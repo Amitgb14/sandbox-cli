@@ -484,7 +484,21 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		// through into cfg.Security.CapAdd's backing array, mutating the caller's
 		// config. BuildArgs is documented as pure and BuildSpec is held to the
 		// same standard.
-		capAdd = append(append([]string(nil), capAdd...), "NET_ADMIN", "NET_RAW", "SETUID", "SETGID")
+		//
+		// KILL because `--init` makes tini PID 1 as root, while setpriv leaves the
+		// agent running as a different uid. kill(2) permits a signal only when the
+		// sender's uid matches the target's or the sender holds CAP_KILL — being
+		// uid 0 is not itself enough, the capability *is* the bypass. Without it
+		// the first forwarded signal (SIGWINCH on a terminal resize, typically)
+		// fails EPERM and tini aborts the container:
+		//
+		//   [FATAL tini (7)] Unexpected error when forwarding signal: Operation not permitted
+		//
+		// Scoped to the container's PID namespace, and held only by root: setpriv
+		// clears the capability sets when it changes uid, so the agent never has
+		// it. Non-allowlist runs are unaffected — they keep cap-drop ALL with
+		// nothing added back.
+		capAdd = append(append([]string(nil), capAdd...), "NET_ADMIN", "NET_RAW", "SETUID", "SETGID", "KILL")
 		dockerUser = "root"
 		entrypoint = "/usr/local/bin/sandbox-firewall"
 		network = runtime.SandboxNetwork // allowlist needs networking, not "none"
