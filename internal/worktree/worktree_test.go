@@ -256,6 +256,81 @@ func TestRemove_RefusesDirtyWorktreeWithoutForce(t *testing.T) {
 	}
 }
 
+// An agent that runs `git checkout -b other` inside its worktree leaves the
+// directory named after the *original* branch, so a branch name no longer maps
+// to a path by string manipulation. Path/Remove/Resolve must ask git which
+// worktree holds the branch instead of guessing from the name.
+func TestBranchSwitchedInsideWorktree(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	info, err := Resolve(repo, "feature/other-adapter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, info.Path, "checkout", "-q", "-b", "adapters-continued")
+
+	// The directory keeps its old name; only git knows the new branch lives there.
+	path, exists, err := Path(repo, "adapters-continued")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || path != info.Path {
+		t.Fatalf("Path = %q, exists=%v; want %q, true", path, exists, info.Path)
+	}
+
+	// Resolve must reuse that worktree rather than try to add a second one for a
+	// branch git already has checked out.
+	again, err := Resolve(repo, "adapters-continued")
+	if err != nil {
+		t.Fatalf("Resolve on the renamed branch: %v", err)
+	}
+	if again.Path != info.Path || again.Created {
+		t.Errorf("Resolve = %+v, want reuse of %s", again, info.Path)
+	}
+
+	if err := Remove(repo, "adapters-continued", false); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if isDir(info.Path) {
+		t.Error("worktree dir still present after Remove")
+	}
+}
+
+// Removing a branch that has no worktree is sandbox-cli's error to explain, not
+// a raw "is not a working tree" from git about a path the user never typed.
+func TestRemove_UnknownBranch(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+
+	err = Remove(repo, "never-existed", false)
+	if err == nil {
+		t.Fatal("Remove of an unknown branch succeeded")
+	}
+	if !strings.Contains(err.Error(), "no sandbox worktree") {
+		t.Errorf("error should say there is no worktree, got: %v", err)
+	}
+}
+
 func TestPathAndDirty(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {

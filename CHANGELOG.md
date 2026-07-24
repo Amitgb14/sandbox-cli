@@ -44,6 +44,15 @@ version is tagged.
 
 ### Fixed
 
+- `worktree rm`, `worktree path`, `worktree git` and `worktree commit` now find
+  the worktree by asking git which one has the branch checked out, instead of
+  deriving a directory name from the branch. An agent that switched branches
+  inside its worktree (`git checkout -b`) left the two out of sync, so a branch
+  `worktree list` showed was unremovable: `rm` reported "is not a working tree"
+  for a path that never existed, and `--force` didn't help. A branch with no
+  worktree at all now gets a plain "no sandbox worktree for branch" instead of
+  git's complaint about a guessed path.
+
 - A git worktree is mounted at its own host path so git can no longer prune it
   away mid-session, keeping git usable inside worktree sandboxes.
 
