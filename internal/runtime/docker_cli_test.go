@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -40,5 +42,43 @@ func TestRuntimeHint(t *testing.T) {
 	// Empty availability still yields a sensible message.
 	if !strings.Contains(runtimeHint("x", nil).Error(), "(none reported)") {
 		t.Error("expected a placeholder when no runtimes are reported")
+	}
+}
+
+func TestTerminalRestoreSeqDisablesMouseReporting(t *testing.T) {
+	// The reported crash symptom is the shell spewing SGR mouse reports, so the
+	// restore sequence must at minimum turn mouse tracking back off. ?1003l is
+	// "any-motion" tracking (the noisiest) and ?1006l its report encoding.
+	for _, want := range []string{"\x1b[?1003l", "\x1b[?1006l", "\x1b[?2004l", "\x1b[?25h"} {
+		if !strings.Contains(terminalRestoreSeq, want) {
+			t.Errorf("restore sequence missing %q", want)
+		}
+	}
+	// It must not leave the alternate screen: ?1049l has a cursor side effect
+	// that would disturb every clean interactive exit.
+	if strings.Contains(terminalRestoreSeq, "?1049") {
+		t.Error("restore sequence should not touch the alternate screen (?1049)")
+	}
+}
+
+func TestRestoreTerminalModesSkipsNonTerminal(t *testing.T) {
+	// Writing escape codes into a pipe or file would corrupt captured output, so
+	// the restore is a no-op unless the target is a real terminal.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	restoreTerminalModes(w)
+	w.Close()
+
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected no write to a non-terminal, got %q", got)
 	}
 }

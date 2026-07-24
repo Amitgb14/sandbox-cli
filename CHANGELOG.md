@@ -47,6 +47,12 @@ version is tagged.
 - A git worktree is mounted at its own host path so git can no longer prune it
   away mid-session, keeping git usable inside worktree sandboxes.
 
+- A crashing full-screen agent no longer leaves your host terminal spewing mouse
+  gibberish. When the guest is given a TTY, the sandbox now restores the terminal
+  modes a crashed TUI can leak (mouse reporting, bracketed paste, application
+  cursor keys) on the way out, instead of relying on the agent to clean up after
+  itself.
+
 ## 0.0.1beta.4 — 2026-07-22
 
 ### Added

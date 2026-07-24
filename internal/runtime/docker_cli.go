@@ -144,6 +144,18 @@ func (d *DockerCLI) Run(ctx context.Context, spec RunSpec) (int, error) {
 		return 1, err
 	}
 
+	// A full-screen guest agent that crashes can leave the host terminal in a
+	// mode it turned on by writing escape codes — mouse reporting, bracketed
+	// paste, application cursor keys. docker restores the termios line discipline
+	// but not these app-set DEC private modes, so a crashed agent leaves the
+	// shell spewing mouse-report gibberish on every pointer move. Undo the common
+	// leaks on the way out whenever we handed the guest a real terminal; each
+	// sequence resets to the terminal default, so a clean exit that already
+	// restored them is unaffected.
+	if spec.TTY {
+		defer restoreTerminalModes(os.Stdout)
+	}
+
 	args := BuildArgs(spec)
 	cmd := exec.CommandContext(ctx, d.bin(), args...)
 	cmd.Stdin = os.Stdin
@@ -227,6 +239,43 @@ func pump(wg *sync.WaitGroup, src io.Reader, dst *os.File, footer *metrics.TermF
 			return
 		}
 	}
+}
+
+// terminalRestoreSeq disables the DEC private modes a full-screen guest app
+// commonly turns on and may not turn off if it crashes: mouse reporting
+// (?1000/?1002/?1003 plus the ?1006/?1015 report encodings) and bracketed paste
+// (?2004). It also re-shows the cursor, restores normal cursor-key (?1l) and
+// keypad (ESC >) modes, and clears any lingering SGR attributes. Every code
+// resets a mode to its terminal default, so emitting the whole sequence after a
+// clean exit — which already restored these — is a harmless no-op. It
+// deliberately does not leave the alternate screen (?1049l): that has a cursor
+// side effect on the normal buffer, so it would visibly disturb the common
+// clean-exit case; recovering from a crash inside the alternate screen still
+// wants a full `reset`.
+const terminalRestoreSeq = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l" +
+	"\x1b[?2004l" + // bracketed paste
+	"\x1b[?25h" + // show cursor
+	"\x1b[?1l\x1b>" + // normal cursor keys + normal keypad
+	"\x1b[0m" // clear SGR attributes
+
+// restoreTerminalModes writes terminalRestoreSeq to w, but only when w is a real
+// terminal — writing escape codes into a pipe or file would corrupt captured
+// output.
+func restoreTerminalModes(w *os.File) {
+	if !isCharDevice(w) {
+		return
+	}
+	io.WriteString(w, terminalRestoreSeq)
+}
+
+// isCharDevice reports whether f is a character device (a terminal), using only
+// the standard library to honor the project's dependency constraint.
+func isCharDevice(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func exitCodeOf(err error) (int, error) {
