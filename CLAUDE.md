@@ -112,3 +112,6 @@ host path outside the workspace — keep it scoped to the single project bucket.
 - Non-root by default (`user: sandbox`): agents refuse `--dangerously-skip-permissions` as root, and
   on macOS Docker Desktop bind-mount ownership is virtualized so files are still written as the host user.
 - Module path is `github.com/Amitgb14/sandbox-cli`. Standard library + `cobra` + `yaml.v3` only.
+- Do not add a `Co-Authored-By` trailer to commit messages.
+- After every release (tagging a new version), update `CHANGELOG.md`: move the
+  `Unreleased` entries under a new version heading dated with the release date.

@@ -24,3 +24,76 @@ version is tagged.
   file (a browser's "Copy Image", a screenshot straight to the clipboard) — there
   is no path involved and the container has no clipboard to read. See
   [docs/GUIDE.md](docs/GUIDE.md) for the narrower alternatives.
+
+- 13 more agent wrappers: `cline`, `goose`, `crush`, `aider`, `copilot`,
+  `cursor`, `qwen`, `amp`, `continue`, `openhands`, `droid` — plus `gemini` and
+  `opencode` — each a first-class subcommand alongside `claude` and `codex`.
+  Every wrapper persists its login by default and forwards the same sandbox
+  flags. Adapter agents are installed into the persisted HOME on first use rather
+  than baked into the base image, so the download stays small and you only pay for
+  the agents you actually run.
+
+- Clipboard bridge — an agent's copy escapes the sandbox to the host clipboard
+  over OSC 52, so text copied inside the container lands where you can paste it.
+
+### Changed
+
+- The project now lives at
+  [`github.com/Amitgb14/sandbox-cli`](https://github.com/Amitgb14/sandbox-cli);
+  install and module paths point there.
+
+### Fixed
+
+- A git worktree is mounted at its own host path so git can no longer prune it
+  away mid-session, keeping git usable inside worktree sandboxes.
+
+## 0.0.1beta.4 — 2026-07-22
+
+### Added
+
+- `--share` — a shared scratch mount for exchanging files between two running
+  sandboxes.
+
+## 0.0.1beta.3 — 2026-07-21
+
+### Added
+
+- The current git branch now shows on the right of both the status line and
+  `sandbox-cli stats`.
+
+## 0.0.1beta.2 — 2026-07-21
+
+### Changed
+
+- Host Claude history is shared by default; `--share-history` was renamed to
+  `--sync` (and `--no-sync` opts out).
+- Dropped Homebrew as a distribution channel and added an uninstall path.
+
+### Fixed
+
+- git now works inside worktree sandboxes; added `worktree git`, `worktree
+  commit`, and `worktree path`.
+- The installer resolves the version from the releases list instead of a pinned
+  value.
+
+## 0.0.1beta.1 — 2026-07-21
+
+First public pre-release. Runs an AI coding agent (or any command) inside a
+disposable, isolated Docker container with only the chosen project mounted.
+
+### Added
+
+- Agent wrappers for `claude`, `codex`, `gemini` and `opencode`, each persisting
+  its login and forwarding sandbox flags.
+- `run` for wrapping an arbitrary command; `--dry-run` to print the `docker` argv
+  without executing.
+- `sandbox-cli stats` and, for `claude`, an in-UI memory/CPU status line.
+- `--worktree` for parallel agents on git worktrees, with `worktree list`/`rm`.
+- Networking and git ergonomics: `--git`, `--host-gateway`, `--add-host`, and an
+  optional egress allowlist (`network: allowlist` / `--allow`).
+- Credential broker (`secrets:` / `--secret`) and opt-in persistent package
+  caches (`cache:` / `--cache`).
+- `--runtime` passthrough for microVM / gVisor isolation.
+- `--share-history` (later `--sync`) to resume host Claude sessions inside the
+  sandbox.
+- One-line installer and cross-platform release binaries (GoReleaser).
