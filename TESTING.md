@@ -80,6 +80,10 @@ go vet ./...              # must be clean
 | `--dry-run` golden (asserts `--rm`, fake HOME, no host-home mount) | `TestDryRunInvariants` | `internal/cli` |
 | metrics parsing / bar / duration / humanBytes / footer / summary | `TestParseBytes`, `TestParseMemUsage`, `TestBar`, `TestFormatDuration`, `TestHumanBytes`, `TestFooterForwardsOutputIntact`, `TestMeterSummary` | `internal/metrics` |
 | branch label: right-aligned, dropped when too narrow, never wraps | `TestLayout`, `TestMeterFormatBranch`, `TestBranch` | `internal/metrics`, `internal/worktree` |
+| usage cache: both windows, epoch/RFC3339 reset times, newest-of-two-homes wins | `TestParseReadsBothWindows`, `TestParseAcceptsEpochAndUnparseableResetTimes`, `TestFindPrefersTheNewestReading` | `internal/agentusage` |
+| usage cache: model-scoped caps read from `limits[]`, unscoped entries not duplicated | `TestParseScopedLimits`, `TestParseReadsBothWindows` | `internal/agentusage` |
+| usage cache: an unknown shape reports *nothing* rather than a zero | `TestParseWithoutUsageIsEmptyNotAnError`, `TestReadMissingFileIsEmptyNotAnError`, `TestFindWithNothingToReadIsEmptyNotAnError`, `TestAgeIsNeverNegative` | `internal/agentusage` |
+| `usage` rendering: countdown units, past-reset shown as due, missing reset named | `TestResetCells`, `TestHumanLeft`, `TestWindowLabel` | `internal/cli` |
 | **[integration]** isolation smoke (HOME=/sandbox/home, /workspace writes reach host) | `TestIsolation_HomeAndWorkspace` | `internal/cli` |
 | **[integration]** `rm -rf ~` cannot touch host | `TestRmRfHomeSafety` | `internal/cli` |
 | **[integration]** env allowlist forwards / non-allowlisted absent | `TestEnvPassthrough` | `internal/cli` |
@@ -341,6 +345,27 @@ if installed via `make install`).
 1. `rm -rf ~/.config/sandbox/agents/claude`
 2. `sandbox-cli claude -- --version`
 - Expected: reports the current Claude Code version (e.g. `2.1.212`), installed at `~/.config/sandbox/agents/claude/.local/bin/claude`. Second run is instant and stays current.
+
+**TC-95 [A/M] Status-line usage + model segments (unit-level, synthetic JSON)**
+1. `R=$(( $(date +%s) + 8040 ))`
+2. `./bin/sandbox-cli run --no-tty --no-metrics -- sh -c "printf '%s' '{\"model\":{\"display_name\":\"Opus 5\"},\"rate_limits\":{\"five_hour\":{\"used_percentage\":23,\"resets_at\":$R},\"seven_day\":{\"used_percentage\":49,\"resets_at\":$((R+250000))}}}' | SANDBOX_STATUSLINE_COLS=120 /usr/local/bin/sandbox-statusline"`
+- Expected: the line includes `· opus 5 ·` after `⬢ sandbox`, and `· 5h 23% (2h14m) · wk 49%` (the countdown tracks the clock, so ±1m is fine). The model is lowercased.
+3. Same command with `SANDBOX_STATUSLINE_NO_USAGE=1` also set → model stays, no `5h`/`wk` segment. With `SANDBOX_STATUSLINE_NO_MODEL=1` instead → windows stay, no model.
+4. Same command with `echo {}` instead of the JSON → neither segment, and no placeholder in their place.
+
+**TC-96 [A/M] The line sheds segments in order as it narrows**
+1. Repeat TC-95 step 2 with `SANDBOX_STATUSLINE_COLS=80`, then `=70`, then `=55`.
+- Expected: at 80 and 70 the `5h`/`wk` segments are gone but `· opus 5` and the right-hand `⎇ <branch>` remain; at 55 the model is gone too and the line is what it was before this feature. The branch is the last thing to go (existing behaviour, TC-90).
+
+**TC-97 [A] `sandbox-cli usage` with nothing recorded**
+1. `HOME=$(mktemp -d) ./bin/sandbox-cli usage`
+- Expected: "no usage recorded for claude yet", the two paths it looked in, and the note about Claude.ai plans vs API-key auth. Exit status 0 — an empty answer is not an error.
+
+**TC-98 [M] `sandbox-cli usage` against a real cache** *(needs a Claude.ai login that has run at least once)*
+1. `./bin/sandbox-cli usage`
+- Expected: a `5h` and a `week` row with percentages, each with a reset time, and a trailing `claude, as of <age> — <path>` line. `--json` emits the same windows.
+2. On a plan that meters a model separately, an extra row labelled `week (<Model>)`.
+- Expected: exactly one row per allowance — the account-wide `week` must not be repeated under a model name.
 
 ### Group 11 — Crash recovery
 

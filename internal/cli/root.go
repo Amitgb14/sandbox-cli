@@ -303,6 +303,7 @@ func NewRootCmd() *cobra.Command {
 		newInitCmd(),
 		newConfigCmd(),
 		newStatsCmd(),
+		newUsageCmd(),
 		newWorktreeCmd(),
 		newRecoverCmd(),
 		newContextCmd(),

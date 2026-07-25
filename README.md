@@ -315,16 +315,30 @@ for containers too short-lived to sample. Disable all of this with `--no-metrics
 Measurement only — no limits are placed on the container.
 
 **Inside a `sandbox-cli claude` session**, a status line at the bottom of the Claude
-UI shows the container's live memory/CPU (via Claude Code's `statusLine`, injected
-through a managed-settings file that never touches your own Claude settings):
+UI shows the container's live memory/CPU, plus how much of your subscription window
+is spent and when it resets (via Claude Code's `statusLine`, injected through a
+managed-settings file that never touches your own Claude settings):
 
 ```
-⬢ sandbox · mem 412MiB · cpu 82%                          ⎇ feature/login
+⬢ sandbox · opus 5 · mem 412MiB · cpu 82% · 5h 23% (2h14m) · wk 49%   ⎇ feature/login
 ```
+
+`5h` is the 5-hour session window, with the time until it resets; `wk` is the weekly
+one; and `opus 5` is the model answering — the three are read together, since how fast
+a window drains depends on what is running. Those come from Claude Code itself, which
+reports the windows only on a Claude.ai plan and only once it has made a request —
+under API-key auth, or before the first response, that part of the line is simply
+absent rather than showing a placeholder. `--env SANDBOX_STATUSLINE_NO_USAGE=1` and
+`--env SANDBOX_STATUSLINE_NO_MODEL=1` leave them out individually. For the same
+numbers **outside** a Claude session — a second terminal, or after a run has ended
+— use [`sandbox-cli usage`](#usage).
 
 The branch sits at the right edge, padded against the terminal width read from
 `/dev/tty`. If the width can't be determined, or the line is too narrow for both
-halves, the branch is dropped rather than shown truncated. Two escape hatches, in
+halves, the branch is dropped rather than shown truncated. On a narrow terminal what
+the agent reports about itself goes first — the usage figures, then the model — and
+the branch is the last to go: a percentage is stale within the hour, the branch you
+are on is not. Two escape hatches, in
 case Claude renders the status line in an area narrower than the terminal:
 
 ```sh
@@ -355,6 +369,33 @@ sandbox-cli — live stats  15:04:05  (Ctrl-C to exit)
 CONTAINER             MEM                CPU     PIDS
 sandbox-dk0gtrd15s2g  412MiB / 7.6GiB   82.00%  24
 ```
+
+<a id="usage"></a>
+**To see how much of your subscription window is left**, `sandbox-cli usage` — the
+same two windows the status line shows, from anywhere:
+
+```sh
+sandbox-cli usage
+sandbox-cli usage --json     # scriptable
+```
+
+```
+5h            23%  resets in 2h14m  (14:14)
+week          49%  resets in 4d     (Wed 12:00)
+week (Fable)  25%  resets in 4d     (Wed 12:00)
+
+claude, as of 4m ago — ~/.config/sandbox/agents/claude/.claude.json
+```
+
+A row named with a model in parentheses is a cap on **that model alone**, which some
+plans meter separately alongside the account-wide window.
+
+There is no way to ask for a live reading without an interactive session, so this
+reads the numbers Claude Code caches for its own `/usage` display — which is why it
+always tells you how old the reading is. They refresh when the agent talks to the
+server, so an idle machine can hold a figure from hours ago. If claude has not run
+signed in to a Claude.ai plan there is nothing to read, and the command says where
+it looked rather than printing a zero.
 
 ### Common flags (run and every agent wrapper)
 

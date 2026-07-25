@@ -1,0 +1,60 @@
+{
+  "numStartups": 41,
+  "installMethod": "npm",
+  "cachedUsageUtilization": {
+    "fetchedAtMs": 1784957403517,
+    "accountUuid": "00000000-0000-4000-8000-000000000000",
+    "utilization": {
+      "five_hour": {
+        "utilization": 23,
+        "resets_at": "2026-07-25T10:09:59.429244+00:00",
+        "limit_dollars": null,
+        "used_dollars": null,
+        "remaining_dollars": null
+      },
+      "seven_day": {
+        "utilization": 49.4,
+        "resets_at": "2026-07-25T05:59:59.429263+00:00",
+        "limit_dollars": null,
+        "used_dollars": null,
+        "remaining_dollars": null
+      },
+      "seven_day_opus": null,
+      "extra_usage": {
+        "is_enabled": false,
+        "monthly_limit": null,
+        "spend_limit_reached": false
+      },
+      "limits": [
+        {
+          "kind": "session",
+          "group": "session",
+          "percent": 23,
+          "severity": "normal",
+          "resets_at": "2026-07-25T10:09:59.429244+00:00",
+          "scope": null,
+          "is_active": false
+        },
+        {
+          "kind": "weekly_scoped",
+          "group": "weekly",
+          "percent": 25,
+          "severity": "normal",
+          "resets_at": "2026-07-25T06:00:00.429543+00:00",
+          "scope": { "model": { "id": null, "display_name": "Opus" } },
+          "is_active": true
+        }
+      ]
+    }
+  },
+  "projects": {
+    "/workspace": {
+      "lastCost": 3.1069,
+      "lastTotalInputTokens": 4211
+    }
+  },
+  "oauthAccount": {
+    "organizationRateLimitTier": "default_claude_max_5x",
+    "organizationType": "claude_max"
+  }
+}

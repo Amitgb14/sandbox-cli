@@ -43,6 +43,11 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
 - **`internal/sandbox`** — composition layer. `BuildSpec(cfg, opts)` folds config + per-invocation
   `Options` into a fully-resolved `runtime.RunSpec`. `mounts.go/ResolveWorkspace` enforces the
   **non-overridable safety refusals**: never mount `/`, the host home, or an ancestor of it.
+  `timezone.go` forwards the host zone as `TZ` so timestamps written in the container (a git
+  commit above all) carry the user's offset instead of the image's UTC — a **name**, never a
+  mount of `/etc/localtime`, since a name is a string and a mount is another host path. It
+  yields to any `TZ` the user set themselves, and an unresolvable zone forwards nothing rather
+  than guessing. `hostTimezone` is a var so tests can pin the one input that differs per machine.
 - **`internal/runtime`** — `BuildArgs(RunSpec) []string` is a **pure, deterministic function** that
   produces the `docker` argv. This is the single choke point for the isolation invariants (only
   declared mounts are host-connected; `HOME` is always the fake path; host home is never mounted)
@@ -95,6 +100,28 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   resume argument from the verified descriptor, only within *this* project's history, and only when
   exactly one session matches; anything else is forwarded untouched, because the agent's own error
   beats resuming the wrong conversation.
+- **`internal/agentusage`** — how much of the subscription window is spent and when it
+  resets, for the host side (`sandbox-cli usage`). The container does not use it: Claude
+  pipes the status line a documented `rate_limits` object, and reaching past a supported
+  contract for an internal file to get the same two numbers would be a bad trade. Off-line
+  there is no such pipe and no supported query at all, so this reads the cache Claude Code
+  keeps for its own `/usage` (`~/.claude.json` → `cachedUsageUtilization`) — which makes the
+  two rules non-negotiable: **read only** (nothing here ever opens that file for writing;
+  it belongs to Claude Code), and **always aged** (every `Snapshot` carries the `fetchedAtMs`
+  it came with and the command always prints it — these refresh only when the agent talks to
+  the server, so an unlabelled percentage can be hours stale). A shape the parser no longer
+  recognizes yields *no windows* rather than a zero, the same bargain `agentctx` makes with
+  transcripts — and a window **past its reset** prints no percentage either, because the
+  cached figure then measures the period before the reset rather than a stale amount of the
+  current one. Two candidate paths — the persisted agent HOME and the user's real home —
+  resolved by whichever was refreshed last, since both describe the same account.
+  `usage --refresh` (`refresh.go`) is the only way to make a reading current: it runs one
+  throwaway `claude -p` turn, in a scratch cwd so the turn stays out of the project's
+  transcript history, and re-reads. That keeps both rules — Claude Code still writes its own
+  file, we only give it a reason to — and it stays opt-in because the request is spent from
+  the window being measured. It bounds staleness to Claude Code's own refetch interval; it
+  does not stamp the reading now, so the printed age still governs.
+  Design: `docs/proposals/usage-stats.md`.
 - **`internal/creds`, `internal/audit`** — deliberate **stub seams** for a future credential broker
   and audit trail. Today nothing extra is forwarded and audit goes to a no-op sink; keep these seams clean.
 
@@ -149,7 +176,7 @@ agents still to adapt, ordered by popularity, plus the full checklist, is in
 flow, forwarded variables, `--allow` domains — is `docs/AGENTS.md`; a new adapter needs a
 section there.
 
-### The memory/CPU status line
+### The memory/CPU/usage status line
 
 Only `claude` gets one on screen, and that is a deliberate limit, not an oversight:
 
@@ -162,6 +189,17 @@ Only `claude` gets one on screen, and that is a deliberate limit, not an oversig
   a bad trade for a gauge. `sandbox-cli stats` in a second terminal is the answer for these.
 
 Don't reach for a terminal multiplexer here again without checking that the agent's UI survives it.
+
+The line also carries the subscription windows and the model
+(`· opus 5 · mem … · 5h 23% (2h14m) · wk 49%`), both from the JSON Claude already pipes to
+the hook — `rate_limits` and `model.display_name`, documented fields, so the script needs no
+mount and no file whose shape it is not entitled to know. Two rules hold it together:
+**absent means absent** (no `rate_limits`, API-key auth, before the first response, one
+window and not the other — all print nothing, never a placeholder), and **what the agent
+reports about itself is dropped before the branch** when the row is too narrow — usage
+first, then the model, so a terminal that fit the line before this feature still shows
+exactly what it did. `SANDBOX_STATUSLINE_NO_USAGE=1` / `_NO_MODEL=1` opt out individually.
+Design and rejected alternatives: `docs/proposals/usage-stats.md`.
 
 `claude` additionally read-write mounts the host's Claude history for the current project
 (`~/.claude/projects/<bucket>`) into the persisted HOME by default, so host sessions resolve
