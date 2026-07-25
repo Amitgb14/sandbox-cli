@@ -98,7 +98,22 @@ func renderStats(dockerBin string, out *os.File, clear bool) error {
 }
 
 // collectSandboxStats returns live usage for running containers named sandbox-*.
+// collectSandboxStats samples every running sandbox container.
+//
+// It retries once, because the two steps below cannot be made atomic: a sandbox
+// that exits between the listing and the sampling makes `docker stats` fail for
+// the whole batch, taking the other containers' readings with it. Watching
+// containers that come and go is the entire job of this command, so that race is
+// the normal case rather than an exotic one, and one fresh attempt settles it.
 func collectSandboxStats(dockerBin string) ([]statRow, error) {
+	rows, err := sampleSandboxStats(dockerBin)
+	if err != nil {
+		rows, err = sampleSandboxStats(dockerBin)
+	}
+	return rows, err
+}
+
+func sampleSandboxStats(dockerBin string) ([]statRow, error) {
 	ids, err := exec.Command(dockerBin, "ps", "--filter", "name=sandbox-", "--format", "{{.ID}}").Output()
 	if err != nil {
 		return nil, fmt.Errorf("listing sandbox containers: %w", err)
