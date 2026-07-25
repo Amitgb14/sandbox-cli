@@ -121,8 +121,12 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 	}
 	rf.envAllow = append(rf.envAllow, envAllow...)
 	// An abbreviated session id from `context list` is expanded here, because the
-	// agents require the full one.
-	guest = expandResumeID(cmd.Annotations[agentAnnotation], guest)
+	// agents require the full one — and a session belonging to another project is
+	// refused here, because the container will not have its history mounted.
+	guest, err := expandResumeID(cmd.Annotations[agentAnnotation], resumeProject(rf), guest)
+	if err != nil {
+		return err
+	}
 	full := append(append([]string{}, agentCmd...), guest...)
 	return execute(rf, full)
 }

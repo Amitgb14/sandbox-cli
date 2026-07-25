@@ -133,7 +133,10 @@ func TestExpandResumeIDLeavesArgsAloneUnlessItIsSure(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := expandResumeID(c.agent, c.guest)
+			got, err := expandResumeID(c.agent, "/nowhere/in/particular", c.guest)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if !reflect.DeepEqual(got, c.guest) {
 				t.Errorf("args were rewritten: %#v -> %#v", c.guest, got)
 			}

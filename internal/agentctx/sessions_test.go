@@ -268,33 +268,63 @@ func TestExpandID(t *testing.T) {
 	writeTranscript(t, filepath.Join(dir, "-w", "3f2a9999-0000-4000-8000-000000000002.jsonl"), claudeTranscript)
 	f := claudeFinding(dir)
 
-	if got, ok := ExpandID(f, "3f2a1b4c"); !ok || got != full {
-		t.Errorf("ExpandID(unambiguous prefix) = %q,%v, want %q,true", got, ok, full)
+	all := ListOpts{All: true}
+	if got, ok := ExpandID(f, all, "3f2a1b4c"); !ok || got.ID != full {
+		t.Errorf("ExpandID(unambiguous prefix) = %q,%v, want %q,true", got.ID, ok, full)
 	}
 	// Two sessions share this prefix: guessing one would resume the wrong
 	// conversation, which is worse than the agent's own error.
-	if got, ok := ExpandID(f, "3f2a"); ok || got != "3f2a" {
-		t.Errorf("ExpandID(ambiguous) = %q,%v, want it left alone", got, ok)
+	if _, ok := ExpandID(f, all, "3f2a"); ok {
+		t.Error("an ambiguous prefix must be left alone")
 	}
-	if got, ok := ExpandID(f, "nope"); ok || got != "nope" {
-		t.Errorf("ExpandID(unknown) = %q,%v, want it left alone", got, ok)
+	if _, ok := ExpandID(f, all, "nope"); ok {
+		t.Error("an unknown value must be left alone — it may not be an id at all")
 	}
-	if _, ok := ExpandID(f, full); ok {
+	if _, ok := ExpandID(f, all, full); ok {
 		t.Error("a full id needs no expansion")
 	}
 }
 
-// TestSessionIDsReadsNoTranscripts pins the cheap path: expansion happens on
-// every agent run, so it must not open dozens of multi-megabyte files.
-func TestSessionIDsReadsNoTranscripts(t *testing.T) {
+// TestExpandIDIsScopedToTheProject is the fix for a resume that failed with the
+// right id: a sandbox mounts only the current project's history, so a session in
+// another project's directory is unreachable however correct the id is. The
+// expansion has to see the same scope the container will.
+func TestExpandIDIsScopedToTheProject(t *testing.T) {
 	dir := t.TempDir()
-	// Unparseable content: if SessionIDs tried to read it, this would still work,
-	// but the ids must come from the names either way.
+	here := "3f2a1b4c-0000-4000-8000-000000000001"
+	elsewhere := "9c910000-0000-4000-8000-000000000002"
+	writeTranscript(t, filepath.Join(dir, ProjectBucket("/Users/x/app"), here+".jsonl"), claudeTranscript)
+	writeTranscript(t, filepath.Join(dir, ProjectBucket("/Users/x/other"), elsewhere+".jsonl"), claudeTranscript)
+	f := claudeFinding(dir)
+
+	inThisProject := ListOpts{Project: "/Users/x/app"}
+	if got, ok := ExpandID(f, inThisProject, "3f2a1b4c"); !ok || got.ID != here {
+		t.Errorf("a session in this project must expand: %q,%v", got.ID, ok)
+	}
+	if _, ok := ExpandID(f, inThisProject, "9c910000"); ok {
+		t.Error("a session in another project must not expand — the sandbox cannot open it")
+	}
+	// It is still findable, which is what lets the caller say where it lives
+	// instead of leaving the user with a bare "no session found".
+	got, ok := ExpandID(f, ListOpts{All: true}, "9c910000")
+	if !ok {
+		t.Fatal("the session should still be locatable across the whole store")
+	}
+	if filepath.Base(got.Dir()) != ProjectBucket("/Users/x/other") {
+		t.Errorf("Dir() = %q, want the other project's directory", got.Dir())
+	}
+}
+
+// TestSessionRefsReadNoTranscripts pins the cheap path: expansion happens on
+// every agent run, so it must not open dozens of multi-megabyte files.
+func TestSessionRefsReadNoTranscripts(t *testing.T) {
+	dir := t.TempDir()
+	// Unparseable content: the ids must come from the file names either way.
 	writeTranscript(t, filepath.Join(dir, "-w", "aaa11111-0000-4000-8000-00000000000b.jsonl"), "not json at all")
 
-	got := SessionIDs(claudeFinding(dir))
-	if len(got) != 1 || got[0] != "aaa11111-0000-4000-8000-00000000000b" {
-		t.Errorf("SessionIDs = %v, want the id from the file name", got)
+	got := SessionRefs(claudeFinding(dir), ListOpts{All: true})
+	if len(got) != 1 || got[0].ID != "aaa11111-0000-4000-8000-00000000000b" {
+		t.Errorf("SessionRefs = %+v, want the id from the file name", got)
 	}
 }
 

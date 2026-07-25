@@ -694,6 +694,21 @@ sessions share the prefix it leaves the value alone rather than guessing.
 (Claude Code also accepts a session *title*, so
 `--resume "Run integration tests"` works too.)
 
+**You can only resume a session from the project it belongs to.** A sandbox
+mounts one project's history, so a session recorded elsewhere isn't visible
+inside the container however right the id is — including a session from a
+`--worktree` run, which counts as its own project. `--all` lists those too, so
+it's easy to pick one you can't reach from here; sandbox-cli checks before
+starting the container and tells you where it actually lives:
+
+```
+$ sandbox-cli claude --resume ba2e2c56
+session ba2e2c56 is not in this project's claude history
+  it is in ~/.claude/projects/-Users-you-other-project
+  a sandbox mounts only the current project's history, so claude cannot open it from here
+  run sandbox-cli from that project, or pass --project <dir>
+```
+
 **Ids are not interchangeable between agents.** With several agents listed it's a
 natural mistake to take an id off any row and hand it to whichever agent you
 like:

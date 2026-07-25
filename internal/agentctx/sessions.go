@@ -39,24 +39,33 @@ type ListOpts struct {
 	All     bool   // every project in the store
 }
 
+// scopeOf narrows a store to one project's directory when the store has one that
+// can be derived. empty reports a project the store has simply never seen, which
+// is not an error — no agent has worked there yet.
+func scopeOf(f Finding, o ListOpts) (dir string, depth int, scoped, empty bool) {
+	store, _ := Lookup(f.Agent)
+	dir, depth = f.Dir, storeDepth(store)
+	if o.All || o.Project == "" || store.BucketStyle != BucketDashedPath {
+		return dir, depth, false, false
+	}
+	// The per-project directory is one level of the store, so scoping to it
+	// removes exactly one level of the search.
+	cand := filepath.Join(dir, ProjectBucket(o.Project))
+	if !isDir(cand) {
+		return dir, depth, true, true
+	}
+	return cand, depth - 1, true, false
+}
+
 // List returns the sessions in a verified store, newest first.
 func List(f Finding, o ListOpts) (sessions []Session, scoped bool, err error) {
 	if f.Dir == "" {
 		return nil, false, nil
 	}
 	store, _ := Lookup(f.Agent)
-
-	dir, depth := f.Dir, storeDepth(store)
-	if !o.All && o.Project != "" && store.BucketStyle == BucketDashedPath {
-		// The per-project directory is one level of the store, so scoping to it
-		// removes exactly one level of the search.
-		if cand := filepath.Join(dir, ProjectBucket(o.Project)); isDir(cand) {
-			dir, depth, scoped = cand, depth-1, true
-		} else {
-			// No directory for this project is not an error: it means no agent has
-			// worked here yet. An empty list says that better than a failure does.
-			return nil, true, nil
-		}
+	dir, depth, scoped, empty := scopeOf(f, o)
+	if empty {
+		return nil, scoped, nil
 	}
 
 	err = walkSessionFiles(dir, store.Glob, store.SubDir, depth, func(path string, info fs.FileInfo) {
@@ -273,46 +282,60 @@ func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// SessionIDs returns just the ids in a store, read from file names alone. It is
-// the cheap counterpart to List: no transcript is opened, so it is safe to call
-// on the path of every agent run, where reading dozens of multi-megabyte
-// transcripts to expand one argument would be an absurd price.
-func SessionIDs(f Finding) []string {
+// SessionRef is a session's id and the file it lives in, without its contents.
+type SessionRef struct {
+	ID   string
+	Path string
+}
+
+// Dir is the directory holding the session — for a store organised by project,
+// the project's own directory. Which directory a session is in decides whether a
+// sandbox can reach it at all, since only the current project's history is
+// mounted into the container.
+func (r SessionRef) Dir() string { return filepath.Dir(r.Path) }
+
+// SessionRefs returns the ids in a store, read from file names alone. It is the
+// cheap counterpart to List: no transcript is opened, so it is safe to call on
+// the path of every agent run, where reading dozens of multi-megabyte transcripts
+// to expand one argument would be an absurd price.
+func SessionRefs(f Finding, o ListOpts) []SessionRef {
 	if f.Dir == "" {
 		return nil
 	}
 	store, _ := Lookup(f.Agent)
-	var out []string
-	_ = walkSessionFiles(f.Dir, store.Glob, store.SubDir, storeDepth(store), func(path string, _ fs.FileInfo) {
-		out = append(out, sessionID(path))
+	dir, depth, _, empty := scopeOf(f, o)
+	if empty {
+		return nil
+	}
+	var out []SessionRef
+	_ = walkSessionFiles(dir, store.Glob, store.SubDir, depth, func(path string, _ fs.FileInfo) {
+		out = append(out, SessionRef{ID: sessionID(path), Path: path})
 	})
 	return out
 }
 
-// ExpandID turns a shortened session id into the full one. It returns ok=false
-// unless exactly one known session starts with the given text, so an ambiguous
-// or unknown value is left exactly as the user typed it rather than being
-// guessed at — the agent's own error is better than the wrong session.
-func ExpandID(f Finding, short string) (string, bool) {
+// ExpandID turns a shortened session id into the full one, searching only the
+// sessions the given scope covers. It returns ok=false unless exactly one matches,
+// so an ambiguous or unknown value is left exactly as the user typed it rather
+// than being guessed at — the agent's own error is better than the wrong session,
+// and the value may not be an id at all (Claude Code also resumes by title).
+func ExpandID(f Finding, o ListOpts, short string) (SessionRef, bool) {
 	if short == "" || len(short) >= 36 {
-		return short, false // already a full id, or nothing to work with
+		return SessionRef{}, false // already a full id, or nothing to work with
 	}
-	var hit string
-	for _, id := range SessionIDs(f) {
-		if id == short {
-			return id, false // exact already
+	var hit SessionRef
+	for _, r := range SessionRefs(f, o) {
+		if r.ID == short {
+			return SessionRef{}, false // exact already
 		}
-		if strings.HasPrefix(id, short) {
-			if hit != "" {
-				return short, false // ambiguous
+		if strings.HasPrefix(r.ID, short) {
+			if hit.ID != "" {
+				return SessionRef{}, false // ambiguous
 			}
-			hit = id
+			hit = r
 		}
 	}
-	if hit == "" {
-		return short, false
-	}
-	return hit, true
+	return hit, hit.ID != ""
 }
 
 // Find resolves a user-typed session id against a store. An unambiguous prefix is
