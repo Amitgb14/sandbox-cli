@@ -3,4 +3,4 @@
 /dist/
 /.claude/
 __pycache__/
-web/
+docs/proposals/
