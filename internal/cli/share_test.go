@@ -119,7 +119,7 @@ func TestShareDoesNotClobberReadme(t *testing.T) {
 // the agent (which would reject it).
 func TestShareIsASandboxFlagInWrappers(t *testing.T) {
 	cmd := newClaudeCmd()
-	gotFlags, gotGuest := splitWrapperArgs(cmd, []string{"--share", "--dangerously-skip-permissions"})
+	gotFlags, gotGuest, _ := splitWrapperArgs(cmd, []string{"--share", "--dangerously-skip-permissions"})
 	if want := []string{"--share"}; !reflect.DeepEqual(gotFlags, want) {
 		t.Errorf("flags = %#v, want %#v", gotFlags, want)
 	}

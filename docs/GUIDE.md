@@ -615,6 +615,130 @@ one-way channel, mount it by hand instead
 (`--mount ~/.config/sandbox/shared:/shared:ro` on the consumer). For history,
 `git init --bare` a repo inside it and push from both sides.
 
+### Finding your past conversations
+
+Agent logins persist in a sandbox-owned home, and so do the conversations the
+agent writes there — the container is disposable, its session history is not.
+`context list` shows you those conversations, newest first:
+
+```sh
+sandbox-cli claude context list
+```
+
+```
+ID        WHEN      TURNS  TITLE
+37888763  just now  4      Share context between sandbox instances with resume
+95ad79ff  35m ago   17     sandbox-run-signal-handling
+1bbbda97  53m ago   11     Review project and agent harness sandbox-cli
+
+resume: sandbox-cli claude --resume 37888763
+```
+
+The id is the one the agent resumes by, so the listing is something to copy out
+of. TURNS counts the prompts *you* sent, not the messages exchanged. The title is
+the one Claude Code generates for the session; a session too short to have earned
+one shows its first prompt instead.
+
+Ids are abbreviated, and sandbox-cli expands one back to the full id before the
+agent sees it. **`-f` / `--full` prints whole ids**, which you need when running
+the agent directly rather than through sandbox-cli:
+
+```sh
+sandbox-cli claude context list -f
+claude --resume 37888763-3d07-451a-920c-d458c987cda8   # plain claude, no sandbox
+```
+
+That works because a Claude session recorded in a sandbox is written into your
+real `~/.claude` history — same conversation, inside the container or out. Plain
+`claude` won't take the abbreviated form; the expansion is sandbox-cli's own.
+
+It's scoped to the project you're standing in, because that's the question you're
+usually asking. `--all` lists every project in the store and adds a PROJECT
+column, `--limit 0` shows everything (the default stops at 20 and tells you how
+many it held back), and `--json` is for scripts. Without an agent name it lists
+every agent that has sessions. `sandbox-cli context` on its own does the same
+thing as `context list`.
+
+**When there's nothing to list**, it tells you why in the same breath, including
+where it looked:
+
+```
+$ sandbox-cli codex context list
+no codex sessions found on this machine — has codex run in a sandbox yet?
+  looked in ~/.config/sandbox/agents/codex/.codex/sessions
+  looked in ~/.codex/sessions
+```
+
+`--verbose` shows the same location line next to a listing that *did* work.
+
+Sessions from a store sandbox-cli can find but not yet read are still listed,
+with `?` where the title and turn count would be — found but not understood is
+not the same as empty. And an agent sandbox-cli has no store layout for says so
+plainly rather than reporting "no sessions"; the agent still runs, only the
+listing is missing.
+
+Nothing here is taken on trust. sandbox-cli ships candidate layouts and only
+treats one as real once it's been found on *your* machine holding sessions, then
+records it in `~/.config/sandbox/contexts/stores.json` so it stays known. A store
+confirmed earlier isn't forgotten when a later look can't see it — an agent home
+that isn't mounted right now is not the same thing as a store that never existed
+— it's just reported as not currently visible.
+
+For Claude Code these ids resolve the same inside the sandbox and out, so a
+conversation started on your host can be continued in a container and back again
+(that's what `--no-sync` turns off).
+
+**Each agent spells resume differently**, and the listing prints the right one
+per agent — copy that line rather than typing it from memory:
+
+```sh
+sandbox-cli claude --resume 37888763     # a flag
+sandbox-cli codex  resume 019f87bb       # a subcommand
+```
+
+`sandbox-cli claude resume <id>` is *not* an error you'll notice: Claude Code has
+no `resume` subcommand, so the words become your first prompt and you get a brand
+new conversation that looks nothing like the one you wanted.
+
+The short ids above are shortened for the table, and the agents themselves reject
+them — Claude Code wants a full UUID. sandbox-cli expands the short form to the
+full id before the agent sees it, and prints which session it resolved to. If two
+sessions share the prefix it leaves the value alone rather than guessing.
+(Claude Code also accepts a session *title*, so
+`--resume "Run integration tests"` works too.)
+
+**You can only resume a session from the project it belongs to.** A sandbox
+mounts one project's history, so a session recorded elsewhere isn't visible
+inside the container however right the id is — including a session from a
+`--worktree` run, which counts as its own project. `--all` lists those too, so
+it's easy to pick one you can't reach from here; sandbox-cli checks before
+starting the container and tells you where it actually lives:
+
+```
+$ sandbox-cli claude --resume ba2e2c56
+session ba2e2c56 is not in this project's claude history
+  it is in ~/.claude/projects/-Users-you-other-project
+  a sandbox mounts only the current project's history, so claude cannot open it from here
+  run sandbox-cli from that project, or pass --project <dir>
+```
+
+**Ids are not interchangeable between agents.** With several agents listed it's a
+natural mistake to take an id off any row and hand it to whichever agent you
+like:
+
+```sh
+sandbox-cli codex resume 37888763    # a claude id
+ERROR: No saved session found with ID 37888763.
+```
+
+That's not a sandbox-cli failure — Codex looked in its own store and the id was
+never there. A session id is a key into one vendor's private store, not a
+portable handle: different namespaces, different file formats, and a Claude
+transcript is full of tool calls Codex doesn't have. Carrying a conversation
+across agents is a **handoff** (summarise, then brief the other agent), not a
+resume. It isn't built yet — see `docs/proposals/shared-context.md` for the
+design and what it can and can't preserve.
+
 ### Passing Claude's own flags
 
 The wrappers forward everything they don't recognize, so Claude's flags work

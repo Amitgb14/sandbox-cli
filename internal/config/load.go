@@ -106,6 +106,20 @@ func RescueDir() string {
 	return filepath.Join(r, "rescue")
 }
 
+// ContextsDir returns the sandbox-owned host directory holding conversation
+// context state — the per-context manifests and the verified agent session-store
+// registry, e.g. ~/.config/sandbox/contexts. Like RescueDir it sits outside every
+// repository, because a context outlives the checkout it started in and has to be
+// answerable ("which sessions do I have for this repo?") from anywhere. Returns
+// "" if the home directory cannot be determined.
+func ContextsDir() string {
+	r := configRoot()
+	if r == "" {
+		return ""
+	}
+	return filepath.Join(r, "contexts")
+}
+
 // findProjectConfig walks up from dir looking for .sandbox.yaml, stopping at the
 // filesystem root. Returns "" if none is found.
 func findProjectConfig(dir string) string {

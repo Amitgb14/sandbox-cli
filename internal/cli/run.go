@@ -57,13 +57,19 @@ func guestArgs(cmd *cobra.Command, args []string) []string {
 // work with no separator, while agent short flags like `-p` always pass through
 // and never collide with sandbox's own short flags. An explicit `--` still forces
 // the boundary (and is dropped from both sides).
-func splitWrapperArgs(cmd *cobra.Command, args []string) (sandboxFlags, guest []string) {
+//
+// explicit reports whether the boundary came from a literal `--` rather than from
+// the first unrecognized token. Everything after either boundary is forwarded, so
+// the two are the same to the agent; the difference matters only to the handful of
+// sandbox-cli subcommands a wrapper also answers (see wrapperSubcommand), where a
+// typed `--` is how the user says "no, really, give this to the agent".
+func splitWrapperArgs(cmd *cobra.Command, args []string) (sandboxFlags, guest []string, explicit bool) {
 	fs := cmd.Flags()
 	i := 0
 	for i < len(args) {
 		a := args[i]
 		if a == "--" { // explicit boundary; drop the separator
-			return args[:i], args[i+1:]
+			return args[:i], args[i+1:], true
 		}
 		if !strings.HasPrefix(a, "--") {
 			break // short flag or positional -> belongs to the agent
@@ -84,7 +90,7 @@ func splitWrapperArgs(cmd *cobra.Command, args []string) (sandboxFlags, guest []
 			i++
 		}
 	}
-	return args[:i], args[i:]
+	return args[:i], args[i:], false
 }
 
 // runWrapper implements the claude/codex subcommands. Flag parsing is disabled
@@ -98,8 +104,14 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		return cmd.Help()
 	}
-	sflags, guest := splitWrapperArgs(cmd, args)
+	sflags, guest, explicit := splitWrapperArgs(cmd, args)
 	if err := cmd.Flags().Parse(sflags); err != nil {
+		return err
+	}
+	// A sandbox-cli subcommand spelled under the agent's name (`sandbox-cli claude
+	// context list`) is answered here, before anything is mounted or a container
+	// is built: it is a question about the agent, not a run of it.
+	if handled, err := wrapperSubcommand(cmd, rf, guest, explicit); handled {
 		return err
 	}
 	if afterParse != nil {
@@ -108,6 +120,13 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 		}
 	}
 	rf.envAllow = append(rf.envAllow, envAllow...)
+	// An abbreviated session id from `context list` is expanded here, because the
+	// agents require the full one — and a session belonging to another project is
+	// refused here, because the container will not have its history mounted.
+	guest, err := expandResumeID(cmd.Annotations[agentAnnotation], resumeProject(rf), guest)
+	if err != nil {
+		return err
+	}
 	full := append(append([]string{}, agentCmd...), guest...)
 	return execute(rf, full)
 }

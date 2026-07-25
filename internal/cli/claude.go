@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 )
 
@@ -101,13 +101,11 @@ func newClaudeCmd() *cobra.Command {
 	return cmd
 }
 
-// claudeProjectBucket mirrors how Claude Code names a project's session
-// directory under ~/.claude/projects: the absolute path with every '/' and '.'
-// replaced by '-' (e.g. /Users/x/proj → -Users-x-proj, /workspace → -workspace).
-func claudeProjectBucket(absPath string) string {
-	b := strings.ReplaceAll(absPath, "/", "-")
-	return strings.ReplaceAll(b, ".", "-")
-}
+// claudeProjectBucket names a project's session directory under
+// ~/.claude/projects. It lives in internal/agentctx with the rest of what
+// sandbox-cli knows about agent session stores; this is the one caller that has
+// to reproduce a store layout rather than read it.
+func claudeProjectBucket(absPath string) string { return agentctx.ProjectBucket(absPath) }
 
 // claudeHistoryMount resolves the host Claude project-history dir for the
 // workspace and the matching in-container target (under the persisted HOME's

@@ -13,6 +13,49 @@ version is tagged.
 
 ### Added
 
+- `sandbox-cli context list` — see the conversations an agent has had in this
+  project, newest first, with the id you resume by. Your agent logins already
+  persist in a sandbox-owned HOME, which means the sessions they write survive
+  the disposable container too — but until now nothing could show you what was
+  there, so resuming meant remembering an id or digging through a directory you
+  had to know the name of. The listing shows the id, when it was, how many
+  prompts you sent, and the session's title, and ends with the exact command that
+  resumes the newest one. Scoped to the project you are in; `--all` lists every
+  project, `--limit 0` lists everything (the default stops at 20 and says how
+  many it held back), `--json` is for scripts. Also spelled per agent:
+  `sandbox-cli claude context list`.
+
+  Ids are abbreviated for readability, and `-f` / `--full` prints them whole —
+  which you need to resume outside sandbox-cli, since a Claude session recorded
+  in a sandbox is written into your real `~/.claude` history and plain
+  `claude --resume <full-id>` from that project picks up the same conversation.
+
+  sandbox-cli expands an abbreviated id back to the full one before the agent
+  sees it — Claude Code refuses anything
+  that is not a complete UUID, so an abbreviated id would otherwise be a listing
+  you could read and not use. It expands only when exactly one session matches,
+  and says which one it resolved to; an ambiguous or unknown value is passed
+  through untouched, because the agent's own error beats resuming the wrong
+  conversation. Note that agents spell resume differently
+  (`claude --resume <id>` is a flag, `codex resume <id>` is a subcommand) — the
+  listing prints the correct form per agent.
+
+  When there is nothing to list it says why in the same output — including the
+  directories it searched — so "where does this agent even keep its sessions?"
+  is answered where the question comes up rather than by a second command.
+  `--verbose` shows the same detail beside a listing that worked. Sessions in a
+  store sandbox-cli can find but not yet read are still listed, with `?` where
+  the title and count would be; an agent it has no layout for says so plainly
+  instead of reporting an empty list.
+
+  Where each agent keeps its sessions is verified rather than assumed: candidate
+  layouts ship in the code, a path counts only once it has been found on your
+  machine holding sessions, and the result is recorded in
+  `~/.config/sandbox/contexts/stores.json`. A store confirmed earlier is not
+  forgotten when a later look cannot see it — a home that is not mounted today is
+  not a store that never existed. First step of shared conversation context
+  between sandboxes (`docs/proposals/shared-context.md`).
+
 - Crash recovery — `sandbox-cli recover`, plus an automatic safety net behind it.
   A sandbox writes straight through to your real files, so when a run is killed
   mid-write the files survive but git sometimes does not: a pruned

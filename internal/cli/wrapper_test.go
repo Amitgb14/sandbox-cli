@@ -14,10 +14,11 @@ import (
 
 func TestSplitWrapperArgs(t *testing.T) {
 	cases := []struct {
-		name      string
-		in        []string
-		wantFlags []string
-		wantGuest []string
+		name         string
+		in           []string
+		wantFlags    []string
+		wantGuest    []string
+		wantExplicit bool
 	}{
 		{
 			name:      "bare agent flag passes through (the reported bug)",
@@ -56,10 +57,26 @@ func TestSplitWrapperArgs(t *testing.T) {
 			wantGuest: []string{},
 		},
 		{
-			name:      "explicit -- forces boundary and is dropped",
-			in:        []string{"--project", "/x", "--", "--dangerously-skip-permissions", "--model", "opus"},
-			wantFlags: []string{"--project", "/x"},
-			wantGuest: []string{"--dangerously-skip-permissions", "--model", "opus"},
+			name:         "explicit -- forces boundary and is dropped",
+			in:           []string{"--project", "/x", "--", "--dangerously-skip-permissions", "--model", "opus"},
+			wantFlags:    []string{"--project", "/x"},
+			wantGuest:    []string{"--dangerously-skip-permissions", "--model", "opus"},
+			wantExplicit: true,
+		},
+		{
+			// The escape hatch for the agent-scoped `context` subcommand: with a
+			// typed `--`, the token belongs to the agent no matter what it says.
+			name:         "explicit -- marks the boundary as the user's own",
+			in:           []string{"--", "context", "list"},
+			wantFlags:    []string{},
+			wantGuest:    []string{"context", "list"},
+			wantExplicit: true,
+		},
+		{
+			name:      "a positional ends the sandbox portion without marking it explicit",
+			in:        []string{"context", "stores"},
+			wantFlags: []string{},
+			wantGuest: []string{"context", "stores"},
 		},
 		{
 			name:      "unknown long flag (agent's) ends sandbox portion",
@@ -77,12 +94,15 @@ func TestSplitWrapperArgs(t *testing.T) {
 	cmd := newClaudeCmd() // real command so Flags() knows sandbox's flag set
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotFlags, gotGuest := splitWrapperArgs(cmd, c.in)
+			gotFlags, gotGuest, gotExplicit := splitWrapperArgs(cmd, c.in)
 			if !reflect.DeepEqual(gotFlags, c.wantFlags) {
 				t.Errorf("flags = %#v, want %#v", gotFlags, c.wantFlags)
 			}
 			if !reflect.DeepEqual(gotGuest, c.wantGuest) {
 				t.Errorf("guest = %#v, want %#v", gotGuest, c.wantGuest)
+			}
+			if gotExplicit != c.wantExplicit {
+				t.Errorf("explicit = %v, want %v", gotExplicit, c.wantExplicit)
 			}
 		})
 	}
