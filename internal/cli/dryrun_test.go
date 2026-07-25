@@ -50,6 +50,31 @@ func TestDryRunInvariants(t *testing.T) {
 	if !strings.Contains(line, "'hi there'") {
 		t.Errorf("expected quoted argument:\n%s", line)
 	}
+
+	// Nothing is reachable from the host unless it was asked for.
+	if strings.Contains(line, "-p ") {
+		t.Errorf("a spec with no ports must publish nothing:\n%s", line)
+	}
+}
+
+// TestDryRunShowsPublishedPorts: publishing is the one reach that points inward,
+// so --dry-run has to show it — with the address it will actually bind, not the
+// shorthand that was typed.
+func TestDryRunShowsPublishedPorts(t *testing.T) {
+	spec := runtime.RunSpec{
+		Image:   "sandbox-base:0.1.0",
+		Workdir: "/workspace",
+		Command: []string{"npm", "run", "dev"},
+		Home:    "/sandbox/home",
+		Ports:   []string{"127.0.0.1:3000:3000", "0.0.0.0:8080:80"},
+	}
+	line := dockerCommandLine(spec)
+
+	for _, want := range []string{"-p 127.0.0.1:3000:3000", "-p 0.0.0.0:8080:80"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("dry-run line missing %q:\n%s", want, line)
+		}
+	}
 }
 
 // TestDryRunDetached is the same proof for a background run: --detach changes how

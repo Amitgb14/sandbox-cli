@@ -72,6 +72,21 @@ version is tagged.
   ChatGPT plan and in a shape no sample has confirmed yet, and gemini, opencode and
   goose record nothing of the kind. Nothing is guessed at for the others.
 
+### Fixed
+
+- Timestamps written inside the sandbox now carry your timezone. The container
+  had no idea where you were — `TZ` unset, `/etc/localtime` UTC — so a commit an
+  agent made in a sandbox recorded `+0000` while your own commits recorded your
+  real offset, and `git log` showed two commits made minutes apart sitting hours
+  apart. The host's zone is forwarded as `TZ` (a name, resolved from `$TZ`,
+  `/etc/localtime` or `/etc/timezone` — nothing new is mounted). A host whose
+  zone can't be established keeps the old UTC behavior, and `--env TZ=UTC` opts
+  out.
+
+## 0.0.1beta.5 — 2026-07-25
+
+### Added
+
 - `sandbox-cli context list` — see the conversations an agent has had in this
   project, newest first, with the id you resume by. Your agent logins already
   persist in a sandbox-owned HOME, which means the sessions they write survive
@@ -159,6 +174,19 @@ version is tagged.
   foreground one. See [docs/GUIDE.md](docs/GUIDE.md) → "Running an agent in the
   background".
 
+- `-P` / `--publish` and a `ports:` config key — publish a container port to the
+  host, so you can actually look at the dev server running inside the sandbox.
+  Nothing is published by default; the container stays unreachable from the host
+  until you ask. **A spec that names no address binds to `127.0.0.1`, not
+  `0.0.0.0`** — this is the one place sandbox-cli deliberately differs from
+  `docker -p`, because "let me see my dev server" should not also mean "serve it
+  to everything on this network". Write `0.0.0.0:3000:3000` when you do mean
+  that. Config `ports:` declares what a project normally needs and `--publish`
+  adds to it for a single run; the two combine. Publishing under
+  `network: none` is refused rather than silently producing a port that never
+  answers. Works on `run` and every agent wrapper — inside a wrapper use the long
+  form, since `-P` is a short flag and short flags are forwarded to the agent.
+
 - `--paste` — mount `~/Desktop`, `~/Downloads` and `~/Pictures` read-only at
   their own host paths, so an image path pasted into an agent resolves inside the
   container. Pasting an image previously looked like it did nothing: the terminal
@@ -189,15 +217,6 @@ version is tagged.
   install and module paths point there.
 
 ### Fixed
-
-- Timestamps written inside the sandbox now carry your timezone. The container
-  had no idea where you were — `TZ` unset, `/etc/localtime` UTC — so a commit an
-  agent made in a sandbox recorded `+0000` while your own commits recorded your
-  real offset, and `git log` showed two commits made minutes apart sitting hours
-  apart. The host's zone is forwarded as `TZ` (a name, resolved from `$TZ`,
-  `/etc/localtime` or `/etc/timezone` — nothing new is mounted). A host whose
-  zone can't be established keeps the old UTC behavior, and `--env TZ=UTC` opts
-  out.
 
 - `worktree rm`, `worktree path`, `worktree git` and `worktree commit` now find
   the worktree by asking git which one has the branch checked out, instead of

@@ -46,6 +46,16 @@ type RunSpec struct {
 	Mounts   []Mount           // bind mounts (workspace + extras)
 	AddHosts []string          // --add-host HOST:IP entries (e.g. host.docker.internal:host-gateway)
 
+	// Ports are published to the host (docker -p), each already a fully-qualified
+	// IP:HOSTPORT:CONTAINERPORT spec — sandbox.NormalizePublish has resolved a
+	// missing address to 127.0.0.1, so BuildArgs never has to decide where a port
+	// is exposed. Empty (the default) publishes nothing and the container remains
+	// unreachable from the host.
+	//
+	// This is the one direction the boundary opens *inward*, which is why it is
+	// opt-in and why the address is explicit by the time it lands here.
+	Ports []string
+
 	// Entrypoint overrides the image ENTRYPOINT (docker --entrypoint). "" leaves
 	// the image default. Used by the egress allowlist, where a firewall-setup
 	// wrapper must run (as root, with NET_ADMIN) before dropping to the target

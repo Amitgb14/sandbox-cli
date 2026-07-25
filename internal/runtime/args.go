@@ -49,6 +49,12 @@ func BuildArgs(s RunSpec) []string {
 	for _, h := range s.AddHosts {
 		a = append(a, "--add-host", h)
 	}
+	// Published ports. Emitted verbatim: the address is already explicit (see
+	// RunSpec.Ports), so what is exposed is decided in one place, upstream, and
+	// is visible in --dry-run before anything runs.
+	for _, p := range s.Ports {
+		a = append(a, "-p", p)
+	}
 
 	// Container hardening. Order is fixed for deterministic output.
 	if s.NoNewPrivileges {

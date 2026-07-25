@@ -165,6 +165,66 @@ func TestLoad_RuntimeFromConfig(t *testing.T) {
 	}
 }
 
+func TestLoad_PortsFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, projectFileName)
+	if err := os.WriteFile(cfgFile, []byte("ports:\n  - 3000:3000\n  - 5173\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+
+	cfg, err := Load(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Ports) != 2 || cfg.Ports[0] != "3000:3000" || cfg.Ports[1] != "5173" {
+		t.Errorf("Ports = %v, want [3000:3000 5173]", cfg.Ports)
+	}
+	// Nothing is published unless a config or flag says so.
+	if d := Default(); len(d.Ports) != 0 {
+		t.Errorf("default Ports = %v, want none", d.Ports)
+	}
+}
+
+// TestLoad_PortsReplaceNotAppend: publishing opens the boundary inward, so a
+// project must be able to narrow an inherited set — including to nothing.
+func TestLoad_PortsReplaceNotAppend(t *testing.T) {
+	xdg := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(xdg, "sandbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userCfg := filepath.Join(xdg, "sandbox", "config.yaml")
+	if err := os.WriteFile(userCfg, []byte("ports:\n  - 9000:9000\n  - 9001:9001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, projectFileName), []byte("ports:\n  - 3000:3000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Ports) != 1 || cfg.Ports[0] != "3000:3000" {
+		t.Errorf("project ports must replace the user's, got %v", cfg.Ports)
+	}
+
+	// An explicit empty list clears the inherited set rather than being ignored.
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, projectFileName), []byte("ports: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(dir2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg2.Ports) != 0 {
+		t.Errorf("`ports: []` must publish nothing, got %v", cfg2.Ports)
+	}
+}
+
 func TestValidate_BadNetwork(t *testing.T) {
 	c := Default()
 	c.Network.Mode = "bogus"

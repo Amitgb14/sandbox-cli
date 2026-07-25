@@ -1,0 +1,233 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+ * Design system — "quiet paper, loud signal".
+ *
+ * The page is deliberately light and near-monochrome: white paper, one very
+ * dark ink for type and primary actions, and a thin neutral rule for structure.
+ * Colour is reserved for meaning, never decoration, and there are only three:
+ *
+ *   contained  (emerald)  — inside the boundary, allowed, safe
+ *   exposed    (rose)     — outside the boundary, reachable, dangerous
+ *   caution    (amber)    — opt-in reach that widens the boundary
+ *
+ * Every graphic on the page — the boundary canvas, the blast-radius map, the
+ * egress visualiser, the comparison table — restates the product's thesis with
+ * that same pair, so the palette is doing argument, not decoration.
+ */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Semantic trio */
+  --color-contained: var(--contained);
+  --color-contained-soft: var(--contained-soft);
+  --color-contained-line: var(--contained-line);
+  --color-exposed: var(--exposed);
+  --color-exposed-soft: var(--exposed-soft);
+  --color-exposed-line: var(--exposed-line);
+  --color-caution: var(--caution);
+  --color-caution-soft: var(--caution-soft);
+
+  /* Surfaces */
+  --color-surface: var(--surface);
+  --color-grid-line: var(--grid-line);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.9);
+  --radius-3xl: calc(var(--radius) * 2.4);
+  --radius-4xl: calc(var(--radius) * 3);
+}
+
+:root {
+  --radius: 0.7rem;
+
+  --background: #ffffff;
+  --foreground: #0b0b0d;
+  --card: #ffffff;
+  --card-foreground: #0b0b0d;
+  --popover: #ffffff;
+  --popover-foreground: #0b0b0d;
+  --primary: #121215;
+  --primary-foreground: #fafafa;
+  --secondary: #f5f5f6;
+  --secondary-foreground: #121215;
+  --muted: #f5f5f6;
+  --muted-foreground: #70707a;
+  --accent: #f1f1f3;
+  --accent-foreground: #121215;
+  --destructive: #e11d48;
+  --border: #e7e7ea;
+  --input: #e4e4e8;
+  --ring: #a8a8b0;
+
+  /* Meaning, not decoration */
+  --contained: #059669;
+  --contained-soft: #ecfdf5;
+  --contained-line: #a7f3d0;
+  --exposed: #e11d48;
+  --exposed-soft: #fff1f2;
+  --exposed-line: #fecdd3;
+  --caution: #b45309;
+  --caution-soft: #fffbeb;
+
+  --surface: #fbfbfc;
+  --grid-line: #ededf0;
+
+  --chart-1: #121215;
+  --chart-2: #059669;
+  --chart-3: #a1a1aa;
+  --chart-4: #e11d48;
+  --chart-5: #d4d4d8;
+
+  --sidebar: #fbfbfc;
+  --sidebar-foreground: #0b0b0d;
+  --sidebar-primary: #121215;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f1f1f3;
+  --sidebar-accent-foreground: #121215;
+  --sidebar-border: #e7e7ea;
+  --sidebar-ring: #a8a8b0;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in srgb, var(--ring) 50%, transparent);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 5.5rem;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--contained) 22%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* A faint engineering grid — the page's only ambient texture. */
+@utility bg-blueprint {
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+@utility bg-dotgrid {
+  background-image: radial-gradient(var(--grid-line) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* Section label: a short rule, then small caps. */
+@utility eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* Numerals that line up in tables and gauges. */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes marquee-x {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.55;
+  }
+  70% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}

@@ -573,3 +573,88 @@ func contains(s []string, v string) bool {
 	}
 	return false
 }
+
+func TestBuildSpec_PublishFromFlagAndConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseCfg()
+	cfg.Ports = []string{"3000:3000"}
+
+	spec, err := BuildSpec(cfg, Options{
+		Project: dir,
+		Publish: []string{"9229", "0.0.0.0:8080:80"},
+		Command: []string{"sh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"127.0.0.1:3000:3000", "127.0.0.1:9229:9229", "0.0.0.0:8080:80"}
+	if len(spec.Ports) != len(want) {
+		t.Fatalf("Ports = %v, want %v", spec.Ports, want)
+	}
+	for i := range want {
+		if spec.Ports[i] != want[i] {
+			t.Errorf("Ports[%d] = %q, want %q", i, spec.Ports[i], want[i])
+		}
+	}
+}
+
+// TestBuildSpec_NoPublishByDefault: the container is unreachable from the host
+// unless publishing was asked for. This is the inward half of the isolation
+// story and belongs next to the mount invariants.
+func TestBuildSpec_NoPublishByDefault(t *testing.T) {
+	dir := t.TempDir()
+	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Ports) != 0 {
+		t.Errorf("expected no published ports by default, got %v", spec.Ports)
+	}
+}
+
+func TestBuildSpec_PublishRejectsBadSpec(t *testing.T) {
+	dir := t.TempDir()
+	_, err := BuildSpec(baseCfg(), Options{Project: dir, Publish: []string{"not-a-port"}, Command: []string{"sh"}})
+	if err == nil {
+		t.Fatal("expected an error for a malformed port spec")
+	}
+	if !strings.Contains(err.Error(), "publish") {
+		t.Errorf("error should name the flag, got %v", err)
+	}
+}
+
+// A published port and `network: none` cannot both be honoured; say so instead
+// of returning a container that looks configured and never answers.
+func TestBuildSpec_PublishWithNetworkNoneFails(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseCfg()
+	cfg.Network.Mode = "none"
+	_, err := BuildSpec(cfg, Options{Project: dir, Publish: []string{"3000"}, Command: []string{"sh"}})
+	if err == nil {
+		t.Fatal("expected publishing under network:none to be refused")
+	}
+	if !strings.Contains(err.Error(), "none") {
+		t.Errorf("error should mention the network mode, got %v", err)
+	}
+}
+
+// The egress allowlist filters OUTPUT only, so publishing still works alongside
+// it — and the two features must not quietly disable each other.
+func TestBuildSpec_PublishWithAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project: dir,
+		Publish: []string{"3000"},
+		Allow:   []string{"example.com"},
+		Command: []string{"sh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Ports) != 1 || spec.Ports[0] != "127.0.0.1:3000:3000" {
+		t.Errorf("Ports = %v, want the published port kept under --allow", spec.Ports)
+	}
+	if spec.Network == "none" {
+		t.Error("allowlist mode must keep bridge networking")
+	}
+}

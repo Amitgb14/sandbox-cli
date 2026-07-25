@@ -423,6 +423,7 @@ it looked rather than printing a zero.
 | `--share` | Mount the shared dir (`~/.config/sandbox/shared`) at `/shared` so agents in different projects can exchange files |
 | `--paste` | Mount `~/Desktop`, `~/Downloads` and `~/Pictures` read-only at their host paths, so an image path pasted into the agent resolves inside the container |
 | `--git` | Forward host git identity and trust the workspace so `git` commits just work in-container |
+| `-P, --publish` | Publish a container port to the host, e.g. `-P 3000` or `-P 8080:3000` (repeatable; binds `127.0.0.1` unless you give an address) |
 | `--host-gateway` | Map `host.docker.internal` to the host (reach host MCP servers; needed on Linux) |
 | `--add-host` | Extra `HOST:IP` mapping passed to docker (repeatable) |
 | `--runtime` | OCI runtime for stronger isolation, e.g. `kata-runtime` (microVM) or `runsc` (gVisor) |
@@ -813,6 +814,9 @@ network:
   mode: default       # default | none | allowlist
   allow:              # allowlist mode only: extra domains beyond the baseline
     - internal.registry.example.com
+ports:                # published to the host; no address => 127.0.0.1 only
+  - 3000:3000         # write 0.0.0.0:3000:3000 to expose it to your network
+  - 5173
 security:             # secure-by-default hardening; override per project/user
   no_new_privileges: true     # block setuid privilege escalation
   cap_drop: [ALL]             # drop all Linux capabilities (cap_add: [] to add back)
@@ -874,6 +878,14 @@ secrets:              # broker: resolve at run time, forward by name (never on t
   the run drops back to the non-root `sandbox` user; it fails closed if setup
   errors. Requires a Linux-capable Docker host (iptables); resolves domains to IPs
   once at startup, so extremely dynamic CDNs may need extra `allow` entries.
+
+- **Nothing is reachable inward unless you publish it.** No container port is
+  exposed to the host by default. `--publish` / `ports:` opens one, and a spec
+  that names no address binds to `127.0.0.1` rather than every interface — the
+  one place sandbox-cli deliberately differs from `docker -p`, because "let me
+  see my dev server" should not also mean "serve it to the network". Write
+  `0.0.0.0:3000:3000` when you mean that. The egress allowlist filters outbound
+  traffic only, so it and a published port coexist.
 
 Deliberately out of scope, with clean seams left in the code for them: a
 header-injecting secrets proxy (so the agent never sees the raw value),
