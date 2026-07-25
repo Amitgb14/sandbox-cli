@@ -164,6 +164,15 @@ Reading a file another program owns is the compromise this half is built on, so
   an unlabelled stale percentage is the one way this actively misleads. A shape
   the parser no longer recognizes yields *no windows*, never a zero.
 
+There is a sharper form of that second rule, learned from a cache written 29
+minutes before its windows reset and read 16 hours later: it reported `week
+(Fable) 25%` when the true figure was `0`. Aging the *reading* was not enough,
+because once a window has passed its reset the percentage is not merely old — it
+describes the period **before** the reset, and no amount of labelling makes it an
+answer to what is left now. Such a row prints `rolled over` and **no percentage**,
+the same bargain the parser makes with a shape it cannot read. `--refresh` is the
+way out of that state rather than a way to dress it up.
+
 Two candidate paths, resolved by which was refreshed last rather than by
 precedence: the sandbox-owned HOME (`~/.config/sandbox/agents/claude/.claude.json`)
 and the user's real `~/.claude.json`. Both describe the same account and so the
@@ -222,8 +231,14 @@ word to spend on a command that is account-scoped rather than agent-scoped.
 
 - Cost in dollars. The cache carries `used_dollars` / `limit_dollars`, but on a
   subscription plan they are internal accounting, not what the user is spending.
-- Any live query. There is no supported way to ask, and inventing one by
-  replaying the agent's credentials is out of the question.
+- A live query of our own. There is no supported way to ask, and inventing one by
+  replaying the agent's credentials against an endpoint nobody documented is out
+  of the question. `--refresh` is not that: it asks the agent, through its own
+  supported CLI, to make one ordinary request, and then reads the same file as
+  before. Opt-in, because that request is spent from the window being measured,
+  and bounded rather than instant — Claude Code refetches on its own interval, so
+  a refresh makes a reading minutes old where an idle machine had hours, and the
+  printed age still says which.
 - Other agents. Only claude's windows are read, because they are the only ones
   that have been seen holding a number (the survey is above: gemini, opencode and
   goose record nothing of the kind; codex records the same shape, but only under a

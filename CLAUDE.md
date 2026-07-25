@@ -106,8 +106,16 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   it came with and the command always prints it — these refresh only when the agent talks to
   the server, so an unlabelled percentage can be hours stale). A shape the parser no longer
   recognizes yields *no windows* rather than a zero, the same bargain `agentctx` makes with
-  transcripts. Two candidate paths — the persisted agent HOME and the user's real home —
+  transcripts — and a window **past its reset** prints no percentage either, because the
+  cached figure then measures the period before the reset rather than a stale amount of the
+  current one. Two candidate paths — the persisted agent HOME and the user's real home —
   resolved by whichever was refreshed last, since both describe the same account.
+  `usage --refresh` (`refresh.go`) is the only way to make a reading current: it runs one
+  throwaway `claude -p` turn, in a scratch cwd so the turn stays out of the project's
+  transcript history, and re-reads. That keeps both rules — Claude Code still writes its own
+  file, we only give it a reason to — and it stays opt-in because the request is spent from
+  the window being measured. It bounds staleness to Claude Code's own refetch interval; it
+  does not stamp the reading now, so the printed age still governs.
   Design: `docs/proposals/usage-stats.md`.
 - **`internal/creds`, `internal/audit`** — deliberate **stub seams** for a future credential broker
   and audit trail. Today nothing extra is forwarded and audit goes to a no-op sink; keep these seams clean.

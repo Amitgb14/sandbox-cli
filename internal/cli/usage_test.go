@@ -3,7 +3,36 @@ package cli
 import (
 	"testing"
 	"time"
+
+	"github.com/Amitgb14/sandbox-cli/internal/agentusage"
 )
+
+// The bug this guards: a cache written 29 minutes before a window reset, read
+// 16 hours later, printed "week (Fable) 25%" when the true figure was 0. The
+// percentage was the previous week's final reading. Once a window has rolled
+// over the only honest cell is one that shows no number.
+func TestPercentCell(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		w    agentusage.Window
+		want string
+	}{
+		{"still running", agentusage.Window{Percent: 49, ResetsAt: now.Add(time.Hour)}, "49%"},
+		{"rolled over", agentusage.Window{Percent: 25, ResetsAt: now.Add(-time.Minute)}, "—"},
+		{"rolled over at exactly now", agentusage.Window{Percent: 25, ResetsAt: now}, "—"},
+		// No reset time to place it either side of: the percentage is all there
+		// is, and it is still true of some window.
+		{"no reset reported", agentusage.Window{Percent: 8}, "8%"},
+		{"zero is a number, not a gap", agentusage.Window{Percent: 0, ResetsAt: now.Add(time.Hour)}, "0%"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := percentCell(tc.w, now); got != tc.want {
+				t.Errorf("percentCell = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestResetCells(t *testing.T) {
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.Local)
@@ -17,8 +46,9 @@ func TestResetCells(t *testing.T) {
 		{"within the hour", now.Add(9 * time.Minute), "resets in 9m", "(12:09)"},
 		{"days out names the day", now.Add(4 * 24 * time.Hour), "resets in 4d", "(Wed 12:00)"},
 		{"on the hour drops the minutes", now.Add(3 * time.Hour), "resets in 3h", "(15:00)"},
-		// Past its reset: the reading is stale, not negative.
-		{"already due", now.Add(-time.Minute), "due", "(11:59)"},
+		// Past its reset: the window has started over, which is what to say —
+		// not a negative countdown.
+		{"already rolled over", now.Add(-time.Minute), "rolled over", "(11:59)"},
 		// A window with no reset time still reports its percentage, so the cell
 		// has to say what is missing rather than render a zero time as midnight.
 		{"not reported", time.Time{}, "reset time not reported", ""},

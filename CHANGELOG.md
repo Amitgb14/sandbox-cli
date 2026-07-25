@@ -47,10 +47,27 @@ version is tagged.
   A row named with a model in parentheses is a cap on that model alone, for plans
   that meter one separately alongside the account-wide window.
 
-  There is no way to ask for a live reading without an interactive session, so this
-  reads the numbers Claude Code caches for its own `/usage` — which is why it always
-  prints how old the reading is; they refresh when the agent talks to the server, so
-  an idle machine can hold a figure from hours ago. `--json` for scripts. Only
+  This reads the numbers Claude Code caches for its own `/usage`, which is why it
+  always prints how old the reading is: the cache only refreshes when the agent
+  talks to the server, so an idle machine can hold a figure from hours ago — long
+  enough that a window has since started over. Those rows show no percentage at
+  all rather than the last figure from the window before, which is a number about
+  the wrong period:
+
+  ```
+  5h            —  rolled over  (03:09)
+  week          —  rolled over  (Fri 22:59)
+  week (Fable)  —  rolled over  (Fri 23:00)
+
+  claude, as of 17h ago — ~/.claude.json
+  run `sandbox-cli usage --refresh` for a current reading
+  ```
+
+  `--refresh` spends one throwaway turn to make the numbers current — the only way
+  to do it, since there is no supported query and reaching for the agent's stored
+  credentials is not one. It is opt-in because that request comes out of the
+  subscription being measured, and Claude Code still decides when to refetch, so
+  it bounds the reading to that interval rather than stamping it now. `--json` for scripts. Only
   claude's windows are read: codex records the same kind of figure, but only under a
   ChatGPT plan and in a shape no sample has confirmed yet, and gemini, opencode and
   goose record nothing of the kind. Nothing is guessed at for the others.
