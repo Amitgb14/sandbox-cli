@@ -337,6 +337,156 @@ use `--worktree`; run the agent in a normal checkout instead.
   collide. One branch per agent.
 - Commit before you start: an agent can only build on what's in HEAD.
 
+### Crash recovery
+
+Everything an agent does lands directly on your disk — that is the point of the
+bind mount — so when a run dies mid-write, the damage lands there too. Two ways
+it bites:
+
+- **git stops working.** A worktree's `.git` is a pointer into
+  `<repo>/.git/worktrees/<name>`. Delete that directory (a `git worktree prune`,
+  or the one `git gc` runs for itself, reaching out through the read-write
+  mount) and every command answers `fatal: not a git repository`, with all your
+  files still sitting right there.
+- **the agent discards its own work.** One `git reset --hard` and the commits it
+  just made are on no branch at all.
+
+So sandbox-cli keeps a running copy. While a sandbox is up, the workspace is
+committed into your repository's own object store under
+`refs/sandbox/snapshots/` — at the start, every two minutes, and on the way out,
+including on Ctrl-C. Each snapshot is written against a private index file, so
+your index, `HEAD`, branches and working tree are never written to: nothing shows
+in `git branch`, nothing is pushed, `git status` is unchanged.
+
+```sh
+sandbox-cli recover                  # what's broken here, and what there is to recover
+sandbox-cli recover list             # every recorded run for this repo, newest first
+sandbox-cli recover show ID          # what's in a snapshot
+sandbox-cli recover restore ID       # put it back, on a branch
+sandbox-cli recover repair           # fix a repository a crashed sandbox broke
+```
+
+`restore` creates a branch and touches nothing else. After a crash the files on
+disk may themselves be the newest copy of your work, so nothing overwrites them
+unless you ask: `--into-worktree` puts the files back in place (refused unless
+the tree is clean) and `--patch` writes the changes out as a patch instead.
+
+Run it from your normal checkout even when the crash happened in a `--worktree`
+sandbox — worktrees share the repository the snapshots live in.
+
+`repair` handles the other half. It rebuilds a deleted worktree administrative
+directory and clears locks a killed git left behind, then rebuilds the index from
+`HEAD` — never `--hard`, and never moving a ref, since the uncommitted work is
+the whole point. An interrupted merge or rebase is reported but never touched:
+only you know whether to finish it or abort it.
+
+#### After a crash, step by step
+
+Work from your normal checkout. Everything up to step 5 is read-only or additive,
+so you can run it before deciding anything.
+
+**1. Change nothing yet.** Your files are still on disk — that is the usual case,
+not the exception. The one way to make this worse is to overwrite them while
+trying to recover them, so resist `git checkout .`, `git reset --hard`, and
+deleting the worktree until you know what you have.
+
+**2. Ask what happened.**
+
+```sh
+sandbox-cli recover
+```
+
+It prints two things: what is broken in the repository here, and every run it has
+a record of. A run marked `crashed` is one that nothing closed.
+
+**3. If it reported a problem, fix it.**
+
+```sh
+sandbox-cli recover repair        # add --yes to skip the confirmations
+git status
+```
+
+This is the whole fix for the most common failure — a worktree whose
+administrative directory was deleted, where `git status` answered `fatal: not a
+git repository`. Your commits and your uncommitted edits come back untouched.
+**Very often you are done here**, because nothing was ever lost; git had merely
+been made unable to see it.
+
+**4. If work is actually missing, restore a snapshot.** That means the agent
+reset it away, or the worktree directory itself is gone. Find it and look before
+you take it:
+
+```sh
+sandbox-cli recover list                  # note the SESSION id
+sandbox-cli recover show 20260724-2318    # any unambiguous prefix works
+```
+
+```sh
+sandbox-cli recover restore 20260724-2318
+```
+
+That creates `sandbox-recover/<branch>-<id>` and changes nothing else — not your
+current branch, not your working tree, not any existing branch.
+
+**5. Review it, then take what you want.**
+
+```sh
+git diff HEAD sandbox-recover/feature-a-20260724-231800-08df8e   # what's in it
+git switch sandbox-recover/feature-a-20260724-231800-08df8e      # work on it directly
+# or, from your own branch:
+git cherry-pick <commit>          # a commit the agent made
+git checkout sandbox-recover/… -- path/to/file.go   # one file
+```
+
+**6. Commit the work.** Once a branch holds it, the snapshot is a duplicate and
+is deleted automatically at the start of your next run in that repository.
+
+**7. Clean up the recovery branch** when you no longer need it:
+
+```sh
+git branch -D sandbox-recover/feature-a-20260724-231800-08df8e
+```
+
+Two variations on step 4, when a branch is not what you want:
+
+```sh
+sandbox-cli recover restore <id> --patch -o crash.patch   # then: git apply crash.patch
+sandbox-cli recover restore <id> --into-worktree          # files straight back in place
+```
+
+`--into-worktree` is refused unless your working tree is clean, for the reason in
+step 1. It leaves the restored files staged, so `git status` shows you exactly
+what came back before you commit.
+
+**If `recover list` is empty**, there is no snapshot to restore — the run
+predates this feature, ran with `--no-snapshot`, worked in a directory that is not
+a git repository, or died before its first snapshot. Your files on disk are still
+the source of truth; step 3 is what gets git looking at them again.
+
+Snapshots clean themselves up. Once you commit the work for real, the snapshot
+holds a tree some branch already holds, and it is deleted at the start of the
+next run in that repository — being superseded, not timing out, is a snapshot's
+normal end. The test is an *exact* tree match, never "the branch moved on":
+commit half of what the agent left and the snapshot stays, because it is still
+the only copy of the other half.
+
+```sh
+sandbox-cli recover prune                      # both kinds, by hand
+sandbox-cli recover prune --superseded=false   # only the 14-day expiry
+```
+
+**Gotchas:**
+
+- Snapshots honour `.gitignore`. Ignored paths are not captured — which is what
+  stops `node_modules` from being committed every two minutes, and means a
+  gitignored `.env` the agent wrote is not recoverable this way.
+- Work you never commit is pruned after 14 days (`snapshot.retention`), because a
+  ref keeps its objects alive forever.
+- A sandbox that is still running is never pruned, so its next snapshot can't be
+  broken by housekeeping in another terminal.
+- It needs a git repository. A sandbox on a plain directory gets no safety net.
+- `--no-snapshot` turns it off for a run.
+
 ### Handing files between two sandboxes
 
 Two sandboxes are blind to each other by design — each sees its own project and
@@ -486,6 +636,11 @@ security:                     # secure-by-default; override per project
 cache:
   enabled: false              # or use --cache
 
+snapshot:                     # crash safety net (sandbox-cli recover)
+  enabled: true               # or use --no-snapshot
+  interval: 2m                # how often the workspace is snapshotted
+  retention: 336h             # 14d, then old snapshots are pruned
+
 secrets:
   GITHUB_TOKEN: { command: gh auth token }
   ANTHROPIC_API_KEY: { file: ~/.secrets/anthropic }
@@ -523,6 +678,9 @@ Run `sandbox-cli config show` to see the effective, merged config.
 | `sandbox-cli worktree list\|path\|rm` | Manage `--worktree` worktrees |
 | `sandbox-cli worktree git BRANCH ...` | Run git inside a worktree, by branch name |
 | `sandbox-cli worktree commit BRANCH -m ...` | Commit what the agent left there |
+| `sandbox-cli recover` | What a crashed run left behind, and what's broken ([runbook](#after-a-crash-step-by-step)) |
+| `sandbox-cli recover list\|show\|restore` | Find and restore work from a crashed run |
+| `sandbox-cli recover repair` | Fix a repository a crashed sandbox broke |
 | `sandbox-cli version` | Print the version |
 
 Common flags (work on `run` and on every agent wrapper):
@@ -565,6 +723,22 @@ the allowlist. The common ones are built in; add others with another `--allow`.
 
 **The agent can't reach my local MCP server** — add `--host-gateway` (Linux) and
 point the agent at `host.docker.internal`.
+
+**A run crashed and I don't know where my work is** — follow
+[After a crash, step by step](#after-a-crash-step-by-step). Short version:
+`sandbox-cli recover`, then `sandbox-cli recover repair` if it reported a
+problem, then `git status`.
+
+**`fatal: not a git repository` after a sandbox crashed** — the worktree's
+administrative directory in the parent repo was deleted, so the `.git` pointer
+file leads nowhere. Your files are untouched. Run `sandbox-cli recover repair`
+(from the worktree or from your main checkout — it finds orphaned worktrees
+either way); `git worktree repair` will not help, since it reconnects worktrees
+that *moved* and there is nothing left here to reconnect.
+
+**The agent reset away work I wanted** — `sandbox-cli recover list`, then
+`sandbox-cli recover restore <id>` puts it on a branch. Snapshots carry the
+commit `HEAD` was on, so commits a `git reset --hard` orphaned come back too.
 
 **Files in `/workspace` are owned by the wrong user (Linux)** — run as your own
 uid: `--user "$(id -u):$(id -g)"`. On macOS Docker Desktop this is handled

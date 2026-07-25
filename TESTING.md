@@ -67,6 +67,15 @@ go vet ./...              # must be clean
 | **[integration]** `--secret` delivers file/env/cmd sources into the container | `TestSecretDelivery` | `internal/cli` |
 | **[integration]** `--cache` non-root write + persistence across --rm runs | `TestCachePersistsAndWritable` | `internal/cli` |
 | **[integration]** `--worktree` mounts the branch's checkout at /workspace | `TestWorktreeEndToEnd` | `internal/cli` |
+| crash snapshots leave the repo untouched (index, HEAD, branches, tree) and write only `refs/sandbox` | `TestSnapshotLeavesTheRepositoryUntouched` | `internal/rescue` |
+| snapshots capture uncommitted + untracked work, skip ignored paths, no-op when unchanged | `TestSnapshotCapturesWorkAndSkipsIgnored`, `TestSnapshotIsANoOpWhenNothingChanged` | `internal/rescue` |
+| an agent's `git reset --hard` cannot destroy its own commits (HEAD carried as a snapshot parent) | `TestSnapshotSurvivesAResetHard` | `internal/rescue` |
+| restore adds a branch and changes nothing else; `--into-worktree` refuses a dirty tree | `TestRestoreOntoABranchChangesNothingElse`, `TestRestoreIntoWorktreeRefusesADirtyTree` | `internal/rescue` |
+| worktree snapshots are visible from the main checkout; retention prunes refs + sessions | `TestSnapshotsFromAWorktreeAreVisibleFromTheMainRepo`, `TestPruneDropsOldSessionsAndTheirRefs` | `internal/rescue` |
+| superseded prune: exact tree match only (a partial commit keeps the snapshot), and never a live session | `TestPruneSupersededOnlyWhenTheWorkIsFullyCommitted`, `TestPruneLeavesALiveSessionAlone` | `internal/rescue` |
+| repair rebuilds a deleted worktree admin dir without discarding uncommitted work | `TestRepairRebuildsADeletedWorktreeAdminDir` | `internal/rescue` |
+| diagnose: only *stale* locks, interrupted merges reported not repaired, quiet when healthy | `TestDiagnoseFindsOnlyStaleLocks`, `TestInterruptedOperationsAreReportedNotRepaired`, `TestDiagnoseIsQuietOnAHealthyRepo` | `internal/rescue` |
+| `--dry-run` stays pure (no session, no snapshot ref); safety net on by default | `TestDryRunTakesNoSnapshotAndRecordsNoSession`, `TestSnapshotsAreOnByDefault` | `internal/cli` |
 | wrapper arg splitting (claude/codex flag passthrough) | `TestSplitWrapperArgs`, `TestClaudeWrapperParsesWithoutError` | `internal/cli` |
 | `--dry-run` golden (asserts `--rm`, fake HOME, no host-home mount) | `TestDryRunInvariants` | `internal/cli` |
 | metrics parsing / bar / duration / humanBytes / footer / summary | `TestParseBytes`, `TestParseMemUsage`, `TestBar`, `TestFormatDuration`, `TestHumanBytes`, `TestFooterForwardsOutputIntact`, `TestMeterSummary` | `internal/metrics` |
@@ -332,6 +341,48 @@ if installed via `make install`).
 1. `rm -rf ~/.config/sandbox/agents/claude`
 2. `sandbox-cli claude -- --version`
 - Expected: reports the current Claude Code version (e.g. `2.1.212`), installed at `~/.config/sandbox/agents/claude/.local/bin/claude`. Second run is instant and stays current.
+
+### Group 11 — Crash recovery
+
+**TC-100 [M] Work survives a killed sandbox**
+1. In a git repo: `sandbox-cli claude --worktree crashme --snapshot-interval 20s`
+2. Have the agent edit a file and commit; leave a second file uncommitted. Wait ~30s.
+3. From another terminal: `kill -9` the `sandbox-cli` process.
+4. `sandbox-cli recover list`
+- Expected: one row for the run, branch `crashme`, state `crashed`, a non-zero snapshot count.
+
+**TC-101 [M] Restore puts the work on a branch, changing nothing else**
+1. From your *normal* checkout (not the worktree): `sandbox-cli recover restore <id>`
+2. `git status`, `git branch`
+- Expected: a new `sandbox-recover/crashme-<id>` branch holding both the committed and the
+  uncommitted work; your current branch, HEAD and working tree are exactly as they were.
+
+**TC-102 [M] Repair a worktree a prune broke**
+1. `rm -rf <repo>/.git/worktrees/<name>` (what an in-container `git worktree prune` does).
+2. In the worktree: `git status` → `fatal: not a git repository`.
+3. `sandbox-cli recover repair --yes`, then `git status`, `git log --oneline -1`.
+- Expected: repair names the right branch, git works again on that branch, the agent's commit
+  is there, and the uncommitted file is still uncommitted (not staged, not discarded).
+
+**TC-103 [M] Ctrl-C takes a final snapshot**
+1. `sandbox-cli run --no-tty -- sh -c 'echo x > /workspace/new.txt; sleep 60'`
+2. Press `Ctrl-C`.
+- Expected: `sandbox-cli: interrupted — saving a final snapshot of your work…`, exit status 130,
+  and `sandbox-cli recover list` shows the session as `interrupted` with a snapshot containing
+  `new.txt`.
+
+**TC-104 [A/M] `--no-snapshot` and a non-repo workspace are silent no-ops**
+1. `sandbox-cli run --no-snapshot -- true` in a repo; `sandbox-cli run -- true` in a plain directory.
+- Expected: both run normally, and `~/.config/sandbox/rescue` gains no session for either.
+
+**TC-105 [M] A snapshot disappears once its work is committed**
+1. After TC-100/101, commit only *some* of the recovered files, then `sandbox-cli recover prune`.
+- Expected: `nothing to prune` — the rest exists nowhere else, so the snapshot stays.
+2. Commit the rest (`git add -A && git commit`), then run any sandbox in that repo.
+- Expected: no `recover prune` needed; `sandbox-cli recover list` no longer shows the session,
+  and its `refs/sandbox/snapshots/<id>` is gone (`git for-each-ref refs/sandbox`).
+3. Repeat with `sandbox-cli recover prune --superseded=false`.
+- Expected: the session survives; only the 14-day expiry applies.
 
 ---
 

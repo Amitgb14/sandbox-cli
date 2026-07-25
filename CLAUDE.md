@@ -50,6 +50,12 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
 - **`internal/image`** — lazily builds the embedded base image (`assets/Dockerfile`, `//go:embed`)
   on first use via the `Runtime`'s builder hook.
 - **`internal/metrics`** — the sticky-footer live resource gauge for non-interactive runs only.
+- **`internal/rescue`** — the crash safety net and `sandbox-cli recover`. Snapshots the workspace
+  into `refs/sandbox/snapshots/<session>` while a run is in flight, using a **private
+  `GIT_INDEX_FILE`** so the user's index, `HEAD`, branches and working tree are never written.
+  Session manifests live outside every repo (`~/.config/sandbox/rescue/<repo-id>/`) because the
+  repo is often the broken thing. Keep the rule: rescue only ever *creates* objects and refs
+  under `refs/sandbox/`. Design and rejected alternatives: `docs/proposals/crash-recovery.md`.
 - **`internal/creds`, `internal/audit`** — deliberate **stub seams** for a future credential broker
   and audit trail. Today nothing extra is forwarded and audit goes to a no-op sink; keep these seams clean.
 
