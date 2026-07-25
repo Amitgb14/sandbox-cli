@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `sandbox-cli` runs AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose, Crush, Aider,
 Copilot CLI, Cursor, Qwen, Amp, Continue, OpenHands, Droid) or any command inside a disposable,
 isolated Docker container. Only the chosen project is bind-mounted at `/workspace`; `HOME` is a
-fake ephemeral path (`/sandbox/home`) and the container is `--rm`. The goal is to give an agent
-"Allow All" autonomy while limiting the blast radius to the project it is editing.
+fake ephemeral path (`/sandbox/home`) and the container is `--rm` (the single exception is
+`--detach`, below). The goal is to give an agent "Allow All" autonomy while limiting the blast
+radius to the project it is editing.
 
 ## Commands
 
@@ -50,6 +51,21 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
 - **`internal/image`** — lazily builds the embedded base image (`assets/Dockerfile`, `//go:embed`)
   on first use via the `Runtime`'s builder hook.
 - **`internal/metrics`** — the sticky-footer live resource gauge for non-interactive runs only.
+- **`internal/worktree`** — `--worktree <branch>` and the `worktree` subcommands. A worktree is
+  addressed by **branch**, never by a directory name derived from one: an agent that runs
+  `git checkout -b` inside its worktree puts the two out of sync, so `Resolve`, `Path` and `List`
+  ask git which worktree has the branch checked out. The path is symlink-resolved as soon as the
+  directory exists, so the string handed out when a worktree is created is the same one git reports
+  when it is reused (`/var` vs `/private/var` on macOS) — the mount, `worktree rm` and
+  `worktree git` all address it by that string, so the three must agree. The worktree is mounted at
+  its own host path so git cannot prune it away mid-session.
+- **`internal/netpolicy`** — a vestigial seam that only turns `network: none` into
+  `--network none`. The egress allowlist (`network: allowlist` / `--allow`) does **not** live here:
+  `config.NetworkSpec.EgressDomains` resolves it (baseline domains ∪ configured ones),
+  `sandbox.BuildSpec` passes it in as `SANDBOX_EGRESS_ALLOW`, and it is enforced *inside* the
+  container by `sandbox-firewall` / `sandbox-egress-setup` (`assets/Dockerfile`), which programs a
+  default-deny firewall as root and then drops to the sandbox user. Keep it failing closed: a run
+  that asks for an allowlist and cannot program it refuses to start rather than running open.
 - **`internal/rescue`** — the crash safety net and `sandbox-cli recover`. Snapshots the workspace
   into `refs/sandbox/snapshots/<session>` while a run is in flight, using a **private
   `GIT_INDEX_FILE`** so the user's index, `HEAD`, branches and working tree are never written.
@@ -73,6 +89,12 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   agent with no verified descriptor is reported `untracked` rather than guessed at,
   and a *user* turn is a prompt someone typed, never a tool result coming back as a
   user message (they outnumber real prompts ~30:1).
+  The listing prints ids abbreviated, so `resume.go/expandResumeID` grows one back into the full id
+  before the agent sees it (the agents resolve no prefixes; Claude Code rejects anything that is not
+  a whole UUID). That rewrite is deliberately timid — it fires only on the token after a known
+  resume argument from the verified descriptor, only within *this* project's history, and only when
+  exactly one session matches; anything else is forwarded untouched, because the agent's own error
+  beats resuming the wrong conversation.
 - **`internal/creds`, `internal/audit`** — deliberate **stub seams** for a future credential broker
   and audit trail. Today nothing extra is forwarded and audit goes to a no-op sink; keep these seams clean.
 
@@ -94,6 +116,17 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
      by sandbox-cli, so `sandbox-cli claude context list` works. It fires only without an
      explicit `--`, which is the escape hatch (`sandbox-cli claude -- context …` still goes
      to the agent). Adding a word to that list makes it un-forwardable — do it rarely.
+
+### Detached runs
+
+`--detach` (`run` and every wrapper) is the one case that breaks the container's usual shape, and
+each break is load-bearing: `-d` **replaces** `-i`/`-it` (nobody is attached, and an agent handed a
+pty draws its TUI for an audience of none), and `Remove` is false — the exit code and `docker logs`
+are the entire supervision story, so `--rm` would discard both at the moment they become
+interesting. Those two are resolved in `sandbox.BuildSpec`; `BuildArgs` only renders what it is
+handed. Docker is the state store: a detached container is named `sandbox-<repo>-<branch>` (so
+docker's own duplicate-name refusal enforces one agent per branch) and labelled with its repo,
+branch, agent and base branch — a fact not stamped as a label is one no later command can recover.
 
 ### Agent wrappers
 
