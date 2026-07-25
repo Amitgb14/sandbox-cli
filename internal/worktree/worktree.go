@@ -59,6 +59,7 @@ func Resolve(dir, branch string) (Info, error) {
 
 	// Reuse an existing worktree directory (git tracks it; re-adding would error).
 	if isDir(path) {
+		info.Path = resolveSymlinks(path)
 		return info, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -74,6 +75,10 @@ func Resolve(dir, branch string) (Info, error) {
 	if _, err := runGit(root, args...); err != nil {
 		return Info{}, fmt.Errorf("creating worktree for branch %q: %w", branch, err)
 	}
+	// Report the path git will report from here on. Resolving only now that the
+	// directory exists is deliberate: EvalSymlinks needs a real path, and this is
+	// the first moment there is one.
+	info.Path = resolveSymlinks(path)
 	info.Created = true
 	return info, nil
 }
@@ -193,8 +198,14 @@ func Path(dir, branch string) (path string, exists bool, err error) {
 	if path, ok := lookup(root, branch); ok {
 		return path, true, nil
 	}
+	// Fall back to the name-derived path, resolved to match what git and lookup
+	// report once the worktree exists. Unresolved is right only when it does not:
+	// there is nothing to resolve, and the caller is printing a "would be" path.
 	path = worktreePath(root, branch)
-	return path, isDir(path), nil
+	if isDir(path) {
+		return resolveSymlinks(path), true, nil
+	}
+	return path, false, nil
 }
 
 // Dirty reports the paths of modified or untracked files in the worktree for
