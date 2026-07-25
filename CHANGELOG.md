@@ -143,6 +143,22 @@ version is tagged.
 - A git worktree is mounted at its own host path so git can no longer prune it
   away mid-session, keeping git usable inside worktree sandboxes.
 
+- `sandbox-cli stats` no longer replaces the whole table with an error when a
+  sandbox exits while it is sampling. Listing the containers and reading them
+  cannot be one atomic step, and one container disappearing in between made
+  docker fail the entire batch — taking the readings of every sandbox that was
+  still running with it. Watching containers come and go is the job of this
+  command, so that sample is now retried once against a fresh list.
+
+- A sandbox worktree is reported by the same path however it was reached. The
+  path was built locally when the worktree was created and asked of git every
+  time afterwards, and git resolves symlinks — so on macOS (where `/var` is a
+  symlink to `/private/var`) the same branch came back as two different strings
+  depending on whether its worktree already existed. That is not cosmetic:
+  `worktree rm`, `worktree git` and the `--worktree` mount all address the
+  worktree by that string, so you were shown one path while a later command
+  reported another.
+
 - A crashing full-screen agent no longer leaves your host terminal spewing mouse
   gibberish. When the guest is given a TTY, the sandbox now restores the terminal
   modes a crashed TUI can leak (mouse reporting, bracketed paste, application

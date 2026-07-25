@@ -112,6 +112,10 @@ OPENAI_API_KEY=...    sandbox-cli codex exec 'run the tests'
 GEMINI_API_KEY=...    sandbox-cli gemini --yolo
 ANTHROPIC_API_KEY=... sandbox-cli opencode run 'run the tests'
 
+# See the conversations an agent has had here, and resume one
+sandbox-cli context list
+sandbox-cli claude --resume 37888763
+
 # Scaffold a project config
 sandbox-cli init
 ```
@@ -228,6 +232,59 @@ sandbox-cli claude --no-sync
 If the host has no history for the project yet, there's nothing to mount and the
 flag is a no-op. History sharing assumes the default `HOME` and workdir; with
 `--workdir` overridden, session IDs may not line up.
+
+### Past conversations (`context list`)
+
+Because each agent's home persists, so do the conversations it records there.
+`context list` shows them for the project you're in, newest first, with the id
+you resume by:
+
+```sh
+sandbox-cli context list          # every agent that has a verified session store
+sandbox-cli claude context list   # one agent — the same command, spelled per agent
+```
+
+```
+ID        WHEN    TURNS  TITLE
+37888763  2h ago  24     Make the egress allowlist fail closed
+9c1a04ef  1d ago  8      Why does worktree rm say "is not a working tree"?
+
+resume: sandbox-cli claude --resume 37888763
+```
+
+`TURNS` is prompts you sent, not messages exchanged. The listing ends with the
+command that resumes the newest session, spelled the way that agent spells it
+(`claude --resume <id>` is a flag, `codex resume <id>` is a subcommand).
+
+```sh
+sandbox-cli context list --all      # every project, not just this one
+sandbox-cli context list --limit 0  # everything (the default stops at 20 and says so)
+sandbox-cli context list --full     # whole ids (-f), needed to resume outside sandbox-cli
+sandbox-cli context list -v         # also say where each agent's sessions are stored
+sandbox-cli context list --json     # for scripts
+```
+
+Ids are printed abbreviated, and sandbox-cli expands one back to the full id
+before the agent sees it — but only when exactly one session in this project
+matches; anything ambiguous or unrecognised is passed through untouched, since
+the agent's own error beats resuming the wrong conversation. Running the agent
+*directly* needs the whole id (`claude --resume` refuses anything that isn't a
+full UUID), which is what `--full` is for — and because a Claude session recorded
+in a sandbox lands in your real `~/.claude` history, plain `claude --resume` on
+the host picks up the same conversation.
+
+Four agents have a session store that has actually been located on disk:
+`claude`, `codex`, `gemini` and `opencode`. Only `claude`'s transcripts are read
+in full — the others list the id and date with `?` for the title and count, and
+their stores aren't organised by project, so those listings cover every project
+and say so. Every other agent is reported `untracked` rather than guessed at: a
+wrong path would make "you have no sessions" look like an answer instead of a
+gap. When there's nothing to list, the output names the directories it searched.
+
+An id belongs to the agent that created it — codex can't resume a claude session.
+Carrying context *across* agents is a handoff, not a resume; it's the next step in
+[docs/proposals/shared-context.md](docs/proposals/shared-context.md). Per-agent
+detail lives in [docs/AGENTS.md](docs/AGENTS.md#seeing-an-agents-past-conversations).
 
 ### Live resource gauge
 

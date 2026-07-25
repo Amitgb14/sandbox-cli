@@ -38,6 +38,10 @@ sandbox-cli <agent> [sandbox flags] [-- ] [everything else goes to the agent]
   the container cannot see and silently cost you the session on every run.
 - **Only `/workspace` is host-connected.** Anything else needs an explicit
   `--mount`.
+- **The conversations survive too.** Because the agent home persists, so do the
+  transcripts the agent writes into it — `sandbox-cli <agent> context list` shows
+  them with the id you resume by. See
+  [Seeing an agent's past conversations](#seeing-an-agents-past-conversations).
 
 ## Prerequisites shared by all agents
 
@@ -100,7 +104,10 @@ mysterious "command not found".
 - **Extras unique to this wrapper:** a live memory/CPU status line in Claude's own
   UI (`--no-statusline` to disable), and your **host Claude history for this
   project** is shared by default so a host session can be `--resume`d inside the
-  container and vice versa (`--no-sync` to keep them separate).
+  container and vice versa (`--no-sync` to keep them separate). It is also the
+  one agent whose transcripts sandbox-cli reads in full, so
+  `sandbox-cli claude context list` shows each session's title and how many
+  prompts you sent.
 
 ```sh
 sandbox-cli claude
@@ -341,6 +348,51 @@ sandbox-cli droid exec 'run the tests'
 ```
 
 ---
+
+## Seeing an agent's past conversations
+
+Every wrapper persists the agent's `HOME`, so the sessions it records outlive the
+disposable container. `context list` shows them, newest first, with the id you
+resume by — and ends with the exact command that resumes the newest one:
+
+```sh
+sandbox-cli context list          # every agent that has a verified session store
+sandbox-cli claude context list   # one agent; the same command, spelled per agent
+sandbox-cli context list --all    # every project, not just the one you're in
+sandbox-cli context list --full   # whole ids (-f), for resuming outside sandbox-cli
+```
+
+`--limit 0` lists everything (the default stops at 20 and says how many it held
+back), `--json` is for scripts, and `-v` adds where each agent's store is.
+
+Four agents have a store that has actually been located; every other adapter is
+reported `untracked` rather than guessed at, because a wrong path would make "you
+have no sessions" look like an answer instead of a gap:
+
+| Agent | What the listing can read | Where the sessions are |
+|---|---|---|
+| `claude` | everything — title and prompt count | your real `~/.claude/projects/<project>`, since that history is mounted by default; the agent home instead under `--no-sync` |
+| `codex` | id and date; `?` for title and count | `~/.config/sandbox/agents/codex/.codex/sessions` |
+| `gemini` | id and date; `?` for title and count | `~/.config/sandbox/agents/gemini/.gemini/tmp` |
+| `opencode` | id and date; `?` for title and count | `~/.config/sandbox/agents/opencode/.local/share/opencode/storage/session` |
+| everything else | nothing yet | reported `untracked` |
+
+Two things worth knowing before you resume:
+
+- **Only `claude`'s store is organised by project**, so only its listing can be
+  narrowed to the directory you're standing in. The others are listed whole and
+  say so on the last line, rather than passing one agent's entire history off as
+  this project's.
+- **Ids are abbreviated**, and sandbox-cli expands one back to the full id before
+  the agent sees it — but only when exactly one session in this project matches;
+  an ambiguous or unknown value is forwarded untouched. Resuming *outside*
+  sandbox-cli needs the whole id, so use `-f`. Agents also spell resume
+  differently (`claude --resume <id>` is a flag, `codex resume <id>` is a
+  subcommand); the listing prints the right form for the agent you asked about.
+
+When there is nothing to list, the output says which directories were searched —
+so "where does this agent even keep its sessions?" is answered where the question
+comes up.
 
 ## Running an agent detached
 
