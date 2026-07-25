@@ -811,6 +811,37 @@ sandbox-cli claude --git
 sandbox-cli claude --host-gateway
 ```
 
+### Seeing a web app the agent is running
+The sandbox publishes no ports, so a dev server started inside it is invisible
+from your browser — the container is on Docker's own network, and on Docker
+Desktop that network lives inside a Linux VM your host cannot route to. Publish
+the port to change that:
+
+```sh
+sandbox-cli run -P 3000 -- npm run dev        # then open http://localhost:3000
+sandbox-cli claude --publish 3000             # same, for an agent session
+```
+
+Two things to know:
+
+- **Bind to `0.0.0.0` inside the container.** Most dev servers listen on
+  localhost by default, which inside a container means the container's own
+  loopback — the published port would answer with nothing. Next.js and Vite want
+  `--hostname 0.0.0.0` / `--host 0.0.0.0`; others use `HOST=0.0.0.0`.
+- **The host side binds to `127.0.0.1` unless you say otherwise.** `-P 3000` is
+  reachable from your machine and nowhere else. To share it with a phone on the
+  same wifi, ask for that explicitly: `-P 0.0.0.0:3000:3000`.
+
+Put the port in `.sandbox.yaml` and you never type it again:
+
+```yaml
+ports:
+  - 3000:3000
+```
+
+Flags add to that list rather than replacing it, so `-P 9229` opens a debugger
+port for one run without disturbing the project's own.
+
 ### Live resource metrics
 Non-interactive runs show a live memory/CPU gauge; every run prints a peak-usage
 summary at the end. `sandbox-cli stats` shows a live table of running sandboxes.
@@ -858,6 +889,9 @@ network:
   mode: default               # default | none | allowlist
   allow:                      # extra domains for allowlist mode
     - internal.registry.example.com
+
+ports:                        # published to the host; no address => 127.0.0.1
+  - 3000:3000
 
 security:                     # secure-by-default; override per project
   memory: ""                  # e.g. 2g (opt-in)
@@ -928,6 +962,7 @@ Common flags (work on `run` and on every agent wrapper):
 | `--share` | Mount `~/.config/sandbox/shared` at `/shared` (exchange files between sandboxes) |
 | `--paste` | Mount `~/Desktop`, `~/Downloads`, `~/Pictures` read-only at their host paths (pasted image paths resolve) |
 | `--git` | Forward git identity + trust the workspace |
+| `-P, --publish 3000` | Publish a container port to the host (repeatable; `127.0.0.1` unless you give an address) |
 | `--host-gateway` / `--add-host H:IP` | Reach host services / add a host mapping |
 | `--memory 2g` / `--cpus 1.5` | Resource limits |
 | `--dry-run` | Print the docker command and exit |

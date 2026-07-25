@@ -100,6 +100,19 @@ version is tagged.
   foreground one. See [docs/GUIDE.md](docs/GUIDE.md) → "Running an agent in the
   background".
 
+- `-P` / `--publish` and a `ports:` config key — publish a container port to the
+  host, so you can actually look at the dev server running inside the sandbox.
+  Nothing is published by default; the container stays unreachable from the host
+  until you ask. **A spec that names no address binds to `127.0.0.1`, not
+  `0.0.0.0`** — this is the one place sandbox-cli deliberately differs from
+  `docker -p`, because "let me see my dev server" should not also mean "serve it
+  to everything on this network". Write `0.0.0.0:3000:3000` when you do mean
+  that. Config `ports:` declares what a project normally needs and `--publish`
+  adds to it for a single run; the two combine. Publishing under
+  `network: none` is refused rather than silently producing a port that never
+  answers. Works on `run` and every agent wrapper — inside a wrapper use the long
+  form, since `-P` is a short flag and short flags are forwarded to the agent.
+
 - `--paste` — mount `~/Desktop`, `~/Downloads` and `~/Pictures` read-only at
   their own host paths, so an image path pasted into an agent resolves inside the
   container. Pasting an image previously looked like it did nothing: the terminal

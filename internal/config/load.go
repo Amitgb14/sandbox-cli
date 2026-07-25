@@ -188,6 +188,12 @@ func mergeInto(dst *Config, src Config, baseDir string) {
 	if src.Network.Allow != nil {
 		dst.Network.Allow = src.Network.Allow
 	}
+	// Ports replace for the same reason, and one more: publishing opens the
+	// boundary inward, so a project must be able to say "only these" — and to say
+	// "none" with `ports: []` — without a user-level default leaking through.
+	if src.Ports != nil {
+		dst.Ports = src.Ports
+	}
 	mergeSecurity(&dst.Security, src.Security)
 	if src.Cache.Enabled != nil {
 		dst.Cache.Enabled = src.Cache.Enabled

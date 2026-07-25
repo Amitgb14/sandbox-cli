@@ -39,6 +39,7 @@ type runFlags struct {
 	cache       bool
 	secrets     []string
 	worktree    string
+	publish     []string
 	addHosts    []string
 	hostGateway bool
 	git         bool
@@ -102,6 +103,7 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		Allow:       rf.allow,
 		Cache:       rf.cache,
 		Secrets:     rf.secrets,
+		Publish:     rf.publish,
 		AddHosts:    rf.addHosts,
 		HostGateway: rf.hostGateway,
 		GitIdentity: rf.git,
@@ -269,6 +271,7 @@ func addRunFlags(cmd *cobra.Command, rf *runFlags) {
 	f.BoolVar(&rf.cache, "cache", false, "persist package-manager caches (npm/pip/cargo/go) in named volumes across runs")
 	f.StringArrayVar(&rf.secrets, "secret", nil, "brokered credential NAME=file:PATH|cmd:COMMAND|env:VAR, resolved at run time and kept off the argv (repeatable)")
 	f.StringVar(&rf.worktree, "worktree", "", "run in a git worktree for BRANCH (created if absent), for parallel per-branch agents")
+	f.StringArrayVarP(&rf.publish, "publish", "P", nil, "publish a container port to the host: PORT|HOST:CONTAINER|IP:HOST:CONTAINER (repeatable; binds 127.0.0.1 unless an address is given)")
 	f.StringArrayVar(&rf.addHosts, "add-host", nil, "extra HOST:IP mapping passed to docker (repeatable)")
 	f.BoolVar(&rf.hostGateway, "host-gateway", false, "map host.docker.internal to the host so the agent can reach host MCP servers (Linux)")
 	f.BoolVar(&rf.git, "git", false, "forward host git identity and trust the workspace so git commits just work in-container")

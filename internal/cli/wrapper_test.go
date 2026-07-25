@@ -39,6 +39,22 @@ func TestSplitWrapperArgs(t *testing.T) {
 			wantGuest: []string{"-p", "do the thing"},
 		},
 		{
+			name:      "--publish is consumed as a sandbox flag with its value",
+			in:        []string{"--publish", "3000:3000", "--dangerously-skip-permissions"},
+			wantFlags: []string{"--publish", "3000:3000"},
+			wantGuest: []string{"--dangerously-skip-permissions"},
+		},
+		{
+			// -P is a short flag, and short flags always end the sandbox portion
+			// (that is what keeps agent flags from colliding). Inside a wrapper the
+			// long form is the one that works; -P is for `sandbox-cli run`, or after
+			// an explicit --.
+			name:      "-P goes to the agent, like every other short flag",
+			in:        []string{"-P", "3000:3000"},
+			wantFlags: []string{},
+			wantGuest: []string{"-P", "3000:3000"},
+		},
+		{
 			name:      "leading sandbox long-flags consumed, rest to agent (no -- needed)",
 			in:        []string{"--no-persist-auth", "--dangerously-skip-permissions"},
 			wantFlags: []string{"--no-persist-auth"},
@@ -134,7 +150,7 @@ func TestAgentWrappersShareTheContract(t *testing.T) {
 			if !cmd.DisableFlagParsing {
 				t.Error("must set DisableFlagParsing to forward agent flags")
 			}
-			for _, f := range []string{"project", "worktree", "dry-run", "detach", "no-persist-auth", "no-snapshot"} {
+			for _, f := range []string{"project", "worktree", "dry-run", "detach", "no-persist-auth", "no-snapshot", "publish"} {
 				if cmd.Flags().Lookup(f) == nil {
 					t.Errorf("missing sandbox flag --%s", f)
 				}
