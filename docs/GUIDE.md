@@ -811,6 +811,13 @@ sandbox-cli claude --git
 sandbox-cli claude --host-gateway
 ```
 
+Your timezone comes along too. The container's own clock is UTC, so without this
+a commit made inside a sandbox records `+0000` while your own commits record your
+real offset — the same instant, but `git log` shows them hours apart. The host's
+zone is forwarded as `TZ` (read from `$TZ`, `/etc/localtime` or `/etc/timezone`;
+nothing extra is mounted). To run on a different clock, say so — `--env TZ=UTC`,
+or any zone name — and that wins.
+
 ### Live resource metrics
 Non-interactive runs show a live memory/CPU gauge; every run prints a peak-usage
 summary at the end. `sandbox-cli stats` shows a live table of running sandboxes.
@@ -830,14 +837,33 @@ first request, so under API-key auth that part of the line is simply not there.
 
 ```sh
 sandbox-cli usage           # the same windows, outside a Claude session
+sandbox-cli usage --refresh # spend one throwaway turn to make them current
 sandbox-cli usage --json
 ```
 
 Useful when several sandboxes are running at once: they are separate containers
 but one account quota. A row labelled with a model in parentheses — `week (Fable)`
-— is a cap on that model alone, which some plans meter separately. The numbers are
-cached rather than live — there is no way to ask for a live reading
-non-interactively — so the command always prints how old the reading is.
+— is a cap on that model alone, which some plans meter separately.
+
+The numbers are cached rather than live: they come from what Claude Code keeps
+for its own `/usage`, refreshed only when the agent talks to the server, which is
+why the command always prints how old the reading is. Left alone long enough, a
+window resets and the cached figure stops describing it at all — those rows show
+`rolled over` and no percentage, rather than a number that is about last week:
+
+```
+5h            —  rolled over  (03:09)
+week          —  rolled over  (Fri 22:59)
+week (Fable)  —  rolled over  (Fri 23:00)
+
+claude, as of 17h ago — ~/.claude.json
+run `sandbox-cli usage --refresh` for a current reading
+```
+
+`--refresh` asks claude for one throwaway turn first, which is the only way to
+bring the numbers up to date — it is opt-in because that request comes out of the
+window being measured, and Claude Code still refetches on its own schedule, so it
+makes a reading minutes old rather than hours, never one stamped now.
 
 ### Works with Claude, Codex, Gemini, OpenCode and Cline
 `sandbox-cli claude` / `codex` / `gemini` / `opencode` / `cline` wrap each agent, forward

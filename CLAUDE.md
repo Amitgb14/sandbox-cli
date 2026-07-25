@@ -43,6 +43,11 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
 - **`internal/sandbox`** — composition layer. `BuildSpec(cfg, opts)` folds config + per-invocation
   `Options` into a fully-resolved `runtime.RunSpec`. `mounts.go/ResolveWorkspace` enforces the
   **non-overridable safety refusals**: never mount `/`, the host home, or an ancestor of it.
+  `timezone.go` forwards the host zone as `TZ` so timestamps written in the container (a git
+  commit above all) carry the user's offset instead of the image's UTC — a **name**, never a
+  mount of `/etc/localtime`, since a name is a string and a mount is another host path. It
+  yields to any `TZ` the user set themselves, and an unresolvable zone forwards nothing rather
+  than guessing. `hostTimezone` is a var so tests can pin the one input that differs per machine.
 - **`internal/runtime`** — `BuildArgs(RunSpec) []string` is a **pure, deterministic function** that
   produces the `docker` argv. This is the single choke point for the isolation invariants (only
   declared mounts are host-connected; `HOME` is always the fake path; host home is never mounted)

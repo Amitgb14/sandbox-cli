@@ -183,6 +183,17 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		}
 	}
 
+	// The host's timezone, so timestamps written inside the container carry the
+	// offset the user works in rather than the UTC the base image was built with
+	// (timezone.go). A default, which is why it yields to anything the user said
+	// about TZ themselves — `--env TZ=UTC` opts out, and forwarding TZ by name
+	// keeps the host's own value.
+	if _, set := env["TZ"]; !set && !seen["TZ"] {
+		if tz := hostTimezone(); tz != "" {
+			env["TZ"] = tz
+		}
+	}
+
 	// Brokered secrets are forwarded by name only. Their values are resolved on
 	// the real run path (Session.Run -> injectSecrets), never here, so BuildSpec
 	// stays pure and --dry-run neither reads a secret file nor runs a secret

@@ -190,6 +190,15 @@ version is tagged.
 
 ### Fixed
 
+- Timestamps written inside the sandbox now carry your timezone. The container
+  had no idea where you were — `TZ` unset, `/etc/localtime` UTC — so a commit an
+  agent made in a sandbox recorded `+0000` while your own commits recorded your
+  real offset, and `git log` showed two commits made minutes apart sitting hours
+  apart. The host's zone is forwarded as `TZ` (a name, resolved from `$TZ`,
+  `/etc/localtime` or `/etc/timezone` — nothing new is mounted). A host whose
+  zone can't be established keeps the old UTC behavior, and `--env TZ=UTC` opts
+  out.
+
 - `worktree rm`, `worktree path`, `worktree git` and `worktree commit` now find
   the worktree by asking git which one has the branch checked out, instead of
   deriving a directory name from the branch. An agent that switched branches
