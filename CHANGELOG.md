@@ -13,6 +13,22 @@ version is tagged.
 
 ### Added
 
+- `--detach` — start the sandbox in the background and print its container name
+  instead of holding the terminal, so one terminal can launch several agents at
+  once. Works on `run` and on every agent wrapper, and pairs with `--worktree`:
+  each detached run gets its own branch, checkout and container. The guest has to
+  exit on its own — there is no terminal inside a detached container, so an agent
+  in its interactive mode would wait forever; use `claude -p`, `codex exec` or an
+  ordinary command. Unlike every other run the container is **kept** after it
+  exits, because its exit code and logs are the only record that the work
+  happened; read them with `docker logs` and reap with `docker rm`. Each run is
+  labelled with its repo, branch, agent and base branch, and a detached container
+  is named `sandbox-<repo>-<branch>` — docker refuses a duplicate name, so one
+  agent per branch is enforced rather than merely recommended. Isolation is
+  unchanged: a background container has the same mounts, HOME and hardening as a
+  foreground one. See [docs/GUIDE.md](docs/GUIDE.md) → "Running an agent in the
+  background".
+
 - `--paste` — mount `~/Desktop`, `~/Downloads` and `~/Pictures` read-only at
   their own host paths, so an image path pasted into an agent resolves inside the
   container. Pasting an image previously looked like it did nothing: the terminal

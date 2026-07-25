@@ -337,6 +337,108 @@ use `--worktree`; run the agent in a normal checkout instead.
   collide. One branch per agent.
 - Commit before you start: an agent can only build on what's in HEAD.
 
+### Running an agent in the background
+
+`--worktree` gives each agent its own branch, but every run still holds a
+terminal. `--detach` starts the container in the background and returns
+immediately, so one terminal can launch several:
+
+```sh
+sandbox-cli claude --worktree feature-a --detach -- -p "implement A"
+sandbox-cli claude --worktree feature-b --detach -- -p "implement B"
+```
+
+```
+sandbox-cli: started sandbox-myapp-f379c0cd-feature-a in the background
+  logs:  docker logs -f sandbox-myapp-f379c0cd-feature-a
+  stop:  docker stop sandbox-myapp-f379c0cd-feature-a
+  note:  nothing is attached — the agent must be in a mode that exits on its own
+```
+
+The container name goes to stdout on its own line, so `NAME=$(sandbox-cli claude
+--worktree feature-a --detach -- -p "…")` works in a script.
+
+**Step by step.** The whole cycle, from launching two agents to landing their
+work, runs from your normal checkout:
+
+```sh
+# 1. Log in once per agent, if you haven't. A detached run cannot answer a login
+#    prompt, so do this interactively first — it persists across runs.
+sandbox-cli claude
+
+# 2. Fan out. --git so the agent's commits carry your name and email.
+sandbox-cli claude --worktree feature-a --detach --git -- -p "implement A, then commit"
+sandbox-cli claude --worktree feature-b --detach --git -- -p "implement B, then commit"
+
+# 3. Check on them. Running, exited, and with what exit code.
+docker ps -a --filter label=sandbox.repo --format \
+  'table {{.Names}}\t{{.Status}}\t{{.Label "sandbox.branch"}}'
+
+# 4. Read the transcript of one.
+docker logs sandbox-myapp-f379c0cd-feature-a          # add -f to follow live
+
+# 5. Stop one early if it is going wrong.
+docker stop sandbox-myapp-f379c0cd-feature-a
+
+# 6. Review the work. The branch is already in your repo.
+git log feature-a
+git diff main...feature-a
+
+# 7. Commit anything the agent left uncommitted (skip if it committed its own).
+sandbox-cli worktree git feature-a status
+sandbox-cli worktree commit feature-a -m "implement A"
+
+# 8. Merge.
+git checkout main
+git merge feature-a
+
+# 9. Reap both halves: the container, then the worktree.
+docker rm sandbox-myapp-f379c0cd-feature-a
+sandbox-cli worktree rm feature-a
+```
+
+Steps 6–8 are the same as for a foreground `--worktree` run — detaching changes
+how the agent is launched, not how its work comes back. Step 9 has the one extra
+piece: a detached container is not removed on exit, so it stays until you say so.
+
+**Try it without launching anything.** `--dry-run` prints the exact docker
+command, including `-d`, the labels and the absence of `--rm`:
+
+```sh
+sandbox-cli claude --worktree feature-a --detach --dry-run -- -p "implement A"
+```
+
+**The guest must exit by itself.** There is no terminal inside a detached
+container: an agent started in its normal interactive mode will draw a UI nobody
+can see and wait for a keystroke that never comes, until you stop it. Use the
+agent's non-interactive form — `claude -p "…"`, `codex exec "…"`,
+`droid exec "…"` — or an ordinary command like `npm test`.
+
+**The container is kept after it exits**, unlike every other sandbox run. That is
+the point: its exit code and its output are the only record that the work
+happened, and `--rm` would delete both at the moment they become useful. Read
+them back with ordinary docker commands, and reap when you're done:
+
+```sh
+docker ps -a --filter label=sandbox.branch=feature-a   # state and exit code
+docker logs sandbox-myapp-f379c0cd-feature-a           # what the agent said
+docker rm  sandbox-myapp-f379c0cd-feature-a            # when you've read both
+```
+
+Each run is stamped with `sandbox.repo`, `sandbox.branch`, `sandbox.agent` and
+`sandbox.base` labels, which is how you find a container later without having
+kept its name.
+
+**One agent per branch is enforced**, and by construction rather than by a check:
+a detached container is named `sandbox-<repo>-<branch>`, and docker refuses a
+duplicate name. A second detached run on a branch that already has one fails
+immediately rather than putting two agents in one checkout, which would lose
+work silently. If the first one has finished, `docker rm` its container to free
+the name.
+
+Everything else is unchanged — the same mounts, the same fake HOME, the same
+hardening. A background container reaches exactly what a foreground one does.
+
 ### Handing files between two sandboxes
 
 Two sandboxes are blind to each other by design — each sees its own project and
@@ -536,6 +638,7 @@ Common flags (work on `run` and on every agent wrapper):
 | `--cache` | Persist package caches across runs |
 | `--secret NAME=file:\|cmd:\|env:...` | Brokered credential (repeatable) |
 | `--worktree BRANCH` | Run in a git worktree for BRANCH |
+| `--detach` | Start in the background, print the container name (guest must exit on its own) |
 | `--share` | Mount `~/.config/sandbox/shared` at `/shared` (exchange files between sandboxes) |
 | `--paste` | Mount `~/Desktop`, `~/Downloads`, `~/Pictures` read-only at their host paths (pasted image paths resolve) |
 | `--git` | Forward git identity + trust the workspace |
@@ -553,6 +656,33 @@ one ordering mistake worth avoiding.
 ---
 
 ## Troubleshooting
+
+**A `--detach` run never finishes** — almost always the agent was started in its
+interactive mode. There is no terminal inside a detached container, so it drew a
+UI to nothing and is waiting for a keystroke. `docker logs NAME` shows escape
+codes and a prompt rather than work. Stop it (`docker stop NAME`), remove it
+(`docker rm NAME`) and relaunch with the agent's non-interactive form: `claude -p
+"…"`, `codex exec "…"`, `droid exec "…"`.
+
+**"Conflict. The container name … is already in use"** on a detached run — that
+branch already has an agent, and the refusal is the feature: two agents in one
+checkout overwrite each other's work silently. If the first is still running,
+wait for it or `docker stop` it; if it has finished, `docker rm NAME` frees the
+name.
+
+**A detached run finished but `docker ps` shows nothing** — `docker ps` lists only
+running containers. A finished sandbox is still there, holding the exit code and
+the logs you came back for: `docker ps -a --filter label=sandbox.repo`.
+
+**Detached containers piling up** — they are kept on purpose and reaped by hand.
+`docker rm $(docker ps -aq --filter label=sandbox.repo --filter status=exited)`
+clears the finished ones; the branches and worktrees are untouched by it.
+
+**A detached agent asks for a login and dies** — the persisted login is created by
+an interactive run. Run the agent once in the foreground (`sandbox-cli claude`),
+log in, then detach. The same applies to an agent installed on first use: let it
+install once interactively, since a detached first run does that download with
+nobody watching.
 
 **"Cannot connect to the Docker daemon"** — Docker isn't running. Start Docker
 Desktop, or your Linux Docker daemon.

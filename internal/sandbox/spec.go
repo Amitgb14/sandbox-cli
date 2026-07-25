@@ -11,6 +11,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/creds"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
 // gitIdentityEnvNames are forwarded (by name) into the container when --git is
@@ -42,8 +43,22 @@ type Options struct {
 	AddHosts    []string // --add-host HOST:IP (repeatable)
 	HostGateway bool     // --host-gateway: add host.docker.internal -> host gateway (reach host MCP servers)
 	GitIdentity bool     // --git: forward host git user.name/email and trust the workspace
-	Branch      string   // workspace's git branch, for display in the gauge/summary only
+	Branch      string   // workspace's git branch: display in the gauge/summary, and the sandbox.branch label
 	Command     []string // guest argv
+
+	// Detach runs the container in the background instead of waiting on it, so one
+	// terminal can launch several agents. It is not merely a docker flag: it
+	// decides three things about the resolved spec that are wrong by default for
+	// an unattended run — no pty, no live gauge, and no --rm (the exit code and
+	// logs are the whole point of launching it).
+	Detach bool
+
+	// Identity stamped on the container as sandbox.* labels, and — for detached
+	// runs — folded into its name. Docker is the state store: a fact not recorded
+	// here is one no later command can recover.
+	RepoID string // stable repo identity (worktree.RepoID), shared by every branch of one repo
+	Agent  string // agent adapter name ("claude", "codex"), empty for a plain run
+	Base   string // the branch this work is expected to land on
 
 	// AuthPersistDir, when non-empty, is a host directory bind-mounted read-write
 	// as the agent's whole HOME so its login/config survives the ephemeral
@@ -268,22 +283,56 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	if opts.TTY != nil {
 		tty = *opts.TTY
 	}
+	// A detached run has no terminal behind it, whatever the launching one looks
+	// like. detectTTY() reports on the shell that typed the command, not on the
+	// container — so without this an agent launched from a terminal is handed a
+	// pty, starts its full-screen UI, and waits forever for a keystroke from
+	// nobody. An explicit --tty does not override it: there is no terminal to give.
+	if opts.Detach {
+		tty = false
+	}
 
 	// Metrics require a terminal to report to. The live gauge is drawn only for
 	// non-interactive runs (an interactive agent TUI owns the terminal); the
 	// post-run summary is printed for all runs, including interactive ones, since
-	// it only appears after the session ends.
-	metricsOn := !opts.NoMetrics && isTerminal(os.Stderr)
+	// it only appears after the session ends. A detached run gets neither: nothing
+	// is watching, and this process exits long before the container does.
+	metricsOn := !opts.NoMetrics && !opts.Detach && isTerminal(os.Stderr)
 	showMetrics := metricsOn && !tty
 	showSummary := metricsOn
 
+	// Labels are how a container is found again after this process is gone.
+	// Empty values are omitted rather than stamped blank, so a label that is
+	// present always carries a fact.
+	labels := map[string]string{}
+	for k, v := range map[string]string{
+		"sandbox.repo":   opts.RepoID,
+		"sandbox.branch": opts.Branch,
+		"sandbox.agent":  opts.Agent,
+		"sandbox.base":   opts.Base,
+	} {
+		if v != "" {
+			labels[k] = v
+		}
+	}
+	if len(labels) == 0 {
+		labels = nil
+	}
+
+	// Remove is the single deliberate exception to the disposable-container rule:
+	// a detached container is retained after it exits, because its exit code and
+	// its logs are the only record that the run happened at all and --rm would
+	// delete both at the moment they become interesting. Reaping is a later,
+	// explicit step.
 	return runtime.RunSpec{
 		Image:    image,
-		Name:     containerName(),
+		Name:     containerName(opts),
 		Workdir:  workdir,
 		Command:  opts.Command,
 		TTY:      tty,
-		Remove:   true,
+		Detach:   opts.Detach,
+		Labels:   labels,
+		Remove:   !opts.Detach,
 		Hostname: cfg.Hostname,
 		Home:     cfg.Home,
 		User:     dockerUser,
@@ -310,9 +359,26 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	}, nil
 }
 
-// containerName returns a unique, docker-valid container name. A stable prefix
-// makes sandbox containers easy to spot (and, later, filter for `stats`).
-func containerName() string {
+// containerName returns a docker-valid container name. Foreground runs get a
+// timestamp, which keeps repeated runs of one project from colliding.
+//
+// Detached runs get a deterministic sandbox-<repo>-<branch> instead, and that is
+// load-bearing rather than cosmetic: docker refuses a duplicate container name
+// atomically, so the name itself enforces one-agent-per-branch. The alternative —
+// listing containers and checking before launching — has a window between the
+// check and the launch in which a second launch passes the same check, and two
+// agents in one checkout is silent data loss.
+//
+// Without a repo and branch to build from there is nothing to be deterministic
+// about, so it falls back to the timestamp.
+func containerName(opts Options) string {
+	if opts.Detach {
+		repo := worktree.SanitizeName(opts.RepoID)
+		branch := worktree.SanitizeName(opts.Branch)
+		if repo != "" && branch != "" {
+			return "sandbox-" + repo + "-" + branch
+		}
+	}
 	return "sandbox-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 

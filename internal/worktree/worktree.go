@@ -348,10 +348,45 @@ func worktreeBase(repoRoot string) string {
 	if root == "" {
 		root = filepath.Join(os.TempDir(), "sandbox")
 	}
-	sum := sha256.Sum256([]byte(repoRoot))
-	id := filepath.Base(repoRoot) + "-" + hex.EncodeToString(sum[:])[:8]
-	return filepath.Join(root, "worktrees", id)
+	return filepath.Join(root, "worktrees", repoID(repoRoot))
 }
+
+// repoID namespaces one repository: its directory name plus a short hash of its
+// absolute path, so two clones sharing a name never share a namespace.
+func repoID(repoRoot string) string {
+	sum := sha256.Sum256([]byte(repoRoot))
+	return filepath.Base(repoRoot) + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
+// RepoID is the stable identity of the repository containing dir. Container
+// names, container labels and managed worktree paths are all built from it, so
+// they agree with each other by construction rather than by coincidence — which
+// is what lets a later command find every container belonging to one repo.
+func RepoID(dir string) (string, error) {
+	root, err := mainRepoRoot(dir)
+	if err != nil {
+		return "", err
+	}
+	return repoID(root), nil
+}
+
+// mainRepoRoot resolves the *main* repository root for dir, following a linked
+// worktree back to the repository it belongs to. `git rev-parse --show-toplevel`
+// reports a worktree's own directory, so relying on it alone would give each
+// branch of one repo a different identity — and every branch of a repo sharing
+// one identity is exactly what the addressing scheme needs.
+func mainRepoRoot(dir string) (string, error) {
+	if common, ok := GitCommonDir(dir); ok {
+		return filepath.Dir(common), nil // <main>/.git -> <main>
+	}
+	return RepoRoot(dir)
+}
+
+// SanitizeName reduces a branch or repository identifier to one safe path or
+// container-name segment ("feature/login" -> "feature-login"). Exported because
+// container names are assembled from the same pieces as worktree paths: two
+// spellings of one branch would mean two containers where the rule is one.
+func SanitizeName(s string) string { return sanitizeBranch(s) }
 
 // worktreePath is the managed path for a single branch's worktree.
 func worktreePath(repoRoot, branch string) string {

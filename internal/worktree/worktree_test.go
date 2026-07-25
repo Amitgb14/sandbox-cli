@@ -210,6 +210,60 @@ func TestGitCommonDir(t *testing.T) {
 	}
 }
 
+// TestRepoID_SharedByEveryWorktree pins the property the whole addressing scheme
+// rests on: every branch of one repository reports one identity. A linked
+// worktree's `rev-parse --show-toplevel` is its own directory, so an
+// implementation that used it alone would hand each branch a different id — and
+// then "show me every container for this repo" would return one row.
+func TestRepoID_SharedByEveryWorktree(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	main, err := RepoID(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if main == "" {
+		t.Fatal("empty repo id")
+	}
+
+	info, err := Resolve(repo, "feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromWorktree, err := RepoID(info.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromWorktree != main {
+		t.Errorf("RepoID(worktree) = %q, want the parent's %q", fromWorktree, main)
+	}
+
+	// It is a container-name and path segment, so it must survive being used as
+	// one unchanged.
+	if SanitizeName(main) != main {
+		t.Errorf("repo id %q is not already a safe segment (%q)", main, SanitizeName(main))
+	}
+
+	// Not a repository: an error, not a fabricated identity.
+	if id, err := RepoID(t.TempDir()); err == nil {
+		t.Errorf("RepoID(non-repo) = %q, want an error", id)
+	}
+}
+
 // Remove must refuse to destroy uncommitted work unless --force is given.
 func TestRemove_RefusesDirtyWorktreeWithoutForce(t *testing.T) {
 	git, err := exec.LookPath("git")
