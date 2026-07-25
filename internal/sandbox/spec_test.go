@@ -429,6 +429,142 @@ func TestBuildSpec_Runtime(t *testing.T) {
 	}
 }
 
+// TestBuildSpec_DetachResolvesAnUnattendedRun pins the three things --detach
+// decides beyond passing -d to docker. Each of them is wrong by default for a
+// container nobody is watching, and each is silent when it is wrong: a pty makes
+// an agent draw a UI for no one, --rm throws away the exit code that says whether
+// the work happened, and the gauge draws to a terminal this process is about to
+// leave.
+func TestBuildSpec_DetachResolvesAnUnattendedRun(t *testing.T) {
+	dir := t.TempDir()
+	wantTTY := true
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project: dir,
+		Command: []string{"claude", "-p", "do the thing"},
+		Detach:  true,
+		TTY:     &wantTTY, // even an explicit --tty cannot conjure a terminal
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.Detach {
+		t.Error("Detach not carried into the spec")
+	}
+	if spec.TTY {
+		t.Error("a detached run must not allocate a pty, even with --tty")
+	}
+	if spec.Remove {
+		t.Error("a detached container must be retained: its logs and exit code are the whole record")
+	}
+	if spec.ShowMetrics || spec.ShowSummary {
+		t.Error("a detached run has no terminal to draw the gauge or summary on")
+	}
+
+	// A foreground run is unaffected by any of it.
+	fg, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fg.Remove || fg.Detach {
+		t.Errorf("foreground run changed: Remove=%v Detach=%v", fg.Remove, fg.Detach)
+	}
+}
+
+// TestBuildSpec_DetachedNameIsDeterministic covers the reason the name matters:
+// docker refuses a duplicate container name atomically, so a stable
+// sandbox-<repo>-<branch> is what enforces one agent per branch. A check-then-
+// launch would have a window in between; a name has none.
+func TestBuildSpec_DetachedNameIsDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Project: dir,
+		Command: []string{"sh"},
+		Detach:  true,
+		RepoID:  "app-1234abcd",
+		Branch:  "feature/login",
+	}
+	first, err := BuildSpec(baseCfg(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := BuildSpec(baseCfg(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "sandbox-app-1234abcd-feature-login"
+	if first.Name != want {
+		t.Errorf("Name = %q, want %q", first.Name, want)
+	}
+	if first.Name != second.Name {
+		t.Errorf("detached name not stable: %q vs %q", first.Name, second.Name)
+	}
+
+	// With no repo/branch to build from there is nothing to be deterministic
+	// about, so it falls back to the unique timestamped form rather than
+	// colliding every run.
+	bare, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}, Detach: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.Name == want || !strings.HasPrefix(bare.Name, "sandbox-") {
+		t.Errorf("unexpected fallback name %q", bare.Name)
+	}
+
+	// Foreground runs keep the timestamp: repeating one must not collide with the
+	// run before it.
+	a, _ := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}, RepoID: "app-1234abcd", Branch: "feature/login"})
+	b, _ := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}, RepoID: "app-1234abcd", Branch: "feature/login"})
+	if a.Name == b.Name {
+		t.Errorf("foreground names must stay unique, got %q twice", a.Name)
+	}
+}
+
+// TestBuildSpec_LabelsStampIdentity: docker is the state store, so whatever a
+// later command needs to know about a run has to be stamped on at launch.
+func TestBuildSpec_LabelsStampIdentity(t *testing.T) {
+	dir := t.TempDir()
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project: dir,
+		Command: []string{"sh"},
+		RepoID:  "app-1234abcd",
+		Branch:  "feature-a",
+		Agent:   "claude",
+		Base:    "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"sandbox.repo":   "app-1234abcd",
+		"sandbox.branch": "feature-a",
+		"sandbox.agent":  "claude",
+		"sandbox.base":   "main",
+	}
+	for k, v := range want {
+		if spec.Labels[k] != v {
+			t.Errorf("label %s = %q, want %q", k, spec.Labels[k], v)
+		}
+	}
+
+	// An unknown fact is left unstamped rather than stamped blank, so a label
+	// that is present always means something. A plain `run` outside a repository
+	// carries no labels at all.
+	partial, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}, Branch: "feature-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := partial.Labels["sandbox.agent"]; ok {
+		t.Errorf("empty agent should not be labelled: %v", partial.Labels)
+	}
+	none, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none.Labels) != 0 {
+		t.Errorf("expected no labels with nothing to stamp, got %v", none.Labels)
+	}
+}
+
 func contains(s []string, v string) bool {
 	for _, x := range s {
 		if x == v {

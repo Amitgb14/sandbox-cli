@@ -342,6 +342,31 @@ sandbox-cli droid exec 'run the tests'
 
 ---
 
+## Running an agent detached
+
+`--detach` starts the sandbox in the background and prints its container name, so
+one terminal can launch several agents (see
+[GUIDE.md](GUIDE.md#running-an-agent-in-the-background) for the full cycle). Two
+things decide whether an adapter can be used that way:
+
+1. **It needs a non-interactive mode**, because nothing is attached to answer a
+   prompt. The documented ones are `claude -p "…"`, `codex exec "…"` and
+   `droid exec "…"`; for any other adapter, check its own `--help` before
+   detaching it.
+2. **Log in — and, for an adapter installed on first use, install — before
+   detaching.** Both are interactive by nature and both persist afterwards, so
+   one foreground run per agent is enough:
+
+   ```sh
+   sandbox-cli aider            # logs in, and installs on the first run
+   sandbox-cli claude --worktree feature-a --detach -- -p "implement A"
+   ```
+
+   Skipping this makes the first detached run do the download unattended: it
+   needs network at that moment, the install host has to be on the allowlist
+   under `--allow` (see the table below), and a failure shows up only as exit
+   127 in `docker logs`.
+
 ## Using agents with `--allow` (egress allowlist)
 
 `--allow` switches the container to a default-deny firewall. These are always

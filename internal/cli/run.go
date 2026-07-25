@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -124,12 +125,40 @@ func execute(rf *runFlags, guest []string) error {
 		return nil
 	}
 
+	if rf.detach {
+		return startDetached(rf, sess, opts)
+	}
+
 	code, err := sess.Run(context.Background(), opts, rf.build)
 	if err != nil {
 		return err
 	}
 	warnDirtyWorktree(rf)
 	exitCode = code
+	return nil
+}
+
+// startDetached launches the container in the background and prints how to reach
+// it again. Nothing waits on it — that is the point: one terminal can start
+// several agents, and the exit code and output are recovered from docker later
+// instead of from this process.
+//
+// The name goes to stdout on its own so the command is scriptable; everything
+// else is stderr, like the rest of sandbox-cli's own commentary.
+func startDetached(rf *runFlags, sess *sandbox.Session, opts sandbox.Options) error {
+	name, err := sess.Start(context.Background(), opts, rf.build)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "sandbox-cli: started %s in the background\n", name)
+	fmt.Fprintf(os.Stderr, "  logs:  docker logs -f %s\n", name)
+	fmt.Fprintf(os.Stderr, "  stop:  docker stop %s\n", name)
+	// Worth saying once, at the moment it can still be acted on: an agent left in
+	// its interactive mode has no terminal in there and will sit until stopped.
+	if rf.persistName != "" {
+		fmt.Fprintf(os.Stderr, "  note:  nothing is attached — the agent must be in a mode that exits on its own\n")
+	}
+	fmt.Println(name)
 	return nil
 }
 

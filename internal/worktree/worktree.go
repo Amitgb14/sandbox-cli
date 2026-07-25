@@ -48,6 +48,12 @@ func Resolve(dir, branch string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
+	// Reuse the worktree git says holds this branch, wherever it sits: its
+	// directory name may no longer match the branch (see lookup), and re-adding
+	// a branch that is already checked out is an error.
+	if path, ok := lookup(root, branch); ok {
+		return Info{Branch: branch, Path: path}, nil
+	}
 	path := worktreePath(root, branch)
 	info := Info{Branch: branch, Path: path}
 
@@ -79,6 +85,11 @@ func List(dir string) ([]Info, error) {
 	if err != nil {
 		return nil, err
 	}
+	return listIn(root)
+}
+
+// listIn is List for an already-resolved repository root.
+func listIn(root string) ([]Info, error) {
 	out, err := runGit(root, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, err
@@ -108,6 +119,32 @@ func List(dir string) ([]Info, error) {
 	return infos, nil
 }
 
+// lookup returns the path of the sandbox-managed worktree that currently has
+// branch checked out. The directory is named after the branch it was created
+// for, but the two drift apart the moment anything inside the worktree switches
+// branches (an agent running `git checkout -b`), so git — not the name — is the
+// authority on which path holds which branch.
+//
+// ok is false when no managed worktree has that branch checked out; callers then
+// fall back to the name-derived path.
+func lookup(root, branch string) (string, bool) {
+	// A detached-HEAD worktree lists no branch, so an empty name would match one
+	// at random; there is no such branch to look up anyway.
+	if branch == "" {
+		return "", false
+	}
+	infos, err := listIn(root)
+	if err != nil {
+		return "", false
+	}
+	for _, wt := range infos {
+		if wt.Branch == branch {
+			return wt.Path, true
+		}
+	}
+	return "", false
+}
+
 // Remove deletes the sandbox worktree for branch (git worktree remove). When
 // force is false git refuses if the worktree holds modified or untracked files,
 // which is the safe default: those edits exist nowhere else.
@@ -116,7 +153,13 @@ func Remove(dir, branch string, force bool) error {
 	if err != nil {
 		return err
 	}
-	path := worktreePath(root, branch)
+	path, ok := lookup(root, branch)
+	if !ok {
+		path = worktreePath(root, branch)
+		if !isDir(path) {
+			return fmt.Errorf("no sandbox worktree for branch %q (see: sandbox-cli worktree list)", branch)
+		}
+	}
 	args := []string{"worktree", "remove"}
 	if force {
 		args = append(args, "--force")
@@ -146,6 +189,9 @@ func Path(dir, branch string) (path string, exists bool, err error) {
 	root, err := RepoRoot(dir)
 	if err != nil {
 		return "", false, err
+	}
+	if path, ok := lookup(root, branch); ok {
+		return path, true, nil
 	}
 	path = worktreePath(root, branch)
 	return path, isDir(path), nil
@@ -302,10 +348,45 @@ func worktreeBase(repoRoot string) string {
 	if root == "" {
 		root = filepath.Join(os.TempDir(), "sandbox")
 	}
-	sum := sha256.Sum256([]byte(repoRoot))
-	id := filepath.Base(repoRoot) + "-" + hex.EncodeToString(sum[:])[:8]
-	return filepath.Join(root, "worktrees", id)
+	return filepath.Join(root, "worktrees", repoID(repoRoot))
 }
+
+// repoID namespaces one repository: its directory name plus a short hash of its
+// absolute path, so two clones sharing a name never share a namespace.
+func repoID(repoRoot string) string {
+	sum := sha256.Sum256([]byte(repoRoot))
+	return filepath.Base(repoRoot) + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
+// RepoID is the stable identity of the repository containing dir. Container
+// names, container labels and managed worktree paths are all built from it, so
+// they agree with each other by construction rather than by coincidence — which
+// is what lets a later command find every container belonging to one repo.
+func RepoID(dir string) (string, error) {
+	root, err := mainRepoRoot(dir)
+	if err != nil {
+		return "", err
+	}
+	return repoID(root), nil
+}
+
+// mainRepoRoot resolves the *main* repository root for dir, following a linked
+// worktree back to the repository it belongs to. `git rev-parse --show-toplevel`
+// reports a worktree's own directory, so relying on it alone would give each
+// branch of one repo a different identity — and every branch of a repo sharing
+// one identity is exactly what the addressing scheme needs.
+func mainRepoRoot(dir string) (string, error) {
+	if common, ok := GitCommonDir(dir); ok {
+		return filepath.Dir(common), nil // <main>/.git -> <main>
+	}
+	return RepoRoot(dir)
+}
+
+// SanitizeName reduces a branch or repository identifier to one safe path or
+// container-name segment ("feature/login" -> "feature-login"). Exported because
+// container names are assembled from the same pieces as worktree paths: two
+// spellings of one branch would mean two containers where the rule is one.
+func SanitizeName(s string) string { return sanitizeBranch(s) }
 
 // worktreePath is the managed path for a single branch's worktree.
 func worktreePath(repoRoot, branch string) string {

@@ -172,6 +172,48 @@ func (d *DockerCLI) Run(ctx context.Context, spec RunSpec) (int, error) {
 	return exitCodeOf(cmd.Run())
 }
 
+// Start launches the spec in the background and returns the container's name,
+// without waiting for the guest. The container outlives this process on purpose:
+// its exit code and output are read back later with `docker inspect` / `docker
+// logs`, which is what lets one terminal launch several agents.
+//
+// It refuses a non-detached spec rather than quietly launching one. BuildArgs
+// would render `-i` for that spec, attaching stdin to a container nothing is
+// reading from, and the caller would get a name back for a container that is
+// waiting on input that will never come.
+func (d *DockerCLI) Start(ctx context.Context, spec RunSpec) (string, error) {
+	if !spec.Detach {
+		return "", fmt.Errorf("Start requires a detached spec (RunSpec.Detach)")
+	}
+	if err := d.checkRuntime(ctx, spec.Runtime); err != nil {
+		return "", err
+	}
+
+	cmd := exec.CommandContext(ctx, d.bin(), BuildArgs(spec)...)
+	// `docker run -d` prints the container id on stdout and its own diagnostics on
+	// stderr; the id is captured, the diagnostics belong to the user. Stdin stays
+	// nil (/dev/null) — this run has no terminal behind it.
+	var out strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = d.stderr()
+	if err := cmd.Run(); err != nil {
+		// docker has already written the reason to stderr; naming the container
+		// here is what makes it actionable, since a detached name is deterministic
+		// and a refusal usually means one is already running under it.
+		if spec.Name != "" {
+			return "", fmt.Errorf("starting detached container %s: %w", spec.Name, err)
+		}
+		return "", fmt.Errorf("starting detached container: %w", err)
+	}
+
+	// Prefer the name: it is the handle every later command addresses, and for a
+	// detached run it is deterministic, so it stays true across invocations.
+	if spec.Name != "" {
+		return spec.Name, nil
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
 // runWithLiveGauge forwards the container's output through a sticky footer that
 // shows a live resource gauge, erases the gauge on exit, and prints a summary.
 func (d *DockerCLI) runWithLiveGauge(cmd *exec.Cmd, spec RunSpec) (int, error) {
