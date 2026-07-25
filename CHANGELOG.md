@@ -13,6 +13,48 @@ version is tagged.
 
 ### Added
 
+- Usage stats on Claude's status line, and `sandbox-cli usage`. The line already
+  said what the container was doing — `mem`, `cpu`, the branch — but not the thing
+  that actually ends a session: how much of your subscription window is gone and
+  when it comes back. It now reads
+  `⬢ sandbox · opus 5 · mem 412MiB · cpu 82% · 5h 23% (2h14m) · wk 49%`, where `5h`
+  is the 5-hour session window with the time until it resets, `wk` is the weekly
+  one, and `opus 5` is the model answering — read together, since how fast a window
+  drains depends on what is running. That matters more in a sandbox than on a host:
+  several sandboxes on several branches are separate containers but one account
+  quota.
+
+  The numbers come from Claude Code itself, which reports them only on a Claude.ai
+  plan and only once it has made a request. Under API-key auth, or before the first
+  response, that part of the line is simply absent rather than showing a placeholder
+  — and on a terminal too narrow to hold everything, what the agent reports about
+  itself is dropped first (the usage figures, then the model), so a line that fit
+  before still shows exactly what it did. `--env SANDBOX_STATUSLINE_NO_USAGE=1` and
+  `--env SANDBOX_STATUSLINE_NO_MODEL=1` leave them out individually;
+  `--no-statusline` still removes the whole line.
+
+  `sandbox-cli usage` shows the same two windows from anywhere — a second terminal,
+  a run that has already finished, or an agent with nowhere to put them:
+
+  ```
+  5h            23%  resets in 2h14m  (14:14)
+  week          49%  resets in 4d     (Wed 12:00)
+  week (Fable)  25%  resets in 4d     (Wed 12:00)
+
+  claude, as of 4m ago — ~/.config/sandbox/agents/claude/.claude.json
+  ```
+
+  A row named with a model in parentheses is a cap on that model alone, for plans
+  that meter one separately alongside the account-wide window.
+
+  There is no way to ask for a live reading without an interactive session, so this
+  reads the numbers Claude Code caches for its own `/usage` — which is why it always
+  prints how old the reading is; they refresh when the agent talks to the server, so
+  an idle machine can hold a figure from hours ago. `--json` for scripts. Only
+  claude's windows are read: codex records the same kind of figure, but only under a
+  ChatGPT plan and in a shape no sample has confirmed yet, and gemini, opencode and
+  goose record nothing of the kind. Nothing is guessed at for the others.
+
 - `sandbox-cli context list` — see the conversations an agent has had in this
   project, newest first, with the id you resume by. Your agent logins already
   persist in a sandbox-owned HOME, which means the sessions they write survive

@@ -121,20 +121,123 @@ if [ -z "$branch" ]; then
   fi
 fi
 
-line="⬢ sandbox · mem $(hum "$used")"
-if [ -n "$cpu" ]; then line="$line · cpu ${cpu}%"; fi
+# Subscription usage. Claude's own status-line JSON carries a rate_limits object
+# — five_hour and seven_day, each {used_percentage, resets_at} with resets_at in
+# epoch seconds — so the numbers come from the same pipe the branch does: no
+# extra mount, no file this script has to know the shape of. It is documented as
+# present only for Pro/Max accounts and only once the first API response has
+# landed, and either window can be missing on its own, so every branch below
+# degrades to printing *nothing*. A placeholder next to two real percentages
+# reads as a number that failed rather than a limit that isn't being reported.
+usage5=""
+usage7=""
+if [ -z "${SANDBOX_STATUSLINE_NO_USAGE:-}" ]; then
+  now_s=$(date +%s 2>/dev/null || echo 0)
 
-# Push the branch to the right edge. Our stdin is Claude's JSON pipe, so the
-# width comes from the controlling terminal instead. SANDBOX_STATUSLINE_COLS
-# overrides it, for when Claude renders the status line in an area narrower than
-# the terminal (pass it with --env).
-if [ -n "$branch" ]; then
-  right="⎇ $branch"
-  cols=$(termcols)
-  # reserve: leave a few columns free at the right edge. Writing into the last
-  # column wraps on most terminals, and Claude's own frame may end before the
-  # terminal does.
-  gap=$(( cols - ${SANDBOX_STATUSLINE_RESERVE:-4} - ${#line} - ${#right} ))
+  # Time left until a window resets, coarsened to what fits: days once it is more
+  # than a day out (the weekly one always is), else hours and minutes. Prints
+  # nothing — and so drops the parenthesis entirely — when the timestamp is
+  # missing, unparseable, or already past.
+  countdown() {
+    end=$(awk -v v="${1:-}" 'BEGIN{if(v+0==v && v>0) printf "%d", v}')
+    [ -n "$end" ] || return 0
+    left=$(( end - now_s ))
+    [ "$left" -gt 0 ] 2>/dev/null || return 0
+    if [ "$left" -ge 86400 ]; then printf '%dd' $(( left / 86400 ))
+    elif [ "$left" -ge 3600 ]; then printf '%dh%02dm' $(( left / 3600 )) $(( (left % 3600) / 60 ))
+    else printf '%dm' $(( left / 60 ))
+    fi
+  }
+
+  # One jq call for both windows, in a fixed order, as "<percent> <resets_at>"
+  # per line with "-" for anything absent. Indexing a null rate_limits yields
+  # null in jq rather than an error, so an account that reports no limits simply
+  # produces two "- -" lines.
+  rl=$(printf '%s' "$session" | jq -r '
+    .rate_limits as $r
+    | ("five_hour", "seven_day")
+    | ($r[.] // {})
+    | "\(.used_percentage // "-") \(.resets_at // "-")"' 2>/dev/null)
+
+  # Read into the two variables rather than piping: a pipeline runs the loop in a
+  # subshell, where the assignments would be thrown away.
+  win=0
+  while IFS=' ' read -r pct rst; do
+    win=$(( win + 1 ))
+    # used_percentage may arrive fractional; round it, and treat anything
+    # non-numeric (including the "-" above) as this window not being reported.
+    p=$(awk -v v="${pct:-}" 'BEGIN{if(v+0==v) printf "%.0f", v}')
+    [ -n "$p" ] || continue
+    if [ "$win" -eq 1 ]; then
+      usage5="5h ${p}%"
+      c=$(countdown "$rst")
+      [ -n "$c" ] && usage5="$usage5 ($c)"
+    else
+      # The weekly window resets days out, where a live countdown earns none of
+      # the columns it costs. Percent alone.
+      usage7="wk ${p}%"
+    fi
+  done <<< "$rl"
+fi
+
+# Which model is answering. Claude reports it in the same JSON as the limits, and
+# it belongs next to them: a percentage moves at a rate that depends entirely on
+# what is running, and on a plan with per-model caps the two are read together.
+# Lowercased to match the rest of the line rather than Claude's own title case.
+model=""
+if [ -z "${SANDBOX_STATUSLINE_NO_MODEL:-}" ]; then
+  model=$(printf '%s' "$session" | jq -r '.model.display_name // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')
+fi
+
+if [ -n "$model" ]; then model=" · $model"; fi
+
+# The fixed part: what sandbox-cli itself measures, always printed.
+fixed=" · mem $(hum "$used")"
+if [ -n "$cpu" ]; then fixed="$fixed · cpu ${cpu}%"; fi
+
+quota=""
+if [ -n "$usage5" ]; then quota="$quota · $usage5"; fi
+if [ -n "$usage7" ]; then quota="$quota · $usage7"; fi
+
+# Our stdin is Claude's JSON pipe, so the width comes from the controlling
+# terminal instead. SANDBOX_STATUSLINE_COLS overrides it, for when Claude renders
+# the status line in an area narrower than the terminal (pass it with --env).
+# reserve: leave a few columns free at the right edge. Writing into the last
+# column wraps on most terminals, and Claude's own frame may end before the
+# terminal does.
+cols=$(termcols)
+reserve=${SANDBOX_STATUSLINE_RESERVE:-4}
+right=""
+if [ -n "$branch" ]; then right="⎇ $branch"; fi
+
+# fits reports whether a left half of this many bytes leaves room for the branch.
+# An unknown width answers yes: with nothing to measure against, showing a
+# segment matches how mem and cpu are already treated — the width caution exists
+# for padding to the right edge, which the left half never does.
+fits() {
+  [ "$cols" -le 0 ] 2>/dev/null && return 0
+  need=$(( $1 + reserve ))
+  if [ -n "$right" ]; then need=$(( need + ${#right} + 1 )); fi
+  [ "$need" -le "$cols" ] 2>/dev/null
+}
+
+# Everything the agent reports about itself is droppable, in a fixed order, and
+# the branch outlives all of it: percentages age out of usefulness in minutes and
+# the model rarely changes mid-session, while which branch the agent is editing
+# is why the line was there before either of them. So: try both, then drop the
+# usage window (the widest), then the model, and let the branch take what it
+# needs from what is left.
+line="⬢ sandbox$model$fixed$quota"
+if ! fits ${#line}; then
+  line="⬢ sandbox$model$fixed"
+  if ! fits ${#line}; then
+    line="⬢ sandbox$fixed"
+  fi
+fi
+
+# Push the branch to the right edge.
+if [ -n "$right" ]; then
+  gap=$(( cols - reserve - ${#line} - ${#right} ))
   # Unknown width, or too narrow for both halves: drop the branch entirely. A
   # half-shown name is worse than none — appending it inline would overflow the
   # row and leave it truncated (or wrapped) mid-name.

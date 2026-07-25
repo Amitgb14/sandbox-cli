@@ -821,6 +821,24 @@ has a `statusLine` hook sandbox-cli can render into (`--no-statusline` turns it
 off). `gemini`, `opencode` and `codex` have no such hook, so for those run
 `sandbox-cli stats` in a second terminal.
 
+### How much of the plan is left
+Claude's status line also carries the two subscription windows and the model —
+`· opus 5 · … · 5h 23% (2h14m) · wk 49%`: the session window with the time until it
+resets, the weekly one, and what is answering (how fast a window drains depends on
+that). Claude Code reports the windows only on a Claude.ai plan and only after its
+first request, so under API-key auth that part of the line is simply not there.
+
+```sh
+sandbox-cli usage           # the same windows, outside a Claude session
+sandbox-cli usage --json
+```
+
+Useful when several sandboxes are running at once: they are separate containers
+but one account quota. A row labelled with a model in parentheses — `week (Fable)`
+— is a cap on that model alone, which some plans meter separately. The numbers are
+cached rather than live — there is no way to ask for a live reading
+non-interactively — so the command always prints how old the reading is.
+
 ### Works with Claude, Codex, Gemini, OpenCode and Cline
 `sandbox-cli claude` / `codex` / `gemini` / `opencode` / `cline` wrap each agent, forward
 its flags untouched (so `--dangerously-skip-permissions` just works), and

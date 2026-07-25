@@ -102,7 +102,14 @@ mysterious "command not found".
 - **Forwarded if set:** `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
   `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`.
 - **Extras unique to this wrapper:** a live memory/CPU status line in Claude's own
-  UI (`--no-statusline` to disable), and your **host Claude history for this
+  UI, which also names the model in play and shows how much of your 5-hour and
+  weekly subscription windows is spent and when they reset (`--no-statusline` to
+  disable the line, `--env SANDBOX_STATUSLINE_NO_USAGE=1` /
+  `--env SANDBOX_STATUSLINE_NO_MODEL=1` to keep it without one of them; Claude Code
+  reports the windows only on a Claude.ai plan and only after its first request, so
+  under API-key auth they are absent). `sandbox-cli usage` shows the same windows
+  outside a Claude session, including any per-model cap your plan meters
+  separately. And your **host Claude history for this
   project** is shared by default so a host session can be `--resume`d inside the
   container and vice versa (`--no-sync` to keep them separate). It is also the
   one agent whose transcripts sandbox-cli reads in full, so
