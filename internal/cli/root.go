@@ -45,6 +45,7 @@ type runFlags struct {
 	runtime     string
 	share       bool
 	paste       bool
+	detach      bool
 
 	// Crash safety net (internal/rescue). noSnapshot opts out entirely;
 	// snapshotInterval overrides the configured cadence for this run.
@@ -107,14 +108,18 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		Runtime:     rf.runtime,
 	}
 
+	// The repository this run belongs to, resolved before --worktree redirects the
+	// project directory: identity is a property of the repo, not of the checkout
+	// a particular agent happens to be given.
+	repoDir := rf.project
+	if repoDir == "" {
+		repoDir, _ = os.Getwd()
+	}
+
 	// --worktree BRANCH: resolve (creating if needed) a git worktree for the
 	// branch and run the sandbox in it, so parallel agents each get their own
 	// branch/container without colliding. This overrides the project directory.
 	if rf.worktree != "" {
-		repoDir := rf.project
-		if repoDir == "" {
-			repoDir, _ = os.Getwd()
-		}
 		info, werr := worktree.Resolve(repoDir, rf.worktree)
 		if werr != nil {
 			return nil, sandbox.Options{}, werr
@@ -155,10 +160,24 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		}
 	}
 
-	// Display only: the live gauge and the post-run summary show which branch the
-	// sandbox is on. It matters most with --worktree, where several containers are
-	// running different branches of the same repo at once.
+	// The branch drives the live gauge and the post-run summary, and — with
+	// --detach — the container's name and its sandbox.branch label. It matters
+	// most with --worktree, where several containers are running different
+	// branches of the same repo at once.
 	opts.Branch = worktree.Branch(config.ExpandTilde(projectDir))
+
+	// Identity for the container name and the sandbox.* labels. RepoID is shared
+	// by every branch of one repository, so a later command can ask for all of
+	// them at once; Base is the branch the main checkout is sitting on now, which
+	// is the branch this work is expected to land on. Both are best-effort: a
+	// non-repository project simply has no identity to stamp, which is not an
+	// error — it only means the run cannot be addressed by branch afterwards.
+	if id, ierr := worktree.RepoID(config.ExpandTilde(repoDir)); ierr == nil {
+		opts.RepoID = id
+		opts.Base = worktree.Branch(config.ExpandTilde(repoDir))
+	}
+	opts.Agent = rf.persistName
+	opts.Detach = rf.detach
 
 	// --share: mount one sandbox-owned host directory at /shared. This is the
 	// only mount that is intentionally the *same* for every project, which is
@@ -256,6 +275,7 @@ func addRunFlags(cmd *cobra.Command, rf *runFlags) {
 	f.StringVar(&rf.runtime, "runtime", "", "OCI runtime for stronger isolation, e.g. kata-runtime (microVM) or runsc (gVisor); must be registered with docker")
 	f.BoolVar(&rf.share, "share", false, "mount the shared dir (~/.config/sandbox/shared) at /shared so agents in different projects can exchange files")
 	f.BoolVar(&rf.paste, "paste", false, "mount ~/Desktop, ~/Downloads and ~/Pictures read-only at their host paths so an image path pasted into the agent resolves")
+	f.BoolVar(&rf.detach, "detach", false, "run in the background and print the container name; the guest gets no terminal, so it must be a command (or an agent in its non-interactive mode) that exits on its own")
 	f.BoolVar(&rf.noSnapshot, "no-snapshot", false, "disable the crash safety net (periodic snapshots of the workspace under refs/sandbox)")
 	f.DurationVar(&rf.snapshotInterval, "snapshot-interval", 0, "how often to snapshot the workspace, e.g. 30s (default: the configured 2m)")
 

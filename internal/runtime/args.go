@@ -22,9 +22,19 @@ func BuildArgs(s RunSpec) []string {
 	if s.Name != "" {
 		a = append(a, "--name", s.Name)
 	}
-	if s.TTY {
+	// Labels, in sorted-key order so the rendered command is deterministic (same
+	// treatment as Env below, and for the same reason: --dry-run is a golden test).
+	for _, k := range sortedKeys(s.Labels) {
+		a = append(a, "--label", k+"="+s.Labels[k])
+	}
+	// A detached container has nobody attached to it: no pty to allocate and no
+	// stdin to keep open. -d replaces -i/-it rather than joining them.
+	switch {
+	case s.Detach:
+		a = append(a, "-d")
+	case s.TTY:
 		a = append(a, "-it")
-	} else {
+	default:
 		a = append(a, "-i")
 	}
 	if s.Hostname != "" {

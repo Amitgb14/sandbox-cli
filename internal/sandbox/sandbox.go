@@ -71,6 +71,42 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	return s.Runtime.Run(ctx, spec)
 }
 
+// Start launches the container detached and returns its name, without waiting
+// for the guest. It runs the identical preflight as Run and resolves the spec
+// through the identical BuildSpec, so a detached run is isolated exactly as its
+// foreground twin is; the only thing that differs is that nothing here waits.
+func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (string, error) {
+	opts.Detach = true
+	spec, err := s.Prepare(opts)
+	if err != nil {
+		return "", err
+	}
+	if err := s.Runtime.Available(ctx); err != nil {
+		return "", err
+	}
+	// Built here, before the container starts, and deliberately not left to the
+	// launch itself: a fan-out of detached runs against a cold image would
+	// otherwise trigger one concurrent build per container.
+	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
+		return "", fmt.Errorf("preparing image %q: %w", spec.Image, err)
+	}
+
+	s.Audit.RecordSession(audit.SessionMeta{
+		Image:   spec.Image,
+		Workdir: spec.Workdir,
+		Command: spec.Command,
+	})
+
+	// Same rule as Run: secrets are resolved only on a real launch path, never in
+	// Prepare/--dry-run, and reach the container by name rather than on the argv.
+	if err := injectSecrets(s.Cfg, opts); err != nil {
+		return "", err
+	}
+	injectGitIdentity(opts)
+
+	return s.Runtime.Start(ctx, spec)
+}
+
 // injectGitIdentity, when --git is set, reads the host git user.name/email and
 // places them in this process's environment as the GIT_AUTHOR_*/GIT_COMMITTER_*
 // vars the runtime forwards by name, so commits inside the sandbox are attributed

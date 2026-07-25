@@ -75,6 +75,22 @@ type RunSpec struct {
 	// and in the summary. Display only: BuildArgs ignores it, so it can never
 	// affect what the container can reach.
 	Branch string
+
+	// Detach runs the container in the background (-d), which is what makes
+	// several agents at once practical: nothing waits on it, so one terminal can
+	// launch many. It excludes TTY — a detached container has nobody attached to
+	// type into it, and an agent handed a pty draws its full-screen UI for an
+	// audience of none — and it is the one case where Remove is false, since the
+	// exit code and the logs are the entire supervision story and --rm would
+	// discard both at the moment they become interesting. Both of those are
+	// resolved in sandbox.BuildSpec; BuildArgs only renders what it is handed.
+	Detach bool
+
+	// Labels are stamped on the container (--label) so it can be found again by
+	// what it is rather than by the name someone has to remember: which repo,
+	// branch, agent and base branch this run belongs to. Docker is the state
+	// store, so a fact not stamped here is one no later command can recover.
+	Labels map[string]string
 }
 
 // Runtime is a container execution backend.
@@ -87,4 +103,8 @@ type Runtime interface {
 	EnsureImage(ctx context.Context, ref string, forceBuild bool) error
 	// Run executes the spec and returns the guest's exit code.
 	Run(ctx context.Context, spec RunSpec) (exitCode int, err error)
+	// Start launches a detached spec and returns immediately with the container's
+	// name, leaving it running. The guest's exit code and output are recovered
+	// later from the backend rather than waited for here.
+	Start(ctx context.Context, spec RunSpec) (name string, err error)
 }

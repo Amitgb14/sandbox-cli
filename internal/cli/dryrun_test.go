@@ -51,3 +51,49 @@ func TestDryRunInvariants(t *testing.T) {
 		t.Errorf("expected quoted argument:\n%s", line)
 	}
 }
+
+// TestDryRunDetached is the same proof for a background run: --detach changes how
+// the container is attached and how long it survives, and nothing else. The
+// mounts and HOME it prints are the ones the foreground case pins above.
+func TestDryRunDetached(t *testing.T) {
+	line := dockerCommandLine(runtime.RunSpec{
+		Image:   "sandbox-base:0.1.0",
+		Name:    "sandbox-app-1234abcd-feature-a",
+		Workdir: "/workspace",
+		Command: []string{"claude", "-p", "implement the login form"},
+		Detach:  true,
+		Home:    "/sandbox/home",
+		Labels:  map[string]string{"sandbox.repo": "app-1234abcd", "sandbox.branch": "feature-a"},
+		Mounts:  []runtime.Mount{{Source: "/Users/dev/proj", Target: "/workspace"}},
+
+		NoNewPrivileges: true,
+		CapDrop:         []string{"ALL"},
+	})
+
+	for _, s := range []string{
+		"-d",
+		"--label sandbox.branch=feature-a",
+		"--label sandbox.repo=app-1234abcd",
+		"--name sandbox-app-1234abcd-feature-a",
+		"-e HOME=/sandbox/home",
+		"type=bind,source=/Users/dev/proj,target=/workspace",
+		"--security-opt no-new-privileges",
+		"--cap-drop ALL",
+	} {
+		if !strings.Contains(line, s) {
+			t.Errorf("detached dry-run line missing %q:\n%s", s, line)
+		}
+	}
+	// Retained on purpose: the exit code and logs of an unattended run are the
+	// only evidence it ran, and --rm would discard both.
+	if strings.Contains(line, "--rm") {
+		t.Errorf("a detached container must not be --rm:\n%s", line)
+	}
+	// Nothing is attached, so no pty and no stdin.
+	if strings.Contains(line, "-it") {
+		t.Errorf("a detached container must not get a pty:\n%s", line)
+	}
+	if strings.Count(line, "type=bind") != 1 {
+		t.Errorf("expected exactly one bind mount:\n%s", line)
+	}
+}

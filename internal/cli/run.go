@@ -129,6 +129,14 @@ func execute(rf *runFlags, guest []string) error {
 		return nil
 	}
 
+	// A detached run gets no safety net: sandbox-cli exits as soon as the
+	// container is up, so there is no host process left to take snapshots. The
+	// container keeps running with the workspace mounted, and `recover repair`
+	// still works afterwards — there is simply nothing periodic behind it.
+	if rf.detach {
+		return startDetached(rf, sess, opts)
+	}
+
 	// The crash safety net: started before the container and stopped after it, so
 	// a run that dies anywhere in between still leaves the work recoverable.
 	snap := beginRescue(rf, sess.Cfg, opts)
@@ -224,6 +232,30 @@ func reportRescue(snap *rescue.Snapshotter) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "sandbox-cli: your work is snapshotted — sandbox-cli recover restore %s\n", sess.ID)
+}
+
+// startDetached launches the container in the background and prints how to reach
+// it again. Nothing waits on it — that is the point: one terminal can start
+// several agents, and the exit code and output are recovered from docker later
+// instead of from this process.
+//
+// The name goes to stdout on its own so the command is scriptable; everything
+// else is stderr, like the rest of sandbox-cli's own commentary.
+func startDetached(rf *runFlags, sess *sandbox.Session, opts sandbox.Options) error {
+	name, err := sess.Start(context.Background(), opts, rf.build)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "sandbox-cli: started %s in the background\n", name)
+	fmt.Fprintf(os.Stderr, "  logs:  docker logs -f %s\n", name)
+	fmt.Fprintf(os.Stderr, "  stop:  docker stop %s\n", name)
+	// Worth saying once, at the moment it can still be acted on: an agent left in
+	// its interactive mode has no terminal in there and will sit until stopped.
+	if rf.persistName != "" {
+		fmt.Fprintf(os.Stderr, "  note:  nothing is attached — the agent must be in a mode that exits on its own\n")
+	}
+	fmt.Println(name)
+	return nil
 }
 
 // warnDirtyWorktree points out work the agent left uncommitted in a --worktree

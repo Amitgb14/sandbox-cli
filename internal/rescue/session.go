@@ -94,15 +94,23 @@ func newSessionID(now time.Time) string {
 	return now.UTC().Format("20060102-150405") + "-" + hex.EncodeToString(b[:])
 }
 
-// sessionsDir is where one repository's manifests live. Bucketed with the same
-// <name>-<hash> scheme as managed worktrees so everything sandbox-cli keeps about
-// a repository sits together.
+// sessionsDir is where one repository's manifests live, under the same
+// repository identity that names its managed worktrees and its containers — so
+// everything sandbox-cli keeps about a repository agrees by construction.
+//
+// repoRoot has already been resolved by MainRepoRoot, so RepoID only fails for a
+// repository that has since been deleted. The fallback then costs nothing but a
+// stale index directory left behind for a project that no longer exists.
 func sessionsDir(repoRoot string) string {
 	root := config.RescueDir()
 	if root == "" {
 		root = filepath.Join(os.TempDir(), "sandbox", "rescue")
 	}
-	return filepath.Join(root, worktree.RepoID(repoRoot))
+	id, err := worktree.RepoID(repoRoot)
+	if err != nil {
+		id = filepath.Base(repoRoot)
+	}
+	return filepath.Join(root, id)
 }
 
 // Save writes the manifest atomically: a crash mid-write must not leave a

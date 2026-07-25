@@ -226,6 +226,107 @@ func TestBuildArgs_OnlyDeclaredMounts(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_Detach(t *testing.T) {
+	got := BuildArgs(RunSpec{Image: "img", Workdir: "/w", Detach: true})
+	if !containsArg(got, "-d") {
+		t.Errorf("expected -d for a detached spec, got %v", got)
+	}
+	// -d replaces the attachment flags rather than joining them: there is no
+	// terminal behind a detached run and nothing reading its stdin.
+	if containsArg(got, "-i") || containsArg(got, "-it") {
+		t.Errorf("did not expect -i/-it alongside -d, got %v", got)
+	}
+	// TTY set alongside Detach must still not produce a pty. BuildArgs renders
+	// what it is given, and sandbox.BuildSpec is what refuses the combination —
+	// but rendering `-dit` would hand an agent a UI nobody can see, so the
+	// renderer does not do it either.
+	both := BuildArgs(RunSpec{Image: "img", Workdir: "/w", Detach: true, TTY: true})
+	if containsArg(both, "-it") {
+		t.Errorf("Detach must win over TTY, got %v", both)
+	}
+}
+
+func TestBuildArgs_Labels(t *testing.T) {
+	spec := RunSpec{
+		Image:   "img",
+		Workdir: "/w",
+		Labels:  map[string]string{"sandbox.repo": "app-1234abcd", "sandbox.branch": "feature-a", "sandbox.agent": "claude"},
+	}
+	got := BuildArgs(spec)
+	for _, want := range []string{"sandbox.agent=claude", "sandbox.branch=feature-a", "sandbox.repo=app-1234abcd"} {
+		if !hasPair(got, "--label", want) {
+			t.Errorf("expected --label %s, got %v", want, got)
+		}
+	}
+	// Sorted, so the rendered command is stable across runs (the --dry-run golden
+	// depends on it, and so does anyone diffing two invocations).
+	joined := strings.Join(got, " ")
+	iAgent := strings.Index(joined, "sandbox.agent")
+	iBranch := strings.Index(joined, "sandbox.branch")
+	iRepo := strings.Index(joined, "sandbox.repo")
+	if !(iAgent < iBranch && iBranch < iRepo) {
+		t.Errorf("labels not sorted: agent=%d branch=%d repo=%d in %q", iAgent, iBranch, iRepo, joined)
+	}
+	if !reflect.DeepEqual(BuildArgs(spec), got) {
+		t.Error("label rendering is not deterministic")
+	}
+	if containsArg(BuildArgs(RunSpec{Image: "img", Workdir: "/w"}), "--label") {
+		t.Error("did not expect --label on a bare spec")
+	}
+}
+
+// TestBuildArgs_DetachedIsolationMatchesForeground is the invariant --detach must
+// not weaken: a background container reaches exactly what its foreground twin
+// reaches. Only attachment (-i/-it vs -d) and lifecycle (--rm) may differ, so the
+// two argvs are compared with precisely those flags removed. Anything else that
+// diverges — a mount, HOME, a capability — fails here.
+func TestBuildArgs_DetachedIsolationMatchesForeground(t *testing.T) {
+	base := RunSpec{
+		Image:    "sandbox-base:0.1.0",
+		Name:     "sandbox-app-feature-a",
+		Workdir:  "/workspace",
+		Command:  []string{"claude", "-p", "do the thing"},
+		Hostname: "sandbox",
+		Home:     "/sandbox/home",
+		User:     "sandbox",
+		Env:      map[string]string{"A": "1"},
+		EnvNames: []string{"ANTHROPIC_API_KEY"},
+		Mounts: []Mount{
+			{Source: "/host/proj", Target: "/workspace"},
+			{Source: "/host/state", Target: "/sandbox/home"},
+		},
+		NoNewPrivileges: true,
+		CapDrop:         []string{"ALL"},
+		PidsLimit:       1024,
+		Memory:          "4g",
+	}
+	fg := base
+	fg.Remove = true
+	bg := base
+	bg.Detach = true // and Remove stays false, as BuildSpec resolves it
+
+	drop := func(args []string) []string {
+		var out []string
+		for _, a := range args {
+			switch a {
+			case "-i", "-it", "-d", "--rm":
+				continue
+			}
+			out = append(out, a)
+		}
+		return out
+	}
+	if !reflect.DeepEqual(drop(BuildArgs(fg)), drop(BuildArgs(bg))) {
+		t.Fatalf("detached run differs from its foreground twin beyond attachment:\n fg=%v\n bg=%v",
+			BuildArgs(fg), BuildArgs(bg))
+	}
+	// And the lifecycle difference is real: the detached container is retained,
+	// because its exit code and logs are the only record that it ran.
+	if containsArg(BuildArgs(bg), "--rm") {
+		t.Error("a detached container must not be --rm")
+	}
+}
+
 func containsArg(args []string, want string) bool {
 	for _, a := range args {
 		if a == want {

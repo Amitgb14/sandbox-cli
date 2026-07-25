@@ -114,7 +114,7 @@ func TestAgentWrappersShareTheContract(t *testing.T) {
 			if !cmd.DisableFlagParsing {
 				t.Error("must set DisableFlagParsing to forward agent flags")
 			}
-			for _, f := range []string{"project", "worktree", "dry-run", "no-persist-auth", "no-snapshot"} {
+			for _, f := range []string{"project", "worktree", "dry-run", "detach", "no-persist-auth", "no-snapshot"} {
 				if cmd.Flags().Lookup(f) == nil {
 					t.Errorf("missing sandbox flag --%s", f)
 				}

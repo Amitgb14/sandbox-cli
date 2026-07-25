@@ -321,6 +321,7 @@ sandbox-dk0gtrd15s2g  412MiB / 7.6GiB   82.00%  24
 | `--cache` | Persist package-manager caches (npm/pip/cargo/go) in named volumes across runs |
 | `--secret` | Brokered credential `NAME=file:PATH \| cmd:COMMAND \| env:VAR`, resolved at run time and kept off the command line (repeatable) |
 | `--worktree` | Run in a git worktree for `BRANCH` (created if absent) — parallel per-branch agents |
+| `--detach` | Start in the background and print the container name, so one terminal can launch several agents (the guest must exit on its own) |
 | `--share` | Mount the shared dir (`~/.config/sandbox/shared`) at `/shared` so agents in different projects can exchange files |
 | `--paste` | Mount `~/Desktop`, `~/Downloads` and `~/Pictures` read-only at their host paths, so an image path pasted into the agent resolves inside the container |
 | `--git` | Forward host git identity and trust the workspace so `git` commits just work in-container |
@@ -475,6 +476,57 @@ tells you when there's anything left over.
 Step 5 deletes the worktree directory, not the branch. Until you run it, `git
 checkout feature-a` in your main copy fails with *"already checked out"* — that's
 git protecting the worktree, not an error.
+
+### Running them in the background
+
+The runs above each hold a terminal. `--detach` starts the container in the
+background and returns immediately, so one terminal can launch all of them:
+
+```sh
+# 1. Fan out — each on its own branch, all at once
+sandbox-cli claude --worktree feature-a --detach --git -- -p "implement A, then commit"
+sandbox-cli claude --worktree feature-b --detach --git -- -p "implement B, then commit"
+
+# 2. See who is still working (state, exit code)
+docker ps -a --filter label=sandbox.repo
+
+# 3. Read what an agent did
+docker logs -f sandbox-myapp-f379c0cd-feature-a
+
+# 4. Land the work — ordinary git, from your normal checkout
+git log feature-a
+git checkout main && git merge feature-a
+
+# 5. Clean up both halves
+docker rm sandbox-myapp-f379c0cd-feature-a
+sandbox-cli worktree rm feature-a
+```
+
+Three things to know before using it:
+
+- **The agent must exit on its own.** A detached container has no terminal
+  inside it, so an agent in its normal interactive mode draws a UI nobody can
+  see and waits forever. Use the non-interactive form — `claude -p "…"`,
+  `codex exec "…"`, `droid exec "…"` — or a plain command like `npm test`.
+- **The container is kept after it exits**, unlike every other sandbox run. Its
+  exit code and logs are the only record that the work happened, so `--rm` would
+  delete exactly what you came back for. Step 5 is how it gets reaped.
+- **One agent per branch is enforced by construction.** The container is named
+  `sandbox-<repo>-<branch>`, and docker refuses a duplicate name — a second
+  detached run on a busy branch fails instead of putting two agents in one
+  checkout. If the first finished, `docker rm` its container to free the name.
+
+The container name is printed on stdout by itself, so it is scriptable:
+
+```sh
+NAME=$(sandbox-cli claude --worktree feature-a --detach -- -p "implement A")
+docker wait "$NAME"    # blocks until it finishes, prints the exit code
+docker logs "$NAME"
+```
+
+Isolation is identical to a foreground run — same mounts, same fake HOME, same
+hardening. Full walkthrough in
+[docs/GUIDE.md](docs/GUIDE.md#running-an-agent-in-the-background).
 
 ### Commands
 
