@@ -1,9 +1,8 @@
 import type { NextConfig } from "next";
 
 /**
- * Static export: `next build` emits a fully static site into ./out, so the page
- * deploys to GitHub Pages / any bucket with no Node server — same deployment
- * story as the hand-written page it replaces.
+ * Static export: `next build` emits a fully static site into ./out, so the
+ * landing page deploys to GitHub Pages or any bucket with no Node server.
  */
 const nextConfig: NextConfig = {
   output: "export",

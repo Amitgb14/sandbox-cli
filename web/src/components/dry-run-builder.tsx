@@ -2,256 +2,194 @@
 
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ShieldAlert, ShieldCheck } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
+import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/copy-button";
+import { buildArgv, hostReach, OPTIONS, type OptionId } from "@/lib/argv";
 import { cn } from "@/lib/utils";
 
-type AgentKey = "run" | "claude" | "codex" | "aider";
+const AGENTS = [
+  { id: "claude", label: "claude" },
+  { id: "codex", label: "codex" },
+  { id: "run", label: "run -- bash" },
+];
 
-const TARGETS: Record<AgentKey, { cli: string; label: string; guest: string; home: string | null; env: string[] }> = {
-  run: { cli: "run", label: "run — npm test", guest: "npm test", home: null, env: [] },
-  claude: { cli: "claude", label: "claude", guest: "claude", home: "claude", env: ["ANTHROPIC_API_KEY"] },
-  codex: { cli: "codex", label: "codex", guest: "codex", home: "codex", env: ["OPENAI_API_KEY"] },
-  aider: { cli: "aider", label: "aider", guest: "aider", home: "aider", env: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] },
+const DIRECTION_ICON = {
+  widens: ArrowUpRight,
+  tightens: ArrowDownRight,
+  neutral: Minus,
+} as const;
+
+const LINE_COLOR: Record<string, string> = {
+  base: "text-[#d4d4d8]",
+  harden: "text-[#6ee7b7]",
+  mount: "text-[#e7e7ea]",
+  env: "text-[#fbbf24]",
+  image: "text-[#a5b4fc]",
+  cmd: "text-white",
 };
 
-interface Line {
-  id: string;
-  parts: { text: string; tone?: "flag" | "path" | "danger" | "img" | "cmd" }[];
-}
+/**
+ * Toggle real flags, watch the real argv. The point is not that the command is
+ * long — it is that every host-connected path in it is one you can name, and
+ * the tool will print the whole thing before it runs anything.
+ */
+export function DryRunBuilder({ className }: { className?: string }) {
+  const [agent, setAgent] = useState("claude");
+  const [on, setOn] = useState<Set<OptionId>>(new Set<OptionId>(["allow"]));
 
-export function DryRunBuilder() {
-  const [agent, setAgent] = useState<AgentKey>("run");
-  const [worktree, setWorktree] = useState(false);
-  const [branch, setBranch] = useState("feature-a");
-  const [allow, setAllow] = useState(false);
-  const [domain, setDomain] = useState("api.anthropic.com");
-  const [noPersist, setNoPersist] = useState(false);
-  const [asRoot, setAsRoot] = useState(false);
+  const lines = useMemo(() => buildArgv(agent, on), [agent, on]);
+  const reach = hostReach(agent, on);
 
-  const t = TARGETS[agent];
+  function toggle(id: OptionId) {
+    setOn((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
-  const lines = useMemo<Line[]>(() => {
-    const src = worktree
-      ? `~/.config/sandbox/worktrees/myapp/${branch || "feature-a"}`
-      : "~/projects/myapp";
-
-    const out: Line[] = [
-      { id: "run", parts: [{ text: "docker", tone: "cmd" }, { text: " run " }, { text: "--rm -it", tone: "flag" }, { text: " \\" }] },
-      { id: "mount", parts: [{ text: "  -v ", tone: "flag" }, { text: src, tone: "path" }, { text: ":" }, { text: "/workspace", tone: "path" }, { text: " \\" }] },
-      { id: "wd", parts: [{ text: "  -w ", tone: "flag" }, { text: "/workspace" }, { text: " \\" }] },
-      { id: "home", parts: [{ text: "  -e ", tone: "flag" }, { text: "HOME=/sandbox/home" }, { text: " \\" }] },
-    ];
-
-    if (t.home && !noPersist) {
-      out.push({
-        id: "agenthome",
-        parts: [
-          { text: "  -v ", tone: "flag" },
-          { text: `~/.config/sandbox/agents/${t.home}`, tone: "path" },
-          { text: ":" },
-          { text: "/sandbox/home", tone: "path" },
-          { text: " \\" },
-        ],
-      });
-    }
-
-    for (const e of t.env) {
-      out.push({
-        id: `env-${e}`,
-        parts: [{ text: "  -e ", tone: "flag" }, { text: `${e}=` }, { text: `$${e}`, tone: "img" }, { text: " \\" }],
-      });
-    }
-
-    if (allow) {
-      out.push({ id: "net", parts: [{ text: "  --network ", tone: "flag" }, { text: "sandbox-egress" }, { text: " \\" }] });
-      out.push({
-        id: "allow",
-        parts: [{ text: "  -e ", tone: "flag" }, { text: "SANDBOX_ALLOW=" }, { text: domain || "api.anthropic.com", tone: "path" }, { text: " \\" }],
-      });
-    }
-
-    out.push(
-      asRoot
-        ? { id: "user", parts: [{ text: "  « --user omitted: running as root »", tone: "danger" }, { text: " \\" }] }
-        : { id: "user", parts: [{ text: "  --user ", tone: "flag" }, { text: "sandbox" }, { text: " \\" }] },
-    );
-
-    out.push({ id: "img", parts: [{ text: "  sandbox-base:0.0.1", tone: "img" }, { text: " \\" }] });
-    out.push({ id: "guest", parts: [{ text: `  ${t.guest}`, tone: "cmd" }] });
-
-    return out;
-  }, [t, worktree, branch, allow, domain, noPersist, asRoot]);
-
-  const cli = useMemo(() => {
-    const flags: string[] = [];
-    if (worktree) flags.push(`--worktree ${branch || "feature-a"}`);
-    if (allow) flags.push(`--allow ${domain || "api.anthropic.com"}`);
-    if (noPersist) flags.push("--no-persist-auth");
-    if (asRoot) flags.push("--root");
-    const tail = agent === "run" ? " -- npm test" : "";
-    return `sandbox-cli ${t.cli} ${[...flags, "--dry-run"].join(" ")}${tail}`;
-  }, [agent, t.cli, worktree, branch, allow, domain, noPersist, asRoot]);
-
-  const plain = useMemo(
-    () => lines.map((l) => l.parts.map((p) => p.text).join("")).join("\n"),
-    [lines],
-  );
-
-  const verdict = asRoot
-    ? { warn: true, text: "Root inside the box — still only /workspace is mounted, but drop this if you can." }
-    : allow
-      ? { warn: false, text: "One host path mounted, egress pinned to one domain. Tightest setting." }
-      : worktree
-        ? { warn: false, text: "Mounts an isolated worktree — the main checkout is untouched." }
-        : noPersist
-          ? { warn: false, text: "No saved login mounted. The agent starts logged out every run." }
-          : { warn: false, text: "One host path mounted. Home directory unreachable." };
+  const commandLine = useMemo(() => {
+    const flags = OPTIONS.filter((o) => on.has(o.id)).map((o) => o.flag);
+    return `sandbox-cli ${agent === "run" ? "run" : agent} ${[...flags, "--dry-run"].join(" ")}${
+      agent === "run" ? " -- bash" : ""
+    }`;
+  }, [agent, on]);
 
   return (
-    <div className="grid overflow-hidden rounded-xl border bg-card shadow-xl md:grid-cols-[320px_1fr]">
-      {/* controls */}
-      <div className="flex flex-col gap-5 border-b bg-muted/30 p-5 md:border-b-0 md:border-r">
-        <div className="flex flex-col gap-2">
-          <span className="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-muted-foreground">
-            What to run
-          </span>
-          <div className="flex flex-wrap gap-1.5">
-            {(Object.keys(TARGETS) as AgentKey[]).map((k) => (
-              <button
-                key={k}
-                onClick={() => setAgent(k)}
-                aria-pressed={agent === k}
-                className={cn(
-                  "rounded-md border px-2.5 py-1.5 font-mono text-xs transition-colors",
-                  agent === k
-                    ? "border-contained bg-contained font-semibold text-background"
-                    : "bg-card text-muted-foreground hover:border-contained/40 hover:text-foreground",
-                )}
+    <div className={cn("grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]", className)}>
+      {/* ------------------------------------------------------- the flags */}
+      <div className="flex flex-col overflow-hidden rounded-2xl border bg-card">
+        <div className="border-b bg-surface px-4 py-3">
+          <p className="eyebrow">agent</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {AGENTS.map((a) => (
+              <Button
+                key={a.id}
+                size="xs"
+                variant={agent === a.id ? "default" : "outline"}
+                onClick={() => setAgent(a.id)}
+                className="font-mono text-[0.72rem]"
               >
-                {TARGETS[k].label}
-              </button>
+                {a.label}
+              </Button>
             ))}
           </div>
         </div>
 
-        <div className="flex flex-col gap-1">
-          <span className="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-muted-foreground">
-            Sandbox flags
-          </span>
-
-          <Flag name="--worktree" note="isolate on its own branch" checked={worktree} onChange={setWorktree} />
-          <Input
-            value={branch}
-            onChange={(e) => setBranch(e.target.value)}
-            disabled={!worktree}
-            aria-label="Worktree branch name"
-            className="h-8 font-mono text-xs"
-          />
-
-          <Flag name="--allow" note="restrict network egress" checked={allow} onChange={setAllow} />
-          <Input
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-            disabled={!allow}
-            aria-label="Allowed domain"
-            className="h-8 font-mono text-xs"
-          />
-
-          <Flag
-            name="--no-persist-auth"
-            note="drop the saved agent login"
-            checked={noPersist}
-            onChange={setNoPersist}
-            disabled={!t.home}
-          />
-          <Flag name="--root" note="run as root inside the box" checked={asRoot} onChange={setAsRoot} danger />
-        </div>
-      </div>
-
-      {/* output */}
-      <div className="flex flex-col">
-        <div className="flex items-center gap-2 border-b px-4 py-2.5 font-mono text-xs text-muted-foreground">
-          <span className="no-scrollbar overflow-x-auto whitespace-nowrap">$ {cli}</span>
-          <span className="flex-1" />
-          <CopyButton value={plain} label="Copy" />
-        </div>
-
-        <pre className="no-scrollbar flex-1 overflow-x-auto p-5 font-mono text-[0.8rem] leading-[1.95]">
-          <AnimatePresence initial={false} mode="popLayout">
-            {lines.map((l) => (
-              <motion.span
-                key={l.id}
-                layout
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -8 }}
-                transition={{ duration: 0.22 }}
-                className="block"
-              >
-                {l.parts.map((p, i) => (
+        <ul className="flex-1 divide-y">
+          {OPTIONS.map((o) => {
+            const Icon = DIRECTION_ICON[o.direction];
+            const active = on.has(o.id);
+            return (
+              <li key={o.id}>
+                <button
+                  type="button"
+                  onClick={() => toggle(o.id)}
+                  aria-pressed={active}
+                  className={cn(
+                    "flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/60",
+                    active && "bg-accent/60",
+                  )}
+                >
                   <span
-                    key={i}
                     className={cn(
-                      p.tone === "flag" && "text-signal",
-                      p.tone === "path" && "text-contained",
-                      p.tone === "danger" && "font-semibold text-exposed",
-                      p.tone === "img" && "text-muted-foreground",
-                      p.tone === "cmd" && "font-semibold text-foreground",
+                      "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border transition-colors",
+                      active ? "border-primary bg-primary text-primary-foreground" : "border-input",
                     )}
                   >
-                    {p.text}
+                    {active ? (
+                      <svg viewBox="0 0 10 10" className="size-2.5 fill-none stroke-current stroke-2">
+                        <path d="M1.5 5.2 3.8 7.5 8.5 2.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    ) : null}
                   </span>
-                ))}
-              </motion.span>
-            ))}
-          </AnimatePresence>
-        </pre>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <code className="font-mono text-[0.78rem] font-medium">{o.flag}</code>
+                      <Icon
+                        className={cn(
+                          "size-3 shrink-0",
+                          o.direction === "widens" && "text-exposed",
+                          o.direction === "tightens" && "text-contained",
+                          o.direction === "neutral" && "text-muted-foreground",
+                        )}
+                      />
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">{o.label}</span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
 
-        <div
-          className={cn(
-            "flex items-center gap-2 border-t bg-muted/30 px-5 py-3 font-mono text-xs",
-            verdict.warn ? "text-exposed" : "text-contained",
-          )}
-        >
-          {verdict.warn ? <ShieldAlert className="size-4 shrink-0" /> : <ShieldCheck className="size-4 shrink-0" />}
-          <span>{verdict.text}</span>
+      {/* -------------------------------------------------------- the argv */}
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-card px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="font-mono text-contained select-none">$</span>
+            <code className="no-scrollbar overflow-x-auto font-mono text-[0.78rem] whitespace-nowrap">
+              {commandLine}
+            </code>
+          </div>
+          <div className="flex items-center gap-3">
+            <Badge
+              variant="outline"
+              className={cn(
+                "gap-1.5 font-mono text-[0.65rem]",
+                reach > 3 ? "border-caution/40 text-caution" : "border-contained/40 text-contained",
+              )}
+            >
+              {reach} host {reach === 1 ? "path" : "paths"} in reach
+            </Badge>
+            <CopyButton value={commandLine} />
+          </div>
         </div>
+
+        <div className="min-w-0 overflow-hidden rounded-2xl border bg-[#0b0b0d]">
+          <div className="flex items-center gap-1.5 border-b border-white/8 px-4 py-2.5">
+            <span className="size-2 rounded-full bg-white/15" />
+            <span className="size-2 rounded-full bg-white/15" />
+            <span className="size-2 rounded-full bg-white/15" />
+            <span className="ml-2 font-mono text-[0.68rem] text-white/40">
+              sandbox-cli --dry-run
+            </span>
+          </div>
+          <div className="no-scrollbar max-h-[460px] overflow-auto px-4 py-3.5">
+            <AnimatePresence initial={false} mode="popLayout">
+              {lines.map((l) => (
+                <motion.div
+                  key={`${l.text}-${l.kind}`}
+                  layout
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 8 }}
+                  transition={{ duration: 0.18 }}
+                  title={l.why}
+                  className={cn(
+                    "font-mono text-[0.74rem] leading-relaxed whitespace-pre",
+                    LINE_COLOR[l.kind],
+                    l.from && "border-l-2 border-[#6ee7b7]/50 pl-2",
+                  )}
+                >
+                  {l.text}
+                  {l.kind !== "cmd" ? <span className="text-white/25"> \</span> : null}
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+        </div>
+
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Highlighted lines are the ones your toggles added. Hover any line for what it does. The
+          only host paths in the whole command are the <code className="font-mono">--mount</code>{" "}
+          sources — count them, and that is the blast radius.
+        </p>
       </div>
     </div>
-  );
-}
-
-function Flag({
-  name,
-  note,
-  checked,
-  onChange,
-  danger,
-  disabled,
-}: {
-  name: string;
-  note: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  danger?: boolean;
-  disabled?: boolean;
-}) {
-  return (
-    <label className={cn("flex items-center justify-between gap-3 py-2", disabled && "opacity-45")}>
-      <span className="flex flex-col">
-        <span className="font-mono text-xs">{name}</span>
-        <span className="text-[0.7rem] text-muted-foreground">{note}</span>
-      </span>
-      <Switch
-        checked={checked}
-        onCheckedChange={onChange}
-        disabled={disabled}
-        aria-label={name}
-        className={danger ? "data-[checked]:bg-exposed" : "data-[checked]:bg-contained"}
-      />
-    </label>
   );
 }

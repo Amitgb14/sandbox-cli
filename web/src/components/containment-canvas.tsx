@@ -1,323 +1,345 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from "react";
+import { cn } from "@/lib/utils";
 
-export type ShotKind = "blocked" | "allowed";
+export type CanvasHandle = {
+  /** Send a command at the wall. Returns nothing; the canvas tells the story. */
+  launch: (label: string, passes: boolean) => void;
+};
 
-export interface CanvasHandle {
-  fire: (label: string, kind: ShotKind) => void;
-}
-
-interface Projectile {
+type Shot = {
   x: number;
   y: number;
   vx: number;
+  vy: number;
   label: string;
-  kind: ShotKind;
-  alive: boolean;
-  /** 0→1 fade used once it has passed the wall. */
-  fade: number;
-}
-
-interface Shard {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
+  passes: boolean;
+  /** 0 = in flight, 1 = resolved. */
+  state: 0 | 1;
   life: number;
-  maxLife: number;
-  size: number;
-}
+};
 
-interface Drifter {
-  x: number;
-  y: number;
-  vy: number;
-  size: number;
-  alpha: number;
-}
+type Shard = { x: number; y: number; vx: number; vy: number; r: number; life: number };
+type Ripple = { x: number; y: number; t: number; passes: boolean };
+type Mote = { x: number; y: number; vx: number; vy: number; r: number };
 
-function readVar(el: HTMLElement, name: string, fallback: string): string {
-  const v = getComputedStyle(el).getPropertyValue(name).trim();
-  return v || fallback;
-}
+const MAX_SHOTS = 7;
 
 /**
- * The containment boundary, drawn on canvas.
+ * The centrepiece. A particle system with one job: make the boundary something
+ * you watch work rather than something you read about. Commands launch from the
+ * host side; the ones that reach past the workspace shatter against the wall,
+ * the ordinary ones pass through and settle into /workspace.
  *
- * Commands launch from the host side and travel toward the wall. Blocked ones
- * shatter against it; allowed ones pass through into /workspace. Ambient motes
- * drift on the host side so the exposed territory never looks inert.
+ * Everything is drawn from CSS custom properties, so the canvas and the rest of
+ * the page cannot drift apart.
  */
-export function ContainmentCanvas({
-  onImpact,
-  className,
-}: {
-  onImpact?: (kind: ShotKind) => void;
-  className?: string;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const projectiles = useRef<Projectile[]>([]);
-  const shards = useRef<Shard[]>([]);
-  const drifters = useRef<Drifter[]>([]);
-  const flash = useRef<{ v: number; kind: ShotKind }>({ v: 0, kind: "blocked" });
-  const sizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
-  const rafRef = useRef<number>(0);
-  const reduced = useRef(false);
+export const ContainmentCanvas = forwardRef<CanvasHandle, { className?: string }>(
+  function ContainmentCanvas({ className }, ref) {
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const shots = useRef<Shot[]>([]);
+    const shards = useRef<Shard[]>([]);
+    const ripples = useRef<Ripple[]>([]);
+    const motes = useRef<Mote[]>([]);
+    const size = useRef({ w: 0, h: 0 });
+    const reduced = useRef(false);
 
-  const fire = useCallback((label: string, kind: ShotKind) => {
-    const { w, h } = sizeRef.current;
-    if (!w) return;
-    projectiles.current.push({
-      x: w * 0.06,
-      y: h / 2,
-      vx: w * 0.006,
-      label,
-      kind,
-      alive: true,
-      fade: 1,
-    });
-  }, []);
+    const launch = useCallback((label: string, passes: boolean) => {
+      const { w, h } = size.current;
+      if (!w) return;
+      const y = h * (0.24 + Math.random() * 0.52);
+      const speed = reduced.current ? 26 : 3.1 + Math.random() * 0.9;
+      shots.current.push({
+        x: w * 0.06,
+        y,
+        vx: speed,
+        vy: (Math.random() - 0.5) * 0.35,
+        label,
+        passes,
+        state: 0,
+        life: 0,
+      });
+      if (shots.current.length > MAX_SHOTS) shots.current.shift();
+    }, []);
 
-  // Expose `fire` on the DOM node so the parent can drive it without a ref forward.
-  useEffect(() => {
-    const el = canvasRef.current;
-    if (!el) return;
-    (el as HTMLCanvasElement & { fire?: CanvasHandle["fire"] }).fire = fire;
-  }, [fire]);
+    useImperativeHandle(ref, () => ({ launch }), [launch]);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
 
-    reduced.current = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+      reduced.current = mq.matches;
+      const onMq = () => (reduced.current = mq.matches);
+      mq.addEventListener("change", onMq);
 
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.floor(rect.width * dpr);
-      canvas.height = Math.floor(rect.height * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      sizeRef.current = { w: rect.width, h: rect.height };
+      let raf = 0;
+      let dpr = 1;
 
-      // Seed ambient motes across the host half.
-      drifters.current = Array.from({ length: 26 }, (_, i) => ({
-        x: Math.random() * rect.width * 0.44,
-        y: Math.random() * rect.height,
-        vy: 0.08 + ((i % 5) * 0.03),
-        size: 1 + (i % 3) * 0.6,
-        alpha: 0.12 + (i % 4) * 0.05,
-      }));
-    };
+      const resize = () => {
+        const rect = canvas.getBoundingClientRect();
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.round(rect.width * dpr);
+        canvas.height = Math.round(rect.height * dpr);
+        size.current = { w: rect.width, h: rect.height };
+        // Ambient motes on the exposed side: the host is never quiet.
+        motes.current = Array.from({ length: 26 }, () => ({
+          x: Math.random() * rect.width * 0.46,
+          y: Math.random() * rect.height,
+          vx: (Math.random() - 0.5) * 0.16,
+          vy: (Math.random() - 0.5) * 0.16,
+          r: 0.7 + Math.random() * 1.5,
+        }));
+      };
+      resize();
+      const ro = new ResizeObserver(resize);
+      ro.observe(canvas);
 
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(canvas);
+      const css = (name: string, fallback: string) =>
+        getComputedStyle(canvas).getPropertyValue(name).trim() || fallback;
 
-    const draw = () => {
-      const { w, h } = sizeRef.current;
-      if (!w || !h) {
-        rafRef.current = requestAnimationFrame(draw);
-        return;
-      }
+      const draw = () => {
+        const { w, h } = size.current;
+        const contained = css("--contained", "#059669");
+        const exposed = css("--exposed", "#e11d48");
+        const grid = css("--grid-line", "#ededf0");
+        const border = css("--border", "#e7e7ea");
+        const muted = css("--muted-foreground", "#70707a");
+        const fg = css("--foreground", "#0b0b0d");
+        const wallX = w * 0.54;
 
-      const host = canvas as HTMLElement;
-      const cContained = readVar(host, "--contained", "#2dd4be");
-      const cExposed = readVar(host, "--exposed", "#ff6f5e");
-      const cBorder = readVar(host, "--border", "#26303c");
-      const cMuted = readVar(host, "--muted-foreground", "#8493a4");
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
 
-      const wallX = w * 0.5;
-
-      ctx.clearRect(0, 0, w, h);
-
-      // --- host-side hatching -------------------------------------------
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 0, wallX, h);
-      ctx.clip();
-      ctx.strokeStyle = cExposed;
-      ctx.globalAlpha = 0.07;
-      ctx.lineWidth = 1;
-      for (let x = -h; x < wallX + h; x += 13) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x + h, h);
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      // --- sandbox-side tint --------------------------------------------
-      ctx.save();
-      ctx.globalAlpha = 0.05;
-      ctx.fillStyle = cContained;
-      ctx.fillRect(wallX, 0, w - wallX, h);
-      ctx.restore();
-
-      // --- ambient motes on the host side --------------------------------
-      if (!reduced.current) {
-        for (const d of drifters.current) {
-          d.y += d.vy;
-          if (d.y > h) {
-            d.y = -4;
-            d.x = Math.random() * w * 0.44;
+        // --- host side: dotted, restless ---------------------------------
+        ctx.fillStyle = grid;
+        for (let gx = 12; gx < wallX - 14; gx += 20)
+          for (let gy = 12; gy < h - 8; gy += 20) {
+            ctx.beginPath();
+            ctx.arc(gx, gy, 0.8, 0, Math.PI * 2);
+            ctx.fill();
           }
-          ctx.save();
-          ctx.globalAlpha = d.alpha;
-          ctx.fillStyle = cExposed;
+
+        ctx.fillStyle = muted;
+        ctx.globalAlpha = 0.35;
+        for (const m of motes.current) {
+          if (!reduced.current) {
+            m.x += m.vx;
+            m.y += m.vy;
+            if (m.x < 4 || m.x > wallX - 18) m.vx *= -1;
+            if (m.y < 4 || m.y > h - 4) m.vy *= -1;
+          }
           ctx.beginPath();
-          ctx.arc(d.x, d.y, d.size, 0, Math.PI * 2);
+          ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
           ctx.fill();
-          ctx.restore();
         }
-      }
+        ctx.globalAlpha = 1;
 
-      // --- the wall -------------------------------------------------------
-      const f = flash.current.v;
-      const wallColor = f > 0.01 ? (flash.current.kind === "allowed" ? cContained : cExposed) : cBorder;
-      ctx.save();
-      if (f > 0.01) {
-        ctx.shadowColor = wallColor;
-        ctx.shadowBlur = 26 * f;
-      }
-      const grad = ctx.createLinearGradient(0, 0, 0, h);
-      grad.addColorStop(0, "transparent");
-      grad.addColorStop(0.12, wallColor);
-      grad.addColorStop(0.88, wallColor);
-      grad.addColorStop(1, "transparent");
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = 2 + 1.5 * f;
-      ctx.beginPath();
-      ctx.moveTo(wallX, 0);
-      ctx.lineTo(wallX, h);
-      ctx.stroke();
-      ctx.restore();
-      flash.current.v *= 0.92;
-
-      // --- side labels ----------------------------------------------------
-      ctx.save();
-      ctx.font = "500 10px var(--font-plex-mono), ui-monospace, monospace";
-      ctx.fillStyle = cMuted;
-      ctx.globalAlpha = 0.75;
-      ctx.textBaseline = "top";
-      ctx.fillText("HOST — EXPOSED", 12, 12);
-      const rl = "SANDBOX — CONTAINED";
-      ctx.fillText(rl, w - ctx.measureText(rl).width - 12, 12);
-      ctx.restore();
-
-      // --- projectiles ------------------------------------------------------
-      for (const p of projectiles.current) {
-        if (!p.alive) continue;
-
-        if (reduced.current) {
-          // Skip the travel entirely; resolve immediately.
-          p.alive = false;
-          flash.current = { v: 1, kind: p.kind };
-          onImpact?.(p.kind);
-          continue;
-        }
-
-        p.x += p.vx;
-
-        const hitWall = p.x >= wallX - 4;
-        if (hitWall && p.kind === "blocked") {
-          p.alive = false;
-          flash.current = { v: 1, kind: "blocked" };
-          onImpact?.("blocked");
-          // shatter
-          for (let i = 0; i < 30; i++) {
-            const a = Math.PI * (0.5 + Math.random());
-            const sp = 1.2 + Math.random() * 3.4;
-            shards.current.push({
-              x: wallX - 3,
-              y: p.y + (Math.random() - 0.5) * 14,
-              vx: Math.cos(a) * sp,
-              vy: Math.sin(a) * sp * 0.7,
-              life: 0,
-              maxLife: 34 + Math.random() * 26,
-              size: 1 + Math.random() * 2,
-            });
-          }
-          continue;
-        }
-
-        if (p.kind === "allowed" && p.x > wallX) {
-          if (Math.abs(p.x - wallX) < p.vx * 1.5) {
-            flash.current = { v: 0.85, kind: "allowed" };
-            onImpact?.("allowed");
-          }
-          if (p.x > w * 0.82) p.fade -= 0.06;
-          if (p.fade <= 0) {
-            p.alive = false;
-            continue;
-          }
-        }
-
-        const color = p.kind === "allowed" ? cContained : cExposed;
-        ctx.save();
-        ctx.globalAlpha = Math.max(0, p.fade);
-
-        // trail
-        const tg = ctx.createLinearGradient(p.x - 54, 0, p.x, 0);
-        tg.addColorStop(0, "transparent");
-        tg.addColorStop(1, color);
-        ctx.strokeStyle = tg;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(p.x - 54, p.y);
-        ctx.lineTo(p.x, p.y);
+        // --- workspace side: calm, tinted ---------------------------------
+        const tint = ctx.createLinearGradient(wallX, 0, w, 0);
+        tint.addColorStop(0, withAlpha(contained, 0.1));
+        tint.addColorStop(1, withAlpha(contained, 0.02));
+        ctx.fillStyle = tint;
+        roundRect(ctx, wallX + 16, 10, Math.max(0, w - wallX - 26), h - 20, 12);
+        ctx.fill();
+        ctx.strokeStyle = withAlpha(contained, 0.32);
+        ctx.lineWidth = 1;
+        roundRect(ctx, wallX + 16, 10, Math.max(0, w - wallX - 26), h - 20, 12);
         ctx.stroke();
 
-        // head
-        ctx.fillStyle = color;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 10;
+        // --- the wall ------------------------------------------------------
+        const wall = ctx.createLinearGradient(wallX - 8, 0, wallX + 8, 0);
+        wall.addColorStop(0, withAlpha(contained, 0.06));
+        wall.addColorStop(0.5, withAlpha(contained, 0.3));
+        wall.addColorStop(1, withAlpha(contained, 0.06));
+        ctx.fillStyle = wall;
+        ctx.fillRect(wallX - 7, 6, 14, h - 12);
+        ctx.strokeStyle = contained;
+        ctx.globalAlpha = 0.85;
+        ctx.lineWidth = 1.6;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 3.2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
+        ctx.moveTo(wallX, 6);
+        ctx.lineTo(wallX, h - 6);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
 
-        // label
-        ctx.font = "500 11px var(--font-plex-mono), ui-monospace, monospace";
-        ctx.fillStyle = color;
-        ctx.textBaseline = "bottom";
-        const text = p.label.length > 26 ? `${p.label.slice(0, 25)}…` : p.label;
-        ctx.fillText(text, Math.max(6, p.x - ctx.measureText(text).width - 10), p.y - 8);
-        ctx.restore();
-      }
-      projectiles.current = projectiles.current.filter((p) => p.alive);
-
-      // --- shards -----------------------------------------------------------
-      for (const s of shards.current) {
-        s.life += 1;
-        s.x += s.vx;
-        s.y += s.vy;
-        s.vy += 0.06; // gravity
-        s.vx *= 0.985;
-        const t = 1 - s.life / s.maxLife;
-        if (t <= 0) continue;
-        ctx.save();
-        ctx.globalAlpha = t * 0.9;
-        ctx.fillStyle = cExposed;
+        // the one opening: /workspace passes through here
+        ctx.strokeStyle = css("--background", "#fff");
+        ctx.lineWidth = 5;
         ctx.beginPath();
-        ctx.arc(s.x, s.y, s.size * t, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      }
-      shards.current = shards.current.filter((s) => s.life < s.maxLife);
+        ctx.moveTo(wallX, h * 0.5 - 16);
+        ctx.lineTo(wallX, h * 0.5 + 16);
+        ctx.stroke();
+        ctx.strokeStyle = withAlpha(contained, 0.5);
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(wallX, h * 0.5 - 16);
+        ctx.lineTo(wallX, h * 0.5 + 16);
+        ctx.stroke();
+        ctx.setLineDash([]);
 
-      rafRef.current = requestAnimationFrame(draw);
-    };
+        // --- shots ---------------------------------------------------------
+        ctx.font = `500 11px ${css("--font-mono", "ui-monospace")}, ui-monospace, monospace`;
+        ctx.textBaseline = "middle";
 
-    rafRef.current = requestAnimationFrame(draw);
+        for (const s of shots.current) {
+          s.life += 1;
+          if (s.state === 0) {
+            s.x += s.vx;
+            s.y += s.vy;
+            if (s.x >= wallX - 3) {
+              if (s.passes) {
+                s.y += (h * 0.5 - s.y) * 0.35;
+                s.state = 1;
+                s.vx = 1.5;
+                ripples.current.push({ x: wallX, y: h * 0.5, t: 0, passes: true });
+              } else {
+                s.state = 1;
+                s.x = wallX - 3;
+                ripples.current.push({ x: wallX, y: s.y, t: 0, passes: false });
+                if (!reduced.current)
+                  for (let i = 0; i < 22; i++) {
+                    const a = Math.PI * (0.5 + Math.random());
+                    const sp = 0.9 + Math.random() * 3.4;
+                    shards.current.push({
+                      x: wallX - 4,
+                      y: s.y,
+                      vx: Math.cos(a) * sp,
+                      vy: Math.sin(a) * sp * 0.8,
+                      r: 0.8 + Math.random() * 1.8,
+                      life: 0,
+                    });
+                  }
+              }
+            }
+          } else if (s.passes) {
+            s.x += s.vx;
+            s.vx *= 0.955;
+          }
 
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      ro.disconnect();
-    };
-  }, [onImpact]);
+          const alpha = s.state === 1 && !s.passes ? Math.max(0, 1 - (s.life - 40) / 45) : 1;
+          if (alpha <= 0) continue;
 
-  return <canvas ref={canvasRef} className={className} aria-hidden="true" />;
+          const color = s.state === 1 ? (s.passes ? contained : exposed) : fg;
+          ctx.globalAlpha = alpha;
+
+          // the trail
+          ctx.strokeStyle = withAlpha(color, 0.22);
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.moveTo(Math.max(6, s.x - 34), s.y);
+          ctx.lineTo(s.x, s.y);
+          ctx.stroke();
+
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, 3.2, 0, Math.PI * 2);
+          ctx.fill();
+
+          // the label rides just behind the head
+          const text = s.label.length > 30 ? `${s.label.slice(0, 29)}…` : s.label;
+          const tw = ctx.measureText(text).width;
+          const lx = Math.min(Math.max(8, s.x - tw - 14), Math.max(8, wallX - tw - 16));
+          ctx.fillStyle = css("--background", "#fff");
+          ctx.globalAlpha = alpha * 0.9;
+          roundRect(ctx, lx - 6, s.y - 9, tw + 12, 18, 5);
+          ctx.fill();
+          ctx.strokeStyle = withAlpha(s.state === 1 ? color : border, 0.7);
+          ctx.lineWidth = 1;
+          roundRect(ctx, lx - 6, s.y - 9, tw + 12, 18, 5);
+          ctx.stroke();
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = s.state === 1 ? color : muted;
+          ctx.fillText(text, lx, s.y + 0.5);
+          ctx.globalAlpha = 1;
+        }
+        shots.current = shots.current.filter(
+          (s) => s.life < 120 && s.x < size.current.w + 60,
+        );
+
+        // --- shards --------------------------------------------------------
+        for (const sh of shards.current) {
+          sh.life += 1;
+          sh.x += sh.vx;
+          sh.y += sh.vy;
+          sh.vy += 0.045;
+          sh.vx *= 0.985;
+          ctx.globalAlpha = Math.max(0, 1 - sh.life / 55);
+          ctx.fillStyle = exposed;
+          ctx.beginPath();
+          ctx.arc(sh.x, sh.y, sh.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        shards.current = shards.current.filter((s) => s.life < 55);
+
+        // --- impact rings ---------------------------------------------------
+        for (const r of ripples.current) {
+          r.t += 1;
+          const p = r.t / 34;
+          ctx.globalAlpha = Math.max(0, 0.55 * (1 - p));
+          ctx.strokeStyle = r.passes ? contained : exposed;
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.arc(r.x, r.y, 4 + p * 26, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        ripples.current = ripples.current.filter((r) => r.t < 34);
+
+        raf = requestAnimationFrame(draw);
+      };
+
+      raf = requestAnimationFrame(draw);
+      return () => {
+        cancelAnimationFrame(raf);
+        ro.disconnect();
+        mq.removeEventListener("change", onMq);
+      };
+    }, []);
+
+    return (
+      <canvas
+        ref={canvasRef}
+        role="img"
+        aria-label="Commands launched from the host side of a boundary: the ones reaching past the project shatter against it, ordinary project work passes through into /workspace."
+        className={cn("h-full w-full", className)}
+      />
+    );
+  },
+);
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/** Accepts the hex values the theme uses; falls back to the colour untouched. */
+function withAlpha(color: string, alpha: number) {
+  const m = /^#([0-9a-f]{6})$/i.exec(color.trim());
+  if (!m) return color;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }

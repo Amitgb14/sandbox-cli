@@ -1,106 +1,132 @@
-"use client";
-
-import { motion } from "motion/react";
+import { ArrowRight, Package, Terminal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { GithubMark } from "@/components/logo";
 import { buttonVariants } from "@/components/ui/button";
-import { CopyButton } from "@/components/copy-button";
+import { InstallCard } from "@/components/install-card";
 import { ContainmentSimulator } from "@/components/containment-simulator";
-import { CountUp } from "@/components/count-up";
+import { FIRST_RUN, HERO_STATS, REPO_URL, VERSION } from "@/lib/site";
 import { cn } from "@/lib/utils";
-
-export const INSTALL_CMD =
-  "curl -fsSL https://raw.githubusercontent.com/Aegmis/sandbox-cli/main/install.sh | sh";
-
-const STATS = [
-  { value: 15, suffix: "", label: "agents wrapped" },
-  { value: 1, suffix: "", label: "host path mounted" },
-  { value: 0, suffix: "", label: "credentials reachable" },
-  { literal: "--rm", label: "every run" },
-] as const;
 
 export function Hero() {
   return (
-    <section className="relative overflow-hidden px-6 pb-12 pt-16" id="top">
-      {/* ambient wash: warm on the exposed side, cool on the contained side */}
+    <section className="relative overflow-hidden">
+      {/* ambient: a faint engineering grid that fades before it distracts */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 -top-40 -z-10 h-[42rem]"
+        className="bg-blueprint pointer-events-none absolute inset-0 opacity-70 [mask-image:radial-gradient(80%_60%_at_50%_0%,black,transparent)]"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[520px]"
         style={{
           background:
-            "radial-gradient(48% 55% at 22% 18%, color-mix(in oklch, var(--exposed) 12%, transparent), transparent 72%), radial-gradient(48% 55% at 78% 22%, color-mix(in oklch, var(--contained) 16%, transparent), transparent 72%)",
+            "radial-gradient(60% 70% at 50% -10%, color-mix(in srgb, var(--contained) 10%, transparent), transparent 70%)",
         }}
       />
 
-      <div className="mx-auto w-full max-w-6xl">
-        <motion.div
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: "easeOut" }}
-          className="flex max-w-3xl flex-col gap-5"
-        >
-          <span className="eyebrow">
-            <span className="h-px w-6 bg-current opacity-60" />
-            Containment for coding agents
-          </span>
+      <div className="relative mx-auto w-full max-w-6xl px-5 pt-14 pb-6 sm:px-6 lg:pt-20">
+        <div className="grid grid-cols-1 items-start gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:gap-14">
+          <div className="flex flex-col items-start">
+            <Badge
+              variant="outline"
+              className="h-6 gap-2 border-contained/30 bg-contained-soft px-2.5 font-mono text-[0.7rem] text-contained"
+            >
+              <span className="relative flex size-1.5">
+                <span
+                  className="absolute inline-flex size-full rounded-full bg-contained"
+                  style={{ animation: "pulse-ring 2.4s ease-out infinite" }}
+                />
+                <span className="relative inline-flex size-1.5 rounded-full bg-contained" />
+              </span>
+              v{VERSION} · out now
+            </Badge>
 
-          <h1 className="font-heading text-5xl font-extrabold leading-[1.04] tracking-[-0.042em] sm:text-6xl lg:text-7xl">
-            Your agent gets <span className="text-exposed">root</span>.
-            <br />
-            It just doesn&apos;t get <span className="text-contained">your machine</span>.
-          </h1>
+            <h1 className="mt-5 text-[2.4rem] leading-[1.06] font-semibold tracking-[-0.032em] text-balance sm:text-[3rem] lg:text-[3.25rem]">
+              Give the agent full autonomy.
+              <br className="hidden sm:block" />{" "}
+              <span className="text-muted-foreground">Give it nothing else.</span>
+            </h1>
 
-          <p className="max-w-2xl text-lg text-muted-foreground">
-            <strong className="font-semibold text-foreground">sandbox-cli</strong> runs Claude Code,
-            Codex, Gemini and twelve more agents inside a disposable container. Only the project you
-            point it at is mounted. Everything else — your SSH keys, cloud credentials, the other 200
-            repos on your disk — simply isn&apos;t there to reach.
-          </p>
+            <p className="mt-5 max-w-xl text-[1.05rem] leading-relaxed text-muted-foreground">
+              <span className="font-mono text-[0.95em] text-foreground">sandbox-cli</span> runs
+              Claude Code, Codex, Gemini and twelve more coding agents inside a disposable Docker
+              container. Only the project you point it at is mounted;{" "}
+              <span className="text-foreground">HOME</span> is a fake ephemeral path and your SSH
+              keys, cloud credentials and browser cookies are not there to be read.
+            </p>
 
-          <div className="flex w-fit max-w-full items-center gap-2 rounded-lg border bg-card p-1.5 pl-3 shadow-sm">
-            <span className="font-mono font-semibold text-contained" aria-hidden="true">
-              $
-            </span>
-            <code className="no-scrollbar overflow-x-auto whitespace-nowrap font-mono text-[0.8rem]">
-              {INSTALL_CMD}
-            </code>
-            <CopyButton value={INSTALL_CMD} label="Copy" />
+            <div className="mt-7 flex flex-wrap items-center gap-2.5">
+              <a href="#install" className={cn(buttonVariants({ size: "lg" }), "gap-1.5 px-4")}>
+                Install v{VERSION}
+                <ArrowRight className="size-4" />
+              </a>
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cn(buttonVariants({ variant: "outline", size: "lg" }), "gap-1.5 px-4")}
+              >
+                <GithubMark className="size-4" />
+                Source on GitHub
+              </a>
+            </div>
+
+            <p className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <Package className="size-3.5" /> Needs Docker. Nothing else.
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Terminal className="size-3.5" /> macOS · Linux · Windows
+              </span>
+              <span>MIT licensed · written in Go</span>
+            </p>
           </div>
 
-          <div className="mt-1 flex flex-wrap gap-2.5">
-            <a href="#usage" className={cn(buttonVariants({ size: "lg" }), "bg-contained text-background hover:bg-contained/90")}>
-              Get started
-            </a>
-            <a href="#boundary" className={buttonVariants({ variant: "outline", size: "lg" })}>
-              See what it blocks
-            </a>
+          <div className="flex w-full flex-col gap-4">
+            <InstallCard />
+
+            <div className="rounded-2xl border bg-surface px-4 py-3.5">
+              <p className="eyebrow mb-2.5">then</p>
+              <ul className="flex flex-col gap-2">
+                {FIRST_RUN.map((f) => (
+                  <li key={f.cmd} className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                    <code className="font-mono text-[0.8rem] font-medium">
+                      <span className="pr-1.5 text-contained select-none">$</span>
+                      {f.cmd}
+                    </code>
+                    <span className="text-xs text-muted-foreground">{f.note}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
-        </motion.div>
+        </div>
+      </div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.55, delay: 0.15, ease: "easeOut" }}
-          className="mt-14"
-          id="boundary"
-        >
-          <ContainmentSimulator />
-        </motion.div>
+      {/* The argument, animated. */}
+      <div className="relative mx-auto w-full max-w-6xl px-5 pt-8 sm:px-6">
+        <ContainmentSimulator />
+      </div>
 
-        <div className="mt-14 flex flex-wrap justify-center gap-x-10 gap-y-5 border-y py-8">
-          {STATS.map((s) => (
-            <div key={s.label} className="flex items-baseline gap-2 font-mono text-sm text-muted-foreground">
-              <b className="font-heading text-2xl font-bold tracking-tight text-contained tabular-nums">
-                {"literal" in s ? s.literal : <CountUp to={s.value} />}
-              </b>
-              {s.label}
+      {/* Four numbers that are the whole product. */}
+      <div className="relative mx-auto mt-10 w-full max-w-6xl px-5 pb-4 sm:px-6">
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border bg-border md:grid-cols-4">
+          {HERO_STATS.map((s) => (
+            <div key={s.label} className="flex flex-col gap-0.5 bg-card px-4 py-5">
+              <dt
+                className={cn(
+                  "text-2xl leading-none font-semibold tracking-tight tnum",
+                  s.mono && "font-mono text-xl",
+                )}
+              >
+                {s.value}
+              </dt>
+              <dd className="mt-1.5 text-sm font-medium">{s.label}</dd>
+              <dd className="text-xs text-muted-foreground">{s.sub}</dd>
             </div>
           ))}
-        </div>
+        </dl>
       </div>
     </section>
   );
-}
-
-export function HeroBadge() {
-  return <Badge variant="secondary">Open source · Go · MIT</Badge>;
 }

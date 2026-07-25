@@ -1,97 +1,297 @@
-/** Comparison data shared by the spec table and the attack-surface chart. */
+/**
+ * The landscape table from README.md ("Alternatives & prior art"), typed so the
+ * page can render it and score it consistently.
+ *
+ * This is the project's own read of the landscape and the ratings for other
+ * tools are a snapshot that will age — the page says so, and so does the README.
+ */
 
-export type Level = "good" | "partial" | "bad";
+export type Tone = "strong" | "ok" | "weak" | "none" | "neutral";
 
-export interface Row {
-  property: string;
-  host: { level: Level; text: string };
-  sandbox: { level: Level; text: string };
-  devcontainer: { level: Level; text: string };
-  vm: { level: Level; text: string };
-}
+export type Cell = { text: string; tone: Tone };
 
-export const ROWS: readonly Row[] = [
+export type Column = {
+  id: string;
+  name: string;
+  sub: string;
+  /** The one column that sits inside the boundary this page is about. */
+  highlight?: boolean;
+};
+
+export const COLUMNS: Column[] = [
+  { id: "sandbox", name: "sandbox-cli", sub: "this project", highlight: true },
+  { id: "builtin", name: "Built-in agent sandboxes", sub: "Claude / Codex" },
+  { id: "sbx", name: "Docker Sandboxes", sub: "sbx" },
+  { id: "os", name: "Native OS tools", sub: "Seatbelt / Landlock" },
+  { id: "cloud", name: "Cloud microVMs", sub: "E2B, Daytona, …" },
+];
+
+export type Row = {
+  label: string;
+  /** Short plain-language gloss shown under the label. */
+  note?: string;
+  cells: Record<string, Cell>;
+};
+
+const s = (text: string): Cell => ({ text, tone: "strong" });
+const o = (text: string): Cell => ({ text, tone: "ok" });
+const w = (text: string): Cell => ({ text, tone: "weak" });
+const n = (text: string): Cell => ({ text, tone: "none" });
+const x = (text: string): Cell => ({ text, tone: "neutral" });
+
+export const ROWS: Row[] = [
   {
-    property: "Host secrets reachable",
-    host: { level: "bad", text: "all of them" },
-    sandbox: { level: "good", text: "none" },
-    devcontainer: { level: "partial", text: "often forwarded" },
-    vm: { level: "good", text: "none" },
+    label: "Isolation strength",
+    note: "How hard the wall actually is",
+    cells: {
+      sandbox: o("Good — Docker + hardening, optional gVisor/Kata"),
+      builtin: x("Medium — OS-level, shared kernel"),
+      sbx: s("Excellent — microVM / Firecracker"),
+      os: o("Good — kernel primitives"),
+      cloud: s("Excellent — microVMs"),
+    },
   },
   {
-    property: "Blast radius",
-    host: { level: "bad", text: "whole machine" },
-    sandbox: { level: "good", text: "one project" },
-    devcontainer: { level: "partial", text: "project + config" },
-    vm: { level: "good", text: "the guest" },
+    label: "Local, no cloud",
+    note: "Your code never leaves the machine",
+    cells: {
+      sandbox: s("Yes"),
+      builtin: s("Yes"),
+      sbx: s("Yes"),
+      os: s("Yes"),
+      cloud: n("No"),
+    },
   },
   {
-    property: "Built for agent autonomy",
-    host: { level: "bad", text: "no" },
-    sandbox: { level: "good", text: "15 agents wrapped" },
-    devcontainer: { level: "bad", text: "generic" },
-    vm: { level: "bad", text: "generic" },
+    label: "Persistent agent auth",
+    note: "Log in once, not every run",
+    cells: {
+      sandbox: s("Excellent — dedicated persistent home"),
+      builtin: x("Varies"),
+      sbx: o("Good"),
+      os: x("Varies"),
+      cloud: x("Varies"),
+    },
   },
   {
-    property: "Lifetime",
-    host: { level: "bad", text: "permanent" },
-    sandbox: { level: "good", text: "dies on exit" },
-    devcontainer: { level: "partial", text: "long-lived" },
-    vm: { level: "partial", text: "snapshot / restore" },
+    label: "Package cache persistence",
+    note: "No cold npm install every run",
+    cells: {
+      sandbox: s("Yes — --cache volumes"),
+      builtin: w("Limited"),
+      sbx: o("Good"),
+      os: w("Manual"),
+      cloud: o("Often built-in"),
+    },
   },
   {
-    property: "Time to first run",
-    host: { level: "good", text: "none" },
-    sandbox: { level: "good", text: "one install" },
-    devcontainer: { level: "partial", text: "config + rebuild" },
-    vm: { level: "bad", text: "provision a guest" },
+    label: "Parallel agents (worktrees)",
+    note: "Several branches at once, no collisions",
+    cells: {
+      sandbox: s("Excellent — built-in --worktree"),
+      builtin: w("Poor"),
+      sbx: o("Good"),
+      os: w("Poor"),
+      cloud: x("Varies"),
+    },
   },
   {
-    property: "Overhead",
-    host: { level: "good", text: "native" },
-    sandbox: { level: "good", text: "one container" },
-    devcontainer: { level: "good", text: "one container" },
-    vm: { level: "bad", text: "a whole OS" },
+    label: "Credential broker",
+    note: "Secrets off the argv and out of history",
+    cells: {
+      sandbox: s("Excellent — file / cmd / env sources"),
+      builtin: w("Basic"),
+      sbx: o("Good — proxy"),
+      os: x("Varies"),
+      cloud: o("Good"),
+    },
   },
   {
-    property: "Parallel agents, isolated branches",
-    host: { level: "bad", text: "manual" },
-    sandbox: { level: "good", text: "built in" },
-    devcontainer: { level: "bad", text: "manual" },
-    vm: { level: "partial", text: "one VM each" },
+    label: "Egress / network control",
+    note: "Stop exfiltration, keep installs working",
+    cells: {
+      sandbox: s("Strong — allowlist with baselines"),
+      builtin: w("Basic"),
+      sbx: s("Strong"),
+      os: x("Varies"),
+      cloud: s("Strong"),
+    },
+  },
+  {
+    label: "Observability / metrics",
+    note: "What is this thing actually doing",
+    cells: {
+      sandbox: s("Excellent — live gauge, stats, summaries"),
+      builtin: w("Limited"),
+      sbx: o("Good"),
+      os: w("Poor"),
+      cloud: x("Varies"),
+    },
+  },
+  {
+    label: "Project config",
+    note: "Per-repo policy, checked in",
+    cells: {
+      sandbox: s("Excellent — .sandbox.yaml"),
+      builtin: w("Limited"),
+      sbx: o("Good"),
+      os: w("Poor"),
+      cloud: x("API / config"),
+    },
+  },
+  {
+    label: "Dry-run / preview",
+    note: "Read the boundary before trusting it",
+    cells: {
+      sandbox: s("Yes"),
+      builtin: n("No"),
+      sbx: x("Varies"),
+      os: n("No"),
+      cloud: x("Varies"),
+    },
+  },
+  {
+    label: "Ease of use",
+    cells: {
+      sandbox: s("High — CLI-focused, thorough docs"),
+      builtin: s("High"),
+      sbx: s("High"),
+      os: x("Medium"),
+      cloud: x("Medium — setup"),
+    },
+  },
+  {
+    label: "Cross-platform",
+    cells: {
+      sandbox: o("Good — macOS / Linux / Windows"),
+      builtin: o("Good"),
+      sbx: s("Excellent"),
+      os: w("Platform-specific"),
+      cloud: x("N/A"),
+    },
+  },
+  {
+    label: "Docker dependency",
+    cells: {
+      sandbox: x("Yes"),
+      builtin: x("No"),
+      sbx: x("Yes"),
+      os: x("No"),
+      cloud: x("No"),
+    },
+  },
+  {
+    label: "Best for",
+    cells: {
+      sandbox: x("Local multi-agent workflows, ergonomics"),
+      builtin: x("Quick minimal protection"),
+      sbx: x("Strongest local isolation"),
+      os: x("Lightweight, zero deps"),
+      cloud: x("Scale & long-running tasks"),
+    },
   },
 ];
 
 /**
- * Radar dimensions, scored 0–10. Higher is better in every axis, so the
- * enclosed area reads directly as "how well contained and how practical".
+ * The same judgement as numbers. Axes are all "higher is better", scored 0–5
+ * straight from the table above, so the chart and the table cannot disagree.
  */
-export interface RadarPoint {
-  axis: string;
-  host: number;
-  sandbox: number;
-  devcontainer: number;
-  vm: number;
-}
+export const SCORE_AXES = [
+  "Isolation",
+  "Ergonomics",
+  "Parallelism",
+  "Credential hygiene",
+  "Observability",
+  "Stays local",
+] as const;
 
-export const RADAR: readonly RadarPoint[] = [
-  { axis: "Secret safety", host: 1, sandbox: 9, devcontainer: 5, vm: 9 },
-  { axis: "Blast containment", host: 1, sandbox: 9, devcontainer: 6, vm: 10 },
-  { axis: "Agent ergonomics", host: 9, sandbox: 9, devcontainer: 4, vm: 3 },
-  { axis: "Disposability", host: 1, sandbox: 10, devcontainer: 4, vm: 6 },
-  { axis: "Startup speed", host: 10, sandbox: 8, devcontainer: 5, vm: 2 },
-  { axis: "Low overhead", host: 10, sandbox: 8, devcontainer: 8, vm: 2 },
+export type ScoreSeries = {
+  id: string;
+  name: string;
+  values: Record<(typeof SCORE_AXES)[number], number>;
+};
+
+export const SCORES: ScoreSeries[] = [
+  {
+    id: "sandbox",
+    name: "sandbox-cli",
+    values: {
+      Isolation: 3.5,
+      Ergonomics: 5,
+      Parallelism: 5,
+      "Credential hygiene": 5,
+      Observability: 5,
+      "Stays local": 5,
+    },
+  },
+  {
+    id: "builtin",
+    name: "Built-in agent sandboxes",
+    values: {
+      Isolation: 2.5,
+      Ergonomics: 5,
+      Parallelism: 1.5,
+      "Credential hygiene": 2,
+      Observability: 1.5,
+      "Stays local": 5,
+    },
+  },
+  {
+    id: "cloud",
+    name: "Cloud microVMs",
+    values: {
+      Isolation: 5,
+      Ergonomics: 3,
+      Parallelism: 4,
+      "Credential hygiene": 4,
+      Observability: 3,
+      "Stays local": 0,
+    },
+  },
 ];
 
-export interface Series {
-  key: "host" | "sandbox" | "devcontainer" | "vm";
-  label: string;
-  color: string;
-}
-
-export const SERIES: readonly Series[] = [
-  { key: "sandbox", label: "sandbox-cli", color: "var(--contained)" },
-  { key: "host", label: "Bare host", color: "var(--exposed)" },
-  { key: "devcontainer", label: "Dev Container", color: "var(--signal)" },
-  { key: "vm", label: "Full VM", color: "var(--chart-5)" },
-];
+/** README's platform matrix, trimmed to the rows that actually differ. */
+export const PLATFORMS = [
+  {
+    capability: "run, agent wrappers, mounts, env, hardening, metrics",
+    macos: "yes",
+    linux: "yes",
+    windows: "yes",
+  },
+  {
+    capability: "--cache, --secret, --worktree, --git, --share",
+    macos: "yes",
+    linux: "yes",
+    windows: "yes",
+  },
+  {
+    capability: "Egress allowlist (--allow)",
+    macos: "partial",
+    linux: "yes",
+    windows: "partial",
+    footnote:
+      "The firewall runs iptables inside the Linux container, so it works wherever the container kernel is Linux. Verified in CI on native Linux; not yet independently verified on Docker Desktop.",
+  },
+  {
+    capability: "--host-gateway",
+    macos: "auto",
+    linux: "needed",
+    windows: "auto",
+    footnote: "host.docker.internal resolves automatically on Docker Desktop; native Linux needs the flag.",
+  },
+  {
+    capability: "/workspace file ownership",
+    macos: "virtualized to you",
+    linux: "container uid",
+    windows: "virtualized to you",
+    footnote: "On native Linux, use --user \"$(id -u):$(id -g)\" if ownership matters.",
+  },
+  {
+    capability: "--runtime kata-runtime / runsc",
+    macos: "no",
+    linux: "yes",
+    windows: "no",
+    footnote:
+      "Docker Desktop runs containers in its own managed Linux VM and won't let you register custom OCI runtimes — you already get a VM boundary from Docker Desktop itself.",
+  },
+] as const;

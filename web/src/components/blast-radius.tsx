@@ -1,82 +1,132 @@
 "use client";
 
 import { useState } from "react";
-import { motion } from "motion/react";
-import { Cookie, FileKey, FileLock2, Folder, FolderGit2, Globe } from "lucide-react";
+import { FolderOpen, Lock, ShieldAlert } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { HOST_PATHS, INSIDE_LABEL } from "@/lib/reach";
 import { cn } from "@/lib/utils";
 
-const PATHS = [
-  { path: "~/.ssh/id_rsa", Icon: FileKey, workspace: false },
-  { path: "~/.aws/credentials", Icon: FileLock2, workspace: false },
-  { path: "~/work/other-repo/.env", Icon: Folder, workspace: false },
-  { path: "browser cookies & tokens", Icon: Cookie, workspace: false },
-  { path: "the open internet", Icon: Globe, workspace: false },
-  { path: "~/projects/myapp", Icon: FolderGit2, workspace: true },
-];
+/**
+ * One switch, twelve paths. On the host every one of them is in reach; inside
+ * the sandbox eleven of them are not paths at all. The count in the corner is
+ * the number the whole product exists to change.
+ */
+export function BlastRadius({ className }: { className?: string }) {
+  const [sandboxed, setSandboxed] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
 
-/** One switch that flips the whole host filesystem between exposed and contained. */
-export function BlastRadius() {
-  const [contained, setContained] = useState(false);
+  const reachable = sandboxed ? 1 : HOST_PATHS.length;
+  const selected = HOST_PATHS.find((p) => p.path === open);
 
   return (
-    <div className="mt-12 flex flex-col gap-5">
-      <div className="flex flex-wrap items-center justify-center gap-3">
-        <span
-          className={cn(
-            "font-mono text-sm transition-colors",
-            contained ? "text-muted-foreground" : "font-semibold text-exposed",
-          )}
-        >
-          Agent unsandboxed
-        </span>
-        <Switch
-          checked={contained}
-          onCheckedChange={setContained}
-          aria-label="Toggle sandbox-cli containment"
-          className="data-[checked]:bg-contained"
-        />
-        <span
-          className={cn(
-            "font-mono text-sm transition-colors",
-            contained ? "font-semibold text-contained" : "text-muted-foreground",
-          )}
-        >
-          Wrapped in sandbox-cli
-        </span>
+    <div className={cn("overflow-hidden rounded-2xl border bg-card", className)}>
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b bg-surface px-4 py-3.5 sm:px-5">
+        <label className="flex cursor-pointer items-center gap-3 text-sm">
+          <span
+            className={cn(
+              "font-medium transition-colors",
+              sandboxed ? "text-muted-foreground" : "text-exposed",
+            )}
+          >
+            Agent on your host
+          </span>
+          <Switch
+            checked={sandboxed}
+            onCheckedChange={setSandboxed}
+            aria-label="Run the agent inside sandbox-cli"
+          />
+          <span
+            className={cn(
+              "font-medium transition-colors",
+              sandboxed ? "text-contained" : "text-muted-foreground",
+            )}
+          >
+            Agent in sandbox-cli
+          </span>
+        </label>
+
+        <div className="flex items-baseline gap-2">
+          <span
+            className={cn(
+              "text-2xl font-semibold tnum transition-colors",
+              sandboxed ? "text-contained" : "text-exposed",
+            )}
+          >
+            {reachable}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            of {HOST_PATHS.length} host locations in reach
+          </span>
+        </div>
       </div>
 
-      <div className="flex flex-col gap-1.5 rounded-xl border bg-card p-5 shadow-sm" aria-live="polite">
-        {PATHS.map(({ path, Icon, workspace }, i) => {
-          const state = !contained ? "reachable" : workspace ? "mounted" : "blocked";
+      <ul className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
+        {HOST_PATHS.map((p) => {
+          const inReach = !sandboxed || p.inside === "workspace";
+          const isWorkspace = p.inside === "workspace";
           return (
-            <motion.div
-              key={path}
-              layout
-              transition={{ duration: 0.35, delay: i * 0.035, ease: "easeOut" }}
-              className={cn(
-                "flex items-center gap-2.5 rounded-md border px-2.5 py-2 font-mono text-sm transition-colors duration-500",
-                state === "reachable" && "border-exposed/35 bg-exposed-soft text-exposed",
-                state === "mounted" && "border-contained/40 bg-contained-soft text-contained",
-                state === "blocked" && "border-contained/20 bg-contained/[0.06] text-muted-foreground",
-              )}
-            >
-              <Icon className="size-4 shrink-0" />
-              <span>{path}</span>
-              {workspace && <span className="opacity-60">— the project</span>}
-              <span className="ml-auto text-[0.68rem] uppercase tracking-[0.08em] opacity-90">
-                {state === "reachable" ? "reachable" : state === "mounted" ? "mounted" : "not mounted"}
-              </span>
-            </motion.div>
+            <li key={p.path}>
+              <button
+                type="button"
+                onClick={() => setOpen(open === p.path ? null : p.path)}
+                aria-expanded={open === p.path}
+                className={cn(
+                  "flex h-full w-full flex-col items-start gap-1 px-4 py-3.5 text-left transition-colors duration-300",
+                  inReach ? "bg-card" : "bg-surface",
+                  open === p.path && "bg-accent",
+                )}
+              >
+                <span className="flex w-full items-center gap-2">
+                  {isWorkspace ? (
+                    <FolderOpen
+                      className={cn(
+                        "size-3.5 shrink-0",
+                        sandboxed ? "text-contained" : "text-exposed",
+                      )}
+                    />
+                  ) : inReach ? (
+                    <ShieldAlert className="size-3.5 shrink-0 text-exposed" />
+                  ) : (
+                    <Lock className="size-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <code
+                    className={cn(
+                      "truncate font-mono text-[0.8rem] font-medium transition-colors",
+                      inReach ? "text-foreground" : "text-muted-foreground line-through decoration-1",
+                    )}
+                  >
+                    {p.path}
+                  </code>
+                </span>
+                <span className="pl-5.5 text-xs text-muted-foreground">
+                  {sandboxed ? INSIDE_LABEL[p.inside] : p.what}
+                </span>
+              </button>
+            </li>
           );
         })}
-      </div>
+      </ul>
 
-      <p className="text-center text-sm text-muted-foreground">
-        {contained
-          ? "One path mounted. The rest was never in the container to begin with."
-          : "Everything above is reachable by an agent running with “Allow All”."}
-      </p>
+      <div className="border-t px-4 py-3.5 sm:px-5">
+        {selected ? (
+          <p className="flex items-start gap-2.5 text-sm">
+            <Badge
+              variant="outline"
+              className="mt-0.5 shrink-0 font-mono text-[0.65rem]"
+            >
+              {selected.path}
+            </Badge>
+            <span className="text-muted-foreground">{selected.stake}</span>
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {sandboxed
+              ? "Everything but the project is either not mounted or belongs to a container that is deleted on exit. Pick a path to read what was at stake."
+              : "This is the default when you run an agent with “Allow All” on your machine. Pick a path to read what is at stake."}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
