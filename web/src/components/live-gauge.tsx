@@ -55,11 +55,17 @@ export function LiveGauge({ className }: { className?: string }) {
       <Frame label="inside a sandbox-cli claude session — Claude's own status line">
         <div className="flex items-center justify-between gap-3 text-[#e7e7ea]">
           <span className="truncate">
-            <span className="text-[#6ee7b7]">[sandbox]</span>
+            <span className="text-[#6ee7b7]">⬢ sandbox</span>
+            <span className="text-white/40"> · </span>opus 5
             <span className="text-white/40"> · </span>mem{" "}
             <span className="tnum">{Math.round(mem)}MiB</span>
             <span className="text-white/40"> · </span>cpu{" "}
             <span className="tnum">{Math.round(cpu)}%</span>
+            <span className="text-white/40"> · </span>5h{" "}
+            <span className="tnum">23%</span>
+            <span className="text-white/40"> (2h14m)</span>
+            <span className="text-white/40"> · </span>wk{" "}
+            <span className="tnum">49%</span>
           </span>
           <span className="hidden shrink-0 text-[#a5b4fc] sm:inline">git:feature/login</span>
         </div>

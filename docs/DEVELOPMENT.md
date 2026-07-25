@@ -33,7 +33,7 @@ make clean              # rm -rf bin dist bin-docker
 
 The version string is derived from `git describe --tags --always` and injected at
 build time into `internal/version.Version`. A dirty/untagged tree builds fine and
-reports something like `0.0.1beta.4-26-g97f461a`.
+reports something like `0.0.1beta.6-26-g97f461a`.
 
 ### Running a single test
 

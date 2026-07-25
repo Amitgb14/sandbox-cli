@@ -183,9 +183,16 @@ export const FEATURES: Feature[] = [
     title: "A status line inside Claude",
     group: "observability",
     flag: "--no-statusline",
-    body: "Claude Code renders the container's live memory and CPU in its own UI, injected through a managed-settings file that never touches your own Claude settings. Deliberately limited to claude: no other agent has a status-line hook, and running them under tmux to fake one made their TUIs render badly.",
-    code: "[sandbox] · mem 412MiB · cpu 82%                    git:feature/login",
+    body: "Claude Code renders the container's live memory and CPU in its own UI, plus the model answering and how much of your 5-hour and weekly windows is left — both from the JSON Claude already pipes to the hook. Injected through a managed-settings file that never touches your own Claude settings. Deliberately limited to claude: no other agent has a status-line hook, and running them under tmux to fake one made their TUIs render badly.",
+    code: "⬢ sandbox · opus 5 · mem 412MiB · cpu 82% · 5h 23% (2h14m) · wk 49%   git:feature/login",
     state: "opt-out",
+  },
+  {
+    title: "How much of the window is left",
+    group: "observability",
+    body: "sandbox-cli usage prints the same two subscription windows from anywhere — a second terminal, or a run that already finished. Several sandboxes on several branches are separate containers but one account quota. The reading comes from the cache Claude Code keeps for its own /usage, so the command always prints how old it is, and a window that has since reset shows no percentage rather than a figure about the period before it. --refresh spends one throwaway turn to make it current; --json for scripts.",
+    code: "5h   23%  resets in 2h14m   ·   week   49%  resets in 4d",
+    state: "opt-in",
   },
   {
     title: "Peak summary on every run",
