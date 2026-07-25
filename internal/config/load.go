@@ -92,6 +92,20 @@ func SharedDir() string {
 	return filepath.Join(r, "shared")
 }
 
+// RescueDir returns the sandbox-owned host directory holding crash-recovery
+// state — the per-session manifests and private snapshot index files, e.g.
+// ~/.config/sandbox/rescue. It is deliberately outside every repository: after a
+// crash the repository itself may be the thing that is broken, and the answer to
+// "which branch was that work on?" has to survive that. Returns "" if the home
+// directory cannot be determined.
+func RescueDir() string {
+	r := configRoot()
+	if r == "" {
+		return ""
+	}
+	return filepath.Join(r, "rescue")
+}
+
 // findProjectConfig walks up from dir looking for .sandbox.yaml, stopping at the
 // filesystem root. Returns "" if none is found.
 func findProjectConfig(dir string) string {
@@ -168,6 +182,15 @@ func mergeInto(dst *Config, src Config, baseDir string) {
 	// set; the built-in defaults are always added on top at resolution time.
 	if src.Cache.Paths != nil {
 		dst.Cache.Paths = src.Cache.Paths
+	}
+	if src.Snapshot.Enabled != nil {
+		dst.Snapshot.Enabled = src.Snapshot.Enabled
+	}
+	if src.Snapshot.Interval != "" {
+		dst.Snapshot.Interval = src.Snapshot.Interval
+	}
+	if src.Snapshot.Retention != "" {
+		dst.Snapshot.Retention = src.Snapshot.Retention
 	}
 	// Secrets overlay per-key (like Env): a later layer can add or replace an
 	// individual secret without wiping the inherited set.

@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/image"
 )
@@ -22,6 +23,7 @@ type Config struct {
 	Network  NetworkSpec           `yaml:"network"`
 	Security SecuritySpec          `yaml:"security"`
 	Cache    CacheSpec             `yaml:"cache"`
+	Snapshot SnapshotSpec          `yaml:"snapshot"`
 	Secrets  map[string]SecretSpec `yaml:"secrets"`
 	// Runtime is the OCI runtime (docker --runtime); "" uses docker's default
 	// (runc). Set to a stronger-isolation runtime the host has registered, e.g.
@@ -202,6 +204,57 @@ func CacheVolumeName(containerPath string) string {
 	return strings.TrimRight(b.String(), "-")
 }
 
+// SnapshotSpec controls the crash safety net: while a sandbox runs, the
+// workspace is periodically committed into the repository's own object store
+// under refs/sandbox/snapshots/, so work survives a container, daemon, or
+// sandbox-cli crash — and survives an agent that resets the branch out from
+// under itself. It is on by default because the whole point is to be there
+// when nobody thought to turn it on; a snapshot never touches the user's index,
+// HEAD, branches, or working tree (see internal/rescue).
+//
+// Enabled is tri-state for the same reason as SecuritySpec's pointers: a
+// project config must be able to override a default-on setting to false.
+type SnapshotSpec struct {
+	Enabled   *bool  `yaml:"enabled"`   // default true
+	Interval  string `yaml:"interval"`  // Go duration, e.g. "2m" (default 2m; <=0 disables)
+	Retention string `yaml:"retention"` // Go duration; snapshots older than this are pruned (default 336h = 14d)
+}
+
+// Snapshot defaults. Two minutes bounds the loss window on a hard kill without
+// making the safety net noticeable; fourteen days is long enough that "the
+// crash was last week" is still recoverable, short enough that abandoned
+// snapshot refs stop pinning objects forever.
+const (
+	DefaultSnapshotInterval  = 2 * time.Minute
+	DefaultSnapshotRetention = 14 * 24 * time.Hour
+)
+
+// IsEnabled reports whether snapshotting should run, defaulting to true when unset.
+func (s SnapshotSpec) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
+
+// EveryDuration returns the resolved snapshot interval, falling back to the
+// default when unset or unparseable (Validate rejects unparseable values, so a
+// bad string only reaches here on a config that was never validated).
+func (s SnapshotSpec) EveryDuration() time.Duration {
+	return parseDurationOr(s.Interval, DefaultSnapshotInterval)
+}
+
+// RetentionDuration returns the resolved retention window.
+func (s SnapshotSpec) RetentionDuration() time.Duration {
+	return parseDurationOr(s.Retention, DefaultSnapshotRetention)
+}
+
+func parseDurationOr(s string, fallback time.Duration) time.Duration {
+	if s == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return fallback
+	}
+	return d
+}
+
 func dedupePaths(in []string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -267,6 +320,17 @@ func (c Config) Validate() error {
 		case "", "ro", "rw":
 		default:
 			return fmt.Errorf("mounts[%d]: mode must be \"ro\" or \"rw\", got %q", i, m.Mode)
+		}
+	}
+	for _, d := range []struct{ field, value string }{
+		{"snapshot.interval", c.Snapshot.Interval},
+		{"snapshot.retention", c.Snapshot.Retention},
+	} {
+		if d.value == "" {
+			continue
+		}
+		if _, err := time.ParseDuration(d.value); err != nil {
+			return fmt.Errorf("%s must be a duration like \"2m\" or \"336h\", got %q", d.field, d.value)
 		}
 	}
 	for name, s := range c.Secrets {

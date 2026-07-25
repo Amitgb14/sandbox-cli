@@ -340,6 +340,16 @@ func branchExists(root, branch string) bool {
 	return err == nil
 }
 
+// RepoID is the stable directory name sandbox-cli uses to bucket per-repository
+// state under the config dir: the repo's own name plus a short hash of its
+// absolute path, so two checkouts of "api" in different places never collide.
+// Exported because worktrees are not the only thing bucketed this way — crash
+// snapshots are too, and they must land in the same bucket.
+func RepoID(repoRoot string) string {
+	sum := sha256.Sum256([]byte(repoRoot))
+	return filepath.Base(repoRoot) + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
 // worktreeBase is the managed directory holding all worktrees for one repo,
 // namespaced by repo name + a short hash of its absolute path so identically
 // named repos never collide.
@@ -348,9 +358,7 @@ func worktreeBase(repoRoot string) string {
 	if root == "" {
 		root = filepath.Join(os.TempDir(), "sandbox")
 	}
-	sum := sha256.Sum256([]byte(repoRoot))
-	id := filepath.Base(repoRoot) + "-" + hex.EncodeToString(sum[:])[:8]
-	return filepath.Join(root, "worktrees", id)
+	return filepath.Join(root, "worktrees", RepoID(repoRoot))
 }
 
 // worktreePath is the managed path for a single branch's worktree.
