@@ -109,5 +109,12 @@ just to make a test pass:
 - `internal/runtime/args_test.go`
 - the `--dry-run` golden test in `internal/cli/dryrun_test.go`
 
+`internal/rescue` has an invariant of its own: it only ever *creates* git objects
+and refs under `refs/sandbox/`, never writing `HEAD`, a branch, the repository
+index, or a file in the working tree. It runs automatically against every user's
+repository while an agent is loose in it, so that restraint is the whole licence
+to be there. `TestSnapshotLeavesTheRepositoryUntouched` pins it byte-for-byte;
+see `docs/proposals/crash-recovery.md` for the reasoning.
+
 See `CLAUDE.md` for the full architecture notes and `TESTING.md` for the test
 strategy.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -45,6 +46,11 @@ type runFlags struct {
 	share       bool
 	paste       bool
 	detach      bool
+
+	// Crash safety net (internal/rescue). noSnapshot opts out entirely;
+	// snapshotInterval overrides the configured cadence for this run.
+	noSnapshot       bool
+	snapshotInterval time.Duration
 
 	// Auth persistence (agent wrappers only). persistName is the sandbox-owned
 	// host state dir name (e.g. "claude") mounted as the agent's HOME.
@@ -270,6 +276,8 @@ func addRunFlags(cmd *cobra.Command, rf *runFlags) {
 	f.BoolVar(&rf.share, "share", false, "mount the shared dir (~/.config/sandbox/shared) at /shared so agents in different projects can exchange files")
 	f.BoolVar(&rf.paste, "paste", false, "mount ~/Desktop, ~/Downloads and ~/Pictures read-only at their host paths so an image path pasted into the agent resolves")
 	f.BoolVar(&rf.detach, "detach", false, "run in the background and print the container name; the guest gets no terminal, so it must be a command (or an agent in its non-interactive mode) that exits on its own")
+	f.BoolVar(&rf.noSnapshot, "no-snapshot", false, "disable the crash safety net (periodic snapshots of the workspace under refs/sandbox)")
+	f.DurationVar(&rf.snapshotInterval, "snapshot-interval", 0, "how often to snapshot the workspace, e.g. 30s (default: the configured 2m)")
 
 	// Flags before -- are ours; everything after -- is the guest command verbatim.
 	f.SetInterspersed(false)
@@ -293,6 +301,7 @@ func NewRootCmd() *cobra.Command {
 		newConfigCmd(),
 		newStatsCmd(),
 		newWorktreeCmd(),
+		newRecoverCmd(),
 		newVersionCmd(),
 	)
 	// One command per agent adapter, from the single list in agents.go.

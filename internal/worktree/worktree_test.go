@@ -153,6 +153,70 @@ func TestBranch(t *testing.T) {
 	}
 }
 
+// One branch must always name one path, whichever way the answer is reached.
+// Resolve builds the path itself when creating a worktree but asks git for it
+// afterwards, and git always reports a symlink-resolved path — so on a config
+// directory reached through a symlink the two disagreed, and Resolve returned a
+// different string the second time it was called for the same branch. macOS hits
+// this on every run, because /var is a symlink to /private/var; this test forces
+// the same condition everywhere so the platform without the symlink still
+// catches a regression.
+func TestPathsAreConsistentUnderASymlinkedConfigDir(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "cfg-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", link)
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", ".")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	created, err := Resolve(repo, "feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reused, err := Resolve(repo, "feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Path != reused.Path {
+		t.Errorf("same branch, two paths:\n  created: %s\n  reused:  %s", created.Path, reused.Path)
+	}
+
+	// Path and List have to agree with Resolve, or `worktree rm` and the
+	// --worktree mount would be addressing a different string than the one the
+	// user was shown.
+	got, exists, err := Path(repo, "feature/x")
+	if err != nil || !exists {
+		t.Fatalf("Path = (%q, %v, %v)", got, exists, err)
+	}
+	if got != created.Path {
+		t.Errorf("Path = %q, want %q (what Resolve reported)", got, created.Path)
+	}
+	infos, err := List(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("List returned %d worktrees, want 1: %+v", len(infos), infos)
+	}
+	if infos[0].Path != created.Path {
+		t.Errorf("List path = %q, want %q", infos[0].Path, created.Path)
+	}
+}
+
 func runOrSkip(t *testing.T, git, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(git, args...)

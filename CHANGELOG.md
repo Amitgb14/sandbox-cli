@@ -13,6 +13,34 @@ version is tagged.
 
 ### Added
 
+- Crash recovery — `sandbox-cli recover`, plus an automatic safety net behind it.
+  A sandbox writes straight through to your real files, so when a run is killed
+  mid-write the files survive but git sometimes does not: a pruned
+  `.git/worktrees/<name>` makes every command answer `fatal: not a git
+  repository` with all your work still on disk, and one `git reset --hard` inside
+  the container leaves the agent's commits on no branch at all. While a sandbox
+  runs, the workspace is now committed into your repository's own object store
+  under `refs/sandbox/snapshots/` — at the start, every two minutes, and on the
+  way out, including on Ctrl-C. Snapshots use a private index file, so your
+  index, `HEAD`, branches and working tree are never written to. `recover list` /
+  `show` / `restore` bring work back on a branch (nothing is overwritten unless
+  you ask), and `recover repair` rebuilds a broken worktree and clears locks a
+  killed git left behind. Works from your normal checkout even when the crash was
+  in a `--worktree` sandbox. Ignored paths are not captured, and `--no-snapshot`
+  / `snapshot.enabled: false` turn it off.
+
+  Snapshots clean themselves up: once you commit the work for real, the snapshot
+  holds a tree a branch already holds and is deleted at the start of the next run
+  in that repository. It must be an exact tree match, so committing half of what
+  the agent left keeps the snapshot — it is still the only copy of the other
+  half. Work that is never committed is pruned after 14 days. `sandbox-cli
+  recover prune` does both by hand; `--superseded=false` limits it to the
+  time-based expiry.
+
+- sandbox-cli now handles SIGINT/SIGTERM/SIGHUP instead of dying on the spot, so
+  an interrupted run takes a final snapshot and still prints the "you left work
+  in the worktree" warning it used to skip in exactly that case.
+
 - `--detach` — start the sandbox in the background and print its container name
   instead of holding the terminal, so one terminal can launch several agents at
   once. Works on `run` and on every agent wrapper, and pairs with `--worktree`:
