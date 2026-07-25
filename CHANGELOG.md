@@ -11,6 +11,8 @@ version is tagged.
 
 ## Unreleased
 
+## 0.0.1beta.5 — 2026-07-25
+
 ### Added
 
 - `sandbox-cli context list` — see the conversations an agent has had in this
