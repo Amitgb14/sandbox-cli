@@ -56,6 +56,23 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   Session manifests live outside every repo (`~/.config/sandbox/rescue/<repo-id>/`) because the
   repo is often the broken thing. Keep the rule: rescue only ever *creates* objects and refs
   under `refs/sandbox/`. Design and rejected alternatives: `docs/proposals/crash-recovery.md`.
+- **`internal/agentctx`** — where each agent keeps its conversation transcripts, and the
+  persisted record of what has actually been confirmed. The paths in `stores.go` are
+  *candidates*, not facts: `Probe` looks for them on this machine and the `Registry`
+  (`~/.config/sandbox/contexts/stores.json`) writes down what was found. The merge is
+  deliberately **sticky** — a probe that finds nothing never erases a store verified
+  earlier, because an agent HOME that is not mounted today is not the same as a store that
+  never existed. `sessions.go` reads a verified store into `Session` values —
+  the claude-jsonl reader is the only one written against a confirmed format, so
+  everything else lists `Partial` (id and dates real, title and turn count shown as
+  `?`). Surfaced by the single command `sandbox-cli context list` — where a store
+  lives is reported *inside* that listing (inline when it is empty, under `--verbose`
+  when it is not) rather than by a second command, which read as two overlapping
+  things to learn. First step of
+  `docs/proposals/shared-context.md`; keep the two rules that make it honest — an
+  agent with no verified descriptor is reported `untracked` rather than guessed at,
+  and a *user* turn is a prompt someone typed, never a tool result coming back as a
+  user message (they outnumber real prompts ~30:1).
 - **`internal/creds`, `internal/audit`** — deliberate **stub seams** for a future credential broker
   and audit trail. Today nothing extra is forwarded and audit goes to a no-op sink; keep these seams clean.
 
@@ -72,6 +89,11 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
      run of recognized sandbox long-flags, then forwards **everything else verbatim** to the agent, so
      `sandbox-cli claude --dangerously-skip-permissions` just works and agent short flags never collide.
      A sandbox option after the boundary needs a `--` separator.
+     The **one exception** to "everything else is forwarded" is `wrapperSubcommands`
+     (`context.go`): a leading token naming one of sandbox-cli's own subcommands is answered
+     by sandbox-cli, so `sandbox-cli claude context list` works. It fires only without an
+     explicit `--`, which is the escape hatch (`sandbox-cli claude -- context …` still goes
+     to the agent). Adding a word to that list makes it un-forwardable — do it rarely.
 
 ### Agent wrappers
 
