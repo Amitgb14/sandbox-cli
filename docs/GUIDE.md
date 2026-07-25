@@ -631,13 +631,19 @@ ID        WHEN      TURNS  TITLE
 95ad79ff  35m ago   17     sandbox-run-signal-handling
 1bbbda97  53m ago   11     Review project and agent harness sandbox-cli
 
-resume: sandbox-cli claude --resume 37888763
+resume: sandbox-cli claude --resume 37888763-3d07-451a-920c-d458c987cda8
 ```
 
 The id is the one the agent resumes by, so the listing is something to copy out
 of. TURNS counts the prompts *you* sent, not the messages exchanged. The title is
 the one Claude Code generates for the session; a session too short to have earned
 one shows its first prompt instead.
+
+The `resume:` line spells out the **full** id, so it also works outside
+sandbox-cli: a Claude session recorded in a sandbox is written into your real
+`~/.claude` history, so plain `claude --resume <full-id>` from that project picks
+up the same conversation. (Plain `claude` won't take the abbreviated form — that
+expansion is sandbox-cli's own.)
 
 It's scoped to the project you're standing in, because that's the question you're
 usually asking. `--all` lists every project in the store and adds a PROJECT

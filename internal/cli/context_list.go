@@ -304,8 +304,14 @@ func printResumeHint(listed []listedAgent) {
 		if len(la.finding.Resume) == 0 || len(la.sessions) == 0 {
 			continue
 		}
+		// The full id, not the abbreviated one in the table. This is the line people
+		// copy, and it should keep working outside sandbox-cli: prefix expansion is
+		// sandbox-cli's own glue, so `claude --resume 37888763` run plainly on the
+		// host fails where the full id succeeds. A claude session recorded in a
+		// sandbox lives in the host's real history, which makes that a normal thing
+		// to want to do rather than an edge case.
 		fmt.Printf("resume: sandbox-cli %s %s %s\n",
-			la.finding.Agent, strings.Join(la.finding.Resume, " "), shortSessionID(la.sessions[0].ID))
+			la.finding.Agent, strings.Join(la.finding.Resume, " "), la.sessions[0].ID)
 	}
 	if len(listed) > 1 {
 		fmt.Println("\nnote: an id belongs to the agent that created it — a claude session cannot be")
