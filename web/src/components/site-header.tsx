@@ -18,6 +18,7 @@ const NAV = [
   { href: "#threat", label: "Why" },
   { href: "#features", label: "Features" },
   { href: "#command", label: "The command" },
+  { href: "#config", label: "Config" },
   { href: "#agents", label: "Agents" },
   { href: "#compare", label: "Compare" },
 ];

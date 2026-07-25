@@ -7,6 +7,7 @@ import { Section, SectionHead } from "@/components/section-head";
 import { BlastRadius } from "@/components/blast-radius";
 import { FeaturesGrid } from "@/components/features-grid";
 import { DryRunBuilder } from "@/components/dry-run-builder";
+import { ConfigReference } from "@/components/config-reference";
 import { EgressVisualizer } from "@/components/egress-visualizer";
 import { ParallelAgents } from "@/components/parallel-agents";
 import { LiveGauge } from "@/components/live-gauge";
@@ -158,6 +159,33 @@ export default function Home() {
             }
           />
           <DryRunBuilder />
+
+          <div id="config" className="mt-14 scroll-mt-20">
+            <SectionHead
+              eyebrow="the same boundary, as a file"
+              title={
+                <>
+                  Everything above has a{" "}
+                  <code className="font-mono text-[0.85em]">.sandbox.yaml</code> key
+                </>
+              }
+              lead={
+                <>
+                  Flags are for one run; a{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                    .sandbox.yaml
+                  </code>{" "}
+                  committed at the root of the repo is the boundary everyone on the project gets by
+                  default. Nothing here is required —{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                    sandbox-cli init
+                  </code>{" "}
+                  scaffolds the file, and every key falls back to a working default.
+                </>
+              }
+            />
+            <ConfigReference />
+          </div>
         </Section>
 
         {/* --------------------------------------------------------- egress */}
