@@ -25,6 +25,7 @@ const COLUMNS = [
     links: [
       { label: "Why", href: "#threat" },
       { label: "Features", href: "#features" },
+      { label: "Config file", href: "#config" },
       { label: "Agents", href: "#agents" },
       { label: "Compare", href: "#compare" },
     ],
