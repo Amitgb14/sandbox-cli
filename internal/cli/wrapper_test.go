@@ -102,9 +102,10 @@ func TestClaudeWrapperParsesWithoutError(t *testing.T) {
 // TestAgentWrappersShareTheContract pins the properties every agent adapter must
 // have, so a new one added by copying an existing file can't quietly drop them:
 // unknown agent flags are forwarded rather than rejected, the shared sandbox
-// flag set is present, and the login persists in a sandbox-owned host dir of its
-// own with an opt-out. Distinct persist names matter most — two adapters sharing
-// one would cross their logins into a single directory.
+// flag set is present, the crash safety net reaches every agent (not just the
+// ones someone remembered), and the login persists in a sandbox-owned host dir
+// of its own with an opt-out. Distinct persist names matter most — two adapters
+// sharing one would cross their logins into a single directory.
 func TestAgentWrappersShareTheContract(t *testing.T) {
 	agents := map[string]bool{}
 	for _, cmd := range agentCmds() {
@@ -113,7 +114,7 @@ func TestAgentWrappersShareTheContract(t *testing.T) {
 			if !cmd.DisableFlagParsing {
 				t.Error("must set DisableFlagParsing to forward agent flags")
 			}
-			for _, f := range []string{"project", "worktree", "dry-run", "no-persist-auth"} {
+			for _, f := range []string{"project", "worktree", "dry-run", "no-persist-auth", "no-snapshot"} {
 				if cmd.Flags().Lookup(f) == nil {
 					t.Errorf("missing sandbox flag --%s", f)
 				}
