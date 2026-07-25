@@ -124,12 +124,17 @@ OpenAPI, or generating clients. Those belong to tools that already do them well.
 - **One contracts repo per machine, or per pair of projects?** A single
   `contracts.git` under the shared dir is simplest, but couples unrelated
   projects into one history. Per-pair repos are cleaner and harder to discover.
+  [`shared-namespaces.md`](shared-namespaces.md) gives the shared dir a
+  per-repo/per-branch layout, which makes a per-producer `contracts.git` an
+  address rather than a naming convention.
 - **Should `--share` seed `contracts.git`?** It would remove the one-time setup
   step, but every sandbox would then carry a git repo it has no use for. Probably
   better as an explicit `sandbox-cli contract init`.
 - **Ownership enforcement.** Mounting `/shared` read-only on the consumer makes
   the ownership rule structural rather than advisory, but `--share` is a single
   boolean today. A `--share-ro` variant, or a mode argument, would be needed.
+  Proposed as `--share=ro` in [`shared-namespaces.md`](shared-namespaces.md),
+  which mounts the root read-only and the producer's own directory read-write.
 
 ## Not chosen
 
