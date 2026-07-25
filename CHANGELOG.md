@@ -11,6 +11,8 @@ version is tagged.
 
 ## Unreleased
 
+## 0.0.1beta.6 — 2026-07-25
+
 ### Added
 
 - Usage stats on Claude's status line, and `sandbox-cli usage`. The line already
