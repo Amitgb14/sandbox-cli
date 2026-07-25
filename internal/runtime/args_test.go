@@ -171,6 +171,46 @@ func TestBuildArgs_AddHost(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_Publish(t *testing.T) {
+	got := BuildArgs(RunSpec{
+		Image:   "img",
+		Workdir: "/w",
+		Ports:   []string{"127.0.0.1:3000:3000", "0.0.0.0:8080:80/tcp"},
+	})
+	if !hasPair(got, "-p", "127.0.0.1:3000:3000") {
+		t.Errorf("expected the loopback port, got %v", got)
+	}
+	if !hasPair(got, "-p", "0.0.0.0:8080:80/tcp") {
+		t.Errorf("expected the explicit-address port, got %v", got)
+	}
+	// Emitted verbatim: BuildArgs must not invent or rewrite an address, since
+	// that decision belongs to sandbox.NormalizePublish and must stay readable in
+	// --dry-run.
+	for i, a := range got {
+		if a == "-p" && i+1 < len(got) && !strings.Contains(got[i+1], ":") {
+			t.Errorf("port spec %q reached docker without an explicit address", got[i+1])
+		}
+	}
+	// The flag must precede the image so docker parses it as a run flag.
+	joined := strings.Join(got, " ")
+	if strings.Index(joined, "-p ") > strings.Index(joined, " img") {
+		t.Errorf("-p must come before the image: %v", got)
+	}
+}
+
+// TestBuildArgs_NoPublishByDefault is the half of the port story that matters:
+// nothing is reachable from the host unless it was asked for.
+func TestBuildArgs_NoPublishByDefault(t *testing.T) {
+	got := BuildArgs(RunSpec{
+		Image:   "img",
+		Workdir: "/workspace",
+		Mounts:  []Mount{{Source: "/host/proj", Target: "/workspace"}},
+	})
+	if containsArg(got, "-p") {
+		t.Errorf("a spec with no Ports must publish nothing, got %v", got)
+	}
+}
+
 func TestBuildArgs_VolumeMount(t *testing.T) {
 	got := BuildArgs(RunSpec{
 		Image:   "img",

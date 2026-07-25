@@ -40,6 +40,7 @@ type Options struct {
 	Allow       []string // --allow DOMAIN: enable the egress allowlist and permit these domains (repeatable)
 	Cache       bool     // --cache: persist package-manager caches in named volumes across runs
 	Secrets     []string // --secret NAME=file:PATH|cmd:COMMAND|env:VAR (brokered credential, repeatable)
+	Publish     []string // --publish/-P PORT|HOST:CONTAINER|IP:HOST:CONTAINER (repeatable); adds to config `ports`
 	AddHosts    []string // --add-host HOST:IP (repeatable)
 	HostGateway bool     // --host-gateway: add host.docker.internal -> host gateway (reach host MCP servers)
 	GitIdentity bool     // --git: forward host git user.name/email and trust the workspace
@@ -279,6 +280,22 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		addHosts = append(addHosts, "host.docker.internal:host-gateway")
 	}
 
+	// Published ports. Config `ports:` declares what a project normally needs and
+	// --publish adds to it for one run, so a repo can check in its dev-server port
+	// and a debugger port can still be opened ad hoc. Unlike every other reach in
+	// here, this one points inward — so the address is resolved now (a bare spec
+	// becomes 127.0.0.1) and the result is what --dry-run prints.
+	ports, err := NormalizePublish(append(append([]string(nil), cfg.Ports...), opts.Publish...))
+	if err != nil {
+		return runtime.RunSpec{}, err
+	}
+	// `network: none` and a published port are a contradiction: docker would take
+	// the flag and the port would never answer. Say so rather than hand back a
+	// container that looks configured and isn't.
+	if len(ports) > 0 && network == "none" {
+		return runtime.RunSpec{}, fmt.Errorf("cannot publish ports with network mode \"none\": the container has no network to publish from")
+	}
+
 	tty := detectTTY()
 	if opts.TTY != nil {
 		tty = *opts.TTY
@@ -342,6 +359,7 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		EnvNames: envNames,
 		Mounts:   mounts,
 		AddHosts: addHosts,
+		Ports:    ports,
 
 		Entrypoint: entrypoint,
 

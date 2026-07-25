@@ -12,15 +12,21 @@ import (
 
 // Config is the merged sandbox configuration.
 type Config struct {
-	Image    string                `yaml:"image"`
-	Workdir  string                `yaml:"workdir"`
-	User     string                `yaml:"user"`
-	Home     string                `yaml:"home"`
-	Hostname string                `yaml:"hostname"`
-	Mounts   []MountSpec           `yaml:"mounts"`
-	Env      map[string]string     `yaml:"env"`
-	EnvAllow []string              `yaml:"env_allow"`
-	Network  NetworkSpec           `yaml:"network"`
+	Image    string            `yaml:"image"`
+	Workdir  string            `yaml:"workdir"`
+	User     string            `yaml:"user"`
+	Home     string            `yaml:"home"`
+	Hostname string            `yaml:"hostname"`
+	Mounts   []MountSpec       `yaml:"mounts"`
+	Env      map[string]string `yaml:"env"`
+	EnvAllow []string          `yaml:"env_allow"`
+	Network  NetworkSpec       `yaml:"network"`
+	// Ports are published to the host (docker -p), e.g. ["3000:3000"]. A spec
+	// with no address of its own binds to 127.0.0.1 (see sandbox.NormalizePublish)
+	// — write 0.0.0.0:3000:3000 to expose it to the network deliberately. Empty
+	// (the default) publishes nothing. Declaring a project's dev-server ports here
+	// is the point: `sandbox-cli run -- npm run dev` then just works.
+	Ports    []string              `yaml:"ports"`
 	Security SecuritySpec          `yaml:"security"`
 	Cache    CacheSpec             `yaml:"cache"`
 	Snapshot SnapshotSpec          `yaml:"snapshot"`
