@@ -27,6 +27,7 @@ type contextListOpts struct {
 	limit   int
 	json    bool
 	verbose bool
+	full    bool
 }
 
 func newContextListCmd(sc contextScope) *cobra.Command {
@@ -44,11 +45,14 @@ func newContextListCmd(sc contextScope) *cobra.Command {
 			"empty. `--verbose` shows the same detail alongside a listing that did work.\n\n" +
 			"Sessions from a store sandbox-cli can locate but not yet read are listed with\n" +
 			"their id and date, and \"?\" where the title and turn count would be — the file\n" +
-			"is there, the format is not understood yet.",
+			"is there, the format is not understood yet.\n\n" +
+			"Ids are abbreviated; sandbox-cli expands one back to the full id before the\n" +
+			"agent sees it. Use --full when you need the whole id — running the agent\n" +
+			"directly, outside sandbox-cli, requires it (`claude --resume <full-id>`).",
 		Example: "  sandbox-cli context list\n" +
 			"  sandbox-cli claude context list\n" +
-			"  sandbox-cli claude context list --all --limit 0\n" +
-			"  sandbox-cli claude context list --verbose",
+			"  sandbox-cli claude context list --full\n" +
+			"  sandbox-cli claude context list --all --limit 0",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return runContextList(o) },
 	}
@@ -57,6 +61,7 @@ func newContextListCmd(sc contextScope) *cobra.Command {
 	cmd.Flags().IntVar(&o.limit, "limit", defaultContextListLimit, "show at most this many sessions (0 for all)")
 	cmd.Flags().BoolVar(&o.json, "json", false, "emit the sessions as JSON")
 	cmd.Flags().BoolVarP(&o.verbose, "verbose", "v", false, "also show where each agent's sessions are stored")
+	cmd.Flags().BoolVarP(&o.full, "full", "f", false, "print whole session ids (needed to resume outside sandbox-cli)")
 	return cmd
 }
 
@@ -257,7 +262,7 @@ func printSessions(listed []listedAgent, o contextListOpts, project string) erro
 			if multi {
 				row = append(row, la.finding.Agent)
 			}
-			row = append(row, shortSessionID(s.ID), humanAge(s.Modified), turnsCell(s))
+			row = append(row, sessionIDCell(s.ID, o.full), humanAge(s.Modified), turnsCell(s))
 			if o.all {
 				row = append(row, projectCell(s))
 			}
@@ -286,7 +291,7 @@ func printSessions(listed []listedAgent, o contextListOpts, project string) erro
 			fmt.Printf("%s\n", storeLine(la.finding))
 		}
 	}
-	printResumeHint(listed)
+	printResumeHint(listed, o.full)
 	return nil
 }
 
@@ -299,25 +304,36 @@ func printSessions(listed []listedAgent, o contextListOpts, project string) erro
 // and handing it to whichever agent you like — fails with a message from the
 // agent that explains nothing ("No saved session found with ID ..."). The table
 // created that impression, so the table corrects it.
-func printResumeHint(listed []listedAgent) {
+func printResumeHint(listed []listedAgent, full bool) {
 	for _, la := range listed {
 		if len(la.finding.Resume) == 0 || len(la.sessions) == 0 {
 			continue
 		}
-		// The full id, not the abbreviated one in the table. This is the line people
-		// copy, and it should keep working outside sandbox-cli: prefix expansion is
-		// sandbox-cli's own glue, so `claude --resume 37888763` run plainly on the
-		// host fails where the full id succeeds. A claude session recorded in a
-		// sandbox lives in the host's real history, which makes that a normal thing
-		// to want to do rather than an edge case.
 		fmt.Printf("resume: sandbox-cli %s %s %s\n",
-			la.finding.Agent, strings.Join(la.finding.Resume, " "), la.sessions[0].ID)
+			la.finding.Agent, strings.Join(la.finding.Resume, " "), sessionIDCell(la.sessions[0].ID, full))
 	}
 	if len(listed) > 1 {
 		fmt.Println("\nnote: an id belongs to the agent that created it — a claude session cannot be")
 		fmt.Println("      resumed by codex, and vice versa. Carrying a conversation across agents is")
 		fmt.Println("      a handoff, not a resume (docs/proposals/shared-context.md).")
 	}
+}
+
+// sessionIDCell renders an id for display: abbreviated by default, whole under
+// --full.
+//
+// Abbreviated is right for the common case, where the id is read on screen and
+// handed straight back to sandbox-cli, which expands it. It is wrong for the
+// other case: prefix expansion is sandbox-cli's own glue, so an abbreviated id
+// fails when the agent is run directly (`claude --resume 37888763` is refused as
+// not-a-UUID). A claude session recorded in a sandbox lives in the user's real
+// ~/.claude history, so reaching for it outside the sandbox is a normal thing to
+// want — hence a flag rather than a choice made for them.
+func sessionIDCell(id string, full bool) string {
+	if full {
+		return id
+	}
+	return shortSessionID(id)
 }
 
 // shortSessionID is the first block of a UUID: long enough to be unambiguous in

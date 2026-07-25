@@ -144,6 +144,19 @@ func TestExpandResumeIDLeavesArgsAloneUnlessItIsSure(t *testing.T) {
 	}
 }
 
+// TestSessionIDCell pins both halves of the display choice: abbreviated is what
+// you read and hand back to sandbox-cli, whole is what you need to run the agent
+// directly, since prefix expansion is sandbox-cli's own.
+func TestSessionIDCell(t *testing.T) {
+	const id = "37888763-3d07-451a-920c-d458c987cda8"
+	if got := sessionIDCell(id, false); got != "37888763" {
+		t.Errorf("default = %q, want the abbreviated id", got)
+	}
+	if got := sessionIDCell(id, true); got != id {
+		t.Errorf("--full = %q, want the whole id", got)
+	}
+}
+
 func TestShortSessionID(t *testing.T) {
 	// The first block of a UUID is what a user copies out of the listing. The
 	// agents themselves reject it — expandResumeID is what makes it work.

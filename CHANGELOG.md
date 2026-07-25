@@ -25,13 +25,13 @@ version is tagged.
   many it held back), `--json` is for scripts. Also spelled per agent:
   `sandbox-cli claude context list`.
 
-  The `resume:` line it ends with carries the full id, so it works outside
-  sandbox-cli too: a Claude session recorded in a sandbox is written into your
-  real `~/.claude` history, and plain `claude --resume <full-id>` from that
-  project picks up the same conversation.
+  Ids are abbreviated for readability, and `-f` / `--full` prints them whole —
+  which you need to resume outside sandbox-cli, since a Claude session recorded
+  in a sandbox is written into your real `~/.claude` history and plain
+  `claude --resume <full-id>` from that project picks up the same conversation.
 
-  The ids in the table are shortened for readability, and sandbox-cli expands one
-  back to the full id before the agent sees it — Claude Code refuses anything
+  sandbox-cli expands an abbreviated id back to the full one before the agent
+  sees it — Claude Code refuses anything
   that is not a complete UUID, so an abbreviated id would otherwise be a listing
   you could read and not use. It expands only when exactly one session matches,
   and says which one it resolved to; an ambiguous or unknown value is passed
