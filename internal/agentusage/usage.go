@@ -34,6 +34,8 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
 // Window kinds — the two periods usage is metered over. A plan may report each
@@ -120,26 +122,7 @@ func (l limit) model() string {
 	if l.Scope == nil || l.Scope.Model == nil {
 		return ""
 	}
-	return sanitizeForTerminal(l.Scope.Model.DisplayName)
-}
-
-// sanitizeForTerminal strips the characters a terminal reads as commands rather
-// than as text.
-//
-// This value is read out of a JSON file the sandboxed agent writes (its own
-// ~/.claude.json, in a HOME bind-mounted read-write) and `sandbox-cli usage`
-// prints it straight to the user's terminal — so an ESC in it is an instruction,
-// reaching screen clears, window titles and, on permissive terminals, the system
-// clipboard via OSC 52. Same reasoning and same ranges as agentctx.oneLine;
-// duplicated rather than shared because a package for eight lines is worse than
-// the duplication.
-func sanitizeForTerminal(s string) string {
-	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-			return ' '
-		}
-		return r
-	}, s)), " ")
+	return termsafe.Clean(l.Scope.Model.DisplayName)
 }
 
 // timestamp accepts the two spellings a reset time arrives in: an RFC3339 string

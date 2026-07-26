@@ -622,3 +622,43 @@ func TestGitCommonDir_AcceptsARealWorktree(t *testing.T) {
 		t.Errorf("resolved path is not a git directory: %v", err)
 	}
 }
+
+// TestDirtyStripsTerminalControlSequences pins that a filename cannot act on the
+// terminal that prints it. These paths are shown by the "you left work here"
+// warning at the end of every --worktree run and on Ctrl-C, they come from the
+// workspace so the agent names them, and `--porcelain -z` deliberately does NOT
+// quote — so an ESC in a filename used to reach the user's terminal verbatim.
+func TestDirtyStripsTerminalControlSequences(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	runOrSkip(t, git, root, "init", "-q")
+	runOrSkip(t, git, root, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, root, "config", "user.name", "t")
+	runOrSkip(t, git, root, "commit", "-qm", "init", "--allow-empty")
+
+	wt, err := Resolve(root, "feat")
+	if err != nil {
+		t.Fatalf("creating worktree: %v", err)
+	}
+	// An untracked file whose *name* is a terminal command.
+	hostile := "\x1b]0;PWNED\x07\x1b[31mevil.txt"
+	if err := os.WriteFile(filepath.Join(wt.Path, hostile), []byte("x"), 0o644); err != nil {
+		t.Skipf("filesystem rejected the name: %v", err)
+	}
+
+	files := Dirty(root, "feat", 10)
+	if len(files) == 0 {
+		t.Fatal("the dirty file was not reported at all")
+	}
+	for _, f := range files {
+		for _, r := range f {
+			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+				t.Errorf("Dirty returned %q, which still carries control character %q", f, r)
+			}
+		}
+	}
+}

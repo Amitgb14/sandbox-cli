@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
 // Session is one conversation in an agent's store, described in the terms a
@@ -196,7 +198,9 @@ func readClaudeSession(path string, s *Session) {
 			s.ID = l.SessionID
 		}
 		if s.Project == "" && l.Cwd != "" {
-			s.Project = l.Cwd
+			// The cwd comes from the transcript, which the agent writes, and it is
+			// printed as the PROJECT column. Same treatment as the title.
+			s.Project = termsafe.Clean(l.Cwd)
 		}
 		if s.Started.IsZero() && l.Timestamp != "" {
 			if t, terr := time.Parse(time.RFC3339, l.Timestamp); terr == nil {
@@ -294,23 +298,7 @@ func userPromptText(content json.RawMessage) (string, bool) {
 // Reachable today: clearing the screen, setting the window title (OSC), and on
 // terminals that permit it, writing the system clipboard via OSC 52. A listing
 // of what an agent did should not be able to act on the machine reading it.
-func oneLine(s string) string {
-	// Keep only the first line, as before — a title is one line, and the rest of a
-	// multi-line prompt is not a summary of it.
-	s = strings.TrimSpace(s)
-	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
-		s = strings.TrimSpace(s[:i])
-	}
-	s = strings.Map(func(r rune) rune {
-		// C0 (including ESC), DEL, and C1 — the ranges a terminal reads as
-		// commands. Anything printable, including non-ASCII, is kept.
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-			return ' '
-		}
-		return r
-	}, s)
-	return strings.Join(strings.Fields(s), " ")
-}
+func oneLine(s string) string { return termsafe.FirstLine(s) }
 
 // SessionRef is a session's id and the file it lives in, without its contents.
 type SessionRef struct {

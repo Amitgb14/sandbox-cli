@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
+
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
 // snapshotTimeout bounds one snapshot. A pathological workspace (a huge
@@ -538,7 +540,7 @@ func (s *Snapshotter) oversizedExcludes(ctx context.Context, env []string) strin
 		}
 		if !s.skipped[rel] && len(s.skipped) < maxOversizedExcludes {
 			s.skipped[rel] = true
-			newlySkipped = append(newlySkipped, fmt.Sprintf("%s (%d MiB)", oneLinePath(rel), fi.Size()>>20))
+			newlySkipped = append(newlySkipped, fmt.Sprintf("%s (%d MiB)", termsafe.Clean(rel), fi.Size()>>20))
 		}
 		s.mu.Unlock()
 	}
@@ -558,18 +560,6 @@ func (s *Snapshotter) oversizedExcludes(ctx context.Context, env []string) strin
 			maxOversizedExcludes)
 	}
 	return specFile
-}
-
-// oneLinePath makes a path safe to print. It is read from the workspace, so the
-// agent chooses it, and it goes straight to the user's terminal — the same reason
-// agentctx.oneLine exists.
-func oneLinePath(p string) string {
-	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-			return ' '
-		}
-		return r
-	}, p)), " ")
 }
 
 // contentEnv redirects the commands that read the workspace — `add -A` and

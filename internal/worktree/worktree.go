@@ -17,6 +17,8 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 
 	"github.com/Amitgb14/sandbox-cli/internal/githard"
+
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
 // gitBin is the git executable; a variable so tests can stub it if needed.
@@ -220,6 +222,11 @@ func Dirty(dir, branch string, limit int) []string {
 	if err != nil || !exists {
 		return nil
 	}
+	// Paths are cleaned before returning: they are display-only (the "you left work
+	// here" warning at the end of every --worktree run and on Ctrl-C), they come
+	// from the workspace so the agent names them, and -z means git does NOT quote
+	// them — so an ESC in a filename reached the user's terminal verbatim.
+	//
 	// -z: NUL-separated and never quoted. Plain --porcelain quotes paths
 	// containing spaces or non-ASCII, which would surface to the user as
 	// `"weird name.txt"`.
@@ -240,7 +247,7 @@ func Dirty(dir, branch string, limit int) []string {
 		if status[0] == 'R' || status[0] == 'C' {
 			i++
 		}
-		files = append(files, name)
+		files = append(files, termsafe.Clean(name))
 		if limit > 0 && len(files) >= limit {
 			break
 		}

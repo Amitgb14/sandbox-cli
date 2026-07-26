@@ -332,8 +332,30 @@ allow="${SANDBOX_EGRESS_ALLOW:-}"
 ingress="${SANDBOX_INGRESS_PORTS:-}"
 
 # No IPv6 allowlist yet: reject all IPv6 traffic so it can't be used to bypass the
-# IPv4 rules, inbound or outbound. Best-effort — some hosts have no ip6tables.
-if command -v ip6tables >/dev/null 2>&1; then
+# IPv4 rules, inbound or outbound.
+#
+# This used to be best-effort in both directions — every call was `|| true`, so a
+# missing ip6tables left IPv6 completely unfiltered while sandbox-cli reported it
+# was enforcing an allowlist. Failing open is the one thing the rest of this
+# script is careful not to do. Now: if the container has IPv6 at all, the rules
+# are required; if it has none, there is nothing to filter and nothing to fail.
+if ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
+  if ! command -v ip6tables >/dev/null 2>&1; then
+    echo "sandbox-cli: this container has IPv6 but no ip6tables, so the allowlist cannot be" >&2
+    echo "sandbox-cli: enforced on it; refusing rather than filtering only IPv4" >&2
+    exit 1
+  fi
+  ip6tables -F OUTPUT
+  ip6tables -A OUTPUT -o lo -j ACCEPT
+  ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  ip6tables -A OUTPUT -j REJECT
+  ip6tables -F INPUT
+  ip6tables -A INPUT -i lo -j ACCEPT
+  ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  ip6tables -A INPUT -j REJECT
+elif command -v ip6tables >/dev/null 2>&1; then
+  # No global IPv6 address, but keep the rules if we can: an address could be
+  # configured later, and a default-deny chain costs nothing.
   ip6tables -F OUTPUT 2>/dev/null || true
   ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
   ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
@@ -347,9 +369,23 @@ fi
 iptables -F OUTPUT
 iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-# DNS, so the allowlist below (and the agent's own runtime lookups) can resolve.
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+# DNS, so the allowlist below (and the agent's own runtime lookups) can resolve —
+# but only to the resolvers this container was actually given.
+#
+# Accepting port 53 to *any* destination is not "allow DNS", it is a full-duplex
+# tunnel to any host willing to listen on 53: a peer container was reached on
+# port 53 while every other port on it was refused, and public resolvers answered
+# arbitrary attacker-chosen queries. Restricting to /etc/resolv.conf turns that
+# back into DNS. Name-based exfiltration through the real resolver remains
+# possible — that needs a proxy, not a firewall rule — but the arbitrary-peer
+# channel does not.
+for ns in $(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null); do
+  case "$ns" in
+    *:*) continue ;;  # IPv6 resolver; IPv6 egress is rejected wholesale above
+  esac
+  iptables -A OUTPUT -p udp -d "$ns" --dport 53 -j ACCEPT
+  iptables -A OUTPUT -p tcp -d "$ns" --dport 53 -j ACCEPT
+done
 
 # Permit the resolved IPv4 addresses of each allowlisted domain. Split the
 # comma-separated list into words via `tr` under the default IFS so the inner IP
