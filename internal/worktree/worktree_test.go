@@ -560,3 +560,65 @@ func TestDirty_RenamesAndAwkwardPaths(t *testing.T) {
 		}
 	}
 }
+
+// TestGitCommonDir_RejectsAForgedPointer covers the sharpest finding of the
+// audit. The `.git` pointer file lives inside the workspace, which the sandbox
+// mounts read-write, so the agent can rewrite it at any time — and the caller
+// bind-mounts whatever this returns, read-write, at its own host path.
+//
+// The old check was isDir, and the fallback takes two directories up from the
+// `gitdir:` string, so `gitdir: <home>/x/y` yielded the home directory and
+// `gitdir: <home>` yielded the filesystem root. Both were mounted read-write on
+// the user's next run, from one file the agent already had write access to.
+func TestGitCommonDir_RejectsAForgedPointer(t *testing.T) {
+	proj := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "sensitive")
+	if err := os.MkdirAll(filepath.Join(victim, "x", "y"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, target := range []string{
+		filepath.Join(victim, "x", "y"), // two up -> victim
+		victim,                          // two up -> its parent
+		"/etc/foo/bar",
+	} {
+		if err := os.WriteFile(filepath.Join(proj, ".git"), []byte("gitdir: "+target+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := GitCommonDir(proj); ok {
+			t.Errorf("gitdir: %q was accepted and would be mounted rw at %q", target, got)
+		}
+	}
+}
+
+// TestGitCommonDir_AcceptsARealWorktree is the other half: the check must not be
+// so strict that it breaks the case the mount exists for. Without the parent
+// .git mounted, every git command inside the container fails with "not a git
+// repository" and the agent can edit files but never commit them.
+func TestGitCommonDir_AcceptsARealWorktree(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	runOrSkip(t, git, root, "init", "-q")
+	runOrSkip(t, git, root, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, root, "config", "user.name", "t")
+	runOrSkip(t, git, root, "commit", "-qm", "init", "--allow-empty")
+
+	wt, err := Resolve(root, "feat")
+	if err != nil {
+		t.Fatalf("creating worktree: %v", err)
+	}
+	got, ok := GitCommonDir(wt.Path)
+	if !ok {
+		t.Fatal("a real linked worktree must resolve its parent .git")
+	}
+	if filepath.Base(got) != ".git" {
+		t.Errorf("GitCommonDir = %q, want the parent repository's .git", got)
+	}
+	if _, err := os.Stat(filepath.Join(got, "HEAD")); err != nil {
+		t.Errorf("resolved path is not a git directory: %v", err)
+	}
+}

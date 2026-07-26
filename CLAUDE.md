@@ -165,6 +165,16 @@ the threat model and the phased plan. Three rules that follow from it:
   as their first statement, and the agent's writable HOME is deliberately *not* on
   the image `PATH` (`assets/Dockerfile`). This is why an agent can no longer plant a
   `bash` in its own HOME and have root run it.
+- **Every host path that gets bind-mounted goes through `sandbox.RefuseUnsafeHostPath`**
+  — never `/`, never the host home, never an ancestor of it. It compares by
+  **identity (device+inode), not by string**: `EvalSymlinks` preserves the caller's
+  casing and APFS/NTFS are case-insensitive, so `--project /Users/AmitGhadge` used to
+  mount the home directory and `--project /USERS` bypassed the ancestor check entirely.
+  The second caller is the worktree `.git` mount, whose location comes from a `.git`
+  **pointer file inside the workspace** that the agent can rewrite — `GitCommonDir`
+  additionally requires the target to look like a real git directory (`HEAD` +
+  `objects/`), because its fallback takes *two directories up* from that string and
+  used to hand back `/` for `gitdir: $HOME`.
 - **`SANDBOX_RUN_AS` and `SANDBOX_EGRESS_ALLOW` are instructions, not settings**
   (`config.IsReservedEnv`). They cannot be set or forwarded from outside. The list is
   exact names, not a `SANDBOX_*` prefix, because `SANDBOX_STATUSLINE_*` is a documented

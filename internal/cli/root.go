@@ -143,7 +143,13 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	if projectDir == "" {
 		projectDir, _ = os.Getwd()
 	}
-	if gitDir, ok := worktree.GitCommonDir(config.ExpandTilde(projectDir)); ok {
+	// The path comes from a `.git` pointer file inside the workspace, which the
+	// agent can rewrite, and it is about to be mounted read-write at its own host
+	// location — so it goes through the same non-overridable refusals as the
+	// workspace itself. worktree.GitCommonDir already requires the target to look
+	// like a real git directory; this is the second layer, and the one that would
+	// still hold if that check were ever loosened.
+	if gitDir, ok := worktree.GitCommonDir(config.ExpandTilde(projectDir)); ok && sandbox.RefuseUnsafeHostPath(gitDir) == nil {
 		opts.ExtraMounts = append(opts.ExtraMounts, gitDir+":"+gitDir+":rw")
 
 		// The worktree is mounted a second time at its own host path, not only at

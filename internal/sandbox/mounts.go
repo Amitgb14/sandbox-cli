@@ -40,24 +40,82 @@ func ResolveWorkspace(flagPath string) (string, error) {
 		return "", fmt.Errorf("project path is not a directory: %q", real)
 	}
 
-	if isFilesystemRoot(real) {
-		return "", fmt.Errorf("refusing to mount filesystem root %q as the workspace", real)
-	}
-
-	if home := hostHome(); home != "" {
-		realHome, herr := filepath.EvalSymlinks(home)
-		if herr != nil {
-			realHome = home
-		}
-		switch {
-		case real == realHome:
-			return "", fmt.Errorf("refusing to mount your home directory %q; cd into a specific project first", real)
-		case isAncestor(real, realHome):
-			return "", fmt.Errorf("%q is an ancestor of your home directory; too broad to mount safely", real)
-		}
+	if err := RefuseUnsafeHostPath(real); err != nil {
+		return "", err
 	}
 
 	return real, nil
+}
+
+// RefuseUnsafeHostPath enforces the non-overridable safety refusals for a host
+// path that is about to be bind-mounted: never the filesystem root, never the
+// host home, never an ancestor of it. path must already be absolute and
+// symlink-resolved.
+//
+// It is exported because the workspace is not the only path that reaches this
+// question. The parent .git of a worktree is mounted at its own host location,
+// and *which* location comes from a `.git` pointer file inside the workspace —
+// a file the agent can rewrite. Without this check, `gitdir: /Users/you/x/y`
+// produced `--mount source=/Users/you,target=/Users/you` read-write, and
+// `gitdir: /Users/you` produced `source=/,target=/`.
+func RefuseUnsafeHostPath(path string) error {
+	if isFilesystemRoot(path) {
+		return fmt.Errorf("refusing to mount filesystem root %q", path)
+	}
+	home := hostHome()
+	if home == "" {
+		return nil
+	}
+	realHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		realHome = home
+	}
+	switch {
+	case samePath(path, realHome):
+		return fmt.Errorf("refusing to mount your home directory %q; cd into a specific project first", path)
+	case isAncestorOnDisk(path, realHome):
+		return fmt.Errorf("%q is an ancestor of your home directory; too broad to mount safely", path)
+	}
+	return nil
+}
+
+// samePath reports whether two paths name the same directory on disk.
+//
+// It compares identity (device + inode) rather than strings, because a string
+// compare is not a path compare on the filesystems people actually use. macOS
+// APFS and Windows NTFS are case-insensitive while EvalSymlinks preserves
+// whatever casing the caller typed, so `--project /Users/AmitGhadge` slipped
+// past a `real == realHome` test and mounted the home directory; unicode
+// normalisation (NFC vs NFD in a home directory name) is the same bug wearing a
+// different hat. Identity has neither failure mode.
+func samePath(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(fa, fb)
+}
+
+// isAncestorOnDisk reports whether dir is a strict ancestor of child, walking
+// child's parents and comparing by identity. Same reasoning as samePath: this is
+// what catches `--project /USERS`, which is a real directory, is not the
+// filesystem root, and is `/Users` by another name.
+func isAncestorOnDisk(dir, child string) bool {
+	cur := filepath.Clean(child)
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return false // reached the filesystem root without a match
+		}
+		if samePath(dir, parent) {
+			return true
+		}
+		cur = parent
+	}
 }
 
 // WorkspaceMount builds the /workspace bind mount for the given host path.

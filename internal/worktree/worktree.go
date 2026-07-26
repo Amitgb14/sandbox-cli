@@ -336,16 +336,44 @@ func GitCommonDir(dir string) (path string, ok bool) {
 			if !filepath.IsAbs(common) {
 				common = filepath.Join(gitDir, common)
 			}
-			if isDir(common) {
+			if isGitCommonDir(common) {
 				return filepath.Clean(common), true
 			}
 		}
 	}
 	// Fall back to the conventional layout: .git/worktrees/<name> -> .git
-	if parent := filepath.Dir(filepath.Dir(gitDir)); isDir(parent) {
+	if parent := filepath.Dir(filepath.Dir(gitDir)); isGitCommonDir(parent) {
 		return filepath.Clean(parent), true
 	}
 	return "", false
+}
+
+// isGitCommonDir reports whether path looks like a real git common directory,
+// rather than merely existing.
+//
+// This is a security check, not a tidiness one. Every path above derives from the
+// `gitdir:` string in a `.git` **pointer file inside the workspace** — which the
+// sandbox mounts read-write, so the agent can rewrite it at will — and the caller
+// bind-mounts the answer read-write at its own host location. The old test was
+// `isDir`, and the fallback takes *two directories up* from whatever was written,
+// so `gitdir: /Users/you/x/y` yielded `/Users/you` and `gitdir: /Users/you`
+// yielded `/`. Both were mounted read-write on the user's next run.
+//
+// Requiring the markers of a git directory closes that, because the agent cannot
+// create them: the only host location it can write is the workspace, and a target
+// worth attacking is by definition outside it. sandbox.RefuseUnsafeHostPath is
+// the second layer, at the mount site.
+func isGitCommonDir(path string) bool {
+	if !isDir(path) {
+		return false
+	}
+	// HEAD and objects/ are present in every git directory — bare, non-bare, and
+	// the common dir shared by linked worktrees. refs/ can be absent once a
+	// repository is fully packed, so it is not required.
+	if fi, err := os.Lstat(filepath.Join(path, "HEAD")); err != nil || fi.IsDir() {
+		return false
+	}
+	return isDir(filepath.Join(path, "objects"))
 }
 
 func branchExists(root, branch string) bool {

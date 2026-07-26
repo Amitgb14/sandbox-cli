@@ -13,6 +13,27 @@ version is tagged.
 
 ### Security
 
+- **A forged `.git` pointer file can no longer mount an arbitrary host
+  directory.** When the workspace is a git worktree, sandbox-cli mounts the
+  parent repository's `.git` at its own host path — and *which* path came from
+  the `gitdir:` line of a `.git` file **inside the workspace**, which the sandbox
+  mounts read-write. The resolver only checked that the result was a directory,
+  and its fallback takes two directories up from whatever was written, so
+  `gitdir: $HOME/x/y` produced `--mount source=$HOME,target=$HOME` read-write and
+  `gitdir: $HOME` produced `source=/,target=/`. One file the agent already had
+  write access to, taking effect on the user's next run. The target must now look
+  like a real git directory (`HEAD` plus `objects/`), which an agent cannot
+  fabricate outside the workspace, and it passes the same refusals as the
+  workspace itself.
+
+- **The host-directory refusals compare paths by identity, not by string.**
+  `EvalSymlinks` preserves whatever casing the caller typed, and macOS APFS and
+  Windows NTFS are case-insensitive — so `--project /Users/YourName` with one
+  letter's case flipped mounted the home directory, and `--project /USERS` was
+  neither the filesystem root nor string-equal to anything and so bypassed the
+  ancestor check, mounting every user's home at once. Comparison is now on device
+  and inode, which also covers the unicode-normalisation form of the same bug.
+
 - **Host-side `git` no longer runs commands the repository names.** sandbox-cli
   runs git on your machine, inside the repository the agent has read-write
   access to — and git is a programmable tool: `git add -A` runs

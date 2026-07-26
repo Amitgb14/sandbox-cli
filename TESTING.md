@@ -533,9 +533,30 @@ if installed via `make install`).
 - Expected: the hook runs. This is the user invoking their own git in their own repo;
   it is the one path githard intentionally does not neutralise.
 
-**Known-unfixed (do not sign off as passing — these are Phases 3–4):** a forged
-`.git` pointer file still mounts an arbitrary host directory; the home-directory
-refusal is still case-sensitive; and `INPUT`/`FORWARD` are still unfiltered.
+**TC-120 [A/M] A forged `.git` pointer file mounts nothing**
+1. In a scratch dir that is *not* a repo: `printf 'gitdir: %s/x/y\n' "$HOME" > .git`
+2. `sandbox-cli run --dry-run -- true`
+- Expected: the only bind mount is `target=/workspace`. Before this, the rendered argv
+  carried `--mount source=$HOME,target=$HOME` read-write; `gitdir: $HOME` gave
+  `source=/,target=/`. One file the agent already has write access to, firing on the
+  user's *next* run.
+3. Regression guard the other way: `sandbox-cli run --dry-run --worktree feat` in a real
+  repo **must** still mount the parent `.git` at its host path, and
+  `sandbox-cli run --worktree feat -- git -C /workspace status` must work — without that
+  mount git is unusable inside the container.
+- Note: covered by `TestGitCommonDir_RejectsAForgedPointer` / `..._AcceptsARealWorktree`.
+
+**TC-121 [A/M] The home refusal survives a change of case**
+1. `sandbox-cli run --dry-run --project /Users/YourName` (flip one letter's case), and
+   `--project /USERS`.
+- Expected: both refused. macOS/Windows filesystems are case-insensitive while path
+  resolution preserves the caller's casing, so a string compare let both through —
+  `/USERS` mounting every user's home directory at once.
+- Note: covered by `TestResolveWorkspace_HomeRefusalIgnoresCasing`, `TestRefuseUnsafeHostPath`.
+
+**Known-unfixed (do not sign off as passing — this is Phase 4):**
+`INPUT`/`FORWARD` are still unfiltered, so anything that can reach the container on
+the docker bridge gets a bidirectional channel the egress allowlist never sees.
 
 ---
 
