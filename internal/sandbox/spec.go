@@ -421,6 +421,26 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	addHosts := append([]string(nil), opts.AddHosts...)
 	if opts.HostGateway {
 		addHosts = append(addHosts, "host.docker.internal:host-gateway")
+	} else {
+		// Without --host-gateway, point the host names at the container's own
+		// loopback so they resolve to nothing useful.
+		//
+		// spec.go used to treat host.docker.internal as something --host-gateway
+		// switched on. On Docker Desktop it resolves unconditionally, so it was
+		// never off: a sandbox with no flags at all read a file from a service the
+		// user had bound to 127.0.0.1 precisely so nothing else could reach it.
+		// The absence of a flag was not a defence.
+		//
+		// This blocks the *name*, which is the documented and discoverable path.
+		// In allowlist mode the gateway address is refused as well, since it is on
+		// no allowlist; in default mode there is no firewall and a raw address is
+		// still reachable — that is the residue, and it is tracked with the rest of
+		// the default-mode isolation work.
+		for _, name := range []string{"host.docker.internal", "gateway.docker.internal"} {
+			if !namesHost(opts.AddHosts, name) {
+				addHosts = append(addHosts, name+":127.0.0.1")
+			}
+		}
 	}
 
 	// Published ports. Config `ports:` declares what a project normally needs and
@@ -681,4 +701,17 @@ func isRootUser(user string) bool {
 func isExistingDir(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.IsDir()
+}
+
+// namesHost reports whether the caller already mapped this hostname themselves.
+// An explicit --add-host is a deliberate act and must win: /etc/hosts resolution
+// takes the first match, so sandbox-cli adding its own entry for the same name
+// would silently override what the user asked for.
+func namesHost(addHosts []string, name string) bool {
+	for _, h := range addHosts {
+		if n, _, ok := strings.Cut(h, ":"); ok && strings.EqualFold(strings.TrimSpace(n), name) {
+			return true
+		}
+	}
+	return false
 }

@@ -651,10 +651,14 @@ func TestBuildSpec_HostGatewayAndAddHosts(t *testing.T) {
 	if !contains(spec.AddHosts, "db:10.0.0.5") {
 		t.Errorf("--add-host passthrough missing: %v", spec.AddHosts)
 	}
-	// None by default.
+	// By default the gateway is NOT mapped — and the host names are pointed at the
+	// container's own loopback, because on Docker Desktop they resolve whether or
+	// not the flag was given. See TestBuildSpec_HostNamesAreNeutralisedWithoutTheFlag.
 	bare, _ := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
-	if len(bare.AddHosts) != 0 {
-		t.Errorf("unexpected AddHosts by default: %v", bare.AddHosts)
+	for _, h := range bare.AddHosts {
+		if strings.Contains(h, "host-gateway") || strings.HasPrefix(h, "db:") {
+			t.Errorf("unexpected AddHosts by default: %v", bare.AddHosts)
+		}
 	}
 }
 
@@ -1182,5 +1186,70 @@ func TestBuildSpec_NoHooksMountWithoutAHooksDir(t *testing.T) {
 		if strings.Contains(m.Target, ".git/hooks") {
 			t.Errorf("mounted hooks for a non-repository: %+v", m)
 		}
+	}
+}
+
+// TestBuildSpec_HostNamesAreNeutralisedWithoutTheFlag pins that --host-gateway is
+// a gate rather than a label.
+//
+// spec.go treated host.docker.internal as something the flag switched on. On
+// Docker Desktop it resolves unconditionally, so it was never off: a sandbox with
+// no flags read a file from a service bound to 127.0.0.1 on the host — bound
+// there precisely so nothing else could reach it. Confirmed before this fix.
+func TestBuildSpec_HostNamesAreNeutralisedWithoutTheFlag(t *testing.T) {
+	dir := t.TempDir()
+
+	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"host.docker.internal:127.0.0.1", "gateway.docker.internal:127.0.0.1"} {
+		if !contains(spec.AddHosts, want) {
+			t.Errorf("AddHosts = %v, want it to contain %q", spec.AddHosts, want)
+		}
+	}
+	for _, h := range spec.AddHosts {
+		if strings.Contains(h, "host-gateway") {
+			t.Errorf("the gateway was mapped without --host-gateway: %q", h)
+		}
+	}
+
+	// With the flag, the documented behaviour is unchanged — this is how an agent
+	// reaches an MCP server running on the host.
+	spec, err = BuildSpec(baseCfg(), Options{Project: dir, HostGateway: true, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(spec.AddHosts, "host.docker.internal:host-gateway") {
+		t.Errorf("--host-gateway must map the gateway: %v", spec.AddHosts)
+	}
+	for _, h := range spec.AddHosts {
+		if strings.HasSuffix(h, ":127.0.0.1") {
+			t.Errorf("--host-gateway must not also neutralise the name: %q", h)
+		}
+	}
+}
+
+// TestBuildSpec_ExplicitAddHostWins guards against sandbox-cli overriding the
+// user. /etc/hosts resolution takes the first match, so adding our own entry for
+// a name the caller already mapped would silently discard what they asked for.
+func TestBuildSpec_ExplicitAddHostWins(t *testing.T) {
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project:  t.TempDir(),
+		AddHosts: []string{"host.docker.internal:10.1.2.3"},
+		Command:  []string{"sh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(spec.AddHosts, "host.docker.internal:10.1.2.3") {
+		t.Errorf("the caller's own mapping was dropped: %v", spec.AddHosts)
+	}
+	if contains(spec.AddHosts, "host.docker.internal:127.0.0.1") {
+		t.Errorf("sandbox-cli overrode an explicit --add-host: %v", spec.AddHosts)
+	}
+	// The name they did not map is still neutralised.
+	if !contains(spec.AddHosts, "gateway.docker.internal:127.0.0.1") {
+		t.Errorf("gateway.docker.internal should still be neutralised: %v", spec.AddHosts)
 	}
 }

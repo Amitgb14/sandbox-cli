@@ -214,7 +214,31 @@ which is a worse default than the one it protects.
 
 ---
 
-## 5. `host.docker.internal` resolves without `--host-gateway`
+## 5. `host.docker.internal` resolves without `--host-gateway` — **DONE**
+
+**Closed.** Without the flag, `host.docker.internal` and `gateway.docker.internal`
+are now mapped to the container's own loopback, so the documented and
+discoverable route to the host resolves to nothing useful. With `--host-gateway`
+the behaviour is unchanged, which is how an agent reaches an MCP server on the
+host.
+
+Confirmed against a service bound to `127.0.0.1:8931`:
+
+```
+default mode, no flags      blocked        (was: read the file)
+--host-gateway              reads the file (unchanged, opt-in)
+allowlist mode              blocked        (already, via the firewall and proxy)
+```
+
+An explicit `--add-host host.docker.internal:…` still wins: `/etc/hosts` takes the
+first match, so sandbox-cli adding its own entry for a name the caller mapped
+would silently discard what they asked for.
+
+**Residue:** in default mode there is no firewall, so the gateway's raw *address*
+is still reachable. Blocking the name closes the discoverable path; closing the
+address needs the default-mode work in item 4.
+
+<details><summary>Original entry</summary>
 
 **Severity: medium. Effort: small. Blocked on: nothing.**
 
@@ -226,6 +250,8 @@ loopback *specifically* so nothing else could reach it.
 The absence of the flag is not a defence on macOS. Either block the gateway
 address by default (and let `--host-gateway` unblock it), or stop describing it
 as opt-in. The first is the honest reading of what the flag is for.
+
+</details>
 
 ---
 
