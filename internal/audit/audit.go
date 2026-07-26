@@ -36,6 +36,13 @@ type SessionMeta struct {
 
 	// Network is the resolved posture: "default", "none" or "allowlist".
 	Network string
+	// EgressEnforcedBy is "name" when the in-container proxy decided each
+	// connection by hostname, "address" when only the address-matching firewall
+	// applied, and "" when there was no allowlist. Recorded because
+	// `network: allowlist` alone does not say which regime a past run was under,
+	// and the two differ in exactly the way that matters: an address-matched run
+	// permitted every host sharing an allowlisted address.
+	EgressEnforcedBy string
 	// EgressAllow is the resolved allowlist, when one was in force. Recording it
 	// is the point: the domains come from several merged layers, so "what was
 	// this run permitted to reach" is otherwise unanswerable afterwards.
@@ -73,6 +80,7 @@ type record struct {
 	Branch      string   `json:"branch,omitempty"`
 	Command     []string `json:"command,omitempty"`
 	Network     string   `json:"network,omitempty"`
+	EnforcedBy  string   `json:"egress_enforced_by,omitempty"`
 	EgressAllow []string `json:"egress_allow,omitempty"`
 	EnvNames    []string `json:"env_names,omitempty"`
 	ExitCode    int      `json:"exit_code"`
@@ -116,6 +124,7 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 		Branch:      meta.Branch,
 		Command:     meta.Command,
 		Network:     meta.Network,
+		EnforcedBy:  meta.EgressEnforcedBy,
 		EgressAllow: meta.EgressAllow,
 		EnvNames:    meta.EnvNames,
 		ExitCode:    meta.ExitCode,

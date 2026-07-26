@@ -227,6 +227,13 @@ func auditMeta(spec runtime.RunSpec, opts Options, exitCode int, took time.Durat
 	if allow := spec.Env["SANDBOX_EGRESS_ALLOW"]; allow != "" {
 		m.Network = "allowlist"
 		m.EgressAllow = strings.Split(allow, ",")
+		// Which regime actually decided. The address-matching firewall permits
+		// every host sharing an allowlisted address; the proxy does not. A log that
+		// recorded only "allowlist" could not tell those apart afterwards.
+		m.EgressEnforcedBy = "address"
+		if spec.Env["SANDBOX_PROXY_PORT"] != "" {
+			m.EgressEnforcedBy = "name"
+		}
 	}
 	return m
 }

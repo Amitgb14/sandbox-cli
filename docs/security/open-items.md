@@ -354,7 +354,47 @@ unbounded-but-observed container. Changing that is a real trade, not a bug fix.
 
 ---
 
-## 7. Denial logging is unreadable on macOS
+## 7. Denial logging is unreadable on macOS — **mostly resolved**
+
+Substantially closed by the name-enforcing proxy, which arrived after this item
+was written and changed what the gap actually is.
+
+**Now visible on screen, on every platform**, because the proxy writes to stderr
+and docker carries it:
+
+```
+sandbox-cli: egress DENY gist.github.com:443 (not on the egress allowlist)
+sandbox-cli: egress DENY :0 (connection carries no hostname to check)
+```
+
+The second line is a connection straight to an address with no name — the obvious
+way to try to evade a name-based allowlist, and previously silent.
+
+Since all of an agent's HTTP and HTTPS is redirected through the proxy, that
+covers essentially every denial worth seeing.
+
+**Still invisible: denials that never reach the proxy.** Only tcp/80 and tcp/443
+are redirected; anything else meets the address rules and the final `REJECT`,
+whose `LOG` lands in the VM's kernel buffer under Docker Desktop. So a blocked
+connection on, say, tcp/9999 shows the agent a refusal and tells the user nothing.
+
+**Also added:** the run log now records *which regime* enforced a run —
+
+```json
+{"network":"allowlist","egress_enforced_by":"name", …}
+```
+
+`network: allowlist` alone could not distinguish an address-matched run (which
+permitted every host sharing an allowlisted address) from a name-matched one.
+After the fact, that is the difference that matters.
+
+**What is left** is plumbing the proxy's denial lines back into the run log so
+`sessions.jsonl` answers "did this run try to reach something it was refused?"
+without scrollback. That means counting them in the output pipeline the metrics
+footer already uses — real work for a small remainder, and not obviously worth it
+while the lines are already on screen.
+
+<details><summary>Original entry</summary>
 
 **Severity: low. Effort: small. Blocked on: nothing.**
 
@@ -371,6 +411,8 @@ Cheapest fix: read the REJECT rules' packet counters (`iptables -L -v -n`) at
 container exit and record the counts in the audit line. That answers "did this
 run try to reach something it was refused?" without needing the kernel log.
 `NFLOG` to a userspace reader is the thorough version.
+
+</details>
 
 ---
 
