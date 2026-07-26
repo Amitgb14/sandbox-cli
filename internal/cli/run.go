@@ -15,6 +15,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
+	"sort"
 )
 
 func newRunCmd() *cobra.Command {
@@ -120,6 +121,7 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 		}
 	}
 	rf.envAllow = append(rf.envAllow, envAllow...)
+	announceBroadCredentials(envAllow)
 	// An abbreviated session id from `context list` is expanded here, because the
 	// agents require the full one — and a session belonging to another project is
 	// refused here, because the container will not have its history mounted.
@@ -324,4 +326,53 @@ func shellQuote(s string) string {
 		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 	}
 	return s
+}
+
+// broadCredentials are forwarded host variables that are not scoped to the agent
+// they authenticate.
+//
+// Most wrapper allowlists carry a model-provider key: ANTHROPIC_API_KEY is worth
+// exactly the thing the agent is for. These are different — an AWS session is the
+// whole cloud account, and a GitHub token is every repository the user can push
+// to. They are still forwarded, because they are how `continue` reaches Bedrock
+// and how `copilot` authenticates at all; taking them away would break those
+// agents for the people who configured them.
+//
+// What was wrong was that it happened silently. Saying it once, at the moment it
+// happens, is the difference between a decision and a surprise.
+var broadCredentials = map[string]string{
+	"AWS_ACCESS_KEY_ID":     "your AWS account",
+	"AWS_SECRET_ACCESS_KEY": "your AWS account",
+	"AWS_SESSION_TOKEN":     "your AWS account",
+	"GH_TOKEN":              "every GitHub repository you can push to",
+	"GITHUB_TOKEN":          "every GitHub repository you can push to",
+	"COPILOT_GITHUB_TOKEN":  "every GitHub repository you can push to",
+}
+
+// announceBroadCredentials reports which account-wide credentials this run will
+// forward. Only names actually present in the host environment are named — an
+// allowlist entry that matches nothing forwards nothing, and warning about it
+// would train people to ignore the message.
+func announceBroadCredentials(envAllow []string) {
+	seen := map[string]bool{}
+	var lines []string
+	for _, n := range envAllow {
+		scope, broad := broadCredentials[n]
+		if !broad || seen[scope] {
+			continue
+		}
+		if _, set := os.LookupEnv(n); !set {
+			continue
+		}
+		seen[scope] = true
+		lines = append(lines, fmt.Sprintf("  %s — %s", n, scope))
+	}
+	if len(lines) == 0 {
+		return
+	}
+	sort.Strings(lines)
+	fmt.Fprintln(os.Stderr, "sandbox-cli: forwarding account-wide credentials into the sandbox:")
+	for _, l := range lines {
+		fmt.Fprintln(os.Stderr, l)
+	}
 }

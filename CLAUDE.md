@@ -149,14 +149,29 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   the window being measured. It bounds staleness to Claude Code's own refetch interval; it
   does not stamp the reading now, so the printed age still governs.
   Design: `docs/proposals/usage-stats.md`.
-- **`internal/creds`, `internal/audit`** — deliberate **stub seams** for a future credential broker
-  and audit trail. Today nothing extra is forwarded and audit goes to a no-op sink; keep these seams clean.
+- **`internal/audit`** — the run log (`~/.config/sandbox/audit/sessions.jsonl`), one line per
+  run: image, workspace, branch, agent, command, network posture, resolved egress allowlist,
+  exit code, duration. Written *after* the run, because "how did it end" is the point. The rule
+  that shapes it: environment variables are recorded **by name only**. The credential broker
+  exists to keep secret values off the argv and out of config files, and a log is a file — so
+  `SessionMeta` has nowhere to put a value, deliberately. Best-effort and silent on failure: the
+  run is what the user asked for, the record is a courtesy.
+- **`internal/githard`** — neutralises the parts of a repository's git config that make git *run
+  commands*, for every git call sandbox-cli makes on its own behalf. See the trust-boundary
+  section below.
+- **`internal/creds`** — a deliberate **stub seam** for a future credential broker. Today it
+  resolves secret *references* on the host; the values reach the container via
+  `RunSpec.ForwardedEnv`, which the docker child gets and `BuildArgs` never renders. Keep it that
+  way: they used to travel through sandbox-cli's own environment, where a secret named `PATH`
+  redirected the subprocesses spawned next.
 
 ### The trust boundary (read before touching config, mounts, or the entrypoint)
 
-An audit found the container→host boundary does not hold, and the fixes are only
-partly landed. `docs/proposals/security-hardening.md` has the reproduced findings,
-the threat model and the phased plan. Three rules that follow from it:
+An audit found the container→host boundary did not hold — twelve exploits reproduced end to
+end, from host code execution to mounting `/` read-write. All five phases of the fix are landed;
+`docs/proposals/security-hardening.md` has the findings, the threat model, and what is still
+open (the allowlist matches resolved **IPs** rather than names, and the agent still holds raw
+credentials — both need the egress proxy described there). The rules that follow from it:
 
 - **A project `.sandbox.yaml` is untrusted input** and the privilege-relevant keys are
   *refused* from it (`internal/config/trust.go`): `image`, `workdir`, `user`, `home`,

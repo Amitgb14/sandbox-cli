@@ -43,8 +43,21 @@ type RunSpec struct {
 	Runtime  string
 	Env      map[string]string // explicit KEY=VALUE injected into the container
 	EnvNames []string          // names forwarded from the host env (value read at exec time)
-	Mounts   []Mount           // bind mounts (workspace + extras)
-	AddHosts []string          // --add-host HOST:IP entries (e.g. host.docker.internal:host-gateway)
+
+	// ForwardedEnv carries the *values* for names listed in EnvNames that must not
+	// travel through sandbox-cli's own environment: resolved secrets, and the host
+	// git identity. The backend places them in the docker child's environment, so
+	// docker reads them for its bare `-e NAME` arguments.
+	//
+	// BuildArgs never renders this — asserted by
+	// TestBuildArgs_NeverRendersForwardedEnv — which is the whole point. Putting
+	// the values on the argv would expose them in `ps` and in --dry-run, and the
+	// previous approach of os.Setenv on our own process meant a secret named PATH
+	// or DOCKER_HOST redirected the docker and git subprocesses we spawn
+	// afterwards. Keep it out of anything that prints or renders a spec.
+	ForwardedEnv map[string]string
+	Mounts       []Mount  // bind mounts (workspace + extras)
+	AddHosts     []string // --add-host HOST:IP entries (e.g. host.docker.internal:host-gateway)
 
 	// Ports are published to the host (docker -p), each already a fully-qualified
 	// IP:HOSTPORT:CONTAINERPORT spec — sandbox.NormalizePublish has resolved a

@@ -587,6 +587,29 @@ if installed via `make install`).
 - Note: covered by `TestValidWorktreeAdminDir`, `TestRepairRefusesAWriteOutsideTheRepository`,
   and `TestRepairRebuildsADeletedWorktreeAdminDir` for the regression.
 
+**TC-125 [M] `ps` and `clean` find what was left behind**
+1. `sandbox-cli run --detach -- sh -c 'sleep 120'`, then `sandbox-cli ps`.
+- Expected: the container is listed. Try it from a directory that is **not** a git repo too —
+  that case used to carry no labels at all and was invisible.
+2. `sandbox-cli clean` → refuses to touch it ("nothing to clean"); `clean --force` removes it.
+3. After a detached run exits, `ps --all` shows it and `clean` reaps it.
+
+**TC-126 [A/M] The run log records the policy but never a secret value**
+1. `sandbox-cli run --allow example.com --secret 'TOK=file:/tmp/tok' -- sh -c 'exit 3'`
+2. `tail -1 ~/.config/sandbox/audit/sessions.jsonl`
+- Expected: `exit_code: 3`, the resolved `egress_allow` list, `network: allowlist`, and
+  `env_names: ["TOK"]` — the name, never the value. File mode 0600.
+
+**TC-127 [M] Snapshots skip oversized files**
+1. Write a 20 MB file into a repo, run a sandbox with snapshots on.
+- Expected: one "snapshot skipping …" line, and `git ls-tree -r <ref>` does not contain it while
+  ordinary work is still captured.
+
+**TC-128 [M] `recover repair --branch` completes a repair it used to refuse**
+1. Break a worktree's admin dir with no session manifest, then `recover repair --branch NAME --yes`.
+- Expected: the repair applies and git works again. Previously this printed
+  "re-run with --branch NAME" and then "nothing was repaired" — advice that could never succeed.
+
 All audit phases (0–4) are now landed. The remaining known gaps are recorded in
 `docs/proposals/security-hardening.md`: the allowlist still matches resolved **IPs**
 rather than names (so `gist.github.com` rides in on `github.com`'s address, and names

@@ -62,7 +62,7 @@ func runRecoverStatus() error {
 		fmt.Println("repository: healthy")
 	default:
 		fmt.Printf("repository: %d problem(s) found\n\n", len(findings))
-		printFindings(findings)
+		printFindings(findings, "")
 		fmt.Println()
 	}
 
@@ -75,17 +75,23 @@ func runRecoverStatus() error {
 	return printSnapshots(snaps, false)
 }
 
-func printFindings(findings []rescue.Finding) {
+// printFindings renders the diagnosis. branchOverride is what the user passed as
+// --branch, so a finding that only needed a branch name reports the fix it is
+// about to apply rather than still advising the user to supply one — printing
+// "re-run with --branch NAME" during a run that already has it reads as a
+// failure when the repair is in fact about to happen.
+func printFindings(findings []rescue.Finding, branchOverride string) {
 	for i, f := range findings {
 		if i > 0 {
 			fmt.Println()
 		}
 		fmt.Printf("  \033[1m%s\033[0m\n", f.Summary)
 		fmt.Printf("    %s\n", f.Detail)
-		switch {
-		case f.Repairable():
-			fmt.Printf("    fix: %s  (sandbox-cli recover repair)\n", f.Fix)
-		case f.Advice != "":
+		if fix, ok := f.RepairableWith(branchOverride); ok {
+			fmt.Printf("    fix: %s  (sandbox-cli recover repair)\n", fix)
+			continue
+		}
+		if f.Advice != "" {
 			fmt.Printf("    do:  %s\n", f.Advice)
 		}
 	}
@@ -302,17 +308,18 @@ func newRecoverRepairCmd() *cobra.Command {
 				fmt.Println("nothing to repair")
 				return nil
 			}
-			printFindings(findings)
+			printFindings(findings, branch)
 
 			// One reader for the whole loop: a fresh bufio.Reader per question
 			// would discard anything already buffered past the first line.
 			stdin := bufio.NewReader(os.Stdin)
 			repaired := 0
 			for _, f := range findings {
-				if !f.Repairable() {
+				fix, ok := f.RepairableWith(branch)
+				if !ok {
 					continue
 				}
-				if !yes && !confirm(stdin, fmt.Sprintf("\nApply: %s?", f.Fix)) {
+				if !yes && !confirm(stdin, fmt.Sprintf("\nApply: %s?", fix)) {
 					fmt.Fprintln(os.Stderr, "sandbox-cli: skipped")
 					continue
 				}

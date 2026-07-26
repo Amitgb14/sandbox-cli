@@ -581,27 +581,55 @@ func TestBuildSpec_BadSecretFlag(t *testing.T) {
 	}
 }
 
-func TestInjectSecrets_SetsEnvFromSources(t *testing.T) {
+// TestForwardedValues_ResolvesWithoutTouchingOurEnv covers both halves of the
+// contract: the values are produced, and this process's own environment is left
+// alone. The second half is the security-relevant one — secrets used to be
+// os.Setenv'd here, and sandbox-cli spawns docker and git *after* that point, so
+// a secret named PATH or DOCKER_HOST redirected them (and the preflight ran
+// before the injection, so nothing noticed).
+func TestForwardedValues_ResolvesWithoutTouchingOurEnv(t *testing.T) {
 	t.Setenv("SRC_ENV_SECRET", "topsecret")
-	// Register cleanup for the target var so the test doesn't leak process env.
-	t.Setenv("BROKERED_TOKEN", "placeholder")
 
 	cfg := config.Default()
 	cfg.Secrets = map[string]config.SecretSpec{"BROKERED_TOKEN": {Env: "SRC_ENV_SECRET"}}
-	if err := injectSecrets(cfg, Options{}); err != nil {
+	got, err := forwardedValues(cfg, Options{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := os.Getenv("BROKERED_TOKEN"); got != "topsecret" {
-		t.Errorf("injectSecrets set BROKERED_TOKEN=%q, want topsecret", got)
+	if got["BROKERED_TOKEN"] != "topsecret" {
+		t.Errorf("BROKERED_TOKEN = %q, want topsecret", got["BROKERED_TOKEN"])
+	}
+	if v, ok := os.LookupEnv("BROKERED_TOKEN"); ok {
+		t.Errorf("resolving a secret set it in our own environment (=%q); it must reach the docker child only", v)
 	}
 
-	// A --secret flag with env: source also resolves.
-	t.Setenv("FLAG_TOKEN", "placeholder")
-	if err := injectSecrets(config.Default(), Options{Secrets: []string{"FLAG_TOKEN=env:SRC_ENV_SECRET"}}); err != nil {
+	// A --secret flag with an env: source resolves the same way.
+	got, err = forwardedValues(config.Default(), Options{Secrets: []string{"FLAG_TOKEN=env:SRC_ENV_SECRET"}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := os.Getenv("FLAG_TOKEN"); got != "topsecret" {
-		t.Errorf("injectSecrets(flag) set FLAG_TOKEN=%q, want topsecret", got)
+	if got["FLAG_TOKEN"] != "topsecret" {
+		t.Errorf("FLAG_TOKEN = %q, want topsecret", got["FLAG_TOKEN"])
+	}
+	if _, ok := os.LookupEnv("FLAG_TOKEN"); ok {
+		t.Error("--secret leaked into our own environment")
+	}
+
+	// A process-controlling name is exactly the case that made this dangerous.
+	got, err = forwardedValues(config.Default(), Options{Secrets: []string{"PATH=env:SRC_ENV_SECRET"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["PATH"] != "topsecret" {
+		t.Errorf("PATH = %q, want it carried to the child", got["PATH"])
+	}
+	if os.Getenv("PATH") == "topsecret" {
+		t.Fatal("a secret named PATH replaced our own PATH; docker and git would no longer resolve")
+	}
+
+	// Nothing configured yields nothing, so the runtime inherits our env unchanged.
+	if v, err := forwardedValues(config.Default(), Options{}); err != nil || v != nil {
+		t.Errorf("forwardedValues with nothing configured = %v, %v; want nil, nil", v, err)
 	}
 }
 
@@ -819,12 +847,23 @@ func TestBuildSpec_LabelsStampIdentity(t *testing.T) {
 	if _, ok := partial.Labels["sandbox.agent"]; ok {
 		t.Errorf("empty agent should not be labelled: %v", partial.Labels)
 	}
+	// With nothing to stamp about the *work*, the identifying label still has to
+	// be there. Those describe the run (repo, branch, agent) and are omitted when
+	// there is nothing true to say — which meant a run outside a git repository
+	// carried no labels at all and could not be found again by `sandbox-cli ps`.
+	// A container nobody can list is one nobody can stop, and a killed sandbox-cli
+	// leaves it running with the workspace still mounted.
 	none, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(none.Labels) != 0 {
-		t.Errorf("expected no labels with nothing to stamp, got %v", none.Labels)
+	if none.Labels["sandbox.cli"] != "1" {
+		t.Errorf("every container must carry sandbox.cli so it can be found again, got %v", none.Labels)
+	}
+	for _, k := range []string{"sandbox.repo", "sandbox.branch", "sandbox.agent", "sandbox.base"} {
+		if _, ok := none.Labels[k]; ok {
+			t.Errorf("%s stamped with nothing to say: %v", k, none.Labels)
+		}
 	}
 }
 
@@ -964,5 +1003,58 @@ func TestBuildSpec_NoHardeningWithAllowlistRefuses(t *testing.T) {
 	}
 	if !spec.NoNewPrivileges || !contains(spec.CapDrop, "ALL") {
 		t.Errorf("--allow alone must keep the hardening: noNewPriv=%v capDrop=%v", spec.NoNewPrivileges, spec.CapDrop)
+	}
+}
+
+// TestBuildSpec_WorkdirMovesTheMountOnlyWhenItLeavesIt covers a flag that used
+// to produce a container the guest could not start in: --workdir set -w but left
+// the project at /workspace, so the guest began in a directory that did not
+// exist. Config `workdir:` moved both, so the two spellings of one setting also
+// disagreed.
+func TestBuildSpec_WorkdirMovesTheMountOnlyWhenItLeavesIt(t *testing.T) {
+	dir := t.TempDir()
+
+	// Outside the mount: the project comes with it, or there is nothing there.
+	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Workdir: "/app", Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Workdir != "/app" {
+		t.Errorf("Workdir = %q, want /app", spec.Workdir)
+	}
+	if spec.Mounts[0].Target != "/app" {
+		t.Errorf("workspace mounted at %q, want /app — the guest would start in an empty directory", spec.Mounts[0].Target)
+	}
+
+	// Inside the mount: starting in a subdirectory must not relocate the project.
+	spec, err = BuildSpec(baseCfg(), Options{Project: dir, Workdir: "/workspace/sub", Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Mounts[0].Target != "/workspace" {
+		t.Errorf("workspace moved to %q; a subdirectory workdir must keep the mount", spec.Mounts[0].Target)
+	}
+	if spec.Workdir != "/workspace/sub" {
+		t.Errorf("Workdir = %q, want /workspace/sub", spec.Workdir)
+	}
+}
+
+// TestBuildSpec_RefusesCommaInMountPaths covers a rendering hole: docker's
+// --mount CSV reads a comma as the start of another option, so a directory named
+// "a,b" produced source=/tmp/a,b,target=/data — with `b` as a field.
+func TestBuildSpec_RefusesCommaInMountPaths(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := BuildSpec(baseCfg(), Options{
+		Project:     dir,
+		ExtraMounts: []string{"/host/a,b:/data:ro"},
+		Command:     []string{"sh"},
+	}); err == nil {
+		t.Error("a comma in a mount host path must be refused")
+	}
+	if err := ValidateMountTarget("/data,readonly"); err == nil {
+		t.Error("a comma in a mount target must be refused")
+	}
+	if err := ValidateMountPath("host path", "/ordinary/path"); err != nil {
+		t.Errorf("an ordinary path must pass: %v", err)
 	}
 }

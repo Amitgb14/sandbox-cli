@@ -163,6 +163,18 @@ type claudeLine struct {
 // session that is running right now — must still list, with whatever was already
 // on disk.
 func readClaudeSession(path string, s *Session) {
+	// Only ever read a regular file. These live in the agent's persisted HOME,
+	// which is bind-mounted read-write into the container, so the agent can put a
+	// symlink named <uuid>.jsonl there and have `context list` open — and render —
+	// whatever it points at on the host. WalkDir already refuses to *descend*
+	// through directory symlinks; this is the same rule for the files themselves.
+	//
+	// Lstat on the path, not Stat on the opened file: Open follows the link, so
+	// the descriptor reports the *target's* mode and a symlink to a regular file
+	// looks regular. The question is what this path is, not what it leads to.
+	if fi, err := os.Lstat(path); err != nil || !fi.Mode().IsRegular() {
+		return
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -274,11 +286,29 @@ func userPromptText(content json.RawMessage) (string, bool) {
 
 // oneLine flattens a prompt for a table cell. Prompts are routinely pasted logs
 // or several paragraphs, and the first line is the part that identifies them.
+// oneLine collapses a title to a single printable line.
+//
+// Stripping control characters is not cosmetic. These strings come from
+// transcripts the agent writes, and they are printed straight to the user's
+// terminal — so an ESC left in one is a command to that terminal, not text.
+// Reachable today: clearing the screen, setting the window title (OSC), and on
+// terminals that permit it, writing the system clipboard via OSC 52. A listing
+// of what an agent did should not be able to act on the machine reading it.
 func oneLine(s string) string {
+	// Keep only the first line, as before — a title is one line, and the rest of a
+	// multi-line prompt is not a summary of it.
 	s = strings.TrimSpace(s)
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		s = strings.TrimSpace(s[:i])
 	}
+	s = strings.Map(func(r rune) rune {
+		// C0 (including ESC), DEL, and C1 — the ranges a terminal reads as
+		// commands. Anything printable, including non-ASCII, is kept.
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return ' '
+		}
+		return r
+	}, s)
 	return strings.Join(strings.Fields(s), " ")
 }
 

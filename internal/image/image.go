@@ -37,7 +37,7 @@ func Ref() string {
 func Register(d *runtime.DockerCLI) {
 	d.SetBuilder(func(ctx context.Context, ref string) error {
 		return Build(ctx, d.Bin, ref)
-	})
+	}, Ref())
 }
 
 // Build builds ref from the embedded Dockerfile. The build context is a temp

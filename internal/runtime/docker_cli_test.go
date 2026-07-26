@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -80,5 +81,36 @@ func TestRestoreTerminalModesSkipsNonTerminal(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected no write to a non-terminal, got %q", got)
+	}
+}
+
+// TestEnsureImage_OnlyBuildsTheEmbeddedRef pins that a foreign image reference is
+// never built from the embedded Dockerfile. Building it would tag the sandbox
+// base as, say, `node:22` in the user's local image store — poisoning that name
+// for every other project on the machine, and handing back something that is not
+// the image they asked for.
+func TestEnsureImage_OnlyBuildsTheEmbeddedRef(t *testing.T) {
+	var built []string
+	d := &DockerCLI{Bin: "/nonexistent-docker-for-test"}
+	d.SetBuilder(func(ctx context.Context, ref string) error {
+		built = append(built, ref)
+		return nil
+	}, "sandbox-base:0.0.1-abcdef12")
+
+	// The embedded ref is built. (image inspect fails because the bin does not
+	// exist, which is the "not present locally" path.)
+	if err := d.EnsureImage(context.Background(), "sandbox-base:0.0.1-abcdef12", false); err != nil {
+		t.Fatalf("the embedded ref must be buildable: %v", err)
+	}
+	if len(built) != 1 || built[0] != "sandbox-base:0.0.1-abcdef12" {
+		t.Fatalf("builder calls = %v, want exactly the embedded ref", built)
+	}
+
+	// Anything else is pulled instead — which fails here, but must not build.
+	if err := d.EnsureImage(context.Background(), "node:22", false); err == nil {
+		t.Error("a foreign image that cannot be pulled should error, not silently build")
+	}
+	if len(built) != 1 {
+		t.Errorf("builder was called for a foreign ref: %v", built)
 	}
 }

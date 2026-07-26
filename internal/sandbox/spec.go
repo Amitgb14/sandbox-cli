@@ -108,18 +108,38 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		runtimeName = opts.Runtime
 	}
 
-	// The workspace target is caller-influenced (config `workdir:`), so it is
-	// checked like any other: a target that shadows the container's own binaries
-	// hands the repository control of what the entrypoint runs.
+	// Where the workspace is mounted, and where the guest starts, are two
+	// questions that `workdir` answers at once — and they are not always the same
+	// answer:
+	//
+	//   --workdir /app             mount the project at /app and start there
+	//   --workdir /workspace/sub   keep the mount, start in a subdirectory
+	//
+	// Deciding by whether the path is inside the mount covers both. Previously the
+	// flag moved only `-w`, so `--workdir /app` started the guest in a directory
+	// that did not exist while the project sat at /workspace; and config `workdir:`
+	// moved both, so the two spellings of one setting disagreed.
 	wsTarget := workdirTargetOrDefault(cfg.Workdir)
+	if opts.Workdir != "" && !isPathAncestor(wsTarget, opts.Workdir) && opts.Workdir != wsTarget {
+		wsTarget = opts.Workdir
+	}
+	// The workspace target is caller-influenced, so it is checked like any other:
+	// a target that shadows the container's own binaries hands the repository
+	// control of what the entrypoint runs.
 	if err := ValidateMountTarget(wsTarget); err != nil {
 		return runtime.RunSpec{}, fmt.Errorf("workdir %q: %w", wsTarget, err)
+	}
+	if err := ValidateMountPath("workspace path", ws); err != nil {
+		return runtime.RunSpec{}, err
 	}
 	mounts := []runtime.Mount{WorkspaceMount(ws, wsTarget)}
 
 	// Config-declared mounts (host paths already resolved to absolute at load time).
 	for _, m := range cfg.Mounts {
 		if err := ValidateMountTarget(m.Container); err != nil {
+			return runtime.RunSpec{}, err
+		}
+		if err := ValidateMountPath("host path", m.Host); err != nil {
 			return runtime.RunSpec{}, err
 		}
 		mounts = append(mounts, runtime.Mount{
@@ -135,6 +155,9 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 			return runtime.RunSpec{}, err
 		}
 		if err := ValidateMountTarget(m.Target); err != nil {
+			return runtime.RunSpec{}, err
+		}
+		if err := ValidateMountPath("host path", m.Source); err != nil {
 			return runtime.RunSpec{}, err
 		}
 		mounts = append(mounts, m)
@@ -413,7 +436,13 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// Labels are how a container is found again after this process is gone.
 	// Empty values are omitted rather than stamped blank, so a label that is
 	// present always carries a fact.
-	labels := map[string]string{}
+	// sandbox.cli is stamped unconditionally, and that is the point: every other
+	// label describes the *work* (which repo, branch, agent) and is omitted when
+	// there is nothing true to say — so a run outside a git repository carried no
+	// labels at all and could not be found again by `sandbox-cli ps`. A container
+	// nobody can list is one nobody can stop, and a killed sandbox-cli leaves the
+	// container running with the workspace still mounted.
+	labels := map[string]string{"sandbox.cli": "1"}
 	for k, v := range map[string]string{
 		"sandbox.repo":   opts.RepoID,
 		"sandbox.branch": opts.Branch,
@@ -423,9 +452,6 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		if v != "" {
 			labels[k] = v
 		}
-	}
-	if len(labels) == 0 {
-		labels = nil
 	}
 
 	// Remove is the single deliberate exception to the disposable-container rule:
@@ -553,6 +579,12 @@ func parseSecretFlag(raw string) (string, creds.Source, error) {
 	name, spec, ok := strings.Cut(raw, "=")
 	if !ok || name == "" || spec == "" {
 		return "", creds.Source{}, fmt.Errorf("invalid --secret %q: want NAME=file:PATH | cmd:COMMAND | env:VAR", raw)
+	}
+	if !config.ValidEnvName(name) {
+		return "", creds.Source{}, fmt.Errorf("invalid --secret %q: %q is not a valid environment variable name", raw, name)
+	}
+	if config.IsReservedEnv(name) {
+		return "", creds.Source{}, fmt.Errorf("invalid --secret %q: %s", raw, config.ReservedEnvReason())
 	}
 	scheme, val, ok := strings.Cut(spec, ":")
 	if !ok || val == "" {

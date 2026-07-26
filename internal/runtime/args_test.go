@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -305,22 +306,33 @@ func TestBuildArgs_Entrypoint(t *testing.T) {
 // TestBuildArgs_NeverMountsHostHome asserts the core security invariant at the
 // arg level: only the mounts explicitly present in the spec are emitted.
 func TestBuildArgs_OnlyDeclaredMounts(t *testing.T) {
+	home, _ := os.UserHomeDir()
 	got := BuildArgs(RunSpec{
 		Image:   "img",
 		Workdir: "/workspace",
 		Mounts:  []Mount{{Source: "/host/proj", Target: "/workspace"}},
 	})
-	mountCount := 0
+	var mounts []string
 	for i, a := range got {
-		if a == "--mount" {
-			mountCount++
-			if i+1 < len(got) && strings.Contains(got[i+1], "/Users") {
-				// only fails if a home-like path leaked in; /host/proj is fine
-			}
+		if a == "--mount" && i+1 < len(got) {
+			mounts = append(mounts, got[i+1])
 		}
 	}
-	if mountCount != 1 {
-		t.Errorf("expected exactly 1 mount, got %d in %v", mountCount, got)
+	if len(mounts) != 1 {
+		t.Fatalf("expected exactly 1 mount, got %d in %v", len(mounts), got)
+	}
+	if mounts[0] != "type=bind,source=/host/proj,target=/workspace" {
+		t.Errorf("mount = %q, want only the declared one", mounts[0])
+	}
+	// The invariant this test exists for: BuildArgs adds no mount of its own, so
+	// nothing host-connected appears that the caller did not ask for. The previous
+	// version of this check had an empty if-body and could never fail.
+	for _, m := range mounts {
+		for _, forbidden := range []string{home, "/Users", "/home/", "/root", "/var/run", "/etc"} {
+			if forbidden != "" && strings.Contains(m, forbidden) {
+				t.Errorf("undeclared host path %q leaked into a mount: %q", forbidden, m)
+			}
+		}
 	}
 }
 
@@ -441,4 +453,26 @@ func hasPair(args []string, flag, val string) bool {
 		}
 	}
 	return false
+}
+
+// TestBuildArgs_NeverRendersForwardedEnv is the guard that makes ForwardedEnv
+// safe to hold secret values. They travel in the docker child's environment, so
+// docker can read them for its bare `-e NAME` arguments — putting them on the
+// argv would expose them in `ps` output and in --dry-run, which is the whole
+// thing the credential broker exists to prevent.
+func TestBuildArgs_NeverRendersForwardedEnv(t *testing.T) {
+	got := BuildArgs(RunSpec{
+		Image:        "img",
+		Workdir:      "/w",
+		EnvNames:     []string{"BROKERED_TOKEN"},
+		ForwardedEnv: map[string]string{"BROKERED_TOKEN": "s3cr3t-value"},
+	})
+	joined := strings.Join(got, " ")
+	if strings.Contains(joined, "s3cr3t-value") {
+		t.Fatalf("a forwarded value reached the docker argv: %q", joined)
+	}
+	// The name still has to be there, or docker forwards nothing.
+	if !hasPair(got, "-e", "BROKERED_TOKEN") {
+		t.Errorf("expected -e BROKERED_TOKEN (name only), got %v", got)
+	}
 }

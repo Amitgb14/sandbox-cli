@@ -49,8 +49,28 @@ type Finding struct {
 	lockPath    string
 }
 
-// Repairable reports whether Repair can act on this finding.
+// Repairable reports whether Repair can act on this finding as it stands.
 func (f Finding) Repairable() bool { return f.Fix != "" }
+
+// RepairableWith reports whether Repair can act once branchOverride is taken
+// into account, and returns the description to show the user.
+//
+// The override exists because the branch is the one thing a destroyed worktree
+// admin directory takes with it: when no session manifest recorded it, Diagnose
+// can only say "re-run with --branch NAME". That advice used to be unreachable —
+// the finding had Advice but no Fix, so Repairable() was false and the caller
+// skipped it before Repair ever saw the override. Supplying the name is exactly
+// what makes the finding actionable, so the two questions have to be asked
+// together.
+func (f Finding) RepairableWith(branchOverride string) (string, bool) {
+	if f.Repairable() {
+		return f.Fix, true
+	}
+	if f.Kind == KindWorktreeAdmin && strings.TrimSpace(branchOverride) != "" {
+		return fmt.Sprintf("recreate %s for branch %q and rebuild the index", f.gitDir, branchOverride), true
+	}
+	return "", false
+}
 
 // Diagnose inspects the repository containing dir and reports what is broken.
 //

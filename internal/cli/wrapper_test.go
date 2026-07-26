@@ -337,3 +337,48 @@ func TestClaudeProjectBucket(t *testing.T) {
 		}
 	}
 }
+
+// TestAnnounceBroadCredentials pins what gets said and what does not. Most
+// wrapper allowlists carry a model-provider key, which is worth exactly the thing
+// the agent is for; an AWS session or a GitHub token is the whole account. Those
+// are still forwarded — it is how continue reaches Bedrock and how copilot
+// authenticates — but silently was the wrong way to do it.
+func TestAnnounceBroadCredentials(t *testing.T) {
+	capture := func(envAllow []string) string {
+		r, w, _ := os.Pipe()
+		orig := os.Stderr
+		os.Stderr = w
+		announceBroadCredentials(envAllow)
+		w.Close()
+		os.Stderr = orig
+		var b strings.Builder
+		io.Copy(&b, r)
+		r.Close()
+		return b.String()
+	}
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "set")
+	t.Setenv("ANTHROPIC_API_KEY", "set")
+	os.Unsetenv("AWS_SECRET_ACCESS_KEY")
+
+	got := capture([]string{"ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"})
+	if !strings.Contains(got, "AWS_ACCESS_KEY_ID") {
+		t.Errorf("a set account-wide credential must be announced, got %q", got)
+	}
+	// One line per scope, not per variable — three AWS names are one fact.
+	if strings.Count(got, "your AWS account") != 1 {
+		t.Errorf("expected the AWS scope named once, got %q", got)
+	}
+	// An allowlist entry that is not set forwards nothing, so warning about it
+	// would train people to ignore the message.
+	if strings.Contains(got, "AWS_SECRET_ACCESS_KEY") {
+		t.Errorf("an unset variable was announced: %q", got)
+	}
+	// A model-provider key is scoped to the agent and is not account-wide.
+	if strings.Contains(got, "ANTHROPIC_API_KEY") {
+		t.Errorf("a model API key should not be announced as account-wide: %q", got)
+	}
+	if out := capture([]string{"ANTHROPIC_API_KEY"}); out != "" {
+		t.Errorf("nothing account-wide forwarded, want silence, got %q", out)
+	}
+}

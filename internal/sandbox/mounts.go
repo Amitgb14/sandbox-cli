@@ -150,7 +150,26 @@ var protectedTargets = []string{
 // ValidateMountTarget refuses a caller-supplied container path that would shadow
 // a protected one — either by being it, or by being an ancestor of it (mounting
 // /usr hides /usr/local/bin just as effectively as mounting it directly).
+// ValidateMountPath rejects a host path or container target that docker's
+// `--mount` CSV syntax cannot express unambiguously.
+//
+// The renderer builds `type=bind,source=<src>,target=<tgt>`, so a comma in
+// either value is read as the start of another option: a directory named "a,b"
+// produced `source=/tmp/a,b,target=/data`, where docker sees a field `b`.
+// Nothing good is on the other side of that, and quoting is not reliably
+// supported, so it is refused where the path enters rather than mangled here.
+func ValidateMountPath(kind, p string) error {
+	if strings.ContainsRune(p, ',') {
+		return fmt.Errorf("mount %s %q contains a comma, which docker's --mount syntax cannot express; "+
+			"rename the directory or mount a parent of it", kind, p)
+	}
+	return nil
+}
+
 func ValidateMountTarget(target string) error {
+	if err := ValidateMountPath("target", target); err != nil {
+		return err
+	}
 	t := path.Clean(strings.TrimSpace(target))
 	if t == "" || t == "." {
 		return fmt.Errorf("mount target must not be empty")

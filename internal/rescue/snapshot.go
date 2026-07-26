@@ -46,6 +46,7 @@ type Snapshotter struct {
 	lastCommit string
 	failures   int
 	disabled   bool
+	skipped    map[string]bool // oversized paths already reported, so we say it once
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -247,7 +248,8 @@ func (s *Snapshotter) take(timeout time.Duration) {
 func (s *Snapshotter) snapshot(ctx context.Context) (string, error) {
 	env := append([]string{"GIT_INDEX_FILE=" + s.indexFile}, snapshotIdentity...)
 
-	if _, err := run(ctx, s.workspace, env, "add", "-A"); err != nil {
+	addArgs := append([]string{"add", "-A", "--"}, s.oversizedExcludes(ctx, env)...)
+	if _, err := run(ctx, s.workspace, env, addArgs...); err != nil {
 		return "", err
 	}
 	tree, err := run(ctx, s.workspace, env, "write-tree")
@@ -438,4 +440,59 @@ func drop(sess Session) {
 		_, _ = run(context.Background(), sess.Repo, nil, "update-ref", "-d", sess.Ref)
 	}
 	sess.remove()
+}
+
+// maxSnapshotFileBytes is the largest single file a snapshot will copy into the
+// user's object store.
+//
+// A snapshot writes into the *user's* repository and pins what it wrote behind
+// refs/sandbox for the retention window, so anything captured survives the agent
+// deleting it — 60 MB of junk written once stayed 60 MB for fourteen days, and
+// PruneSuperseded only drops a session whose tree is committed exactly, so it
+// never self-cleaned. The safety net is for source code someone would be upset to
+// lose; a build artifact, a core dump or a model checkpoint is neither at risk
+// nor worth that.
+//
+// Deliberately a constant rather than config. As a `snapshot.*` key it would be
+// settable from a project .sandbox.yaml, which is untrusted — and "raise the cap"
+// is exactly the knob a hostile repository would reach for.
+const maxSnapshotFileBytes = 10 << 20 // 10 MiB
+
+// oversizedExcludes returns pathspecs excluding files too large to snapshot,
+// and reports them once per session so a missing file is never a silent surprise.
+//
+// The candidate list comes from git itself (modified and untracked, honoring
+// .gitignore), so this costs one extra command and looks at nothing git would not
+// have added anyway.
+func (s *Snapshotter) oversizedExcludes(ctx context.Context, env []string) []string {
+	out, err := run(ctx, s.workspace, env, "ls-files", "-o", "-m", "--exclude-standard")
+	if err != nil || out == "" {
+		return nil
+	}
+	var excludes, newlySkipped []string
+	for _, rel := range strings.Split(out, "\n") {
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			continue
+		}
+		fi, err := os.Lstat(filepath.Join(s.workspace, rel))
+		if err != nil || !fi.Mode().IsRegular() || fi.Size() <= maxSnapshotFileBytes {
+			continue
+		}
+		excludes = append(excludes, ":(exclude)"+rel)
+		s.mu.Lock()
+		if !s.skipped[rel] {
+			if s.skipped == nil {
+				s.skipped = map[string]bool{}
+			}
+			s.skipped[rel] = true
+			newlySkipped = append(newlySkipped, fmt.Sprintf("%s (%d MiB)", rel, fi.Size()>>20))
+		}
+		s.mu.Unlock()
+	}
+	for _, m := range newlySkipped {
+		fmt.Fprintf(os.Stderr, "sandbox-cli: snapshot skipping %s — over the %d MiB per-file limit\n",
+			m, maxSnapshotFileBytes>>20)
+	}
+	return excludes
 }

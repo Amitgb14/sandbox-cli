@@ -13,6 +13,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/creds"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"time"
 )
 
 // Session ties a resolved config to a runtime backend and an audit sink.
@@ -28,7 +29,7 @@ func New(cfg config.Config) *Session {
 	return &Session{
 		Cfg:     cfg,
 		Runtime: runtime.NewDockerCLI(),
-		Audit:   audit.NopSink{},
+		Audit:   audit.NewJSONLSink(config.AuditDir()),
 	}
 }
 
@@ -52,23 +53,25 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 		return 1, fmt.Errorf("preparing image %q: %w", spec.Image, err)
 	}
 
-	s.Audit.RecordSession(audit.SessionMeta{
-		Image:   spec.Image,
-		Workdir: spec.Workdir,
-		Command: spec.Command,
-	})
-
-	// Resolve brokered secrets and place them in this process's environment so
-	// the runtime forwards them to the container by name (the values are never
-	// on the docker argv). Done only here, on the real run path — never in
-	// Prepare/--dry-run — so a secret command is not executed just to print the
-	// command. BuildSpec already added the names to the spec's forwarded env.
-	if err := injectSecrets(s.Cfg, opts); err != nil {
+	// Resolve brokered secrets and the host git identity, and hand the values to
+	// the runtime for the docker child only — never into this process's own
+	// environment, which a secret named PATH or DOCKER_HOST would otherwise use to
+	// redirect the subprocesses we spawn afterwards. Done only here, on the real
+	// run path and never in Prepare/--dry-run, so a secret command is not executed
+	// just to print the command. BuildSpec already added the names to the spec.
+	fwd, err := forwardedValues(s.Cfg, opts)
+	if err != nil {
 		return 1, err
 	}
-	injectGitIdentity(opts)
+	spec.ForwardedEnv = fwd
 
-	return s.Runtime.Run(ctx, spec)
+	// Recorded after the run, not before it: an audit line whose whole purpose is
+	// "what did this do and how did it end" is not worth much written at the
+	// moment nothing has happened yet.
+	started := time.Now()
+	code, runErr := s.Runtime.Run(ctx, spec)
+	s.Audit.RecordSession(auditMeta(spec, opts, code, time.Since(started)))
+	return code, runErr
 }
 
 // Start launches the container detached and returns its name, without waiting
@@ -97,24 +100,36 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 		Command: spec.Command,
 	})
 
-	// Same rule as Run: secrets are resolved only on a real launch path, never in
-	// Prepare/--dry-run, and reach the container by name rather than on the argv.
-	if err := injectSecrets(s.Cfg, opts); err != nil {
+	// Same rule as Run: resolved only on a real launch path, never in
+	// Prepare/--dry-run, and reaching the container by name rather than on the argv.
+	fwd, err := forwardedValues(s.Cfg, opts)
+	if err != nil {
 		return "", err
 	}
-	injectGitIdentity(opts)
+	spec.ForwardedEnv = fwd
 
-	return s.Runtime.Start(ctx, spec)
+	started := time.Now()
+	name, startErr := s.Runtime.Start(ctx, spec)
+	// A detached run has no exit code to wait for — the record says it was
+	// launched, and `sandbox-cli ps` is where its fate lives.
+	meta := auditMeta(spec, opts, 0, time.Since(started))
+	meta.Detached = true
+	s.Audit.RecordSession(meta)
+	return name, startErr
 }
 
-// injectGitIdentity, when --git is set, reads the host git user.name/email and
-// places them in this process's environment as the GIT_AUTHOR_*/GIT_COMMITTER_*
-// vars the runtime forwards by name, so commits inside the sandbox are attributed
-// to the host identity. Best-effort: an unset identity or missing git is simply
-// skipped (the workspace-trust env from BuildSpec still applies).
-func injectGitIdentity(opts Options) {
+// gitIdentityValues, when --git is set, reads the host git user.name/email and
+// returns them as the GIT_AUTHOR_*/GIT_COMMITTER_* vars the runtime forwards by
+// name, so commits inside the sandbox are attributed to the host identity.
+// Best-effort: an unset identity or missing git simply yields nothing (the
+// workspace-trust env from BuildSpec still applies).
+//
+// It returns them rather than setting them, for the same reason secrets do: this
+// process spawns docker and git afterwards, and nothing it forwards to a
+// container belongs in its own environment.
+func gitIdentityValues(opts Options) map[string]string {
 	if !opts.GitIdentity {
-		return
+		return nil
 	}
 	// Read the identity git would use in the project itself (its local config
 	// wins over global), not sandbox-cli's ambient cwd.
@@ -122,16 +137,19 @@ func injectGitIdentity(opts Options) {
 	if dir == "" {
 		dir, _ = os.Getwd()
 	}
-	name := gitConfigGet(dir, "user.name")
-	email := gitConfigGet(dir, "user.email")
-	if name != "" {
-		os.Setenv("GIT_AUTHOR_NAME", name)
-		os.Setenv("GIT_COMMITTER_NAME", name)
+	out := map[string]string{}
+	if name := gitConfigGet(dir, "user.name"); name != "" {
+		out["GIT_AUTHOR_NAME"] = name
+		out["GIT_COMMITTER_NAME"] = name
 	}
-	if email != "" {
-		os.Setenv("GIT_AUTHOR_EMAIL", email)
-		os.Setenv("GIT_COMMITTER_EMAIL", email)
+	if email := gitConfigGet(dir, "user.email"); email != "" {
+		out["GIT_AUTHOR_EMAIL"] = email
+		out["GIT_COMMITTER_EMAIL"] = email
 	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func gitConfigGet(dir, key string) string {
@@ -146,22 +164,65 @@ func gitConfigGet(dir, key string) string {
 
 // injectSecrets resolves the configured/flagged secrets and sets them in the
 // current process environment, ready for the runtime to forward by name.
-func injectSecrets(cfg config.Config, opts Options) error {
+// forwardedValues resolves everything whose *value* must reach the container
+// without passing through sandbox-cli's own environment or the docker argv:
+// brokered secrets, and the host git identity. The names are already on the
+// spec (BuildSpec); this supplies what they are worth.
+//
+// Called only from Run and Start, never from Prepare, so --dry-run neither reads
+// a secret file nor executes a secret command.
+func forwardedValues(cfg config.Config, opts Options) (map[string]string, error) {
+	out := map[string]string{}
+	for k, v := range gitIdentityValues(opts) {
+		out[k] = v
+	}
+
 	sources, err := secretSources(cfg, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(sources) == 0 {
-		return nil
-	}
-	vars, err := creds.Resolve(sources)
-	if err != nil {
-		return err
-	}
-	for _, v := range vars {
-		if err := os.Setenv(v.Name, v.Value); err != nil {
-			return fmt.Errorf("setting secret %q: %w", v.Name, err)
+	if len(sources) > 0 {
+		vars, err := creds.Resolve(sources)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range vars {
+			out[v.Name] = v.Value
 		}
 	}
-	return nil
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// auditMeta assembles the record for one run. Everything here is already
+// resolved on the spec, which is the point: the log describes what actually ran,
+// not what the flags asked for.
+func auditMeta(spec runtime.RunSpec, opts Options, exitCode int, took time.Duration) audit.SessionMeta {
+	m := audit.SessionMeta{
+		Image:    spec.Image,
+		Workdir:  spec.Workdir,
+		Command:  spec.Command,
+		Agent:    opts.Agent,
+		Branch:   spec.Branch,
+		Network:  "default",
+		EnvNames: spec.EnvNames, // names only — never the values
+		ExitCode: exitCode,
+		Duration: took,
+	}
+	for _, mnt := range spec.Mounts {
+		if mnt.Target == spec.Workdir {
+			m.Workspace = mnt.Source
+			break
+		}
+	}
+	if spec.Network == "none" {
+		m.Network = "none"
+	}
+	if allow := spec.Env["SANDBOX_EGRESS_ALLOW"]; allow != "" {
+		m.Network = "allowlist"
+		m.EgressAllow = strings.Split(allow, ",")
+	}
+	return m
 }

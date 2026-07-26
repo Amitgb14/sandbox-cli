@@ -159,6 +159,28 @@ const reservedEnvReason = "this variable instructs the container's root-phase st
 	"(which user to drop to, what egress to permit) and cannot be set or forwarded from outside; " +
 	"setting it would disable those controls"
 
+// ValidEnvName reports whether name is usable as an environment variable name.
+//
+// It matters because sandbox-cli forwards values by emitting a bare `-e NAME`,
+// which docker parses as KEY=VALUE when the string contains an "=". A secret
+// named `LD_PRELOAD=/workspace/evil.so` therefore rendered as a real assignment
+// rather than a forward. Nothing downstream should have to wonder about that, so
+// the name is checked where it enters.
+func ValidEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // IsReservedEnv reports whether name is one of sandbox-cli's own control
 // variables and therefore may not be set or forwarded by a user or a config.
 func IsReservedEnv(name string) bool {
@@ -390,6 +412,18 @@ func (c Config) Validate() error {
 	for k := range c.Env {
 		if IsReservedEnv(k) {
 			return fmt.Errorf("env %q: %s", k, reservedEnvReason)
+		}
+		if !ValidEnvName(k) {
+			return fmt.Errorf("env %q is not a valid environment variable name", k)
+		}
+	}
+	for k := range c.Secrets {
+		if !ValidEnvName(k) {
+			return fmt.Errorf("secret %q is not a valid environment variable name "+
+				"(it is forwarded as `-e %s`, so anything else is read by docker as something other than a name)", k, k)
+		}
+		if IsReservedEnv(k) {
+			return fmt.Errorf("secret %q: %s", k, reservedEnvReason)
 		}
 	}
 	if c.Workdir == "" {

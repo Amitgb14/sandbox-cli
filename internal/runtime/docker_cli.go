@@ -25,8 +25,10 @@ type DockerCLI struct {
 	// Stderr receives image-build progress and diagnostics. Defaults to os.Stderr.
 	Stderr *os.File
 	// builder builds a missing image; wired by the image package via SetBuilder
-	// to avoid an import cycle.
-	builder Builder
+	// to avoid an import cycle. embeddedRef is the one reference that builder
+	// knows how to produce — anything else must be pulled, not built.
+	builder     Builder
+	embeddedRef string
 }
 
 // NewDockerCLI returns a DockerCLI with sensible defaults.
@@ -73,14 +75,32 @@ func (d *DockerCLI) EnsureImage(ctx context.Context, ref string, forceBuild bool
 	if d.builder == nil {
 		return fmt.Errorf("image %q not found locally and no builder configured", ref)
 	}
+	// Only *our* image is built from the embedded Dockerfile. Any other reference
+	// is somebody else's image and has to be pulled: building it would tag the
+	// sandbox base as, say, `node:22` in the user's local image store, poisoning
+	// that name for every other project on the machine — and quietly handing back
+	// something that is not what was asked for.
+	if d.embeddedRef != "" && ref != d.embeddedRef {
+		pull := exec.CommandContext(ctx, d.bin(), "pull", ref)
+		pull.Stdout = d.stderr()
+		pull.Stderr = d.stderr()
+		if err := pull.Run(); err != nil {
+			return fmt.Errorf("image %q is not present locally and could not be pulled: %w", ref, err)
+		}
+		return nil
+	}
 	return d.builder(ctx, ref)
 }
 
 // Builder builds the given image reference. Set by the image package.
 type Builder func(ctx context.Context, ref string) error
 
-// SetBuilder wires a build function used by EnsureImage when an image is absent.
-func (d *DockerCLI) SetBuilder(b Builder) { d.builder = b }
+// SetBuilder wires a build function used by EnsureImage when an image is absent,
+// together with the single image reference that function produces.
+func (d *DockerCLI) SetBuilder(b Builder, embeddedRef string) {
+	d.builder = b
+	d.embeddedRef = embeddedRef
+}
 
 // checkRuntime verifies the daemon has the requested OCI runtime registered.
 // Failing to query the daemon is non-fatal — the run proceeds and docker
@@ -158,6 +178,7 @@ func (d *DockerCLI) Run(ctx context.Context, spec RunSpec) (int, error) {
 
 	args := BuildArgs(spec)
 	cmd := exec.CommandContext(ctx, d.bin(), args...)
+	cmd.Env = childEnv(spec)
 	cmd.Stdin = os.Stdin
 
 	if spec.Name != "" && spec.ShowMetrics {
@@ -190,6 +211,7 @@ func (d *DockerCLI) Start(ctx context.Context, spec RunSpec) (string, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, d.bin(), BuildArgs(spec)...)
+	cmd.Env = childEnv(spec)
 	// `docker run -d` prints the container id on stdout and its own diagnostics on
 	// stderr; the id is captured, the diagnostics belong to the user. Stdin stays
 	// nil (/dev/null) — this run has no terminal behind it.
@@ -329,4 +351,26 @@ func exitCodeOf(err error) (int, error) {
 		return exitErr.ExitCode(), nil
 	}
 	return 1, fmt.Errorf("failed to run docker: %w", err)
+}
+
+// childEnv is the environment for the docker process: ours, plus the values for
+// any bare `-e NAME` arguments BuildArgs emitted.
+//
+// Those values reach the container this way rather than through os.Setenv on
+// sandbox-cli itself. That mattered: secrets used to be placed in our own
+// environment, so a secret named PATH or DOCKER_HOST redirected the docker and
+// git subprocesses spawned after the injection — and the preflight ran before
+// it, so nothing noticed. Scoping them to the child removes the class.
+//
+// Returns nil when there is nothing extra, which makes exec inherit our
+// environment exactly as before.
+func childEnv(spec RunSpec) []string {
+	if len(spec.ForwardedEnv) == 0 {
+		return nil
+	}
+	env := os.Environ()
+	for _, k := range sortedKeys(spec.ForwardedEnv) {
+		env = append(env, k+"="+spec.ForwardedEnv[k])
+	}
+	return env
 }

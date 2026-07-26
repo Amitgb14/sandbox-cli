@@ -192,3 +192,37 @@ func count(findings []Finding, kind string) int {
 	}
 	return n
 }
+
+// TestRepairWithBranchOverride covers advice the tool printed but could never
+// act on. When no session manifest recorded the branch, worktreeAdminFinding
+// leaves Fix empty and sets Advice ("re-run with --branch NAME") — but the
+// caller skipped every finding where Repairable() was false, so Repair never saw
+// the override and the run ended "nothing was repaired".
+func TestRepairWithBranchOverride(t *testing.T) {
+	f := Finding{Kind: KindWorktreeAdmin, gitDir: "/repo/.git/worktrees/wt"}
+
+	if _, ok := f.RepairableWith(""); ok {
+		t.Error("without a branch there is still nothing to do")
+	}
+	fix, ok := f.RepairableWith("feat")
+	if !ok {
+		t.Fatal("supplying --branch is exactly what makes this finding actionable")
+	}
+	if !strings.Contains(fix, "feat") {
+		t.Errorf("fix description should name the branch, got %q", fix)
+	}
+	// Whitespace is not a branch name.
+	if _, ok := f.RepairableWith("   "); ok {
+		t.Error("a blank --branch must not make the finding repairable")
+	}
+	// An already-repairable finding keeps its own description.
+	f2 := Finding{Kind: KindWorktreeAdmin, Fix: "recreate ... for branch \"known\""}
+	if fix, _ := f2.RepairableWith("other"); !strings.Contains(fix, "known") {
+		t.Errorf("an existing Fix must win over the override, got %q", fix)
+	}
+	// The override applies only to the finding kind it makes sense for.
+	lock := Finding{Kind: KindStaleLock}
+	if _, ok := lock.RepairableWith("feat"); ok {
+		t.Error("--branch must not make an unrelated finding repairable")
+	}
+}

@@ -11,6 +11,82 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **`sandbox-cli ps` and `sandbox-cli clean`.** Two things left containers behind
+  and neither had a command: a `kill -9` on sandbox-cli leaves the container
+  running — the daemon owns it, not the `docker run` client — with an agent still
+  writing to your project and nothing attached to it; and `--detach` keeps its
+  container after it exits on purpose, so the exit code and `docker logs`
+  survive. `ps` lists both, `clean` reaps the exited ones, and `clean --force` is
+  needed to touch a running one. Containers now carry a `sandbox.cli` label
+  unconditionally — the repo/branch/agent labels are omitted when there is
+  nothing true to say, so a run started outside a git repository previously
+  carried none at all and could not be found again.
+
+- **A run log at `~/.config/sandbox/audit/sessions.jsonl`.** One line per run:
+  image, workspace, branch, agent, command, network posture, the resolved egress
+  allowlist, exit code and duration. This answers "what did that sandbox run,
+  under what policy, and how did it end" — which nothing could, because the audit
+  sink was a no-op. Environment variables are recorded **by name only**; the
+  broker exists to keep secret values out of files, and a log is a file.
+  Best-effort and 0600.
+
+- **Blocked traffic is now logged.** The firewall's default-deny rules carry
+  rate-limited `LOG` targets (`sandbox-cli DENY-OUT` / `DENY-IN`), so a refused
+  connection leaves a trace instead of only an error the agent may swallow. On
+  Linux this lands in the host's kernel log; under Docker Desktop it goes to the
+  VM's, which is harder to reach — the run log above is the portable half.
+
+### Fixed
+
+- **`recover repair --branch NAME` now works.** It was unreachable: a finding
+  with no recorded branch had advice but no fix, and the caller skipped every
+  finding it could not already repair — so the advice the tool printed
+  ("re-run with `--branch NAME`") could never succeed. It also no longer prints
+  that advice during a run that already supplied the branch.
+
+- **Snapshots skip files over 10 MiB.** `git add -A` had no cap, so anything an
+  agent wrote was copied into your object store and pinned behind
+  `refs/sandbox` for the retention window — surviving its own deletion, and never
+  collected, because superseded-pruning only drops a session whose tree was
+  committed exactly. 60 MB of junk stayed 60 MB for fourteen days. Skipped files
+  are named once per session.
+
+- **`--workdir` no longer starts the guest in a directory that does not exist.**
+  The flag moved `-w` but left the project at `/workspace`, while config
+  `workdir:` moved both — the two spellings of one setting disagreed. It now
+  moves the mount when the path is outside it and keeps the mount when the path
+  is a subdirectory of it, so both `--workdir /app` and
+  `--workdir /workspace/sub` do the obvious thing.
+
+- **`--user uid:gid` works with an egress allowlist.** The firewall entrypoint
+  resolved the user with `id -u`, which fails on a numeric `1000:1000` and killed
+  the run with an opaque `id: '1000:1000': no such user`. It also now treats
+  `--user 0` as root, rather than only the spelling `root`.
+
+- **A config `image:` that is absent locally is pulled, not built.** Any missing
+  reference was built from the embedded Dockerfile and tagged with that name, so
+  `image: node:22` would poison `node:22` in your local image store for every
+  other project — and hand back something that was not the image you asked for.
+
+- **A comma in a mount path is refused rather than mangled.** docker's `--mount`
+  CSV reads it as the start of another option, so a directory named `a,b`
+  rendered `source=/tmp/a,b,target=/data`.
+
+- Session titles in `context list` and the model name in `usage` are stripped of
+  terminal control sequences. They come from files the agent writes and were
+  printed directly, so an escape in one was a command to your terminal — screen
+  clears, window titles, and clipboard writes via OSC 52 on terminals that allow
+  it.
+
+- A symlink named `<uuid>.jsonl` in the persisted agent HOME is no longer read,
+  so `context list` cannot be used to render the contents of an arbitrary host
+  file.
+
+- Secret and `env:` names are validated. A name containing `=` was emitted as a
+  bare `-e NAME`, which docker reads as `KEY=VALUE`.
+
 ### Security
 
 - **`--no-hardening` can no longer be combined with the egress allowlist.** The
@@ -52,6 +128,13 @@ version is tagged.
   Scope: like the rest of the firewall this applies in allowlist mode only.
   Filtering ingress on every run would mean every run taking the root-entrypoint
   path with `NET_ADMIN` — a worse default than the one it would be protecting.
+
+- **Resolved secrets no longer pass through sandbox-cli's own environment.**
+  They were placed there with `os.Setenv` so docker would pick them up for its
+  bare `-e NAME` arguments — but sandbox-cli spawns `docker` and `git` *after*
+  that point, so a secret named `PATH` or `DOCKER_HOST` redirected them, and the
+  preflight ran before the injection so nothing noticed. Values now reach the
+  docker child only. They are still never on the argv or in `--dry-run`.
 
 - **A forged `.git` pointer file can no longer mount an arbitrary host
   directory.** When the workspace is a git worktree, sandbox-cli mounts the

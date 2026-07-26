@@ -309,6 +309,8 @@ func NewRootCmd() *cobra.Command {
 		newInitCmd(),
 		newConfigCmd(),
 		newStatsCmd(),
+		newPsCmd(),
+		newCleanCmd(),
 		newUsageCmd(),
 		newWorktreeCmd(),
 		newRecoverCmd(),

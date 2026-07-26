@@ -523,3 +523,31 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// TestSnapshotSkipsOversizedFiles pins the cap on what a snapshot copies into
+// the user's repository. Without it an agent writing a large file left it pinned
+// behind refs/sandbox for the whole retention window — surviving its own
+// deletion, and never collected, because PruneSuperseded only drops a session
+// whose tree was committed exactly.
+func TestSnapshotSkipsOversizedFiles(t *testing.T) {
+	dir := initRepo(t)
+
+	writeFile(t, filepath.Join(dir, "small.txt"), "keep me\n")
+	big := make([]byte, maxSnapshotFileBytes+1024)
+	if err := os.WriteFile(filepath.Join(dir, "big.bin"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := begin(t, dir)
+	if _, err := s.Once(); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	tree := git(t, dir, "ls-tree", "-r", "--name-only", s.Session().Ref)
+	if !strings.Contains(tree, "small.txt") {
+		t.Errorf("the snapshot dropped ordinary work; tree = %q", tree)
+	}
+	if strings.Contains(tree, "big.bin") {
+		t.Errorf("an oversized file was copied into the object store; tree = %q", tree)
+	}
+}

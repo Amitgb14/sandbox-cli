@@ -126,6 +126,18 @@ func RescueDir() string {
 	return filepath.Join(r, "rescue")
 }
 
+// AuditDir returns the sandbox-owned host directory holding the run log, e.g.
+// ~/.config/sandbox/audit. Outside every repository like the rescue and contexts
+// state, and for the same reason: a record of what a run did has to survive the
+// project it ran in. Returns "" if the home directory cannot be determined.
+func AuditDir() string {
+	r := configRoot()
+	if r == "" {
+		return ""
+	}
+	return filepath.Join(r, "audit")
+}
+
 // ContextsDir returns the sandbox-owned host directory holding conversation
 // context state — the per-context manifests and the verified agent session-store
 // registry, e.g. ~/.config/sandbox/contexts. Like RescueDir it sits outside every

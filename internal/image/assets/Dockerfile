@@ -362,7 +362,17 @@ for d in $(printf '%s' "$allow" | tr ',' ' '); do
   done
 done
 
-# Everything else outbound is rejected with a fast, visible error (not a hang).
+# Everything else outbound is rejected with a fast, visible error (not a hang) —
+# and logged first. A blocked connection used to leave no trace anywhere: the
+# agent saw a connection error it may well swallow, and the user had no way to
+# answer "what did the sandbox try to reach, and what was refused?". That is the
+# question an allowlist exists to be able to answer.
+#
+# --log-prefix is what makes it greppable; the rate limit is what stops a busy
+# agent filling the kernel ring buffer (and the host's syslog on Linux, where the
+# container shares it) with one line per retry.
+iptables -A OUTPUT -m limit --limit 12/min --limit-burst 20 \
+  -j LOG --log-prefix "sandbox-cli DENY-OUT " --log-level 4
 iptables -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
 
 # Ingress. An egress allowlist that ignores inbound traffic is not a boundary:
@@ -394,6 +404,8 @@ for p in $(printf '%s' "$ingress" | tr ',' ' '); do
   iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
 done
 
+iptables -A INPUT -m limit --limit 12/min --limit-burst 20 \
+  -j LOG --log-prefix "sandbox-cli DENY-IN " --log-level 4
 iptables -A INPUT -j REJECT --reject-with icmp-port-unreachable
 FW
 RUN chmod +x /usr/local/bin/sandbox-egress-setup
@@ -421,10 +433,30 @@ if [ -n "${SANDBOX_EGRESS_ALLOW:-}" ]; then
 fi
 
 user="${SANDBOX_RUN_AS:-}"
-if [ -n "$user" ] && [ "$user" != "root" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
-  uid="$(/usr/bin/id -u "$user")"
-  gid="$(/usr/bin/id -g "$user")"
-  exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"
+if [ -n "$user" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
+  # SANDBOX_RUN_AS is whatever --user was given, so it is a name OR a numeric
+  # uid[:gid] — `docker run --user 1000:1000` is documented, and `id -u 1000:1000`
+  # simply fails, which under `set -e` killed the run with an opaque
+  # "id: '1000:1000': no such user" before the guest ever started.
+  case "$user" in
+    *[!0-9:]*)
+      # A name: ask the passwd database.
+      uid="$(/usr/bin/id -u "$user")"
+      gid="$(/usr/bin/id -g "$user")"
+      ;;
+    *)
+      # Numeric uid or uid:gid; a bare uid reuses itself as the gid, matching
+      # docker's own reading of --user.
+      uid="${user%%:*}"
+      gid="${user#*:}"
+      [ "$gid" = "$user" ] && gid="$uid"
+      ;;
+  esac
+  # Dropping to root is not dropping. Checked on the resolved id rather than the
+  # spelling, so `--user 0` and `--user root` behave the same.
+  if [ "$uid" != "0" ]; then
+    exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"
+  fi
 fi
 exec "$@"
 EP
