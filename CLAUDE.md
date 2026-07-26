@@ -169,8 +169,8 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
 
 An audit found the container→host boundary did not hold — 22 issues, all reproduced end to end,
 from host code execution to mounting `/` read-write. All of them are fixed.
-`docs/security/audit-2026-07-26.md` is the tracked record: findings, threat model, what was done,
-and what is still open (the allowlist matches resolved **IPs** rather than names, and the agent
+`docs/security/audit-2026-07-26.md` is the tracked record (findings, threat model, what was done)
+and `docs/security/open-items.md` is the live backlog of what is still open (the allowlist matches resolved **IPs** rather than names, and the agent
 still holds raw credentials — both need the egress proxy). `docs/proposals/security-hardening.md`
 has the phased design notes, and is gitignored. The rules that follow from it:
 
