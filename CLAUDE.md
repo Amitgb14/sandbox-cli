@@ -92,8 +92,15 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   (`SANDBOX_INGRESS_PORTS`, from `sandbox.IngressPorts`) — publishing *is* an explicit request for
   ingress, and without the carve-out a dev server would silently stop answering the moment someone
   added `--allow`. `FORWARD` is left alone: a container netns has one interface and routes nothing.
-  Fixing the IP-vs-name gap properly still means name-based enforcement — the egress proxy
-  `internal/creds` already names as future work.
+  The IP-vs-name gap is closed by `internal/egressproxy`: a proxy running **inside** the
+  container as its own uid, which the firewall permits to egress while REDIRECTing everyone
+  else's tcp/80 and tcp/443 into it. It reads the hostname from the TLS SNI, an explicit
+  `CONNECT`, or an HTTP `Host` header, resolves fresh per connection, and decides on the
+  name — so `gist.github.com` no longer rides in on `github.com`'s address and a rotating
+  record no longer breaks an allowlisted domain. Its source is embedded in that package,
+  compiled by a builder stage (users have no Go toolchain), and `image.Ref` hashes it so a
+  changed proxy produces a new image tag. It deliberately does **not** terminate TLS; that
+  is the credential-injection work, and a separate decision.
 
   The whole firewall, ingress included, runs in allowlist mode only. Filtering ingress on every run
   would mean every run taking the root-entrypoint path with `NET_ADMIN`, which is a worse default

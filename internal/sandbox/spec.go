@@ -380,6 +380,11 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		}
 		env["SANDBOX_EGRESS_ALLOW"] = strings.Join(egress, ",")
 		env["SANDBOX_RUN_AS"] = runAs
+		// Turns on name-based enforcement: the entrypoint starts the proxy on this
+		// port and redirects the guest's 80/443 into it, so the allowlist is decided
+		// on the hostname the client asked for rather than on addresses resolved
+		// once at startup. A container-local port, never published.
+		env["SANDBOX_PROXY_PORT"] = defaultProxyPort
 		// NET_ADMIN/NET_RAW to program iptables; SETUID/SETGID so the entrypoint's
 		// `setpriv` can drop root -> the intended user before the agent runs
 		// (cap-drop ALL from hardening would otherwise block setresuid/setresgid).
@@ -628,6 +633,11 @@ func isTerminal(f *os.File) bool {
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
 }
+
+// defaultProxyPort is where the in-container egress proxy listens. Fixed rather
+// than chosen per run: it is bound to loopback inside the container's own network
+// namespace, so it collides with nothing outside and needs no coordination.
+const defaultProxyPort = "3128"
 
 // defaultRunAsUser is the unprivileged user the firewall entrypoint drops to.
 const defaultRunAsUser = "sandbox"

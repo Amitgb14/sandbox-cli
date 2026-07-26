@@ -3,6 +3,16 @@
 # node:*-bookworm-slim is multi-arch, so on Apple Silicon this resolves to the
 # arm64 variant automatically. Node is present because every agent wrapped here
 # (Claude Code, Codex, Gemini CLI, OpenCode) ships as an npm package.
+# The egress proxy is compiled here rather than on the host: sandbox-cli ships as
+# a binary, so requiring a Go toolchain to build the image would be a new
+# prerequisite for every user. Its source is written into the build context by
+# internal/egressproxy, and the image tag is hashed over that source too, so a
+# change to the proxy produces a new tag and a rebuild.
+FROM golang:1.25-bookworm AS egressproxy
+WORKDIR /src
+COPY proxy/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /sandbox-egress-proxy .
+
 FROM node:22-bookworm-slim
 
 # Common dev/agent tooling.
@@ -373,6 +383,14 @@ fi
 
 iptables -F OUTPUT
 iptables -A OUTPUT -o lo -j ACCEPT
+# A packet redirected into the local proxy has its destination rewritten to
+# 127.0.0.1, but does NOT necessarily leave via `lo` — the routing decision was
+# already made before the nat OUTPUT chain ran. Matching on the destination
+# instead is what actually covers it: without this the REDIRECT succeeded and the
+# rewritten packet was then rejected by the rule at the bottom of this chain, so
+# every connection failed with the proxy sitting idle and logging nothing.
+# 127.0.0.0/8 is this container's own loopback, so this widens nothing.
+iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # DNS, so the allowlist below (and the agent's own runtime lookups) can resolve —
 # but only to the resolvers this container was actually given.
@@ -391,6 +409,34 @@ for ns in $(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null); do
   iptables -A OUTPUT -p udp -d "$ns" --dport 53 -j ACCEPT
   iptables -A OUTPUT -p tcp -d "$ns" --dport 53 -j ACCEPT
 done
+
+# Name-based enforcement, when the proxy is available.
+#
+# The rules below this point match resolved ADDRESSES, and an address is not a
+# name: gist.github.com answers because it shares github.com's address, and a
+# rotating record breaks a domain that was explicitly allowed. The proxy decides
+# on the name the client actually asked for, freshly, per connection.
+#
+# The lever is uid ownership. Outbound traffic is permitted only from the proxy's
+# own uid; everything else on 80/443 is redirected INTO the proxy. The agent
+# cannot go around it, because going around it would mean being a different user.
+# Everything not 80/443 still falls through to the address rules and the final
+# REJECT, so this narrows what is reachable and never widens it.
+if [ -n "${SANDBOX_PROXY_PORT:-}" ] && command -v sandbox-egress-proxy >/dev/null 2>&1; then
+  proxy_uid="$(id -u sandbox-proxy 2>/dev/null || echo)"
+  if [ -n "$proxy_uid" ]; then
+    iptables -t nat -N SANDBOX_EGRESS 2>/dev/null || iptables -t nat -F SANDBOX_EGRESS
+    # The proxy's own connections must not be redirected back into itself.
+    iptables -t nat -A SANDBOX_EGRESS -m owner --uid-owner "$proxy_uid" -j RETURN
+    iptables -t nat -A SANDBOX_EGRESS -p tcp --dport 80 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
+    iptables -t nat -A SANDBOX_EGRESS -p tcp --dport 443 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
+    iptables -t nat -A OUTPUT -j SANDBOX_EGRESS
+    # Loopback must be reachable so the redirect has somewhere to land, and the
+    # proxy itself is allowed out — it is the thing enforcing the allowlist.
+    iptables -A OUTPUT -m owner --uid-owner "$proxy_uid" -j ACCEPT
+    echo "sandbox-cli: egress enforced by name (proxy on 127.0.0.1:$SANDBOX_PROXY_PORT)" >&2
+  fi
+fi
 
 # Permit the resolved IPv4 addresses of each allowlisted domain. Split the
 # comma-separated list into words via `tr` under the default IFS so the inner IP
@@ -489,6 +535,22 @@ if [ -n "${SANDBOX_EGRESS_ALLOW:-}" ]; then
   fi
 fi
 
+# Start the egress proxy before dropping privileges, as its own user. It must be
+# running before the guest does, or the redirect rules point at nothing and every
+# outbound connection is refused — so a failure to start is a failure to run,
+# matching the rest of this script's fail-closed posture.
+if [ -n "${SANDBOX_PROXY_PORT:-}" ] && [ -n "${SANDBOX_EGRESS_ALLOW:-}" ] \
+   && command -v sandbox-egress-proxy >/dev/null 2>&1 && [ "$(/usr/bin/id -u)" = "0" ]; then
+  SANDBOX_PROXY_LISTEN="127.0.0.1:$SANDBOX_PROXY_PORT" \
+    /usr/bin/setpriv --reuid sandbox-proxy --regid nogroup --clear-groups \
+      /usr/local/bin/sandbox-egress-proxy &
+  # Wait briefly for the listener; the guest starting first would see refusals.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if (exec 3<>/dev/tcp/127.0.0.1/"$SANDBOX_PROXY_PORT") 2>/dev/null; then break; fi
+    sleep 0.2
+  done
+fi
+
 user="${SANDBOX_RUN_AS:-}"
 if [ -n "$user" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
   # SANDBOX_RUN_AS is whatever --user was given, so it is a name OR a numeric
@@ -526,6 +588,16 @@ fi
 exec "$@"
 EP
 RUN chmod +x /usr/local/bin/sandbox-firewall
+
+# The egress proxy and the uid it runs as.
+#
+# Its own uid is the enforcement lever: the firewall permits outbound traffic
+# ONLY from this uid and redirects everything else to the proxy, so the agent
+# cannot go around it — "around it" would mean being a different user. It owns
+# nothing writable and has no shell.
+COPY --from=egressproxy /sandbox-egress-proxy /usr/local/bin/sandbox-egress-proxy
+RUN chmod 0755 /usr/local/bin/sandbox-egress-proxy \
+    && useradd --system --no-create-home --shell /usr/sbin/nologin sandbox-proxy
 
 # Isolated, non-root user whose home IS /sandbox/home — set as the passwd home
 # (-d) so $HOME and getpwuid agree and there is no stray /home/sandbox. Nothing

@@ -240,6 +240,98 @@ func TestEgressAllowlistFiltersIngressToo(t *testing.T) {
 	}
 }
 
+// TestEgressIsEnforcedByNameNotAddress is the end-to-end proof for the whole
+// egress-proxy change.
+//
+// The firewall it replaces permitted resolved addresses, so gist.github.com —
+// which shares github.com's address and is a *write* endpoint, i.e. an
+// exfiltration channel — answered under the baseline despite never being listed.
+// The same for docs.python.org via pypi.org's Fastly IPs. Both must now be
+// refused while the names actually on the list still work.
+//
+// Deliberately live rather than a rule-shape assertion: the previous defect was
+// invisible in the rules (they looked correct, and were correct about addresses),
+// so only a real connection distinguishes the fixed behaviour from the broken one.
+func TestEgressIsEnforcedByNameNotAddress(t *testing.T) {
+	proj := t.TempDir()
+	sess := newTestSession(t, config.Default())
+
+	script := `for h in github.com gist.github.com pypi.org docs.python.org; do
+  code=$(curl -s -m 15 -o /dev/null -w "%{http_code}" "https://$h" 2>/dev/null)
+  echo "$h=$code"
+done > /workspace/egress.txt`
+
+	if _, err := sess.Run(context.Background(), sandbox.Options{
+		Project: proj,
+		TTY:     ptr(false),
+		Allow:   []string{"example.com"}, // baseline carries github.com and pypi.org
+		Command: []string{"sh", "-c", script},
+	}, false); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	out, err := os.ReadFile(filepath.Join(proj, "egress.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+
+	// Parsed into exact lines rather than matched as substrings. Contains() is
+	// wrong here for the same reason it is wrong in an allowlist: "github.com=000"
+	// is a substring of "gist.github.com=000", so a substring check reported the
+	// allowlisted host as blocked when it was the *unlisted* one that was blocked.
+	// The bug this feature fixes, reproduced in the test for it.
+	code := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		if h, c, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			code[h] = c
+		}
+	}
+
+	// On the list: reachable. If these fail the change has broken ordinary use,
+	// which matters more than the hole it closes.
+	for _, h := range []string{"github.com", "pypi.org"} {
+		if code[h] == "" || code[h] == "000" {
+			t.Errorf("%s is on the allowlist but was blocked (code %q):\n%s", h, code[h], got)
+		}
+	}
+	// Not on the list, but sharing an allowlisted address: must be refused now.
+	for _, h := range []string{"gist.github.com", "docs.python.org"} {
+		if code[h] != "000" {
+			t.Errorf("%s is not on the allowlist but returned %q — egress is still "+
+				"matching addresses rather than names:\n%s", h, code[h], got)
+		}
+	}
+}
+
+// TestEgressProxyCannotBeBypassed pins that the enforcement is the redirect, not
+// the environment. An agent that unsets HTTPS_PROXY, or dials an address with no
+// hostname at all, must still be refused — otherwise the allowlist is advisory.
+func TestEgressProxyCannotBeBypassed(t *testing.T) {
+	proj := t.TempDir()
+	sess := newTestSession(t, config.Default())
+
+	script := `env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy \
+  curl -s -m 12 -o /dev/null -w "unset=%{http_code}\n" https://gist.github.com > /workspace/bypass.txt 2>&1
+curl -s -m 8 -o /dev/null -w "altport=%{http_code}\n" https://gist.github.com:8443 >> /workspace/bypass.txt 2>&1`
+
+	if _, err := sess.Run(context.Background(), sandbox.Options{
+		Project: proj,
+		TTY:     ptr(false),
+		Allow:   []string{"example.com"},
+		Command: []string{"sh", "-c", script},
+	}, false); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	out, _ := os.ReadFile(filepath.Join(proj, "bypass.txt"))
+	got := string(out)
+	if !strings.Contains(got, "unset=000") {
+		t.Errorf("unsetting the proxy env reached a blocked host; the env is not the boundary:\n%s", got)
+	}
+	if !strings.Contains(got, "altport=000") {
+		t.Errorf("a non-80/443 port reached a blocked host:\n%s", got)
+	}
+}
+
 // TestGitIdentity proves --git forwards the host git identity into the container
 // and marks the workspace as trusted. It pins a deterministic host identity via
 // an isolated global git config so the assertion doesn't depend on the CI user's

@@ -13,6 +13,8 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
+
+	"github.com/Amitgb14/sandbox-cli/internal/egressproxy"
 )
 
 //go:embed assets/Dockerfile
@@ -28,8 +30,23 @@ var dockerfile []byte
 // tag, leaving stale images that silently lacked the egress entrypoint and the
 // pre-created cache directories.
 func Ref() string {
-	sum := sha256.Sum256(dockerfile)
-	return "sandbox-base:" + version.BaseImageVersion + "-" + hex.EncodeToString(sum[:])[:8]
+	// The tag is content-addressed over everything that goes into the image, not
+	// only the Dockerfile. The egress proxy's source is compiled into the image
+	// too, so hashing the Dockerfile alone would mean a changed proxy shipped
+	// under the old tag and nobody rebuilt — a stale binary enforcing the
+	// allowlist, which is the worst thing to be stale.
+	h := sha256.New()
+	h.Write(dockerfile)
+	for _, name := range egressproxy.EmbeddedFiles() {
+		src, err := egressproxy.SourceOf(name)
+		if err != nil {
+			continue
+		}
+		h.Write([]byte(name))
+		h.Write([]byte(src))
+	}
+	h.Write([]byte(egressproxy.GeneratedSources()))
+	return "sandbox-base:" + version.BaseImageVersion + "-" + hex.EncodeToString(h.Sum(nil))[:8]
 }
 
 // Register wires the image builder into a DockerCLI runtime so EnsureImage can
@@ -57,6 +74,20 @@ func Build(ctx context.Context, dockerBin, ref string) error {
 	dfPath := filepath.Join(tmp, "Dockerfile")
 	if err := os.WriteFile(dfPath, dockerfile, 0o644); err != nil {
 		return fmt.Errorf("writing Dockerfile: %w", err)
+	}
+
+	// The egress proxy runs inside the container, so its source has to be in the
+	// build context. It is compiled by a builder stage rather than cross-compiled
+	// here, because sandbox-cli ships as a binary and most users have no Go
+	// toolchain — requiring one would be a new prerequisite for everybody.
+	if err := egressproxy.WriteBuildContext(tmp, func(name string, data []byte) error {
+		p := filepath.Join(tmp, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(p, data, 0o644)
+	}); err != nil {
+		return fmt.Errorf("writing proxy source: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "sandbox-cli: building base image %s (first run only)...\n", ref)

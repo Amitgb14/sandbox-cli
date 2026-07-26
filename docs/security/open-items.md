@@ -10,7 +10,34 @@ self-contained beats one that is severe but blocked on a decision.
 
 ---
 
-## 1. Egress matches resolved IPs, not names
+## 1. Egress matches resolved IPs, not names — **DONE**
+
+**Closed.** `internal/egressproxy` enforces the allowlist by hostname, read from
+the TLS SNI, an explicit `CONNECT`, or an HTTP `Host` header, and resolved fresh
+per connection.
+
+Verified live, in a sandbox allowing only `example.com` plus the baseline:
+
+```
+github.com           reachable (200)     <- on the list
+gist.github.com      BLOCKED             <- shared github.com's address
+pypi.org             reachable (200)     <- on the list
+docs.python.org      BLOCKED             <- shared pypi.org's address
+```
+
+And that the enforcement is the redirect rather than the environment: unsetting
+`HTTPS_PROXY` still refused, a non-80/443 port still refused, and a connection to
+a bare address with no SNI refused rather than resolved from its destination.
+
+The proxy runs inside the container as its own uid; the firewall permits outbound
+traffic only from that uid and REDIRECTs everything else into it, so "going
+around it" would mean being a different user. Item 4 below no longer needs a
+per-run network on this account.
+
+Item 2 (credential injection) is unaffected and still open — this deliberately
+does not terminate TLS.
+
+<details><summary>Original entry</summary>
 
 **Severity: high. Effort: large. Blocked on: nothing.**
 
@@ -44,15 +71,19 @@ environment variable; it cannot unset a netfilter rule).
 Ship it independently of item 2. It is the larger part of the value and carries
 none of the risk.
 
-### Open questions
+</details>
 
-- `--detach` returns as soon as the container is up, so nothing on the host
-  survives to hold a proxy. Needs a sidecar container or a daemon.
-- sandbox-cli currently creates **no** per-run docker network, which is why
-  "no orphaned networks" is free today. A proxy sidecar changes that — see item 4,
-  which wants a per-run network anyway. Do them together.
-- Non-HTTP egress (ssh-based git, arbitrary TCP) has no `CONNECT` to inspect.
-  Decide whether that is refused or falls back to the address-based rules.
+### How the open questions resolved
+
+- **`--detach` and sidecar lifetime: moot.** The proxy runs inside the sandbox
+  container, started by the entrypoint before privileges are dropped, so it lives
+  exactly as long as the run it belongs to. Nothing on the host has to survive.
+- **No per-run docker network is needed**, so "no orphaned networks" stays free.
+- **Non-HTTP egress falls through to the address rules**, unchanged. Only tcp/80
+  and tcp/443 are redirected into the proxy; everything else meets the existing
+  allowlist and the final REJECT. That narrows what is reachable and never widens
+  it. ssh-based git is therefore still address-matched — the residual case, and a
+  much smaller one than the CDN-sharing problem this closed.
 
 ---
 

@@ -19,6 +19,9 @@ import (
 // many, and this process is the one thing standing between it and the network.
 const handshakeTimeout = 15 * time.Second
 
+// errNoData marks a connection that closed without sending anything.
+var errNoData = errors.New("connection sent no data")
+
 // Server enforces the allowlist for connections redirected to it.
 type Server struct {
 	Match *Matcher
@@ -67,8 +70,25 @@ func (s *Server) handle(client net.Conn) {
 	br := bufio.NewReader(client)
 	host, port, explicit, err := s.peek(br)
 	if err != nil {
-		s.Log(Decision{Reason: err.Error()})
+		// A connection that sent nothing at all is a probe or an abandoned dial —
+		// the entrypoint's own readiness check is one — and logging it as a denial
+		// would put noise in the place denials are meant to be legible. A
+		// connection that sent data but named nothing is the interesting case:
+		// that is what dialling an address directly looks like.
+		if !errors.Is(err, errNoData) {
+			s.Log(Decision{Reason: err.Error()})
+		}
 		return
+	}
+	// For a redirected connection the port peek() inferred from the protocol
+	// shape (443 for TLS, 80 for HTTP) is a guess; the kernel knows what was
+	// actually asked for. Only the port is taken — the address deliberately is
+	// not, because trusting it would be the address-based matching this package
+	// exists to replace.
+	if !explicit {
+		if _, origPort, oerr := OriginalDestination(client); oerr == nil && origPort > 0 {
+			port = origPort
+		}
 	}
 	_ = client.SetReadDeadline(time.Time{})
 
@@ -113,7 +133,7 @@ func (s *Server) handle(client net.Conn) {
 func (s *Server) peek(br *bufio.Reader) (host string, port int, explicit bool, err error) {
 	first, err := br.Peek(1)
 	if err != nil {
-		return "", 0, false, errors.New("no data")
+		return "", 0, false, errNoData
 	}
 
 	if first[0] == 0x16 { // TLS handshake
@@ -273,7 +293,7 @@ func peekHeaders(br *bufio.Reader) ([]byte, error) {
 			if len(b) > 0 {
 				return b, nil // peer stopped talking; decide on what it did send
 			}
-			return nil, errors.New("no request")
+			return nil, errNoData
 		}
 		if n >= br.Size() {
 			return b, nil // head larger than the buffer: decide on what we have
@@ -283,7 +303,7 @@ func peekHeaders(br *bufio.Reader) ([]byte, error) {
 			if b, _ := br.Peek(br.Buffered()); len(b) > 0 {
 				return b, nil
 			}
-			return nil, errors.New("no request")
+			return nil, errNoData
 		}
 	}
 }

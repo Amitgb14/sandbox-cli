@@ -153,6 +153,7 @@ var reservedEnvNames = map[string]bool{
 	"SANDBOX_RUN_AS":        true,
 	"SANDBOX_EGRESS_ALLOW":  true,
 	"SANDBOX_INGRESS_PORTS": true, // which inbound ports the firewall leaves open
+	"SANDBOX_PROXY_PORT":    true, // where the name-enforcing egress proxy listens
 
 	// Interpreter- and loader-control variables. These are not sandbox-cli's, but
 	// they decide what the container's root-phase startup *executes*, which puts

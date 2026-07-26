@@ -149,31 +149,32 @@ func TestConnectionWithNoNameIsRefused(t *testing.T) {
 	}
 }
 
-// TestSilentConnectionDoesNotHoldAGoroutine covers the resource side. The agent
-// can open many sockets; one that says nothing must time out rather than pin a
-// goroutine and a descriptor for the life of the run.
-func TestSilentConnectionDoesNotHoldAGoroutine(t *testing.T) {
+// TestSilentConnectionIsTimedOut covers the resource side. The agent can open
+// many sockets; one that says nothing must be closed rather than pin a goroutine
+// and a descriptor for the life of the run.
+//
+// The assertion is that the server closes the connection, not that it logs one:
+// a connection that sends nothing is deliberately NOT logged, because the
+// entrypoint's own readiness probe is one and denials are meant to be legible.
+// Asserting on the log would be asserting on the thing that was removed.
+func TestSilentConnectionIsTimedOut(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing test")
 	}
-	_, l, log, mu := testServer(t, []string{"github.com"})
+	_, l, _, _ := testServer(t, []string{"github.com"})
 	c, err := net.Dial("tcp", l.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 
-	// The deadline is 15s; assert the connection is not simply forgotten by
-	// checking the handler eventually records a decision for it.
-	deadline := time.Now().Add(handshakeTimeout + 5*time.Second)
-	for time.Now().Before(deadline) {
-		mu.Lock()
-		n := len(*log)
-		mu.Unlock()
-		if n > 0 {
-			return
-		}
-		time.Sleep(250 * time.Millisecond)
+	// Say nothing. The server should hang up once its handshake deadline passes.
+	c.SetReadDeadline(time.Now().Add(handshakeTimeout + 10*time.Second))
+	n, err := c.Read(make([]byte, 1))
+	if err == nil {
+		t.Fatalf("server sent %d bytes to a connection that said nothing", n)
 	}
-	t.Error("a silent connection was never timed out")
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Error("the server never closed a silent connection; it would hold a goroutine and an fd")
+	}
 }
