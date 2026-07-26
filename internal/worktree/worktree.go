@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+
+	"github.com/Amitgb14/sandbox-cli/internal/githard"
 )
 
 // gitBin is the git executable; a variable so tests can stub it if needed.
@@ -444,10 +446,18 @@ func gitEnv() []string {
 	return append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0")
 }
 
+// runGit runs one of sandbox-cli's *own* git commands. Every such command runs
+// on the host inside a repository the agent can write to, so the repository's
+// configuration is neutralised first (githard): `worktree add` performs a
+// checkout, which without this would run smudge filters and the post-checkout
+// hook — both commands named by files the agent controls.
+//
+// worktree.Git is the deliberate exception: that is the user running their own
+// git command in their own repository, where hooks firing is expected.
 func runGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command(gitBin, args...)
+	cmd := exec.Command(gitBin, append(githard.Args(), args...)...)
 	cmd.Dir = dir
-	cmd.Env = gitEnv()
+	cmd.Env = append(gitEnv(), githard.Env(dir)...)
 	var out, errb strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errb

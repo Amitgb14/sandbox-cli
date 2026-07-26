@@ -319,7 +319,13 @@ RUN chmod +x /usr/local/bin/sandbox-clipboard \
 # root with NET_ADMIN, before the agent starts. Uses plain iptables (no ipset) so
 # it works on the common iptables-nft backend without extra kernel modules.
 RUN cat > /usr/local/bin/sandbox-egress-setup <<'FW'
-#!/usr/bin/env bash
+#!/bin/bash
+# Absolute interpreter and a fixed PATH, both deliberate: this runs as root
+# before privileges are dropped, so resolving either through an inherited PATH
+# lets whoever controls that PATH choose what root executes. `env bash` and a
+# bare `iptables` were exactly that hole.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 set -euo pipefail
 
 allow="${SANDBOX_EGRESS_ALLOW:-}"
@@ -362,21 +368,27 @@ RUN chmod +x /usr/local/bin/sandbox-egress-setup
 # (SANDBOX_RUN_AS, e.g. `sandbox`) before exec'ing the guest command. With no
 # SANDBOX_EGRESS_ALLOW set it is a transparent passthrough.
 RUN cat > /usr/local/bin/sandbox-firewall <<'EP'
-#!/usr/bin/env bash
+#!/bin/bash
+# Absolute interpreter and a fixed PATH: see sandbox-egress-setup. This script is
+# the container's entrypoint and runs as root, so every name it resolves — its own
+# interpreter included — must come from the image, never from an inherited PATH
+# that the agent's writable HOME or a config `env:` could have supplied.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 set -euo pipefail
 
 if [ -n "${SANDBOX_EGRESS_ALLOW:-}" ]; then
-  if ! sandbox-egress-setup; then
+  if ! /usr/local/bin/sandbox-egress-setup; then
     echo "sandbox-cli: egress firewall setup failed; refusing to run without the requested allowlist" >&2
     exit 1
   fi
 fi
 
 user="${SANDBOX_RUN_AS:-}"
-if [ -n "$user" ] && [ "$user" != "root" ] && [ "$(id -u)" = "0" ]; then
-  uid="$(id -u "$user")"
-  gid="$(id -g "$user")"
-  exec setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"
+if [ -n "$user" ] && [ "$user" != "root" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
+  uid="$(/usr/bin/id -u "$user")"
+  gid="$(/usr/bin/id -g "$user")"
+  exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"
 fi
 exec "$@"
 EP
@@ -400,8 +412,19 @@ RUN useradd -m -d /sandbox/home -s /bin/bash sandbox \
     && chown -R sandbox:sandbox /sandbox/home /workspace
 
 ENV HOME=/sandbox/home
-# Prefer a self-updating Claude install in the persisted HOME over the baked one.
-ENV PATH=/sandbox/home/.local/bin:${PATH}
+# NOTE: /sandbox/home/.local/bin is deliberately NOT on the image PATH.
+#
+# That directory is the agent's persisted HOME, bind-mounted read-write from the
+# host and writable by the agent itself. With it first on the image PATH it was
+# also first on the PATH of the *root* entrypoint used in allowlist mode, so an
+# agent could drop a file named `bash` there and have root execute it on the next
+# run — container root, and the egress firewall never programmed while sandbox-cli
+# reported it was enforcing one.
+#
+# The agents that want a self-updating install in the persisted HOME add the
+# directory themselves, in the guest phase after privileges are dropped
+# (claudeBootstrap and agentBootstrap both `export PATH="$HOME/.local/bin:$PATH"`),
+# which is where a writable directory belongs.
 WORKDIR /workspace
 
 # No USER is set here, so the image itself defaults to root — but sandbox-cli

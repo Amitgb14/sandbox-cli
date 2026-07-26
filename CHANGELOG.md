@@ -11,6 +11,134 @@ version is tagged.
 
 ## Unreleased
 
+### Security
+
+- **Host-side `git` no longer runs commands the repository names.** sandbox-cli
+  runs git on your machine, inside the repository the agent has read-write
+  access to — and git is a programmable tool: `git add -A` runs
+  `filter.<x>.clean` and `core.fsmonitor`, `git update-ref` runs the
+  `reference-transaction` hook, `git worktree add` runs smudge filters and
+  `post-checkout`, `git show`/`diff` run `diff.<x>.textconv`. Every one of those
+  is a command named by a file the agent can write.
+
+  That made the crash safety net into a **live** container→host escape: the
+  snapshotter runs `add -A` and `update-ref` every couple of minutes for the
+  whole life of a run, so an agent could write `.git/config` or
+  `.git/hooks/reference-transaction` mid-run and have that code execute on the
+  host, unattended, while the sandbox was still going. The `recover show -p` and
+  `recover restore --patch` paths were the same, at the worst possible moment —
+  a user inspecting a run they already distrust.
+
+  A new `internal/githard` neutralises all of it for every git command
+  sandbox-cli issues on its own behalf. `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`
+  are not sufficient — these settings live in the repository's *local* config,
+  which they do not cover — so the config keys are overridden with `-c` (which
+  outranks local config) and the attribute stack is pointed at an empty tree via
+  `GIT_ATTR_SOURCE`, since filter driver names come from `.gitattributes` and
+  cannot be enumerated ahead of time.
+
+  Two consequences worth knowing. In a git-lfs repository, snapshots now store
+  the real file content rather than the pointer — larger, but the more useful
+  thing for a rescue copy. And `sandbox-cli worktree git …` is deliberately
+  *not* hardened: that is you running your own git command in your own
+  repository, where hooks firing is the expected behavior.
+
+  The claim in `snapshot.go` that "no hook runs: these are all plumbing
+  commands" was false, and is corrected along with the behavior.
+
+- **A project `.sandbox.yaml` is now treated as untrusted, and the
+  privilege-relevant keys are refused from it.** That file travels with the
+  repository and the agent can rewrite it between runs, yet every key in it
+  outranked your own `~/.config/sandbox/config.yaml` — which made a checked-in
+  config a complete bypass of the tool. `secrets.<N>.command` ran arbitrary
+  commands on the **host** before any container started; `mounts:` plus
+  `user: root` handed over the host filesystem; `env: {PATH: ...}` redirected the
+  root entrypoint's own interpreter into the repository; `network: {mode:
+  default}` silently switched off an allowlist you had configured globally.
+
+  Refused from a project file: `image`, `workdir`, `user`, `home`, `runtime`,
+  `mounts`, `secrets`, `env`, `env_allow`, `security.*`, `cache.paths`, and any
+  `network.mode` / `network.baseline` that **weakens** what is already in force.
+  A project may still tighten the network posture (`default` → `allowlist` →
+  `none`) — asking for stricter confinement is what a project file is for.
+  Still permitted: `hostname`, `ports`, `cache.enabled`, `snapshot.*`, and
+  `network.allow`.
+
+  The refusal names the offending keys and points at the two escape hatches:
+  your own config, and `--config <path>` — where typing the path is the
+  deliberate act that discovery never involves.
+
+  **This is a breaking change if you keep any of those keys in a project
+  `.sandbox.yaml`.** Move them to `~/.config/sandbox/config.yaml`, pass them as
+  flags, or load the file explicitly with `--config`. `sandbox-cli init` no
+  longer scaffolds keys it would then refuse.
+
+- **Config discovery no longer walks to the filesystem root.** It stops at the
+  repository root, else the home directory, else the starting directory. Walking
+  further meant a `.sandbox.yaml` in *any* ancestor won silently — and on Linux
+  that turned a world-writable shared directory such as `/tmp` into a
+  config-injection point for everyone working beneath it.
+
+- **The agent's persisted HOME is no longer on the image's `PATH`.** That
+  directory is bind-mounted read-write and writable by the agent, and it sat
+  first on the `PATH` of the *root* entrypoint used in allowlist mode — so an
+  agent could write a file named `bash` into its own HOME and have root execute
+  it on the next run. The result was container root, the non-root default
+  defeated, and the egress firewall never programmed while sandbox-cli reported
+  it was enforcing one. `sandbox-firewall` and `sandbox-egress-setup` now use an
+  absolute interpreter, reset `PATH` before doing anything, and call `setpriv`
+  and `id` by absolute path. Agents that want a self-updating install in the
+  persisted HOME still get one — they add the directory themselves, in the guest
+  phase, after privileges are dropped. Rebuilds the base image.
+
+- **`SANDBOX_RUN_AS` and `SANDBOX_EGRESS_ALLOW` can no longer be set or forwarded
+  from outside.** Both instruct the container's root-phase startup, and docker
+  keeps the *last* `-e` for a repeated name — so forwarding `SANDBOX_RUN_AS`
+  (via `--env-allow`, or a project `env_allow:`) with `root` in the host
+  environment made the entrypoint skip its privilege drop entirely. The
+  by-name forwards now render before explicit values, and a colliding name is
+  dropped. `SANDBOX_STATUSLINE_*` is untouched: it is read after the drop and
+  stays a user knob.
+
+- **A mount may no longer land on, or shadow, a path the container's own startup
+  depends on.** `workdir: /usr/local/bin` in a project config moved the workspace
+  mount onto the directory holding `sandbox-firewall`, so the repository supplied
+  the program root executes and no firewall was programmed — a fail-open in the
+  one path whose contract is to fail closed. Applies to the workspace target,
+  config `mounts:`, and `--mount`.
+
+- **An `image:` beginning with `-` is refused, and `--` now separates docker's
+  flags from the image reference.** `image: "--privileged"` was rendered into the
+  argv as a real flag, with the guest's first argument promoted to the image name.
+
+  These came out of a security audit; the full findings, threat model and the
+  remaining phased work are in `docs/proposals/security-hardening.md`. Several
+  more serious issues are known and not yet fixed — most importantly that a
+  project-level `.sandbox.yaml` is still fully trusted, and that host-side `git`
+  still runs agent-controlled hooks and filters.
+
+### Added
+
+- `network.baseline: false`, which drops the built-in egress domains so
+  `network.allow` is the whole allowlist. Until now `allow` could only ever
+  *add*: every allowlisted run reached `api.anthropic.com`, `api.openai.com`,
+  the npm/PyPI registries and `github.com` whether or not it needed them, and
+  there was no way to say otherwise. That matters most for `github.com` — it is
+  a write endpoint, so a run holding a token could push data out through a
+  domain the user never chose to permit. A run that should reach an internal
+  registry and the model API and nothing else can now say exactly that.
+
+  It is deliberately awkward: with the baseline off, `npm`, `pip` and `git`
+  stop working unless you list their hosts, and forgetting the agent's own API
+  leaves it unable to reach its model. The field is tri-state, so a nearer
+  config can turn the baseline back **on** rather than only off.
+
+  An allowlist that resolves to nothing is now **refused** instead of run. The
+  firewall is programmed only when there are domains to permit, so an empty
+  list would have produced a container with no egress filtering at all — the
+  strictest request giving the weakest result. `network.mode: none` remains the
+  way to ask for a sandbox that reaches nothing.
+
 ## 0.0.1beta.6 — 2026-07-25
 
 ### Added

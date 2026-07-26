@@ -100,16 +100,30 @@ func BuildArgs(s RunSpec) []string {
 		a = append(a, "-e", "HOME="+s.Home)
 	}
 
-	// Explicit key=value pairs, emitted in a stable order for deterministic output.
+	// Pass-through by name first, then explicit key=value pairs (stable order for
+	// deterministic output). The order is load-bearing, not cosmetic: docker keeps
+	// the LAST occurrence of a repeated -e, so rendering the by-name forwards last
+	// would let a forwarded host variable overwrite a value BuildSpec set
+	// deliberately. That was reachable — forwarding SANDBOX_RUN_AS with `root` set
+	// on the host made the firewall entrypoint skip its privilege drop and run the
+	// agent as root. collidingNames below is the primary guard; this ordering is
+	// the backstop, so a name that slips past it still loses to the explicit value.
+	for _, k := range s.EnvNames {
+		if _, explicit := s.Env[k]; explicit {
+			continue // an explicit value wins; forwarding the name too is a no-op at best
+		}
+		a = append(a, "-e", k)
+	}
 	for _, k := range sortedKeys(s.Env) {
 		a = append(a, "-e", k+"="+s.Env[k])
 	}
-	// Pass-through by name: docker reads the host value at exec time.
-	for _, k := range s.EnvNames {
-		a = append(a, "-e", k)
-	}
 
-	a = append(a, s.Image)
+	// `--` before the image: `image` is a config-supplied string, and without the
+	// separator a value beginning with a dash is read by docker as another flag
+	// (`image: "--privileged"` rendered as a real --privileged, with the guest's
+	// first argument silently becoming the image). config.Validate rejects that
+	// shape now; this makes the argv unambiguous regardless.
+	a = append(a, "--", s.Image)
 	a = append(a, s.Command...)
 	return a
 }

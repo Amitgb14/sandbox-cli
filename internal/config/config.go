@@ -96,6 +96,18 @@ type MountSpec struct {
 type NetworkSpec struct {
 	Mode  string   `yaml:"mode"`  // "default" | "none" | "allowlist"
 	Allow []string `yaml:"allow"` // extra domains permitted in allowlist mode
+
+	// Baseline switches off the built-in domain set, making Allow the whole
+	// allowlist. Tri-state like the security fields: nil means "keep the
+	// default" (baseline on), so no existing config changes behavior.
+	//
+	// It exists because Allow could only ever *add*: a run that should reach an
+	// internal registry and the model API and nothing else had no way to decline
+	// github.com — which is a write endpoint, and so an exfiltration channel for
+	// any token the agent is holding. Turning it off is deliberately awkward to
+	// use (npm, pip and git all stop working unless listed), which is the right
+	// trade for the case it serves.
+	Baseline *bool `yaml:"baseline"`
 }
 
 // baselineEgress is the always-permitted domain set in allowlist mode: the agent
@@ -119,12 +131,65 @@ func BaselineEgress() []string {
 	return append([]string(nil), baselineEgress...)
 }
 
+// reservedEnvNames are the variables sandbox-cli uses to instruct code that runs
+// **as root, before the agent starts** — the sandbox-firewall entrypoint. They
+// are not preferences: SANDBOX_RUN_AS names the user privileges are dropped to,
+// and SANDBOX_EGRESS_ALLOW is the allowlist the firewall programs.
+//
+// Supplying either from outside turns it into an off switch. Both were reachable:
+// forwarding SANDBOX_RUN_AS by name with `root` in the host environment made the
+// entrypoint skip its privilege drop and run the agent as root, and an empty
+// SANDBOX_EGRESS_ALLOW made the entrypoint a transparent passthrough while
+// sandbox-cli still reported it was enforcing an allowlist.
+//
+// This is an exact-name list rather than a `SANDBOX_*` prefix on purpose. The
+// prefix is also used by knobs that are the user's to set — `--env
+// SANDBOX_STATUSLINE_NO_USAGE=1` is documented in docs/AGENTS.md — and those are
+// read by an unprivileged script in the guest phase, long after the drop. Banning
+// the whole namespace would break a documented feature to fix an unrelated one.
+//
+// Anything added here must be a variable consumed before privileges are dropped.
+var reservedEnvNames = map[string]bool{
+	"SANDBOX_RUN_AS":       true,
+	"SANDBOX_EGRESS_ALLOW": true,
+}
+
+const reservedEnvReason = "this variable instructs the container's root-phase startup " +
+	"(which user to drop to, what egress to permit) and cannot be set or forwarded from outside; " +
+	"setting it would disable those controls"
+
+// IsReservedEnv reports whether name is one of sandbox-cli's own control
+// variables and therefore may not be set or forwarded by a user or a config.
+func IsReservedEnv(name string) bool {
+	return reservedEnvNames[strings.TrimSpace(name)]
+}
+
+// ReservedEnvReason is the explanation shown when one of them is refused, shared
+// so the config and flag paths say the same thing.
+func ReservedEnvReason() string { return reservedEnvReason }
+
+// BaselineEnabled reports whether the built-in domain set is part of the
+// allowlist. It answers for the *whole* config, not just allowlist mode, because
+// `--allow` can switch the allowlist on for a run whose config never named a
+// mode — and `baseline: false` has to hold there too.
+func (n NetworkSpec) BaselineEnabled() bool {
+	return n.Baseline == nil || *n.Baseline
+}
+
 // EgressDomains returns the resolved allowlist for allowlist mode — the baseline
 // domains unioned with any configured Allow — or nil when the mode is not
 // "allowlist". The result is de-duplicated and stably ordered (baseline first).
+//
+// With `baseline: false` the result is Allow alone, and an empty Allow yields an
+// empty list rather than an implicit fallback. Callers must not read that as
+// "no allowlist requested": see the refusal in sandbox.BuildSpec, which is what
+// keeps the empty case from silently running with no firewall.
 func (n NetworkSpec) EgressDomains() []string {
 	if n.Mode != "allowlist" {
 		return nil
+	}
+	if !n.BaselineEnabled() {
+		return DedupeDomains(n.Allow)
 	}
 	return DedupeDomains(append(BaselineEgress(), n.Allow...))
 }
@@ -309,6 +374,22 @@ func int64Ptr(n int64) *int64 { return &n }
 func (c Config) Validate() error {
 	if c.Image == "" {
 		return fmt.Errorf("image must not be empty")
+	}
+	// An image reference beginning with a dash is read by docker as another flag,
+	// not as the image: `image: "--privileged"` rendered a real --privileged into
+	// the argv and promoted the guest's first argument to the image name. BuildArgs
+	// now also emits `--` before the image, so this is belt and braces — but the
+	// config is where the mistake is legible, so it is reported here too.
+	if strings.HasPrefix(c.Image, "-") {
+		return fmt.Errorf("image %q must not begin with %q: docker would read it as a flag rather than an image reference", c.Image, "-")
+	}
+	if strings.ContainsAny(c.Image, " \t\n") {
+		return fmt.Errorf("image %q must not contain whitespace", c.Image)
+	}
+	for k := range c.Env {
+		if IsReservedEnv(k) {
+			return fmt.Errorf("env %q: %s", k, reservedEnvReason)
+		}
 	}
 	if c.Workdir == "" {
 		return fmt.Errorf("workdir must not be empty")

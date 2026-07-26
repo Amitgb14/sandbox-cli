@@ -231,8 +231,19 @@ func (s *Snapshotter) take(timeout time.Duration) {
 //	             agent made stay reachable even if it later resets the branch away
 //	update-ref   compare-and-swap under refs/sandbox/, the only ref we ever write
 //
-// Nothing here writes HEAD, a branch, the index, or the working tree, and no
-// hook runs: these are all plumbing commands.
+// Nothing here writes HEAD, a branch, the index, or the working tree — that part
+// of the argument is carried by the private GIT_INDEX_FILE and holds.
+//
+// What did NOT hold, until the githard hardening: "no hook runs, these are all
+// plumbing commands". Plumbing is not the same as inert. `add -A` runs
+// filter.<x>.clean and core.fsmonitor, and `update-ref` runs the
+// reference-transaction hook — all named by files inside the repository, which
+// the agent has read-write access to for the whole life of the run. Both were
+// reproduced executing on the host during a plain `sandbox-cli run`. Every git
+// invocation in this package now goes through githard, which is what makes the
+// sentence above true rather than merely plausible; see
+// hostile_repo_test.go for the regression, and do not add a git call here that
+// bypasses run/runRaw.
 func (s *Snapshotter) snapshot(ctx context.Context) (string, error) {
 	env := append([]string{"GIT_INDEX_FILE=" + s.indexFile}, snapshotIdentity...)
 

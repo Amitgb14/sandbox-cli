@@ -292,6 +292,12 @@ func TestEveryAgentRendersADryRun(t *testing.T) {
 func renderDryRun(t *testing.T, cmd *cobra.Command, extra []string) string {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	// Run from a scratch directory outside any repository. Without this the CLI
+	// discovers the developer's own .sandbox.yaml at this repo's root and folds it
+	// into every rendered argv — so the assertions below depend on a file that is
+	// not part of the test, and a machine whose config happens to set `image:` or
+	// `mounts:` gets different results from CI.
+	t.Chdir(t.TempDir())
 
 	r, w, err := os.Pipe()
 	if err != nil {

@@ -71,6 +71,23 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   container by `sandbox-firewall` / `sandbox-egress-setup` (`assets/Dockerfile`), which programs a
   default-deny firewall as root and then drops to the sandbox user. Keep it failing closed: a run
   that asks for an allowlist and cannot program it refuses to start rather than running open.
+  `baseline: false` drops the built-in domains so `allow` is the whole list — it exists because
+  `allow` could only ever *add*, leaving no way to decline `github.com`, which is a write endpoint
+  and so an exfiltration channel for any token the agent holds. It is tri-state (`*bool`) for the
+  same reason the security fields are: a nearer config must be able to turn it back **on**. The
+  edge that matters is the empty one — the firewall is wired only when there are domains to
+  permit, so `BuildSpec` **refuses** an allowlist that resolved to nothing rather than handing back
+  a container with no filtering at all, which is the strictest request producing the weakest
+  result. `mode: none` is how you ask to reach nothing.
+
+  Two limits worth knowing before trusting the mode. The rules match resolved **IPs**, not names,
+  so a host sharing an allowlisted address rides in on it (`gist.github.com` is reachable under the
+  baseline via `github.com`'s IP, and it was never listed) — and names are resolved **once** at
+  container start, so a rotating record can break a domain the user did allowlist, mid-session. It
+  is also egress-only: `INPUT`/`FORWARD` are left at ACCEPT, so anything that can reach the
+  container on the bridge gets a bidirectional channel that the allowlist never sees (the reply
+  rides the `ESTABLISHED,RELATED` rule). Fixing either properly means name-based enforcement — the
+  egress proxy `internal/creds` already names as future work.
 - **`internal/rescue`** — the crash safety net and `sandbox-cli recover`. Snapshots the workspace
   into `refs/sandbox/snapshots/<session>` while a run is in flight, using a **private
   `GIT_INDEX_FILE`** so the user's index, `HEAD`, branches and working tree are never written.
@@ -124,6 +141,50 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   Design: `docs/proposals/usage-stats.md`.
 - **`internal/creds`, `internal/audit`** — deliberate **stub seams** for a future credential broker
   and audit trail. Today nothing extra is forwarded and audit goes to a no-op sink; keep these seams clean.
+
+### The trust boundary (read before touching config, mounts, or the entrypoint)
+
+An audit found the container→host boundary does not hold, and the fixes are only
+partly landed. `docs/proposals/security-hardening.md` has the reproduced findings,
+the threat model and the phased plan. Three rules that follow from it:
+
+- **A project `.sandbox.yaml` is untrusted input** and the privilege-relevant keys are
+  *refused* from it (`internal/config/trust.go`): `image`, `workdir`, `user`, `home`,
+  `runtime`, `mounts`, `secrets`, `env`, `env_allow`, `security.*`, `cache.paths`, and
+  any `network.mode`/`network.baseline` that **weakens** what is already in force. A
+  project may tighten (`default` → `allowlist` → `none`), never loosen. The escape
+  hatches are the user's own config and an explicit `--config <path>`, where typing the
+  path is the deliberate act discovery never involves. Discovery is also bounded — it
+  stops at the repository root, else the home directory, else the starting directory —
+  so a `.sandbox.yaml` in a shared parent like `/tmp` is no longer picked up.
+  When adding a config key, decide which side it is on: if a hostile repo setting it
+  could widen what the container reaches or reach the host, it belongs on the refused
+  list, and `TestProjectConfigRefusesPrivilegedKeys` is where that gets pinned.
+- **Anything running as root before the privilege drop must resolve names from the
+  image only.** The entrypoint scripts pin an absolute interpreter and reset `PATH`
+  as their first statement, and the agent's writable HOME is deliberately *not* on
+  the image `PATH` (`assets/Dockerfile`). This is why an agent can no longer plant a
+  `bash` in its own HOME and have root run it.
+- **`SANDBOX_RUN_AS` and `SANDBOX_EGRESS_ALLOW` are instructions, not settings**
+  (`config.IsReservedEnv`). They cannot be set or forwarded from outside. The list is
+  exact names, not a `SANDBOX_*` prefix, because `SANDBOX_STATUSLINE_*` is a documented
+  user knob read *after* the drop — check which side of the drop a new variable lands on
+  before adding it.
+
+- **Host-side `git` runs inside a repository the agent controls**, so every git
+  invocation sandbox-cli makes on its own behalf goes through `internal/githard`
+  (`internal/rescue`, `internal/worktree`). git is a programmable tool: `add -A`
+  runs `filter.*.clean` and `core.fsmonitor`, `update-ref` runs the
+  `reference-transaction` hook, `worktree add` runs smudge filters and
+  `post-checkout`, `show`/`diff` run `diff.*.textconv` — every one of them naming
+  a command from a file the agent can write. `githard.Args()` overrides the
+  config keys (`-c` outranks the repo's local config, which
+  `GIT_CONFIG_GLOBAL/SYSTEM` do **not** cover); `githard.Env()` points
+  `GIT_ATTR_SOURCE` at an empty tree, because filter driver names come from
+  `.gitattributes` and cannot be enumerated ahead of time. The deliberate
+  exception is `worktree.Git` — `sandbox-cli worktree git …` is the user's own
+  command in their own repo. Adding a git call that bypasses `rescue.run`/
+  `runGit` reopens this; `internal/rescue/hostile_repo_test.go` is the guard.
 
 ### Two invariants to preserve when changing behavior
 

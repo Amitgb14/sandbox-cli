@@ -209,6 +209,269 @@ func TestBuildSpec_AllowlistOverridesNetworkNone(t *testing.T) {
 	}
 }
 
+// TestValidateMountTarget_ProtectsContainerBinaries pins the guard that stops a
+// caller-supplied mount from replacing the files the container's own startup
+// depends on. The live case was `workdir: /usr/local/bin` in a project config:
+// it moved the workspace mount target onto the directory holding
+// sandbox-firewall, so in allowlist mode root executed the repository's own file
+// and no firewall was ever programmed.
+func TestValidateMountTarget_ProtectsContainerBinaries(t *testing.T) {
+	refuse := []string{
+		"/usr/local/bin", // holds sandbox-firewall, the root entrypoint
+		"/usr/local/bin/",
+		"/usr/local/bin/.", // must not be normalizable past the check
+		"/usr",             // shadows /usr/local/bin without naming it
+		"/", "/bin", "/sbin", "/etc", "/proc", "/sys", "/dev", "/var/run",
+	}
+	for _, tgt := range refuse {
+		if err := ValidateMountTarget(tgt); err == nil {
+			t.Errorf("ValidateMountTarget(%q) = nil, want a refusal", tgt)
+		}
+	}
+	allow := []string{"/workspace", "/app", "/sandbox/home", "/usr/local/share/x", "/srv/data"}
+	for _, tgt := range allow {
+		if err := ValidateMountTarget(tgt); err != nil {
+			t.Errorf("ValidateMountTarget(%q) = %v, want nil", tgt, err)
+		}
+	}
+	// A relative target is meaningless inside the container and must not pass.
+	if err := ValidateMountTarget("workspace"); err == nil {
+		t.Error("a relative mount target must be refused")
+	}
+}
+
+// TestBuildSpec_RefusesWorkdirOverContainerBinaries is the end-to-end half: the
+// refusal has to fire through BuildSpec, not just in the helper.
+func TestBuildSpec_RefusesWorkdirOverContainerBinaries(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseCfg()
+	cfg.Workdir = "/usr/local/bin"
+	cfg.Network.Mode = "allowlist" // the mode whose entrypoint lives there
+
+	spec, err := BuildSpec(cfg, Options{Project: dir, Command: []string{"sh"}})
+	if err == nil {
+		t.Fatalf("expected a refusal; got a spec mounting the workspace at %q with entrypoint %q",
+			cfg.Workdir, spec.Entrypoint)
+	}
+	for _, m := range spec.Mounts {
+		if m.Target == "/usr/local/bin" {
+			t.Errorf("refusal still produced a mount over the entrypoint directory: %+v", m)
+		}
+	}
+}
+
+// TestBuildSpec_RefusesMountsOverContainerBinaries covers the other two ways a
+// target arrives: a config `mounts:` entry and a --mount flag.
+func TestBuildSpec_RefusesMountsOverContainerBinaries(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := baseCfg()
+	cfg.Mounts = []config.MountSpec{{Host: dir, Container: "/usr/local/bin", Mode: "rw"}}
+	if _, err := BuildSpec(cfg, Options{Project: dir, Command: []string{"sh"}}); err == nil {
+		t.Error("config mounts: a target over /usr/local/bin must be refused")
+	}
+
+	if _, err := BuildSpec(baseCfg(), Options{
+		Project:     dir,
+		ExtraMounts: []string{dir + ":/usr/local/bin:rw"},
+		Command:     []string{"sh"},
+	}); err == nil {
+		t.Error("--mount: a target over /usr/local/bin must be refused")
+	}
+}
+
+// TestBuildSpec_ReservedEnvNamespace pins that nothing outside sandbox-cli can
+// occupy SANDBOX_*. Those variables instruct code running as root before the
+// agent starts, so supplying one from outside is an off switch: SANDBOX_RUN_AS
+// skips the privilege drop, an empty SANDBOX_EGRESS_ALLOW makes the firewall
+// entrypoint a passthrough.
+func TestBuildSpec_ReservedEnvNamespace(t *testing.T) {
+	dir := t.TempDir()
+
+	// Forwarded by name (--env-allow / config env_allow): dropped silently,
+	// because that list is "forward it if it happens to be set" and a host that
+	// exports a SANDBOX_* name should not fail the run.
+	t.Setenv("SANDBOX_RUN_AS", "root")
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project:  dir,
+		EnvAllow: []string{"SANDBOX_RUN_AS"},
+		Allow:    []string{"x.example.com"}, // so BuildSpec sets the real value
+		Command:  []string{"sh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range spec.EnvNames {
+		if n == "SANDBOX_RUN_AS" {
+			t.Error("SANDBOX_RUN_AS was forwarded by name; docker keeps the last -e, so the host value would win")
+		}
+	}
+	if spec.Env["SANDBOX_RUN_AS"] != "sandbox" {
+		t.Errorf("SANDBOX_RUN_AS = %q, want sandbox", spec.Env["SANDBOX_RUN_AS"])
+	}
+
+	// Set deliberately via --env: refused by name, because here the user is
+	// asking rather than inheriting and a silent drop would mislead.
+	if _, err := BuildSpec(baseCfg(), Options{
+		Project: dir,
+		Env:     []string{"SANDBOX_EGRESS_ALLOW=evil.example.com"},
+		Command: []string{"sh"},
+	}); err == nil {
+		t.Error("--env SANDBOX_EGRESS_ALLOW=... must be refused")
+	}
+}
+
+// TestBuildSpec_ReservationDoesNotEatUserKnobs guards the narrowness of the
+// reservation. It was briefly a whole-namespace `SANDBOX_*` ban, which silently
+// broke `--env SANDBOX_STATUSLINE_NO_USAGE=1` — a user-facing opt-out documented
+// in docs/AGENTS.md, read by an unprivileged script long after privileges are
+// dropped. Only variables consumed by the root-phase startup belong on the list.
+func TestBuildSpec_ReservationDoesNotEatUserKnobs(t *testing.T) {
+	dir := t.TempDir()
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project: dir,
+		Env:     []string{"SANDBOX_STATUSLINE_NO_USAGE=1"},
+		Command: []string{"sh"},
+	})
+	if err != nil {
+		t.Fatalf("the documented statusline opt-out must still work: %v", err)
+	}
+	if spec.Env["SANDBOX_STATUSLINE_NO_USAGE"] != "1" {
+		t.Errorf("SANDBOX_STATUSLINE_NO_USAGE = %q, want 1", spec.Env["SANDBOX_STATUSLINE_NO_USAGE"])
+	}
+
+	// And a plainly-named host variable still forwards, prefix or not.
+	t.Setenv("SANDBOX_TEST_ALLOWED", "yes")
+	spec, err = BuildSpec(baseCfg(), Options{
+		Project:  dir,
+		EnvAllow: []string{"SANDBOX_TEST_ALLOWED"},
+		Command:  []string{"sh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(spec.EnvNames, "SANDBOX_TEST_ALLOWED") {
+		t.Errorf("a non-control variable must still forward: %v", spec.EnvNames)
+	}
+}
+
+func falsePtr() *bool { b := false; return &b }
+
+// TestBuildSpec_BaselineOffNarrowsTheAllowlist proves the firewall is still
+// fully wired when the baseline is off — the point is a *narrower* allowlist,
+// not a weaker one — and that the built-in domains really are gone.
+func TestBuildSpec_BaselineOffNarrowsTheAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseCfg()
+	cfg.Network.Mode = "allowlist"
+	cfg.Network.Baseline = falsePtr()
+	cfg.Network.Allow = []string{"internal.example.com"}
+
+	spec, err := BuildSpec(cfg, Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := spec.Env["SANDBOX_EGRESS_ALLOW"]; got != "internal.example.com" {
+		t.Errorf("SANDBOX_EGRESS_ALLOW = %q, want exactly the configured domain", got)
+	}
+	// github.com is the domain this feature exists to be able to decline: it is a
+	// write endpoint, so a token in the container can be pushed out through it.
+	for _, d := range []string{"github.com", "registry.npmjs.org", "api.anthropic.com"} {
+		if strings.Contains(spec.Env["SANDBOX_EGRESS_ALLOW"], d) {
+			t.Errorf("baseline domain %q survived baseline: false", d)
+		}
+	}
+	// The firewall itself must be unchanged — same entrypoint, same privileges.
+	if spec.Entrypoint != "/usr/local/bin/sandbox-firewall" {
+		t.Errorf("Entrypoint = %q, want the firewall wrapper", spec.Entrypoint)
+	}
+	if spec.User != "root" || spec.Env["SANDBOX_RUN_AS"] != "sandbox" {
+		t.Errorf("User = %q / SANDBOX_RUN_AS = %q, want root dropping to sandbox", spec.User, spec.Env["SANDBOX_RUN_AS"])
+	}
+	if !contains(spec.CapAdd, "NET_ADMIN") {
+		t.Errorf("CapAdd missing NET_ADMIN: %v", spec.CapAdd)
+	}
+}
+
+// TestBuildSpec_EmptyAllowlistRefuses is the fail-closed guard. The firewall is
+// only wired when there are domains to permit, so an allowlist that resolved to
+// nothing would otherwise produce a container with no egress filtering at all —
+// the strictest request yielding the weakest result. It must refuse instead.
+func TestBuildSpec_EmptyAllowlistRefuses(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseCfg()
+	cfg.Network.Mode = "allowlist"
+	cfg.Network.Baseline = falsePtr() // and no Allow at all
+
+	spec, err := BuildSpec(cfg, Options{Project: dir, Command: []string{"sh"}})
+	if err == nil {
+		t.Fatalf("expected a refusal; got a runnable spec with entrypoint %q and allow %q",
+			spec.Entrypoint, spec.Env["SANDBOX_EGRESS_ALLOW"])
+	}
+	if !strings.Contains(err.Error(), "mode: none") {
+		t.Errorf("error should point at the right way to reach nothing: %v", err)
+	}
+	// Nothing runnable may come back alongside the error.
+	if spec.Entrypoint != "" || spec.Env["SANDBOX_EGRESS_ALLOW"] != "" {
+		t.Errorf("refusal returned a partially-built spec: entrypoint %q, allow %q",
+			spec.Entrypoint, spec.Env["SANDBOX_EGRESS_ALLOW"])
+	}
+}
+
+// TestBuildSpec_BaselineOffHoldsForTheAllowFlag covers the case the old code got
+// wrong. `--allow` seeds the baseline when it switches the allowlist on by
+// itself; that seeding used to key off "the config produced no domains", which
+// is exactly what `baseline: false` produces — so the flag would have silently
+// reinstated the domains the config had just declined.
+func TestBuildSpec_BaselineOffHoldsForTheAllowFlag(t *testing.T) {
+	dir := t.TempDir()
+
+	// The config declines the baseline but never names a mode: --allow alone is
+	// what turns the allowlist on.
+	cfg := baseCfg()
+	cfg.Network.Baseline = falsePtr()
+
+	spec, err := BuildSpec(cfg, Options{Project: dir, Allow: []string{"x.example.com"}, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := spec.Env["SANDBOX_EGRESS_ALLOW"]; got != "x.example.com" {
+		t.Errorf("SANDBOX_EGRESS_ALLOW = %q, want only the flag domain — the baseline must stay declined", got)
+	}
+	if spec.Entrypoint == "" {
+		t.Error("--allow must still switch the firewall on")
+	}
+
+	// And with a mode plus configured domains, the flag adds to them rather than
+	// bringing the baseline back.
+	cfg.Network.Mode = "allowlist"
+	cfg.Network.Allow = []string{"a.example.com"}
+	spec, err = BuildSpec(cfg, Options{Project: dir, Allow: []string{"b.example.com"}, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := spec.Env["SANDBOX_EGRESS_ALLOW"]; got != "a.example.com,b.example.com" {
+		t.Errorf("SANDBOX_EGRESS_ALLOW = %q, want the config and flag domains only", got)
+	}
+}
+
+// TestBuildSpec_AllowFlagStillSeedsTheBaseline guards the default from the
+// change above: with no opinion in the config, --allow behaves as it always has.
+func TestBuildSpec_AllowFlagStillSeedsTheBaseline(t *testing.T) {
+	dir := t.TempDir()
+	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Allow: []string{"x.example.com"}, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow := spec.Env["SANDBOX_EGRESS_ALLOW"]
+	if !strings.Contains(allow, "github.com") || !strings.Contains(allow, "x.example.com") {
+		t.Errorf("SANDBOX_EGRESS_ALLOW = %q, want the baseline plus the flag domain", allow)
+	}
+	if !strings.HasPrefix(allow, "api.anthropic.com") {
+		t.Errorf("SANDBOX_EGRESS_ALLOW = %q, want baseline first", allow)
+	}
+}
+
 func TestBuildSpec_NoEgressByDefault(t *testing.T) {
 	dir := t.TempDir()
 	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})

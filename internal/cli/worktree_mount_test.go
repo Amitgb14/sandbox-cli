@@ -49,6 +49,7 @@ func initRepo(t *testing.T) string {
 func TestWorktreeMountedAtItsHostPath(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	repo := initRepo(t)
+	t.Chdir(repo) // the scenario under test, and keeps this repo's own config out
 
 	info, err := worktree.Resolve(repo, "feature/x")
 	if err != nil {
@@ -84,6 +85,7 @@ func TestWorktreeMountedAtItsHostPath(t *testing.T) {
 func TestNormalRepoGetsNoExtraGitMounts(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	repo := initRepo(t)
+	t.Chdir(repo) // the scenario under test, and keeps this repo's own config out
 
 	_, opts, err := newSession(&runFlags{project: repo})
 	if err != nil {

@@ -27,7 +27,10 @@ func TestBuildArgs_Basic(t *testing.T) {
 		"--mount", "type=bind,source=/host/proj,target=/workspace",
 		"-w", "/workspace",
 		"-e", "HOME=/sandbox/home",
-		"sandbox-base:0.1.0",
+		// `--` separates docker's own flags from the image reference. Deliberate:
+		// Image is config-supplied, and without it `image: "--privileged"` was read
+		// by docker as a flag (see TestBuildArgs_DashDashGuardsTheImage).
+		"--", "sandbox-base:0.1.0",
 		"sh", "-c", "echo hi",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -84,6 +87,61 @@ func TestBuildArgs_EnvPassthroughByName(t *testing.T) {
 	if !hasPair(got, "-e", "ANTHROPIC_API_KEY") {
 		t.Errorf("expected passthrough -e ANTHROPIC_API_KEY, got %v", got)
 	}
+}
+
+// TestBuildArgs_ExplicitEnvBeatsPassthrough pins the ordering that makes the
+// security-critical env values un-overridable. docker keeps the LAST occurrence
+// of a repeated -e, so a by-name forward rendered after an explicit value would
+// silently replace it with whatever the host has set.
+//
+// This was live: forwarding SANDBOX_RUN_AS (via --env-allow, or a project
+// env_allow: list) with SANDBOX_RUN_AS=root in the host environment made the
+// firewall entrypoint skip its setpriv drop and run the agent as root.
+func TestBuildArgs_ExplicitEnvBeatsPassthrough(t *testing.T) {
+	got := BuildArgs(RunSpec{
+		Image:    "img",
+		Workdir:  "/w",
+		Env:      map[string]string{"SANDBOX_RUN_AS": "sandbox"},
+		EnvNames: []string{"SANDBOX_RUN_AS", "ANTHROPIC_API_KEY"},
+	})
+
+	// The colliding name must not be forwarded at all — a bare `-e NAME` after
+	// `-e NAME=value` would win, and before it is merely dead weight.
+	for i := 0; i < len(got)-1; i++ {
+		if got[i] == "-e" && got[i+1] == "SANDBOX_RUN_AS" {
+			t.Errorf("bare -e SANDBOX_RUN_AS forwarded alongside an explicit value: %v", got)
+		}
+	}
+	if !hasPair(got, "-e", "SANDBOX_RUN_AS=sandbox") {
+		t.Errorf("explicit value missing: %v", got)
+	}
+	// A non-colliding name is still forwarded, and still before the explicit
+	// values, so this ordering holds even if a collision slips through later.
+	joined := strings.Join(got, " ")
+	if !hasPair(got, "-e", "ANTHROPIC_API_KEY") {
+		t.Errorf("non-colliding passthrough dropped: %v", got)
+	}
+	if strings.Index(joined, "-e ANTHROPIC_API_KEY") > strings.Index(joined, "-e SANDBOX_RUN_AS=sandbox") {
+		t.Errorf("passthrough must render before explicit values so explicit wins: %q", joined)
+	}
+}
+
+// TestBuildArgs_DashDashGuardsTheImage pins the separator that stops a
+// config-supplied image reference from being read as a docker flag.
+// `image: "--privileged"` used to render `docker run … --privileged sh -c …`,
+// smuggling in a real flag and turning the guest's first argument into the
+// image name.
+func TestBuildArgs_DashDashGuardsTheImage(t *testing.T) {
+	got := BuildArgs(RunSpec{Image: "--privileged", Workdir: "/w", Command: []string{"sh", "-c", "id"}})
+	for i, a := range got {
+		if a == "--" {
+			if i+1 >= len(got) || got[i+1] != "--privileged" {
+				t.Fatalf("expected the image immediately after --, got %v", got)
+			}
+			return
+		}
+	}
+	t.Fatalf("no -- separator before the image; a dash-leading image is read as a flag: %v", got)
 }
 
 func TestBuildArgs_Network(t *testing.T) {

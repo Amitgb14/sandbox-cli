@@ -11,34 +11,22 @@ import (
 const scaffoldConfig = `# sandbox configuration (https://github.com/Amitgb14/sandbox-cli)
 # Only /workspace (this project) is mounted into the container. HOME is fake and
 # ephemeral. Uncomment and edit fields as needed.
+#
+# THIS FILE IS UNTRUSTED. It travels with the repository — anyone who clones the
+# repo runs it, and the agent working in the sandbox can rewrite it between runs.
+# So it may only describe the *project*, never the security boundary. These keys
+# are refused here and belong in your own config (~/.config/sandbox/config.yaml)
+# or on the command line:
+#
+#   image  workdir  user  home  runtime  mounts  secrets  env  env_allow
+#   security.*  cache.paths  and any network.mode that weakens what you already
+#   have in force
+#
+# If you have read a project file and want it anyway, load it deliberately:
+#   sandbox-cli --config ./.sandbox.yaml claude
 
-# Override the container image. Leave unset to use the built-in sandbox-base,
-# whose tag is content-addressed (sandbox-base:<gen>-<hash>) so it rebuilds
-# itself whenever the image definition changes — pinning a tag here opts out of
-# that. Run "sandbox-cli config show" to see the current default.
-# image: my-org/my-dev-image:latest
-# workdir: /workspace
-# user: sandbox         # sandbox (non-root default) | root
-#                       # agents refuse --dangerously-skip-permissions as root
-# runtime: ""           # OCI runtime; "" = docker default (runc). kata-runtime
-#                       # (microVM) or runsc (gVisor) for a stronger boundary
-#                       # (must be registered with the docker daemon).
-
-# Extra mounts beyond the automatic /workspace bind. Host paths may use ~ and may
-# be relative to this file. mode defaults to ro.
-# mounts:
-#   - { host: ./data, container: /workspace/data, mode: rw }
-
-# Explicit env values injected into the container.
-# env:
-#   NODE_ENV: development
-
-# Host env vars forwarded ONLY if they are set (default-deny allowlist).
-env_allow:
-  - ANTHROPIC_API_KEY
-  - OPENAI_API_KEY
-
-# Networking: default (bridge) | none | allowlist.
+# Networking. A project may ask for STRICTER confinement than your own config
+# (default -> allowlist -> none), never looser.
 # In allowlist mode, outbound traffic is default-denied except DNS, established
 # flows, a baseline of agent APIs + package registries, and the domains below —
 # so npm/pip/git keep working while blocking arbitrary exfiltration. (Also
@@ -47,32 +35,54 @@ network:
   mode: default
   # allow:
   #   - internal.registry.example.com
+  # baseline: false   # drop the built-in domains so "allow" is the WHOLE list.
+  #                   # npm/pip/git then stop working unless you list their hosts,
+  #                   # and forgetting the agent's own API leaves it unable to
+  #                   # reach its model. Use when github.com must not be reachable
+  #                   # — it is a write endpoint, so a token in the container can
+  #                   # be pushed out through it. An empty list is refused, not
+  #                   # run open; say "mode: none" to reach nothing at all.
+  #                   # (baseline: true is refused here — it widens egress.)
 
-# Container hardening (secure-by-default; shown here to make it tunable). Pointer
-# fields are tri-state: omit to keep the default, set to override.
-# security:
-#   no_new_privileges: true   # block setuid privilege escalation
-#   cap_drop: [ALL]           # drop all Linux capabilities (cap_add: [] to add back)
-#   pids_limit: 1024          # fork-bomb guard; 0 disables
-#   memory: ""                # e.g. 2g — opt-in, empty = unlimited
-#   cpus: ""                  # e.g. 1.5 — opt-in, empty = unlimited
+# Ports published to the host. A bare or HOST:CONTAINER spec binds 127.0.0.1;
+# write 0.0.0.0:3000:3000 to expose it to your network deliberately.
+# ports:
+#   - 3000:3000
+
+# Container hostname (cosmetic).
+# hostname: sandbox
 
 # Persist package-manager caches (npm/pip/cargo/go) in named volumes so they
 # survive the disposable container. Opt-in; also available ad hoc via --cache.
+# (cache.paths is user-config-only: it aims a writable volume at a container path.)
 # cache:
 #   enabled: true
-#   paths:
-#     - /sandbox/home/.cache/pnpm
 
-# Brokered credentials: resolved at run time and forwarded by name, so the raw
-# value never lands on the docker command line, in --dry-run, or in this file.
-# Each secret sets exactly one source: file, command, or env. Also available ad
-# hoc via --secret NAME=file:PATH|cmd:COMMAND|env:VAR.
-# secrets:
-#   GITHUB_TOKEN:
-#     command: gh auth token      # short-lived token from your own tool
-#   ANTHROPIC_API_KEY:
-#     file: ~/.secrets/anthropic
+# Crash safety net: periodic snapshots of the workspace under refs/sandbox.
+# snapshot:
+#   interval: 2m
+#   retention: 336h
+
+# ---------------------------------------------------------------------------
+# For reference — these belong in ~/.config/sandbox/config.yaml, not here:
+#
+#   image: my-org/my-dev-image:latest
+#   user: sandbox            # sandbox (non-root default) | root
+#   runtime: runsc           # stronger boundary (gVisor / kata-runtime)
+#   mounts:
+#     - { host: ./data, container: /workspace/data, mode: rw }
+#   env:
+#     NODE_ENV: development
+#   env_allow:               # host vars forwarded only if set
+#     - ANTHROPIC_API_KEY
+#     - OPENAI_API_KEY
+#   security:
+#     no_new_privileges: true
+#     cap_drop: [ALL]
+#     pids_limit: 1024
+#   secrets:                 # resolved at run time, forwarded by name only
+#     GITHUB_TOKEN:
+#       command: gh auth token
 `
 
 func newInitCmd() *cobra.Command {

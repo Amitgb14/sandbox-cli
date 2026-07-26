@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/Amitgb14/sandbox-cli/internal/githard"
 )
 
 // Snapshot is one recoverable point: a session plus the commit its ref actually
@@ -85,9 +87,13 @@ func Show(dir, id string, patch bool) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"show", "--stat"}
+	// githard.NoExternalDiff(): `show -p` renders content through diff.<x>.textconv /
+	// diff.<x>.command when .gitattributes selects one, and both are commands from
+	// the repository the agent was working in — which is exactly the repository a
+	// user inspects *after* a run they already distrust.
+	args := append([]string{"show", "--stat"}, githard.NoExternalDiff()...)
 	if patch {
-		args = []string{"show"}
+		args = append([]string{"show"}, githard.NoExternalDiff()...)
 	}
 	return stream(snap.Repo, append(args, snap.Commit)...)
 }
@@ -206,10 +212,10 @@ func diff(snap Snapshot) (string, error) {
 			// A snapshot with no parent at all — the run started in a repository
 			// with no commits yet. `show` on a root commit renders every file as an
 			// addition, which is exactly the patch wanted here.
-			return runRaw(ctx, snap.Repo, nil, "show", "--format=", snap.Commit)
+			return runRaw(ctx, snap.Repo, nil, append([]string{"show", "--format="}, append(githard.NoExternalDiff(), snap.Commit)...)...)
 		}
 	}
-	return runRaw(ctx, snap.Repo, nil, "diff", base, snap.Commit)
+	return runRaw(ctx, snap.Repo, nil, append([]string{"diff"}, append(githard.NoExternalDiff(), base, snap.Commit)...)...)
 }
 
 // countFiles reports how many files the snapshot changed relative to the run's
@@ -220,7 +226,7 @@ func countFiles(snap Snapshot) int {
 	if base == "" || !objectExists(ctx, snap.Repo, base) {
 		return 0
 	}
-	out, err := run(ctx, snap.Repo, nil, "diff", "--name-only", base, snap.Commit)
+	out, err := run(ctx, snap.Repo, nil, append([]string{"diff", "--name-only"}, append(githard.NoExternalDiff(), base, snap.Commit)...)...)
 	if err != nil || strings.TrimSpace(out) == "" {
 		return 0
 	}

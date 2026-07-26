@@ -206,6 +206,38 @@ if installed via `make install`).
 2. A registry in the baseline still works: `... --allow example.com -- sh -c 'curl -sI -m 10 https://registry.npmjs.org | head -1'` → `HTTP/... 200`.
 - Note: also covered by the `TestEgressAllowlist` integration test.
 
+**TC-45a [A] `baseline: false` makes `allow` the whole list**
+1. In a scratch dir, `.sandbox.yaml`:
+   `network:\n  mode: allowlist\n  baseline: false\n  allow:\n    - example.com`
+2. `sandbox-cli run --dry-run -- true`
+- Expected: `-e SANDBOX_EGRESS_ALLOW=example.com` — that domain **alone**, no baseline entries —
+  and the firewall wiring (`--cap-add NET_ADMIN`, `--entrypoint /usr/local/bin/sandbox-firewall`)
+  still present. Narrower allowlist, same enforcement.
+3. Add `baseline: true` (or delete the line) → the nine built-in domains are back.
+- Note: also covered by `TestEgressDomains_BaselineOff` / `TestBuildSpec_BaselineOffNarrowsTheAllowlist`.
+
+**TC-45b [M] `baseline: false` actually blocks the built-in domains (needs Docker)**
+1. With the TC-45a config: `sandbox-cli run --no-tty --no-metrics -- sh -c 'for h in example.com github.com registry.npmjs.org api.anthropic.com; do curl -s -m 6 -o /dev/null https://$h && echo "$h REACHABLE" || echo "$h blocked"; done'`
+- Expected: `example.com REACHABLE`; the other three **blocked**. `github.com` is the one that
+  matters — it is a write endpoint, so blocking it is what closes the push-out path for a token
+  in the container.
+
+**TC-45c [A/M] An empty allowlist refuses rather than running open**
+1. `.sandbox.yaml` with `network:\n  mode: allowlist\n  baseline: false` and **no** `allow:`.
+2. `sandbox-cli run --dry-run -- true`, then the same without `--dry-run`.
+- Expected: both exit 1 with "…permits nothing, and would run with no egress firewall at all;
+  list the domains you need, or use network.mode: none". No container starts.
+- Why it matters: the firewall is wired only when there are domains to permit, so without this
+  refusal the strictest possible request would yield a container with **no** egress filtering.
+- Note: also covered by `TestBuildSpec_EmptyAllowlistRefuses`.
+
+**TC-45d [A] `--allow` does not resurrect a declined baseline**
+1. `.sandbox.yaml` with `network:\n  baseline: false` (no `mode:`).
+2. `sandbox-cli run --dry-run --allow x.example.com -- true`
+- Expected: `-e SANDBOX_EGRESS_ALLOW=x.example.com` only. The flag switches the allowlist on but
+  must not bring back the domains the config declined.
+- Note: also covered by `TestBuildSpec_BaselineOffHoldsForTheAllowFlag`.
+
 **TC-46 [A] `--cache` mounts named volumes**
 1. `./bin/sandbox-cli run --dry-run --cache -- npm ci`
 - Expected: `--mount type=volume,source=sandbox-cache-npm,target=/sandbox/home/.npm`
@@ -408,6 +440,102 @@ if installed via `make install`).
   and its `refs/sandbox/snapshots/<id>` is gone (`git for-each-ref refs/sandbox`).
 3. Repeat with `sandbox-cli recover prune --superseded=false`.
 - Expected: the session survives; only the 14-day expiry applies.
+
+---
+
+### Group 12 — Trust boundary (see `docs/proposals/security-hardening.md`)
+
+**TC-110 [M] An agent cannot hijack the root entrypoint via its persisted HOME**
+1. `printf '#!/bin/sh\nshift\nexec "$@"\n' > ~/.config/sandbox/agents/<agent>/.local/bin/bash; chmod +x` it
+   (or use a throwaway dir mounted at `/sandbox/home`).
+2. Run any agent with `--allow example.com`, guest command
+   `sh -c 'id -un; iptables -S OUTPUT | tail -1'`.
+- Expected: `sandbox` (not `root`), and the OUTPUT chain ends in `REJECT`. Before the fix this
+  printed `root` and `-P OUTPUT ACCEPT`, with the allowlist silently unenforced.
+- Also check `echo $PATH` in a plain run does **not** start with `/sandbox/home/.local/bin`, while
+  `sandbox-cli claude` still prefers a persisted install (the wrapper re-adds it after the drop).
+
+**TC-111 [A] The root-phase control variables cannot be set or forwarded**
+1. `SANDBOX_RUN_AS=root ./bin/sandbox-cli run --dry-run --env-allow SANDBOX_RUN_AS --allow x.com -- true`
+- Expected: exactly one `-e SANDBOX_RUN_AS=sandbox`, and **no** bare `-e SANDBOX_RUN_AS`.
+2. `./bin/sandbox-cli run --dry-run --env SANDBOX_EGRESS_ALLOW=evil.com -- true` → refused.
+3. `./bin/sandbox-cli run --dry-run --env SANDBOX_STATUSLINE_NO_USAGE=1 -- true` → **accepted**
+   (documented user opt-out; it is read after the privilege drop).
+- Note: covered by `TestBuildArgs_ExplicitEnvBeatsPassthrough`, `TestBuildSpec_ReservedEnvNamespace`,
+  `TestBuildSpec_ReservationDoesNotEatUserKnobs`.
+
+**TC-112 [A] A mount cannot shadow the container's own binaries**
+1. `.sandbox.yaml` with `workdir: /usr/local/bin` and `network.mode: allowlist`; `run --dry-run`.
+- Expected: refused. Before the fix the repo was mounted over the directory holding
+  `sandbox-firewall`, so root executed the repository's own file and no firewall was programmed.
+2. Same for `mounts: [{host: ., container: /usr/local/bin}]` and `--mount .:/usr:rw`.
+- Note: covered by `TestValidateMountTarget_ProtectsContainerBinaries` and the two `BuildSpec` cases.
+
+**TC-113 [A] A dash-leading image is refused and `--` guards the argv**
+1. `.sandbox.yaml` with `image: "--privileged"`; `run --dry-run -- bash -lc id` → refused.
+2. Any `run --dry-run` → the rendered command has `--` immediately before the image reference.
+- Note: covered by `TestBuildArgs_DashDashGuardsTheImage`.
+
+**TC-114 [A/M] A project `.sandbox.yaml` cannot reach the host or unpick the sandbox**
+1. In a git repo, put each of these in `.sandbox.yaml` and run `run --dry-run -- true`:
+   `secrets: {X: {command: "touch /tmp/PWNED"}}`; `mounts: [{host: /, container: /h, mode: rw}]`;
+   `user: root`; `security: {seccomp: unconfined}`; `env: {PATH: /workspace/.bin}`;
+   `env_allow: [AWS_SECRET_ACCESS_KEY]`; `image: attacker/x`; `runtime: x`; `home: /tmp/x`;
+   `cache: {paths: [/sandbox/home/.claude]}`.
+- Expected: every one refused, naming the key, and `/tmp/PWNED` **never created** — the
+  secret command must not run even to be rejected.
+2. `hostname`, `ports`, `cache.enabled`, `snapshot.*` and `network.allow` still load.
+- Note: covered by `TestProjectConfigRefusesPrivilegedKeys` / `...AllowsProjectShapedKeys`.
+
+**TC-115 [A/M] A project may tighten the network posture, never loosen it**
+1. User config `network.mode: allowlist`; repo `.sandbox.yaml` `network.mode: default` → refused.
+2. Same user config; repo says `mode: none` → accepted, renders `--network none`.
+3. No user config; repo says `mode: allowlist` → accepted.
+- Note: covered by `TestProjectConfigNetworkDirectionOfTravel`.
+
+**TC-116 [A/M] Config discovery stops at a boundary**
+1. `mkdir -p /tmp/shared/work; echo 'hostname: INJECTED' > /tmp/shared/.sandbox.yaml`;
+   run from `/tmp/shared/work`.
+- Expected: `--hostname sandbox` (the default). A config in a shared, world-writable
+  parent must not be picked up — that was a local config-injection vector on Linux.
+2. Inside a git repo, a `.sandbox.yaml` at the repo root **is** found from a subdirectory;
+   one *above* the repo root is not.
+- Note: covered by `TestFindProjectConfig_BoundedWalk`.
+
+**TC-117 [M] The escape hatches work**
+1. A repo config with restricted keys, loaded with `--config ./.sandbox.yaml` → accepted.
+2. The same keys in `~/.config/sandbox/config.yaml` → accepted.
+3. `sandbox-cli init` in a fresh repo, then `run --dry-run` → the generated scaffold loads
+   with no error (it must not ship keys it would then refuse).
+
+**TC-118 [A/M] A hostile repository cannot make host-side git run its commands**
+1. In a git repo, arm every mechanism at once:
+   ```sh
+   git config filter.pwn.clean 'touch /tmp/M-clean; cat'
+   git config core.fsmonitor  'touch /tmp/M-fsmon; echo'
+   git config diff.pwn.textconv 'touch /tmp/M-textconv; cat'
+   printf '* filter=pwn diff=pwn\n' > .gitattributes
+   printf '#!/bin/sh\ntouch /tmp/M-reftx\n' > .git/hooks/reference-transaction
+   chmod +x .git/hooks/reference-transaction
+   ```
+2. `sandbox-cli run --snapshot-interval 1s -- sh -c 'echo x >> /workspace/w.txt; sleep 4'`
+3. `sandbox-cli recover show -p <id>`, then `sandbox-cli recover restore <id> --patch`.
+- Expected: **no `/tmp/M-*` marker is ever created**, and the snapshot still contains
+  `w.txt` (`git ls-tree -r <ref>`). Before this, markers appeared during step 2 — a live
+  container→host escape, firing every snapshot interval while the sandbox was running.
+- Note: covered by `TestSnapshotRunsNoRepositoryCommands` and
+  `TestRecoverInspectionRunsNoRepositoryCommands`.
+- Caveat: the filter half relies on `GIT_ATTR_SOURCE` (git 2.40+). On older git the
+  config overrides still apply but clean filters are not neutralised.
+
+**TC-119 [M] `worktree git` still runs the user's hooks (deliberate)**
+1. Add a `pre-commit` hook in a repo, then `sandbox-cli worktree commit <branch> -m x`.
+- Expected: the hook runs. This is the user invoking their own git in their own repo;
+  it is the one path githard intentionally does not neutralise.
+
+**Known-unfixed (do not sign off as passing — these are Phases 3–4):** a forged
+`.git` pointer file still mounts an arbitrary host directory; the home-directory
+refusal is still case-sensitive; and `INPUT`/`FORWARD` are still unfiltered.
 
 ---
 

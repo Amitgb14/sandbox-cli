@@ -67,6 +67,19 @@ type Options struct {
 	AuthPersistDir string
 }
 
+// isReservedEnv reports whether name is one of the control variables consumed by
+// the container's root-phase startup. The canonical list and the reasoning live
+// in config.IsReservedEnv; this is the local spelling.
+//
+// Two behaviors hang off it, and the difference is deliberate. A name arriving
+// through `env_allow` is dropped **silently**: that list is a best-effort
+// "forward it if it happens to be set", so a host that exports one of these
+// should not fail the run. A name set **deliberately** — `--env
+// SANDBOX_RUN_AS=root`, or a config `env:` key — is refused with an error,
+// because there the user is asking rather than inheriting and a silent drop
+// would mislead them about what the container received.
+func isReservedEnv(name string) bool { return config.IsReservedEnv(name) }
+
 // BuildSpec turns a merged config plus per-invocation options into a fully
 // resolved runtime.RunSpec. It resolves and safety-checks the workspace, folds
 // in config and flag mounts/env, and decides TTY allocation.
@@ -95,10 +108,20 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		runtimeName = opts.Runtime
 	}
 
-	mounts := []runtime.Mount{WorkspaceMount(ws, workdirTargetOrDefault(cfg.Workdir))}
+	// The workspace target is caller-influenced (config `workdir:`), so it is
+	// checked like any other: a target that shadows the container's own binaries
+	// hands the repository control of what the entrypoint runs.
+	wsTarget := workdirTargetOrDefault(cfg.Workdir)
+	if err := ValidateMountTarget(wsTarget); err != nil {
+		return runtime.RunSpec{}, fmt.Errorf("workdir %q: %w", wsTarget, err)
+	}
+	mounts := []runtime.Mount{WorkspaceMount(ws, wsTarget)}
 
 	// Config-declared mounts (host paths already resolved to absolute at load time).
 	for _, m := range cfg.Mounts {
+		if err := ValidateMountTarget(m.Container); err != nil {
+			return runtime.RunSpec{}, err
+		}
 		mounts = append(mounts, runtime.Mount{
 			Source: m.Host,
 			Target: m.Container,
@@ -109,6 +132,9 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	for _, raw := range opts.ExtraMounts {
 		m, err := parseMount(raw)
 		if err != nil {
+			return runtime.RunSpec{}, err
+		}
+		if err := ValidateMountTarget(m.Target); err != nil {
 			return runtime.RunSpec{}, err
 		}
 		mounts = append(mounts, m)
@@ -149,13 +175,16 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 
 	env := map[string]string{}
 	for k, v := range cfg.Env {
+		if isReservedEnv(k) {
+			continue
+		}
 		env[k] = v
 	}
 	var envNames []string
 	seen := map[string]bool{}
 	addName := func(n string) {
 		n = strings.TrimSpace(n)
-		if n == "" || seen[n] {
+		if n == "" || seen[n] || isReservedEnv(n) {
 			return
 		}
 		seen[n] = true
@@ -176,6 +205,9 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// --env: KEY=VALUE sets explicitly; bare KEY forwards host value.
 	for _, e := range opts.Env {
 		if k, v, ok := strings.Cut(e, "="); ok {
+			if isReservedEnv(k) {
+				return runtime.RunSpec{}, fmt.Errorf("--env %s: %s", k, config.ReservedEnvReason())
+			}
 			env[k] = v
 		} else {
 			if _, ok := os.LookupEnv(e); ok {
@@ -259,15 +291,31 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// runs. Allowlist implies bridge networking, so it overrides `none`.
 	network := cfg.NetworkArg()
 	egress := cfg.Network.EgressDomains()
+	allowlist := cfg.Network.Mode == "allowlist" || len(opts.Allow) > 0
 	if len(opts.Allow) > 0 {
-		if egress == nil {
-			egress = config.BaselineEgress()
+		// --allow on its own switches the allowlist on, and the baseline comes with
+		// it — unless the config explicitly declined it, which has to hold whether
+		// or not that config also named the mode. Dedupe keeps baseline first and
+		// makes this idempotent when EgressDomains already supplied it.
+		if cfg.Network.BaselineEnabled() {
+			egress = append(config.BaselineEgress(), egress...)
 		}
 		egress = config.DedupeDomains(append(egress, opts.Allow...))
 	}
+	// An allowlist that resolved to nothing must refuse, not run. The firewall is
+	// wired below only when there are domains to permit, so an empty list would
+	// otherwise hand back a container with no egress filtering at all — the
+	// strictest request producing the weakest result. `mode: none` is how you ask
+	// for a sandbox that reaches nothing.
+	if allowlist && len(egress) == 0 {
+		return runtime.RunSpec{}, fmt.Errorf(
+			"network.mode is \"allowlist\" with baseline: false and no domains in network.allow — " +
+				"that permits nothing, and would run with no egress firewall at all; " +
+				"list the domains you need, or use network.mode: none")
+	}
 	dockerUser := user
 	entrypoint := ""
-	if len(egress) > 0 {
+	if allowlist {
 		runAs := user
 		if runAs == "" {
 			runAs = "sandbox"
