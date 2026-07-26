@@ -114,3 +114,34 @@ func TestEnsureImage_OnlyBuildsTheEmbeddedRef(t *testing.T) {
 		t.Errorf("builder was called for a foreign ref: %v", built)
 	}
 }
+
+// TestSeccompDisabled covers the parsing behind the warning. sandbox-cli ships no
+// profile of its own — docker's default is good and a custom one is a large
+// ongoing cost — so `Seccomp: ""` means "whatever the daemon does". The daemon may
+// do nothing, and on the machine where this was found it did: `docker info`
+// reported profile=unconfined, a container showed `Seccomp: 0`, and `unshare -r`
+// gave uid 0. Every claim sandbox-cli makes about hardening still read as true
+// while one of its layers was simply absent.
+func TestSeccompDisabled(t *testing.T) {
+	disabled := [][]string{
+		{"name=seccomp,profile=unconfined", "name=cgroupns"}, // observed in the wild
+		{"name=cgroupns"}, // no seccomp entry at all
+		{},                // daemon reports nothing
+	}
+	for _, opts := range disabled {
+		if !seccompDisabled(opts) {
+			t.Errorf("seccompDisabled(%v) = false, want true", opts)
+		}
+	}
+
+	enabled := [][]string{
+		{"name=seccomp,profile=builtin"},
+		{"name=apparmor", "name=seccomp,profile=builtin", "name=cgroupns"},
+		{"name=seccomp,profile=/etc/docker/seccomp.json"},
+	}
+	for _, opts := range enabled {
+		if seccompDisabled(opts) {
+			t.Errorf("seccompDisabled(%v) = true, want false — warning here would be noise", opts)
+		}
+	}
+}

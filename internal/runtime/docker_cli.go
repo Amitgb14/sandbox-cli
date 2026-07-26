@@ -414,3 +414,59 @@ func (d *DockerCLI) EnsureNetwork(ctx context.Context, name string) error {
 	}
 	return nil
 }
+
+// Seccomp is the syscall filter docker normally applies. sandbox-cli does not
+// ship a profile of its own — docker's default is good, and maintaining a custom
+// one is a large ongoing cost for a small marginal gain — so `Seccomp: ""` on the
+// spec means "whatever the daemon does".
+//
+// The problem is that the daemon may do nothing, silently. On the machine this
+// was found, `docker info` reported profile=unconfined and a container showed
+// `Seccomp: 0` in /proc/self/status: the full syscall table available, plus
+// unprivileged user namespaces (`unshare -r` gave uid 0). Everything sandbox-cli
+// says about hardening still read as true while one of its layers was absent.
+//
+// So it is reported rather than assumed. Not refused: seccomp being off is a
+// property of the user's docker installation, fixable in its settings, and
+// refusing to run would make the tool unusable on a machine that is merely
+// configured badly — a much worse trade than the firewall's fail-closed rule,
+// where the thing that failed was something sandbox-cli itself asked for.
+
+// seccompDisabled reports whether the daemon's own security options say no
+// syscall filter is applied. Pure, so the parsing is tested without a daemon.
+func seccompDisabled(securityOptions []string) bool {
+	sawSeccomp := false
+	for _, o := range securityOptions {
+		if !strings.Contains(o, "name=seccomp") {
+			continue
+		}
+		sawSeccomp = true
+		if strings.Contains(o, "profile=unconfined") {
+			return true
+		}
+	}
+	// No seccomp entry at all means the daemon is not applying one either.
+	return !sawSeccomp
+}
+
+// WarnIfSeccompDisabled prints one line when the daemon applies no syscall
+// filter. Best-effort: a daemon that cannot be queried is not a reason to say
+// anything, since the alternative is warning on every run for a question we
+// could not ask.
+func (d *DockerCLI) WarnIfSeccompDisabled(ctx context.Context) {
+	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .SecurityOptions}}").Output()
+	if err != nil {
+		return
+	}
+	var opts []string
+	if json.Unmarshal(bytes.TrimSpace(out), &opts) != nil {
+		return
+	}
+	if !seccompDisabled(opts) {
+		return
+	}
+	fmt.Fprintln(d.stderr(), "sandbox-cli: this docker daemon applies no seccomp profile, so the container "+
+		"has the full syscall table\n"+
+		"  the other hardening still applies (non-root, cap-drop, no-new-privileges), but this layer is absent\n"+
+		"  Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\"")
+}

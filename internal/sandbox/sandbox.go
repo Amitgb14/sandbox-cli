@@ -55,6 +55,10 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	if err := s.Runtime.EnsureNetwork(ctx, spec.Network); err != nil {
 		return 1, err
 	}
+	// Said once, on the way in, while the user can still do something about it.
+	if w, ok := s.Runtime.(interface{ WarnIfSeccompDisabled(context.Context) }); ok {
+		w.WarnIfSeccompDisabled(ctx)
+	}
 
 	// Resolve brokered secrets and the host git identity, and hand the values to
 	// the runtime for the docker child only — never into this process's own

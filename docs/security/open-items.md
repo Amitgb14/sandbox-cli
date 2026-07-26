@@ -282,7 +282,48 @@ as opt-in. The first is the honest reading of what the flag is for.
 
 ---
 
-## 6. No seccomp profile is applied, and resource limits are unbounded
+## 6. No seccomp profile is applied, and resource limits are unbounded — **DONE**
+
+Two halves, two different answers.
+
+**Seccomp: now reported.** sandbox-cli ships no profile of its own — docker's
+default is good, and maintaining a custom one is a large ongoing cost for a small
+gain — so `Seccomp: ""` means "whatever the daemon does". The daemon may do
+nothing, silently: on the machine where this was found, `docker info` said
+`profile=unconfined`, a container showed `Seccomp: 0`, and `unshare -r` gave uid
+0. Every claim about hardening still read as true while one layer was simply
+absent. A run on such a daemon now says so, once, with the setting to change:
+
+```
+sandbox-cli: this docker daemon applies no seccomp profile, so the container has the full syscall table
+  the other hardening still applies (non-root, cap-drop, no-new-privileges), but this layer is absent
+  Docker Desktop: Settings > Docker Engine, remove "seccomp-profile": "unconfined"
+```
+
+Reported rather than refused: seccomp being off is a property of the user's
+docker installation, fixable in its settings. Refusing would make the tool
+unusable on a machine that is merely configured badly — a different trade from
+the firewall's fail-closed rule, where the thing that failed was something
+sandbox-cli itself had asked for.
+
+**Resource limits: unchanged, deliberately.** Memory and CPU stay unbounded by
+default. The reasoning already in `config.go` holds: agents legitimately spike
+memory during builds and test runs, and an OOM-kill mid-task destroys work in a
+way an unbounded-but-observed container does not. `--pids-limit 1024` remains the
+one default guard, because a fork bomb has no legitimate version.
+
+For untrusted work, ask for limits explicitly:
+
+```sh
+sandbox-cli run --memory 4g --cpus 2 -- ...
+```
+
+or set `security.memory` / `security.cpus` in your own config. Note the exposure
+this leaves: an agent can exhaust host RAM and CPU, and can fill the Docker
+Desktop disk image — a sparse file on the real disk that does **not** shrink when
+the container is `--rm`'d. `docker system df` is where that shows up.
+
+<details><summary>Original entry</summary>
 
 **Severity: medium. Effort: small–medium. Blocked on: nothing.**
 
@@ -308,6 +349,8 @@ Fix: pin a profile with `--security-opt seccomp=<file>` (or detect its absence
 and say so), and consider a default memory cap. Note the precedent — resource
 limits are opt-in deliberately, because an unexpected OOM-kill is worse than an
 unbounded-but-observed container. Changing that is a real trade, not a bug fix.
+
+</details>
 
 ---
 
