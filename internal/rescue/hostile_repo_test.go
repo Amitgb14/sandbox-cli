@@ -120,3 +120,81 @@ func TestRecoverInspectionRunsNoRepositoryCommands(t *testing.T) {
 	}
 	assertNothingRan(t, markers, "recover restore --patch")
 }
+
+// TestValidWorktreeAdminDir pins the guard on `recover repair`'s write target.
+// The path comes from the .git pointer file inside the workspace, so the agent
+// chooses it, and repairWorktreeAdmin creates a directory and writes three files
+// there. Unvalidated, that was a write-anywhere primitive.
+func TestValidWorktreeAdminDir(t *testing.T) {
+	repo := initRepo(t)
+	gitDir := filepath.Join(repo, ".git")
+
+	// The legitimate shape must be accepted, including when "worktrees" does not
+	// exist yet — a fully deleted registry is exactly the case repair exists for.
+	good := filepath.Join(gitDir, "worktrees", "feat")
+	if err := validWorktreeAdminDir(good); err != nil {
+		t.Errorf("a real worktree admin dir was refused: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(gitDir, "worktrees"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := validWorktreeAdminDir(good); err != nil {
+		t.Errorf("a real worktree admin dir was refused once worktrees/ existed: %v", err)
+	}
+
+	outside := t.TempDir()
+	bad := map[string]string{
+		"somewhere else entirely":    filepath.Join(outside, "PWN"),
+		"parent not named worktrees": filepath.Join(gitDir, "EVIL", "PWN"),
+		"not a git directory":        filepath.Join(outside, "worktrees", "PWN"),
+		"relative":                   "worktrees/PWN",
+		"empty":                      "",
+	}
+	for name, p := range bad {
+		if err := validWorktreeAdminDir(p); err == nil {
+			t.Errorf("%s: %q was accepted and would be created and written to", name, p)
+		}
+	}
+
+	// The audit's actual proof: a symlink planted inside the parent .git — which
+	// is bind-mounted read-write into the container — with the pointer aimed
+	// through it, so a lexically-plausible path resolves outside the repository.
+	linked := filepath.Join(gitDir, "worktrees-link")
+	if err := os.Symlink(outside, linked); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Rename(filepath.Join(gitDir, "worktrees"), filepath.Join(gitDir, "worktrees-real")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(gitDir, "worktrees")); err != nil {
+		t.Fatal(err)
+	}
+	if err := validWorktreeAdminDir(good); err == nil {
+		t.Error("a symlinked worktrees/ was accepted; the write would land outside the repository")
+	}
+}
+
+// TestRepairRefusesAWriteOutsideTheRepository exercises the call site, not just
+// the helper: a test that only checks validWorktreeAdminDir would still pass if
+// someone deleted the call, which is the mistake worth catching.
+func TestRepairRefusesAWriteOutsideTheRepository(t *testing.T) {
+	repo := initRepo(t)
+	outside := t.TempDir()
+	target := filepath.Join(outside, "PWN")
+
+	f := Finding{
+		Kind:        KindWorktreeAdmin,
+		Fix:         "recreate", // non-empty so Repairable() lets it through
+		worktreeDir: filepath.Join(repo, "wt"),
+		gitDir:      target, // what the agent's .git pointer named
+		commonDir:   filepath.Join(repo, ".git"),
+		branch:      "feat",
+		head:        "",
+	}
+	if err := Repair(f, "feat"); err == nil {
+		t.Fatal("Repair accepted a target outside the repository")
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Errorf("Repair created %q despite refusing", target)
+	}
+}

@@ -921,3 +921,48 @@ func TestBuildSpec_PublishWithAllowlist(t *testing.T) {
 		t.Error("allowlist mode must keep bridge networking")
 	}
 }
+
+// TestBuildSpec_NoHardeningWithAllowlistRefuses pins a combination that produced
+// a container wider than either flag alone. --no-hardening is documented as
+// reverting to the historical behavior, but the allowlist adds NET_ADMIN,
+// NET_RAW, SETUID and SETGID and starts the container as root — and it is
+// cap_drop ALL plus no-new-privileges that stop the guest keeping any of that
+// after the drop to the sandbox user. Zeroing them left docker's full default
+// capability set *plus* those four, with setuid binaries live again.
+func TestBuildSpec_NoHardeningWithAllowlistRefuses(t *testing.T) {
+	dir := t.TempDir()
+
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project:     dir,
+		NoHardening: true,
+		Allow:       []string{"example.com"},
+		Command:     []string{"sh"},
+	})
+	if err == nil {
+		t.Fatalf("expected a refusal; got user=%q capAdd=%v capDrop=%v noNewPriv=%v",
+			spec.User, spec.CapAdd, spec.CapDrop, spec.NoNewPrivileges)
+	}
+	// Config-driven allowlist reaches the same place.
+	cfg := baseCfg()
+	cfg.Network.Mode = "allowlist"
+	if _, err := BuildSpec(cfg, Options{Project: dir, NoHardening: true, Command: []string{"sh"}}); err == nil {
+		t.Error("network.mode: allowlist plus --no-hardening must be refused too")
+	}
+
+	// Each alone is unchanged: --no-hardening still drops the hardening...
+	spec, err = BuildSpec(baseCfg(), Options{Project: dir, NoHardening: true, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatalf("--no-hardening alone must still work: %v", err)
+	}
+	if spec.NoNewPrivileges || len(spec.CapDrop) != 0 {
+		t.Errorf("--no-hardening alone should drop hardening: noNewPriv=%v capDrop=%v", spec.NoNewPrivileges, spec.CapDrop)
+	}
+	// ...and the allowlist alone still keeps it.
+	spec, err = BuildSpec(baseCfg(), Options{Project: dir, Allow: []string{"example.com"}, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatalf("--allow alone must still work: %v", err)
+	}
+	if !spec.NoNewPrivileges || !contains(spec.CapDrop, "ALL") {
+		t.Errorf("--allow alone must keep the hardening: noNewPriv=%v capDrop=%v", spec.NoNewPrivileges, spec.CapDrop)
+	}
+}

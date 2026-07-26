@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
 // Finding kinds. The kind is what `recover repair` dispatches on.
@@ -251,6 +253,17 @@ func Repair(f Finding, branchOverride string) error {
 // worktree has checked out), commondir (how to find the shared object store),
 // and gitdir (the way back to the checkout).
 func repairWorktreeAdmin(f Finding, branch string) error {
+	// f.gitDir traces back to the `gitdir:` line of a .git pointer file inside the
+	// workspace — which the sandbox mounts read-write, so the agent chooses it.
+	// Everything below creates a directory and writes files there, so an
+	// unvalidated target made `recover repair` a write-anywhere primitive: the
+	// audit's proof planted a symlink in the (also rw-mounted) parent .git and had
+	// three files land in an unrelated directory. rescue's stated rule is that it
+	// only ever creates objects and refs under refs/sandbox/; this is what keeps
+	// that true for the repair path.
+	if err := validWorktreeAdminDir(f.gitDir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(f.gitDir, 0o755); err != nil {
 		return fmt.Errorf("recreating %s: %w", f.gitDir, err)
 	}
@@ -363,4 +376,50 @@ func branchExists(commonDir, branch string) bool {
 func isDir(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.IsDir()
+}
+
+// validWorktreeAdminDir checks that path is where a linked worktree's
+// administrative directory can legitimately live: <main>/.git/worktrees/<name>,
+// with symlinks resolved.
+//
+// Two checks, because either alone is bypassable. The *lexical* one — the parent
+// must be named "worktrees" and its parent must be a real git directory — stops
+// a pointer that simply names somewhere else (`gitdir: /tmp/anywhere/x`). The
+// *resolved* one stops the same thing arriving through a symlink, which is how
+// the audit reached outside the repository: the parent .git of a worktree is
+// bind-mounted read-write into the container, so the agent can plant a link
+// inside it and have the write follow that link out.
+//
+// Both are deliberately shape checks rather than a list of forbidden
+// destinations. A forbidden-list has to anticipate the target; requiring the
+// path to *be* a worktree admin directory means an attacker has to already own a
+// real git directory at the destination, which is the thing they are trying to
+// obtain.
+func validWorktreeAdminDir(path string) error {
+	refuse := func(why string) error {
+		return fmt.Errorf("refusing to repair %q: %s.\n"+
+			"  This path comes from the .git pointer file in the worktree, which an agent "+
+			"can rewrite; a worktree's admin directory must be <repo>/.git/worktrees/<name>", path, why)
+	}
+	if path == "" || !filepath.IsAbs(path) {
+		return refuse("it is not an absolute path")
+	}
+	parent := filepath.Dir(path) // .../.git/worktrees
+	if filepath.Base(parent) != "worktrees" {
+		return refuse("its parent directory is not named \"worktrees\"")
+	}
+	// The .git it claims to belong to must be a real git directory. Resolving
+	// first means a symlinked .git cannot stand in for one.
+	gitCommon, err := filepath.EvalSymlinks(filepath.Dir(parent))
+	if err != nil || !worktree.IsGitDir(gitCommon) {
+		return refuse("the repository it names does not exist or is not a git directory")
+	}
+	// If "worktrees" itself already exists, it must really be that directory and
+	// not a link pointing somewhere else — the case the audit exploited.
+	if realParent, err := filepath.EvalSymlinks(parent); err == nil {
+		if filepath.Base(realParent) != "worktrees" || filepath.Dir(realParent) != gitCommon {
+			return refuse("its \"worktrees\" directory is a link out of the repository")
+		}
+	}
+	return nil
 }

@@ -13,6 +13,27 @@ version is tagged.
 
 ### Security
 
+- **`--no-hardening` can no longer be combined with the egress allowlist.** The
+  flag is documented as reverting to the historical behavior, but together with
+  an allowlist it landed *above* that baseline rather than at it: the firewall
+  starts the container as root with `NET_ADMIN`, `NET_RAW`, `SETUID` and
+  `SETGID`, and it is `cap_drop: ALL` plus `no-new-privileges` that stop the
+  guest keeping any of that after the drop to the sandbox user. Zeroing them left
+  docker's full default capability set *plus* those four, with setuid binaries
+  live again — from a flag whose entire purpose is to be no worse than the old
+  default. The combination is now refused, naming both halves; each alone is
+  unchanged.
+
+- **`recover repair` can no longer be steered into writing outside the
+  repository.** The directory it recreates comes from the `gitdir:` line of the
+  worktree's `.git` pointer file — which the agent can rewrite — and it was used
+  unvalidated as a `MkdirAll` plus three `WriteFile` destination. With a symlink
+  planted in the parent `.git` (bind-mounted read-write for a worktree run) the
+  writes landed anywhere on the host, breaking rescue's stated rule that it only
+  ever creates objects and refs under `refs/sandbox/`. The target must now be a
+  real `<repo>/.git/worktrees/<name>`, checked both lexically and after resolving
+  symlinks.
+
 - **The egress allowlist now filters inbound traffic too.** It never did, and
   that made it bypassable in one step: the `OUTPUT` chain accepts
   `ESTABLISHED,RELATED`, so a connection someone else *dialled in* got a working

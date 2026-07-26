@@ -570,6 +570,23 @@ if installed via `make install`).
    (`getent hosts github.com`), and a `-P 9000` published port answers from the host.
 - Note: covered by `TestEgressAllowlistFiltersIngressToo`.
 
+**TC-123 [A] `--no-hardening` and the allowlist are mutually exclusive**
+1. `sandbox-cli run --dry-run --no-hardening --allow example.com -- id`
+- Expected: refused. Before this it rendered `--user root` with four `--cap-add` and
+  **no** `--cap-drop`, `no-new-privileges` or `--pids-limit` — wider than either flag alone.
+2. Each alone still behaves as documented: `--no-hardening` drops the hardening,
+  `--allow` keeps it.
+- Note: covered by `TestBuildSpec_NoHardeningWithAllowlistRefuses`.
+
+**TC-124 [A] `recover repair` will not write outside the repository**
+1. In a worktree, point `.git` at a path outside the repo (directly, or through a symlink
+   planted in the parent `.git`), then `sandbox-cli recover repair --yes`.
+- Expected: refused, and nothing created at that path. The admin directory must be a real
+  `<repo>/.git/worktrees/<name>`.
+2. TC-102 (the legitimate repair of a deleted admin dir) must still pass unchanged.
+- Note: covered by `TestValidWorktreeAdminDir`, `TestRepairRefusesAWriteOutsideTheRepository`,
+  and `TestRepairRebuildsADeletedWorktreeAdminDir` for the regression.
+
 All audit phases (0–4) are now landed. The remaining known gaps are recorded in
 `docs/proposals/security-hardening.md`: the allowlist still matches resolved **IPs**
 rather than names (so `gist.github.com` rides in on `github.com`'s address, and names

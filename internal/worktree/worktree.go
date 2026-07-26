@@ -363,7 +363,14 @@ func GitCommonDir(dir string) (path string, ok bool) {
 // create them: the only host location it can write is the workspace, and a target
 // worth attacking is by definition outside it. sandbox.RefuseUnsafeHostPath is
 // the second layer, at the mount site.
-func isGitCommonDir(path string) bool {
+func isGitCommonDir(path string) bool { return IsGitDir(path) }
+
+// IsGitDir reports whether path holds the markers of a git directory — HEAD and
+// objects/ — rather than merely existing. Exported for internal/rescue, whose
+// repair path faces the same question about the same untrusted input: a `.git`
+// pointer file inside the workspace naming a directory sandbox-cli is about to
+// write to.
+func IsGitDir(path string) bool {
 	if !isDir(path) {
 		return false
 	}

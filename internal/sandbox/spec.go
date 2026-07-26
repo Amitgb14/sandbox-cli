@@ -302,6 +302,27 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		}
 		egress = config.DedupeDomains(append(egress, opts.Allow...))
 	}
+	// --no-hardening and the allowlist are mutually exclusive, and refusing is the
+	// only honest outcome. The escape hatch is documented as reverting to the
+	// historical behavior, but combined with an allowlist it lands *above* that
+	// baseline rather than at it: the firewall needs the container to start as
+	// root with NET_ADMIN, NET_RAW, SETUID and SETGID, and it is `cap_drop: ALL`
+	// plus `no-new-privileges` that stop the guest holding on to them after the
+	// drop to the sandbox user. Without those, the run has docker's full default
+	// capability set *plus* those four, with setuid binaries live again — strictly
+	// wider than a plain --no-hardening run, from a flag whose whole purpose is to
+	// be no worse than the old default.
+	//
+	// Silently keeping the hardening would be the other option, and is worse: the
+	// user asked for something and would not get it, with nothing said.
+	if allowlist && opts.NoHardening {
+		return runtime.RunSpec{}, fmt.Errorf(
+			"--no-hardening cannot be combined with the egress allowlist: the firewall starts the " +
+				"container as root with NET_ADMIN and drops privileges, and the hardening you are " +
+				"disabling is what stops the guest regaining them — the combination is wider than " +
+				"either alone. Drop one of the two")
+	}
+
 	// An allowlist that resolved to nothing must refuse, not run. The firewall is
 	// wired below only when there are domains to permit, so an empty list would
 	// otherwise hand back a container with no egress filtering at all — the
