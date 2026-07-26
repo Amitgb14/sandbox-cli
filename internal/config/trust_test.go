@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -239,4 +240,91 @@ func TestFindProjectConfig_BoundedWalk(t *testing.T) {
 			t.Errorf("findProjectConfig = %q, want none: a config in a shared parent must not be picked up", got)
 		}
 	})
+}
+
+// projectKeyPolicy is the explicit classification of every Config field: may a
+// discovered .sandbox.yaml set it, or not?
+//
+// This exists because restrictedProjectKeys is a hand-maintained denylist over a
+// struct that grows, and a field nobody classified defaults to *permitted* —
+// silently. That is not hypothetical: network.allow, ports and snapshot were all
+// permitted at first, and all three turned out to be decisions about the
+// boundary rather than about the project. A new field should fail this test
+// until someone has decided which side it is on, rather than quietly becoming
+// settable by a repository.
+var projectKeyPolicy = map[string]bool{ // field name -> may a project file set it
+	"Image":    false,
+	"Workdir":  false,
+	"User":     false,
+	"Home":     false,
+	"Hostname": true, // cosmetic
+	"Mounts":   false,
+	"Env":      false,
+	"EnvAllow": false,
+	"Network":  false, // handled per-subkey: allow refused, mode/baseline direction-checked
+	"Ports":    false,
+	"Security": false,
+	"Cache":    false, // enabled permitted, paths refused — see the subkey cases below
+	"Snapshot": false,
+	"Secrets":  false,
+	"Runtime":  false,
+}
+
+// TestEveryConfigFieldIsClassified fails when a field is added to Config without
+// a decision about whether an untrusted project file may set it.
+func TestEveryConfigFieldIsClassified(t *testing.T) {
+	typ := reflect.TypeOf(Config{})
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if _, ok := projectKeyPolicy[name]; !ok {
+			t.Errorf("Config.%s is not classified in projectKeyPolicy.\n"+
+				"  Decide whether a discovered .sandbox.yaml — which travels with the repository and "+
+				"which the agent can rewrite — may set it.\n"+
+				"  If it can reach the host, widen what the container reaches, or relax its "+
+				"confinement, add it to restrictedProjectKeys and mark it false here.", name)
+		}
+	}
+	// And the other direction: a policy entry for a field that no longer exists is
+	// a stale decision, which is its own kind of wrong.
+	for name := range projectKeyPolicy {
+		if _, ok := typ.FieldByName(name); !ok {
+			t.Errorf("projectKeyPolicy names %q, which is no longer a Config field", name)
+		}
+	}
+}
+
+// TestClassifiedFieldsAreActuallyEnforced checks the policy against the code
+// rather than against itself: every field marked un-settable must really be
+// refused when a project file sets it. A table that agrees with nothing is
+// documentation, not a test.
+func TestClassifiedFieldsAreActuallyEnforced(t *testing.T) {
+	yamlFor := map[string]string{
+		"Image":    "image: x:1\n",
+		"Workdir":  "workdir: /app\n",
+		"User":     "user: root\n",
+		"Home":     "home: /tmp/h\n",
+		"Mounts":   "mounts:\n  - {host: /tmp, container: /d}\n",
+		"Env":      "env:\n  A: b\n",
+		"EnvAllow": "env_allow:\n  - A\n",
+		"Network":  "network:\n  allow:\n    - x.example.com\n",
+		"Ports":    "ports:\n  - 3000\n",
+		"Security": "security:\n  seccomp: unconfined\n",
+		"Cache":    "cache:\n  paths:\n    - /x\n",
+		"Snapshot": "snapshot:\n  enabled: false\n",
+		"Secrets":  "secrets:\n  T:\n    env: HOME\n",
+		"Runtime":  "runtime: runsc\n",
+	}
+	for field, permitted := range projectKeyPolicy {
+		if permitted {
+			continue
+		}
+		y, ok := yamlFor[field]
+		if !ok {
+			t.Errorf("no yaml sample for un-settable field %q; add one so the refusal is exercised", field)
+			continue
+		}
+		if err := loadWithProject(t, y); err == nil {
+			t.Errorf("Config.%s is classified un-settable but a project config setting it was accepted", field)
+		}
+	}
 }

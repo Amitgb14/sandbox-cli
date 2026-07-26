@@ -18,6 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 \
       build-essential \
       iptables \
+      # iproute2 for `ip`, which sandbox-egress-setup uses to find the default
+      # gateway (to scope published-port ingress) and to detect whether the
+      # container has IPv6 at all. Both checks silently did nothing without it —
+      # a firewall that cannot see the interface it is filtering.
+      iproute2 \
       # Goose's installer extracts a .tar.bz2, and GNU tar shells out to bzip2
       # for that. ~100KB, and without it `sandbox-cli goose` cannot install.
       bzip2 \
@@ -433,11 +438,27 @@ iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # request for ingress, so the container ports it names stay reachable. Entries
 # arrive as proto:port or proto:lo-hi (see sandbox.IngressPorts); iptables wants
 # lo:hi for a range.
+# Only from the bridge gateway, which is where docker's own port forwarding
+# arrives from. Accepting a published port from *any* source contradicted the
+# thing that makes --publish safe: sandbox.NormalizePublish deliberately binds
+# the HOST side to 127.0.0.1 unless told otherwise, and then the container
+# accepted the same port from every other container on the bridge — a peer read
+# workspace data out of a sandbox whose port the user had published to loopback
+# only.
+# || true: under set -e a failing substitution would abort the whole setup, and
+# a missing default route is not a reason to refuse to run.
+gw="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}' || true)"
 for p in $(printf '%s' "$ingress" | tr ',' ' '); do
   [ -z "$p" ] && continue
   proto="${p%%:*}"
   port="$(printf '%s' "${p#*:}" | tr '-' ':')"
-  iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
+  if [ -n "$gw" ]; then
+    iptables -A INPUT -s "$gw" -p "$proto" --dport "$port" -j ACCEPT
+  else
+    # No default route to anchor to: publishing was asked for, so the port stays
+    # open rather than silently not answering.
+    iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
+  fi
 done
 
 iptables -A INPUT -m limit --limit 12/min --limit-burst 20 \
