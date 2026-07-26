@@ -7,6 +7,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"path/filepath"
 )
 
 func baseCfg() config.Config {
@@ -1108,6 +1109,78 @@ func TestIsRootUser(t *testing.T) {
 	for _, u := range []string{"sandbox", "1000", "1000:1000", ""} {
 		if isRootUser(u) {
 			t.Errorf("isRootUser(%q) = true, want false", u)
+		}
+	}
+}
+
+// TestBuildSpec_HooksAreMountedReadOnly pins the prevention half of the .git
+// problem. An agent that writes .git/hooks/pre-commit is not editing the project
+// — it is waiting for the user's next commit, which runs that file on the host as
+// them. Confirmed as a live escape before this mount existed.
+func TestBuildSpec_HooksAreMountedReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	hooks := filepath.Join(dir, ".git", "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *runtime.Mount
+	for i := range spec.Mounts {
+		if spec.Mounts[i].Target == "/workspace/.git/hooks" {
+			found = &spec.Mounts[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no read-only mount over .git/hooks: %+v", spec.Mounts)
+	}
+	if !found.RO {
+		t.Error("the hooks mount is writable, so a hook can still be planted")
+	}
+	// It has to land at the container path, not the host path — the workspace is
+	// mounted at /workspace, so a host-path target would shadow nothing.
+	// Compared against the symlink-resolved path: ResolveWorkspace resolves the
+	// workspace (on macOS /var is /private/var), and the hooks mount is derived
+	// from that resolved path so the two always agree.
+	wantSrc, err := filepath.EvalSymlinks(hooks)
+	if err != nil {
+		wantSrc = hooks
+	}
+	if found.Source != wantSrc {
+		t.Errorf("hooks mount source = %q, want %q", found.Source, wantSrc)
+	}
+	// And it must follow a relocated workspace rather than assuming /workspace.
+	cfg := baseCfg()
+	cfg.Workdir = "/app"
+	spec, err = BuildSpec(cfg, Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var moved bool
+	for _, m := range spec.Mounts {
+		if m.Target == "/app/.git/hooks" && m.RO {
+			moved = true
+		}
+	}
+	if !moved {
+		t.Errorf("the hooks mount did not follow workdir: %+v", spec.Mounts)
+	}
+}
+
+// TestBuildSpec_NoHooksMountWithoutAHooksDir pins that sandbox-cli does not
+// invent one. Creating .git/hooks would be writing into the user's repository,
+// which it does not do.
+func TestBuildSpec_NoHooksMountWithoutAHooksDir(t *testing.T) {
+	spec, err := BuildSpec(baseCfg(), Options{Project: t.TempDir(), Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range spec.Mounts {
+		if strings.Contains(m.Target, ".git/hooks") {
+			t.Errorf("mounted hooks for a non-repository: %+v", m)
 		}
 	}
 }

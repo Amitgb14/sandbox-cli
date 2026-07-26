@@ -168,6 +168,28 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		}
 	}
 
+	// .git/hooks read-only, over the read-write workspace.
+	//
+	// The agent has to be able to edit project files, but hooks are not project
+	// source: they are programs the *user's* git runs, on the host, as them. An
+	// agent that writes .git/hooks/pre-commit is not editing the project, it is
+	// waiting for the user's next commit. Confirmed as a live escape.
+	//
+	// hooks specifically, not .git as a whole: agents legitimately run `git config`
+	// and git itself writes indexes, refs and logs constantly. Changes to
+	// .git/config are watched instead (see watchGitConfig) — detected rather than
+	// prevented, because preventing them breaks ordinary work.
+	// The workspace's own .git/hooks is handled in BuildSpec, which knows where the
+	// workspace lands inside the container. This is the other one: a linked
+	// worktree runs the hooks from the parent repository's common directory, and
+	// that directory is bind-mounted read-write at its host path so git works at
+	// all — so its hooks need covering at that same host path.
+	if common, ok := worktree.GitCommonDir(config.ExpandTilde(projectDir)); ok {
+		if h := filepath.Join(common, "hooks"); isDirPath(h) {
+			opts.ExtraMounts = append(opts.ExtraMounts, h+":"+h+":ro")
+		}
+	}
+
 	// The branch drives the live gauge and the post-run summary, and — with
 	// --detach — the container's name and its sandbox.branch label. It matters
 	// most with --worktree, where several containers are running different
@@ -334,3 +356,11 @@ func Execute() int {
 // exitCode carries the guest process exit code out of a subcommand's RunE so the
 // process can mirror it. Defaults to 0.
 var exitCode int
+
+// isDirPath reports whether p is an existing directory. Only existing hook
+// directories are mounted: creating one would be sandbox-cli writing into the
+// user's repository, which it does not do.
+func isDirPath(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}

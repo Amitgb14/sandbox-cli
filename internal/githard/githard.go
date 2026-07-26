@@ -38,6 +38,7 @@ package githard
 import (
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -174,4 +175,90 @@ func emptyTreeOID(dir string) string {
 	}
 	emptyTreeCache.Store(dir, oid)
 	return oid
+}
+
+// Watching .git/config.
+//
+// Hooks are mounted read-only, so they cannot be planted. Config is not: agents
+// legitimately run `git config`, and taking that away would break ordinary work
+// for a smaller gain. But config is an execution vector too — core.fsmonitor and
+// core.hooksPath both name a program the *user's* git runs, on the host, as them
+// — so what cannot be prevented is reported instead, at the moment it is still
+// useful: when the run ends, before the user next touches the repository.
+
+// dangerousConfigKeys are the settings whose values git executes. A change to one
+// of these is called out specifically, because "core.fsmonitor changed" and
+// "user.email changed" are not the same news.
+var dangerousConfigKeys = map[string]bool{
+	"core.fsmonitor":            true,
+	"core.hookspath":            true,
+	"core.sshcommand":           true,
+	"core.pager":                true,
+	"core.editor":               true,
+	"core.askpass":              true,
+	"core.alternaterefscommand": true,
+	"credential.helper":         true,
+	"core.gitproxy":             true,
+	"core.attributesfile":       true,
+}
+
+// ConfigChange is one key that differs between two snapshots.
+type ConfigChange struct {
+	Key       string
+	Before    string // "" when the key was not previously set
+	After     string // "" when the key was removed
+	Dangerous bool   // git executes this value
+}
+
+// SnapshotConfig records a repository's local git config.
+//
+// Reading config executes nothing, so this is safe to run against a repository
+// the agent controls — unlike almost everything else git does there.
+func SnapshotConfig(dir string) map[string]string {
+	cmd := exec.Command(gitBin, "config", "--local", "--list", "-z")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	m := map[string]string{}
+	for _, entry := range strings.Split(string(out), "\x00") {
+		if entry == "" {
+			continue
+		}
+		// -z separates entries with NUL and key from value with a newline, so a
+		// value containing either cannot forge an entry.
+		key, value, _ := strings.Cut(entry, "\n")
+		m[strings.ToLower(strings.TrimSpace(key))] = value
+	}
+	return m
+}
+
+// DiffConfig reports what changed between two snapshots, dangerous keys first so
+// the news that matters is not buried under a renamed remote.
+func DiffConfig(before, after map[string]string) []ConfigChange {
+	if before == nil && after == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []ConfigChange
+	for k, av := range after {
+		seen[k] = true
+		if bv, ok := before[k]; !ok || bv != av {
+			out = append(out, ConfigChange{Key: k, Before: before[k], After: av, Dangerous: dangerousConfigKeys[k]})
+		}
+	}
+	for k, bv := range before {
+		if !seen[k] {
+			out = append(out, ConfigChange{Key: k, Before: bv, Dangerous: dangerousConfigKeys[k]})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Dangerous != out[j].Dangerous {
+			return out[i].Dangerous
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
 }

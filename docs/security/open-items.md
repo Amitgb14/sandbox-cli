@@ -119,7 +119,34 @@ value attached. That is a real gain; it should not be described as more.
 
 ---
 
-## 3. The agent writes `.git/config` and `.git/hooks`, and the *user's* git runs them
+## 3. The agent writes `.git/config` and `.git/hooks` — **DONE**
+
+**Closed**, with the split the design call chose: prevent what has no legitimate
+use, report what does.
+
+- **`.git/hooks` is mounted read-only** over the read-write workspace, at the
+  container path (and for a worktree run, over the parent repository's hooks at
+  its host path, since a linked worktree runs the common directory's hooks).
+  Planting a hook now fails with `Read-only file system`. Verified that ordinary
+  work is untouched: `git config`, `git add` and `git commit` all still succeed.
+- **`.git/config` stays writable and is watched.** It is recorded when the run
+  starts and the difference reported when it ends — before the user next runs git
+  there. Keys whose values git *executes* (`core.fsmonitor`, `core.hooksPath`,
+  `core.sshCommand`, `credential.helper`, …) are marked and sorted first, so the
+  news that matters is not buried under a renamed remote:
+
+```
+sandbox-cli: the agent changed this repository's git config:
+  ! core.fsmonitor = /workspace/.git/evil
+    user.nickname = bob
+  the lines marked ! name a program your own git will run; review before using git here
+```
+
+Config was not made read-only because agents legitimately run `git config`, and
+breaking that costs more than it gains once hooks — the vector with no honest use
+— are already sealed.
+
+<details><summary>Original entry</summary>
 
 **Severity: high. Effort: medium. Blocked on: a design call.**
 
@@ -153,6 +180,8 @@ project's code". This is the shortest path out of the advertised blast radius.
   stated property rather than a defect.
 
 Pick one deliberately; the current state is the third by accident.
+
+</details>
 
 ---
 

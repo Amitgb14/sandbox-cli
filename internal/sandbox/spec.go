@@ -12,6 +12,8 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/creds"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
+	"path"
+	"path/filepath"
 )
 
 // gitIdentityEnvNames are forwarded (by name) into the container when --git is
@@ -133,6 +135,25 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		return runtime.RunSpec{}, err
 	}
 	mounts := []runtime.Mount{WorkspaceMount(ws, wsTarget)}
+
+	// .git/hooks read-only, layered over the read-write workspace.
+	//
+	// The agent has to be able to edit project files, but hooks are not project
+	// source: they are programs the *user's* git runs later, on the host, as them.
+	// An agent writing .git/hooks/pre-commit is not editing the project, it is
+	// waiting for the user's next commit — confirmed as a live escape.
+	//
+	// hooks specifically, and not .git as a whole: agents legitimately run
+	// `git config`, and git writes indexes, refs and logs constantly. Changes to
+	// .git/config are reported at exit instead — detected rather than prevented,
+	// because preventing them would break ordinary work for a smaller gain.
+	if hooks := filepath.Join(ws, ".git", "hooks"); isExistingDir(hooks) {
+		mounts = append(mounts, runtime.Mount{
+			Source: hooks,
+			Target: path.Join(wsTarget, ".git", "hooks"),
+			RO:     true,
+		})
+	}
 
 	// Config-declared mounts (host paths already resolved to absolute at load time).
 	for _, m := range cfg.Mounts {
@@ -654,4 +675,10 @@ func isRootUser(user string) bool {
 		u = u[:i]
 	}
 	return u == "0"
+}
+
+// isExistingDir reports whether p is a directory that is already there.
+func isExistingDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
 }
