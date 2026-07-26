@@ -52,6 +52,9 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
 		return 1, fmt.Errorf("preparing image %q: %w", spec.Image, err)
 	}
+	if err := s.Runtime.EnsureNetwork(ctx, spec.Network); err != nil {
+		return 1, err
+	}
 
 	// Resolve brokered secrets and the host git identity, and hand the values to
 	// the runtime for the docker child only — never into this process's own
@@ -92,6 +95,9 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	// otherwise trigger one concurrent build per container.
 	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
 		return "", fmt.Errorf("preparing image %q: %w", spec.Image, err)
+	}
+	if err := s.Runtime.EnsureNetwork(ctx, spec.Network); err != nil {
+		return "", err
 	}
 
 	// Same rule as Run: resolved only on a real launch path, never in

@@ -1253,3 +1253,41 @@ func TestBuildSpec_ExplicitAddHostWins(t *testing.T) {
 		t.Errorf("gateway.docker.internal should still be neutralised: %v", spec.AddHosts)
 	}
 }
+
+// TestBuildSpec_JoinsTheIsolatedNetwork pins that sandboxes do not land on the
+// default bridge, where every container can reach every other on any port — a
+// peer container was confirmed reading workspace data out of a sandbox. Running
+// several agents at once is the advertised workflow, so that meant a compromised
+// agent in one repository could dial into the agent working on another.
+func TestBuildSpec_JoinsTheIsolatedNetwork(t *testing.T) {
+	dir := t.TempDir()
+
+	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Network != runtime.SandboxNetwork {
+		t.Errorf("Network = %q, want %q — the default bridge is shared with everything",
+			spec.Network, runtime.SandboxNetwork)
+	}
+
+	// The allowlist needs networking, and must get the isolated one too.
+	spec, err = BuildSpec(baseCfg(), Options{Project: dir, Allow: []string{"x.example.com"}, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Network != runtime.SandboxNetwork {
+		t.Errorf("allowlist mode Network = %q, want %q", spec.Network, runtime.SandboxNetwork)
+	}
+
+	// "none" still means none: asking for no network must not quietly get one.
+	cfg := baseCfg()
+	cfg.Network.Mode = "none"
+	spec, err = BuildSpec(cfg, Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Network != "none" {
+		t.Errorf("network: none produced %q", spec.Network)
+	}
+}

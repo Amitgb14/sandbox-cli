@@ -374,3 +374,43 @@ func childEnv(spec RunSpec) []string {
 	}
 	return env
 }
+
+// SandboxNetwork is the docker network every sandbox joins.
+//
+// One shared network rather than one per run, which matters: a per-run network
+// is a docker object that outlives a crash, so it would reintroduce exactly the
+// orphaned-state cleanup this tool is otherwise free of. A single network is
+// created once and reused forever.
+//
+// The point of it is `enable_icc=false`. On the default bridge every container
+// can reach every other on any port — confirmed by reading workspace data out of
+// one sandbox from another — and running several agents at once is the advertised
+// workflow, so a compromised agent in one repository could dial into the agent
+// working on another. With inter-container communication off they cannot see each
+// other at all, while DNS, egress and published ports are unaffected.
+const SandboxNetwork = "sandbox-cli"
+
+// EnsureNetwork creates the shared sandbox network if it is not already there.
+//
+// A failure is returned rather than swallowed: falling back to the default bridge
+// would silently put the container somewhere every other container can reach,
+// which is the condition this exists to prevent.
+func (d *DockerCLI) EnsureNetwork(ctx context.Context, name string) error {
+	if name == "" {
+		return nil
+	}
+	if err := exec.CommandContext(ctx, d.bin(), "network", "inspect", name).Run(); err == nil {
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, d.bin(), "network", "create",
+		"--opt", "com.docker.network.bridge.enable_icc=false", name).CombinedOutput()
+	if err != nil {
+		// A concurrent run may have created it between the inspect and the create;
+		// that is success, not a race to report.
+		if exec.CommandContext(ctx, d.bin(), "network", "inspect", name).Run() == nil {
+			return nil
+		}
+		return fmt.Errorf("creating the sandbox network %q: %s: %w", name, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}

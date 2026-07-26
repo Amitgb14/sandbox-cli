@@ -124,6 +124,8 @@ type Runtime interface {
 	// EnsureImage makes sure the given image reference exists locally, building
 	// or pulling it if necessary. forceBuild ignores any cached local image.
 	EnsureImage(ctx context.Context, ref string, forceBuild bool) error
+	// EnsureNetwork makes sure the shared sandbox network exists.
+	EnsureNetwork(ctx context.Context, name string) error
 	// Run executes the spec and returns the guest's exit code.
 	Run(ctx context.Context, spec RunSpec) (exitCode int, err error)
 	// Start launches a detached spec and returns immediately with the container's

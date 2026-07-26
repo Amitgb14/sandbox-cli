@@ -333,7 +333,13 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// sandbox-firewall entrypoint, which requires running as root with NET_ADMIN
 	// and then drops back to the intended user (SANDBOX_RUN_AS) before the agent
 	// runs. Allowlist implies bridge networking, so it overrides `none`.
+	// Every sandbox joins one shared network with inter-container communication
+	// disabled, rather than the default bridge where each can reach all the others.
+	// `network: none` still means none.
 	network := cfg.NetworkArg()
+	if network != "none" {
+		network = runtime.SandboxNetwork
+	}
 	egress := cfg.Network.EgressDomains()
 	allowlist := cfg.Network.Mode == "allowlist" || len(opts.Allow) > 0
 	if len(opts.Allow) > 0 {
@@ -412,7 +418,7 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		capAdd = append(capAdd, "NET_ADMIN", "NET_RAW", "SETUID", "SETGID")
 		dockerUser = "root"
 		entrypoint = "/usr/local/bin/sandbox-firewall"
-		network = "" // allowlist requires bridge networking, not "none"
+		network = runtime.SandboxNetwork // allowlist needs networking, not "none"
 	}
 
 	// --add-host passthrough and the --host-gateway convenience, which maps

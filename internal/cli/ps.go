@@ -8,6 +8,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 )
 
 // Finding a sandbox again after the CLI is gone.
@@ -112,6 +114,10 @@ func newCleanCmd() *cobra.Command {
 			}
 			if len(targets) == 0 {
 				fmt.Println("nothing to clean")
+				// Still try the network: "nothing to remove" is precisely the state in
+				// which a leftover network is worth collecting, and returning early
+				// meant it never was.
+				removeSandboxNetworkIfUnused()
 				return nil
 			}
 			for _, r := range targets {
@@ -122,6 +128,7 @@ func newCleanCmd() *cobra.Command {
 				}
 				fmt.Printf("removed %s (%s)\n", r.Name, r.Status)
 			}
+			removeSandboxNetworkIfUnused()
 			return nil
 		},
 	}
@@ -213,4 +220,29 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// removeSandboxNetworkIfUnused reaps the shared network once nothing is on it.
+//
+// It is one long-lived object rather than one per run, so this is tidiness rather
+// than the orphan problem a per-run network would have created — and it is
+// deliberately conditional: removing a network another sandbox is still attached
+// to would take that sandbox's networking away mid-run. docker refuses that
+// anyway, but relying on the refusal would mean printing an error for a normal
+// situation.
+func removeSandboxNetworkIfUnused() {
+	rows, err := sandboxContainers(true)
+	if err != nil || len(rows) > 0 {
+		return
+	}
+	if err := exec.Command("docker", "network", "inspect", runtime.SandboxNetwork).Run(); err != nil {
+		return // not there; nothing to do
+	}
+	if out, err := exec.Command("docker", "network", "rm", runtime.SandboxNetwork).CombinedOutput(); err != nil {
+		// Something outside sandbox-cli may be attached. Not an error worth
+		// failing the command over.
+		_ = out
+		return
+	}
+	fmt.Printf("removed network %s\n", runtime.SandboxNetwork)
 }

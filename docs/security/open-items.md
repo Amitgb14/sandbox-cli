@@ -185,7 +185,32 @@ Pick one deliberately; the current state is the third by accident.
 
 ---
 
-## 4. Sandboxes are not isolated from each other
+## 4. Sandboxes are not isolated from each other — **DONE**
+
+**Closed.** Every sandbox now joins one shared docker network created with
+`com.docker.network.bridge.enable_icc=false`, instead of the default bridge where
+every container can reach every other on any port.
+
+```
+peer sandbox -> another sandbox:9000    blocked (TimeoutError)
+egress                                   works
+published port from the host             works
+allowlist mode                           works
+```
+
+One shared network rather than one per run, which is the point: a per-run network
+is a docker object that outlives a crash, so it would have reintroduced exactly
+the orphaned-state cleanup this tool is otherwise free of. `sandbox-cli clean`
+reaps it once no sandbox containers remain.
+
+`network: none` still means none — asking for no network does not quietly get one.
+
+**Residue:** the bridge *gateway* is still reachable in default mode, where no
+firewall runs. That is the other half of item 5's residue; closing it would mean
+every run taking the root-entrypoint path with `NET_ADMIN`, which is a worse
+default than the one it would protect.
+
+<details><summary>Original entry</summary>
 
 **Severity: medium. Effort: medium. Blocked on: nothing.**
 
@@ -211,6 +236,8 @@ which needs a network anyway.
 Filtering ingress in default mode via the existing firewall is **not** the
 answer: it would make every run take the root-entrypoint path with `NET_ADMIN`,
 which is a worse default than the one it protects.
+
+</details>
 
 ---
 
