@@ -416,7 +416,44 @@ run try to reach something it was refused?" without needing the kernel log.
 
 ---
 
-## 8. Cross-project persistence channels
+## 8. Cross-project persistence channels — **narrowed; the rest is documented**
+
+The sharpest edge is fixed. The persisted agent HOME
+(`~/.config/sandbox/agents/<name>`) is the *same* directory in every project and
+is writable by the agent — and the bootstrap **prepended** `$HOME/.local/bin` to
+`PATH`. So an agent compromised in one repository could drop a file named `git`,
+`node` or `sh` there and shadow that command in every future session, in every
+project.
+
+Demonstrated, and fixed:
+
+```
+prepend (old):  git --version  ->  HIJACKED-GIT
+append  (now):  git --version  ->  git version 2.39.5   (/usr/bin/git)
+                agent binary   ->  still the persisted, self-updating one
+```
+
+The directory is now appended, and the agent is exec'd from it by absolute path —
+so it keeps self-updating (the reason it lives there at all) while system
+binaries win.
+
+**What remains, deliberately:**
+
+- **The agent's own binary is still replaceable.** It has to be: the whole point
+  of the persisted HOME is that Claude Code updates itself between runs, so
+  pinning a hash would break the feature it exists for. An agent that overwrites
+  `.local/bin/claude` still affects future `sandbox-cli claude` runs.
+- **The stored credential lives there** (`.claude/.credentials.json`, `0600` on
+  the host). Each wrapper mounts only its own directory, so agents cannot read
+  each other's — verified — but a compromised agent can read its own.
+- **`--cache` volumes are shared across agents and projects** by design, so
+  content planted in one is consumed at build time in another. Opt-in, and the
+  cost of making them per-project is the reason they exist.
+
+Use `--no-persist-auth` for a genuinely untrusted run: the HOME is then ephemeral
+and none of the above applies, at the price of logging in again.
+
+<details><summary>Original entry</summary>
 
 **Severity: medium. Effort: small (mostly a decision). Blocked on: a decision.**
 
@@ -436,6 +473,8 @@ as a risk.
 
 Options: document it; scope the HOME per project (losing "log in once"); or
 verify the bootstrap binary before exec. Decide rather than leave it implicit.
+
+</details>
 
 ---
 

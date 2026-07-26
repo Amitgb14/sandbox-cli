@@ -382,3 +382,38 @@ func TestAnnounceBroadCredentials(t *testing.T) {
 		t.Errorf("nothing account-wide forwarded, want silence, got %q", out)
 	}
 }
+
+// TestBootstrapDoesNotShadowSystemBinaries pins the fix for a cross-project
+// persistence path.
+//
+// $HOME/.local/bin is the persisted agent HOME: bind-mounted from the host, the
+// SAME directory in every project, and writable by the agent. The bootstrap used
+// to prepend it to PATH, which put it ahead of /usr/bin for every future session
+// in every project — so an agent compromised in one repository could drop a file
+// named `git`, `node` or `sh` there and shadow that command everywhere
+// afterwards.
+//
+// Appending keeps the directory usable while system binaries win; the absolute
+// exec is what still lets the agent self-update, which is why it lives there.
+func TestBootstrapDoesNotShadowSystemBinaries(t *testing.T) {
+	scripts := map[string]string{
+		"claude":    claudeBootstrap,
+		"npm agent": npmAgentBootstrap("gemini", "@google/gemini-cli")[2],
+	}
+	for name, script := range scripts {
+		t.Run(name, func(t *testing.T) {
+			if strings.Contains(script, `PATH="$HOME/.local/bin:$PATH"`) {
+				t.Error("the persisted HOME is prepended to PATH, so anything written there " +
+					"shadows every system binary in every future session")
+			}
+			if !strings.Contains(script, `PATH="$PATH:$HOME/.local/bin"`) {
+				t.Errorf("expected the persisted bin directory to be appended:\n%s", script)
+			}
+			// The self-updating install must still be the one that runs, or the
+			// baked copy silently wins and the agent stops updating itself.
+			if !strings.Contains(script, `exec "$HOME/.local/bin/`) {
+				t.Errorf("expected an absolute exec of the persisted binary:\n%s", script)
+			}
+		})
+	}
+}

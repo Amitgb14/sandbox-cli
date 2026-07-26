@@ -71,7 +71,20 @@ func finishAgentCmd(cmd *cobra.Command, rf *runFlags, agent string) *cobra.Comma
 // The trailing bin is sh's argv[0] for the script, so "$@" is exactly the guest
 // args appended by runWrapper.
 func agentBootstrap(bin, install string) []string {
-	script := `export PATH="$HOME/.local/bin:$PATH"
+	// $HOME/.local/bin is APPENDED, not prepended, and the agent is exec'd from it
+	// by absolute path.
+	//
+	// That directory is the persisted agent HOME: bind-mounted from the host, the
+	// same one in every project, and writable by the agent. Prepending it put it
+	// ahead of /usr/bin for every future session in every project — so an agent
+	// compromised in one repository could drop a file named `git`, `node` or `sh`
+	// there and shadow that command everywhere afterwards. Appending keeps the
+	// directory usable while system binaries win, and the absolute exec below is
+	// what still lets the agent self-update, which is the reason it lives there.
+	script := `export PATH="$PATH:$HOME/.local/bin"
+if [ -x "$HOME/.local/bin/` + bin + `" ]; then
+  exec "$HOME/.local/bin/` + bin + `" "$@"
+fi
 if ! command -v ` + bin + ` >/dev/null 2>&1; then
   echo "sandbox-cli: installing ` + bin + ` into the sandbox agent home (first run only)..." >&2
   ` + install + ` >/dev/null 2>&1 || true

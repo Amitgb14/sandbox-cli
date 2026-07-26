@@ -27,9 +27,12 @@ var claudeEnvAllow = []string{
 // it. The baked npm copy in /usr/local/bin is the offline fallback. Because the
 // persisted install is user-writable, Claude Code keeps itself up to date across
 // runs — the baked copy could not (root-owned).
-const claudeBootstrap = `export PATH="$HOME/.local/bin:$PATH"
+const claudeBootstrap = `export PATH="$PATH:$HOME/.local/bin"
 if [ ! -x "$HOME/.local/bin/claude" ]; then
   command -v curl >/dev/null 2>&1 && curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1 || true
+fi
+if [ -x "$HOME/.local/bin/claude" ]; then
+  exec "$HOME/.local/bin/claude" "$@"
 fi
 exec claude "$@"`
 
