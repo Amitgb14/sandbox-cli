@@ -354,6 +354,18 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	if len(ports) > 0 && network == "none" {
 		return runtime.RunSpec{}, fmt.Errorf("cannot publish ports with network mode \"none\": the container has no network to publish from")
 	}
+	// With an allowlist the firewall also default-denies *inbound* traffic, so the
+	// published ports have to be named or they would be reachable from the host
+	// and then refused inside the container — a dev server that silently stops
+	// answering the moment --allow is added. This is the one deliberate ingress
+	// carve-out, and it covers exactly what --dry-run already shows being
+	// published. Set here rather than in the egress block above because the port
+	// list is only resolved at this point.
+	if allowlist {
+		if in := IngressPorts(ports); len(in) > 0 {
+			env["SANDBOX_INGRESS_PORTS"] = strings.Join(in, ",")
+		}
+	}
 
 	tty := detectTTY()
 	if opts.TTY != nil {

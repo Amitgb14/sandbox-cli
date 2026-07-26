@@ -164,6 +164,65 @@ func TestEgressAllowlist(t *testing.T) {
 	}
 }
 
+// TestEgressAllowlistFiltersIngressToo proves the INPUT half of the firewall.
+//
+// An egress allowlist that ignores inbound traffic is not a boundary: the OUTPUT
+// chain accepts ESTABLISHED,RELATED, so a connection someone else *dials in*
+// gets a working reply path and carries data straight back out past the
+// allowlist. That was demonstrated end to end — a second container on the bridge
+// opened a socket to an allowlisted sandbox and got 30 bytes back, while that
+// same sandbox could not reach 1.1.1.1 on its own initiative.
+//
+// Asserting on the chain rather than on a live connection keeps this hermetic:
+// the rules are the property under test, and a two-container rendezvous would be
+// slow and flaky in CI.
+func TestEgressAllowlistFiltersIngressToo(t *testing.T) {
+	proj := t.TempDir()
+	sess := newTestSession(t, config.Default())
+
+	_, err := sess.Run(context.Background(), sandbox.Options{
+		Project: proj,
+		TTY:     ptr(false),
+		User:    "root", // reading the tables needs privileges the guest normally drops
+		Allow:   []string{"example.com"},
+		Publish: []string{"3000", "9000/udp"},
+		Command: []string{"sh", "-c", "iptables -S INPUT > /workspace/input.txt"},
+	}, false)
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	out, err := os.ReadFile(filepath.Join(proj, "input.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := string(out)
+
+	// Default-deny, with the two exceptions that keep the sandbox usable:
+	// loopback, and replies to connections the sandbox itself opened (which is
+	// also what lets DNS answers and allowlisted HTTPS work at all).
+	for _, want := range []string{
+		"-A INPUT -i lo -j ACCEPT",
+		"ESTABLISHED -j ACCEPT",
+		"-A INPUT -j REJECT",
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("INPUT chain missing %q:\n%s", want, rules)
+		}
+	}
+	// --publish is the one deliberate request for ingress, so those ports stay
+	// open — otherwise a dev server silently stops answering the moment someone
+	// adds --allow.
+	for _, want := range []string{"--dport 3000 -j ACCEPT", "--dport 9000 -j ACCEPT"} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("published port carve-out missing %q:\n%s", want, rules)
+		}
+	}
+	// The REJECT must come last, or the carve-outs below it never match.
+	if i, j := strings.Index(rules, "-A INPUT -j REJECT"), strings.LastIndex(rules, "--dport"); i >= 0 && j > i {
+		t.Errorf("REJECT precedes a port carve-out, so the carve-out is dead:\n%s", rules)
+	}
+}
+
 // TestGitIdentity proves --git forwards the host git identity into the container
 // and marks the workspace as trusted. It pins a deterministic host identity via
 // an isolated global git config so the assertion doesn't depend on the CI user's

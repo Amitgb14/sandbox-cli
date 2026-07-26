@@ -84,10 +84,20 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   so a host sharing an allowlisted address rides in on it (`gist.github.com` is reachable under the
   baseline via `github.com`'s IP, and it was never listed) — and names are resolved **once** at
   container start, so a rotating record can break a domain the user did allowlist, mid-session. It
-  is also egress-only: `INPUT`/`FORWARD` are left at ACCEPT, so anything that can reach the
-  container on the bridge gets a bidirectional channel that the allowlist never sees (the reply
-  rides the `ESTABLISHED,RELATED` rule). Fixing either properly means name-based enforcement — the
-  egress proxy `internal/creds` already names as future work.
+  Ingress is filtered too, and has to be: the `OUTPUT` chain accepts `ESTABLISHED,RELATED`, so a
+  connection dialled *in* got a working reply path and carried data straight back out past the
+  allowlist (demonstrated — a co-resident container pulled 30 bytes out of an allowlisted sandbox
+  that could not reach `1.1.1.1` itself). `INPUT` is now default-deny with three exceptions:
+  loopback, `ESTABLISHED,RELATED`, and the container ports named by `--publish`
+  (`SANDBOX_INGRESS_PORTS`, from `sandbox.IngressPorts`) — publishing *is* an explicit request for
+  ingress, and without the carve-out a dev server would silently stop answering the moment someone
+  added `--allow`. `FORWARD` is left alone: a container netns has one interface and routes nothing.
+  Fixing the IP-vs-name gap properly still means name-based enforcement — the egress proxy
+  `internal/creds` already names as future work.
+
+  The whole firewall, ingress included, runs in allowlist mode only. Filtering ingress on every run
+  would mean every run taking the root-entrypoint path with `NET_ADMIN`, which is a worse default
+  than the one it would be protecting.
 - **`internal/rescue`** — the crash safety net and `sandbox-cli recover`. Snapshots the workspace
   into `refs/sandbox/snapshots/<session>` while a run is in flight, using a **private
   `GIT_INDEX_FILE`** so the user's index, `HEAD`, branches and working tree are never written.

@@ -13,6 +13,25 @@ version is tagged.
 
 ### Security
 
+- **The egress allowlist now filters inbound traffic too.** It never did, and
+  that made it bypassable in one step: the `OUTPUT` chain accepts
+  `ESTABLISHED,RELATED`, so a connection someone else *dialled in* got a working
+  reply path and carried data straight back out past the allowlist. Demonstrated
+  end to end — a second container on the docker bridge opened a socket to an
+  allowlisted sandbox and received 30 bytes back, while that same sandbox could
+  not reach `1.1.1.1` on its own initiative. A bind shell inside the sandbox was
+  a fully working, unmetered exfiltration channel.
+
+  `INPUT` is now default-deny with three exceptions: loopback, replies to
+  connections the sandbox itself opened, and the container ports named by
+  `--publish` — publishing *is* an explicit request for ingress, and without that
+  carve-out a published dev server would silently stop answering the moment you
+  added `--allow`. IPv6 is rejected inbound as well as outbound.
+
+  Scope: like the rest of the firewall this applies in allowlist mode only.
+  Filtering ingress on every run would mean every run taking the root-entrypoint
+  path with `NET_ADMIN` — a worse default than the one it would be protecting.
+
 - **A forged `.git` pointer file can no longer mount an arbitrary host
   directory.** When the workspace is a git worktree, sandbox-cli mounts the
   parent repository's `.git` at its own host path — and *which* path came from

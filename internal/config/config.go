@@ -150,8 +150,9 @@ func BaselineEgress() []string {
 //
 // Anything added here must be a variable consumed before privileges are dropped.
 var reservedEnvNames = map[string]bool{
-	"SANDBOX_RUN_AS":       true,
-	"SANDBOX_EGRESS_ALLOW": true,
+	"SANDBOX_RUN_AS":        true,
+	"SANDBOX_EGRESS_ALLOW":  true,
+	"SANDBOX_INGRESS_PORTS": true, // which inbound ports the firewall leaves open
 }
 
 const reservedEnvReason = "this variable instructs the container's root-phase startup " +

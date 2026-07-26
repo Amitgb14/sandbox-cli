@@ -329,14 +329,19 @@ export PATH
 set -euo pipefail
 
 allow="${SANDBOX_EGRESS_ALLOW:-}"
+ingress="${SANDBOX_INGRESS_PORTS:-}"
 
-# No IPv6 allowlist yet: reject all IPv6 egress so it can't be used to bypass the
-# IPv4 rules. Best-effort — some hosts have no ip6tables.
+# No IPv6 allowlist yet: reject all IPv6 traffic so it can't be used to bypass the
+# IPv4 rules, inbound or outbound. Best-effort — some hosts have no ip6tables.
 if command -v ip6tables >/dev/null 2>&1; then
   ip6tables -F OUTPUT 2>/dev/null || true
   ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
   ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
   ip6tables -A OUTPUT -j REJECT 2>/dev/null || true
+  ip6tables -F INPUT 2>/dev/null || true
+  ip6tables -A INPUT -i lo -j ACCEPT 2>/dev/null || true
+  ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  ip6tables -A INPUT -j REJECT 2>/dev/null || true
 fi
 
 iptables -F OUTPUT
@@ -359,6 +364,37 @@ done
 
 # Everything else outbound is rejected with a fast, visible error (not a hang).
 iptables -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
+
+# Ingress. An egress allowlist that ignores inbound traffic is not a boundary:
+# the OUTPUT chain accepts ESTABLISHED,RELATED, so a connection someone else
+# *dials in* gets a working reply path and carries data straight back out past
+# the allowlist. Demonstrated: a second container on the default bridge opened a
+# socket to an allowlisted sandbox and received 30 bytes, while that same sandbox
+# could not reach 1.1.1.1 on its own initiative.
+#
+# So the same default-deny shape is applied inbound. Loopback keeps in-container
+# tooling working, ESTABLISHED,RELATED keeps replies to the sandbox's *own*
+# allowed connections flowing (including DNS answers), and nothing the sandbox
+# did not initiate gets in.
+#
+# FORWARD is deliberately untouched: a container network namespace has one
+# interface and routes nothing, so the chain is unreachable.
+iptables -F INPUT
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# Published ports are the one deliberate exception: `--publish` is an explicit
+# request for ingress, so the container ports it names stay reachable. Entries
+# arrive as proto:port or proto:lo-hi (see sandbox.IngressPorts); iptables wants
+# lo:hi for a range.
+for p in $(printf '%s' "$ingress" | tr ',' ' '); do
+  [ -z "$p" ] && continue
+  proto="${p%%:*}"
+  port="$(printf '%s' "${p#*:}" | tr '-' ':')"
+  iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
+done
+
+iptables -A INPUT -j REJECT --reject-with icmp-port-unreachable
 FW
 RUN chmod +x /usr/local/bin/sandbox-egress-setup
 

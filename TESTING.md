@@ -554,9 +554,27 @@ if installed via `make install`).
   `/USERS` mounting every user's home directory at once.
 - Note: covered by `TestResolveWorkspace_HomeRefusalIgnoresCasing`, `TestRefuseUnsafeHostPath`.
 
-**Known-unfixed (do not sign off as passing — this is Phase 4):**
-`INPUT`/`FORWARD` are still unfiltered, so anything that can reach the container on
-the docker bridge gets a bidirectional channel the egress allowlist never sees.
+**TC-122 [A/M] The allowlist filters ingress, not just egress**
+1. `sandbox-cli run --user root --allow example.com -P 3000 -P 9000/udp -- iptables -S INPUT`
+- Expected: `-i lo -j ACCEPT`, an `ESTABLISHED` accept, `--dport 3000` and `--dport 9000`
+  accepts, and a final `-A INPUT -j REJECT`. The REJECT must come **last**, or the
+  port carve-outs below it are dead rules.
+2. [M] The live version: start a detached sandbox under `network.mode: allowlist` running a
+   listener on 9000 with **no** `-P`, then from another container
+   `docker run --rm alpine sh -c "echo hi | nc -w 5 <container-ip> 9000"`.
+- Expected: the attacker gets no reply and the listener times out. Before this it received
+  `EXFIL-PAYLOAD-LEFT-THE-SANDBOX` — data leaving an allowlisted sandbox that could not
+  reach `1.1.1.1` itself.
+3. Regressions that matter more than the fix — all must still work:
+   an allowlisted host is reachable (`curl https://github.com`), DNS resolves
+   (`getent hosts github.com`), and a `-P 9000` published port answers from the host.
+- Note: covered by `TestEgressAllowlistFiltersIngressToo`.
+
+All audit phases (0–4) are now landed. The remaining known gaps are recorded in
+`docs/proposals/security-hardening.md`: the allowlist still matches resolved **IPs**
+rather than names (so `gist.github.com` rides in on `github.com`'s address, and names
+are resolved once at container start), and the agent still holds raw credentials in
+its environment. Both need the egress proxy described there.
 
 ---
 

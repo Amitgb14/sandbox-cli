@@ -100,3 +100,35 @@ func TestNormalizePublish_EmptyAndDuplicates(t *testing.T) {
 		t.Errorf("duplicates not collapsed: %v", got)
 	}
 }
+
+// TestIngressPorts covers the one deliberate hole in the default-deny INPUT
+// chain. Getting this wrong in either direction is bad: too narrow and a
+// published dev server stops answering the moment someone adds --allow, too wide
+// and the ingress guard means nothing.
+func TestIngressPorts(t *testing.T) {
+	published, err := NormalizePublish([]string{
+		"3000",             // bare -> 127.0.0.1:3000:3000
+		"8080:80",          // host:container, container port is what the firewall sees
+		"0.0.0.0:443:8443", // explicit address
+		"9000:9000/udp",    // protocol carried through
+		"[::1]:7000:7000",  // bracketed IPv6 host: its colons precede the port
+		"8000-8010",        // a range
+		"3000",             // duplicate of the first
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := IngressPorts(published)
+	want := []string{"tcp:3000", "tcp:80", "tcp:8443", "udp:9000", "tcp:7000", "tcp:8000-8010"}
+	if len(got) != len(want) {
+		t.Fatalf("IngressPorts = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("IngressPorts[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
+		}
+	}
+	if len(IngressPorts(nil)) != 0 {
+		t.Error("no published ports must yield no carve-out")
+	}
+}
