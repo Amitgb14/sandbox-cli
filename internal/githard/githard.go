@@ -49,9 +49,12 @@ import (
 // core.hooksPath points at a non-directory, which git reads as "no hooks here"
 // for every hook — including the ones with no dedicated switch, which is what
 // makes it better than disabling them one at a time.
-func Args() []string {
-	return []string{
+func Args(dir string) []string {
+	a := []string{
 		"-c", "core.hooksPath=" + os.DevNull,
+		// core.attributesFile names another attributes file. It is a config key, so
+		// unlike the two below it can simply be overridden.
+		"-c", "core.attributesFile=" + os.DevNull,
 		"-c", "core.fsmonitor=",
 		"-c", "core.sshCommand=",
 		"-c", "core.askPass=",
@@ -60,6 +63,68 @@ func Args() []string {
 		"-c", "core.editor=false",
 		"-c", "core.alternateRefsCommand=",
 	}
+	return append(a, neutralizedDrivers(dir)...)
+}
+
+// neutralizedDrivers overrides every filter and diff driver defined in the
+// repository's own config, so that even if an attribute selects one, there is
+// nothing to run.
+//
+// This is the load-bearing half, and it exists because chasing the *attribute*
+// side is unwinnable. A filter runs when an attribute selects a driver AND that
+// driver is defined in config. The attribute side has several layers —
+// `.gitattributes` in the tree, `$GIT_DIR/info/attributes`, a linked worktree's
+// own `info/attributes`, `core.attributesFile` — and `GIT_ATTR_SOURCE` redirects
+// only the first. `$GIT_DIR/info/attributes` has no override at all, and it was
+// enough on its own to run an agent's command on the host during a routine
+// snapshot and during `recover restore --into-worktree`. Both confirmed.
+//
+// The definition side is bounded: driver names are arbitrary, but the ones that
+// exist can be read out of the config, and `-c` outranks it. So the drivers are
+// enumerated and blanked. That is layer-independent and version-independent —
+// unlike GIT_ATTR_SOURCE, which needs git 2.40 — and it is why Env() is now
+// defence in depth rather than the whole defence.
+//
+// Deliberately not cached: the agent can add a driver between one git command and
+// the next, so the answer is only true for the invocation it is built for. One
+// `git config --list` per hardened command is a few milliseconds.
+func neutralizedDrivers(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	cmd := exec.Command(gitBin, "config", "--local", "--name-only", "--list")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil // no local config to read: nothing defined, nothing to blank
+	}
+	var args []string
+	seen := map[string]bool{}
+	for _, key := range strings.Split(string(out), "\n") {
+		key = strings.TrimSpace(key)
+		// filter.<name>.clean/smudge/process and diff.<name>.textconv/command are
+		// the keys whose values git executes.
+		if !strings.HasPrefix(key, "filter.") && !strings.HasPrefix(key, "diff.") {
+			continue
+		}
+		if !runsACommand(key) || seen[key] {
+			continue
+		}
+		seen[key] = true
+		args = append(args, "-c", key+"=")
+	}
+	return args
+}
+
+// runsACommand reports whether a config key's value is executed by git.
+func runsACommand(key string) bool {
+	for _, suffix := range []string{".clean", ".smudge", ".process", ".textconv", ".command"} {
+		if strings.HasSuffix(key, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // NoExternalDiff stops the diff machinery from running a configured textconv or

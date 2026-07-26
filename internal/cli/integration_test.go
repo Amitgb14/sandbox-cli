@@ -18,6 +18,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
+	"time"
 )
 
 func newTestSession(t *testing.T, cfg config.Config) *sandbox.Session {
@@ -180,22 +181,38 @@ func TestEgressAllowlistFiltersIngressToo(t *testing.T) {
 	proj := t.TempDir()
 	sess := newTestSession(t, config.Default())
 
-	_, err := sess.Run(context.Background(), sandbox.Options{
+	// Read the chain from outside the container. The guest cannot: it is dropped
+	// to an unprivileged user, and asking for --user root is refused precisely
+	// because a root guest could flush these rules
+	// (TestBuildSpec_RootWithAllowlistRefuses). So the container is started
+	// detached and inspected with `docker exec -u root`, which is the deployed
+	// rule set rather than a reconstruction of it.
+	name, err := sess.Start(context.Background(), sandbox.Options{
 		Project: proj,
-		TTY:     ptr(false),
-		User:    "root", // reading the tables needs privileges the guest normally drops
 		Allow:   []string{"example.com"},
 		Publish: []string{"3000", "9000/udp"},
-		Command: []string{"sh", "-c", "iptables -S INPUT > /workspace/input.txt"},
+		Command: []string{"sleep", "30"},
 	}, false)
 	if err != nil {
-		t.Fatalf("run error: %v", err)
+		t.Fatalf("start error: %v", err)
 	}
-	out, err := os.ReadFile(filepath.Join(proj, "input.txt"))
-	if err != nil {
-		t.Fatal(err)
+	defer exec.Command("docker", "rm", "-f", name).Run()
+
+	// Wait for the rules, not merely for a successful exec: the container counts as
+	// running the moment the entrypoint starts, which is before it has finished
+	// programming anything, so an early read returns a bare "-P INPUT ACCEPT".
+	var rules string
+	for i := 0; i < 60; i++ {
+		out, execErr := exec.Command("docker", "exec", "-u", "root", name, "iptables", "-S", "INPUT").Output()
+		if execErr == nil && strings.Contains(string(out), "REJECT") {
+			rules = string(out)
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	rules := string(out)
+	if rules == "" {
+		t.Fatal("the INPUT chain was never programmed")
+	}
 
 	// Default-deny, with the two exceptions that keep the sandbox usable:
 	// loopback, and replies to connections the sandbox itself opened (which is

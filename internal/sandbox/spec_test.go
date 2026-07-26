@@ -1058,3 +1058,56 @@ func TestBuildSpec_RefusesCommaInMountPaths(t *testing.T) {
 		t.Errorf("an ordinary path must pass: %v", err)
 	}
 }
+
+// TestBuildSpec_RootWithAllowlistRefuses pins the second half of the pair that
+// TestBuildSpec_NoHardeningWithAllowlistRefuses covers. The firewall starts the
+// container as root and then drops — but the entrypoint skips the drop when the
+// requested user resolves to uid 0, so the guest kept NET_ADMIN in its effective
+// set and could `iptables -F OUTPUT` and reach anything. Confirmed by execution
+// before the fix. An allowlist the guest can switch off is worse than none,
+// because sandbox-cli reports it is enforcing one.
+func TestBuildSpec_RootWithAllowlistRefuses(t *testing.T) {
+	dir := t.TempDir()
+	for _, user := range []string{"root", "0", "0:0"} {
+		if _, err := BuildSpec(baseCfg(), Options{
+			Project: dir, User: user, Allow: []string{"example.com"}, Command: []string{"sh"},
+		}); err == nil {
+			t.Errorf("--user %q with an allowlist must be refused", user)
+		}
+	}
+	// Config-driven allowlist reaches the same place.
+	cfg := baseCfg()
+	cfg.Network.Mode = "allowlist"
+	cfg.User = "root"
+	if _, err := BuildSpec(cfg, Options{Project: dir, Command: []string{"sh"}}); err == nil {
+		t.Error("user: root with network.mode: allowlist must be refused too")
+	}
+
+	// Each alone is unchanged: root without an allowlist is a supported choice...
+	if _, err := BuildSpec(baseCfg(), Options{Project: dir, User: "root", Command: []string{"sh"}}); err != nil {
+		t.Errorf("--user root alone must still work: %v", err)
+	}
+	// ...and the allowlist alone still runs as root for setup, dropping after.
+	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Allow: []string{"example.com"}, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatalf("--allow alone must still work: %v", err)
+	}
+	if spec.User != "root" || spec.Env["SANDBOX_RUN_AS"] != "sandbox" {
+		t.Errorf("allowlist should start as root and drop to sandbox, got user=%q run_as=%q",
+			spec.User, spec.Env["SANDBOX_RUN_AS"])
+	}
+}
+
+// TestIsRootUser covers the spellings the entrypoint treats as root.
+func TestIsRootUser(t *testing.T) {
+	for _, u := range []string{"root", "0", "0:0", " root ", "0:1000"} {
+		if !isRootUser(u) {
+			t.Errorf("isRootUser(%q) = false, want true", u)
+		}
+	}
+	for _, u := range []string{"sandbox", "1000", "1000:1000", ""} {
+		if isRootUser(u) {
+			t.Errorf("isRootUser(%q) = true, want false", u)
+		}
+	}
+}

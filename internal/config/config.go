@@ -153,11 +153,32 @@ var reservedEnvNames = map[string]bool{
 	"SANDBOX_RUN_AS":        true,
 	"SANDBOX_EGRESS_ALLOW":  true,
 	"SANDBOX_INGRESS_PORTS": true, // which inbound ports the firewall leaves open
+
+	// Interpreter- and loader-control variables. These are not sandbox-cli's, but
+	// they decide what the container's root-phase startup *executes*, which puts
+	// them in the same category.
+	//
+	// bash sources $BASH_ENV at the start of every non-interactive script — so
+	// `--env BASH_ENV=/workspace/evil.sh` ran the workspace's file as root, with
+	// NET_ADMIN, *before* sandbox-egress-setup had programmed anything, while the
+	// guest afterwards still reported uid 1001. Pinning PATH in the scripts does
+	// not help: this is read by the interpreter before the first line runs, so the
+	// only place to stop it is here, before it is ever passed to docker.
+	"BASH_ENV":        true,
+	"ENV":             true, // the POSIX sh equivalent
+	"LD_PRELOAD":      true,
+	"LD_LIBRARY_PATH": true,
+	"LD_AUDIT":        true,
+	"SHELLOPTS":       true, // can turn on xtrace, which then evaluates PS4
+	"BASHOPTS":        true,
+	"PS4":             true,
+	"IFS":             true,
+	"GLOBIGNORE":      true,
 }
 
-const reservedEnvReason = "this variable instructs the container's root-phase startup " +
-	"(which user to drop to, what egress to permit) and cannot be set or forwarded from outside; " +
-	"setting it would disable those controls"
+const reservedEnvReason = "this variable decides what the container's root-phase startup does or " +
+	"executes — which user it drops to, what egress it permits, or which file its interpreter " +
+	"sources before the first line runs — and cannot be set or forwarded from outside"
 
 // ValidEnvName reports whether name is usable as an environment variable name.
 //

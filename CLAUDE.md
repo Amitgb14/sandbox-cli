@@ -167,11 +167,12 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
 
 ### The trust boundary (read before touching config, mounts, or the entrypoint)
 
-An audit found the container→host boundary did not hold — twelve exploits reproduced end to
-end, from host code execution to mounting `/` read-write. All five phases of the fix are landed;
-`docs/proposals/security-hardening.md` has the findings, the threat model, and what is still
-open (the allowlist matches resolved **IPs** rather than names, and the agent still holds raw
-credentials — both need the egress proxy described there). The rules that follow from it:
+An audit found the container→host boundary did not hold — 22 issues, all reproduced end to end,
+from host code execution to mounting `/` read-write. All of them are fixed.
+`docs/security/audit-2026-07-26.md` is the tracked record: findings, threat model, what was done,
+and what is still open (the allowlist matches resolved **IPs** rather than names, and the agent
+still holds raw credentials — both need the egress proxy). `docs/proposals/security-hardening.md`
+has the phased design notes, and is gitignored. The rules that follow from it:
 
 - **A project `.sandbox.yaml` is untrusted input** and the privilege-relevant keys are
   *refused* from it (`internal/config/trust.go`): `image`, `workdir`, `user`, `home`,

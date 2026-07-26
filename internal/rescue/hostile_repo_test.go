@@ -32,6 +32,20 @@ func armHostileRepo(t *testing.T, repo, markerDir string) {
 	git(t, repo, "config", "core.fsmonitor", "touch "+filepath.Join(markerDir, "fsmonitor")+"; echo")
 	writeFile(t, filepath.Join(repo, ".gitattributes"), "* filter=pwn diff=pwn\n")
 
+	// The SECOND attributes layer. GIT_ATTR_SOURCE redirects the tree/working-tree
+	// layer, but git always additionally reads $GIT_DIR/info/attributes — a
+	// gitdir-local file with no -c override. Neutralising only the first layer left
+	// this one working, and a plain `sandbox-cli run` executed the agent's clean
+	// filter on the host again. It is inside .git, which the agent can write in
+	// every run, so it needs no worktree and no flags.
+	info := filepath.Join(repo, ".git", "info")
+	if err := os.MkdirAll(info, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(info, "attributes"), []byte("* filter=pwn diff=pwn\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	// .git/hooks/reference-transaction — runs on `git update-ref`, which is how
 	// every snapshot is published. This one falsified the old claim in
 	// snapshot.go that "no hook runs: these are all plumbing commands".

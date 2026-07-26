@@ -856,6 +856,12 @@ read the file and trust it — load it deliberately with
 
 ## Security model
 
+> A full security audit of this codebase was carried out on 2026-07-26: 22 issues
+> found, all reproduced end to end and all fixed. The findings, the threat model,
+> and the limits that are still open are recorded in
+> [`docs/security/audit-2026-07-26.md`](docs/security/audit-2026-07-26.md).
+
+
 - **Only `/workspace` is host-connected and writable** for `sandbox-cli run`.
   `HOME`, `/etc`, `/` inside the container are ephemeral and destroyed on exit
   (`--rm`). The agent wrappers add two more host paths by default,

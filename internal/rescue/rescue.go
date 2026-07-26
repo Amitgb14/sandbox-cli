@@ -84,7 +84,7 @@ func run(ctx context.Context, dir string, env []string, args ...string) (string,
 // runRaw is run without the trimming. Every call goes through here so the pinned
 // environment and the "no auto-gc" rule are impossible to forget at a call site.
 func runRaw(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	full := append(append([]string{"-c", "gc.auto=0"}, githard.Args()...), args...)
+	full := append(append([]string{"-c", "gc.auto=0"}, githard.Args(dir)...), args...)
 	cmd := exec.CommandContext(ctx, gitBin, full...)
 	cmd.Dir = dir
 	cmd.Env = append(baseEnv(), githard.Env(dir)...)
@@ -106,7 +106,7 @@ func runRaw(ctx context.Context, dir string, env []string, args ...string) (stri
 // failure on stderr, so the error is returned bare for the caller to turn into
 // an exit code.
 func stream(dir string, args ...string) error {
-	full := append(append([]string{"-c", "gc.auto=0"}, githard.Args()...), "--no-pager")
+	full := append(append([]string{"-c", "gc.auto=0"}, githard.Args(dir)...), "--no-pager")
 	full = append(full, args...)
 	cmd := exec.Command(gitBin, full...)
 	cmd.Dir = dir

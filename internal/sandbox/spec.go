@@ -338,6 +338,20 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	//
 	// Silently keeping the hardening would be the other option, and is worse: the
 	// user asked for something and would not get it, with nothing said.
+	// `--user root` and the allowlist are the same contradiction as --no-hardening,
+	// and were not refused. The firewall needs the container to *start* as root,
+	// then drop — and the drop is skipped when the requested user resolves to uid
+	// 0, so the agent keeps NET_ADMIN in its effective set and can simply
+	// `iptables -F OUTPUT` and reach anything. Confirmed: flushed, then connected
+	// to a non-allowlisted address. An allowlist the guest can switch off is worse
+	// than no allowlist, because sandbox-cli reports it is enforcing one.
+	if allowlist && isRootUser(user) {
+		return runtime.RunSpec{}, fmt.Errorf(
+			"--user root cannot be combined with the egress allowlist: the firewall drops privileges "+
+				"after programming itself, and a guest left as root keeps NET_ADMIN and can flush the "+
+				"rules. Drop one of the two (the allowlist already runs the container as root for setup, "+
+				"then drops to %q)", defaultRunAsUser)
+	}
 	if allowlist && opts.NoHardening {
 		return runtime.RunSpec{}, fmt.Errorf(
 			"--no-hardening cannot be combined with the egress allowlist: the firewall starts the " +
@@ -613,4 +627,21 @@ func isTerminal(f *os.File) bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// defaultRunAsUser is the unprivileged user the firewall entrypoint drops to.
+const defaultRunAsUser = "sandbox"
+
+// isRootUser reports whether a --user/config value asks to run as uid 0, by name
+// or by number. The entrypoint makes the same judgement on the resolved uid, so
+// checking only the spelling "root" would miss `--user 0` and `--user 0:0`.
+func isRootUser(user string) bool {
+	u := strings.TrimSpace(user)
+	if u == "root" {
+		return true
+	}
+	if i := strings.IndexByte(u, ':'); i >= 0 {
+		u = u[:i]
+	}
+	return u == "0"
 }

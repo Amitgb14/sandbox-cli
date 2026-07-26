@@ -48,6 +48,13 @@ type Snapshotter struct {
 	disabled   bool
 	skipped    map[string]bool // oversized paths already reported, so we say it once
 
+	// contentDir is a scratch git directory used only for reading the workspace,
+	// so the repository's own config is never consulted (see contentEnv).
+	// objectDir is the real repository's object store, where those reads still
+	// write. Both empty when the scratch directory could not be built.
+	contentDir string
+	objectDir  string
+
 	stop     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -101,6 +108,14 @@ func Begin(workspace, agent string, interval, retention time.Duration) *Snapshot
 	if err := os.MkdirAll(filepath.Dir(s.indexFile), 0o700); err != nil {
 		warnNoSafetyNet(err)
 		return nil
+	}
+	// Built once, here, rather than per snapshot: it costs a `git init` and the
+	// answer never changes for a session. A failure is not fatal — snapshotting
+	// falls back to reading through the repository's own git directory, which is
+	// weaker but is still a safety net.
+	if !s.prepareContentDir(context.Background()) {
+		fmt.Fprintln(os.Stderr, "sandbox-cli: snapshots will read through the repository's own git config "+
+			"(scratch git dir unavailable); a hostile repo could run a clean filter on this host")
 	}
 	return s
 }
@@ -248,11 +263,16 @@ func (s *Snapshotter) take(timeout time.Duration) {
 func (s *Snapshotter) snapshot(ctx context.Context) (string, error) {
 	env := append([]string{"GIT_INDEX_FILE=" + s.indexFile}, snapshotIdentity...)
 
-	addArgs := append([]string{"add", "-A", "--"}, s.oversizedExcludes(ctx, env)...)
-	if _, err := run(ctx, s.workspace, env, addArgs...); err != nil {
+	// Reading the workspace's *content* is done against a scratch git directory,
+	// not the user's. See contentEnv: it is what stops a filter driver being
+	// defined at all.
+	readEnv := append(append([]string{}, env...), s.contentEnv()...)
+
+	addArgs := append([]string{"add", "-A", "--"}, s.oversizedExcludes(ctx, readEnv)...)
+	if _, err := run(ctx, s.workspace, readEnv, addArgs...); err != nil {
 		return "", err
 	}
-	tree, err := run(ctx, s.workspace, env, "write-tree")
+	tree, err := run(ctx, s.workspace, readEnv, "write-tree")
 	if err != nil {
 		return "", err
 	}
@@ -495,4 +515,75 @@ func (s *Snapshotter) oversizedExcludes(ctx context.Context, env []string) []str
 			m, maxSnapshotFileBytes>>20)
 	}
 	return excludes
+}
+
+// contentEnv redirects the commands that read the workspace — `add -A` and
+// `write-tree` — at a scratch git directory, while still writing their objects
+// into the user's repository.
+//
+// This is what actually stops clean filters, and githard's GIT_ATTR_SOURCE was
+// not enough on its own. That variable redirects the *tree* attributes layer, but
+// git always additionally reads `$GIT_DIR/info/attributes` — a gitdir-local layer
+// with no `-c` override — so an agent that wrote `.git/info/attributes` plus a
+// `filter.<x>.clean` in `.git/config` still had its command executed on the host
+// by the next snapshot. Confirmed end to end before this existed.
+//
+// Chasing the attribute layers is the wrong shape of fix: a filter runs only if
+// an attribute selects a driver *and* that driver is defined in a config file git
+// reads. The attribute side is unbounded — arbitrary driver names, several
+// layers, one of them unoverridable — but the definition side is not. `-c`
+// outranks local config, and swapping GIT_DIR replaces which config *is* local.
+// With a scratch GIT_DIR the repository's config is never read, so no driver can
+// be defined, so no attribute can select one. It closes the whole class rather
+// than the instances, and it does not depend on the git version — which
+// GIT_ATTR_SOURCE does (2.40+).
+//
+// The objects still land in the user's repository via GIT_OBJECT_DIRECTORY, which
+// is what keeps a snapshot recoverable with ordinary git. Only these two commands
+// use it: commit-tree and update-ref need the real refs, and hooks there are
+// already neutralised by githard.
+//
+// One behavior change worth knowing: `.git/info/exclude` is a gitdir-local file
+// too, so it no longer filters what a snapshot captures. A locally-excluded path
+// is now snapshotted. That errs toward capturing more of the user's work, which
+// is the right direction for a safety net, and the size cap bounds the cost.
+func (s *Snapshotter) contentEnv() []string {
+	if s.contentDir == "" {
+		return nil
+	}
+	return []string{
+		"GIT_DIR=" + s.contentDir,
+		"GIT_OBJECT_DIRECTORY=" + s.objectDir,
+		"GIT_WORK_TREE=" + s.workspace,
+	}
+}
+
+// prepareContentDir builds the scratch git directory, once per session. It must
+// use the repository's own object format: a sha1 scratch against a sha256
+// repository would compute object ids the repository cannot resolve.
+//
+// Returns false when it cannot be built, and the caller then snapshots the old
+// way — degraded, but the alternative is no safety net at all.
+func (s *Snapshotter) prepareContentDir(ctx context.Context) bool {
+	objDir, err := run(ctx, s.workspace, nil, "rev-parse", "--git-path", "objects")
+	if err != nil || objDir == "" {
+		return false
+	}
+	if !filepath.IsAbs(objDir) {
+		objDir = filepath.Join(s.workspace, objDir)
+	}
+	format, err := run(ctx, s.workspace, nil, "rev-parse", "--show-object-format")
+	if err != nil || format == "" {
+		format = "sha1"
+	}
+	dir := filepath.Join(filepath.Dir(s.indexFile), "content.git")
+	if err := os.RemoveAll(dir); err != nil {
+		return false
+	}
+	if _, err := run(ctx, filepath.Dir(s.indexFile), nil,
+		"init", "-q", "--bare", "--object-format="+format, dir); err != nil {
+		return false
+	}
+	s.contentDir, s.objectDir = dir, objDir
+	return true
 }

@@ -490,7 +490,7 @@ func gitEnv() []string {
 // worktree.Git is the deliberate exception: that is the user running their own
 // git command in their own repository, where hooks firing is expected.
 func runGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command(gitBin, append(githard.Args(), args...)...)
+	cmd := exec.Command(gitBin, append(githard.Args(dir), args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(gitEnv(), githard.Env(dir)...)
 	var out, errb strings.Builder
