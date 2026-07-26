@@ -45,14 +45,20 @@ type ListOpts struct {
 // can be derived. empty reports a project the store has simply never seen, which
 // is not an error — no agent has worked there yet.
 func scopeOf(f Finding, o ListOpts) (dir string, depth int, scoped, empty bool) {
+	return scopeDir(f, o, f.Dir)
+}
+
+// scopeDir is scopeOf against one particular root, so the same arithmetic can be
+// applied to each of a Finding's locations rather than only the winning one.
+func scopeDir(f Finding, o ListOpts, root string) (dir string, depth int, scoped, empty bool) {
 	store, _ := Lookup(f.Agent)
-	dir, depth = f.Dir, storeDepth(store)
+	dir, depth = root, storeDepth(store)
 	if o.All || o.Project == "" || store.BucketStyle != BucketDashedPath {
 		return dir, depth, false, false
 	}
 	// The per-project directory is one level of the store, so scoping to it
 	// removes exactly one level of the search.
-	cand := filepath.Join(dir, ProjectBucket(o.Project))
+	cand := filepath.Join(root, ProjectBucket(o.Project))
 	if !isDir(cand) {
 		return dir, depth, true, true
 	}
@@ -65,25 +71,41 @@ func List(f Finding, o ListOpts) (sessions []Session, scoped bool, err error) {
 		return nil, false, nil
 	}
 	store, _ := Lookup(f.Agent)
-	dir, depth, scoped, empty := scopeOf(f, o)
-	if empty {
-		return nil, scoped, nil
+	seen := map[string]bool{}
+	// Every verified location, not just the one with the most recent activity.
+	// The claude wrapper really has two — the host's own history and the
+	// persisted agent HOME — and a session is no less real for living in the one
+	// that lost the tie-break. Listing only the winner made --no-sync sessions,
+	// and everything recorded before the per-project history mount was fixed,
+	// invisible to a command whose whole job is finding conversations.
+	for _, root := range listRoots(f) {
+		dir, depth, sc, empty := scopeDir(f, o, root)
+		scoped = sc
+		if empty {
+			continue
+		}
+		werr := walkSessionFiles(dir, store.Glob, store.SubDir, depth, func(path string, info fs.FileInfo) {
+			if seen[path] {
+				return
+			}
+			seen[path] = true
+			s := Session{
+				Agent:    f.Agent,
+				ID:       sessionID(path),
+				Path:     path,
+				Modified: info.ModTime(),
+				Size:     info.Size(),
+				Partial:  true,
+			}
+			if f.Format == FormatClaudeJSONL {
+				readClaudeSession(path, &s)
+			}
+			sessions = append(sessions, s)
+		})
+		if werr != nil && err == nil {
+			err = werr
+		}
 	}
-
-	err = walkSessionFiles(dir, store.Glob, store.SubDir, depth, func(path string, info fs.FileInfo) {
-		s := Session{
-			Agent:    f.Agent,
-			ID:       sessionID(path),
-			Path:     path,
-			Modified: info.ModTime(),
-			Size:     info.Size(),
-			Partial:  true,
-		}
-		if f.Format == FormatClaudeJSONL {
-			readClaudeSession(path, &s)
-		}
-		sessions = append(sessions, s)
-	})
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].Modified.After(sessions[j].Modified) })
 	return sessions, scoped, err
 }
@@ -372,4 +394,61 @@ func Find(sessions []Session, id string) (Session, []Session) {
 		return hits[0], nil
 	}
 	return Session{}, hits
+}
+
+// sandboxedBucket is the project bucket every sandboxed run used to land in.
+// Claude Code names its transcript directory after the working directory, and
+// inside the sandbox that is always /workspace.
+const sandboxedBucket = "-workspace"
+
+// PooledSessions reports sessions sitting in the shared /workspace bucket of a
+// store — the ones recorded before the wrapper mounted the host's per-project
+// history, when every project's conversations pooled into one directory.
+//
+// They cannot be attributed to a project: the only thing the transcript records
+// about where it ran is a cwd that reads /workspace for all of them. So this
+// does not guess. It reports that they exist and where, which is what turns a
+// conversation that is merely unattributed into one that is findable at all —
+// the alternative was grepping the agent HOME by hand.
+//
+// Returns 0 when the bucket is absent, which is the normal state for a store
+// written since the mount was fixed.
+func PooledSessions(f Finding) (dir string, n int) {
+	store, ok := Lookup(f.Agent)
+	if !ok || store.BucketStyle != BucketDashedPath || f.Dir == "" {
+		return "", 0
+	}
+	for _, root := range listRoots(f) {
+		cand := filepath.Join(root, sandboxedBucket)
+		if !isDir(cand) {
+			continue
+		}
+		// depth-1: the bucket is one level of the store, the same arithmetic
+		// scopeOf does when it scopes to a real project.
+		before := n
+		_ = walkSessionFiles(cand, store.Glob, store.SubDir, storeDepth(store)-1, func(string, fs.FileInfo) { n++ })
+		if n > before && dir == "" {
+			dir = cand
+		}
+	}
+	if n == 0 {
+		return "", 0
+	}
+	return dir, n
+}
+
+// listRoots is every store directory a Finding knows about, the winner first and
+// each one only once. A Finding that predates Locations still has Dir, so the
+// single-location case falls out of the same code.
+func listRoots(f Finding) []string {
+	roots := []string{f.Dir}
+	seen := map[string]bool{f.Dir: true}
+	for _, l := range f.Locations {
+		if l.Dir == "" || seen[l.Dir] {
+			continue
+		}
+		seen[l.Dir] = true
+		roots = append(roots, l.Dir)
+	}
+	return roots
 }

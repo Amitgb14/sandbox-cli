@@ -132,8 +132,34 @@ func claudeHistoryMount(rf *runFlags) (src, target string, ok bool) {
 		return "", "", false
 	}
 	src = filepath.Join(home, ".claude", "projects", claudeProjectBucket(abs))
+	// Create the project's history directory when it is not there yet.
+	//
+	// This used to bail out instead, and that made the sync a chicken-and-egg: the
+	// host bucket only exists once Claude Code has run on the *host* in this
+	// project, so a project used only inside the sandbox never had one, the mount
+	// was never made, and every sandboxed session landed in the persisted HOME's
+	// shared `-workspace` bucket instead.
+	//
+	// Two consequences, and the second is the worse one. `context list` could not
+	// find those sessions at all — it looks up the per-project bucket, which never
+	// existed — so a conversation was reachable only by grepping the agent HOME by
+	// hand. And every project's sessions pooled into that one bucket, so
+	// `--resume` against another repository's conversation was one id away, with
+	// expandResumeID unable to tell them apart either.
+	//
+	// Creating an empty directory is what Claude Code itself does on first run,
+	// and it stays scoped to this one project bucket — the rule that governs this
+	// mount.
 	if fi, err := os.Stat(src); err != nil || !fi.IsDir() {
-		return "", "", false
+		if err != nil && !os.IsNotExist(err) {
+			return "", "", false
+		}
+		if fi != nil && !fi.IsDir() {
+			return "", "", false // something else is there; do not touch it
+		}
+		if err := os.MkdirAll(src, 0o700); err != nil {
+			return "", "", false
+		}
 	}
 	wd := rf.workdir
 	if wd == "" {

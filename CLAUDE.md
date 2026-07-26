@@ -310,6 +310,20 @@ Design and rejected alternatives: `docs/proposals/usage-stats.md`.
 inside the sandbox and vice versa. `--no-sync` opts out. This is the one default that reaches a
 host path outside the workspace — keep it scoped to the single project bucket.
 
+The bucket is **created when it does not exist yet**, and that is load-bearing rather than
+tidiness. Claude Code names the directory after its working directory, which inside the sandbox is
+always `/workspace`; the mount is what redirects those writes into the host's per-project bucket.
+Skipping the mount when the host directory was absent made it a chicken-and-egg — the host bucket
+only appears once Claude Code has run on the *host* in that project, so a project used only in the
+sandbox never got one, and every session pooled into the persisted HOME's shared `-workspace`
+bucket, findable by no project and one id away from resuming another repository's conversation.
+`agentctx.PooledSessions` reports whatever is already in that shared bucket, without guessing which
+project it belonged to, since the transcripts record only `/workspace`.
+
+Relatedly, `agentctx.List` walks **every** verified location, not just the one that won the
+most-recent-activity tie-break: the claude wrapper genuinely has two, and a session is no less real
+for living in the loser.
+
 ## Conventions
 
 - Non-root by default (`user: sandbox`): agents refuse `--dangerously-skip-permissions` as root, and

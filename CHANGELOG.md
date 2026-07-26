@@ -40,6 +40,27 @@ version is tagged.
 
 ### Fixed
 
+- **`context list` could not find sessions from sandboxed runs** ([#15](https://github.com/Amitgb14/sandbox-cli/issues/15)). Claude
+  Code names its transcript directory after the working directory, and inside the
+  sandbox that is always `/workspace`. The wrapper already redirected those writes
+  into the host's per-project history — but only when that directory already
+  existed, which it does only once you have run Claude Code on the *host* in that
+  project. A project used only in the sandbox therefore never got the mount, and
+  all its sessions pooled into one shared `-workspace` bucket: `context list`
+  reported "no claude sessions for <project>" while the transcripts sat on disk,
+  reachable only by grepping the agent HOME by hand, and `--resume` against a
+  different repository's conversation was one id away. The directory is now
+  created when missing, so sandboxed sessions land under the project they belong
+  to. Sessions already in the shared bucket are reported by `context list` (they
+  cannot be attributed to a project — the transcripts record only `/workspace` —
+  so it says so rather than guessing) and can be listed with
+  `context list --project /workspace`.
+
+- **`context list` searched only one of an agent's stores.** The claude wrapper
+  has two — your own `~/.claude/projects` and the persisted agent HOME — and the
+  listing walked whichever had been active most recently, so anything recorded
+  with `--no-sync` was invisible. It now walks every verified location.
+
 - **`recover repair --branch NAME` now works.** It was unreachable: a finding
   with no recorded branch had advice but no fix, and the caller skipped every
   finding it could not already repair — so the advice the tool printed
