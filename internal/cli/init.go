@@ -19,8 +19,8 @@ const scaffoldConfig = `# sandbox configuration (https://github.com/Amitgb14/san
 # or on the command line:
 #
 #   image  workdir  user  home  runtime  mounts  secrets  env  env_allow
-#   security.*  cache.paths  and any network.mode that weakens what you already
-#   have in force
+#   security.*  cache.paths  network.allow  ports  snapshot
+#   and any network.mode / network.baseline that weakens what you already have
 #
 # If you have read a project file and want it anyway, load it deliberately:
 #   sandbox-cli --config ./.sandbox.yaml claude

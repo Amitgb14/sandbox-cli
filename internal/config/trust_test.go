@@ -51,6 +51,14 @@ func TestProjectConfigRefusesPrivilegedKeys(t *testing.T) {
 			"env_allow:\n  - AWS_SECRET_ACCESS_KEY\n", "env_allow"},
 		"shadow a container path with a volume": {
 			"cache:\n  paths:\n    - /sandbox/home/.claude\n", "cache.paths"},
+		"choose where data may be sent": {
+			"network:\n  allow:\n    - exfil.example.com\n", "network.allow"},
+		"publish a host port": {
+			"ports:\n  - 0.0.0.0:8022:22\n", "ports"},
+		"disable the crash safety net": {
+			"snapshot:\n  enabled: false\n", "snapshot"},
+		"turn snapshots into a host busy-loop": {
+			"snapshot:\n  interval: 1ms\n", "snapshot"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -80,10 +88,7 @@ func TestProjectConfigRefusesPrivilegedKeys(t *testing.T) {
 // these keys describe the project rather than the boundary and must keep working.
 func TestProjectConfigAllowsProjectShapedKeys(t *testing.T) {
 	yaml := "hostname: devbox\n" +
-		"ports:\n  - 3000:3000\n" +
-		"cache:\n  enabled: true\n" +
-		"snapshot:\n  interval: 30s\n" +
-		"network:\n  allow:\n    - internal.example.com\n"
+		"cache:\n  enabled: true\n"
 
 	dir := t.TempDir()
 	writeProjectConfig(t, dir, yaml)
@@ -96,17 +101,8 @@ func TestProjectConfigAllowsProjectShapedKeys(t *testing.T) {
 	if cfg.Hostname != "devbox" {
 		t.Errorf("Hostname = %q, want devbox", cfg.Hostname)
 	}
-	if len(cfg.Ports) != 1 || cfg.Ports[0] != "3000:3000" {
-		t.Errorf("Ports = %v, want [3000:3000]", cfg.Ports)
-	}
 	if !cfg.Cache.IsEnabled() {
 		t.Error("cache.enabled must be settable from a project config")
-	}
-	if cfg.Snapshot.Interval != "30s" {
-		t.Errorf("Snapshot.Interval = %q, want 30s", cfg.Snapshot.Interval)
-	}
-	if !containsStr(cfg.Network.Allow, "internal.example.com") {
-		t.Errorf("network.allow = %v, want the project's domain", cfg.Network.Allow)
 	}
 }
 

@@ -268,7 +268,10 @@ func (s *Snapshotter) snapshot(ctx context.Context) (string, error) {
 	// defined at all.
 	readEnv := append(append([]string{}, env...), s.contentEnv()...)
 
-	addArgs := append([]string{"add", "-A", "--"}, s.oversizedExcludes(ctx, readEnv)...)
+	addArgs := []string{"add", "-A"}
+	if specFile := s.oversizedExcludes(ctx, readEnv); specFile != "" {
+		addArgs = append(addArgs, "--pathspec-from-file="+specFile, "--pathspec-file-nul")
+	}
 	if _, err := run(ctx, s.workspace, readEnv, addArgs...); err != nil {
 		return "", err
 	}
@@ -478,20 +481,41 @@ func drop(sess Session) {
 // is exactly the knob a hostile repository would reach for.
 const maxSnapshotFileBytes = 10 << 20 // 10 MiB
 
-// oversizedExcludes returns pathspecs excluding files too large to snapshot,
-// and reports them once per session so a missing file is never a silent surprise.
+// maxOversizedExcludes bounds how many paths one snapshot will exclude. Past
+// that the repository is pathological, and an unbounded list becomes its own
+// problem — an argv (or pathspec file) that grows without limit, and a report the
+// user cannot read.
+const maxOversizedExcludes = 500
+
+// oversizedExcludes writes a pathspec file excluding files too large to
+// snapshot, and returns its path ("" when there is nothing to exclude). It also
+// reports each skipped path once per session, so a missing file is never a silent
+// surprise.
 //
-// The candidate list comes from git itself (modified and untracked, honoring
-// .gitignore), so this costs one extra command and looks at nothing git would not
-// have added anyway.
-func (s *Snapshotter) oversizedExcludes(ctx context.Context, env []string) []string {
-	out, err := run(ctx, s.workspace, env, "ls-files", "-o", "-m", "--exclude-standard")
+// Three things here are not incidental, and each was a bug first:
+//
+//   - `ls-files -z`. Without it git *quotes* any path with a non-ASCII or control
+//     character, so `rapport-financiér.bin` came back as a C-quoted string, Lstat
+//     failed on it, and the file was never excluded — the size cap simply did not
+//     apply to a large class of ordinary filenames. A newline in a name also split
+//     one path into two bogus lines.
+//   - `:(exclude,literal)`. A bare `:(exclude)<path>` is a *glob*, so a file
+//     literally named `*` excluded everything and the snapshot captured nothing at
+//     all — the safety net silently dead for the rest of the run. `literal` is what
+//     makes the path a path.
+//   - `--pathspec-from-file`. The list can be long; as argv it hit
+//     "argument list too long", which failed the add, and three consecutive
+//     failures disable snapshotting for the run.
+func (s *Snapshotter) oversizedExcludes(ctx context.Context, env []string) string {
+	out, err := run(ctx, s.workspace, env, "ls-files", "-o", "-m", "-z", "--exclude-standard")
 	if err != nil || out == "" {
-		return nil
+		return ""
 	}
-	var excludes, newlySkipped []string
-	for _, rel := range strings.Split(out, "\n") {
-		rel = strings.TrimSpace(rel)
+	var specs []byte
+	var newlySkipped []string
+	truncated := false
+	count := 0
+	for _, rel := range strings.Split(out, "\x00") {
 		if rel == "" {
 			continue
 		}
@@ -499,22 +523,53 @@ func (s *Snapshotter) oversizedExcludes(ctx context.Context, env []string) []str
 		if err != nil || !fi.Mode().IsRegular() || fi.Size() <= maxSnapshotFileBytes {
 			continue
 		}
-		excludes = append(excludes, ":(exclude)"+rel)
+		if count >= maxOversizedExcludes {
+			truncated = true
+			break
+		}
+		count++
+		specs = append(specs, ":(exclude,literal)"...)
+		specs = append(specs, rel...)
+		specs = append(specs, 0)
+
 		s.mu.Lock()
-		if !s.skipped[rel] {
-			if s.skipped == nil {
-				s.skipped = map[string]bool{}
-			}
+		if s.skipped == nil {
+			s.skipped = map[string]bool{}
+		}
+		if !s.skipped[rel] && len(s.skipped) < maxOversizedExcludes {
 			s.skipped[rel] = true
-			newlySkipped = append(newlySkipped, fmt.Sprintf("%s (%d MiB)", rel, fi.Size()>>20))
+			newlySkipped = append(newlySkipped, fmt.Sprintf("%s (%d MiB)", oneLinePath(rel), fi.Size()>>20))
 		}
 		s.mu.Unlock()
+	}
+	if len(specs) == 0 {
+		return ""
+	}
+	specFile := filepath.Join(filepath.Dir(s.indexFile), "exclude-pathspecs")
+	if err := os.WriteFile(specFile, specs, 0o600); err != nil {
+		return ""
 	}
 	for _, m := range newlySkipped {
 		fmt.Fprintf(os.Stderr, "sandbox-cli: snapshot skipping %s — over the %d MiB per-file limit\n",
 			m, maxSnapshotFileBytes>>20)
 	}
-	return excludes
+	if truncated {
+		fmt.Fprintf(os.Stderr, "sandbox-cli: more than %d oversized files; the rest are being snapshotted\n",
+			maxOversizedExcludes)
+	}
+	return specFile
+}
+
+// oneLinePath makes a path safe to print. It is read from the workspace, so the
+// agent chooses it, and it goes straight to the user's terminal — the same reason
+// agentctx.oneLine exists.
+func oneLinePath(p string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return ' '
+		}
+		return r
+	}, p)), " ")
 }
 
 // contentEnv redirects the commands that read the workspace — `add -A` and

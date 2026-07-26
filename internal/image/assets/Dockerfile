@@ -455,7 +455,15 @@ if [ -n "$user" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
   # Dropping to root is not dropping. Checked on the resolved id rather than the
   # spelling, so `--user 0` and `--user root` behave the same.
   if [ "$uid" != "0" ]; then
-    exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"
+    # --init-groups reads the passwd/group database, so it fails outright for a
+    # numeric uid with no entry — and `--user $(id -u)` is the standard way on
+    # Linux to get bind-mount ownership right, which made correct ownership and
+    # the egress allowlist mutually exclusive. Ask for supplementary groups only
+    # when there is somewhere to read them from.
+    if /usr/bin/id -u "$user" >/dev/null 2>&1; then
+      exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"
+    fi
+    exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --clear-groups -- "$@"
   fi
 fi
 exec "$@"

@@ -101,7 +101,10 @@ func newCleanCmd() *cobra.Command {
 			}
 			var targets []psRow
 			for _, r := range rows {
-				running := strings.HasPrefix(r.Status, "Up")
+				// Anything not plainly exited is treated as live: "Up", "Restarting",
+				// "Removing", and "?" (status could not be matched) all mean do not
+				// touch this without --force.
+				running := !strings.HasPrefix(r.Status, "Exited") && !strings.HasPrefix(r.Status, "Created")
 				if running && !force {
 					continue
 				}
@@ -131,16 +134,53 @@ func newCleanCmd() *cobra.Command {
 // machine, and the format string is chosen so a value can never contain the
 // separator (names, labels and status have no tabs).
 func sandboxContainers(all bool) ([]psRow, error) {
-	args := []string{"ps", "--filter", "label=" + sandboxLabel,
-		"--format", "{{.Names}}\t{{.Status}}\t{{.Label \"sandbox.repo\"}}\t{{.Label \"sandbox.branch\"}}\t{{.Label \"sandbox.agent\"}}"}
+	base := []string{"ps", "--filter", "label=" + sandboxLabel}
 	if all {
-		args = append(args, "--all")
+		base = append(base, "--all")
 	}
-	out, err := exec.Command("docker", args...).Output()
+
+	// The authoritative set of names comes from a format carrying NOTHING
+	// attacker-controlled. Label values do: they are branch names and repo paths,
+	// and a label containing a newline forged an entire extra row — whose Status
+	// then parsed as empty, which is not "Up", so `clean` force-removed a
+	// container sandbox-cli never created. Names are constrained by docker itself,
+	// so a name list cannot be made to grow.
+	nameOut, err := exec.Command("docker", append(append([]string{}, base...), "--format", "{{.Names}}")...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("listing sandbox containers (is the docker daemon running?): %w", err)
 	}
-	return parsePsRows(string(out)), nil
+	real := map[string]bool{}
+	var order []string
+	for _, n := range strings.Split(string(nameOut), "\n") {
+		if n = strings.TrimSpace(n); n != "" && !real[n] {
+			real[n] = true
+			order = append(order, n)
+		}
+	}
+	if len(order) == 0 {
+		return nil, nil
+	}
+
+	// Labels and status are for display only, and are matched back by name. A row
+	// naming anything not in the set above is discarded rather than shown.
+	detailOut, _ := exec.Command("docker", append(append([]string{}, base...),
+		"--format", "{{.Names}}\t{{.Status}}\t{{.Label \"sandbox.repo\"}}\t{{.Label \"sandbox.branch\"}}\t{{.Label \"sandbox.agent\"}}")...).Output()
+	byName := map[string]psRow{}
+	for _, r := range parsePsRows(string(detailOut)) {
+		if real[r.Name] {
+			byName[r.Name] = r
+		}
+	}
+
+	rows := make([]psRow, 0, len(order))
+	for _, n := range order {
+		if r, ok := byName[n]; ok {
+			rows = append(rows, r)
+			continue
+		}
+		rows = append(rows, psRow{Name: n, Status: "?"})
+	}
+	return rows, nil
 }
 
 // parsePsRows splits docker's tab-separated output.

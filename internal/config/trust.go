@@ -35,10 +35,12 @@ import (
 // deliberate act — which is the supported way to use a checked-in config you have
 // actually read.
 //
-// What is still permitted from a project file is the set that describes the
-// project rather than the boundary: `hostname`, `ports`, `snapshot`,
-// `cache.enabled`, and the egress `network.allow` / `network.baseline` (see
-// restrictedProjectKeys for why those two are treated as narrowing).
+// What is still permitted from a project file is the small set that describes the
+// project without touching the boundary: `hostname`, `cache.enabled`, and a
+// `network.mode` / `network.baseline` that *tightens* what is already in force.
+// Everything else — including `network.allow`, `ports` and `snapshot`, all of
+// which were permitted at first — turned out to be a decision about the boundary
+// rather than about the project.
 
 // restrictedProjectKeys returns the yaml paths of privilege-relevant keys that
 // src sets and a project-level file may not. inherited is the already-merged
@@ -95,6 +97,36 @@ func restrictedProjectKeys(src, inherited Config) []string {
 	}
 	if !securityIsZero(src.Security) {
 		add("security") // no_new_privileges, cap_add/cap_drop, seccomp, pids_limit
+	}
+	if src.Network.Allow != nil {
+		// Permitting this was a mistake, and the reasoning for it was wrong: it was
+		// treated as "narrowing", but `allow` only ever *widens* — and mergeInto
+		// makes it REPLACE rather than append, so a checked-in file could rewrite an
+		// allowlist the user had configured, wholesale. With `baseline: false` in the
+		// user's config, `allow: [exfil.example.com]` in the repository became the
+		// entire allowlist: the repository choosing where a compromised agent may
+		// send data, which is the one thing the allowlist exists to decide.
+		//
+		// This costs a project file its most natural network knob. The escape hatch
+		// is the same as for every other refused key: the user's own config, or
+		// --allow on the command line.
+		add("network.allow")
+	}
+	if src.Ports != nil {
+		// Publishing binds a host port and, under an allowlist, punches a hole in the
+		// default-deny INPUT chain (SANDBOX_INGRESS_PORTS). `0.0.0.0:8022:22` in a
+		// checked-in file exposes the container on every interface, and a project can
+		// also squat host ports. Declaring a dev-server port is a real use, but it is
+		// a decision about the boundary, so it belongs to the user.
+		add("ports")
+	}
+	if src.Snapshot.Enabled != nil || src.Snapshot.Interval != "" || src.Snapshot.Retention != "" {
+		// `snapshot.enabled: false` silently removes crash protection, and
+		// `interval: 1ms` turns the host into a sustained `git add -A` loop for the
+		// length of the session (confirmed: 6 commits and 18 loose objects in five
+		// seconds). maxSnapshotFileBytes was deliberately made a constant to keep it
+		// out of a project file; the cadence deserved the same treatment.
+		add("snapshot")
 	}
 
 	// Refused only when they weaken what is already in force. A project saying

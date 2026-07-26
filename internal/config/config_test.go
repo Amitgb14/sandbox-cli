@@ -94,15 +94,11 @@ func TestLoad_SecurityOverride(t *testing.T) {
 }
 
 func TestLoad_NetworkAllowlistFromConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	content := "network:\n  mode: allowlist\n  allow:\n    - internal.example.com\n"
-	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// network.allow is user-level: it only ever widens the egress boundary, and a
+	// project file could replace it wholesale.
+	withUserConfig(t, "network:\n  mode: allowlist\n  allow:\n    - internal.example.com\n")
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,14 +173,9 @@ func TestEgressDomains_BaselineOffEmptyIsEmpty(t *testing.T) {
 // TestLoad_BaselineFalseFromConfig runs the field through the real YAML path,
 // since a struct literal would not catch a mistyped tag.
 func TestLoad_BaselineFalseFromConfig(t *testing.T) {
-	dir := t.TempDir()
-	content := "network:\n  mode: allowlist\n  baseline: false\n  allow:\n    - internal.example.com\n"
-	if err := os.WriteFile(filepath.Join(dir, projectFileName), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	withUserConfig(t, "network:\n  mode: allowlist\n  baseline: false\n  allow:\n    - internal.example.com\n")
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +211,7 @@ func TestLoad_BaselineIsTriStateAcrossLayers(t *testing.T) {
 	proj := t.TempDir()
 
 	// The project config is silent on baseline: the user-level false stands.
-	if err := os.WriteFile(filepath.Join(proj, projectFileName), []byte("network:\n  allow:\n    - proj.example.com\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(proj, projectFileName), []byte("hostname: devbox\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(proj, "")
@@ -331,14 +322,11 @@ func TestLoad_RuntimeFromConfig(t *testing.T) {
 }
 
 func TestLoad_PortsFromConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	if err := os.WriteFile(cfgFile, []byte("ports:\n  - 3000:3000\n  - 5173\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// ports is user-level: publishing binds a host port and, under an allowlist,
+	// opens a hole in the default-deny INPUT chain.
+	withUserConfig(t, "ports:\n  - 3000:3000\n  - 5173\n")
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,39 +342,29 @@ func TestLoad_PortsFromConfig(t *testing.T) {
 // TestLoad_PortsReplaceNotAppend: publishing opens the boundary inward, so a
 // project must be able to narrow an inherited set — including to nothing.
 func TestLoad_PortsReplaceNotAppend(t *testing.T) {
-	xdg := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(xdg, "sandbox"), 0o755); err != nil {
+	// Ports replace rather than append, so a nearer layer can say "only these" —
+	// and "none" with `ports: []`. Exercised across the user layer and an explicit
+	// --config, since a project file may no longer set ports at all.
+	withUserConfig(t, "ports:\n  - 9999:9999\n")
+	explicit := filepath.Join(t.TempDir(), "trusted.yaml")
+	if err := os.WriteFile(explicit, []byte("ports:\n  - 3000:3000\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	userCfg := filepath.Join(xdg, "sandbox", "config.yaml")
-	if err := os.WriteFile(userCfg, []byte("ports:\n  - 9000:9000\n  - 9001:9001\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", xdg)
-
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, projectFileName), []byte("ports:\n  - 3000:3000\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), explicit)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cfg.Ports) != 1 || cfg.Ports[0] != "3000:3000" {
-		t.Errorf("project ports must replace the user's, got %v", cfg.Ports)
+		t.Errorf("Ports = %v, want only the nearer layer's", cfg.Ports)
 	}
-
-	// An explicit empty list clears the inherited set rather than being ignored.
-	dir2 := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir2, projectFileName), []byte("ports: []\n"), 0o644); err != nil {
+	// An explicit empty list clears an inherited one.
+	if err := os.WriteFile(explicit, []byte("ports: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg2, err := Load(dir2, "")
-	if err != nil {
+	if cfg, err = Load(t.TempDir(), explicit); err != nil {
 		t.Fatal(err)
-	}
-	if len(cfg2.Ports) != 0 {
-		t.Errorf("`ports: []` must publish nothing, got %v", cfg2.Ports)
+	} else if len(cfg.Ports) != 0 {
+		t.Errorf("Ports = %v, want empty", cfg.Ports)
 	}
 }
 

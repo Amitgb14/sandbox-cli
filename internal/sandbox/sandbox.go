@@ -94,12 +94,6 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 		return "", fmt.Errorf("preparing image %q: %w", spec.Image, err)
 	}
 
-	s.Audit.RecordSession(audit.SessionMeta{
-		Image:   spec.Image,
-		Workdir: spec.Workdir,
-		Command: spec.Command,
-	})
-
 	// Same rule as Run: resolved only on a real launch path, never in
 	// Prepare/--dry-run, and reaching the container by name rather than on the argv.
 	fwd, err := forwardedValues(s.Cfg, opts)
