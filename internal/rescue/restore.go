@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Amitgb14/sandbox-cli/internal/githard"
@@ -126,6 +127,18 @@ type RestoreResult struct {
 	Branch   string
 	Patch    string
 	Files    int
+
+	// MatchesWorkingTree reports that the files on disk are already what the
+	// snapshot holds, so nothing was actually rescued.
+	//
+	// This is the common case after a crash and it deserves saying out loud.
+	// /workspace is a bind mount, so everything the agent wrote is on the host's
+	// disk the instant it is written — the snapshots are the belt, not the
+	// braces. A user who is told only "created branch X" reasonably concludes
+	// that the branch is where their work now lives, and goes looking there for
+	// something that was never missing, while the thing that *is* gone after a
+	// kill — the conversation — goes unmentioned.
+	MatchesWorkingTree bool
 }
 
 // Restore brings a snapshot back. The default mode never touches the working
@@ -196,6 +209,7 @@ func Restore(dir, id string, opts RestoreOptions) (RestoreResult, error) {
 		}
 		res.Branch = name
 		res.Files = countFiles(snap)
+		res.MatchesWorkingTree = matchesWorkingTree(dir, snap)
 		return res, nil
 	}
 }
@@ -220,6 +234,67 @@ func diff(snap Snapshot) (string, error) {
 
 // countFiles reports how many files the snapshot changed relative to the run's
 // starting commit; display only, so any failure just yields 0.
+// matchesWorkingTree reports whether the files in dir are already identical to
+// the snapshot.
+//
+// It builds a tree from the working tree and compares object ids, rather than
+// running `git diff <commit>`. The obvious diff is wrong for the case that
+// matters most: a snapshot captures untracked files, and `git diff` compares
+// through the index, so every untracked file in the snapshot is reported as a
+// deletion — the answer would be "different" precisely when an agent's new file
+// had survived on disk, which is the common outcome after a crash.
+//
+// The tree is built the way the snapshotter builds one: a scratch GIT_DIR, so
+// the repository's own config is never read and no filter driver can be defined,
+// let alone selected. This runs `add -A` over a directory the agent controlled,
+// which is the exact operation that executed host commands before that
+// protection existed.
+//
+// Objects go to a throwaway store, not the user's repository. A tree id is a
+// hash of content, so it compares identically wherever it was written, and a
+// question the user asked in passing should not add objects to their repo.
+//
+// Uncertainty answers false: claiming "you already have this" wrongly would talk
+// someone out of looking at a branch that does hold something.
+func matchesWorkingTree(dir string, snap Snapshot) bool {
+	if snap.Commit == "" || dir == "" {
+		return false
+	}
+	ctx := context.Background()
+	want, err := run(ctx, snap.Repo, nil, "rev-parse", "--verify", snap.Commit+"^{tree}")
+	if err != nil || want == "" {
+		return false
+	}
+
+	scratch, err := os.MkdirTemp("", "sandbox-match-")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(scratch)
+
+	format, err := run(ctx, dir, nil, "rev-parse", "--show-object-format")
+	if err != nil || format == "" {
+		format = "sha1"
+	}
+	gitDir := filepath.Join(scratch, "content.git")
+	if _, err := run(ctx, scratch, nil, "init", "-q", "--bare", "--object-format="+format, gitDir); err != nil {
+		return false
+	}
+	env := []string{
+		"GIT_DIR=" + gitDir,
+		"GIT_OBJECT_DIRECTORY=" + filepath.Join(gitDir, "objects"),
+		"GIT_WORK_TREE=" + dir,
+	}
+	if _, err := run(ctx, dir, env, "add", "-A"); err != nil {
+		return false
+	}
+	got, err := run(ctx, dir, env, "write-tree")
+	if err != nil || got == "" {
+		return false
+	}
+	return got == want
+}
+
 func countFiles(snap Snapshot) int {
 	ctx := context.Background()
 	base := snap.HeadAtStart

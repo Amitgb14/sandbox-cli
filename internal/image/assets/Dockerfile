@@ -512,6 +512,17 @@ gw="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}' || true)"
 #
 # So the property is expressed directly instead of by proxy: everything may
 # reach a published port except this container's bridge peers.
+#
+# That is a denylist where the old rule was an allowlist, and the difference is
+# worth stating: a container on a *different* docker bridge is not in $subnet, so
+# these rules now accept it where gateway-only would have denied it. Docker's own
+# DOCKER-ISOLATION-STAGE-* chains block inter-bridge traffic, so this leans on
+# that rather than opening a path — but it is defence in depth given up, and if
+# docker ever stops isolating bridges by default this needs revisiting.
+#
+# A malformed $subnet would make the iptables call fail and, under `set -e`,
+# refuse the run. That is the right direction, if an opaque one: the alternative
+# is a published port with no peer filtering at all.
 subnet="$(ip route 2>/dev/null | awk '/proto kernel/ && /src/ {print $1; exit}' || true)"
 for p in $(printf '%s' "$ingress" | tr ',' ' '); do
   [ -z "$p" ] && continue

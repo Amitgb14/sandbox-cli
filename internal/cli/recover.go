@@ -130,27 +130,47 @@ func printSnapshots(snaps []rescue.Snapshot, all bool) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	header := "SESSION\tBRANCH\tWHEN\tSNAPSHOTS\tSTATE"
+	// AGENT is here because a snapshot's real companion after a crash is the
+	// conversation, and the manifest already knows which agent ran. Without it the
+	// listing describes only the half that usually survives.
+	header := "SESSION\tBRANCH\tAGENT\tWHEN\tSNAPSHOTS\tSTATE"
 	if all {
-		header = "SESSION\tREPO\tBRANCH\tWHEN\tSNAPSHOTS\tSTATE"
+		header = "SESSION\tREPO\tBRANCH\tAGENT\tWHEN\tSNAPSHOTS\tSTATE"
 	}
 	fmt.Fprintln(tw, header)
+	withAgent := false
 	for _, s := range snaps {
 		branch := s.Branch
 		if branch == "" {
 			branch = "-"
+		}
+		agent := s.Agent
+		if agent == "" {
+			agent = "-" // a plain `run`: there was no conversation to lose
+		} else {
+			withAgent = true
 		}
 		state := s.Status()
 		if s.Commit != "" && !s.Reachable {
 			state += " (objects gone)"
 		}
 		if all {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n", s.ID, s.Repo, branch, humanAge(s.Activity()), s.Snapshots, state)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", s.ID, s.Repo, branch, agent, humanAge(s.Activity()), s.Snapshots, state)
 			continue
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", s.ID, branch, humanAge(s.Activity()), s.Snapshots, state)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n", s.ID, branch, agent, humanAge(s.Activity()), s.Snapshots, state)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if withAgent {
+		// Not a per-row lookup: resolving each run's transcript means probing the
+		// store and walking it once per row, which is too much work for a listing.
+		// The pointer is enough, and `restore` does the resolution for the one
+		// session the user picks.
+		fmt.Println("\na run with an agent also left a conversation; `sandbox-cli recover restore ID` names it")
+	}
+	return nil
 }
 
 // humanAge renders "how long ago" at the resolution someone hunting for lost
@@ -273,9 +293,17 @@ func reportRestore(res rescue.RestoreResult, mode rescue.RestoreMode) {
 		if res.Files > 0 {
 			fmt.Fprintf(os.Stderr, " (%d file(s) changed)", res.Files)
 		}
-		fmt.Fprintf(os.Stderr, "\n  Look at it:  git diff HEAD %s\n", res.Branch)
+		fmt.Fprintln(os.Stderr)
+		if res.MatchesWorkingTree {
+			// Said before the git commands, because it changes what they are for.
+			// The files were never lost — /workspace is a bind mount — so pointing
+			// at the branch first invites a hunt through a diff that is empty.
+			fmt.Fprintf(os.Stderr, "  Your working tree already matches this snapshot: nothing was missing.\n")
+		}
+		fmt.Fprintf(os.Stderr, "  Look at it:  git diff HEAD %s\n", res.Branch)
 		fmt.Fprintf(os.Stderr, "  Work on it:  git switch %s\n", res.Branch)
 	}
+	reportConversation(res.Snapshot.Session)
 }
 
 func newRecoverRepairCmd() *cobra.Command {

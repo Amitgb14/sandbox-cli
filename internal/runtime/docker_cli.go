@@ -398,6 +398,12 @@ func childEnv(spec RunSpec) []string {
 // other at all, while DNS, egress and published ports are unaffected.
 const SandboxNetwork = "sandbox-cli"
 
+// ownedNetwork is the one network sandbox-cli creates, and so the only one it is
+// entitled to vouch for. A var rather than a direct use of the constant so tests
+// can exercise the ICC check against a scratch network — the real one usually
+// has live containers attached, and a test must not go near those.
+var ownedNetwork = SandboxNetwork
+
 // EnsureNetwork creates the shared sandbox network if it is not already there,
 // and verifies that an existing one actually has the property it exists for.
 //
@@ -413,6 +419,21 @@ const SandboxNetwork = "sandbox-cli"
 // not what is checked.
 func (d *DockerCLI) EnsureNetwork(ctx context.Context, name string) error {
 	if name == "" {
+		return nil
+	}
+	// Only the network sandbox-cli creates is sandbox-cli's to vouch for.
+	//
+	// `none` is the other value that reaches here, and it is a *predefined*
+	// docker network: `network inspect` succeeds, its Options map is empty, so an
+	// unconditional check read that as "ICC enabled" and refused to run — telling
+	// the user to `docker network rm none`, which docker declines because the
+	// network is predefined. That broke the strictest posture the tool has, and
+	// the one the empty-allowlist refusal points people at.
+	//
+	// It is also the right rule on its own terms: `none` gives the container no
+	// interfaces at all, so inter-container communication is not a property it
+	// can have, and a network the user named themselves is theirs to configure.
+	if name != ownedNetwork {
 		return nil
 	}
 	if icc, err := d.networkICC(ctx, name); err == nil {

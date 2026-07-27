@@ -551,3 +551,50 @@ func TestSnapshotSkipsOversizedFiles(t *testing.T) {
 		t.Errorf("an oversized file was copied into the object store; tree = %q", tree)
 	}
 }
+
+// TestRestoreReportsWhenTheWorkingTreeAlreadyMatches covers the other half of
+// issue #16.
+//
+// After a crash the files are usually fine: /workspace is a bind mount, so
+// everything the agent wrote is already on the host's disk. Restore still
+// creates the branch — it was asked to — but a user told only "created branch X"
+// reasonably concludes their work now lives there, and goes hunting through a
+// diff that is empty, while the thing that actually went missing (the
+// conversation) is never mentioned.
+func TestRestoreReportsWhenTheWorkingTreeAlreadyMatches(t *testing.T) {
+	repo := initRepo(t)
+	s := Begin(repo, "test", time.Minute, time.Hour)
+
+	writeFile(t, filepath.Join(repo, "work.txt"), "the agent's work\n")
+	if _, err := s.Once(); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	zero := 0
+	s.Stop("ok", &zero)
+
+	sessions, err := List(repo, false)
+	if err != nil || len(sessions) == 0 {
+		t.Fatalf("no snapshot session recorded: %v", err)
+	}
+	id := sessions[0].ID
+
+	// The files are still exactly as the snapshot has them — the usual case.
+	res, err := Restore(repo, id, RestoreOptions{})
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if !res.MatchesWorkingTree {
+		t.Error("restore did not notice that the working tree already matched the snapshot")
+	}
+
+	// Now change a file, so the snapshot genuinely holds something the tree does
+	// not. The claim must flip, or it would be reassurance with no content.
+	writeFile(t, filepath.Join(repo, "work.txt"), "something else entirely\n")
+	res2, err := Restore(repo, id, RestoreOptions{Branch: "second-restore"})
+	if err != nil {
+		t.Fatalf("second restore: %v", err)
+	}
+	if res2.MatchesWorkingTree {
+		t.Error("restore claimed the working tree matched when the file had been changed")
+	}
+}

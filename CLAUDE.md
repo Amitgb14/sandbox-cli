@@ -105,7 +105,15 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   The whole firewall, ingress included, runs in allowlist mode only. Filtering ingress on every run
   would mean every run taking the root-entrypoint path with `NET_ADMIN`, which is a worse default
   than the one it would be protecting.
-- **`internal/rescue`** — the crash safety net and `sandbox-cli recover`. Snapshots the workspace
+- **`internal/rescue`** — the crash safety net and `sandbox-cli recover`. Recovering the
+  *work* and recovering the *conversation* are two different things, and the output says
+  both: after a crash the files are usually already on disk (a bind mount), so
+  `RestoreResult.MatchesWorkingTree` reports when nothing was actually missing, and
+  `cli/recover_resume.go` correlates the run with its agent transcript — by agent, project
+  and time window, all three already in the manifest — to print the resume command. It
+  declines to guess: no agent, no verified store, or nothing in the window all print how to
+  look rather than an id, because resuming the *wrong* conversation is worse than offering
+  none. Snapshots the workspace
   into `refs/sandbox/snapshots/<session>` while a run is in flight, using a **private
   `GIT_INDEX_FILE`** so the user's index, `HEAD`, branches and working tree are never written.
   Session manifests live outside every repo (`~/.config/sandbox/rescue/<repo-id>/`) because the

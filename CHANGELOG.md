@@ -40,6 +40,22 @@ version is tagged.
 
 ### Fixed
 
+- **`network: none` refused to start.** The new check that the shared docker
+  network really has inter-container communication disabled was applied to every
+  network, including the predefined `none` — whose options are empty, which read
+  as "enabled". The strictest posture the tool offers failed on every run, with
+  advice (`docker network rm none`) that docker declines. The check now applies
+  only to the network sandbox-cli creates.
+
+- **`recover` said nothing about the conversation** ([#16](https://github.com/Amitgb14/sandbox-cli/issues/16)). After a crash the
+  files are usually fine — `/workspace` is a bind mount, so everything the agent
+  wrote is already on disk — while the conversation is the half that actually
+  goes missing. `recover restore` now names the agent session that belongs to the
+  run and prints the command to resume it, `recover list` grew an AGENT column,
+  and a restore whose snapshot the working tree already matches says so instead
+  of pointing at a branch with an empty diff. When the conversation predates
+  per-project history it says that too, and gives the one command that finds it.
+
 - **A filter driver hidden in worktree-scoped git config could run a command on
   the host.** `githard` enumerates the repository's filter and diff drivers and
   blanks them, which is what stops a `.gitattributes` from selecting something

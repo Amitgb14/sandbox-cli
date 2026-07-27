@@ -562,3 +562,35 @@ func dockerAvailable() bool {
 }
 
 func ptr(b bool) *bool { return &b }
+
+// TestNetworkNoneActuallyRuns is the regression for a break that every existing
+// `none` test missed.
+//
+// They all stop at BuildArgs or BuildSpec, which never reach EnsureNetwork — so
+// when the ICC verification started refusing the predefined `none` network
+// (inspect succeeds, Options is empty, which read as "ICC enabled"), the
+// strictest posture the tool offers failed to start on every run and the suite
+// stayed green. This one starts a real container, which is the only way that
+// class of break is visible.
+func TestNetworkNoneActuallyRuns(t *testing.T) {
+	proj := t.TempDir()
+	cfg := config.Default()
+	cfg.Network.Mode = "none"
+	sess := newTestSession(t, cfg)
+
+	name, err := sess.Start(context.Background(), sandbox.Options{
+		Project: proj,
+		Command: []string{"sleep", "20"},
+	}, false)
+	if err != nil {
+		t.Fatalf("network: none refused to start: %v", err)
+	}
+	defer exec.Command("docker", "rm", "-f", name).Run()
+
+	// And it really has no network, so the mode did what it says.
+	out, _ := exec.Command("docker", "inspect", name,
+		"--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}").Output()
+	if got := strings.TrimSpace(string(out)); got != "none" {
+		t.Errorf("container joined %q, want the none network", got)
+	}
+}

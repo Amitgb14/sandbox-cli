@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These tests treat the repository as hostile, which is the real situation: the
@@ -210,5 +211,46 @@ func TestRepairRefusesAWriteOutsideTheRepository(t *testing.T) {
 	}
 	if _, err := os.Stat(target); err == nil {
 		t.Errorf("Repair created %q despite refusing", target)
+	}
+}
+
+// TestMatchesWorkingTreeRunsNoRepositoryCommands guards the newest place that
+// runs `add -A` over a directory the agent controlled.
+//
+// Restore now reports whether the files on disk already match the snapshot, and
+// answering that means building a tree from the working tree — the same
+// operation that executed agent-supplied commands on the host before the scratch
+// GIT_DIR existed. A convenience added to the output must not reopen that.
+func TestMatchesWorkingTreeRunsNoRepositoryCommands(t *testing.T) {
+	repo := initRepo(t)
+	markers := t.TempDir()
+	armHostileRepo(t, repo, markers)
+
+	s := Begin(repo, "test", time.Minute, time.Hour)
+	writeFile(t, filepath.Join(repo, "work.txt"), "the agent's work\n")
+	if _, err := s.Once(); err != nil {
+		t.Logf("snapshot: %v", err)
+	}
+	zero := 0
+	s.Stop("ok", &zero)
+
+	sessions, err := List(repo, false)
+	if err != nil || len(sessions) == 0 {
+		t.Skipf("no snapshot recorded: %v", err)
+	}
+	// Clear anything the snapshot itself may have dropped, so this asserts about
+	// the restore path alone.
+	entries, _ := os.ReadDir(markers)
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(markers, e.Name()))
+	}
+
+	if _, err := Restore(repo, sessions[0].ID, RestoreOptions{Branch: "check-restore"}); err != nil {
+		t.Logf("restore: %v", err)
+	}
+
+	left, _ := os.ReadDir(markers)
+	for _, e := range left {
+		t.Errorf("restore ran an agent-supplied command on the host: %s", e.Name())
 	}
 }

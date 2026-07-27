@@ -99,6 +99,23 @@ func (s *Server) handle(client net.Conn) {
 	}
 	_ = client.SetReadDeadline(time.Time{})
 
+	// The redirect only ever delivers tcp/80 and tcp/443, so an explicit CONNECT
+	// to another port is a client that reached the proxy directly on loopback and
+	// asked it to open one the redirect would never have produced. Refused here
+	// rather than in parseConnect: rejecting it there made peek fall through to
+	// the Host header, and since most clients send Host on a CONNECT the request
+	// simply became a non-explicit one for the same name — so it was not cleanly
+	// refused, and the client never got the status line it was waiting for.
+	//
+	// Not a widening either way — the name is still enforced, and the address
+	// rules already permit an allowlisted IP on any port — but a component should
+	// not quietly do more than it says.
+	if explicit && port != 80 && port != 443 {
+		s.Log(Decision{Host: host, Port: port, Reason: "CONNECT to a port outside 80/443"})
+		fmt.Fprintf(client, "HTTP/1.1 403 Forbidden\r\n\r\n")
+		return
+	}
+
 	if !s.Match.Allows(host) {
 		s.Log(Decision{Host: host, Port: port, Reason: "not on the egress allowlist"})
 		if explicit {
@@ -207,15 +224,6 @@ func parseConnect(b []byte) (string, int, bool) {
 		if n, err := strconv.Atoi(p); err == nil {
 			port = n
 		}
-	}
-	// The redirect only ever sends tcp/80 and tcp/443 here, so an explicit
-	// CONNECT to anything else is a client reaching the proxy directly on
-	// loopback and asking it to open a port the redirect would never have
-	// produced. Not a widening — the address rules still permit an allowlisted
-	// IP on any port — but this component's remit is the two web ports, and a
-	// component should not quietly do more than it says.
-	if port != 80 && port != 443 {
-		return "", 0, false
 	}
 	h := normalizeHost(hostport)
 	if h == "" || !plausibleHostname(h) {
