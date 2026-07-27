@@ -235,6 +235,11 @@ func removeSandboxNetworkIfUnused() {
 	if err != nil || len(rows) > 0 {
 		return
 	}
+	// Podman gives each sandbox its own network — netavark has no equivalent of
+	// enable_icc, and its `isolate` option leaves same-network peers reachable —
+	// so there are many to reap rather than one. A run that was killed before its
+	// deferred cleanup leaves one behind, which is the case this exists for.
+	removeStaleSandboxNetworks()
 	if err := exec.Command("docker", "network", "inspect", runtime.SandboxNetwork).Run(); err != nil {
 		return // not there; nothing to do
 	}
@@ -245,4 +250,30 @@ func removeSandboxNetworkIfUnused() {
 		return
 	}
 	fmt.Printf("removed network %s\n", runtime.SandboxNetwork)
+}
+
+// removeStaleSandboxNetworks removes the per-run networks podman leaves behind.
+//
+// Only reached once no sandbox containers remain, so anything matching the
+// prefix is by definition unattached. Best-effort and quiet on failure: a leaked
+// network is untidy, and a `clean` that fails because of one is worse.
+func removeStaleSandboxNetworks() {
+	for _, bin := range []string{"podman", "docker"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			continue
+		}
+		out, err := exec.Command(bin, "network", "ls", "--format", "{{.Name}}").Output()
+		if err != nil {
+			continue
+		}
+		for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			name = strings.TrimSpace(name)
+			if !strings.HasPrefix(name, runtime.SandboxNetwork+"-") {
+				continue
+			}
+			if err := exec.Command(bin, "network", "rm", name).Run(); err == nil {
+				fmt.Printf("removed network %s\n", name)
+			}
+		}
+	}
 }

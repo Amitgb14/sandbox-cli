@@ -20,8 +20,12 @@ import (
 // inheriting the real stdio file descriptors so `docker run -it` handles pty /
 // raw-mode natively — no pty library or manual attach/resize plumbing needed.
 type DockerCLI struct {
-	// Bin is the docker executable name/path. Defaults to "docker".
+	// Bin is the container engine executable name/path. Defaults to "docker";
+	// set it to "podman" (or a path to one) to use that instead.
 	Bin string
+	// Engine overrides the dialect that would be inferred from Bin. Only needed
+	// when the binary has been renamed or wrapped; see engine.go.
+	Engine Engine
 	// Stderr receives image-build progress and diagnostics. Defaults to os.Stderr.
 	Stderr *os.File
 	// builder builds a missing image; wired by the image package via SetBuilder
@@ -53,11 +57,21 @@ func (d *DockerCLI) stderr() *os.File {
 // Available checks that docker is on PATH and the daemon is reachable.
 func (d *DockerCLI) Available(ctx context.Context) error {
 	if _, err := exec.LookPath(d.bin()); err != nil {
-		return fmt.Errorf("docker not found on PATH: %w", err)
+		return fmt.Errorf("%s not found on PATH: %w", d.engine(), err)
 	}
-	cmd := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{.ServerVersion}}")
+	// The liveness probe has to be a field the engine actually has. `.ServerVersion`
+	// is docker's; podman has no such key, so the template failed and a perfectly
+	// healthy podman reported "daemon not reachable" — a wrong answer that read
+	// like a real one.
+	format := "{{.ServerVersion}}"
+	hint := "is Docker Desktop running?"
+	if d.engine() == EnginePodman {
+		format = "{{.Version.Version}}"
+		hint = "try `podman machine start`"
+	}
+	cmd := exec.CommandContext(ctx, d.bin(), "info", "--format", format)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker daemon not reachable (is Docker Desktop running?): %s", string(out))
+		return fmt.Errorf("%s not reachable (%s): %s", d.engine(), hint, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -158,6 +172,13 @@ func runtimeHint(name string, avail []string) error {
 // Run executes the spec and returns the guest exit code. A non-zero guest exit
 // is returned as (code, nil); only failures to launch docker itself return err.
 func (d *DockerCLI) Run(ctx context.Context, spec RunSpec) (int, error) {
+	// Under podman the sandbox network belongs to this run alone, so it is
+	// created here and removed on the way out. See PerRunNetwork.
+	if net, cleanup := d.perRunNetwork(ctx, &spec); cleanup != nil {
+		defer cleanup()
+		_ = net
+	}
+
 	// Pre-flight the requested OCI runtime so a typo or missing install fails with
 	// a helpful hint instead of docker's terse "unknown or invalid runtime name".
 	if err := d.checkRuntime(ctx, spec.Runtime); err != nil {
@@ -206,6 +227,9 @@ func (d *DockerCLI) Start(ctx context.Context, spec RunSpec) (string, error) {
 	if !spec.Detach {
 		return "", fmt.Errorf("Start requires a detached spec (RunSpec.Detach)")
 	}
+	// A detached run outlives this process, so its network must too — no cleanup
+	// here. `sandbox-cli clean` reaps it along with the container.
+	d.perRunNetwork(ctx, &spec)
 	if err := d.checkRuntime(ctx, spec.Runtime); err != nil {
 		return "", err
 	}
@@ -421,41 +445,68 @@ func (d *DockerCLI) EnsureNetwork(ctx context.Context, name string) error {
 	if name == "" {
 		return nil
 	}
-	// Only the network sandbox-cli creates is sandbox-cli's to vouch for.
+	// Only a network sandbox-cli creates is sandbox-cli's to vouch for.
 	//
 	// `none` is the other value that reaches here, and it is a *predefined*
-	// docker network: `network inspect` succeeds, its Options map is empty, so an
-	// unconditional check read that as "ICC enabled" and refused to run — telling
-	// the user to `docker network rm none`, which docker declines because the
-	// network is predefined. That broke the strictest posture the tool has, and
-	// the one the empty-allowlist refusal points people at.
-	//
+	// network: inspect succeeds and its options are empty, which an
+	// unconditional check read as "inter-container communication enabled" and
+	// refused — telling the user to remove a network the engine will not remove.
 	// It is also the right rule on its own terms: `none` gives the container no
-	// interfaces at all, so inter-container communication is not a property it
-	// can have, and a network the user named themselves is theirs to configure.
-	if name != ownedNetwork {
+	// interfaces at all, so isolation is not a property it can have, and a
+	// network the user named themselves is theirs to configure.
+	//
+	// Under podman the name is per-run rather than the shared one, so ownership
+	// is decided by prefix instead.
+	if !d.ownsNetwork(name) {
 		return nil
 	}
-	if icc, err := d.networkICC(ctx, name); err == nil {
-		if icc != "false" {
-			return fmt.Errorf("the docker network %q exists but has inter-container communication enabled "+
-				"(com.docker.network.bridge.enable_icc=%s), so another container could reach this sandbox; "+
-				"remove it with `docker network rm %s` and it will be recreated correctly",
-				name, iccValueForMessage(icc), name)
+	if isolated, known, raw := d.networkIsolated(ctx, name); known {
+		if !isolated {
+			return fmt.Errorf("the %s network %q exists but does not isolate containers from each other "+
+				"(%s), so another container could reach this sandbox; remove it with `%s network rm %s` "+
+				"and it will be recreated correctly",
+				d.engine(), name, d.isolationOptionForMessage(raw), d.bin(), name)
 		}
 		return nil
 	}
-	out, err := exec.CommandContext(ctx, d.bin(), "network", "create",
-		"--opt", "com.docker.network.bridge.enable_icc=false", name).CombinedOutput()
+	out, err := exec.CommandContext(ctx, d.bin(), append([]string{}, d.networkCreateArgs(name)...)...).CombinedOutput()
 	if err != nil {
 		// A concurrent run may have created it between the inspect and the create;
 		// that is success, not a race to report.
-		if exec.CommandContext(ctx, d.bin(), "network", "inspect", name).Run() == nil {
+		if _, known, _ := d.networkIsolated(ctx, name); known {
 			return nil
 		}
 		return fmt.Errorf("creating the sandbox network %q: %s: %w", name, strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// ownsNetwork reports whether this is a network sandbox-cli created and may
+// therefore make claims about.
+//
+// Docker uses one shared network; podman needs one per sandbox, because
+// netavark has no equivalent of enable_icc and its `isolate` option leaves
+// same-network peers reachable. So under podman ownership is by prefix.
+func (d *DockerCLI) ownsNetwork(name string) bool {
+	if d.engine() == EnginePodman {
+		return strings.HasPrefix(name, SandboxNetwork+"-")
+	}
+	return name == ownedNetwork
+}
+
+// isolationOptionForMessage renders the isolation option for a human. Both
+// engines omit the key entirely when it was never set, which prints as empty and
+// reads as though nothing is wrong — but unset *is* the permissive setting,
+// which is the whole problem.
+func (d *DockerCLI) isolationOptionForMessage(v string) string {
+	key := "com.docker.network.bridge.enable_icc"
+	if d.engine() == EnginePodman {
+		key = "isolate"
+	}
+	if v == "" || v == "<no value>" {
+		return key + " is unset, which means containers can reach each other"
+	}
+	return key + "=" + v
 }
 
 // networkICC reports the enable_icc option of an existing network. The error is
@@ -523,15 +574,8 @@ func seccompDisabled(securityOptions []string) bool {
 // silent rather than warning about a question it could not ask, and prod refuses
 // rather than assuming the answer it would prefer.
 func (d *DockerCLI) SeccompUnavailable(ctx context.Context) (unavailable, ok bool) {
-	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .SecurityOptions}}").Output()
-	if err != nil {
-		return false, false
-	}
-	var opts []string
-	if json.Unmarshal(bytes.TrimSpace(out), &opts) != nil {
-		return false, false
-	}
-	return seccompDisabled(opts), true
+	applied, known := d.seccompApplied(ctx)
+	return !applied, known
 }
 
 // WarnIfSeccompDisabled prints one line when the daemon applies no syscall
@@ -563,11 +607,7 @@ func (d *DockerCLI) WarnIfSeccompDisabled(ctx context.Context) {
 // available here" is a question about the host that has to be answerable before
 // a run rather than discovered during one.
 func (d *DockerCLI) Runtimes(ctx context.Context) ([]string, error) {
-	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .Runtimes}}").Output()
-	if err != nil {
-		return nil, err
-	}
-	return parseRuntimeNames(out)
+	return d.runtimeNames(ctx)
 }
 
 // FirewallProbe is the outcome of asking whether a container here can program
@@ -655,4 +695,35 @@ iptables -t nat -A SANDBOX_DOCTOR -p tcp --dport 443 -j REDIRECT --to-ports 3128
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	return lines[len(lines)-1] // Split never returns an empty slice
+}
+
+// perRunNetwork gives a podman run its own isolated network and returns the
+// cleanup that removes it.
+//
+// It rewrites spec.Network in place rather than making the caller decide,
+// because which engine is in force is this layer's knowledge and nothing above
+// it should have to branch on the difference. Returns a nil cleanup when the
+// engine shares one network, which is docker.
+//
+// The name is derived from the container's, so an abandoned network is
+// attributable to the run that leaked it and `clean` can reap it.
+func (d *DockerCLI) perRunNetwork(ctx context.Context, spec *RunSpec) (string, func()) {
+	if !d.PerRunNetwork() || spec.Network != SandboxNetwork {
+		return spec.Network, nil
+	}
+	name := SandboxNetwork + "-" + spec.Name
+	if spec.Name == "" {
+		// No container name to hang it on; sharing one network is still better
+		// than failing the run, and the allowlist is unaffected either way.
+		return spec.Network, nil
+	}
+	spec.Network = name
+	if err := d.EnsureNetwork(ctx, name); err != nil {
+		// Leave the shared name in place and let the run proceed: a network that
+		// could not be created is a weaker arrangement, not an open one, and the
+		// firewall inside the container is untouched by it.
+		spec.Network = SandboxNetwork
+		return SandboxNetwork, nil
+	}
+	return name, func() { d.RemoveNetwork(context.WithoutCancel(ctx), name) }
 }

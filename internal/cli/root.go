@@ -31,6 +31,7 @@ type runFlags struct {
 	config      string
 	profile     string
 	network     string
+	engine      string
 	build       bool
 	dryRun      bool
 	noMetrics   bool
@@ -114,6 +115,9 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		fmt.Fprintf(os.Stderr, "sandbox-cli: %s disables what the egress allowlist depends on, so this run "+
 			"has no allowlist\n  pass --allow or --network allowlist to make the conflict an error instead\n", which)
 		cfg.Network.Mode = "default"
+	}
+	if rf.engine != "" {
+		cfg.Engine = rf.engine
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, sandbox.Options{}, err
@@ -329,6 +333,7 @@ func addRunFlags(cmd *cobra.Command, rf *runFlags) {
 	f.StringVarP(&rf.config, "config", "c", "", "explicit config file path")
 	f.StringVar(&rf.profile, "profile", "", "security profile: dev (warns) or prod (refuses); default dev")
 	f.StringVar(&rf.network, "network", "", "network mode: allowlist (default), default (unrestricted), or none")
+	f.StringVar(&rf.engine, "engine", "", "container engine: docker (default) or podman")
 	f.BoolVar(&rf.build, "build", false, "force rebuild of the base image")
 	f.BoolVar(&rf.dryRun, "dry-run", false, "print the docker command and exit")
 	f.BoolVar(&rf.noMetrics, "no-metrics", false, "disable the live resource gauge (non-interactive runs)")

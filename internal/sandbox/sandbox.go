@@ -28,7 +28,7 @@ type Session struct {
 func New(cfg config.Config) *Session {
 	return &Session{
 		Cfg:     cfg,
-		Runtime: runtime.NewDockerCLI(),
+		Runtime: runtime.NewEngine(cfg.Engine),
 		Audit:   audit.NewJSONLSink(config.AuditDir()),
 	}
 }

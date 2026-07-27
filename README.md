@@ -418,6 +418,7 @@ it looked rather than printing a zero.
 | `--allow` | Permit a domain on the egress allowlist, e.g. `--allow example.com` (repeatable; the allowlist is on by default and the baseline registries are always permitted) |
 | `--network` | `allowlist` (default), `default` to run unrestricted for one run, or `none` to reach nothing |
 | `--profile` | `dev` (default, warns when a control is unavailable) or `prod` (refuses) |
+| `--engine` | `docker` (default) or `podman`. Also `engine:` in your own config — not in a project file, since it chooses which binary runs |
 | `--cache` | Persist package-manager caches (npm/pip/cargo/go) in named volumes across runs |
 | `--secret` | Brokered credential `NAME=file:PATH \| cmd:COMMAND \| env:VAR`, resolved at run time and kept off the command line (repeatable) |
 | `--worktree` | Run in a git worktree for `BRANCH` (created if absent) — parallel per-branch agents |
