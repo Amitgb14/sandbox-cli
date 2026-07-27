@@ -21,6 +21,7 @@ const NAV = [
   { href: "#config", label: "Config" },
   { href: "#agents", label: "Agents" },
   { href: "#compare", label: "Compare" },
+  { href: "#setup", label: "Setup" },
 ];
 
 export function SiteHeader() {
