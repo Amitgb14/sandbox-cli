@@ -32,7 +32,11 @@ const scaffoldConfig = `# sandbox configuration (https://github.com/Amitgb14/san
 # so npm/pip/git keep working while blocking arbitrary exfiltration. (Also
 # available ad hoc via --allow DOMAIN.)
 network:
-  mode: default
+  # mode is commented out on purpose. Egress is already default-denied with the
+  # baseline, and a project file may only ever *tighten* what is in force — so
+  # "mode: default" here is a weakening and is refused, which would make every
+  # sandbox-cli command in this directory fail. Uncomment only to go stricter:
+  #   mode: none        # reach nothing at all
   # allow:
   #   - internal.registry.example.com
   # baseline: false   # drop the built-in domains so "allow" is the WHOLE list.

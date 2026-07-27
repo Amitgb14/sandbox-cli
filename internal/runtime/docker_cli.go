@@ -555,3 +555,56 @@ func (d *DockerCLI) WarnIfSeccompDisabled(ctx context.Context) {
 		"  the other hardening still applies (non-root, cap-drop, no-new-privileges), but this layer is absent\n"+
 		"  Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\"")
 }
+
+// Runtimes lists the OCI runtimes the daemon has registered.
+//
+// Exported for the preflight: prod may carry untrusted agents, for which a
+// shared kernel is not a boundary, so "is a stronger-isolation runtime actually
+// available here" is a question about the host that has to be answerable before
+// a run rather than discovered during one.
+func (d *DockerCLI) Runtimes(ctx context.Context) ([]string, error) {
+	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .Runtimes}}").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseRuntimeNames(out)
+}
+
+// FirewallProgrammable reports whether a container on this daemon can actually
+// program the egress firewall.
+//
+// This is the check that matters most on an unfamiliar host. Enforcing an
+// allowlist means starting as root with NET_ADMIN and running iptables, then
+// dropping privileges — and rootless Docker, a userns-remapped daemon and some
+// CI runners cannot grant that. The firewall fails closed, so those runs abort
+// rather than proceeding unfiltered, which is the right direction but a poor
+// thing to discover from an unattended job at 3am.
+//
+// It is answered by trying it, in a throwaway container, because the failure is
+// a property of the daemon's configuration rather than of anything queryable.
+// Returns a reason when it cannot.
+func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image string) (bool, string) {
+	if image == "" {
+		return false, "no base image to test with"
+	}
+	if err := exec.CommandContext(ctx, d.bin(), "image", "inspect", image).Run(); err != nil {
+		return false, "base image is not built yet; run any sandbox command once, or `sandbox-cli run --build -- true`"
+	}
+	out, err := exec.CommandContext(ctx, d.bin(), "run", "--rm",
+		"--cap-add", "NET_ADMIN", "--user", "0",
+		"--entrypoint", "/usr/sbin/iptables", image, "-L", "-n").CombinedOutput()
+	if err != nil {
+		return false, strings.TrimSpace(lastLine(string(out)))
+	}
+	return true, ""
+}
+
+// lastLine is the most useful part of a docker error, which is usually verbose
+// above and specific at the end.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	return lines[len(lines)-1]
+}

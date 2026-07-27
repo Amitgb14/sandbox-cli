@@ -133,7 +133,13 @@ func restrictedProjectKeys(src, inherited Config) []string {
 	// "this code needs stricter confinement than your default" is exactly what a
 	// project file is for; the same key saying "actually, less" is the attack.
 	if src.Network.Mode != "" && networkStrength(src.Network.Mode) < networkStrength(inherited.Network.Mode) {
-		add("network.mode")
+		// The common way to reach this is not an attack but an upgrade: egress is
+		// now default-denied, so a `mode: default` that used to match the built-in
+		// default — and that `sandbox-cli init` itself once scaffolded — became a
+		// weakening overnight and fails every command in the directory. The key
+		// name alone would not explain that, so this one carries its own note.
+		add("network.mode (egress is now default-denied, so \"mode: " + src.Network.Mode +
+			"\" weakens it; remove the key, or use --network " + src.Network.Mode + " for one run)")
 	}
 	// baseline is the same shape one level down: turning the built-in egress
 	// domains off narrows, turning them back on widens.
