@@ -914,32 +914,54 @@ per-adapter checklist live in
 
 ## Configuration
 
-Zero config is required. To customize, drop a `.sandbox.yaml` in your project
-(scaffold one with `sandbox-cli init`):
+Zero config is required. Configuration lives in two files, and **the split
+between them is a security boundary, not a convenience**.
+
+### Your config — `~/.config/sandbox/config.yaml`
+
+Only you write this file, so it may set anything:
 
 ```yaml
-# .sandbox.yaml
-workdir: /workspace
+image: my-org/dev:latest
 user: sandbox                 # non-root by default
+runtime: ""                   # runsc / kata-runtime for a stronger boundary
 
 mounts:
-  - { host: ./data, container: /workspace/data, mode: ro }
+  - { host: ~/data, container: /workspace/data, mode: ro }
+
+env:
+  NODE_ENV: development
 
 env_allow:                    # only these host vars are forwarded, and only if set
   - ANTHROPIC_API_KEY
   - OPENAI_API_KEY
 
+security:                     # secure-by-default; tune here
+  memory: ""                  # e.g. 2g (opt-in)
+  cpus: ""                    # e.g. 1.5 (opt-in)
+
+secrets:                      # resolved at run time, forwarded by name only
+  GITHUB_TOKEN: { command: gh auth token }
+  ANTHROPIC_API_KEY: { file: ~/.secrets/anthropic }
+```
+
+### The project file — `.sandbox.yaml`
+
+Drop one in your project (scaffold with `sandbox-cli init`) to describe *the
+project*:
+
+```yaml
+# .sandbox.yaml
 network:
-  mode: default               # default | none | allowlist
-  allow:                      # extra domains for allowlist mode
+  mode: allowlist             # may only TIGHTEN: default -> allowlist -> none
+  allow:
     - internal.registry.example.com
+  # baseline: false           # drop the built-in domains; `allow` becomes the whole list
 
 ports:                        # published to the host; no address => 127.0.0.1
   - 3000:3000
 
-security:                     # secure-by-default; override per project
-  memory: ""                  # e.g. 2g (opt-in)
-  cpus: ""                    # e.g. 1.5 (opt-in)
+hostname: devbox
 
 cache:
   enabled: false              # or use --cache
@@ -948,15 +970,37 @@ snapshot:                     # crash safety net (sandbox-cli recover)
   enabled: true               # or use --no-snapshot
   interval: 2m                # how often the workspace is snapshotted
   retention: 336h             # 14d, then old snapshots are pruned
-
-secrets:
-  GITHUB_TOKEN: { command: gh auth token }
-  ANTHROPIC_API_KEY: { file: ~/.secrets/anthropic }
 ```
+
+**`.sandbox.yaml` is treated as untrusted.** It travels with the repository —
+anyone who clones the repo runs it — and the agent working in the sandbox has
+read-write access to the very file that configures its next run. So the keys that
+could run commands on your machine, reach host paths, or weaken the container are
+**refused** from it:
+
+> `image`, `workdir`, `user`, `home`, `runtime`, `mounts`, `secrets`, `env`,
+> `env_allow`, `security.*`, `cache.paths`, and any `network.mode` /
+> `network.baseline` that *weakens* what you already have in force.
+
+A project may ask for stricter confinement than your default; it may not ask for
+less. If a project file sets a refused key, sandbox-cli stops and names it rather
+than quietly applying it.
+
+If you have read a project's config and want it anyway, load it deliberately:
+
+```sh
+sandbox-cli --config ./.sandbox.yaml claude
+```
+
+Discovery is also bounded: sandbox-cli looks for `.sandbox.yaml` from the current
+directory up to the repository root (or your home directory when there is no
+repository), never above it — so a stray config in a shared parent like `/tmp`
+cannot be picked up.
 
 Settings merge in this order (later wins): built-in defaults →
 `~/.config/sandbox/config.yaml` → nearest `.sandbox.yaml` → command-line flags.
-Run `sandbox-cli config show` to see the effective, merged config.
+Run `sandbox-cli config show` to see the effective, merged config, and
+`sandbox-cli config path` to see which files were used.
 
 ---
 

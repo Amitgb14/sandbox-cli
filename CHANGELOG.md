@@ -11,6 +11,357 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **`sandbox-cli ps` and `sandbox-cli clean`.** Two things left containers behind
+  and neither had a command: a `kill -9` on sandbox-cli leaves the container
+  running — the daemon owns it, not the `docker run` client — with an agent still
+  writing to your project and nothing attached to it; and `--detach` keeps its
+  container after it exits on purpose, so the exit code and `docker logs`
+  survive. `ps` lists both, `clean` reaps the exited ones, and `clean --force` is
+  needed to touch a running one. Containers now carry a `sandbox.cli` label
+  unconditionally — the repo/branch/agent labels are omitted when there is
+  nothing true to say, so a run started outside a git repository previously
+  carried none at all and could not be found again.
+
+- **A run log at `~/.config/sandbox/audit/sessions.jsonl`.** One line per run:
+  image, workspace, branch, agent, command, network posture, the resolved egress
+  allowlist, exit code and duration. This answers "what did that sandbox run,
+  under what policy, and how did it end" — which nothing could, because the audit
+  sink was a no-op. Environment variables are recorded **by name only**; the
+  broker exists to keep secret values out of files, and a log is a file.
+  Best-effort and 0600.
+
+- **Blocked traffic is now logged.** The firewall's default-deny rules carry
+  rate-limited `LOG` targets (`sandbox-cli DENY-OUT` / `DENY-IN`), so a refused
+  connection leaves a trace instead of only an error the agent may swallow. On
+  Linux this lands in the host's kernel log; under Docker Desktop it goes to the
+  VM's, which is harder to reach — the run log above is the portable half.
+
+### Fixed
+
+- **`network: none` refused to start.** The new check that the shared docker
+  network really has inter-container communication disabled was applied to every
+  network, including the predefined `none` — whose options are empty, which read
+  as "enabled". The strictest posture the tool offers failed on every run, with
+  advice (`docker network rm none`) that docker declines. The check now applies
+  only to the network sandbox-cli creates.
+
+- **`recover` said nothing about the conversation** ([#16](https://github.com/Amitgb14/sandbox-cli/issues/16)). After a crash the
+  files are usually fine — `/workspace` is a bind mount, so everything the agent
+  wrote is already on disk — while the conversation is the half that actually
+  goes missing. `recover restore` now names the agent session that belongs to the
+  run and prints the command to resume it, `recover list` grew an AGENT column,
+  and a restore whose snapshot the working tree already matches says so instead
+  of pointing at a branch with an empty diff. When the conversation predates
+  per-project history it says that too, and gives the one command that finds it.
+
+- **A filter driver hidden in worktree-scoped git config could run a command on
+  the host.** `githard` enumerates the repository's filter and diff drivers and
+  blanks them, which is what stops a `.gitattributes` from selecting something
+  git will execute. It read them with `git config --local`, which lists only
+  `.git/config` — but git honours a scope above that one: with
+  `extensions.worktreeConfig` set, a linked worktree's `config.worktree` wins,
+  and `--local` cannot see it. Both files are inside the `.git` that
+  `--worktree` mode mounts read-write. Drivers are now read from every scope the
+  agent can write; your *global* config is deliberately left alone, so a
+  legitimate `git-lfs` setup keeps working.
+
+- **The shared docker network was accepted on name alone.** It exists to turn
+  inter-container communication off, but any pre-existing network of the right
+  name passed — including one created by hand or by a compose file, with that
+  communication left on. The property is now verified, and a network that does
+  not have it is refused with the command to remove it.
+
+- **Large TLS handshakes to an allowlisted host could fail.** The egress proxy
+  read hellos into a 4 KiB buffer while allowing 16 KiB, so a connection with
+  large ALPN or post-quantum key-share extensions was truncated and refused as
+  if it had named no host at all.
+
+- **A published port could stop answering under `--allow` on daemons configured
+  with `userland-proxy: false`.** The firewall rule assumed connections arrive
+  re-originated from the bridge gateway. It now states the actual rule —
+  everything may reach a published port except the container's own bridge peers
+  — which holds under either daemon setting.
+
+### Changed
+
+- The run log field `egress_enforced_by` is now `egress_enforcement_requested`.
+  It records what the run asked for, which is all the host can know: the
+  container falls back to address matching if a custom image lacks the proxy, and
+  the old name asserted an outcome that was sometimes wrong.
+
+- `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` and
+  `DOCKER_CONTEXT` join the reserved environment names. They never reach the
+  container — they steer the docker client itself — so they cannot be forwarded
+  as secrets.
+
+- The run log rotates at 8 MB, keeping one previous generation.
+
+- **`context list` could not find sessions from sandboxed runs** ([#15](https://github.com/Amitgb14/sandbox-cli/issues/15)). Claude
+  Code names its transcript directory after the working directory, and inside the
+  sandbox that is always `/workspace`. The wrapper already redirected those writes
+  into the host's per-project history — but only when that directory already
+  existed, which it does only once you have run Claude Code on the *host* in that
+  project. A project used only in the sandbox therefore never got the mount, and
+  all its sessions pooled into one shared `-workspace` bucket: `context list`
+  reported "no claude sessions for <project>" while the transcripts sat on disk,
+  reachable only by grepping the agent HOME by hand, and `--resume` against a
+  different repository's conversation was one id away. The directory is now
+  created when missing, so sandboxed sessions land under the project they belong
+  to. Sessions already in the shared bucket are reported by `context list` (they
+  cannot be attributed to a project — the transcripts record only `/workspace` —
+  so it says so rather than guessing) and can be listed with
+  `context list --project /workspace`.
+
+- **`context list` searched only one of an agent's stores.** The claude wrapper
+  has two — your own `~/.claude/projects` and the persisted agent HOME — and the
+  listing walked whichever had been active most recently, so anything recorded
+  with `--no-sync` was invisible. It now walks every verified location.
+
+- **`recover repair --branch NAME` now works.** It was unreachable: a finding
+  with no recorded branch had advice but no fix, and the caller skipped every
+  finding it could not already repair — so the advice the tool printed
+  ("re-run with `--branch NAME`") could never succeed. It also no longer prints
+  that advice during a run that already supplied the branch.
+
+- **Snapshots skip files over 10 MiB.** `git add -A` had no cap, so anything an
+  agent wrote was copied into your object store and pinned behind
+  `refs/sandbox` for the retention window — surviving its own deletion, and never
+  collected, because superseded-pruning only drops a session whose tree was
+  committed exactly. 60 MB of junk stayed 60 MB for fourteen days. Skipped files
+  are named once per session.
+
+- **`--workdir` no longer starts the guest in a directory that does not exist.**
+  The flag moved `-w` but left the project at `/workspace`, while config
+  `workdir:` moved both — the two spellings of one setting disagreed. It now
+  moves the mount when the path is outside it and keeps the mount when the path
+  is a subdirectory of it, so both `--workdir /app` and
+  `--workdir /workspace/sub` do the obvious thing.
+
+- **`--user uid:gid` works with an egress allowlist.** The firewall entrypoint
+  resolved the user with `id -u`, which fails on a numeric `1000:1000` and killed
+  the run with an opaque `id: '1000:1000': no such user`. It also now treats
+  `--user 0` as root, rather than only the spelling `root`.
+
+- **A config `image:` that is absent locally is pulled, not built.** Any missing
+  reference was built from the embedded Dockerfile and tagged with that name, so
+  `image: node:22` would poison `node:22` in your local image store for every
+  other project — and hand back something that was not the image you asked for.
+
+- **A comma in a mount path is refused rather than mangled.** docker's `--mount`
+  CSV reads it as the start of another option, so a directory named `a,b`
+  rendered `source=/tmp/a,b,target=/data`.
+
+- Session titles in `context list` and the model name in `usage` are stripped of
+  terminal control sequences. They come from files the agent writes and were
+  printed directly, so an escape in one was a command to your terminal — screen
+  clears, window titles, and clipboard writes via OSC 52 on terminals that allow
+  it.
+
+- A symlink named `<uuid>.jsonl` in the persisted agent HOME is no longer read,
+  so `context list` cannot be used to render the contents of an arbitrary host
+  file.
+
+- Secret and `env:` names are validated. A name containing `=` was emitted as a
+  bare `-e NAME`, which docker reads as `KEY=VALUE`.
+
+### Security
+
+- **`--no-hardening` can no longer be combined with the egress allowlist.** The
+  flag is documented as reverting to the historical behavior, but together with
+  an allowlist it landed *above* that baseline rather than at it: the firewall
+  starts the container as root with `NET_ADMIN`, `NET_RAW`, `SETUID` and
+  `SETGID`, and it is `cap_drop: ALL` plus `no-new-privileges` that stop the
+  guest keeping any of that after the drop to the sandbox user. Zeroing them left
+  docker's full default capability set *plus* those four, with setuid binaries
+  live again — from a flag whose entire purpose is to be no worse than the old
+  default. The combination is now refused, naming both halves; each alone is
+  unchanged.
+
+- **`recover repair` can no longer be steered into writing outside the
+  repository.** The directory it recreates comes from the `gitdir:` line of the
+  worktree's `.git` pointer file — which the agent can rewrite — and it was used
+  unvalidated as a `MkdirAll` plus three `WriteFile` destination. With a symlink
+  planted in the parent `.git` (bind-mounted read-write for a worktree run) the
+  writes landed anywhere on the host, breaking rescue's stated rule that it only
+  ever creates objects and refs under `refs/sandbox/`. The target must now be a
+  real `<repo>/.git/worktrees/<name>`, checked both lexically and after resolving
+  symlinks.
+
+- **The egress allowlist now filters inbound traffic too.** It never did, and
+  that made it bypassable in one step: the `OUTPUT` chain accepts
+  `ESTABLISHED,RELATED`, so a connection someone else *dialled in* got a working
+  reply path and carried data straight back out past the allowlist. Demonstrated
+  end to end — a second container on the docker bridge opened a socket to an
+  allowlisted sandbox and received 30 bytes back, while that same sandbox could
+  not reach `1.1.1.1` on its own initiative. A bind shell inside the sandbox was
+  a fully working, unmetered exfiltration channel.
+
+  `INPUT` is now default-deny with three exceptions: loopback, replies to
+  connections the sandbox itself opened, and the container ports named by
+  `--publish` — publishing *is* an explicit request for ingress, and without that
+  carve-out a published dev server would silently stop answering the moment you
+  added `--allow`. IPv6 is rejected inbound as well as outbound.
+
+  Scope: like the rest of the firewall this applies in allowlist mode only.
+  Filtering ingress on every run would mean every run taking the root-entrypoint
+  path with `NET_ADMIN` — a worse default than the one it would be protecting.
+
+- **Resolved secrets no longer pass through sandbox-cli's own environment.**
+  They were placed there with `os.Setenv` so docker would pick them up for its
+  bare `-e NAME` arguments — but sandbox-cli spawns `docker` and `git` *after*
+  that point, so a secret named `PATH` or `DOCKER_HOST` redirected them, and the
+  preflight ran before the injection so nothing noticed. Values now reach the
+  docker child only. They are still never on the argv or in `--dry-run`.
+
+- **A forged `.git` pointer file can no longer mount an arbitrary host
+  directory.** When the workspace is a git worktree, sandbox-cli mounts the
+  parent repository's `.git` at its own host path — and *which* path came from
+  the `gitdir:` line of a `.git` file **inside the workspace**, which the sandbox
+  mounts read-write. The resolver only checked that the result was a directory,
+  and its fallback takes two directories up from whatever was written, so
+  `gitdir: $HOME/x/y` produced `--mount source=$HOME,target=$HOME` read-write and
+  `gitdir: $HOME` produced `source=/,target=/`. One file the agent already had
+  write access to, taking effect on the user's next run. The target must now look
+  like a real git directory (`HEAD` plus `objects/`), which an agent cannot
+  fabricate outside the workspace, and it passes the same refusals as the
+  workspace itself.
+
+- **The host-directory refusals compare paths by identity, not by string.**
+  `EvalSymlinks` preserves whatever casing the caller typed, and macOS APFS and
+  Windows NTFS are case-insensitive — so `--project /Users/YourName` with one
+  letter's case flipped mounted the home directory, and `--project /USERS` was
+  neither the filesystem root nor string-equal to anything and so bypassed the
+  ancestor check, mounting every user's home at once. Comparison is now on device
+  and inode, which also covers the unicode-normalisation form of the same bug.
+
+- **Host-side `git` no longer runs commands the repository names.** sandbox-cli
+  runs git on your machine, inside the repository the agent has read-write
+  access to — and git is a programmable tool: `git add -A` runs
+  `filter.<x>.clean` and `core.fsmonitor`, `git update-ref` runs the
+  `reference-transaction` hook, `git worktree add` runs smudge filters and
+  `post-checkout`, `git show`/`diff` run `diff.<x>.textconv`. Every one of those
+  is a command named by a file the agent can write.
+
+  That made the crash safety net into a **live** container→host escape: the
+  snapshotter runs `add -A` and `update-ref` every couple of minutes for the
+  whole life of a run, so an agent could write `.git/config` or
+  `.git/hooks/reference-transaction` mid-run and have that code execute on the
+  host, unattended, while the sandbox was still going. The `recover show -p` and
+  `recover restore --patch` paths were the same, at the worst possible moment —
+  a user inspecting a run they already distrust.
+
+  A new `internal/githard` neutralises all of it for every git command
+  sandbox-cli issues on its own behalf. `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`
+  are not sufficient — these settings live in the repository's *local* config,
+  which they do not cover — so the config keys are overridden with `-c` (which
+  outranks local config) and the attribute stack is pointed at an empty tree via
+  `GIT_ATTR_SOURCE`, since filter driver names come from `.gitattributes` and
+  cannot be enumerated ahead of time.
+
+  Two consequences worth knowing. In a git-lfs repository, snapshots now store
+  the real file content rather than the pointer — larger, but the more useful
+  thing for a rescue copy. And `sandbox-cli worktree git …` is deliberately
+  *not* hardened: that is you running your own git command in your own
+  repository, where hooks firing is the expected behavior.
+
+  The claim in `snapshot.go` that "no hook runs: these are all plumbing
+  commands" was false, and is corrected along with the behavior.
+
+- **A project `.sandbox.yaml` is now treated as untrusted, and the
+  privilege-relevant keys are refused from it.** That file travels with the
+  repository and the agent can rewrite it between runs, yet every key in it
+  outranked your own `~/.config/sandbox/config.yaml` — which made a checked-in
+  config a complete bypass of the tool. `secrets.<N>.command` ran arbitrary
+  commands on the **host** before any container started; `mounts:` plus
+  `user: root` handed over the host filesystem; `env: {PATH: ...}` redirected the
+  root entrypoint's own interpreter into the repository; `network: {mode:
+  default}` silently switched off an allowlist you had configured globally.
+
+  Refused from a project file: `image`, `workdir`, `user`, `home`, `runtime`,
+  `mounts`, `secrets`, `env`, `env_allow`, `security.*`, `cache.paths`, and any
+  `network.mode` / `network.baseline` that **weakens** what is already in force.
+  A project may still tighten the network posture (`default` → `allowlist` →
+  `none`) — asking for stricter confinement is what a project file is for.
+  Still permitted: `hostname`, `ports`, `cache.enabled`, `snapshot.*`, and
+  `network.allow`.
+
+  The refusal names the offending keys and points at the two escape hatches:
+  your own config, and `--config <path>` — where typing the path is the
+  deliberate act that discovery never involves.
+
+  **This is a breaking change if you keep any of those keys in a project
+  `.sandbox.yaml`.** Move them to `~/.config/sandbox/config.yaml`, pass them as
+  flags, or load the file explicitly with `--config`. `sandbox-cli init` no
+  longer scaffolds keys it would then refuse.
+
+- **Config discovery no longer walks to the filesystem root.** It stops at the
+  repository root, else the home directory, else the starting directory. Walking
+  further meant a `.sandbox.yaml` in *any* ancestor won silently — and on Linux
+  that turned a world-writable shared directory such as `/tmp` into a
+  config-injection point for everyone working beneath it.
+
+- **The agent's persisted HOME is no longer on the image's `PATH`.** That
+  directory is bind-mounted read-write and writable by the agent, and it sat
+  first on the `PATH` of the *root* entrypoint used in allowlist mode — so an
+  agent could write a file named `bash` into its own HOME and have root execute
+  it on the next run. The result was container root, the non-root default
+  defeated, and the egress firewall never programmed while sandbox-cli reported
+  it was enforcing one. `sandbox-firewall` and `sandbox-egress-setup` now use an
+  absolute interpreter, reset `PATH` before doing anything, and call `setpriv`
+  and `id` by absolute path. Agents that want a self-updating install in the
+  persisted HOME still get one — they add the directory themselves, in the guest
+  phase, after privileges are dropped. Rebuilds the base image.
+
+- **`SANDBOX_RUN_AS` and `SANDBOX_EGRESS_ALLOW` can no longer be set or forwarded
+  from outside.** Both instruct the container's root-phase startup, and docker
+  keeps the *last* `-e` for a repeated name — so forwarding `SANDBOX_RUN_AS`
+  (via `--env-allow`, or a project `env_allow:`) with `root` in the host
+  environment made the entrypoint skip its privilege drop entirely. The
+  by-name forwards now render before explicit values, and a colliding name is
+  dropped. `SANDBOX_STATUSLINE_*` is untouched: it is read after the drop and
+  stays a user knob.
+
+- **A mount may no longer land on, or shadow, a path the container's own startup
+  depends on.** `workdir: /usr/local/bin` in a project config moved the workspace
+  mount onto the directory holding `sandbox-firewall`, so the repository supplied
+  the program root executes and no firewall was programmed — a fail-open in the
+  one path whose contract is to fail closed. Applies to the workspace target,
+  config `mounts:`, and `--mount`.
+
+- **An `image:` beginning with `-` is refused, and `--` now separates docker's
+  flags from the image reference.** `image: "--privileged"` was rendered into the
+  argv as a real flag, with the guest's first argument promoted to the image name.
+
+  These came out of a security audit; the full findings, threat model and the
+  remaining phased work are in `docs/proposals/security-hardening.md`. Several
+  more serious issues are known and not yet fixed — most importantly that a
+  project-level `.sandbox.yaml` is still fully trusted, and that host-side `git`
+  still runs agent-controlled hooks and filters.
+
+### Added
+
+- `network.baseline: false`, which drops the built-in egress domains so
+  `network.allow` is the whole allowlist. Until now `allow` could only ever
+  *add*: every allowlisted run reached `api.anthropic.com`, `api.openai.com`,
+  the npm/PyPI registries and `github.com` whether or not it needed them, and
+  there was no way to say otherwise. That matters most for `github.com` — it is
+  a write endpoint, so a run holding a token could push data out through a
+  domain the user never chose to permit. A run that should reach an internal
+  registry and the model API and nothing else can now say exactly that.
+
+  It is deliberately awkward: with the baseline off, `npm`, `pip` and `git`
+  stop working unless you list their hosts, and forgetting the agent's own API
+  leaves it unable to reach its model. The field is tri-state, so a nearer
+  config can turn the baseline back **on** rather than only off.
+
+  An allowlist that resolves to nothing is now **refused** instead of run. The
+  firewall is programmed only when there are domains to permit, so an empty
+  list would have produced a container with no egress filtering at all — the
+  strictest request giving the weakest result. `network.mode: none` remains the
+  way to ask for a sandbox that reaches nothing.
+
 ## 0.0.1beta.6 — 2026-07-25
 
 ### Added

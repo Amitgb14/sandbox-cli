@@ -62,7 +62,7 @@ func runRecoverStatus() error {
 		fmt.Println("repository: healthy")
 	default:
 		fmt.Printf("repository: %d problem(s) found\n\n", len(findings))
-		printFindings(findings)
+		printFindings(findings, "")
 		fmt.Println()
 	}
 
@@ -75,17 +75,23 @@ func runRecoverStatus() error {
 	return printSnapshots(snaps, false)
 }
 
-func printFindings(findings []rescue.Finding) {
+// printFindings renders the diagnosis. branchOverride is what the user passed as
+// --branch, so a finding that only needed a branch name reports the fix it is
+// about to apply rather than still advising the user to supply one — printing
+// "re-run with --branch NAME" during a run that already has it reads as a
+// failure when the repair is in fact about to happen.
+func printFindings(findings []rescue.Finding, branchOverride string) {
 	for i, f := range findings {
 		if i > 0 {
 			fmt.Println()
 		}
 		fmt.Printf("  \033[1m%s\033[0m\n", f.Summary)
 		fmt.Printf("    %s\n", f.Detail)
-		switch {
-		case f.Repairable():
-			fmt.Printf("    fix: %s  (sandbox-cli recover repair)\n", f.Fix)
-		case f.Advice != "":
+		if fix, ok := f.RepairableWith(branchOverride); ok {
+			fmt.Printf("    fix: %s  (sandbox-cli recover repair)\n", fix)
+			continue
+		}
+		if f.Advice != "" {
 			fmt.Printf("    do:  %s\n", f.Advice)
 		}
 	}
@@ -124,27 +130,47 @@ func printSnapshots(snaps []rescue.Snapshot, all bool) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	header := "SESSION\tBRANCH\tWHEN\tSNAPSHOTS\tSTATE"
+	// AGENT is here because a snapshot's real companion after a crash is the
+	// conversation, and the manifest already knows which agent ran. Without it the
+	// listing describes only the half that usually survives.
+	header := "SESSION\tBRANCH\tAGENT\tWHEN\tSNAPSHOTS\tSTATE"
 	if all {
-		header = "SESSION\tREPO\tBRANCH\tWHEN\tSNAPSHOTS\tSTATE"
+		header = "SESSION\tREPO\tBRANCH\tAGENT\tWHEN\tSNAPSHOTS\tSTATE"
 	}
 	fmt.Fprintln(tw, header)
+	withAgent := false
 	for _, s := range snaps {
 		branch := s.Branch
 		if branch == "" {
 			branch = "-"
+		}
+		agent := s.Agent
+		if agent == "" {
+			agent = "-" // a plain `run`: there was no conversation to lose
+		} else {
+			withAgent = true
 		}
 		state := s.Status()
 		if s.Commit != "" && !s.Reachable {
 			state += " (objects gone)"
 		}
 		if all {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n", s.ID, s.Repo, branch, humanAge(s.Activity()), s.Snapshots, state)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", s.ID, s.Repo, branch, agent, humanAge(s.Activity()), s.Snapshots, state)
 			continue
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", s.ID, branch, humanAge(s.Activity()), s.Snapshots, state)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n", s.ID, branch, agent, humanAge(s.Activity()), s.Snapshots, state)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if withAgent {
+		// Not a per-row lookup: resolving each run's transcript means probing the
+		// store and walking it once per row, which is too much work for a listing.
+		// The pointer is enough, and `restore` does the resolution for the one
+		// session the user picks.
+		fmt.Println("\na run with an agent also left a conversation; `sandbox-cli recover restore ID` names it")
+	}
+	return nil
 }
 
 // humanAge renders "how long ago" at the resolution someone hunting for lost
@@ -267,9 +293,17 @@ func reportRestore(res rescue.RestoreResult, mode rescue.RestoreMode) {
 		if res.Files > 0 {
 			fmt.Fprintf(os.Stderr, " (%d file(s) changed)", res.Files)
 		}
-		fmt.Fprintf(os.Stderr, "\n  Look at it:  git diff HEAD %s\n", res.Branch)
+		fmt.Fprintln(os.Stderr)
+		if res.MatchesWorkingTree {
+			// Said before the git commands, because it changes what they are for.
+			// The files were never lost — /workspace is a bind mount — so pointing
+			// at the branch first invites a hunt through a diff that is empty.
+			fmt.Fprintf(os.Stderr, "  Your working tree already matches this snapshot: nothing was missing.\n")
+		}
+		fmt.Fprintf(os.Stderr, "  Look at it:  git diff HEAD %s\n", res.Branch)
 		fmt.Fprintf(os.Stderr, "  Work on it:  git switch %s\n", res.Branch)
 	}
+	reportConversation(res.Snapshot.Session)
 }
 
 func newRecoverRepairCmd() *cobra.Command {
@@ -302,17 +336,18 @@ func newRecoverRepairCmd() *cobra.Command {
 				fmt.Println("nothing to repair")
 				return nil
 			}
-			printFindings(findings)
+			printFindings(findings, branch)
 
 			// One reader for the whole loop: a fresh bufio.Reader per question
 			// would discard anything already buffered past the first line.
 			stdin := bufio.NewReader(os.Stdin)
 			repaired := 0
 			for _, f := range findings {
-				if !f.Repairable() {
+				fix, ok := f.RepairableWith(branch)
+				if !ok {
 					continue
 				}
-				if !yes && !confirm(stdin, fmt.Sprintf("\nApply: %s?", f.Fix)) {
+				if !yes && !confirm(stdin, fmt.Sprintf("\nApply: %s?", fix)) {
 					fmt.Fprintln(os.Stderr, "sandbox-cli: skipped")
 					continue
 				}

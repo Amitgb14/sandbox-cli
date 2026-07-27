@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Amitgb14/sandbox-cli/internal/githard"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -83,12 +84,11 @@ func run(ctx context.Context, dir string, env []string, args ...string) (string,
 // runRaw is run without the trimming. Every call goes through here so the pinned
 // environment and the "no auto-gc" rule are impossible to forget at a call site.
 func runRaw(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	// -c gc.auto=0 on every invocation: a snapshot must never be the thing that
-	// kicks off a repack in the user's repository while an agent is working in it.
-	full := append([]string{"-c", "gc.auto=0"}, args...)
+	full := append(append([]string{"-c", "gc.auto=0"}, githard.Args(dir)...), args...)
 	cmd := exec.CommandContext(ctx, gitBin, full...)
 	cmd.Dir = dir
-	cmd.Env = append(baseEnv(), env...)
+	cmd.Env = append(baseEnv(), githard.Env(dir)...)
+	cmd.Env = append(cmd.Env, env...)
 	var out, errb strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -106,10 +106,11 @@ func runRaw(ctx context.Context, dir string, env []string, args ...string) (stri
 // failure on stderr, so the error is returned bare for the caller to turn into
 // an exit code.
 func stream(dir string, args ...string) error {
-	full := append([]string{"-c", "gc.auto=0", "--no-pager"}, args...)
+	full := append(append([]string{"-c", "gc.auto=0"}, githard.Args(dir)...), "--no-pager")
+	full = append(full, args...)
 	cmd := exec.Command(gitBin, full...)
 	cmd.Dir = dir
-	cmd.Env = baseEnv()
+	cmd.Env = append(baseEnv(), githard.Env(dir)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

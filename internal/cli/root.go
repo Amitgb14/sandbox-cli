@@ -143,7 +143,13 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	if projectDir == "" {
 		projectDir, _ = os.Getwd()
 	}
-	if gitDir, ok := worktree.GitCommonDir(config.ExpandTilde(projectDir)); ok {
+	// The path comes from a `.git` pointer file inside the workspace, which the
+	// agent can rewrite, and it is about to be mounted read-write at its own host
+	// location — so it goes through the same non-overridable refusals as the
+	// workspace itself. worktree.GitCommonDir already requires the target to look
+	// like a real git directory; this is the second layer, and the one that would
+	// still hold if that check were ever loosened.
+	if gitDir, ok := worktree.GitCommonDir(config.ExpandTilde(projectDir)); ok && sandbox.RefuseUnsafeHostPath(gitDir) == nil {
 		opts.ExtraMounts = append(opts.ExtraMounts, gitDir+":"+gitDir+":rw")
 
 		// The worktree is mounted a second time at its own host path, not only at
@@ -159,6 +165,28 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		// it grants no reach the container did not have a moment ago.
 		if wt, err := filepath.Abs(config.ExpandTilde(projectDir)); err == nil {
 			opts.ExtraMounts = append(opts.ExtraMounts, wt+":"+wt+":rw")
+		}
+	}
+
+	// .git/hooks read-only, over the read-write workspace.
+	//
+	// The agent has to be able to edit project files, but hooks are not project
+	// source: they are programs the *user's* git runs, on the host, as them. An
+	// agent that writes .git/hooks/pre-commit is not editing the project, it is
+	// waiting for the user's next commit. Confirmed as a live escape.
+	//
+	// hooks specifically, not .git as a whole: agents legitimately run `git config`
+	// and git itself writes indexes, refs and logs constantly. Changes to
+	// .git/config are watched instead (see watchGitConfig) — detected rather than
+	// prevented, because preventing them breaks ordinary work.
+	// The workspace's own .git/hooks is handled in BuildSpec, which knows where the
+	// workspace lands inside the container. This is the other one: a linked
+	// worktree runs the hooks from the parent repository's common directory, and
+	// that directory is bind-mounted read-write at its host path so git works at
+	// all — so its hooks need covering at that same host path.
+	if common, ok := worktree.GitCommonDir(config.ExpandTilde(projectDir)); ok {
+		if h := filepath.Join(common, "hooks"); isDirPath(h) {
+			opts.ExtraMounts = append(opts.ExtraMounts, h+":"+h+":ro")
 		}
 	}
 
@@ -303,6 +331,8 @@ func NewRootCmd() *cobra.Command {
 		newInitCmd(),
 		newConfigCmd(),
 		newStatsCmd(),
+		newPsCmd(),
+		newCleanCmd(),
 		newUsageCmd(),
 		newWorktreeCmd(),
 		newRecoverCmd(),
@@ -326,3 +356,11 @@ func Execute() int {
 // exitCode carries the guest process exit code out of a subcommand's RunE so the
 // process can mirror it. Defaults to 0.
 var exitCode int
+
+// isDirPath reports whether p is an existing directory. Only existing hook
+// directories are mounted: creating one would be sandbox-cli writing into the
+// user's repository, which it does not do.
+func isDirPath(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}

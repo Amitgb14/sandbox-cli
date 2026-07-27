@@ -34,6 +34,8 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
 // Window kinds — the two periods usage is metered over. A plan may report each
@@ -120,7 +122,7 @@ func (l limit) model() string {
 	if l.Scope == nil || l.Scope.Model == nil {
 		return ""
 	}
-	return l.Scope.Model.DisplayName
+	return termsafe.Clean(l.Scope.Model.DisplayName)
 }
 
 // timestamp accepts the two spellings a reset time arrives in: an RFC3339 string

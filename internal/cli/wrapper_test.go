@@ -292,6 +292,12 @@ func TestEveryAgentRendersADryRun(t *testing.T) {
 func renderDryRun(t *testing.T, cmd *cobra.Command, extra []string) string {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	// Run from a scratch directory outside any repository. Without this the CLI
+	// discovers the developer's own .sandbox.yaml at this repo's root and folds it
+	// into every rendered argv — so the assertions below depend on a file that is
+	// not part of the test, and a machine whose config happens to set `image:` or
+	// `mounts:` gets different results from CI.
+	t.Chdir(t.TempDir())
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -329,5 +335,85 @@ func TestClaudeProjectBucket(t *testing.T) {
 		if got := claudeProjectBucket(in); got != want {
 			t.Errorf("claudeProjectBucket(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestAnnounceBroadCredentials pins what gets said and what does not. Most
+// wrapper allowlists carry a model-provider key, which is worth exactly the thing
+// the agent is for; an AWS session or a GitHub token is the whole account. Those
+// are still forwarded — it is how continue reaches Bedrock and how copilot
+// authenticates — but silently was the wrong way to do it.
+func TestAnnounceBroadCredentials(t *testing.T) {
+	capture := func(envAllow []string) string {
+		r, w, _ := os.Pipe()
+		orig := os.Stderr
+		os.Stderr = w
+		announceBroadCredentials(envAllow)
+		w.Close()
+		os.Stderr = orig
+		var b strings.Builder
+		io.Copy(&b, r)
+		r.Close()
+		return b.String()
+	}
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "set")
+	t.Setenv("ANTHROPIC_API_KEY", "set")
+	os.Unsetenv("AWS_SECRET_ACCESS_KEY")
+
+	got := capture([]string{"ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"})
+	if !strings.Contains(got, "AWS_ACCESS_KEY_ID") {
+		t.Errorf("a set account-wide credential must be announced, got %q", got)
+	}
+	// One line per scope, not per variable — three AWS names are one fact.
+	if strings.Count(got, "your AWS account") != 1 {
+		t.Errorf("expected the AWS scope named once, got %q", got)
+	}
+	// An allowlist entry that is not set forwards nothing, so warning about it
+	// would train people to ignore the message.
+	if strings.Contains(got, "AWS_SECRET_ACCESS_KEY") {
+		t.Errorf("an unset variable was announced: %q", got)
+	}
+	// A model-provider key is scoped to the agent and is not account-wide.
+	if strings.Contains(got, "ANTHROPIC_API_KEY") {
+		t.Errorf("a model API key should not be announced as account-wide: %q", got)
+	}
+	if out := capture([]string{"ANTHROPIC_API_KEY"}); out != "" {
+		t.Errorf("nothing account-wide forwarded, want silence, got %q", out)
+	}
+}
+
+// TestBootstrapDoesNotShadowSystemBinaries pins the fix for a cross-project
+// persistence path.
+//
+// $HOME/.local/bin is the persisted agent HOME: bind-mounted from the host, the
+// SAME directory in every project, and writable by the agent. The bootstrap used
+// to prepend it to PATH, which put it ahead of /usr/bin for every future session
+// in every project — so an agent compromised in one repository could drop a file
+// named `git`, `node` or `sh` there and shadow that command everywhere
+// afterwards.
+//
+// Appending keeps the directory usable while system binaries win; the absolute
+// exec is what still lets the agent self-update, which is why it lives there.
+func TestBootstrapDoesNotShadowSystemBinaries(t *testing.T) {
+	scripts := map[string]string{
+		"claude":    claudeBootstrap,
+		"npm agent": npmAgentBootstrap("gemini", "@google/gemini-cli")[2],
+	}
+	for name, script := range scripts {
+		t.Run(name, func(t *testing.T) {
+			if strings.Contains(script, `PATH="$HOME/.local/bin:$PATH"`) {
+				t.Error("the persisted HOME is prepended to PATH, so anything written there " +
+					"shadows every system binary in every future session")
+			}
+			if !strings.Contains(script, `PATH="$PATH:$HOME/.local/bin"`) {
+				t.Errorf("expected the persisted bin directory to be appended:\n%s", script)
+			}
+			// The self-updating install must still be the one that runs, or the
+			// baked copy silently wins and the agent stops updating itself.
+			if !strings.Contains(script, `exec "$HOME/.local/bin/`) {
+				t.Errorf("expected an absolute exec of the persisted binary:\n%s", script)
+			}
+		})
 	}
 }

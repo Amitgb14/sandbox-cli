@@ -96,6 +96,18 @@ type MountSpec struct {
 type NetworkSpec struct {
 	Mode  string   `yaml:"mode"`  // "default" | "none" | "allowlist"
 	Allow []string `yaml:"allow"` // extra domains permitted in allowlist mode
+
+	// Baseline switches off the built-in domain set, making Allow the whole
+	// allowlist. Tri-state like the security fields: nil means "keep the
+	// default" (baseline on), so no existing config changes behavior.
+	//
+	// It exists because Allow could only ever *add*: a run that should reach an
+	// internal registry and the model API and nothing else had no way to decline
+	// github.com — which is a write endpoint, and so an exfiltration channel for
+	// any token the agent is holding. Turning it off is deliberately awkward to
+	// use (npm, pip and git all stop working unless listed), which is the right
+	// trade for the case it serves.
+	Baseline *bool `yaml:"baseline"`
 }
 
 // baselineEgress is the always-permitted domain set in allowlist mode: the agent
@@ -119,12 +131,125 @@ func BaselineEgress() []string {
 	return append([]string(nil), baselineEgress...)
 }
 
+// reservedEnvNames are the variables sandbox-cli uses to instruct code that runs
+// **as root, before the agent starts** — the sandbox-firewall entrypoint. They
+// are not preferences: SANDBOX_RUN_AS names the user privileges are dropped to,
+// and SANDBOX_EGRESS_ALLOW is the allowlist the firewall programs.
+//
+// Supplying either from outside turns it into an off switch. Both were reachable:
+// forwarding SANDBOX_RUN_AS by name with `root` in the host environment made the
+// entrypoint skip its privilege drop and run the agent as root, and an empty
+// SANDBOX_EGRESS_ALLOW made the entrypoint a transparent passthrough while
+// sandbox-cli still reported it was enforcing an allowlist.
+//
+// This is an exact-name list rather than a `SANDBOX_*` prefix on purpose. The
+// prefix is also used by knobs that are the user's to set — `--env
+// SANDBOX_STATUSLINE_NO_USAGE=1` is documented in docs/AGENTS.md — and those are
+// read by an unprivileged script in the guest phase, long after the drop. Banning
+// the whole namespace would break a documented feature to fix an unrelated one.
+//
+// Anything added here must be a variable consumed before privileges are dropped.
+var reservedEnvNames = map[string]bool{
+	"SANDBOX_RUN_AS":        true,
+	"SANDBOX_EGRESS_ALLOW":  true,
+	"SANDBOX_INGRESS_PORTS": true, // which inbound ports the firewall leaves open
+	"SANDBOX_PROXY_PORT":    true, // where the name-enforcing egress proxy listens
+
+	// Interpreter- and loader-control variables. These are not sandbox-cli's, but
+	// they decide what the container's root-phase startup *executes*, which puts
+	// them in the same category.
+	//
+	// bash sources $BASH_ENV at the start of every non-interactive script — so
+	// `--env BASH_ENV=/workspace/evil.sh` ran the workspace's file as root, with
+	// NET_ADMIN, *before* sandbox-egress-setup had programmed anything, while the
+	// guest afterwards still reported uid 1001. Pinning PATH in the scripts does
+	// not help: this is read by the interpreter before the first line runs, so the
+	// only place to stop it is here, before it is ever passed to docker.
+	"BASH_ENV":        true,
+	"ENV":             true, // the POSIX sh equivalent
+	"LD_PRELOAD":      true,
+	"LD_LIBRARY_PATH": true,
+	"LD_AUDIT":        true,
+	"SHELLOPTS":       true, // can turn on xtrace, which then evaluates PS4
+	"BASHOPTS":        true,
+	"PS4":             true,
+	"IFS":             true,
+	"GLOBIGNORE":      true,
+
+	// Docker *client* variables. These never reach the container — they steer the
+	// docker binary sandbox-cli runs, which is the one child that still receives
+	// forwarded values (see runtime.childEnv). DOCKER_HOST points it at another
+	// daemon entirely; DOCKER_CONFIG names a directory whose config.json can set
+	// credential helpers; the TLS pair decides who it trusts. Reaching them takes
+	// a deliberate `--secret DOCKER_HOST=...` — project configs cannot declare
+	// secrets — so this is closing a narrow door, but the list is exactly the
+	// place to close it.
+	"DOCKER_HOST":       true,
+	"DOCKER_CONFIG":     true,
+	"DOCKER_CERT_PATH":  true,
+	"DOCKER_TLS_VERIFY": true,
+	"DOCKER_CONTEXT":    true,
+}
+
+const reservedEnvReason = "this variable decides what the container's root-phase startup does or " +
+	"executes — which user it drops to, what egress it permits, which file its interpreter " +
+	"sources before the first line runs, or which docker daemon the run is sent to — and cannot " +
+	"be set or forwarded from outside"
+
+// ValidEnvName reports whether name is usable as an environment variable name.
+//
+// It matters because sandbox-cli forwards values by emitting a bare `-e NAME`,
+// which docker parses as KEY=VALUE when the string contains an "=". A secret
+// named `LD_PRELOAD=/workspace/evil.so` therefore rendered as a real assignment
+// rather than a forward. Nothing downstream should have to wonder about that, so
+// the name is checked where it enters.
+func ValidEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// IsReservedEnv reports whether name is one of sandbox-cli's own control
+// variables and therefore may not be set or forwarded by a user or a config.
+func IsReservedEnv(name string) bool {
+	return reservedEnvNames[strings.TrimSpace(name)]
+}
+
+// ReservedEnvReason is the explanation shown when one of them is refused, shared
+// so the config and flag paths say the same thing.
+func ReservedEnvReason() string { return reservedEnvReason }
+
+// BaselineEnabled reports whether the built-in domain set is part of the
+// allowlist. It answers for the *whole* config, not just allowlist mode, because
+// `--allow` can switch the allowlist on for a run whose config never named a
+// mode — and `baseline: false` has to hold there too.
+func (n NetworkSpec) BaselineEnabled() bool {
+	return n.Baseline == nil || *n.Baseline
+}
+
 // EgressDomains returns the resolved allowlist for allowlist mode — the baseline
 // domains unioned with any configured Allow — or nil when the mode is not
 // "allowlist". The result is de-duplicated and stably ordered (baseline first).
+//
+// With `baseline: false` the result is Allow alone, and an empty Allow yields an
+// empty list rather than an implicit fallback. Callers must not read that as
+// "no allowlist requested": see the refusal in sandbox.BuildSpec, which is what
+// keeps the empty case from silently running with no firewall.
 func (n NetworkSpec) EgressDomains() []string {
 	if n.Mode != "allowlist" {
 		return nil
+	}
+	if !n.BaselineEnabled() {
+		return DedupeDomains(n.Allow)
 	}
 	return DedupeDomains(append(BaselineEgress(), n.Allow...))
 }
@@ -309,6 +434,34 @@ func int64Ptr(n int64) *int64 { return &n }
 func (c Config) Validate() error {
 	if c.Image == "" {
 		return fmt.Errorf("image must not be empty")
+	}
+	// An image reference beginning with a dash is read by docker as another flag,
+	// not as the image: `image: "--privileged"` rendered a real --privileged into
+	// the argv and promoted the guest's first argument to the image name. BuildArgs
+	// now also emits `--` before the image, so this is belt and braces — but the
+	// config is where the mistake is legible, so it is reported here too.
+	if strings.HasPrefix(c.Image, "-") {
+		return fmt.Errorf("image %q must not begin with %q: docker would read it as a flag rather than an image reference", c.Image, "-")
+	}
+	if strings.ContainsAny(c.Image, " \t\n") {
+		return fmt.Errorf("image %q must not contain whitespace", c.Image)
+	}
+	for k := range c.Env {
+		if IsReservedEnv(k) {
+			return fmt.Errorf("env %q: %s", k, reservedEnvReason)
+		}
+		if !ValidEnvName(k) {
+			return fmt.Errorf("env %q is not a valid environment variable name", k)
+		}
+	}
+	for k := range c.Secrets {
+		if !ValidEnvName(k) {
+			return fmt.Errorf("secret %q is not a valid environment variable name "+
+				"(it is forwarded as `-e %s`, so anything else is read by docker as something other than a name)", k, k)
+		}
+		if IsReservedEnv(k) {
+			return fmt.Errorf("secret %q: %s", k, reservedEnvReason)
+		}
 	}
 	if c.Workdir == "" {
 		return fmt.Errorf("workdir must not be empty")

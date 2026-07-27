@@ -3,6 +3,7 @@ package sandbox
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -39,24 +40,82 @@ func ResolveWorkspace(flagPath string) (string, error) {
 		return "", fmt.Errorf("project path is not a directory: %q", real)
 	}
 
-	if isFilesystemRoot(real) {
-		return "", fmt.Errorf("refusing to mount filesystem root %q as the workspace", real)
-	}
-
-	if home := hostHome(); home != "" {
-		realHome, herr := filepath.EvalSymlinks(home)
-		if herr != nil {
-			realHome = home
-		}
-		switch {
-		case real == realHome:
-			return "", fmt.Errorf("refusing to mount your home directory %q; cd into a specific project first", real)
-		case isAncestor(real, realHome):
-			return "", fmt.Errorf("%q is an ancestor of your home directory; too broad to mount safely", real)
-		}
+	if err := RefuseUnsafeHostPath(real); err != nil {
+		return "", err
 	}
 
 	return real, nil
+}
+
+// RefuseUnsafeHostPath enforces the non-overridable safety refusals for a host
+// path that is about to be bind-mounted: never the filesystem root, never the
+// host home, never an ancestor of it. path must already be absolute and
+// symlink-resolved.
+//
+// It is exported because the workspace is not the only path that reaches this
+// question. The parent .git of a worktree is mounted at its own host location,
+// and *which* location comes from a `.git` pointer file inside the workspace —
+// a file the agent can rewrite. Without this check, `gitdir: /Users/you/x/y`
+// produced `--mount source=/Users/you,target=/Users/you` read-write, and
+// `gitdir: /Users/you` produced `source=/,target=/`.
+func RefuseUnsafeHostPath(path string) error {
+	if isFilesystemRoot(path) {
+		return fmt.Errorf("refusing to mount filesystem root %q", path)
+	}
+	home := hostHome()
+	if home == "" {
+		return nil
+	}
+	realHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		realHome = home
+	}
+	switch {
+	case samePath(path, realHome):
+		return fmt.Errorf("refusing to mount your home directory %q; cd into a specific project first", path)
+	case isAncestorOnDisk(path, realHome):
+		return fmt.Errorf("%q is an ancestor of your home directory; too broad to mount safely", path)
+	}
+	return nil
+}
+
+// samePath reports whether two paths name the same directory on disk.
+//
+// It compares identity (device + inode) rather than strings, because a string
+// compare is not a path compare on the filesystems people actually use. macOS
+// APFS and Windows NTFS are case-insensitive while EvalSymlinks preserves
+// whatever casing the caller typed, so `--project /Users/AmitGhadge` slipped
+// past a `real == realHome` test and mounted the home directory; unicode
+// normalisation (NFC vs NFD in a home directory name) is the same bug wearing a
+// different hat. Identity has neither failure mode.
+func samePath(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(fa, fb)
+}
+
+// isAncestorOnDisk reports whether dir is a strict ancestor of child, walking
+// child's parents and comparing by identity. Same reasoning as samePath: this is
+// what catches `--project /USERS`, which is a real directory, is not the
+// filesystem root, and is `/Users` by another name.
+func isAncestorOnDisk(dir, child string) bool {
+	cur := filepath.Clean(child)
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return false // reached the filesystem root without a match
+		}
+		if samePath(dir, parent) {
+			return true
+		}
+		cur = parent
+	}
 }
 
 // WorkspaceMount builds the /workspace bind mount for the given host path.
@@ -65,6 +124,82 @@ func WorkspaceMount(hostPath, target string) runtime.Mount {
 		target = "/workspace"
 	}
 	return runtime.Mount{Source: hostPath, Target: target, RO: false}
+}
+
+// protectedTargets are container paths that a caller-supplied mount may never
+// land on or shadow. Mounting over any of them replaces trusted, image-provided
+// files with attacker-supplied ones.
+//
+// The case that made this necessary: `workdir: /usr/local/bin` in a project
+// config moved the *workspace mount target*, dropping the repository on top of
+// the directory holding sandbox-firewall. In allowlist mode the container's
+// entrypoint is /usr/local/bin/sandbox-firewall and runs as root — so the repo
+// supplied the program that root executes, and no egress firewall was ever
+// programmed. That is a fail-open in the one code path whose stated contract is
+// to fail closed.
+//
+// sandbox-cli's own mounts (the persisted agent HOME, the cache volumes) are not
+// checked against this list: they target HOME by design, and they come from the
+// tool rather than from anything a repository can influence.
+var protectedTargets = []string{
+	"/", "/bin", "/sbin", "/lib", "/lib64",
+	"/usr", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/local", "/usr/local/bin", "/usr/local/sbin",
+	"/etc", "/proc", "/sys", "/dev", "/boot", "/run", "/var/run",
+}
+
+// ValidateMountTarget refuses a caller-supplied container path that would shadow
+// a protected one — either by being it, or by being an ancestor of it (mounting
+// /usr hides /usr/local/bin just as effectively as mounting it directly).
+// ValidateMountPath rejects a host path or container target that docker's
+// `--mount` CSV syntax cannot express unambiguously.
+//
+// The renderer builds `type=bind,source=<src>,target=<tgt>`, so a comma in
+// either value is read as the start of another option: a directory named "a,b"
+// produced `source=/tmp/a,b,target=/data`, where docker sees a field `b`.
+// Nothing good is on the other side of that, and quoting is not reliably
+// supported, so it is refused where the path enters rather than mangled here.
+func ValidateMountPath(kind, p string) error {
+	if strings.ContainsRune(p, ',') {
+		return fmt.Errorf("mount %s %q contains a comma, which docker's --mount syntax cannot express; "+
+			"rename the directory or mount a parent of it", kind, p)
+	}
+	return nil
+}
+
+func ValidateMountTarget(target string) error {
+	if err := ValidateMountPath("target", target); err != nil {
+		return err
+	}
+	t := path.Clean(strings.TrimSpace(target))
+	if t == "" || t == "." {
+		return fmt.Errorf("mount target must not be empty")
+	}
+	if !path.IsAbs(t) {
+		return fmt.Errorf("mount target %q must be an absolute path inside the container", target)
+	}
+	for _, p := range protectedTargets {
+		if t == p {
+			return fmt.Errorf("refusing to mount over %q: it holds files the container's own startup depends on", p)
+		}
+		if isPathAncestor(t, p) {
+			return fmt.Errorf("refusing to mount at %q: it would shadow %q, which holds files the container's own startup depends on", t, p)
+		}
+	}
+	return nil
+}
+
+// isPathAncestor reports whether ancestor is a strict parent of child, using
+// slash semantics — these are container paths, never host paths.
+func isPathAncestor(ancestor, child string) bool {
+	a := path.Clean(ancestor)
+	c := path.Clean(child)
+	if a == c {
+		return false
+	}
+	if a == "/" {
+		return true
+	}
+	return strings.HasPrefix(c, a+"/")
 }
 
 func isFilesystemRoot(p string) bool {

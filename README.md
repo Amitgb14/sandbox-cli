@@ -793,50 +793,76 @@ hardware microVM boundary you choose per run, use native Linux with Kata or gVis
 
 ## Configuration
 
-Merged in precedence order (later wins): built-in defaults →
-`~/.config/sandbox/config.yaml` → nearest `.sandbox.yaml` (walking up from cwd) →
-CLI flags. Run `sandbox-cli config show` to see the effective config.
+Configuration lives in two files, and **the split between them is a security
+boundary**. Merged in precedence order (later wins): built-in defaults →
+`~/.config/sandbox/config.yaml` → nearest `.sandbox.yaml` → CLI flags. Run
+`sandbox-cli config show` to see the effective config.
+
+**`~/.config/sandbox/config.yaml`** — only you write it, so it may set anything:
 
 ```yaml
-# .sandbox.yaml
 image: sandbox-base:0.0.1-9f95ae16   # default; tag is content-addressed
 workdir: /workspace
 user: sandbox           # non-root; agents refuse --dangerously-skip-permissions as root
 # runtime: kata-runtime # stronger isolation (microVM); or runsc for gVisor. default: runc
 mounts:
-  - { host: ./data, container: /workspace/data, mode: rw }
+  - { host: ~/data, container: /workspace/data, mode: rw }
 env:
   NODE_ENV: development
 env_allow:            # default-deny: only these host vars are forwarded, if set
   - ANTHROPIC_API_KEY
   - OPENAI_API_KEY
-network:
-  mode: default       # default | none | allowlist
-  allow:              # allowlist mode only: extra domains beyond the baseline
-    - internal.registry.example.com
-ports:                # published to the host; no address => 127.0.0.1 only
-  - 3000:3000         # write 0.0.0.0:3000:3000 to expose it to your network
-  - 5173
-security:             # secure-by-default hardening; override per project/user
+security:             # secure-by-default hardening
   no_new_privileges: true     # block setuid privilege escalation
   cap_drop: [ALL]             # drop all Linux capabilities (cap_add: [] to add back)
   pids_limit: 1024            # fork-bomb guard; 0 disables
   memory: ""                  # e.g. 2g — opt-in, empty = unlimited
   cpus: ""                    # e.g. 1.5 — opt-in, empty = unlimited
-cache:                # opt-in: persist package caches across --rm runs
-  enabled: false      # or use --cache; mounts named volumes for npm/pip/cargo/go
-  paths: []           # extra container cache dirs beyond the defaults
-snapshot:             # crash safety net; see "Crash recovery"
-  enabled: true       # or use --no-snapshot
-  interval: 2m        # how often the workspace is snapshotted while a sandbox runs
-  retention: 336h     # 14d; older snapshots are pruned at the start of the next run
 secrets:              # broker: resolve at run time, forward by name (never on the argv/dry-run)
   GITHUB_TOKEN: { command: gh auth token }   # short-lived token from your own tool
   ANTHROPIC_API_KEY: { file: ~/.secrets/anthropic }
   OPENAI_API_KEY: { env: OPENAI_API_KEY }     # from host env, but kept off the command line
 ```
 
+**`.sandbox.yaml`** — travels with the repository, so it describes the *project*:
+
+```yaml
+network:
+  mode: allowlist     # may only TIGHTEN: default -> allowlist -> none
+  allow:              # allowlist mode only: extra domains beyond the baseline
+    - internal.registry.example.com
+  # baseline: false   # drop the built-in domains; `allow` becomes the whole list
+ports:                # published to the host; no address => 127.0.0.1 only
+  - 3000:3000         # write 0.0.0.0:3000:3000 to expose it to your network
+  - 5173
+hostname: devbox
+cache:                # opt-in: persist package caches across --rm runs
+  enabled: false      # or use --cache; mounts named volumes for npm/pip/cargo/go
+snapshot:             # crash safety net; see "Crash recovery"
+  enabled: true       # or use --no-snapshot
+  interval: 2m        # how often the workspace is snapshotted while a sandbox runs
+  retention: 336h     # 14d; older snapshots are pruned at the start of the next run
+```
+
+**A project config is untrusted.** Anyone who clones the repo runs it, and the
+agent in the sandbox can rewrite the file that configures its next run — so
+`image`, `workdir`, `user`, `home`, `runtime`, `mounts`, `secrets`, `env`,
+`env_allow`, `security.*`, `cache.paths` and any network setting that *weakens*
+what you already have in force are **refused** from `.sandbox.yaml`, with an error
+naming the key. Put them in your own config, pass them as flags, or — if you have
+read the file and trust it — load it deliberately with
+`sandbox-cli --config ./.sandbox.yaml`. Discovery stops at the repository root
+(or your home directory), so a stray config in a shared parent is never picked up.
+
 ## Security model
+
+> A full security audit of this codebase was carried out on 2026-07-26: 22 issues
+> found, all reproduced end to end and all fixed. A same-day re-audit of those
+> fixes, and a later external review of the pull request, each found more; those
+> are fixed too. The findings, the threat model, the per-round counts and the
+> limits that are still open are recorded in
+> [`docs/security/audit-2026-07-26.md`](docs/security/audit-2026-07-26.md).
+
 
 - **Only `/workspace` is host-connected and writable** for `sandbox-cli run`.
   `HOME`, `/etc`, `/` inside the container are ephemeral and destroyed on exit

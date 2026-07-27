@@ -12,6 +12,8 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/creds"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
+	"path"
+	"path/filepath"
 )
 
 // gitIdentityEnvNames are forwarded (by name) into the container when --git is
@@ -67,6 +69,19 @@ type Options struct {
 	AuthPersistDir string
 }
 
+// isReservedEnv reports whether name is one of the control variables consumed by
+// the container's root-phase startup. The canonical list and the reasoning live
+// in config.IsReservedEnv; this is the local spelling.
+//
+// Two behaviors hang off it, and the difference is deliberate. A name arriving
+// through `env_allow` is dropped **silently**: that list is a best-effort
+// "forward it if it happens to be set", so a host that exports one of these
+// should not fail the run. A name set **deliberately** — `--env
+// SANDBOX_RUN_AS=root`, or a config `env:` key — is refused with an error,
+// because there the user is asking rather than inheriting and a silent drop
+// would mislead them about what the container received.
+func isReservedEnv(name string) bool { return config.IsReservedEnv(name) }
+
 // BuildSpec turns a merged config plus per-invocation options into a fully
 // resolved runtime.RunSpec. It resolves and safety-checks the workspace, folds
 // in config and flag mounts/env, and decides TTY allocation.
@@ -95,10 +110,59 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		runtimeName = opts.Runtime
 	}
 
-	mounts := []runtime.Mount{WorkspaceMount(ws, workdirTargetOrDefault(cfg.Workdir))}
+	// Where the workspace is mounted, and where the guest starts, are two
+	// questions that `workdir` answers at once — and they are not always the same
+	// answer:
+	//
+	//   --workdir /app             mount the project at /app and start there
+	//   --workdir /workspace/sub   keep the mount, start in a subdirectory
+	//
+	// Deciding by whether the path is inside the mount covers both. Previously the
+	// flag moved only `-w`, so `--workdir /app` started the guest in a directory
+	// that did not exist while the project sat at /workspace; and config `workdir:`
+	// moved both, so the two spellings of one setting disagreed.
+	wsTarget := workdirTargetOrDefault(cfg.Workdir)
+	if opts.Workdir != "" && !isPathAncestor(wsTarget, opts.Workdir) && opts.Workdir != wsTarget {
+		wsTarget = opts.Workdir
+	}
+	// The workspace target is caller-influenced, so it is checked like any other:
+	// a target that shadows the container's own binaries hands the repository
+	// control of what the entrypoint runs.
+	if err := ValidateMountTarget(wsTarget); err != nil {
+		return runtime.RunSpec{}, fmt.Errorf("workdir %q: %w", wsTarget, err)
+	}
+	if err := ValidateMountPath("workspace path", ws); err != nil {
+		return runtime.RunSpec{}, err
+	}
+	mounts := []runtime.Mount{WorkspaceMount(ws, wsTarget)}
+
+	// .git/hooks read-only, layered over the read-write workspace.
+	//
+	// The agent has to be able to edit project files, but hooks are not project
+	// source: they are programs the *user's* git runs later, on the host, as them.
+	// An agent writing .git/hooks/pre-commit is not editing the project, it is
+	// waiting for the user's next commit — confirmed as a live escape.
+	//
+	// hooks specifically, and not .git as a whole: agents legitimately run
+	// `git config`, and git writes indexes, refs and logs constantly. Changes to
+	// .git/config are reported at exit instead — detected rather than prevented,
+	// because preventing them would break ordinary work for a smaller gain.
+	if hooks := filepath.Join(ws, ".git", "hooks"); isExistingDir(hooks) {
+		mounts = append(mounts, runtime.Mount{
+			Source: hooks,
+			Target: path.Join(wsTarget, ".git", "hooks"),
+			RO:     true,
+		})
+	}
 
 	// Config-declared mounts (host paths already resolved to absolute at load time).
 	for _, m := range cfg.Mounts {
+		if err := ValidateMountTarget(m.Container); err != nil {
+			return runtime.RunSpec{}, err
+		}
+		if err := ValidateMountPath("host path", m.Host); err != nil {
+			return runtime.RunSpec{}, err
+		}
 		mounts = append(mounts, runtime.Mount{
 			Source: m.Host,
 			Target: m.Container,
@@ -109,6 +173,12 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	for _, raw := range opts.ExtraMounts {
 		m, err := parseMount(raw)
 		if err != nil {
+			return runtime.RunSpec{}, err
+		}
+		if err := ValidateMountTarget(m.Target); err != nil {
+			return runtime.RunSpec{}, err
+		}
+		if err := ValidateMountPath("host path", m.Source); err != nil {
 			return runtime.RunSpec{}, err
 		}
 		mounts = append(mounts, m)
@@ -149,13 +219,16 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 
 	env := map[string]string{}
 	for k, v := range cfg.Env {
+		if isReservedEnv(k) {
+			continue
+		}
 		env[k] = v
 	}
 	var envNames []string
 	seen := map[string]bool{}
 	addName := func(n string) {
 		n = strings.TrimSpace(n)
-		if n == "" || seen[n] {
+		if n == "" || seen[n] || isReservedEnv(n) {
 			return
 		}
 		seen[n] = true
@@ -176,6 +249,9 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// --env: KEY=VALUE sets explicitly; bare KEY forwards host value.
 	for _, e := range opts.Env {
 		if k, v, ok := strings.Cut(e, "="); ok {
+			if isReservedEnv(k) {
+				return runtime.RunSpec{}, fmt.Errorf("--env %s: %s", k, config.ReservedEnvReason())
+			}
 			env[k] = v
 		} else {
 			if _, ok := os.LookupEnv(e); ok {
@@ -257,30 +333,96 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// sandbox-firewall entrypoint, which requires running as root with NET_ADMIN
 	// and then drops back to the intended user (SANDBOX_RUN_AS) before the agent
 	// runs. Allowlist implies bridge networking, so it overrides `none`.
+	// Every sandbox joins one shared network with inter-container communication
+	// disabled, rather than the default bridge where each can reach all the others.
+	// `network: none` still means none.
 	network := cfg.NetworkArg()
+	if network != "none" {
+		network = runtime.SandboxNetwork
+	}
 	egress := cfg.Network.EgressDomains()
+	allowlist := cfg.Network.Mode == "allowlist" || len(opts.Allow) > 0
 	if len(opts.Allow) > 0 {
-		if egress == nil {
-			egress = config.BaselineEgress()
+		// --allow on its own switches the allowlist on, and the baseline comes with
+		// it — unless the config explicitly declined it, which has to hold whether
+		// or not that config also named the mode. Dedupe keeps baseline first and
+		// makes this idempotent when EgressDomains already supplied it.
+		if cfg.Network.BaselineEnabled() {
+			egress = append(config.BaselineEgress(), egress...)
 		}
 		egress = config.DedupeDomains(append(egress, opts.Allow...))
 	}
+	// --no-hardening and the allowlist are mutually exclusive, and refusing is the
+	// only honest outcome. The escape hatch is documented as reverting to the
+	// historical behavior, but combined with an allowlist it lands *above* that
+	// baseline rather than at it: the firewall needs the container to start as
+	// root with NET_ADMIN, NET_RAW, SETUID and SETGID, and it is `cap_drop: ALL`
+	// plus `no-new-privileges` that stop the guest holding on to them after the
+	// drop to the sandbox user. Without those, the run has docker's full default
+	// capability set *plus* those four, with setuid binaries live again — strictly
+	// wider than a plain --no-hardening run, from a flag whose whole purpose is to
+	// be no worse than the old default.
+	//
+	// Silently keeping the hardening would be the other option, and is worse: the
+	// user asked for something and would not get it, with nothing said.
+	// `--user root` and the allowlist are the same contradiction as --no-hardening,
+	// and were not refused. The firewall needs the container to *start* as root,
+	// then drop — and the drop is skipped when the requested user resolves to uid
+	// 0, so the agent keeps NET_ADMIN in its effective set and can simply
+	// `iptables -F OUTPUT` and reach anything. Confirmed: flushed, then connected
+	// to a non-allowlisted address. An allowlist the guest can switch off is worse
+	// than no allowlist, because sandbox-cli reports it is enforcing one.
+	if allowlist && isRootUser(user) {
+		return runtime.RunSpec{}, fmt.Errorf(
+			"--user root cannot be combined with the egress allowlist: the firewall drops privileges "+
+				"after programming itself, and a guest left as root keeps NET_ADMIN and can flush the "+
+				"rules. Drop one of the two (the allowlist already runs the container as root for setup, "+
+				"then drops to %q)", defaultRunAsUser)
+	}
+	if allowlist && opts.NoHardening {
+		return runtime.RunSpec{}, fmt.Errorf(
+			"--no-hardening cannot be combined with the egress allowlist: the firewall starts the " +
+				"container as root with NET_ADMIN and drops privileges, and the hardening you are " +
+				"disabling is what stops the guest regaining them — the combination is wider than " +
+				"either alone. Drop one of the two")
+	}
+
+	// An allowlist that resolved to nothing must refuse, not run. The firewall is
+	// wired below only when there are domains to permit, so an empty list would
+	// otherwise hand back a container with no egress filtering at all — the
+	// strictest request producing the weakest result. `mode: none` is how you ask
+	// for a sandbox that reaches nothing.
+	if allowlist && len(egress) == 0 {
+		return runtime.RunSpec{}, fmt.Errorf(
+			"network.mode is \"allowlist\" with baseline: false and no domains in network.allow — " +
+				"that permits nothing, and would run with no egress firewall at all; " +
+				"list the domains you need, or use network.mode: none")
+	}
 	dockerUser := user
 	entrypoint := ""
-	if len(egress) > 0 {
+	if allowlist {
 		runAs := user
 		if runAs == "" {
 			runAs = "sandbox"
 		}
 		env["SANDBOX_EGRESS_ALLOW"] = strings.Join(egress, ",")
 		env["SANDBOX_RUN_AS"] = runAs
+		// Turns on name-based enforcement: the entrypoint starts the proxy on this
+		// port and redirects the guest's 80/443 into it, so the allowlist is decided
+		// on the hostname the client asked for rather than on addresses resolved
+		// once at startup. A container-local port, never published.
+		env["SANDBOX_PROXY_PORT"] = defaultProxyPort
 		// NET_ADMIN/NET_RAW to program iptables; SETUID/SETGID so the entrypoint's
 		// `setpriv` can drop root -> the intended user before the agent runs
 		// (cap-drop ALL from hardening would otherwise block setresuid/setresgid).
-		capAdd = append(capAdd, "NET_ADMIN", "NET_RAW", "SETUID", "SETGID")
+		// Copied first: append onto a slice with spare capacity would write
+		// through into cfg.Security.CapAdd's backing array, mutating the caller's
+		// config. BuildArgs is documented as pure and BuildSpec is held to the
+		// same standard.
+		capAdd = append(append([]string(nil), capAdd...), "NET_ADMIN", "NET_RAW", "SETUID", "SETGID")
 		dockerUser = "root"
 		entrypoint = "/usr/local/bin/sandbox-firewall"
-		network = "" // allowlist requires bridge networking, not "none"
+		network = runtime.SandboxNetwork // allowlist needs networking, not "none"
 	}
 
 	// --add-host passthrough and the --host-gateway convenience, which maps
@@ -289,6 +431,26 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	addHosts := append([]string(nil), opts.AddHosts...)
 	if opts.HostGateway {
 		addHosts = append(addHosts, "host.docker.internal:host-gateway")
+	} else {
+		// Without --host-gateway, point the host names at the container's own
+		// loopback so they resolve to nothing useful.
+		//
+		// spec.go used to treat host.docker.internal as something --host-gateway
+		// switched on. On Docker Desktop it resolves unconditionally, so it was
+		// never off: a sandbox with no flags at all read a file from a service the
+		// user had bound to 127.0.0.1 precisely so nothing else could reach it.
+		// The absence of a flag was not a defence.
+		//
+		// This blocks the *name*, which is the documented and discoverable path.
+		// In allowlist mode the gateway address is refused as well, since it is on
+		// no allowlist; in default mode there is no firewall and a raw address is
+		// still reachable — that is the residue, and it is tracked with the rest of
+		// the default-mode isolation work.
+		for _, name := range []string{"host.docker.internal", "gateway.docker.internal"} {
+			if !namesHost(opts.AddHosts, name) {
+				addHosts = append(addHosts, name+":127.0.0.1")
+			}
+		}
 	}
 
 	// Published ports. Config `ports:` declares what a project normally needs and
@@ -305,6 +467,18 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// container that looks configured and isn't.
 	if len(ports) > 0 && network == "none" {
 		return runtime.RunSpec{}, fmt.Errorf("cannot publish ports with network mode \"none\": the container has no network to publish from")
+	}
+	// With an allowlist the firewall also default-denies *inbound* traffic, so the
+	// published ports have to be named or they would be reachable from the host
+	// and then refused inside the container — a dev server that silently stops
+	// answering the moment --allow is added. This is the one deliberate ingress
+	// carve-out, and it covers exactly what --dry-run already shows being
+	// published. Set here rather than in the egress block above because the port
+	// list is only resolved at this point.
+	if allowlist {
+		if in := IngressPorts(ports); len(in) > 0 {
+			env["SANDBOX_INGRESS_PORTS"] = strings.Join(in, ",")
+		}
 	}
 
 	tty := detectTTY()
@@ -332,7 +506,13 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// Labels are how a container is found again after this process is gone.
 	// Empty values are omitted rather than stamped blank, so a label that is
 	// present always carries a fact.
-	labels := map[string]string{}
+	// sandbox.cli is stamped unconditionally, and that is the point: every other
+	// label describes the *work* (which repo, branch, agent) and is omitted when
+	// there is nothing true to say — so a run outside a git repository carried no
+	// labels at all and could not be found again by `sandbox-cli ps`. A container
+	// nobody can list is one nobody can stop, and a killed sandbox-cli leaves the
+	// container running with the workspace still mounted.
+	labels := map[string]string{"sandbox.cli": "1"}
 	for k, v := range map[string]string{
 		"sandbox.repo":   opts.RepoID,
 		"sandbox.branch": opts.Branch,
@@ -342,9 +522,6 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		if v != "" {
 			labels[k] = v
 		}
-	}
-	if len(labels) == 0 {
-		labels = nil
 	}
 
 	// Remove is the single deliberate exception to the disposable-container rule:
@@ -473,6 +650,12 @@ func parseSecretFlag(raw string) (string, creds.Source, error) {
 	if !ok || name == "" || spec == "" {
 		return "", creds.Source{}, fmt.Errorf("invalid --secret %q: want NAME=file:PATH | cmd:COMMAND | env:VAR", raw)
 	}
+	if !config.ValidEnvName(name) {
+		return "", creds.Source{}, fmt.Errorf("invalid --secret %q: %q is not a valid environment variable name", raw, name)
+	}
+	if config.IsReservedEnv(name) {
+		return "", creds.Source{}, fmt.Errorf("invalid --secret %q: %s", raw, config.ReservedEnvReason())
+	}
 	scheme, val, ok := strings.Cut(spec, ":")
 	if !ok || val == "" {
 		return "", creds.Source{}, fmt.Errorf("invalid --secret %q: source must be file:PATH, cmd:COMMAND, or env:VAR", raw)
@@ -500,4 +683,45 @@ func isTerminal(f *os.File) bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// defaultProxyPort is where the in-container egress proxy listens. Fixed rather
+// than chosen per run: it is bound to loopback inside the container's own network
+// namespace, so it collides with nothing outside and needs no coordination.
+const defaultProxyPort = "3128"
+
+// defaultRunAsUser is the unprivileged user the firewall entrypoint drops to.
+const defaultRunAsUser = "sandbox"
+
+// isRootUser reports whether a --user/config value asks to run as uid 0, by name
+// or by number. The entrypoint makes the same judgement on the resolved uid, so
+// checking only the spelling "root" would miss `--user 0` and `--user 0:0`.
+func isRootUser(user string) bool {
+	u := strings.TrimSpace(user)
+	if u == "root" {
+		return true
+	}
+	if i := strings.IndexByte(u, ':'); i >= 0 {
+		u = u[:i]
+	}
+	return u == "0"
+}
+
+// isExistingDir reports whether p is a directory that is already there.
+func isExistingDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// namesHost reports whether the caller already mapped this hostname themselves.
+// An explicit --add-host is a deliberate act and must win: /etc/hosts resolution
+// takes the first match, so sandbox-cli adding its own entry for the same name
+// would silently override what the user asked for.
+func namesHost(addHosts []string, name string) bool {
+	for _, h := range addHosts {
+		if n, _, ok := strings.Cut(h, ":"); ok && strings.EqualFold(strings.TrimSpace(n), name) {
+			return true
+		}
+	}
+	return false
 }

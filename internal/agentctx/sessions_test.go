@@ -344,3 +344,72 @@ func TestFindResolvesAnUnambiguousPrefix(t *testing.T) {
 		t.Error("a prefix matching nothing must return no candidates")
 	}
 }
+
+// TestOneLineStripsTerminalControlSequences pins that a session title cannot act
+// on the terminal that prints it. Titles come from transcripts the agent writes,
+// and `context list` renders them directly — so an ESC left in one is a command,
+// not text. Reachable: screen clear, window title via OSC, and OSC 52 clipboard
+// writes on terminals that allow them.
+func TestOneLineStripsTerminalControlSequences(t *testing.T) {
+	cases := map[string]string{
+		"\x1b[2J\x1b[H\x1b]0;OWNED\x07\x1b[31mBENIGN\x1b[0m": "[2J [H ]0;OWNED [31mBENIGN [0m",
+		"plain title":                 "plain title",
+		"tab\tseparated":              "tab separated",
+		"first line\nsecond line":     "first line",
+		"\x1b]52;c;cGF5bG9hZA==\x07x": "]52;c;cGF5bG9hZA== x",
+		"unicode ✓ kept":              "unicode ✓ kept",
+		"del\x7fchar":                 "del char",
+	}
+	for in, want := range cases {
+		if got := oneLine(in); got != want {
+			t.Errorf("oneLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// The property that actually matters, stated directly.
+	for _, in := range []string{"\x1b[2J", "a\x1bb", "x\x9bc", "\x00\x07"} {
+		got := oneLine(in)
+		for _, r := range got {
+			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+				t.Errorf("oneLine(%q) = %q still carries a control character %q", in, got, r)
+			}
+		}
+	}
+}
+
+// TestReadClaudeSessionRefusesNonRegularFiles pins that a listing cannot be used
+// to read arbitrary host files. Transcripts live in the agent's persisted HOME,
+// which is bind-mounted read-write into the container — so the agent can drop a
+// symlink named <uuid>.jsonl there and, before this, `context list` opened and
+// rendered whatever it pointed at.
+func TestReadClaudeSessionRefusesNonRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "host-secret.txt")
+	// Shaped like a transcript so it would genuinely render if it were read.
+	line := `{"type":"user","message":{"role":"user","content":"TOP-SECRET-HOST-CONTENT"}}` + "\n"
+	if err := os.WriteFile(secret, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "11111111-2222-3333-4444-555555555555.jsonl")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	var s Session
+	readClaudeSession(link, &s)
+	if s.Title != "" || s.Turns != 0 {
+		t.Errorf("a symlinked transcript was read: title=%q turns=%d", s.Title, s.Turns)
+	}
+
+	// The regression: a real transcript at the same path must still be read.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(link, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var real Session
+	readClaudeSession(link, &real)
+	if real.Title == "" {
+		t.Error("a regular transcript must still be read")
+	}
+}

@@ -174,3 +174,43 @@ func parsePort(s, raw string) (int, error) {
 	}
 	return n, nil
 }
+
+// IngressPorts turns normalized publish specs into the entries the in-container
+// firewall needs to keep those ports reachable, as "proto:port" or
+// "proto:lo-hi" (see the ingress loop in assets/Dockerfile).
+//
+// It exists because the egress allowlist now also programs a default-deny INPUT
+// chain, and --publish is the one deliberate request for ingress: a dev server
+// the user asked to expose must not be silently unreachable the moment they add
+// --allow. Everything else inbound stays refused.
+//
+// Input is the output of NormalizePublish, so each spec is
+// HOST:HOST_PORT:CONTAINER_PORT with an optional /proto. The container port is
+// the last colon-separated field — true even for a bracketed IPv6 host, whose
+// own colons all sit before it. An unspecified protocol is tcp, matching docker.
+func IngressPorts(published []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, spec := range published {
+		proto := "tcp"
+		s := spec
+		if i := strings.LastIndexByte(s, '/'); i >= 0 {
+			proto = s[i+1:]
+			s = s[:i]
+		}
+		port := s
+		if i := strings.LastIndexByte(s, ':'); i >= 0 {
+			port = s[i+1:]
+		}
+		if port == "" {
+			continue
+		}
+		entry := proto + ":" + port
+		if seen[entry] {
+			continue
+		}
+		seen[entry] = true
+		out = append(out, entry)
+	}
+	return out
+}

@@ -6,6 +6,43 @@ import (
 	"testing"
 )
 
+// withUserConfig points XDG_CONFIG_HOME at a scratch dir and writes content as
+// the user's own config, returning that file's path.
+//
+// Several tests below use this where they once wrote a project .sandbox.yaml:
+// the keys they exercise — security, mounts, secrets, runtime, image, user — are
+// privilege-relevant and a project file may no longer set them (see trust.go).
+// The merge semantics under test are unchanged; only the layer that may express
+// them moved.
+func withUserConfig(t *testing.T, content string) string {
+	t.Helper()
+	xdg := t.TempDir()
+	dir := filepath.Join(xdg, "sandbox")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	return p
+}
+
+// writeProjectConfig writes a .sandbox.yaml into dir and makes dir look like a
+// repository root, so findProjectConfig's boundary permits the walk.
+func writeProjectConfig(t *testing.T, dir, content string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, projectFileName)
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestDefault(t *testing.T) {
 	c := Default()
 	if c.Workdir != "/workspace" || c.Home != "/sandbox/home" || c.User != "sandbox" {
@@ -34,16 +71,11 @@ func TestDefault_Security(t *testing.T) {
 }
 
 func TestLoad_SecurityOverride(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
 	// A config can both disable a default-on setting and clear an inherited slice.
-	content := "security:\n  no_new_privileges: false\n  cap_drop: []\n  pids_limit: 4096\n  memory: 4g\n"
-	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// User-level, because security.* is not settable from a project file.
+	withUserConfig(t, "security:\n  no_new_privileges: false\n  cap_drop: []\n  pids_limit: 4096\n  memory: 4g\n")
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,15 +94,11 @@ func TestLoad_SecurityOverride(t *testing.T) {
 }
 
 func TestLoad_NetworkAllowlistFromConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	content := "network:\n  mode: allowlist\n  allow:\n    - internal.example.com\n"
-	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// network.allow is user-level: it only ever widens the egress boundary, and a
+	// project file could replace it wholesale.
+	withUserConfig(t, "network:\n  mode: allowlist\n  allow:\n    - internal.example.com\n")
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +111,143 @@ func TestLoad_NetworkAllowlistFromConfig(t *testing.T) {
 	}
 	if !containsStr(domains, "api.anthropic.com") {
 		t.Errorf("baseline domain missing: %v", domains)
+	}
+}
+
+// TestBaselineEnabled pins the tri-state: only an explicit false turns the
+// built-in domains off, so every config written before the field existed keeps
+// the baseline it has always had.
+func TestBaselineEnabled(t *testing.T) {
+	if !(NetworkSpec{}).BaselineEnabled() {
+		t.Error("unset baseline must mean enabled — omitting the field cannot change behavior")
+	}
+	if !(NetworkSpec{Baseline: boolPtr(true)}).BaselineEnabled() {
+		t.Error("baseline: true must mean enabled")
+	}
+	if (NetworkSpec{Baseline: boolPtr(false)}).BaselineEnabled() {
+		t.Error("baseline: false must mean disabled")
+	}
+}
+
+// TestEgressDomains_BaselineOff proves `allow` becomes the whole list: the point
+// of the field is that github.com — a write endpoint, and so an exfiltration
+// channel for any token in the container — can actually be declined.
+func TestEgressDomains_BaselineOff(t *testing.T) {
+	n := NetworkSpec{
+		Mode:     "allowlist",
+		Allow:    []string{"internal.example.com", "api.anthropic.com"},
+		Baseline: boolPtr(false),
+	}
+	got := n.EgressDomains()
+	want := []string{"internal.example.com", "api.anthropic.com"}
+	if len(got) != len(want) {
+		t.Fatalf("EgressDomains = %v, want exactly %v", got, want)
+	}
+	for i, d := range want {
+		if got[i] != d {
+			t.Errorf("EgressDomains[%d] = %q, want %q (order follows allow)", i, got[i], d)
+		}
+	}
+	for _, d := range []string{"github.com", "registry.npmjs.org", "pypi.org"} {
+		if containsStr(got, d) {
+			t.Errorf("baseline domain %q survived baseline: false: %v", d, got)
+		}
+	}
+	// api.anthropic.com is both a baseline domain and explicitly listed here; it
+	// belongs because the user asked for it, and exactly once.
+	if countStr(got, "api.anthropic.com") != 1 {
+		t.Errorf("api.anthropic.com not carried through exactly once: %v", got)
+	}
+}
+
+// TestEgressDomains_BaselineOffEmptyIsEmpty pins the sharp edge: the resolved
+// list is empty rather than falling back to the baseline. sandbox.BuildSpec is
+// what turns that into a refusal — see TestBuildSpec_EmptyAllowlistRefuses.
+func TestEgressDomains_BaselineOffEmptyIsEmpty(t *testing.T) {
+	got := (NetworkSpec{Mode: "allowlist", Baseline: boolPtr(false)}).EgressDomains()
+	if len(got) != 0 {
+		t.Fatalf("EgressDomains = %v, want empty — an implicit baseline fallback would silently undo baseline: false", got)
+	}
+}
+
+// TestLoad_BaselineFalseFromConfig runs the field through the real YAML path,
+// since a struct literal would not catch a mistyped tag.
+func TestLoad_BaselineFalseFromConfig(t *testing.T) {
+	withUserConfig(t, "network:\n  mode: allowlist\n  baseline: false\n  allow:\n    - internal.example.com\n")
+
+	cfg, err := Load(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Network.BaselineEnabled() {
+		t.Fatal("baseline: false did not survive the YAML round trip")
+	}
+	domains := cfg.Network.EgressDomains()
+	if containsStr(domains, "github.com") {
+		t.Errorf("baseline leaked through Load: %v", domains)
+	}
+	if !containsStr(domains, "internal.example.com") {
+		t.Errorf("configured domain missing: %v", domains)
+	}
+}
+
+// TestLoad_BaselineIsTriStateAcrossLayers proves a nearer config can turn the
+// baseline back *on* — the reason the field is a pointer rather than a bool. A
+// plain bool would make the user-level `false` unrecoverable, since a project
+// config that never mentions the field is indistinguishable from one that set
+// it to the zero value.
+func TestLoad_BaselineIsTriStateAcrossLayers(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(home, "xdg")
+	if err := os.MkdirAll(filepath.Join(xdg, "sandbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userCfg := "network:\n  mode: allowlist\n  baseline: false\n  allow:\n    - user.example.com\n"
+	if err := os.WriteFile(filepath.Join(xdg, "sandbox", "config.yaml"), []byte(userCfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	proj := t.TempDir()
+
+	// The project config is silent on baseline: the user-level false stands.
+	if err := os.WriteFile(filepath.Join(proj, projectFileName), []byte("hostname: devbox\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(proj, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Network.BaselineEnabled() {
+		t.Error("a config that never mentions baseline must inherit the user-level false")
+	}
+
+	// Turning it back *on* widens the egress boundary, so a project file may not
+	// do it — that is the whole point of the direction-of-travel rule in trust.go.
+	if err := os.WriteFile(filepath.Join(proj, projectFileName), []byte("network:\n  baseline: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(proj, ""); err == nil {
+		t.Error("a project config re-enabling the baseline must be refused: it widens what the container can reach")
+	}
+
+	// From a trusted layer it works, which is what makes the field tri-state
+	// rather than one-way. A plain bool could not express this at all: a config
+	// that never mentions baseline would be indistinguishable from one setting it
+	// to the zero value, so an inherited false could never be undone.
+	explicit := filepath.Join(t.TempDir(), "trusted.yaml")
+	if err := os.WriteFile(explicit, []byte("network:\n  baseline: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(proj, explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Network.BaselineEnabled() {
+		t.Error("an explicit baseline: true must override an inherited false")
+	}
+	if !containsStr(cfg.Network.EgressDomains(), "github.com") {
+		t.Error("re-enabling the baseline must bring the built-in domains back")
 	}
 }
 
@@ -124,15 +289,10 @@ func TestCachePathsAndEnabled(t *testing.T) {
 }
 
 func TestLoad_CacheOverride(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	content := "cache:\n  enabled: true\n  paths:\n    - /opt/extra-cache\n"
-	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// cache.paths aims a writable volume at a container path, so it is user-level.
+	withUserConfig(t, "cache:\n  enabled: true\n  paths:\n    - /opt/extra-cache\n")
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,14 +305,10 @@ func TestLoad_CacheOverride(t *testing.T) {
 }
 
 func TestLoad_RuntimeFromConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	if err := os.WriteFile(cfgFile, []byte("runtime: kata-runtime\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// runtime selects the strength of the isolation boundary: user-level only.
+	withUserConfig(t, "runtime: kata-runtime\n")
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,14 +322,11 @@ func TestLoad_RuntimeFromConfig(t *testing.T) {
 }
 
 func TestLoad_PortsFromConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	if err := os.WriteFile(cfgFile, []byte("ports:\n  - 3000:3000\n  - 5173\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// ports is user-level: publishing binds a host port and, under an allowlist,
+	// opens a hole in the default-deny INPUT chain.
+	withUserConfig(t, "ports:\n  - 3000:3000\n  - 5173\n")
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,39 +342,29 @@ func TestLoad_PortsFromConfig(t *testing.T) {
 // TestLoad_PortsReplaceNotAppend: publishing opens the boundary inward, so a
 // project must be able to narrow an inherited set — including to nothing.
 func TestLoad_PortsReplaceNotAppend(t *testing.T) {
-	xdg := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(xdg, "sandbox"), 0o755); err != nil {
+	// Ports replace rather than append, so a nearer layer can say "only these" —
+	// and "none" with `ports: []`. Exercised across the user layer and an explicit
+	// --config, since a project file may no longer set ports at all.
+	withUserConfig(t, "ports:\n  - 9999:9999\n")
+	explicit := filepath.Join(t.TempDir(), "trusted.yaml")
+	if err := os.WriteFile(explicit, []byte("ports:\n  - 3000:3000\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	userCfg := filepath.Join(xdg, "sandbox", "config.yaml")
-	if err := os.WriteFile(userCfg, []byte("ports:\n  - 9000:9000\n  - 9001:9001\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", xdg)
-
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, projectFileName), []byte("ports:\n  - 3000:3000\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), explicit)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cfg.Ports) != 1 || cfg.Ports[0] != "3000:3000" {
-		t.Errorf("project ports must replace the user's, got %v", cfg.Ports)
+		t.Errorf("Ports = %v, want only the nearer layer's", cfg.Ports)
 	}
-
-	// An explicit empty list clears the inherited set rather than being ignored.
-	dir2 := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir2, projectFileName), []byte("ports: []\n"), 0o644); err != nil {
+	// An explicit empty list clears an inherited one.
+	if err := os.WriteFile(explicit, []byte("ports: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg2, err := Load(dir2, "")
-	if err != nil {
+	if cfg, err = Load(t.TempDir(), explicit); err != nil {
 		t.Fatal(err)
-	}
-	if len(cfg2.Ports) != 0 {
-		t.Errorf("`ports: []` must publish nothing, got %v", cfg2.Ports)
+	} else if len(cfg.Ports) != 0 {
+		t.Errorf("Ports = %v, want empty", cfg.Ports)
 	}
 }
 
@@ -305,15 +448,10 @@ func TestValidate_Secrets(t *testing.T) {
 }
 
 func TestLoad_SecretsMergePerKey(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	content := "secrets:\n  GITHUB_TOKEN:\n    command: gh auth token\n  API_KEY:\n    file: ~/.secrets/api\n"
-	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// secrets run host commands and read host files: user-level only.
+	withUserConfig(t, "secrets:\n  GITHUB_TOKEN:\n    command: gh auth token\n  API_KEY:\n    file: ~/.secrets/api\n")
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,13 +476,10 @@ func TestValidate_BadMountMode(t *testing.T) {
 
 func TestLoad_ProjectOverridesDefault(t *testing.T) {
 	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	content := "image: my-image:9\nuser: sandbox\nnetwork:\n  mode: none\n"
-	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Point user config away so it doesn't interfere.
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// image and user are user-level; network.mode: none is left in the project
+	// file because it *strengthens* the posture, which a project may do.
+	withUserConfig(t, "image: my-image:9\nuser: sandbox\n")
+	writeProjectConfig(t, dir, "network:\n  mode: none\n")
 
 	cfg, err := Load(dir, "")
 	if err != nil {
@@ -366,15 +501,12 @@ func TestLoad_ProjectOverridesDefault(t *testing.T) {
 }
 
 func TestLoad_RelativeMountResolvedAgainstConfigDir(t *testing.T) {
-	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	content := "mounts:\n  - { host: ./data, container: /workspace/data, mode: rw }\n"
-	if err := os.WriteFile(cfgFile, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty-xdg"))
+	// mounts are user-level, so the "relative to the declaring file" rule is
+	// exercised against the user config's own directory.
+	userCfg := withUserConfig(t, "mounts:\n  - { host: ./data, container: /workspace/data, mode: rw }\n")
+	dir := filepath.Dir(userCfg)
 
-	cfg, err := Load(dir, "")
+	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,10 +521,7 @@ func TestLoad_RelativeMountResolvedAgainstConfigDir(t *testing.T) {
 
 func TestFindProjectConfig_WalksUp(t *testing.T) {
 	dir := t.TempDir()
-	cfgFile := filepath.Join(dir, projectFileName)
-	if err := os.WriteFile(cfgFile, []byte("image: x:1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	cfgFile := writeProjectConfig(t, dir, "hostname: walked\n")
 	sub := filepath.Join(dir, "a", "b")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)

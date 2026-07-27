@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -80,5 +81,67 @@ func TestRestoreTerminalModesSkipsNonTerminal(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected no write to a non-terminal, got %q", got)
+	}
+}
+
+// TestEnsureImage_OnlyBuildsTheEmbeddedRef pins that a foreign image reference is
+// never built from the embedded Dockerfile. Building it would tag the sandbox
+// base as, say, `node:22` in the user's local image store — poisoning that name
+// for every other project on the machine, and handing back something that is not
+// the image they asked for.
+func TestEnsureImage_OnlyBuildsTheEmbeddedRef(t *testing.T) {
+	var built []string
+	d := &DockerCLI{Bin: "/nonexistent-docker-for-test"}
+	d.SetBuilder(func(ctx context.Context, ref string) error {
+		built = append(built, ref)
+		return nil
+	}, "sandbox-base:0.0.1-abcdef12")
+
+	// The embedded ref is built. (image inspect fails because the bin does not
+	// exist, which is the "not present locally" path.)
+	if err := d.EnsureImage(context.Background(), "sandbox-base:0.0.1-abcdef12", false); err != nil {
+		t.Fatalf("the embedded ref must be buildable: %v", err)
+	}
+	if len(built) != 1 || built[0] != "sandbox-base:0.0.1-abcdef12" {
+		t.Fatalf("builder calls = %v, want exactly the embedded ref", built)
+	}
+
+	// Anything else is pulled instead — which fails here, but must not build.
+	if err := d.EnsureImage(context.Background(), "node:22", false); err == nil {
+		t.Error("a foreign image that cannot be pulled should error, not silently build")
+	}
+	if len(built) != 1 {
+		t.Errorf("builder was called for a foreign ref: %v", built)
+	}
+}
+
+// TestSeccompDisabled covers the parsing behind the warning. sandbox-cli ships no
+// profile of its own — docker's default is good and a custom one is a large
+// ongoing cost — so `Seccomp: ""` means "whatever the daemon does". The daemon may
+// do nothing, and on the machine where this was found it did: `docker info`
+// reported profile=unconfined, a container showed `Seccomp: 0`, and `unshare -r`
+// gave uid 0. Every claim sandbox-cli makes about hardening still read as true
+// while one of its layers was simply absent.
+func TestSeccompDisabled(t *testing.T) {
+	disabled := [][]string{
+		{"name=seccomp,profile=unconfined", "name=cgroupns"}, // observed in the wild
+		{"name=cgroupns"}, // no seccomp entry at all
+		{},                // daemon reports nothing
+	}
+	for _, opts := range disabled {
+		if !seccompDisabled(opts) {
+			t.Errorf("seccompDisabled(%v) = false, want true", opts)
+		}
+	}
+
+	enabled := [][]string{
+		{"name=seccomp,profile=builtin"},
+		{"name=apparmor", "name=seccomp,profile=builtin", "name=cgroupns"},
+		{"name=seccomp,profile=/etc/docker/seccomp.json"},
+	}
+	for _, opts := range enabled {
+		if seccompDisabled(opts) {
+			t.Errorf("seccompDisabled(%v) = true, want false — warning here would be noise", opts)
+		}
 	}
 }

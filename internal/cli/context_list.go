@@ -223,6 +223,22 @@ func printNoSessions(agents []agentctx.Finding, project string, all bool) {
 		fmt.Printf("  %s\n", storeLine(f))
 	}
 	fmt.Println("try --all to list the sessions in other projects")
+	printPooledSessions(agents)
+}
+
+// printPooledSessions names the sessions that predate the per-project history
+// mount, when there are any. Kept out of the store line above because it says
+// something different: not "here is the store" but "some of it cannot be
+// attributed to any project, including possibly this one".
+func printPooledSessions(agents []agentctx.Finding) {
+	for _, f := range agents {
+		dir, n := agentctx.PooledSessions(f)
+		if n == 0 {
+			continue
+		}
+		fmt.Printf("  %s: %d session(s) recorded before per-project history, in %s\n", f.Agent, n, shortenHome(dir))
+		fmt.Printf("    they are not attributable to a project; list them with: sandbox-cli %s context list --project /workspace\n", f.Agent)
+	}
 }
 
 // storeLine describes one agent's store in a sentence: what is in it, where it

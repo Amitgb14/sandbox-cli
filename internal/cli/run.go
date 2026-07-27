@@ -11,10 +11,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/githard"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
+	"sort"
 )
 
 func newRunCmd() *cobra.Command {
@@ -120,6 +123,7 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 		}
 	}
 	rf.envAllow = append(rf.envAllow, envAllow...)
+	announceBroadCredentials(envAllow)
 	// An abbreviated session id from `context list` is expanded here, because the
 	// agents require the full one — and a session belonging to another project is
 	// refused here, because the container will not have its history mounted.
@@ -161,6 +165,13 @@ func execute(rf *runFlags, guest []string) error {
 	snap := beginRescue(rf, sess.Cfg, opts)
 	stopWatching := watchSignals(snap, rf)
 	defer stopWatching()
+
+	// .git/hooks is mounted read-only so hooks cannot be planted; config is not,
+	// because agents legitimately write it. So config is recorded now and the
+	// difference reported when the run ends — the moment it is still useful,
+	// which is before the user next runs git in this repository.
+	reportConfigChanges := watchGitConfig(rf)
+	defer reportConfigChanges()
 
 	code, err := sess.Run(context.Background(), opts, rf.build)
 	if err != nil {
@@ -324,4 +335,102 @@ func shellQuote(s string) string {
 		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 	}
 	return s
+}
+
+// broadCredentials are forwarded host variables that are not scoped to the agent
+// they authenticate.
+//
+// Most wrapper allowlists carry a model-provider key: ANTHROPIC_API_KEY is worth
+// exactly the thing the agent is for. These are different — an AWS session is the
+// whole cloud account, and a GitHub token is every repository the user can push
+// to. They are still forwarded, because they are how `continue` reaches Bedrock
+// and how `copilot` authenticates at all; taking them away would break those
+// agents for the people who configured them.
+//
+// What was wrong was that it happened silently. Saying it once, at the moment it
+// happens, is the difference between a decision and a surprise.
+var broadCredentials = map[string]string{
+	"AWS_ACCESS_KEY_ID":     "your AWS account",
+	"AWS_SECRET_ACCESS_KEY": "your AWS account",
+	"AWS_SESSION_TOKEN":     "your AWS account",
+	"GH_TOKEN":              "every GitHub repository you can push to",
+	"GITHUB_TOKEN":          "every GitHub repository you can push to",
+	"COPILOT_GITHUB_TOKEN":  "every GitHub repository you can push to",
+}
+
+// announceBroadCredentials reports which account-wide credentials this run will
+// forward. Only names actually present in the host environment are named — an
+// allowlist entry that matches nothing forwards nothing, and warning about it
+// would train people to ignore the message.
+func announceBroadCredentials(envAllow []string) {
+	seen := map[string]bool{}
+	var lines []string
+	for _, n := range envAllow {
+		scope, broad := broadCredentials[n]
+		if !broad || seen[scope] {
+			continue
+		}
+		if _, set := os.LookupEnv(n); !set {
+			continue
+		}
+		seen[scope] = true
+		lines = append(lines, fmt.Sprintf("  %s — %s", n, scope))
+	}
+	if len(lines) == 0 {
+		return
+	}
+	sort.Strings(lines)
+	fmt.Fprintln(os.Stderr, "sandbox-cli: forwarding account-wide credentials into the sandbox:")
+	for _, l := range lines {
+		fmt.Fprintln(os.Stderr, l)
+	}
+}
+
+// watchGitConfig snapshots the workspace's local git config and returns a
+// function that reports what changed.
+//
+// Reporting rather than preventing is the deliberate half of this pair.
+// core.fsmonitor and core.hooksPath name programs the *user's* git runs on the
+// host as them, so a change to one is worth interrupting for — but agents also
+// legitimately run `git config`, and refusing that outright breaks ordinary work
+// for a smaller gain than mounting hooks read-only already delivers.
+func watchGitConfig(rf *runFlags) func() {
+	dir := rf.project
+	if dir == "" {
+		dir, _ = os.Getwd()
+	}
+	dir = config.ExpandTilde(dir)
+	before := githard.SnapshotConfig(dir)
+	if before == nil {
+		return func() {} // not a repository, or git cannot read it
+	}
+	return func() {
+		changes := githard.DiffConfig(before, githard.SnapshotConfig(dir))
+		if len(changes) == 0 {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "\nsandbox-cli: the agent changed this repository's git config:\n")
+		for _, c := range changes {
+			mark := " "
+			if c.Dangerous {
+				mark = "!"
+			}
+			switch {
+			case c.After == "":
+				fmt.Fprintf(os.Stderr, "  %s removed %s\n", mark, termsafe.Clean(c.Key))
+			case c.Before == "":
+				fmt.Fprintf(os.Stderr, "  %s %s = %s\n", mark, termsafe.Clean(c.Key), termsafe.Clean(c.After))
+			default:
+				fmt.Fprintf(os.Stderr, "  %s %s = %s (was %s)\n", mark,
+					termsafe.Clean(c.Key), termsafe.Clean(c.After), termsafe.Clean(c.Before))
+			}
+		}
+		for _, c := range changes {
+			if c.Dangerous {
+				fmt.Fprintf(os.Stderr, "  the lines marked ! name a program your own git will run; "+
+					"review before using git here\n")
+				break
+			}
+		}
+	}
 }

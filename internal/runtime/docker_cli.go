@@ -25,8 +25,10 @@ type DockerCLI struct {
 	// Stderr receives image-build progress and diagnostics. Defaults to os.Stderr.
 	Stderr *os.File
 	// builder builds a missing image; wired by the image package via SetBuilder
-	// to avoid an import cycle.
-	builder Builder
+	// to avoid an import cycle. embeddedRef is the one reference that builder
+	// knows how to produce — anything else must be pulled, not built.
+	builder     Builder
+	embeddedRef string
 }
 
 // NewDockerCLI returns a DockerCLI with sensible defaults.
@@ -73,14 +75,32 @@ func (d *DockerCLI) EnsureImage(ctx context.Context, ref string, forceBuild bool
 	if d.builder == nil {
 		return fmt.Errorf("image %q not found locally and no builder configured", ref)
 	}
+	// Only *our* image is built from the embedded Dockerfile. Any other reference
+	// is somebody else's image and has to be pulled: building it would tag the
+	// sandbox base as, say, `node:22` in the user's local image store, poisoning
+	// that name for every other project on the machine — and quietly handing back
+	// something that is not what was asked for.
+	if d.embeddedRef != "" && ref != d.embeddedRef {
+		pull := exec.CommandContext(ctx, d.bin(), "pull", ref)
+		pull.Stdout = d.stderr()
+		pull.Stderr = d.stderr()
+		if err := pull.Run(); err != nil {
+			return fmt.Errorf("image %q is not present locally and could not be pulled: %w", ref, err)
+		}
+		return nil
+	}
 	return d.builder(ctx, ref)
 }
 
 // Builder builds the given image reference. Set by the image package.
 type Builder func(ctx context.Context, ref string) error
 
-// SetBuilder wires a build function used by EnsureImage when an image is absent.
-func (d *DockerCLI) SetBuilder(b Builder) { d.builder = b }
+// SetBuilder wires a build function used by EnsureImage when an image is absent,
+// together with the single image reference that function produces.
+func (d *DockerCLI) SetBuilder(b Builder, embeddedRef string) {
+	d.builder = b
+	d.embeddedRef = embeddedRef
+}
 
 // checkRuntime verifies the daemon has the requested OCI runtime registered.
 // Failing to query the daemon is non-fatal — the run proceeds and docker
@@ -158,6 +178,7 @@ func (d *DockerCLI) Run(ctx context.Context, spec RunSpec) (int, error) {
 
 	args := BuildArgs(spec)
 	cmd := exec.CommandContext(ctx, d.bin(), args...)
+	cmd.Env = childEnv(spec)
 	cmd.Stdin = os.Stdin
 
 	if spec.Name != "" && spec.ShowMetrics {
@@ -190,6 +211,7 @@ func (d *DockerCLI) Start(ctx context.Context, spec RunSpec) (string, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, d.bin(), BuildArgs(spec)...)
+	cmd.Env = childEnv(spec)
 	// `docker run -d` prints the container id on stdout and its own diagnostics on
 	// stderr; the id is captured, the diagnostics belong to the user. Stdin stays
 	// nil (/dev/null) — this run has no terminal behind it.
@@ -329,4 +351,188 @@ func exitCodeOf(err error) (int, error) {
 		return exitErr.ExitCode(), nil
 	}
 	return 1, fmt.Errorf("failed to run docker: %w", err)
+}
+
+// childEnv is the environment for the docker process: ours, plus the values for
+// any bare `-e NAME` arguments BuildArgs emitted.
+//
+// Those values reach the container this way rather than through os.Setenv on
+// sandbox-cli itself. That mattered: secrets used to be placed in our own
+// environment, so a secret named PATH or DOCKER_HOST redirected the docker and
+// git subprocesses spawned after the injection — and the preflight ran before
+// it, so nothing noticed. Scoping them to the child narrows the class sharply:
+// git and every later subprocess of ours are out of reach.
+//
+// It does not remove it, and the comment used to overstate this. The child is
+// docker, so a value named DOCKER_HOST, DOCKER_CONFIG, DOCKER_CERT_PATH,
+// DOCKER_TLS_VERIFY or DOCKER_CONTEXT still steers the docker client itself —
+// at another daemon, or at a config.json naming credential helpers. Those names
+// are refused by config.IsReservedEnv for that reason; this scoping is what
+// makes the rest of the environment safe to forward.
+//
+// Returns nil when there is nothing extra, which makes exec inherit our
+// environment exactly as before.
+func childEnv(spec RunSpec) []string {
+	if len(spec.ForwardedEnv) == 0 {
+		return nil
+	}
+	env := os.Environ()
+	for _, k := range sortedKeys(spec.ForwardedEnv) {
+		env = append(env, k+"="+spec.ForwardedEnv[k])
+	}
+	return env
+}
+
+// SandboxNetwork is the docker network every sandbox joins.
+//
+// One shared network rather than one per run, which matters: a per-run network
+// is a docker object that outlives a crash, so it would reintroduce exactly the
+// orphaned-state cleanup this tool is otherwise free of. A single network is
+// created once and reused forever.
+//
+// The point of it is `enable_icc=false`. On the default bridge every container
+// can reach every other on any port — confirmed by reading workspace data out of
+// one sandbox from another — and running several agents at once is the advertised
+// workflow, so a compromised agent in one repository could dial into the agent
+// working on another. With inter-container communication off they cannot see each
+// other at all, while DNS, egress and published ports are unaffected.
+const SandboxNetwork = "sandbox-cli"
+
+// ownedNetwork is the one network sandbox-cli creates, and so the only one it is
+// entitled to vouch for. A var rather than a direct use of the constant so tests
+// can exercise the ICC check against a scratch network — the real one usually
+// has live containers attached, and a test must not go near those.
+var ownedNetwork = SandboxNetwork
+
+// EnsureNetwork creates the shared sandbox network if it is not already there,
+// and verifies that an existing one actually has the property it exists for.
+//
+// A failure is returned rather than swallowed: falling back to the default bridge
+// would silently put the container somewhere every other container can reach,
+// which is the condition this exists to prevent.
+//
+// The same argument applies to a network that merely *looks* right. This used to
+// accept any network of the name, so one created by hand, by an older build, or
+// by a compose file passed and was used as-is with inter-container communication
+// left on — a silent fail-open in the exact layer being added. The point of the
+// network is `enable_icc=false`; existence is not the property, so existence is
+// not what is checked.
+func (d *DockerCLI) EnsureNetwork(ctx context.Context, name string) error {
+	if name == "" {
+		return nil
+	}
+	// Only the network sandbox-cli creates is sandbox-cli's to vouch for.
+	//
+	// `none` is the other value that reaches here, and it is a *predefined*
+	// docker network: `network inspect` succeeds, its Options map is empty, so an
+	// unconditional check read that as "ICC enabled" and refused to run — telling
+	// the user to `docker network rm none`, which docker declines because the
+	// network is predefined. That broke the strictest posture the tool has, and
+	// the one the empty-allowlist refusal points people at.
+	//
+	// It is also the right rule on its own terms: `none` gives the container no
+	// interfaces at all, so inter-container communication is not a property it
+	// can have, and a network the user named themselves is theirs to configure.
+	if name != ownedNetwork {
+		return nil
+	}
+	if icc, err := d.networkICC(ctx, name); err == nil {
+		if icc != "false" {
+			return fmt.Errorf("the docker network %q exists but has inter-container communication enabled "+
+				"(com.docker.network.bridge.enable_icc=%s), so another container could reach this sandbox; "+
+				"remove it with `docker network rm %s` and it will be recreated correctly",
+				name, iccValueForMessage(icc), name)
+		}
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, d.bin(), "network", "create",
+		"--opt", "com.docker.network.bridge.enable_icc=false", name).CombinedOutput()
+	if err != nil {
+		// A concurrent run may have created it between the inspect and the create;
+		// that is success, not a race to report.
+		if exec.CommandContext(ctx, d.bin(), "network", "inspect", name).Run() == nil {
+			return nil
+		}
+		return fmt.Errorf("creating the sandbox network %q: %s: %w", name, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// networkICC reports the enable_icc option of an existing network. The error is
+// how "no such network" is distinguished from "exists but unreadable" — only the
+// first is a reason to create one.
+func (d *DockerCLI) networkICC(ctx context.Context, name string) (string, error) {
+	out, err := exec.CommandContext(ctx, d.bin(), "network", "inspect", name,
+		"--format", `{{index .Options "com.docker.network.bridge.enable_icc"}}`).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// iccValueForMessage renders the option for a human. Docker omits the key
+// entirely when it was never set, which prints as an empty string and reads as
+// though nothing is wrong — but an unset enable_icc *is* ICC on, which is the
+// whole problem.
+func iccValueForMessage(v string) string {
+	if v == "" || v == "<no value>" {
+		return "unset, which means enabled"
+	}
+	return v
+}
+
+// Seccomp is the syscall filter docker normally applies. sandbox-cli does not
+// ship a profile of its own — docker's default is good, and maintaining a custom
+// one is a large ongoing cost for a small marginal gain — so `Seccomp: ""` on the
+// spec means "whatever the daemon does".
+//
+// The problem is that the daemon may do nothing, silently. On the machine this
+// was found, `docker info` reported profile=unconfined and a container showed
+// `Seccomp: 0` in /proc/self/status: the full syscall table available, plus
+// unprivileged user namespaces (`unshare -r` gave uid 0). Everything sandbox-cli
+// says about hardening still read as true while one of its layers was absent.
+//
+// So it is reported rather than assumed. Not refused: seccomp being off is a
+// property of the user's docker installation, fixable in its settings, and
+// refusing to run would make the tool unusable on a machine that is merely
+// configured badly — a much worse trade than the firewall's fail-closed rule,
+// where the thing that failed was something sandbox-cli itself asked for.
+
+// seccompDisabled reports whether the daemon's own security options say no
+// syscall filter is applied. Pure, so the parsing is tested without a daemon.
+func seccompDisabled(securityOptions []string) bool {
+	sawSeccomp := false
+	for _, o := range securityOptions {
+		if !strings.Contains(o, "name=seccomp") {
+			continue
+		}
+		sawSeccomp = true
+		if strings.Contains(o, "profile=unconfined") {
+			return true
+		}
+	}
+	// No seccomp entry at all means the daemon is not applying one either.
+	return !sawSeccomp
+}
+
+// WarnIfSeccompDisabled prints one line when the daemon applies no syscall
+// filter. Best-effort: a daemon that cannot be queried is not a reason to say
+// anything, since the alternative is warning on every run for a question we
+// could not ask.
+func (d *DockerCLI) WarnIfSeccompDisabled(ctx context.Context) {
+	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .SecurityOptions}}").Output()
+	if err != nil {
+		return
+	}
+	var opts []string
+	if json.Unmarshal(bytes.TrimSpace(out), &opts) != nil {
+		return
+	}
+	if !seccompDisabled(opts) {
+		return
+	}
+	fmt.Fprintln(d.stderr(), "sandbox-cli: this docker daemon applies no seccomp profile, so the container "+
+		"has the full syscall table\n"+
+		"  the other hardening still applies (non-root, cap-drop, no-new-privileges), but this layer is absent\n"+
+		"  Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\"")
 }

@@ -15,6 +15,10 @@ import (
 	"strings"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+
+	"github.com/Amitgb14/sandbox-cli/internal/githard"
+
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
 // gitBin is the git executable; a variable so tests can stub it if needed.
@@ -218,6 +222,11 @@ func Dirty(dir, branch string, limit int) []string {
 	if err != nil || !exists {
 		return nil
 	}
+	// Paths are cleaned before returning: they are display-only (the "you left work
+	// here" warning at the end of every --worktree run and on Ctrl-C), they come
+	// from the workspace so the agent names them, and -z means git does NOT quote
+	// them — so an ESC in a filename reached the user's terminal verbatim.
+	//
 	// -z: NUL-separated and never quoted. Plain --porcelain quotes paths
 	// containing spaces or non-ASCII, which would surface to the user as
 	// `"weird name.txt"`.
@@ -238,7 +247,7 @@ func Dirty(dir, branch string, limit int) []string {
 		if status[0] == 'R' || status[0] == 'C' {
 			i++
 		}
-		files = append(files, name)
+		files = append(files, termsafe.Clean(name))
 		if limit > 0 && len(files) >= limit {
 			break
 		}
@@ -334,16 +343,51 @@ func GitCommonDir(dir string) (path string, ok bool) {
 			if !filepath.IsAbs(common) {
 				common = filepath.Join(gitDir, common)
 			}
-			if isDir(common) {
+			if isGitCommonDir(common) {
 				return filepath.Clean(common), true
 			}
 		}
 	}
 	// Fall back to the conventional layout: .git/worktrees/<name> -> .git
-	if parent := filepath.Dir(filepath.Dir(gitDir)); isDir(parent) {
+	if parent := filepath.Dir(filepath.Dir(gitDir)); isGitCommonDir(parent) {
 		return filepath.Clean(parent), true
 	}
 	return "", false
+}
+
+// isGitCommonDir reports whether path looks like a real git common directory,
+// rather than merely existing.
+//
+// This is a security check, not a tidiness one. Every path above derives from the
+// `gitdir:` string in a `.git` **pointer file inside the workspace** — which the
+// sandbox mounts read-write, so the agent can rewrite it at will — and the caller
+// bind-mounts the answer read-write at its own host location. The old test was
+// `isDir`, and the fallback takes *two directories up* from whatever was written,
+// so `gitdir: /Users/you/x/y` yielded `/Users/you` and `gitdir: /Users/you`
+// yielded `/`. Both were mounted read-write on the user's next run.
+//
+// Requiring the markers of a git directory closes that, because the agent cannot
+// create them: the only host location it can write is the workspace, and a target
+// worth attacking is by definition outside it. sandbox.RefuseUnsafeHostPath is
+// the second layer, at the mount site.
+func isGitCommonDir(path string) bool { return IsGitDir(path) }
+
+// IsGitDir reports whether path holds the markers of a git directory — HEAD and
+// objects/ — rather than merely existing. Exported for internal/rescue, whose
+// repair path faces the same question about the same untrusted input: a `.git`
+// pointer file inside the workspace naming a directory sandbox-cli is about to
+// write to.
+func IsGitDir(path string) bool {
+	if !isDir(path) {
+		return false
+	}
+	// HEAD and objects/ are present in every git directory — bare, non-bare, and
+	// the common dir shared by linked worktrees. refs/ can be absent once a
+	// repository is fully packed, so it is not required.
+	if fi, err := os.Lstat(filepath.Join(path, "HEAD")); err != nil || fi.IsDir() {
+		return false
+	}
+	return isDir(filepath.Join(path, "objects"))
 }
 
 func branchExists(root, branch string) bool {
@@ -444,10 +488,18 @@ func gitEnv() []string {
 	return append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0")
 }
 
+// runGit runs one of sandbox-cli's *own* git commands. Every such command runs
+// on the host inside a repository the agent can write to, so the repository's
+// configuration is neutralised first (githard): `worktree add` performs a
+// checkout, which without this would run smudge filters and the post-checkout
+// hook — both commands named by files the agent controls.
+//
+// worktree.Git is the deliberate exception: that is the user running their own
+// git command in their own repository, where hooks firing is expected.
 func runGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command(gitBin, args...)
+	cmd := exec.Command(gitBin, append(githard.Args(dir), args...)...)
 	cmd.Dir = dir
-	cmd.Env = gitEnv()
+	cmd.Env = append(gitEnv(), githard.Env(dir)...)
 	var out, errb strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errb

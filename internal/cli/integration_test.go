@@ -18,6 +18,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
+	"time"
 )
 
 func newTestSession(t *testing.T, cfg config.Config) *sandbox.Session {
@@ -161,6 +162,173 @@ func TestEgressAllowlist(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(blocked)); got != "blocked" {
 		t.Errorf("non-allowlisted egress = %q, want blocked", got)
+	}
+}
+
+// TestEgressAllowlistFiltersIngressToo proves the INPUT half of the firewall.
+//
+// An egress allowlist that ignores inbound traffic is not a boundary: the OUTPUT
+// chain accepts ESTABLISHED,RELATED, so a connection someone else *dials in*
+// gets a working reply path and carries data straight back out past the
+// allowlist. That was demonstrated end to end — a second container on the bridge
+// opened a socket to an allowlisted sandbox and got 30 bytes back, while that
+// same sandbox could not reach 1.1.1.1 on its own initiative.
+//
+// Asserting on the chain rather than on a live connection keeps this hermetic:
+// the rules are the property under test, and a two-container rendezvous would be
+// slow and flaky in CI.
+func TestEgressAllowlistFiltersIngressToo(t *testing.T) {
+	proj := t.TempDir()
+	sess := newTestSession(t, config.Default())
+
+	// Read the chain from outside the container. The guest cannot: it is dropped
+	// to an unprivileged user, and asking for --user root is refused precisely
+	// because a root guest could flush these rules
+	// (TestBuildSpec_RootWithAllowlistRefuses). So the container is started
+	// detached and inspected with `docker exec -u root`, which is the deployed
+	// rule set rather than a reconstruction of it.
+	name, err := sess.Start(context.Background(), sandbox.Options{
+		Project: proj,
+		Allow:   []string{"example.com"},
+		Publish: []string{"3000", "9000/udp"},
+		Command: []string{"sleep", "30"},
+	}, false)
+	if err != nil {
+		t.Fatalf("start error: %v", err)
+	}
+	defer exec.Command("docker", "rm", "-f", name).Run()
+
+	// Wait for the rules, not merely for a successful exec: the container counts as
+	// running the moment the entrypoint starts, which is before it has finished
+	// programming anything, so an early read returns a bare "-P INPUT ACCEPT".
+	var rules string
+	for i := 0; i < 60; i++ {
+		out, execErr := exec.Command("docker", "exec", "-u", "root", name, "iptables", "-S", "INPUT").Output()
+		if execErr == nil && strings.Contains(string(out), "REJECT") {
+			rules = string(out)
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if rules == "" {
+		t.Fatal("the INPUT chain was never programmed")
+	}
+
+	// Default-deny, with the two exceptions that keep the sandbox usable:
+	// loopback, and replies to connections the sandbox itself opened (which is
+	// also what lets DNS answers and allowlisted HTTPS work at all).
+	for _, want := range []string{
+		"-A INPUT -i lo -j ACCEPT",
+		"ESTABLISHED -j ACCEPT",
+		"-A INPUT -j REJECT",
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("INPUT chain missing %q:\n%s", want, rules)
+		}
+	}
+	// --publish is the one deliberate request for ingress, so those ports stay
+	// open — otherwise a dev server silently stops answering the moment someone
+	// adds --allow.
+	for _, want := range []string{"--dport 3000 -j ACCEPT", "--dport 9000 -j ACCEPT"} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("published port carve-out missing %q:\n%s", want, rules)
+		}
+	}
+	// The REJECT must come last, or the carve-outs below it never match.
+	if i, j := strings.Index(rules, "-A INPUT -j REJECT"), strings.LastIndex(rules, "--dport"); i >= 0 && j > i {
+		t.Errorf("REJECT precedes a port carve-out, so the carve-out is dead:\n%s", rules)
+	}
+}
+
+// TestEgressIsEnforcedByNameNotAddress is the end-to-end proof for the whole
+// egress-proxy change.
+//
+// The firewall it replaces permitted resolved addresses, so gist.github.com —
+// which shares github.com's address and is a *write* endpoint, i.e. an
+// exfiltration channel — answered under the baseline despite never being listed.
+// The same for docs.python.org via pypi.org's Fastly IPs. Both must now be
+// refused while the names actually on the list still work.
+//
+// Deliberately live rather than a rule-shape assertion: the previous defect was
+// invisible in the rules (they looked correct, and were correct about addresses),
+// so only a real connection distinguishes the fixed behaviour from the broken one.
+func TestEgressIsEnforcedByNameNotAddress(t *testing.T) {
+	proj := t.TempDir()
+	sess := newTestSession(t, config.Default())
+
+	script := `for h in github.com gist.github.com pypi.org docs.python.org; do
+  code=$(curl -s -m 15 -o /dev/null -w "%{http_code}" "https://$h" 2>/dev/null)
+  echo "$h=$code"
+done > /workspace/egress.txt`
+
+	if _, err := sess.Run(context.Background(), sandbox.Options{
+		Project: proj,
+		TTY:     ptr(false),
+		Allow:   []string{"example.com"}, // baseline carries github.com and pypi.org
+		Command: []string{"sh", "-c", script},
+	}, false); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	out, err := os.ReadFile(filepath.Join(proj, "egress.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+
+	// Parsed into exact lines rather than matched as substrings. Contains() is
+	// wrong here for the same reason it is wrong in an allowlist: "github.com=000"
+	// is a substring of "gist.github.com=000", so a substring check reported the
+	// allowlisted host as blocked when it was the *unlisted* one that was blocked.
+	// The bug this feature fixes, reproduced in the test for it.
+	code := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		if h, c, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			code[h] = c
+		}
+	}
+
+	// On the list: reachable. If these fail the change has broken ordinary use,
+	// which matters more than the hole it closes.
+	for _, h := range []string{"github.com", "pypi.org"} {
+		if code[h] == "" || code[h] == "000" {
+			t.Errorf("%s is on the allowlist but was blocked (code %q):\n%s", h, code[h], got)
+		}
+	}
+	// Not on the list, but sharing an allowlisted address: must be refused now.
+	for _, h := range []string{"gist.github.com", "docs.python.org"} {
+		if code[h] != "000" {
+			t.Errorf("%s is not on the allowlist but returned %q — egress is still "+
+				"matching addresses rather than names:\n%s", h, code[h], got)
+		}
+	}
+}
+
+// TestEgressProxyCannotBeBypassed pins that the enforcement is the redirect, not
+// the environment. An agent that unsets HTTPS_PROXY, or dials an address with no
+// hostname at all, must still be refused — otherwise the allowlist is advisory.
+func TestEgressProxyCannotBeBypassed(t *testing.T) {
+	proj := t.TempDir()
+	sess := newTestSession(t, config.Default())
+
+	script := `env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy \
+  curl -s -m 12 -o /dev/null -w "unset=%{http_code}\n" https://gist.github.com > /workspace/bypass.txt 2>&1
+curl -s -m 8 -o /dev/null -w "altport=%{http_code}\n" https://gist.github.com:8443 >> /workspace/bypass.txt 2>&1`
+
+	if _, err := sess.Run(context.Background(), sandbox.Options{
+		Project: proj,
+		TTY:     ptr(false),
+		Allow:   []string{"example.com"},
+		Command: []string{"sh", "-c", script},
+	}, false); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	out, _ := os.ReadFile(filepath.Join(proj, "bypass.txt"))
+	got := string(out)
+	if !strings.Contains(got, "unset=000") {
+		t.Errorf("unsetting the proxy env reached a blocked host; the env is not the boundary:\n%s", got)
+	}
+	if !strings.Contains(got, "altport=000") {
+		t.Errorf("a non-80/443 port reached a blocked host:\n%s", got)
 	}
 }
 
@@ -394,3 +562,35 @@ func dockerAvailable() bool {
 }
 
 func ptr(b bool) *bool { return &b }
+
+// TestNetworkNoneActuallyRuns is the regression for a break that every existing
+// `none` test missed.
+//
+// They all stop at BuildArgs or BuildSpec, which never reach EnsureNetwork — so
+// when the ICC verification started refusing the predefined `none` network
+// (inspect succeeds, Options is empty, which read as "ICC enabled"), the
+// strictest posture the tool offers failed to start on every run and the suite
+// stayed green. This one starts a real container, which is the only way that
+// class of break is visible.
+func TestNetworkNoneActuallyRuns(t *testing.T) {
+	proj := t.TempDir()
+	cfg := config.Default()
+	cfg.Network.Mode = "none"
+	sess := newTestSession(t, cfg)
+
+	name, err := sess.Start(context.Background(), sandbox.Options{
+		Project: proj,
+		Command: []string{"sleep", "20"},
+	}, false)
+	if err != nil {
+		t.Fatalf("network: none refused to start: %v", err)
+	}
+	defer exec.Command("docker", "rm", "-f", name).Run()
+
+	// And it really has no network, so the mode did what it says.
+	out, _ := exec.Command("docker", "inspect", name,
+		"--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}").Output()
+	if got := strings.TrimSpace(string(out)); got != "none" {
+		t.Errorf("container joined %q, want the none network", got)
+	}
+}

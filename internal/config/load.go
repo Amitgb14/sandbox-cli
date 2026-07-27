@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,16 +29,35 @@ func Load(startDir, explicitPath string) (Config, error) {
 	}
 
 	if explicitPath != "" {
+		// An explicitly named file is trusted: typing the path is the deliberate
+		// act that a discovered .sandbox.yaml never involves. This is the supported
+		// way to use a checked-in config you have actually read.
 		if err := mergeFile(&cfg, explicitPath); err != nil {
 			return cfg, err
 		}
 	} else if p := findProjectConfig(startDir); p != "" {
-		if err := mergeFile(&cfg, p); err != nil {
+		if err := mergeProjectFile(&cfg, p); err != nil {
 			return cfg, err
 		}
 	}
 
 	return cfg, nil
+}
+
+// mergeProjectFile is mergeFile for a *discovered* .sandbox.yaml — the one config
+// layer that arrives inside the repository and is therefore untrusted. It refuses
+// the privilege-relevant keys instead of honoring them; see trust.go for what is
+// on that list and why.
+func mergeProjectFile(dst *Config, path string) error {
+	f, err := readConfigFile(path)
+	if err != nil || f == nil {
+		return err
+	}
+	if bad := restrictedProjectKeys(*f, *dst); len(bad) > 0 {
+		return &ErrRestrictedProjectKeys{Path: path, Keys: bad}
+	}
+	mergeInto(dst, *f, filepath.Dir(path))
+	return nil
 }
 
 // configRoot is the sandbox-cli config/state directory: $XDG_CONFIG_HOME/sandbox or
@@ -106,6 +126,18 @@ func RescueDir() string {
 	return filepath.Join(r, "rescue")
 }
 
+// AuditDir returns the sandbox-owned host directory holding the run log, e.g.
+// ~/.config/sandbox/audit. Outside every repository like the rescue and contexts
+// state, and for the same reason: a record of what a run did has to survive the
+// project it ran in. Returns "" if the home directory cannot be determined.
+func AuditDir() string {
+	r := configRoot()
+	if r == "" {
+		return ""
+	}
+	return filepath.Join(r, "audit")
+}
+
 // ContextsDir returns the sandbox-owned host directory holding conversation
 // context state — the per-context manifests and the verified agent session-store
 // registry, e.g. ~/.config/sandbox/contexts. Like RescueDir it sits outside every
@@ -120,43 +152,113 @@ func ContextsDir() string {
 	return filepath.Join(r, "contexts")
 }
 
-// findProjectConfig walks up from dir looking for .sandbox.yaml, stopping at the
-// filesystem root. Returns "" if none is found.
+// findProjectConfig walks up from dir looking for .sandbox.yaml, stopping at a
+// boundary rather than at the filesystem root. Returns "" if none is found.
+//
+// The boundary matters. Walking to `/` meant a .sandbox.yaml in *any* ancestor
+// won, silently — and on Linux that makes a world-writable shared directory a
+// config-injection point for everyone working beneath it: drop one file in /tmp
+// and every sandbox started from /tmp/<anything> picks it up. Combined with what
+// a config could then do, that was a local privilege-escalation vector rather
+// than a convenience wart.
+//
+// So the search stops at the nearest enclosing repository root, because that is
+// the unit a project config describes and the unit a user thinks they are in. If
+// there is no repository, it stops at the home directory — still the user's own
+// territory. Outside both (a scratch dir under /tmp, say) only the starting
+// directory is consulted, because nothing above it is meaningfully "the project".
 func findProjectConfig(dir string) string {
 	d, err := filepath.Abs(dir)
 	if err != nil {
 		return ""
 	}
+	stopAt := projectSearchBoundary(d)
 	for {
 		candidate := filepath.Join(d, projectFileName)
 		if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
 			return candidate
 		}
+		if d == stopAt {
+			return ""
+		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			return "" // reached root
+			return "" // reached the filesystem root
 		}
 		d = parent
 	}
 }
 
+// projectSearchBoundary returns the highest directory findProjectConfig may
+// consult, given an absolute starting directory: the nearest enclosing repository
+// root, else the home directory when dir is inside it, else dir itself.
+func projectSearchBoundary(dir string) string {
+	if root := repoRootOf(dir); root != "" {
+		return root
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if abs, err := filepath.Abs(home); err == nil && withinDir(abs, dir) {
+			return abs
+		}
+	}
+	return dir
+}
+
+// repoRootOf returns the nearest ancestor of dir (inclusive) holding a .git
+// entry, or "" when there is none. A worktree's .git is a file rather than a
+// directory, so both count.
+func repoRootOf(dir string) string {
+	d := dir
+	for {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return ""
+		}
+		d = parent
+	}
+}
+
+// withinDir reports whether path is root or lives beneath it. Both must be
+// absolute and cleaned by the caller.
+func withinDir(root, path string) bool {
+	r := filepath.Clean(root)
+	p := filepath.Clean(path)
+	if r == p {
+		return true
+	}
+	return strings.HasPrefix(p, r+string(filepath.Separator))
+}
+
 // mergeFile reads a YAML config file and merges its set fields over dst. Missing
 // files are ignored (a user may have none); malformed files are an error.
 func mergeFile(dst *Config, path string) error {
+	f, err := readConfigFile(path)
+	if err != nil || f == nil {
+		return err
+	}
+	mergeInto(dst, *f, filepath.Dir(path))
+	return nil
+}
+
+// readConfigFile parses one config file. It returns (nil, nil) for a file that is
+// not there, which is not an error at any layer — a user may have no config, and
+// findProjectConfig can race with a file being removed.
+func readConfigFile(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("reading config %s: %w", path, err)
+		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
 	var f Config
 	if err := yaml.Unmarshal(data, &f); err != nil {
-		return fmt.Errorf("parsing config %s: %w", path, err)
+		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
-	baseDir := filepath.Dir(path)
-	mergeInto(dst, f, baseDir)
-	return nil
+	return &f, nil
 }
 
 // mergeInto overlays the non-zero fields of src onto dst. Mount host paths are
@@ -187,6 +289,11 @@ func mergeInto(dst *Config, src Config, baseDir string) {
 	// egress allowlist rather than only add to a broader inherited one.
 	if src.Network.Allow != nil {
 		dst.Network.Allow = src.Network.Allow
+	}
+	// Tri-state, so a project can turn the baseline off *and* a nearer config can
+	// turn it back on. Only an explicit value overrides the inherited one.
+	if src.Network.Baseline != nil {
+		dst.Network.Baseline = src.Network.Baseline
 	}
 	// Ports replace for the same reason, and one more: publishing opens the
 	// boundary inward, so a project must be able to say "only these" — and to say

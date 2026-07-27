@@ -1,13 +1,78 @@
-// Package audit is a seam for recording sandbox sessions. The MVP ships a no-op
-// sink; a later milestone can add a JSONL sink capturing image, mounts, command,
-// duration, and exit code.
+// Package audit records what each sandbox run actually did.
+//
+// It exists to answer one question after the fact: *what did this run execute,
+// against what policy, and how did it end?* Before this the sink was a no-op, so
+// a run left no trace once its container was gone — the same gap the firewall's
+// LOG rules close on the network side.
+//
+// What it deliberately does not record: any environment *value*. Names, yes —
+// which credentials a run was handed is exactly what you want to look up later —
+// but never what they were worth. The credential broker exists to keep secret
+// values off the argv and out of config files; writing them to a log would hand
+// that back.
+//
+// The guest command *is* recorded verbatim, and that is the known soft edge in
+// the rule above: an argv is the other classic place a token ends up
+// (`-- curl -H "Authorization: Bearer …"`). It is kept because a run log that
+// cannot say what ran answers nothing, and because redaction here would have to
+// guess — a heuristic that scans argv for secrets misses the ones it does not
+// recognise while implying it caught them all, which is worse than a documented
+// limitation. Treat sessions.jsonl as sensitive; it is written 0600 for this
+// reason as much as for the project names.
 package audit
 
-// SessionMeta describes a single sandbox session for audit purposes.
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// SessionMeta describes a single sandbox session.
 type SessionMeta struct {
 	Image   string
 	Workdir string
 	Command []string
+
+	// Workspace is the host directory mounted at Workdir — the thing this run
+	// could actually change.
+	Workspace string
+	// Agent is the wrapper the run came from ("claude", "codex"); empty for a
+	// plain `run`.
+	Agent string
+	// Branch is the git branch the workspace was on, when it had one.
+	Branch string
+
+	// Network is the resolved posture: "default", "none" or "allowlist".
+	Network string
+	// EgressEnforcementRequested is "name" when the run asked for the
+	// in-container proxy to decide each connection by hostname, "address" when
+	// only the address-matching firewall was asked for, and "" when there was no
+	// allowlist. Recorded because `network: allowlist` alone does not say which
+	// regime a past run was under, and the two differ in exactly the way that
+	// matters: an address-matched run permitted every host sharing an allowlisted
+	// address.
+	//
+	// Named for a *request*, not an outcome, because that is all the host can
+	// honestly know. The container takes the proxy path only if
+	// `sandbox-egress-proxy` is on its PATH and the `sandbox-proxy` user resolves;
+	// otherwise it falls through to address matching. With a user-supplied
+	// --image or `image:` those can be absent, and this field previously claimed
+	// "name" for a run that was address-matched. Observing it for real needs the
+	// entrypoint to report back what it did — worth doing, and until it exists an
+	// accurate name beats a confident wrong value.
+	EgressEnforcementRequested string
+	// EgressAllow is the resolved allowlist, when one was in force. Recording it
+	// is the point: the domains come from several merged layers, so "what was
+	// this run permitted to reach" is otherwise unanswerable afterwards.
+	EgressAllow []string
+	// EnvNames are the host variables forwarded into the container, by name only.
+	EnvNames []string
+
+	// Outcome, filled in once the run has finished.
+	ExitCode int
+	Duration time.Duration
+	Detached bool
 }
 
 // Sink records session metadata.
@@ -15,8 +80,107 @@ type Sink interface {
 	RecordSession(meta SessionMeta)
 }
 
-// NopSink discards everything. Default in the MVP.
+// NopSink discards everything. Used by tests, and by any caller that has not
+// wired a real sink.
 type NopSink struct{}
 
 // RecordSession does nothing.
 func (NopSink) RecordSession(SessionMeta) {}
+
+// record is the on-disk shape, kept separate from SessionMeta so the field names
+// in the file stay stable and explicit rather than tracking whatever the Go
+// struct happens to be called.
+type record struct {
+	Time        string   `json:"time"`
+	Image       string   `json:"image"`
+	Workspace   string   `json:"workspace,omitempty"`
+	Workdir     string   `json:"workdir,omitempty"`
+	Agent       string   `json:"agent,omitempty"`
+	Branch      string   `json:"branch,omitempty"`
+	Command     []string `json:"command,omitempty"`
+	Network     string   `json:"network,omitempty"`
+	EnforcedBy  string   `json:"egress_enforcement_requested,omitempty"`
+	EgressAllow []string `json:"egress_allow,omitempty"`
+	EnvNames    []string `json:"env_names,omitempty"`
+	ExitCode    int      `json:"exit_code"`
+	DurationMS  int64    `json:"duration_ms"`
+	Detached    bool     `json:"detached,omitempty"`
+}
+
+// JSONLSink appends one line per run to a file.
+//
+// Append-only and best-effort: an unwritable log must never fail a run, because
+// the run is what the user asked for and the record is a courtesy. The failure
+// is silent for the same reason — warning on every invocation about a log nobody
+// asked for would be worse than the missing line.
+type JSONLSink struct {
+	Path string
+}
+
+// NewJSONLSink returns a sink writing to dir/sessions.jsonl, or a NopSink when
+// dir is empty (no home directory — not an error worth failing a run over).
+func NewJSONLSink(dir string) Sink {
+	if dir == "" {
+		return NopSink{}
+	}
+	return &JSONLSink{Path: filepath.Join(dir, "sessions.jsonl")}
+}
+
+// maxLogBytes is the size at which the log is rotated. One run is a few hundred
+// bytes, so this holds a long history while bounding a file nothing else ever
+// prunes — an append-only log with no ceiling is a slow leak in the user's home
+// directory.
+const maxLogBytes = 8 << 20
+
+// RecordSession appends meta as one JSON object.
+func (s *JSONLSink) RecordSession(meta SessionMeta) {
+	if s == nil || s.Path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
+		return
+	}
+	s.rotateIfLarge()
+	line, err := json.Marshal(record{
+		Time:        time.Now().Format(time.RFC3339),
+		Image:       meta.Image,
+		Workspace:   meta.Workspace,
+		Workdir:     meta.Workdir,
+		Agent:       meta.Agent,
+		Branch:      meta.Branch,
+		Command:     meta.Command,
+		Network:     meta.Network,
+		EnforcedBy:  meta.EgressEnforcementRequested,
+		EgressAllow: meta.EgressAllow,
+		EnvNames:    meta.EnvNames,
+		ExitCode:    meta.ExitCode,
+		DurationMS:  meta.Duration.Milliseconds(),
+		Detached:    meta.Detached,
+	})
+	if err != nil {
+		return
+	}
+	// 0600: this names the projects someone worked on and the credentials each
+	// run was handed. Same treatment as the rescue manifests and the contexts
+	// registry.
+	f, err := os.OpenFile(s.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.Write(append(line, '\n'))
+}
+
+// rotateIfLarge moves the log aside once it passes maxLogBytes, keeping exactly
+// one previous generation.
+//
+// Best-effort like everything else here: if the rename fails the run still
+// proceeds and the log simply keeps growing, which is the lesser of the two
+// failures.
+func (s *JSONLSink) rotateIfLarge() {
+	fi, err := os.Stat(s.Path)
+	if err != nil || fi.Size() < maxLogBytes {
+		return
+	}
+	_ = os.Rename(s.Path, s.Path+".1")
+}

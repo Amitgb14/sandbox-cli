@@ -26,6 +26,7 @@ func shareMount(t *testing.T) string {
 func TestShareMountsSharedDir(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Chdir(t.TempDir()) // outside any repo: see renderDryRun
 
 	_, opts, err := newSession(&runFlags{share: true})
 	if err != nil {
@@ -52,6 +53,7 @@ func TestShareMountsSharedDir(t *testing.T) {
 func TestShareOffByDefault(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Chdir(t.TempDir()) // outside any repo: see renderDryRun
 
 	_, opts, err := newSession(&runFlags{})
 	if err != nil {
@@ -72,6 +74,7 @@ func TestShareOffByDefault(t *testing.T) {
 func TestShareSeedsReadme(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Chdir(t.TempDir()) // outside any repo: see renderDryRun
 
 	if _, _, err := newSession(&runFlags{share: true}); err != nil {
 		t.Fatalf("newSession: %v", err)
@@ -91,6 +94,7 @@ func TestShareSeedsReadme(t *testing.T) {
 func TestShareDoesNotClobberReadme(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Chdir(t.TempDir()) // outside any repo: see renderDryRun
 
 	dir := filepath.Join(root, "sandbox", "shared")
 	if err := os.MkdirAll(dir, 0o700); err != nil {

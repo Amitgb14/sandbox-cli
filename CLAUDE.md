@@ -71,7 +71,49 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   container by `sandbox-firewall` / `sandbox-egress-setup` (`assets/Dockerfile`), which programs a
   default-deny firewall as root and then drops to the sandbox user. Keep it failing closed: a run
   that asks for an allowlist and cannot program it refuses to start rather than running open.
-- **`internal/rescue`** — the crash safety net and `sandbox-cli recover`. Snapshots the workspace
+  `baseline: false` drops the built-in domains so `allow` is the whole list — it exists because
+  `allow` could only ever *add*, leaving no way to decline `github.com`, which is a write endpoint
+  and so an exfiltration channel for any token the agent holds. It is tri-state (`*bool`) for the
+  same reason the security fields are: a nearer config must be able to turn it back **on**. The
+  edge that matters is the empty one — the firewall is wired only when there are domains to
+  permit, so `BuildSpec` **refuses** an allowlist that resolved to nothing rather than handing back
+  a container with no filtering at all, which is the strictest request producing the weakest
+  result. `mode: none` is how you ask to reach nothing.
+
+  Two limits worth knowing before trusting the mode. The rules match resolved **IPs**, not names,
+  so a host sharing an allowlisted address rides in on it (`gist.github.com` is reachable under the
+  baseline via `github.com`'s IP, and it was never listed) — and names are resolved **once** at
+  container start, so a rotating record can break a domain the user did allowlist, mid-session. It
+  Ingress is filtered too, and has to be: the `OUTPUT` chain accepts `ESTABLISHED,RELATED`, so a
+  connection dialled *in* got a working reply path and carried data straight back out past the
+  allowlist (demonstrated — a co-resident container pulled 30 bytes out of an allowlisted sandbox
+  that could not reach `1.1.1.1` itself). `INPUT` is now default-deny with three exceptions:
+  loopback, `ESTABLISHED,RELATED`, and the container ports named by `--publish`
+  (`SANDBOX_INGRESS_PORTS`, from `sandbox.IngressPorts`) — publishing *is* an explicit request for
+  ingress, and without the carve-out a dev server would silently stop answering the moment someone
+  added `--allow`. `FORWARD` is left alone: a container netns has one interface and routes nothing.
+  The IP-vs-name gap is closed by `internal/egressproxy`: a proxy running **inside** the
+  container as its own uid, which the firewall permits to egress while REDIRECTing everyone
+  else's tcp/80 and tcp/443 into it. It reads the hostname from the TLS SNI, an explicit
+  `CONNECT`, or an HTTP `Host` header, resolves fresh per connection, and decides on the
+  name — so `gist.github.com` no longer rides in on `github.com`'s address and a rotating
+  record no longer breaks an allowlisted domain. Its source is embedded in that package,
+  compiled by a builder stage (users have no Go toolchain), and `image.Ref` hashes it so a
+  changed proxy produces a new image tag. It deliberately does **not** terminate TLS; that
+  is the credential-injection work, and a separate decision.
+
+  The whole firewall, ingress included, runs in allowlist mode only. Filtering ingress on every run
+  would mean every run taking the root-entrypoint path with `NET_ADMIN`, which is a worse default
+  than the one it would be protecting.
+- **`internal/rescue`** — the crash safety net and `sandbox-cli recover`. Recovering the
+  *work* and recovering the *conversation* are two different things, and the output says
+  both: after a crash the files are usually already on disk (a bind mount), so
+  `RestoreResult.MatchesWorkingTree` reports when nothing was actually missing, and
+  `cli/recover_resume.go` correlates the run with its agent transcript — by agent, project
+  and time window, all three already in the manifest — to print the resume command. It
+  declines to guess: no agent, no verified store, or nothing in the window all print how to
+  look rather than an id, because resuming the *wrong* conversation is worse than offering
+  none. Snapshots the workspace
   into `refs/sandbox/snapshots/<session>` while a run is in flight, using a **private
   `GIT_INDEX_FILE`** so the user's index, `HEAD`, branches and working tree are never written.
   Session manifests live outside every repo (`~/.config/sandbox/rescue/<repo-id>/`) because the
@@ -122,8 +164,90 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   the window being measured. It bounds staleness to Claude Code's own refetch interval; it
   does not stamp the reading now, so the printed age still governs.
   Design: `docs/proposals/usage-stats.md`.
-- **`internal/creds`, `internal/audit`** — deliberate **stub seams** for a future credential broker
-  and audit trail. Today nothing extra is forwarded and audit goes to a no-op sink; keep these seams clean.
+- **`internal/audit`** — the run log (`~/.config/sandbox/audit/sessions.jsonl`), one line per
+  run: image, workspace, branch, agent, command, network posture, resolved egress allowlist,
+  exit code, duration. Written *after* the run, because "how did it end" is the point. The rule
+  that shapes it: environment variables are recorded **by name only**. The credential broker
+  exists to keep secret values off the argv and out of config files, and a log is a file — so
+  `SessionMeta` has nowhere to put a value, deliberately. Best-effort and silent on failure: the
+  run is what the user asked for, the record is a courtesy.
+- **`internal/githard`** — neutralises the parts of a repository's git config that make git *run
+  commands*, for every git call sandbox-cli makes on its own behalf. See the trust-boundary
+  section below.
+- **`internal/creds`** — a deliberate **stub seam** for a future credential broker. Today it
+  resolves secret *references* on the host; the values reach the container via
+  `RunSpec.ForwardedEnv`, which the docker child gets and `BuildArgs` never renders. Keep it that
+  way: they used to travel through sandbox-cli's own environment, where a secret named `PATH`
+  redirected the subprocesses spawned next.
+
+### The trust boundary (read before touching config, mounts, or the entrypoint)
+
+An audit found the container→host boundary did not hold — 22 issues, all reproduced end to end,
+from host code execution to mounting `/` read-write. A same-day re-audit of those fixes, and a
+later external review of the pull request, each found more. All are fixed;
+`docs/security/audit-2026-07-26.md` is the ledger and carries the per-round counts.
+`docs/security/audit-2026-07-26.md` is the tracked record (findings, threat model, what was done)
+and `docs/security/open-items.md` is the live backlog of what is still open (the allowlist matches resolved **IPs** rather than names, and the agent
+still holds raw credentials — both need the egress proxy). `docs/proposals/security-hardening.md`
+has the phased design notes, and is gitignored. The rules that follow from it:
+
+- **A project `.sandbox.yaml` is untrusted input** and the privilege-relevant keys are
+  *refused* from it (`internal/config/trust.go`): `image`, `workdir`, `user`, `home`,
+  `runtime`, `mounts`, `secrets`, `env`, `env_allow`, `security.*`, `cache.paths`, and
+  any `network.mode`/`network.baseline` that **weakens** what is already in force. A
+  project may tighten (`default` → `allowlist` → `none`), never loosen. The escape
+  hatches are the user's own config and an explicit `--config <path>`, where typing the
+  path is the deliberate act discovery never involves. Discovery is also bounded — it
+  stops at the repository root, else the home directory, else the starting directory —
+  so a `.sandbox.yaml` in a shared parent like `/tmp` is no longer picked up.
+  When adding a config key, decide which side it is on: if a hostile repo setting it
+  could widen what the container reaches or reach the host, it belongs on the refused
+  list, and `TestProjectConfigRefusesPrivilegedKeys` is where that gets pinned.
+- **Anything running as root before the privilege drop must resolve names from the
+  image only.** The entrypoint scripts pin an absolute interpreter and reset `PATH`
+  as their first statement, and the agent's writable HOME is deliberately *not* on
+  the image `PATH` (`assets/Dockerfile`). This is why an agent can no longer plant a
+  `bash` in its own HOME and have root run it.
+- **Every host path that gets bind-mounted goes through `sandbox.RefuseUnsafeHostPath`**
+  — never `/`, never the host home, never an ancestor of it. It compares by
+  **identity (device+inode), not by string**: `EvalSymlinks` preserves the caller's
+  casing and APFS/NTFS are case-insensitive, so `--project /Users/AmitGhadge` used to
+  mount the home directory and `--project /USERS` bypassed the ancestor check entirely.
+  The second caller is the worktree `.git` mount, whose location comes from a `.git`
+  **pointer file inside the workspace** that the agent can rewrite — `GitCommonDir`
+  additionally requires the target to look like a real git directory (`HEAD` +
+  `objects/`), because its fallback takes *two directories up* from that string and
+  used to hand back `/` for `gitdir: $HOME`.
+- **Some environment variables are instructions, not settings** (`config.IsReservedEnv`).
+  They cannot be set or forwarded from outside. Three groups, and a new variable should be
+  matched against the reason for whichever it resembles:
+  - *sandbox-cli's own control variables* — `SANDBOX_RUN_AS`, `SANDBOX_EGRESS_ALLOW`,
+    `SANDBOX_INGRESS_PORTS`, `SANDBOX_PROXY_PORT`. The list is exact names, not a
+    `SANDBOX_*` prefix, because `SANDBOX_STATUSLINE_*` is a documented user knob read
+    *after* the privilege drop — check which side of the drop a new variable lands on
+    before adding it.
+  - *interpreter and loader controls* — `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_AUDIT`,
+    `LD_LIBRARY_PATH`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `IFS`, `GLOBIGNORE`. Not ours, but
+    they decide what the container's root phase *executes* before its first line runs.
+  - *docker client controls* — `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`,
+    `DOCKER_TLS_VERIFY`, `DOCKER_CONTEXT`. These never reach the container; they steer the
+    docker binary sandbox-cli runs, which is the one child that still receives forwarded
+    values (`runtime.childEnv`).
+
+- **Host-side `git` runs inside a repository the agent controls**, so every git
+  invocation sandbox-cli makes on its own behalf goes through `internal/githard`
+  (`internal/rescue`, `internal/worktree`). git is a programmable tool: `add -A`
+  runs `filter.*.clean` and `core.fsmonitor`, `update-ref` runs the
+  `reference-transaction` hook, `worktree add` runs smudge filters and
+  `post-checkout`, `show`/`diff` run `diff.*.textconv` — every one of them naming
+  a command from a file the agent can write. `githard.Args()` overrides the
+  config keys (`-c` outranks the repo's local config, which
+  `GIT_CONFIG_GLOBAL/SYSTEM` do **not** cover); `githard.Env()` points
+  `GIT_ATTR_SOURCE` at an empty tree, because filter driver names come from
+  `.gitattributes` and cannot be enumerated ahead of time. The deliberate
+  exception is `worktree.Git` — `sandbox-cli worktree git …` is the user's own
+  command in their own repo. Adding a git call that bypasses `rescue.run`/
+  `runGit` reopens this; `internal/rescue/hostile_repo_test.go` is the guard.
 
 ### Two invariants to preserve when changing behavior
 
@@ -205,6 +329,20 @@ Design and rejected alternatives: `docs/proposals/usage-stats.md`.
 (`~/.claude/projects/<bucket>`) into the persisted HOME by default, so host sessions resolve
 inside the sandbox and vice versa. `--no-sync` opts out. This is the one default that reaches a
 host path outside the workspace — keep it scoped to the single project bucket.
+
+The bucket is **created when it does not exist yet**, and that is load-bearing rather than
+tidiness. Claude Code names the directory after its working directory, which inside the sandbox is
+always `/workspace`; the mount is what redirects those writes into the host's per-project bucket.
+Skipping the mount when the host directory was absent made it a chicken-and-egg — the host bucket
+only appears once Claude Code has run on the *host* in that project, so a project used only in the
+sandbox never got one, and every session pooled into the persisted HOME's shared `-workspace`
+bucket, findable by no project and one id away from resuming another repository's conversation.
+`agentctx.PooledSessions` reports whatever is already in that shared bucket, without guessing which
+project it belonged to, since the transcripts record only `/workspace`.
+
+Relatedly, `agentctx.List` walks **every** verified location, not just the one that won the
+most-recent-activity tie-break: the claude wrapper genuinely has two, and a session is no less real
+for living in the loser.
 
 ## Conventions
 

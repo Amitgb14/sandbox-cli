@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
 // Session is one conversation in an agent's store, described in the terms a
@@ -43,14 +45,20 @@ type ListOpts struct {
 // can be derived. empty reports a project the store has simply never seen, which
 // is not an error — no agent has worked there yet.
 func scopeOf(f Finding, o ListOpts) (dir string, depth int, scoped, empty bool) {
+	return scopeDir(f, o, f.Dir)
+}
+
+// scopeDir is scopeOf against one particular root, so the same arithmetic can be
+// applied to each of a Finding's locations rather than only the winning one.
+func scopeDir(f Finding, o ListOpts, root string) (dir string, depth int, scoped, empty bool) {
 	store, _ := Lookup(f.Agent)
-	dir, depth = f.Dir, storeDepth(store)
+	dir, depth = root, storeDepth(store)
 	if o.All || o.Project == "" || store.BucketStyle != BucketDashedPath {
 		return dir, depth, false, false
 	}
 	// The per-project directory is one level of the store, so scoping to it
 	// removes exactly one level of the search.
-	cand := filepath.Join(dir, ProjectBucket(o.Project))
+	cand := filepath.Join(root, ProjectBucket(o.Project))
 	if !isDir(cand) {
 		return dir, depth, true, true
 	}
@@ -63,25 +71,41 @@ func List(f Finding, o ListOpts) (sessions []Session, scoped bool, err error) {
 		return nil, false, nil
 	}
 	store, _ := Lookup(f.Agent)
-	dir, depth, scoped, empty := scopeOf(f, o)
-	if empty {
-		return nil, scoped, nil
+	seen := map[string]bool{}
+	// Every verified location, not just the one with the most recent activity.
+	// The claude wrapper really has two — the host's own history and the
+	// persisted agent HOME — and a session is no less real for living in the one
+	// that lost the tie-break. Listing only the winner made --no-sync sessions,
+	// and everything recorded before the per-project history mount was fixed,
+	// invisible to a command whose whole job is finding conversations.
+	for _, root := range listRoots(f) {
+		dir, depth, sc, empty := scopeDir(f, o, root)
+		scoped = sc
+		if empty {
+			continue
+		}
+		werr := walkSessionFiles(dir, store.Glob, store.SubDir, depth, func(path string, info fs.FileInfo) {
+			if seen[path] {
+				return
+			}
+			seen[path] = true
+			s := Session{
+				Agent:    f.Agent,
+				ID:       sessionID(path),
+				Path:     path,
+				Modified: info.ModTime(),
+				Size:     info.Size(),
+				Partial:  true,
+			}
+			if f.Format == FormatClaudeJSONL {
+				readClaudeSession(path, &s)
+			}
+			sessions = append(sessions, s)
+		})
+		if werr != nil && err == nil {
+			err = werr
+		}
 	}
-
-	err = walkSessionFiles(dir, store.Glob, store.SubDir, depth, func(path string, info fs.FileInfo) {
-		s := Session{
-			Agent:    f.Agent,
-			ID:       sessionID(path),
-			Path:     path,
-			Modified: info.ModTime(),
-			Size:     info.Size(),
-			Partial:  true,
-		}
-		if f.Format == FormatClaudeJSONL {
-			readClaudeSession(path, &s)
-		}
-		sessions = append(sessions, s)
-	})
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].Modified.After(sessions[j].Modified) })
 	return sessions, scoped, err
 }
@@ -163,6 +187,18 @@ type claudeLine struct {
 // session that is running right now — must still list, with whatever was already
 // on disk.
 func readClaudeSession(path string, s *Session) {
+	// Only ever read a regular file. These live in the agent's persisted HOME,
+	// which is bind-mounted read-write into the container, so the agent can put a
+	// symlink named <uuid>.jsonl there and have `context list` open — and render —
+	// whatever it points at on the host. WalkDir already refuses to *descend*
+	// through directory symlinks; this is the same rule for the files themselves.
+	//
+	// Lstat on the path, not Stat on the opened file: Open follows the link, so
+	// the descriptor reports the *target's* mode and a symlink to a regular file
+	// looks regular. The question is what this path is, not what it leads to.
+	if fi, err := os.Lstat(path); err != nil || !fi.Mode().IsRegular() {
+		return
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -184,7 +220,9 @@ func readClaudeSession(path string, s *Session) {
 			s.ID = l.SessionID
 		}
 		if s.Project == "" && l.Cwd != "" {
-			s.Project = l.Cwd
+			// The cwd comes from the transcript, which the agent writes, and it is
+			// printed as the PROJECT column. Same treatment as the title.
+			s.Project = termsafe.Clean(l.Cwd)
 		}
 		if s.Started.IsZero() && l.Timestamp != "" {
 			if t, terr := time.Parse(time.RFC3339, l.Timestamp); terr == nil {
@@ -274,13 +312,15 @@ func userPromptText(content json.RawMessage) (string, bool) {
 
 // oneLine flattens a prompt for a table cell. Prompts are routinely pasted logs
 // or several paragraphs, and the first line is the part that identifies them.
-func oneLine(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
-		s = strings.TrimSpace(s[:i])
-	}
-	return strings.Join(strings.Fields(s), " ")
-}
+// oneLine collapses a title to a single printable line.
+//
+// Stripping control characters is not cosmetic. These strings come from
+// transcripts the agent writes, and they are printed straight to the user's
+// terminal — so an ESC left in one is a command to that terminal, not text.
+// Reachable today: clearing the screen, setting the window title (OSC), and on
+// terminals that permit it, writing the system clipboard via OSC 52. A listing
+// of what an agent did should not be able to act on the machine reading it.
+func oneLine(s string) string { return termsafe.FirstLine(s) }
 
 // SessionRef is a session's id and the file it lives in, without its contents.
 type SessionRef struct {
@@ -354,4 +394,61 @@ func Find(sessions []Session, id string) (Session, []Session) {
 		return hits[0], nil
 	}
 	return Session{}, hits
+}
+
+// sandboxedBucket is the project bucket every sandboxed run used to land in.
+// Claude Code names its transcript directory after the working directory, and
+// inside the sandbox that is always /workspace.
+const sandboxedBucket = "-workspace"
+
+// PooledSessions reports sessions sitting in the shared /workspace bucket of a
+// store — the ones recorded before the wrapper mounted the host's per-project
+// history, when every project's conversations pooled into one directory.
+//
+// They cannot be attributed to a project: the only thing the transcript records
+// about where it ran is a cwd that reads /workspace for all of them. So this
+// does not guess. It reports that they exist and where, which is what turns a
+// conversation that is merely unattributed into one that is findable at all —
+// the alternative was grepping the agent HOME by hand.
+//
+// Returns 0 when the bucket is absent, which is the normal state for a store
+// written since the mount was fixed.
+func PooledSessions(f Finding) (dir string, n int) {
+	store, ok := Lookup(f.Agent)
+	if !ok || store.BucketStyle != BucketDashedPath || f.Dir == "" {
+		return "", 0
+	}
+	for _, root := range listRoots(f) {
+		cand := filepath.Join(root, sandboxedBucket)
+		if !isDir(cand) {
+			continue
+		}
+		// depth-1: the bucket is one level of the store, the same arithmetic
+		// scopeOf does when it scopes to a real project.
+		before := n
+		_ = walkSessionFiles(cand, store.Glob, store.SubDir, storeDepth(store)-1, func(string, fs.FileInfo) { n++ })
+		if n > before && dir == "" {
+			dir = cand
+		}
+	}
+	if n == 0 {
+		return "", 0
+	}
+	return dir, n
+}
+
+// listRoots is every store directory a Finding knows about, the winner first and
+// each one only once. A Finding that predates Locations still has Dir, so the
+// single-location case falls out of the same code.
+func listRoots(f Finding) []string {
+	roots := []string{f.Dir}
+	seen := map[string]bool{f.Dir: true}
+	for _, l := range f.Locations {
+		if l.Dir == "" || seen[l.Dir] {
+			continue
+		}
+		seen[l.Dir] = true
+		roots = append(roots, l.Dir)
+	}
+	return roots
 }

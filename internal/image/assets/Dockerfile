@@ -3,6 +3,16 @@
 # node:*-bookworm-slim is multi-arch, so on Apple Silicon this resolves to the
 # arm64 variant automatically. Node is present because every agent wrapped here
 # (Claude Code, Codex, Gemini CLI, OpenCode) ships as an npm package.
+# The egress proxy is compiled here rather than on the host: sandbox-cli ships as
+# a binary, so requiring a Go toolchain to build the image would be a new
+# prerequisite for every user. Its source is written into the build context by
+# internal/egressproxy, and the image tag is hashed over that source too, so a
+# change to the proxy produces a new tag and a rebuild.
+FROM golang:1.25-bookworm AS egressproxy
+WORKDIR /src
+COPY proxy/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /sandbox-egress-proxy .
+
 FROM node:22-bookworm-slim
 
 # Common dev/agent tooling.
@@ -18,6 +28,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 \
       build-essential \
       iptables \
+      # iproute2 for `ip`, which sandbox-egress-setup uses to find the default
+      # gateway (to scope published-port ingress) and to detect whether the
+      # container has IPv6 at all. Both checks silently did nothing without it —
+      # a firewall that cannot see the interface it is filtering.
+      iproute2 \
       # Goose's installer extracts a .tar.bz2, and GNU tar shells out to bzip2
       # for that. ~100KB, and without it `sandbox-cli goose` cannot install.
       bzip2 \
@@ -319,26 +334,114 @@ RUN chmod +x /usr/local/bin/sandbox-clipboard \
 # root with NET_ADMIN, before the agent starts. Uses plain iptables (no ipset) so
 # it works on the common iptables-nft backend without extra kernel modules.
 RUN cat > /usr/local/bin/sandbox-egress-setup <<'FW'
-#!/usr/bin/env bash
+#!/bin/bash
+# Absolute interpreter and a fixed PATH, both deliberate: this runs as root
+# before privileges are dropped, so resolving either through an inherited PATH
+# lets whoever controls that PATH choose what root executes. `env bash` and a
+# bare `iptables` were exactly that hole.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 set -euo pipefail
 
 allow="${SANDBOX_EGRESS_ALLOW:-}"
+ingress="${SANDBOX_INGRESS_PORTS:-}"
 
-# No IPv6 allowlist yet: reject all IPv6 egress so it can't be used to bypass the
-# IPv4 rules. Best-effort — some hosts have no ip6tables.
-if command -v ip6tables >/dev/null 2>&1; then
+# No IPv6 allowlist yet: reject all IPv6 traffic so it can't be used to bypass the
+# IPv4 rules, inbound or outbound.
+#
+# This used to be best-effort in both directions — every call was `|| true`, so a
+# missing ip6tables left IPv6 completely unfiltered while sandbox-cli reported it
+# was enforcing an allowlist. Failing open is the one thing the rest of this
+# script is careful not to do. Now: if the container has IPv6 at all, the rules
+# are required; if it has none, there is nothing to filter and nothing to fail.
+if ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
+  if ! command -v ip6tables >/dev/null 2>&1; then
+    echo "sandbox-cli: this container has IPv6 but no ip6tables, so the allowlist cannot be" >&2
+    echo "sandbox-cli: enforced on it; refusing rather than filtering only IPv4" >&2
+    exit 1
+  fi
+  ip6tables -F OUTPUT
+  ip6tables -A OUTPUT -o lo -j ACCEPT
+  ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  ip6tables -A OUTPUT -j REJECT
+  ip6tables -F INPUT
+  ip6tables -A INPUT -i lo -j ACCEPT
+  ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  ip6tables -A INPUT -j REJECT
+elif command -v ip6tables >/dev/null 2>&1; then
+  # No global IPv6 address, but keep the rules if we can: an address could be
+  # configured later, and a default-deny chain costs nothing.
   ip6tables -F OUTPUT 2>/dev/null || true
   ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
   ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
   ip6tables -A OUTPUT -j REJECT 2>/dev/null || true
+  ip6tables -F INPUT 2>/dev/null || true
+  ip6tables -A INPUT -i lo -j ACCEPT 2>/dev/null || true
+  ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  ip6tables -A INPUT -j REJECT 2>/dev/null || true
 fi
 
 iptables -F OUTPUT
 iptables -A OUTPUT -o lo -j ACCEPT
+# A packet redirected into the local proxy has its destination rewritten to
+# 127.0.0.1, but does NOT necessarily leave via `lo` — the routing decision was
+# already made before the nat OUTPUT chain ran. Matching on the destination
+# instead is what actually covers it: without this the REDIRECT succeeded and the
+# rewritten packet was then rejected by the rule at the bottom of this chain, so
+# every connection failed with the proxy sitting idle and logging nothing.
+# 127.0.0.0/8 is this container's own loopback, so this widens nothing.
+iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-# DNS, so the allowlist below (and the agent's own runtime lookups) can resolve.
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+# DNS, so the allowlist below (and the agent's own runtime lookups) can resolve —
+# but only to the resolvers this container was actually given.
+#
+# Accepting port 53 to *any* destination is not "allow DNS", it is a full-duplex
+# tunnel to any host willing to listen on 53: a peer container was reached on
+# port 53 while every other port on it was refused, and public resolvers answered
+# arbitrary attacker-chosen queries. Restricting to /etc/resolv.conf turns that
+# back into DNS. Name-based exfiltration through the real resolver remains
+# possible — that needs a proxy, not a firewall rule — but the arbitrary-peer
+# channel does not.
+for ns in $(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null); do
+  case "$ns" in
+    *:*) continue ;;  # IPv6 resolver; IPv6 egress is rejected wholesale above
+  esac
+  iptables -A OUTPUT -p udp -d "$ns" --dport 53 -j ACCEPT
+  iptables -A OUTPUT -p tcp -d "$ns" --dport 53 -j ACCEPT
+done
+
+# Name-based enforcement, when the proxy is available.
+#
+# The rules below this point match resolved ADDRESSES, and an address is not a
+# name: gist.github.com answers because it shares github.com's address, and a
+# rotating record breaks a domain that was explicitly allowed. The proxy decides
+# on the name the client actually asked for, freshly, per connection.
+#
+# The lever is uid ownership. Outbound traffic is permitted only from the proxy's
+# own uid; everything else on 80/443 is redirected INTO the proxy. The agent
+# cannot go around it, because going around it would mean being a different user.
+# Everything not 80/443 still falls through to the address rules and the final
+# REJECT, so this narrows what is reachable and never widens it.
+if [ -n "${SANDBOX_PROXY_PORT:-}" ] && command -v sandbox-egress-proxy >/dev/null 2>&1; then
+  proxy_uid="$(id -u sandbox-proxy 2>/dev/null || echo)"
+  if [ -n "$proxy_uid" ]; then
+    iptables -t nat -N SANDBOX_EGRESS 2>/dev/null || iptables -t nat -F SANDBOX_EGRESS
+    # The proxy's own connections must not be redirected back into itself.
+    iptables -t nat -A SANDBOX_EGRESS -m owner --uid-owner "$proxy_uid" -j RETURN
+    iptables -t nat -A SANDBOX_EGRESS -p tcp --dport 80 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
+    iptables -t nat -A SANDBOX_EGRESS -p tcp --dport 443 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
+    # -C then -A: the chain above is created-or-flushed, but the jump into it
+    # lives in OUTPUT and would stack a duplicate every time this ran. One run
+    # per container makes that harmless today, which is exactly why it would go
+    # unnoticed the first time the setup is re-run.
+    iptables -t nat -C OUTPUT -j SANDBOX_EGRESS 2>/dev/null \
+      || iptables -t nat -A OUTPUT -j SANDBOX_EGRESS
+    # Loopback must be reachable so the redirect has somewhere to land, and the
+    # proxy itself is allowed out — it is the thing enforcing the allowlist.
+    iptables -A OUTPUT -m owner --uid-owner "$proxy_uid" -j ACCEPT
+    echo "sandbox-cli: egress enforced by name (proxy on 127.0.0.1:$SANDBOX_PROXY_PORT)" >&2
+  fi
+fi
 
 # Permit the resolved IPv4 addresses of each allowlisted domain. Split the
 # comma-separated list into words via `tr` under the default IFS so the inner IP
@@ -351,8 +454,95 @@ for d in $(printf '%s' "$allow" | tr ',' ' '); do
   done
 done
 
-# Everything else outbound is rejected with a fast, visible error (not a hang).
+# Everything else outbound is rejected with a fast, visible error (not a hang) —
+# and logged first. A blocked connection used to leave no trace anywhere: the
+# agent saw a connection error it may well swallow, and the user had no way to
+# answer "what did the sandbox try to reach, and what was refused?". That is the
+# question an allowlist exists to be able to answer.
+#
+# --log-prefix is what makes it greppable; the rate limit is what stops a busy
+# agent filling the kernel ring buffer (and the host's syslog on Linux, where the
+# container shares it) with one line per retry.
+iptables -A OUTPUT -m limit --limit 12/min --limit-burst 20 \
+  -j LOG --log-prefix "sandbox-cli DENY-OUT " --log-level 4
 iptables -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
+
+# Ingress. An egress allowlist that ignores inbound traffic is not a boundary:
+# the OUTPUT chain accepts ESTABLISHED,RELATED, so a connection someone else
+# *dials in* gets a working reply path and carries data straight back out past
+# the allowlist. Demonstrated: a second container on the default bridge opened a
+# socket to an allowlisted sandbox and received 30 bytes, while that same sandbox
+# could not reach 1.1.1.1 on its own initiative.
+#
+# So the same default-deny shape is applied inbound. Loopback keeps in-container
+# tooling working, ESTABLISHED,RELATED keeps replies to the sandbox's *own*
+# allowed connections flowing (including DNS answers), and nothing the sandbox
+# did not initiate gets in.
+#
+# FORWARD is deliberately untouched: a container network namespace has one
+# interface and routes nothing, so the chain is unreachable.
+iptables -F INPUT
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# Published ports are the one deliberate exception: `--publish` is an explicit
+# request for ingress, so the container ports it names stay reachable. Entries
+# arrive as proto:port or proto:lo-hi (see sandbox.IngressPorts); iptables wants
+# lo:hi for a range.
+# Only from the bridge gateway, which is where docker's own port forwarding
+# arrives from. Accepting a published port from *any* source contradicted the
+# thing that makes --publish safe: sandbox.NormalizePublish deliberately binds
+# the HOST side to 127.0.0.1 unless told otherwise, and then the container
+# accepted the same port from every other container on the bridge — a peer read
+# workspace data out of a sandbox whose port the user had published to loopback
+# only.
+# || true: under set -e a failing substitution would abort the whole setup, and
+# a missing default route is not a reason to refuse to run.
+gw="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}' || true)"
+# The container's own bridge subnet — the address range its peers live in, and
+# the only range that must not reach a published port.
+#
+# Anchoring on the gateway alone assumed docker's userland proxy, which
+# re-originates the connection from the gateway address. With
+# "userland-proxy": false (common on Linux servers) it is pure DNAT: the source
+# stays the original client, which is 127.0.0.1 for the loopback-bound publish
+# that is sandbox-cli's default, and an arbitrary external address otherwise.
+# Neither matches "$gw", so the published port would silently stop answering
+# under --allow — the exact regression these rules were written to avoid.
+#
+# So the property is expressed directly instead of by proxy: everything may
+# reach a published port except this container's bridge peers.
+#
+# That is a denylist where the old rule was an allowlist, and the difference is
+# worth stating: a container on a *different* docker bridge is not in $subnet, so
+# these rules now accept it where gateway-only would have denied it. Docker's own
+# DOCKER-ISOLATION-STAGE-* chains block inter-bridge traffic, so this leans on
+# that rather than opening a path — but it is defence in depth given up, and if
+# docker ever stops isolating bridges by default this needs revisiting.
+#
+# A malformed $subnet would make the iptables call fail and, under `set -e`,
+# refuse the run. That is the right direction, if an opaque one: the alternative
+# is a published port with no peer filtering at all.
+subnet="$(ip route 2>/dev/null | awk '/proto kernel/ && /src/ {print $1; exit}' || true)"
+for p in $(printf '%s' "$ingress" | tr ',' ' '); do
+  [ -z "$p" ] && continue
+  proto="${p%%:*}"
+  port="$(printf '%s' "${p#*:}" | tr '-' ':')"
+  # The gateway is inside the subnet, so it is admitted before peers are denied.
+  [ -n "$gw" ] && iptables -A INPUT -s "$gw" -p "$proto" --dport "$port" -j ACCEPT
+  # Pure DNAT of a loopback-bound publish arrives on eth0 with a 127/8 source
+  # (route_localnet), so the `-i lo` rule above does not cover it.
+  iptables -A INPUT -s 127.0.0.0/8 -p "$proto" --dport "$port" -j ACCEPT
+  if [ -n "$subnet" ]; then
+    iptables -A INPUT -s "$subnet" -p "$proto" --dport "$port" -j DROP
+  fi
+  # Everyone else: publishing is an explicit request for ingress.
+  iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
+done
+
+iptables -A INPUT -m limit --limit 12/min --limit-burst 20 \
+  -j LOG --log-prefix "sandbox-cli DENY-IN " --log-level 4
+iptables -A INPUT -j REJECT --reject-with icmp-port-unreachable
 FW
 RUN chmod +x /usr/local/bin/sandbox-egress-setup
 
@@ -362,25 +552,85 @@ RUN chmod +x /usr/local/bin/sandbox-egress-setup
 # (SANDBOX_RUN_AS, e.g. `sandbox`) before exec'ing the guest command. With no
 # SANDBOX_EGRESS_ALLOW set it is a transparent passthrough.
 RUN cat > /usr/local/bin/sandbox-firewall <<'EP'
-#!/usr/bin/env bash
+#!/bin/bash
+# Absolute interpreter and a fixed PATH: see sandbox-egress-setup. This script is
+# the container's entrypoint and runs as root, so every name it resolves — its own
+# interpreter included — must come from the image, never from an inherited PATH
+# that the agent's writable HOME or a config `env:` could have supplied.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 set -euo pipefail
 
 if [ -n "${SANDBOX_EGRESS_ALLOW:-}" ]; then
-  if ! sandbox-egress-setup; then
+  if ! /usr/local/bin/sandbox-egress-setup; then
     echo "sandbox-cli: egress firewall setup failed; refusing to run without the requested allowlist" >&2
     exit 1
   fi
 fi
 
+# Start the egress proxy before dropping privileges, as its own user. It must be
+# running before the guest does, or the redirect rules point at nothing and every
+# outbound connection is refused — so a failure to start is a failure to run,
+# matching the rest of this script's fail-closed posture.
+if [ -n "${SANDBOX_PROXY_PORT:-}" ] && [ -n "${SANDBOX_EGRESS_ALLOW:-}" ] \
+   && command -v sandbox-egress-proxy >/dev/null 2>&1 && [ "$(/usr/bin/id -u)" = "0" ]; then
+  SANDBOX_PROXY_LISTEN="127.0.0.1:$SANDBOX_PROXY_PORT" \
+    /usr/bin/setpriv --reuid sandbox-proxy --regid nogroup --clear-groups \
+      /usr/local/bin/sandbox-egress-proxy &
+  # Wait briefly for the listener; the guest starting first would see refusals.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if (exec 3<>/dev/tcp/127.0.0.1/"$SANDBOX_PROXY_PORT") 2>/dev/null; then break; fi
+    sleep 0.2
+  done
+fi
+
 user="${SANDBOX_RUN_AS:-}"
-if [ -n "$user" ] && [ "$user" != "root" ] && [ "$(id -u)" = "0" ]; then
-  uid="$(id -u "$user")"
-  gid="$(id -g "$user")"
-  exec setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"
+if [ -n "$user" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
+  # SANDBOX_RUN_AS is whatever --user was given, so it is a name OR a numeric
+  # uid[:gid] — `docker run --user 1000:1000` is documented, and `id -u 1000:1000`
+  # simply fails, which under `set -e` killed the run with an opaque
+  # "id: '1000:1000': no such user" before the guest ever started.
+  case "$user" in
+    *[!0-9:]*)
+      # A name: ask the passwd database.
+      uid="$(/usr/bin/id -u "$user")"
+      gid="$(/usr/bin/id -g "$user")"
+      ;;
+    *)
+      # Numeric uid or uid:gid; a bare uid reuses itself as the gid, matching
+      # docker's own reading of --user.
+      uid="${user%%:*}"
+      gid="${user#*:}"
+      [ "$gid" = "$user" ] && gid="$uid"
+      ;;
+  esac
+  # Dropping to root is not dropping. Checked on the resolved id rather than the
+  # spelling, so `--user 0` and `--user root` behave the same.
+  if [ "$uid" != "0" ]; then
+    # --init-groups reads the passwd/group database, so it fails outright for a
+    # numeric uid with no entry — and `--user $(id -u)` is the standard way on
+    # Linux to get bind-mount ownership right, which made correct ownership and
+    # the egress allowlist mutually exclusive. Ask for supplementary groups only
+    # when there is somewhere to read them from.
+    if /usr/bin/id -u "$user" >/dev/null 2>&1; then
+      exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"
+    fi
+    exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --clear-groups -- "$@"
+  fi
 fi
 exec "$@"
 EP
 RUN chmod +x /usr/local/bin/sandbox-firewall
+
+# The egress proxy and the uid it runs as.
+#
+# Its own uid is the enforcement lever: the firewall permits outbound traffic
+# ONLY from this uid and redirects everything else to the proxy, so the agent
+# cannot go around it — "around it" would mean being a different user. It owns
+# nothing writable and has no shell.
+COPY --from=egressproxy /sandbox-egress-proxy /usr/local/bin/sandbox-egress-proxy
+RUN chmod 0755 /usr/local/bin/sandbox-egress-proxy \
+    && useradd --system --no-create-home --shell /usr/sbin/nologin sandbox-proxy
 
 # Isolated, non-root user whose home IS /sandbox/home — set as the passwd home
 # (-d) so $HOME and getpwuid agree and there is no stray /home/sandbox. Nothing
@@ -400,8 +650,19 @@ RUN useradd -m -d /sandbox/home -s /bin/bash sandbox \
     && chown -R sandbox:sandbox /sandbox/home /workspace
 
 ENV HOME=/sandbox/home
-# Prefer a self-updating Claude install in the persisted HOME over the baked one.
-ENV PATH=/sandbox/home/.local/bin:${PATH}
+# NOTE: /sandbox/home/.local/bin is deliberately NOT on the image PATH.
+#
+# That directory is the agent's persisted HOME, bind-mounted read-write from the
+# host and writable by the agent itself. With it first on the image PATH it was
+# also first on the PATH of the *root* entrypoint used in allowlist mode, so an
+# agent could drop a file named `bash` there and have root execute it on the next
+# run — container root, and the egress firewall never programmed while sandbox-cli
+# reported it was enforcing one.
+#
+# The agents that want a self-updating install in the persisted HOME add the
+# directory themselves, in the guest phase after privileges are dropped
+# (claudeBootstrap and agentBootstrap both `export PATH="$HOME/.local/bin:$PATH"`),
+# which is where a writable directory belongs.
 WORKDIR /workspace
 
 # No USER is set here, so the image itself defaults to root — but sandbox-cli
