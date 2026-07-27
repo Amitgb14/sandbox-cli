@@ -31,7 +31,7 @@ const scaffoldConfig = `# sandbox configuration (https://github.com/Amitgb14/san
 # flows, a baseline of agent APIs + package registries, and the domains below —
 # so npm/pip/git keep working while blocking arbitrary exfiltration. (Also
 # available ad hoc via --allow DOMAIN.)
-network:
+# network:
   # mode is commented out on purpose. Egress is already default-denied with the
   # baseline, and a project file may only ever *tighten* what is in force — so
   # "mode: default" here is a weakening and is refused, which would make every

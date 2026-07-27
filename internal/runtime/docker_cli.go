@@ -570,6 +570,23 @@ func (d *DockerCLI) Runtimes(ctx context.Context) ([]string, error) {
 	return parseRuntimeNames(out)
 }
 
+// FirewallProbe is the outcome of asking whether a container here can program
+// the egress firewall.
+type FirewallProbe int
+
+const (
+	// FirewallOK: the container programmed the rules the entrypoint needs.
+	FirewallOK FirewallProbe = iota
+	// FirewallBlocked: it could not. The reason says what failed.
+	FirewallBlocked
+	// FirewallUnknown: the question could not be asked — no image to test with,
+	// or the probe itself timed out. Distinct from Blocked on purpose: a caller
+	// that treats "could not tell" as "broken" turns a slow daemon into a hard
+	// refusal. Returned as a value rather than sniffed out of the reason string,
+	// which used to be a substring match across a package boundary.
+	FirewallUnknown
+)
+
 // FirewallProgrammable reports whether a container on this daemon can actually
 // program the egress firewall.
 //
@@ -582,29 +599,47 @@ func (d *DockerCLI) Runtimes(ctx context.Context) ([]string, error) {
 //
 // It is answered by trying it, in a throwaway container, because the failure is
 // a property of the daemon's configuration rather than of anything queryable.
-// Returns a reason when it cannot.
-func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image string) (bool, string) {
+//
+// The probe *writes* rather than lists. `iptables -L` only proves the table can
+// be read, and a host that lists rules perfectly well can still lack the nat
+// table, xt_owner or conntrack — every one of which the real entrypoint needs
+// (`-t nat -N`, `-j REDIRECT`, `-m owner --uid-owner`, `-m conntrack`). Passing
+// a read-only probe and then failing the run is exactly the 3am failure this
+// command exists to prevent, so the probe programs the same kinds of rule the
+// entrypoint does. The container is --rm and its netns is its own, so the rules
+// go away with it.
+func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image string) (FirewallProbe, string) {
 	if image == "" {
-		return false, "no base image to test with"
+		return FirewallUnknown, "no base image to test with"
 	}
 	if err := exec.CommandContext(ctx, d.bin(), "image", "inspect", image).Run(); err != nil {
-		return false, "base image is not built yet; run any sandbox command once, or `sandbox-cli run --build -- true`"
+		return FirewallUnknown, "the base image is not built yet"
 	}
+	// `--entrypoint sh` rather than an absolute path: where iptables lives is the
+	// Dockerfile's business, and hardcoding /usr/sbin/iptables here would turn a
+	// packaging change into a reported host defect. This is a diagnostic, not a
+	// privilege boundary, so resolving through the image's PATH is fine.
+	const probe = `set -e
+iptables -t nat -N SANDBOX_DOCTOR
+iptables -A OUTPUT -m owner --uid-owner 0 -j ACCEPT
+iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT`
 	out, err := exec.CommandContext(ctx, d.bin(), "run", "--rm",
-		"--cap-add", "NET_ADMIN", "--user", "0",
-		"--entrypoint", "/usr/sbin/iptables", image, "-L", "-n").CombinedOutput()
+		"--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--user", "0",
+		"--network", "none", "--entrypoint", "sh", image, "-c", probe).CombinedOutput()
 	if err != nil {
-		return false, strings.TrimSpace(lastLine(string(out)))
+		// A cancelled or timed-out probe answered nothing. Reporting it as
+		// "cannot program iptables" would fail prod for a question never asked.
+		if ctx.Err() != nil {
+			return FirewallUnknown, "the probe timed out"
+		}
+		return FirewallBlocked, strings.TrimSpace(lastLine(string(out)))
 	}
-	return true, ""
+	return FirewallOK, ""
 }
 
 // lastLine is the most useful part of a docker error, which is usually verbose
 // above and specific at the end.
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-	return lines[len(lines)-1]
+	return lines[len(lines)-1] // Split never returns an empty slice
 }

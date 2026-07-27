@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -56,8 +57,14 @@ type check struct {
 	remedy string
 }
 
+// doctorTimeout bounds the whole preflight. A wedged daemon must not hang the
+// one command you run *because* you are unsure about the host — and the checks
+// classify a timeout as "could not be asked" rather than "not satisfied", so a
+// slow machine does not read as a broken one.
+const doctorTimeout = 90 * time.Second
+
 func newDoctorCmd() *cobra.Command {
-	var profile string
+	var profile, cfgPath string
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check whether this host can deliver what a profile promises",
@@ -72,26 +79,31 @@ func newDoctorCmd() *cobra.Command {
 			"anything on it.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := resolveDoctorProfile(profile)
+			name, err := resolveDoctorProfile(cfgPath, profile)
 			if err != nil {
 				return err
 			}
-			checks := runDoctorChecks(context.Background(), name)
-			return reportDoctor(name, checks)
+			ctx, cancel := context.WithTimeout(cmd.Context(), doctorTimeout)
+			defer cancel()
+			return reportDoctor(name, runDoctorChecks(ctx, name))
 		},
 	}
 	cmd.Flags().StringVar(&profile, "profile", "", "profile to check against: dev (default) or prod")
+	// The setups most worth preflighting are the checked-in ones loaded
+	// deliberately, so the command that diagnoses a configuration has to be able
+	// to read the same configuration a run would.
+	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "explicit config file path")
 	return cmd
 }
 
 // resolveDoctorProfile honours the same layers a run would, so `doctor` reports
 // on the profile that would actually be in force here rather than on a guess.
-func resolveDoctorProfile(flag string) (string, error) {
+func resolveDoctorProfile(cfgPath, flag string) (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		wd = "."
 	}
-	cfg, err := config.LoadProfile(wd, "", flag)
+	cfg, err := config.LoadProfile(wd, cfgPath, flag)
 	if err != nil {
 		// A configuration that cannot resolve is itself the finding, and the
 		// message already says which key is at fault.
@@ -106,7 +118,7 @@ type doctorRuntime interface {
 	Available(context.Context) error
 	SeccompUnavailable(context.Context) (bool, bool)
 	Runtimes(context.Context) ([]string, error)
-	FirewallProgrammable(context.Context, string) (bool, string)
+	FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string)
 }
 
 // newDoctorRuntime is a var so tests can substitute a host.
@@ -156,22 +168,21 @@ func checkSeccomp(ctx context.Context, d doctorRuntime) check {
 // grant it now affects everybody rather than only those who passed --allow.
 func checkFirewall(ctx context.Context, d doctorRuntime) check {
 	c := check{name: "egress firewall"}
-	ok, reason := d.FirewallProgrammable(ctx, image.Ref())
-	if ok {
+	switch probe, reason := d.FirewallProgrammable(ctx, image.Ref()); probe {
+	case runtime.FirewallOK:
 		c.status = statusOK
-		c.detail = "a container here can program iptables"
-		return c
-	}
-	if strings.Contains(reason, "not built yet") {
+		c.detail = "a container here can program the nat, owner and conntrack rules the firewall needs"
+	case runtime.FirewallUnknown:
+		// Not the host's fault, and not an answer either.
 		c.status = statusUnknown
 		c.detail = reason
-		c.remedy = "build it once, then run doctor again"
-		return c
+		c.remedy = "run any sandbox command once to build the image, then try again"
+	default:
+		c.status = statusWeak
+		c.detail = "a container here cannot program the firewall: " + reason
+		c.remedy = "rootless or userns-remapped daemons often cannot; use --network default, " +
+			"or run on a daemon that can grant NET_ADMIN"
 	}
-	c.status = statusWeak
-	c.detail = "a container here cannot program iptables: " + reason
-	c.remedy = "rootless or userns-remapped daemons often cannot; use --network default, " +
-		"or run on a daemon that can grant NET_ADMIN"
 	return c
 }
 
@@ -209,8 +220,10 @@ func checkRuntimes(ctx context.Context, d doctorRuntime, profile string) check {
 	c.status = statusOK // reported, not failed — see the doc comment
 	c.detail = "only the default runtime is registered: " + strings.Join(names, ", ")
 	if profile == config.ProfileProd {
-		c.detail += "\n    prod may carry untrusted agents, and a shared kernel is not a boundary for those"
-		c.remedy = "install gVisor (runsc) or Kata and set `runtime:` if the agents you run are untrusted"
+		// Kept out of detail: a newline inside a tabwriter cell ends the column
+		// block, so a check added after this one would silently misalign.
+		c.remedy = "prod may carry untrusted agents, and a shared kernel is not a boundary for those — " +
+			"install gVisor (runsc) or Kata and set `runtime:`"
 	}
 	return c
 }
@@ -226,7 +239,10 @@ func reportDoctor(profile string, checks []check) error {
 	for _, c := range checks {
 		mark, fatal := verdict(c.status, strict)
 		fmt.Fprintf(tw, "  %s\t%s\t%s\n", mark, c.name, c.detail)
-		if c.remedy != "" && c.status != statusOK {
+		// Printed whatever the status: the runtime check is deliberately an "ok"
+		// that still has something to tell you, and dropping its remedy silently
+		// left the actionable half off the screen.
+		if c.remedy != "" {
 			fmt.Fprintf(tw, "\t\t%s\n", c.remedy)
 		}
 		if fatal {

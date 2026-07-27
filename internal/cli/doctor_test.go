@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 )
 
 // fakeHost stands in for a docker daemon so every combination can be exercised,
@@ -19,7 +20,7 @@ type fakeHost struct {
 	seccompKnow bool
 	runtimes    []string
 	runtimesErr error
-	firewallOK  bool
+	firewall    runtime.FirewallProbe
 	firewallWhy string
 }
 
@@ -28,8 +29,8 @@ func (f fakeHost) SeccompUnavailable(context.Context) (bool, bool) {
 	return f.seccompOff, f.seccompKnow
 }
 func (f fakeHost) Runtimes(context.Context) ([]string, error) { return f.runtimes, f.runtimesErr }
-func (f fakeHost) FirewallProgrammable(context.Context, string) (bool, string) {
-	return f.firewallOK, f.firewallWhy
+func (f fakeHost) FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string) {
+	return f.firewall, f.firewallWhy
 }
 
 func withHost(t *testing.T, h fakeHost) {
@@ -41,7 +42,7 @@ func withHost(t *testing.T, h fakeHost) {
 
 // healthy is a host that satisfies everything.
 func healthy() fakeHost {
-	return fakeHost{seccompKnow: true, firewallOK: true, runtimes: []string{"runc"}}
+	return fakeHost{seccompKnow: true, firewall: runtime.FirewallOK, runtimes: []string{"runc"}}
 }
 
 // TestDoctorVerdictFollowsTheProfile is the whole point of the command: the same
@@ -83,7 +84,7 @@ func TestDoctorTreatsAnUnansweredQuestionAsFailureUnderProdOnly(t *testing.T) {
 // run now needs NET_ADMIN, so a daemon that cannot grant it affects everybody.
 func TestDoctorFailsProdWhenTheFirewallCannotBeProgrammed(t *testing.T) {
 	h := healthy()
-	h.firewallOK = false
+	h.firewall = runtime.FirewallBlocked
 	h.firewallWhy = "operation not permitted"
 	withHost(t, h)
 
@@ -107,8 +108,11 @@ func TestDoctorFailsProdWhenTheFirewallCannotBeProgrammed(t *testing.T) {
 // as though the host were at fault.
 func TestDoctorReportsAnUnbuiltImageAsUnknown(t *testing.T) {
 	h := healthy()
-	h.firewallOK = false
-	h.firewallWhy = "base image is not built yet; run any sandbox command once"
+	// The typed outcome, not a substring of the reason: classification used to
+	// hinge on strings.Contains against a literal from another package, so a
+	// reworded message would silently have become a prod failure.
+	h.firewall = runtime.FirewallUnknown
+	h.firewallWhy = "the base image is not built yet"
 	withHost(t, h)
 
 	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev) {
@@ -173,5 +177,48 @@ func TestInitScaffoldsAConfigThatLoads(t *testing.T) {
 	}
 	if _, err := config.Load(dir, ""); err != nil {
 		t.Fatalf("the config `sandbox-cli init` writes is refused by the trust rules: %v", err)
+	}
+}
+
+// The runtime check is an "ok" that still has something to say under prod, and
+// its remedy used to be dropped because remedies only printed for non-OK checks
+// — so the actionable half never reached the screen.
+func TestDoctorPrintsTheRuntimeRemedyEvenThoughTheCheckPasses(t *testing.T) {
+	h := healthy()
+	h.runtimes = []string{"runc"}
+	withHost(t, h)
+
+	var c check
+	for _, got := range runDoctorChecks(context.Background(), config.ProfileProd) {
+		if got.name == "isolation runtime" {
+			c = got
+		}
+	}
+	if c.remedy == "" {
+		t.Fatal("prod says nothing about the missing stronger runtime")
+	}
+	if c.status != statusOK {
+		t.Errorf("status = %v; the runtime gap is reported, not failed", c.status)
+	}
+	// A newline inside the detail would end the tabwriter column block, so a
+	// check added after this one would silently misalign.
+	if strings.Contains(c.detail, "\n") {
+		t.Error("detail contains a newline, which breaks the tabwriter column block")
+	}
+}
+
+// A probe that timed out answered nothing, so it must not read as "this host
+// cannot program the firewall" — that would fail prod for a question never
+// asked, against the command's own rule.
+func TestDoctorTreatsATimedOutProbeAsUnknown(t *testing.T) {
+	h := healthy()
+	h.firewall = runtime.FirewallUnknown
+	h.firewallWhy = "the probe timed out"
+	withHost(t, h)
+
+	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev) {
+		if c.name == "egress firewall" && c.status != statusUnknown {
+			t.Errorf("a timed-out probe was reported as %v, want unknown", c.status)
+		}
 	}
 }

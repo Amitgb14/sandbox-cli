@@ -37,7 +37,8 @@ version is tagged.
   every sandbox-cli command in that directory fails, including read-only ones.
   Older `sandbox-cli init` scaffolds contained exactly that line, so any project
   you scaffolded is affected. The scaffold no longer writes it, and the refusal
-  now explains the change and names `--network default` for a single run.
+  now names the mode actually in force and how to proceed: remove the key, or
+  load the file deliberately with `--config ./.sandbox.yaml`.
 
   **On restricted daemons this may need `--network default`.** Enforcing an
   allowlist means the container starts as root with `NET_ADMIN` to program
