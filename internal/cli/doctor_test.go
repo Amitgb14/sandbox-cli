@@ -220,6 +220,97 @@ func TestInitScaffoldsInstructionsThatWork(t *testing.T) {
 	}
 }
 
+// TestEverySuggestionInTheScaffoldIsAcceptable generalises the principle the
+// test above applies to one key: following the scaffold's instructions must
+// produce what the user asked for.
+//
+// The live section offered three keys a project config may not set —
+// network.allow, ports and snapshot — so uncommenting any of them made every
+// sandbox-cli command in the directory fail. The snapshot one was the sharpest:
+// the key is refused because "interval: 1ms" turns the host into a `git add -A`
+// loop, and the scaffold advertised "interval: 2m" two screens below the header
+// listing it as refused.
+//
+// This walks the live section rather than naming keys, so the next key added to
+// the refused list is caught even if nobody remembers this file exists. Anything
+// below the "For reference" marker is deliberately excluded: that block exists to
+// show what belongs elsewhere.
+func TestEverySuggestionInTheScaffoldIsAcceptable(t *testing.T) {
+	live, _, found := strings.Cut(scaffoldConfig, "# For reference")
+	if !found {
+		t.Fatal("the scaffold has no reference block; this test cannot tell live suggestions from examples")
+	}
+	for _, block := range topLevelSuggestions(live) {
+		t.Run(block.key, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			if err := os.WriteFile(filepath.Join(dir, ".sandbox.yaml"), []byte(block.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := config.Load(dir, ""); err != nil {
+				t.Errorf("the scaffold offers %q, but uncommenting it breaks every command here:\n%v\n\n%s",
+					block.key, err, block.yaml)
+			}
+		})
+	}
+}
+
+// suggestion is one uncommentable top-level block from the scaffold.
+type suggestion struct {
+	key  string
+	yaml string
+}
+
+// topLevelSuggestions finds each commented top-level key in the live section and
+// returns it uncommented, with its indented children.
+//
+// Comment-only lines inside a block (the long explanatory notes) are dropped:
+// they are prose, not settings, and a user uncommenting a block would not
+// uncomment those. Values whose sample text is a placeholder are left alone —
+// the question here is whether the *key* is permitted, not whether the example
+// value parses to something meaningful.
+func topLevelSuggestions(live string) []suggestion {
+	var out []suggestion
+	lines := strings.Split(live, "\n")
+	for i := 0; i < len(lines); i++ {
+		key, ok := commentedTopLevelKey(lines[i])
+		if !ok {
+			continue
+		}
+		body := []string{strings.TrimPrefix(lines[i], "# ")}
+		for j := i + 1; j < len(lines); j++ {
+			child := lines[j]
+			if !strings.HasPrefix(child, "#   ") && !strings.HasPrefix(child, "#     ") {
+				break
+			}
+			if uncommented := strings.TrimPrefix(child, "# "); strings.Contains(uncommented, ":") ||
+				strings.HasPrefix(strings.TrimSpace(uncommented), "-") {
+				body = append(body, uncommented)
+			}
+		}
+		if len(body) > 1 || strings.Contains(body[0], ": ") {
+			out = append(out, suggestion{key: key, yaml: strings.Join(body, "\n") + "\n"})
+		}
+	}
+	return out
+}
+
+// commentedTopLevelKey matches `# key:` or `# key: value` at column zero.
+func commentedTopLevelKey(line string) (string, bool) {
+	if !strings.HasPrefix(line, "# ") {
+		return "", false
+	}
+	rest := strings.TrimPrefix(line, "# ")
+	if rest == "" || rest[0] == ' ' || rest[0] == '#' {
+		return "", false
+	}
+	key, _, ok := strings.Cut(rest, ":")
+	if !ok || strings.ContainsAny(key, " \t") {
+		return "", false
+	}
+	return key, true
+}
+
 // uncomment strips the leading "# " from the named lines, which is what a user
 // does by hand.
 func uncomment(doc string, lines ...string) string {

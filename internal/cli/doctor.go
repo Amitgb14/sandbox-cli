@@ -171,7 +171,7 @@ func checkFirewall(ctx context.Context, d doctorRuntime) check {
 	switch probe, reason := d.FirewallProgrammable(ctx, image.Ref()); probe {
 	case runtime.FirewallOK:
 		c.status = statusOK
-		c.detail = "a container here can program the nat, owner and conntrack rules the firewall needs"
+		c.detail = "a container here can program the nat, redirect, owner and conntrack rules the firewall needs"
 	case runtime.FirewallUnknown:
 		// Not the host's fault, and not an answer either.
 		c.status = statusUnknown
