@@ -13,9 +13,30 @@ import (
 // directory and loads it with an empty user config, returning Load's error.
 func loadWithProject(t *testing.T, content string) error {
 	t.Helper()
+	return loadWithUserAndProject(t, "", content)
+}
+
+// loadWithUserAndProject loads with a user-level config in place, so a
+// direction-checked key can be tested against something to weaken.
+//
+// Several keys are not refused outright — a project may tighten them and only
+// loosening is the attack. Those cannot be exercised against the built-in
+// defaults, because there is nothing stricter in force to step down from.
+func loadWithUserAndProject(t *testing.T, user, project string) error {
+	t.Helper()
 	dir := t.TempDir()
-	writeProjectConfig(t, dir, content)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "empty-xdg"))
+	writeProjectConfig(t, dir, project)
+	xdg := t.TempDir()
+	if user != "" {
+		root := filepath.Join(xdg, "sandbox")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "config.yaml"), []byte(user), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("XDG_CONFIG_HOME", xdg)
 	_, err := Load(dir, "")
 	return err
 }
@@ -268,6 +289,11 @@ var projectKeyPolicy = map[string]bool{ // field name -> may a project file set 
 	"Snapshot": false,
 	"Secrets":  false,
 	"Runtime":  false,
+	// Direction-checked, like Network: a project may demand a stronger profile
+	// and never a weaker one, and may turn the credential mounts off but not on.
+	"Profile":     false,
+	"PersistAuth": false,
+	"Sync":        false,
 }
 
 // TestEveryConfigFieldIsClassified fails when a field is added to Config without
@@ -313,6 +339,17 @@ func TestClassifiedFieldsAreActuallyEnforced(t *testing.T) {
 		"Snapshot": "snapshot:\n  enabled: false\n",
 		"Secrets":  "secrets:\n  T:\n    env: HOME\n",
 		"Runtime":  "runtime: runsc\n",
+		// Direction-checked: the sample must *weaken* something already in force,
+		// so each of these is paired with a stricter user-level config below.
+		"Profile":     "profile: dev\n",
+		"PersistAuth": "persist_auth: true\n",
+		"Sync":        "sync: true\n",
+	}
+	// The stricter setting a direction-checked sample has to step down from.
+	inheritedFor := map[string]string{
+		"Profile":     "profile: prod\nnetwork:\n  allow: [api.example.com]\n",
+		"PersistAuth": "persist_auth: false\n",
+		"Sync":        "sync: false\n",
 	}
 	for field, permitted := range projectKeyPolicy {
 		if permitted {
@@ -323,7 +360,7 @@ func TestClassifiedFieldsAreActuallyEnforced(t *testing.T) {
 			t.Errorf("no yaml sample for un-settable field %q; add one so the refusal is exercised", field)
 			continue
 		}
-		if err := loadWithProject(t, y); err == nil {
+		if err := loadWithUserAndProject(t, inheritedFor[field], y); err == nil {
 			t.Errorf("Config.%s is classified un-settable but a project config setting it was accepted", field)
 		}
 	}

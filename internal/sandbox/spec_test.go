@@ -10,8 +10,17 @@ import (
 	"path/filepath"
 )
 
+// baseCfg is the configuration these tests mean when they are not testing the
+// egress allowlist: Default() plus an explicit "no allowlist".
+//
+// Default() now selects the allowlist, which changes the shape of the spec —
+// the container starts as root so the firewall can program itself, then drops.
+// That is correct, and it is what TestBuildSpec_AllowlistIsTheDefault covers;
+// the cases below are about mounts, users, resources and the rest, and they read
+// wrongly if every one of them is also an allowlist case.
 func baseCfg() config.Config {
 	c := config.Default()
+	c.Network.Mode = "default"
 	return c
 }
 
@@ -473,7 +482,30 @@ func TestBuildSpec_AllowFlagStillSeedsTheBaseline(t *testing.T) {
 	}
 }
 
-func TestBuildSpec_NoEgressByDefault(t *testing.T) {
+// TestBuildSpec_AllowlistIsTheDefault pins the changed default. Dev's egress is
+// bounded because dev is where the developer's own long-lived credential is in
+// reach: the persisted agent HOME holds an OAuth refresh token the agent can
+// read, and with unbounded egress nothing stopped it being posted anywhere.
+func TestBuildSpec_AllowlistIsTheDefault(t *testing.T) {
+	dir := t.TempDir()
+	spec, err := BuildSpec(config.Default(), Options{Project: dir, Command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Entrypoint == "" {
+		t.Error("the default config did not wire the firewall entrypoint")
+	}
+	if spec.Env["SANDBOX_EGRESS_ALLOW"] == "" {
+		t.Error("the default config did not pass an egress allowlist")
+	}
+	// The baseline stays on, so npm, pip and git keep working out of the box.
+	if !strings.Contains(spec.Env["SANDBOX_EGRESS_ALLOW"], "registry.npmjs.org") {
+		t.Errorf("the baseline is missing from the default allowlist: %q", spec.Env["SANDBOX_EGRESS_ALLOW"])
+	}
+}
+
+// And the escape hatch: --network default declines it for one run.
+func TestBuildSpec_NoEgressWhenNetworkIsDefault(t *testing.T) {
 	dir := t.TempDir()
 	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
 	if err != nil {

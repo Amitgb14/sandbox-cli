@@ -1,6 +1,12 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"os"
+
+	"github.com/spf13/cobra"
+
+	"github.com/Amitgb14/sandbox-cli/internal/config"
+)
 
 // Shared plumbing for the agent wrappers (claude/codex/gemini/opencode).
 
@@ -104,4 +110,33 @@ exec ` + bin + ` "$@"`
 // only writable place that survives the container.
 func npmAgentBootstrap(bin, pkg string) []string {
 	return agentBootstrap(bin, `npm install -g --prefix "$HOME/.local" `+pkg)
+}
+
+// syncEnabled reports whether the resolved configuration permits mounting the
+// host's agent history.
+//
+// The wrapper decides its mounts before newSession loads the configuration, so
+// this reads the same layers again rather than threading the config through. A
+// second read is a few file opens and cannot disagree with the first, since both
+// see the same files; an error here defers to the flag alone, because
+// newSession will report the same failure properly a moment later.
+//
+// It exists because `sync` became a config key when profiles arrived: prod turns
+// it off, and a setting the profile promises has to hold whether the user passed
+// --no-sync or not.
+// Fails closed. This decides whether to mount the one default that reaches a
+// host path outside the workspace, so "I could not determine the policy" must
+// not resolve to "mount it". Benign today — newSession makes the identical call
+// moments later and aborts the run — but a fail-open default one refactor away
+// from mattering is not worth keeping.
+func syncEnabled(rf *runFlags) bool {
+	wd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	cfg, err := config.LoadProfile(wd, rf.config, rf.profile)
+	if err != nil {
+		return false
+	}
+	return cfg.SyncEnabled()
 }

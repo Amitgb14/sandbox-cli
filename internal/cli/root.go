@@ -29,6 +29,8 @@ type runFlags struct {
 	tty         bool
 	noTTY       bool
 	config      string
+	profile     string
+	network     string
 	build       bool
 	dryRun      bool
 	noMetrics   bool
@@ -73,9 +75,45 @@ type runFlags struct {
 // guest command is filled in by each subcommand.
 func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	startDir, _ := os.Getwd()
-	cfg, err := config.Load(startDir, rf.config)
+	cfg, err := config.LoadProfile(startDir, rf.config, rf.profile)
 	if err != nil {
 		return nil, sandbox.Options{}, err
+	}
+	// An explicit --network outranks the profile's default. It is the way to
+	// decline the allowlist for one run, which matters now that the allowlist is
+	// the default: without it, --user root and --no-hardening would collide with
+	// a posture the user never asked for and there would be no way to say so.
+	if rf.network != "" {
+		switch rf.network {
+		case "default", "none", "allowlist":
+			cfg.Network.Mode = rf.network
+		default:
+			return nil, sandbox.Options{}, fmt.Errorf("--network %q: want allowlist, default or none", rf.network)
+		}
+		if err := config.ValidateProfile(cfg.Profile, cfg); err != nil {
+			return nil, sandbox.Options{}, err
+		}
+	}
+	// --user root and --no-hardening contradict the allowlist: the firewall needs
+	// the privilege drop to survive, and both undo it. BuildSpec refuses the
+	// combination, and should.
+	//
+	// But since the allowlist became the *default*, that refusal would fire on a
+	// posture the user never asked for — `sandbox-cli run --user root` would stop
+	// working with an error about an allowlist nobody requested. So an explicit
+	// flag beats an implicit default: the allowlist yields, loudly. An allowlist
+	// that was actually asked for (--allow, --network allowlist, or prod) still
+	// refuses, because then the user has stated both intentions and only one can
+	// hold.
+	if cfg.Network.Mode == "allowlist" && rf.network == "" && len(rf.allow) == 0 &&
+		cfg.Profile != config.ProfileProd && (rf.noHardening || config.IsRootUser(rf.user)) {
+		which := "--user root"
+		if rf.noHardening {
+			which = "--no-hardening"
+		}
+		fmt.Fprintf(os.Stderr, "sandbox-cli: %s disables what the egress allowlist depends on, so this run "+
+			"has no allowlist\n  pass --allow or --network allowlist to make the conflict an error instead\n", which)
+		cfg.Network.Mode = "default"
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, sandbox.Options{}, err
@@ -250,7 +288,7 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 
 	// Persist agent login in a dedicated, sandbox-owned host dir mounted as the
 	// agent's whole HOME, so login survives the ephemeral container.
-	if rf.persistName != "" && !rf.noPersistAuth {
+	if rf.persistName != "" && !rf.noPersistAuth && cfg.PersistAuthEnabled() {
 		dir := config.AgentStateDir(rf.persistName)
 		if dir != "" {
 			if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -289,6 +327,8 @@ func addRunFlags(cmd *cobra.Command, rf *runFlags) {
 	f.BoolVar(&rf.tty, "tty", false, "force an interactive TTY")
 	f.BoolVar(&rf.noTTY, "no-tty", false, "disable TTY allocation")
 	f.StringVarP(&rf.config, "config", "c", "", "explicit config file path")
+	f.StringVar(&rf.profile, "profile", "", "security profile: dev (warns) or prod (refuses); default dev")
+	f.StringVar(&rf.network, "network", "", "network mode: allowlist (default), default (unrestricted), or none")
 	f.BoolVar(&rf.build, "build", false, "force rebuild of the base image")
 	f.BoolVar(&rf.dryRun, "dry-run", false, "print the docker command and exit")
 	f.BoolVar(&rf.noMetrics, "no-metrics", false, "disable the live resource gauge (non-interactive runs)")

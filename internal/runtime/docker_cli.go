@@ -515,6 +515,25 @@ func seccompDisabled(securityOptions []string) bool {
 	return !sawSeccomp
 }
 
+// SeccompUnavailable reports whether the daemon applies no syscall filter, and
+// whether that question could be answered at all.
+//
+// Separated from the warning because prod refuses on the same fact that dev
+// merely reports. ok=false means the daemon could not be queried: dev stays
+// silent rather than warning about a question it could not ask, and prod refuses
+// rather than assuming the answer it would prefer.
+func (d *DockerCLI) SeccompUnavailable(ctx context.Context) (unavailable, ok bool) {
+	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .SecurityOptions}}").Output()
+	if err != nil {
+		return false, false
+	}
+	var opts []string
+	if json.Unmarshal(bytes.TrimSpace(out), &opts) != nil {
+		return false, false
+	}
+	return seccompDisabled(opts), true
+}
+
 // WarnIfSeccompDisabled prints one line when the daemon applies no syscall
 // filter. Best-effort: a daemon that cannot be queried is not a reason to say
 // anything, since the alternative is warning on every run for a question we
