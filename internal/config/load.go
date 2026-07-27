@@ -20,7 +20,28 @@ const projectFileName = ".sandbox.yaml"
 // Host paths in mounts are resolved to absolute paths relative to the file that
 // declared them. Flag overrides are applied by the caller after Load.
 func Load(startDir, explicitPath string) (Config, error) {
-	cfg := Default()
+	return LoadProfile(startDir, explicitPath, "")
+}
+
+// LoadProfile is Load with an explicit --profile override.
+//
+// It resolves in two passes because the profile has to be the *base* layer — the
+// thing the other layers are merged on top of — while the name selecting it may
+// itself come from one of those layers. So the first pass reads only the profile
+// keys, and the second builds the real configuration on the base that names.
+//
+// Applying the profile underneath the user's own config, rather than over it,
+// is deliberate: their config is trusted and a profile that could not be adjusted
+// would be abandoned rather than used. What stops that from hollowing prod out is
+// ValidateProfile, which checks the settings that define prod against the
+// configuration that will actually run.
+func LoadProfile(startDir, explicitPath, flagProfile string) (Config, error) {
+	name, err := discoverProfile(startDir, explicitPath, flagProfile)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg := profileBase(name)
+	cfg.Profile = name
 
 	if p := userConfigPath(); p != "" {
 		if err := mergeFile(&cfg, p); err != nil {
@@ -41,7 +62,38 @@ func Load(startDir, explicitPath string) (Config, error) {
 		}
 	}
 
+	// The profile is not something a later layer may change out from under the
+	// caller: it was resolved above, from the layers entitled to choose it.
+	cfg.Profile = name
+	if err := ValidateProfile(name, cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// discoverProfile reads just the profile key out of the layers that may select
+// one, so the answer is known before anything is merged.
+//
+// Errors from reading a file are swallowed here: the real merge below reads the
+// same files and reports properly. This pass only answers "which base".
+func discoverProfile(startDir, explicitPath, flagProfile string) (string, error) {
+	var user, project string
+	if p := userConfigPath(); p != "" {
+		if f, err := readConfigFile(p); err == nil && f != nil {
+			user = f.Profile
+		}
+	}
+	if explicitPath != "" {
+		if f, err := readConfigFile(explicitPath); err == nil && f != nil && f.Profile != "" {
+			// An explicitly named file is trusted, so it selects like the user's own.
+			user = f.Profile
+		}
+	} else if p := findProjectConfig(startDir); p != "" {
+		if f, err := readConfigFile(p); err == nil && f != nil {
+			project = f.Profile
+		}
+	}
+	return ResolveProfile(flagProfile, user, project)
 }
 
 // mergeProjectFile is mergeFile for a *discovered* .sandbox.yaml — the one config
@@ -281,6 +333,12 @@ func mergeInto(dst *Config, src Config, baseDir string) {
 	}
 	if src.Runtime != "" {
 		dst.Runtime = src.Runtime
+	}
+	if src.PersistAuth != nil {
+		dst.PersistAuth = src.PersistAuth
+	}
+	if src.Sync != nil {
+		dst.Sync = src.Sync
 	}
 	if src.Network.Mode != "" {
 		dst.Network.Mode = src.Network.Mode

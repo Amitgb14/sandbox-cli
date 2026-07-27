@@ -29,6 +29,7 @@ type runFlags struct {
 	tty         bool
 	noTTY       bool
 	config      string
+	profile     string
 	build       bool
 	dryRun      bool
 	noMetrics   bool
@@ -73,7 +74,7 @@ type runFlags struct {
 // guest command is filled in by each subcommand.
 func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	startDir, _ := os.Getwd()
-	cfg, err := config.Load(startDir, rf.config)
+	cfg, err := config.LoadProfile(startDir, rf.config, rf.profile)
 	if err != nil {
 		return nil, sandbox.Options{}, err
 	}
@@ -250,7 +251,7 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 
 	// Persist agent login in a dedicated, sandbox-owned host dir mounted as the
 	// agent's whole HOME, so login survives the ephemeral container.
-	if rf.persistName != "" && !rf.noPersistAuth {
+	if rf.persistName != "" && !rf.noPersistAuth && cfg.PersistAuthEnabled() {
 		dir := config.AgentStateDir(rf.persistName)
 		if dir != "" {
 			if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -289,6 +290,7 @@ func addRunFlags(cmd *cobra.Command, rf *runFlags) {
 	f.BoolVar(&rf.tty, "tty", false, "force an interactive TTY")
 	f.BoolVar(&rf.noTTY, "no-tty", false, "disable TTY allocation")
 	f.StringVarP(&rf.config, "config", "c", "", "explicit config file path")
+	f.StringVar(&rf.profile, "profile", "", "security profile: dev (warns) or prod (refuses); default dev")
 	f.BoolVar(&rf.build, "build", false, "force rebuild of the base image")
 	f.BoolVar(&rf.dryRun, "dry-run", false, "print the docker command and exit")
 	f.BoolVar(&rf.noMetrics, "no-metrics", false, "disable the live resource gauge (non-interactive runs)")

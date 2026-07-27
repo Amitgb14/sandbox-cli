@@ -140,6 +140,23 @@ func restrictedProjectKeys(src, inherited Config) []string {
 	if src.Network.Baseline != nil && *src.Network.Baseline && !inherited.Network.BaselineEnabled() {
 		add("network.baseline")
 	}
+	// profile is the same shape at the top level. A repository that knows it
+	// handles untrusted input may demand a stronger profile; the same key naming
+	// a weaker one is the attack, and the worst one available — it would drop the
+	// run out of prod and leave every other control in this file decorative.
+	if src.Profile != "" && profileStrength[src.Profile] < profileStrength[inherited.Profile] {
+		add("profile")
+	}
+	// persist_auth true mounts a sandbox-owned host directory as the agent's
+	// whole HOME, and that directory holds a long-lived OAuth refresh token.
+	// Turning it off narrows; turning it on hands the agent a credential.
+	if src.PersistAuth != nil && *src.PersistAuth && !inherited.PersistAuthEnabled() {
+		add("persist_auth")
+	}
+	// sync true mounts a host path outside the workspace. Same direction rule.
+	if src.Sync != nil && *src.Sync && !inherited.SyncEnabled() {
+		add("sync")
+	}
 
 	sort.Strings(bad)
 	return bad

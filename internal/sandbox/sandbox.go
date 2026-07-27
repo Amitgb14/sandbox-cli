@@ -56,6 +56,9 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 		return 1, err
 	}
 	// Said once, on the way in, while the user can still do something about it.
+	if err := s.enforceSeccomp(ctx); err != nil {
+		return 1, err
+	}
 	if w, ok := s.Runtime.(interface{ WarnIfSeccompDisabled(context.Context) }); ok {
 		w.WarnIfSeccompDisabled(ctx)
 	}
@@ -101,6 +104,9 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 		return "", fmt.Errorf("preparing image %q: %w", spec.Image, err)
 	}
 	if err := s.Runtime.EnsureNetwork(ctx, spec.Network); err != nil {
+		return "", err
+	}
+	if err := s.enforceSeccomp(ctx); err != nil {
 		return "", err
 	}
 
@@ -242,4 +248,39 @@ func auditMeta(spec runtime.RunSpec, opts Options, exitCode int, took time.Durat
 		}
 	}
 	return m
+}
+
+// enforceSeccomp turns the seccomp warning into a refusal when the configuration
+// asked for one.
+//
+// The difference between profiles in one function: dev prints the warning and
+// carries on, because a developer is watching and can act on it. prod refuses,
+// because nobody is, and an unattended run that quietly proceeded with the full
+// syscall table available is exactly the "degraded silently" failure the profile
+// exists to prevent.
+//
+// A daemon that cannot be queried refuses too, under the same reasoning: prod
+// does not get to assume the answer it would prefer.
+func (s *Session) enforceSeccomp(ctx context.Context) error {
+	if s.Cfg.Security.Seccomp != config.SeccompRequired {
+		return nil
+	}
+	r, ok := s.Runtime.(interface {
+		SeccompUnavailable(context.Context) (bool, bool)
+	})
+	if !ok {
+		return nil // a runtime that cannot be asked; nothing to enforce against
+	}
+	unavailable, answered := r.SeccompUnavailable(ctx)
+	if !answered {
+		return fmt.Errorf("security.seccomp is %q but this docker daemon could not be asked whether it "+
+			"applies a syscall filter; refusing rather than assuming it does", config.SeccompRequired)
+	}
+	if unavailable {
+		return fmt.Errorf("security.seccomp is %q but this docker daemon applies no syscall filter, so the "+
+			"container would have the full syscall table\n"+
+			"  Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\"\n"+
+			"  or run with --profile dev, which warns instead of refusing", config.SeccompRequired)
+	}
+	return nil
 }

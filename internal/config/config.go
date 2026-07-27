@@ -35,6 +35,27 @@ type Config struct {
 	// (runc). Set to a stronger-isolation runtime the host has registered, e.g.
 	// "kata-runtime" (microVM) or "runsc" (gVisor).
 	Runtime string `yaml:"runtime"`
+
+	// Profile selects the security profile: "dev" (interactive, warns) or "prod"
+	// (unattended, refuses). See profile.go. A project config may raise this and
+	// never lower it, which is what stops a hostile repository dropping a run out
+	// of prod.
+	Profile string `yaml:"profile"`
+
+	// PersistAuth keeps the agent login across runs by mounting a sandbox-owned
+	// host directory as the agent's HOME. Tri-state: nil means the default (on
+	// for agent wrappers), so no existing config changes behaviour.
+	//
+	// It is here rather than only on the command line because prod needs to turn
+	// it off, and for a reason worth stating: that directory holds a long-lived
+	// OAuth refresh token, readable by the agent, and an unattended run has no
+	// business carrying one.
+	PersistAuth *bool `yaml:"persist_auth"`
+
+	// Sync mounts the host's agent history for this project so sessions resolve
+	// on both sides. Tri-state, same reasoning: it is the one default that
+	// reaches a host path outside the workspace.
+	Sync *bool `yaml:"sync"`
 }
 
 // SecretSpec is a brokered credential: a reference to a value resolved at run
@@ -401,6 +422,12 @@ func dedupePaths(in []string) []string {
 }
 
 // Default returns the built-in base configuration.
+// PersistAuthEnabled reports the effective value: on unless explicitly off.
+func (c Config) PersistAuthEnabled() bool { return c.PersistAuth == nil || *c.PersistAuth }
+
+// SyncEnabled reports the effective value: on unless explicitly off.
+func (c Config) SyncEnabled() bool { return c.Sync == nil || *c.Sync }
+
 func Default() Config {
 	return Config{
 		Image:   image.Ref(),

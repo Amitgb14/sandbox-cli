@@ -85,7 +85,7 @@ func newClaudeCmd() *cobra.Command {
 				}
 				// History sharing is on by default; when the host has no history for
 				// this project yet there is simply nothing to mount (not an error).
-				if !rf.noSync {
+				if !rf.noSync && syncEnabled(rf) {
 					if src, target, ok := claudeHistoryMount(rf); ok {
 						rf.mounts = append(rf.mounts, src+":"+target+":rw")
 					}
