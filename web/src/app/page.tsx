@@ -15,6 +15,7 @@ import { AgentExplorer } from "@/components/agent-explorer";
 import { ComparisonTable } from "@/components/comparison-table";
 import { CapabilityChart } from "@/components/capability-chart";
 import { PlatformTable } from "@/components/platform-table";
+import { SetupGuide } from "@/components/setup-guide";
 import { InstallCard } from "@/components/install-card";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -295,6 +296,19 @@ export default function Home() {
               lead="Almost everything works identically across platforms; the differences are all about the boundary the host can provide."
             />
             <PlatformTable />
+          </div>
+        </Section>
+
+        {/* ---------------------------------------------------------- setup */}
+        <Section id="setup">
+          <div>
+            <SectionHead
+              className="mb-6"
+              eyebrow="setup"
+              title="From a cold machine to a verified sandbox"
+              lead="Pick your platform. Every path ends the same way — with doctor, because installing the binary is the easy half and whether this host can actually deliver the isolation is a property of the machine."
+            />
+            <SetupGuide />
           </div>
         </Section>
 

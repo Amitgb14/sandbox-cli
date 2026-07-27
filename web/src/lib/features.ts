@@ -33,6 +33,43 @@ export const GROUP_LABEL: Record<FeatureGroup, string> = {
 
 export const FEATURES: Feature[] = [
   {
+    title: "Two profiles, neither of them lax",
+    group: "boundary",
+    flag: "--profile",
+    body: "dev and prod are both secure — they differ in what they optimise, never in whether the boundary holds. The one difference of kind: a control the host cannot provide is a warning under dev, because a developer is watching, and a refusal under prod, because nobody is. A committed .sandbox.yaml may demand the stricter profile and may never ask for the weaker one.",
+    code: "sandbox-cli claude --profile prod",
+    state: "default",
+  },
+  {
+    title: "Check the host before you trust it",
+    group: "observability",
+    flag: "doctor",
+    body: "Asks whether this machine can actually deliver what the profile promises: docker reachable, a syscall filter really applied, a container able to program the egress firewall — tried, not queried, because rootless and userns-remapped daemons cannot — and which OCI runtimes are registered. Non-zero exit under prod, so a scheduler notices before an unattended run does.",
+    code: "sandbox-cli doctor --profile prod",
+    state: "default",
+  },
+  {
+    title: "The agent never holds a long-lived credential in prod",
+    group: "boundary",
+    body: "Persisted agent login is off under prod, and that is the whole answer rather than a mitigation: with it on, the agent's HOME holds an OAuth refresh token it can read. prod does not mount it, so there is nothing to steal and no TLS-intercepting proxy is needed to hide it. Prod authenticates with scoped, revocable tokens through the secrets broker.",
+    state: "default",
+  },
+  {
+    title: "Containers you left behind, found and reaped",
+    group: "workflow",
+    flag: "ps / clean",
+    body: "A kill -9 on sandbox-cli leaves the container running — the daemon owns it, not the client — with an agent still writing to your project. --detach keeps its container on purpose. ps lists both, clean reaps the exited ones, and touching a running one takes --force.",
+    code: "sandbox-cli ps",
+    state: "default",
+  },
+  {
+    title: "A run log that says what ran, under what policy",
+    group: "observability",
+    body: "One line per run in ~/.config/sandbox/audit/sessions.jsonl: image, workspace, branch, agent, command, network posture, the resolved egress allowlist, exit code and duration. Environment variables are recorded by name only — never a value, because a log is a file and the broker exists to keep secrets out of those.",
+    code: "~/.config/sandbox/audit/sessions.jsonl",
+    state: "default",
+  },
+  {
     title: "One host path, mounted on purpose",
     group: "boundary",
     body: "The project you chose is bind-mounted at /workspace and nothing else is host-connected. HOME, /etc and / inside the container are ephemeral and destroyed on exit.",
@@ -93,12 +130,12 @@ export const FEATURES: Feature[] = [
     state: "opt-out",
   },
   {
-    title: "Egress allowlist",
+    title: "Egress allowlist, on by default",
     group: "network",
     flag: "--allow",
-    body: "Switch outbound traffic to default-deny with an in-container firewall. DNS, established flows and a baseline of agent APIs and package registries stay open, so npm install and git keep working while arbitrary exfiltration from a prompt-injected agent does not.",
+    body: "Outbound traffic is default-deny, enforced by an in-container firewall and decided by hostname rather than by resolved address. DNS, established flows and a baseline of agent APIs and package registries stay open, so npm install and git keep working. Worth knowing the limit: the baseline includes github.com, a write endpoint — so this bounds and logs exfiltration rather than ending it. network.baseline: false with an explicit allow is the stronger setting, and is what prod uses.",
     code: "sandbox-cli claude --allow internal.registry.example.com",
-    state: "opt-in",
+    state: "default",
   },
   {
     title: "Fails closed",

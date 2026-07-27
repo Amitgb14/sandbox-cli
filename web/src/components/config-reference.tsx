@@ -194,6 +194,20 @@ export function ConfigReference({ className }: { className?: string }) {
                       >
                         unset&nbsp;→&nbsp;{k.fallback}
                       </Badge>
+                      {/* Where a key may be set is a security fact, not a
+                          preference: a committed .sandbox.yaml is untrusted
+                          input, so the keys that reach the host or widen what
+                          the container reaches are refused from it outright. */}
+                      {k.where ? (
+                        <Badge
+                          variant="outline"
+                          className="w-fit border-amber-500/40 text-[0.62rem] font-normal text-amber-600 dark:text-amber-400"
+                        >
+                          {k.where === "user"
+                            ? "your config only"
+                            : "project may tighten only"}
+                        </Badge>
+                      ) : null}
                     </div>
                     <p className="text-[0.82rem] leading-relaxed text-muted-foreground">
                       {k.body}

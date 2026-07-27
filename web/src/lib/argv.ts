@@ -16,6 +16,8 @@ export type OptionId =
   | "paste"
   | "git"
   | "secret"
+  | "prodProfile"
+  | "openNetwork"
   | "noPersistAuth"
   | "noHardening"
   | "root"
@@ -33,6 +35,22 @@ export type Option = {
 };
 
 export const OPTIONS: Option[] = [
+  {
+    id: "prodProfile",
+    flag: "--profile prod",
+    label: "Production profile",
+    effect:
+      "Baseline-off egress, no persisted login (so no long-lived credential is in the container), no host history mount, seccomp required rather than hoped for, and bounded memory/CPU/pids. A control the host cannot provide refuses the run instead of warning.",
+    direction: "tightens",
+  },
+  {
+    id: "openNetwork",
+    flag: "--network default",
+    label: "Decline the allowlist",
+    effect:
+      "Egress is default-deny out of the box; this turns that off for one run. The container reaches anything the host can, which is what every run did before the allowlist became the default.",
+    direction: "widens",
+  },
   {
     id: "allow",
     flag: "--allow",
@@ -149,6 +167,12 @@ export function buildArgv(agent: string, on: Set<OptionId>): ArgLine[] {
   const push = (text: string, kind: ArgLine["kind"], from?: OptionId, why?: string) =>
     lines.push({ text, kind, from, why });
 
+  // Egress is default-deny now, so the firewall appears unless the run declines
+  // it. It used to be gated on --allow, which read as "the allowlist is what you
+  // switch on" — the opposite of what happens today.
+  const egress = !on.has("openNetwork");
+  const prod = on.has("prodProfile");
+
   push("docker run --init --rm -it", "base", undefined, "Every container is --rm: nothing survives the run.");
   if (on.has("microvm"))
     push("--runtime kata-runtime", "base", "microvm", "A different OCI runtime — its own kernel.");
@@ -159,14 +183,22 @@ export function buildArgv(agent: string, on: Set<OptionId>): ArgLine[] {
   if (!on.has("noHardening")) {
     push("--security-opt no-new-privileges", "harden", undefined, "Blocks setuid privilege escalation.");
     push("--cap-drop ALL", "harden", undefined, "Every Linux capability dropped.");
-    if (on.has("allow"))
-      push("--cap-add NET_ADMIN", "harden", "allow", "Needed to program the firewall at startup, then the run drops back to the sandbox user.");
-    push("--pids-limit 1024", "harden", undefined, "Fork-bomb guard.");
-  } else if (on.has("allow")) {
-    push("--cap-add NET_ADMIN", "harden", "allow", "Needed to program the firewall at startup.");
+    if (egress)
+      push("--cap-add NET_ADMIN", "harden", on.has("allow") ? "allow" : undefined,
+        "Needed to program the firewall at startup, then the run drops back to the sandbox user.");
+    push(prod ? "--pids-limit 512" : "--pids-limit 1024", "harden", prod ? "prodProfile" : undefined, "Fork-bomb guard.");
+  } else if (egress) {
+    push("--cap-add NET_ADMIN", "harden", undefined, "Needed to program the firewall at startup.");
   }
 
-  if (on.has("limits")) {
+  if (prod)
+    push("--security-opt seccomp=…", "harden", "prodProfile",
+      "prod refuses to start unless the daemon actually applies a syscall filter. sandbox-cli doctor --profile prod tells you whether yours does.");
+
+  if (prod) {
+    push("--memory 2g", "base", "prodProfile");
+    push("--cpus 2", "base", "prodProfile");
+  } else if (on.has("limits")) {
     push("--memory 4g", "base", "limits");
     push("--cpus 2", "base", "limits");
   }
@@ -182,11 +214,11 @@ export function buildArgv(agent: string, on: Set<OptionId>): ArgLine[] {
     push("--mount type=bind,source=~/projects/app/.git,target=~/projects/app/.git", "mount", "worktree",
       "A worktree's .git is a pointer into the parent repo. Without this every git command fails — and it is read-write.");
 
-  if (!on.has("noPersistAuth"))
+  if (!on.has("noPersistAuth") && !prod)
     push(`--mount type=bind,source=~/.config/sandbox/agents/${agent},target=/sandbox/home`, "mount", undefined,
-      "The sandbox-owned agent home. Separate from your real ~/.claude.");
+      "The sandbox-owned agent home. Separate from your real ~/.claude — and it holds a long-lived OAuth refresh token the agent can read, which is why prod does not mount it at all.");
 
-  if (agent === "claude")
+  if (agent === "claude" && !prod)
     push("--mount type=bind,source=~/.claude/projects/-Users-dev-app,target=/sandbox/home/.claude/projects/-workspace", "mount", undefined,
       "Your host Claude history for this one project, so --resume works on both sides. --no-sync opts out.");
 
@@ -207,9 +239,16 @@ export function buildArgv(agent: string, on: Set<OptionId>): ArgLine[] {
   push("-w /workspace", "base");
   push("-e HOME=/sandbox/home", "env", undefined, "HOME is always the fake path — never your host home.");
 
-  if (on.has("allow"))
-    push("-e SANDBOX_EGRESS_ALLOW=api.anthropic.com,registry.npmjs.org,…", "env", "allow",
-      "Baseline registries and agent APIs, plus whatever you added.");
+  if (egress)
+    push(
+      prod
+        ? "-e SANDBOX_EGRESS_ALLOW=api.anthropic.com"
+        : "-e SANDBOX_EGRESS_ALLOW=api.anthropic.com,registry.npmjs.org,…",
+      "env",
+      prod ? "prodProfile" : on.has("allow") ? "allow" : undefined,
+      prod
+        ? "prod drops the baseline, so this list is the whole allowlist — github.com is a write endpoint and stays off it."
+        : "Baseline registries and agent APIs, plus whatever you added.");
   if (on.has("git")) {
     push("-e GIT_AUTHOR_NAME -e GIT_AUTHOR_EMAIL", "env", "git", "Forwarded by name — docker reads the host value at exec time.");
     push("-e GIT_COMMITTER_NAME -e GIT_COMMITTER_EMAIL", "env", "git");

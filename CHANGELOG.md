@@ -11,6 +11,8 @@ version is tagged.
 
 ## Unreleased
 
+## 0.0.1beta.7 — 2026-07-27
+
 ### Changed — breaking
 
 - **Egress is now bounded by default.** Runs previously had unrestricted network

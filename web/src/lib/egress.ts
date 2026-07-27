@@ -1,7 +1,8 @@
 /**
  * Traffic the egress visualiser sends at the firewall. Verdicts follow the real
- * rule from README.md: with `network: allowlist` (or --allow), outbound is
- * default-deny except DNS, established flows, a baseline of agent APIs and
+ * rule from README.md: egress is default-deny — the allowlist is now the
+ * default posture, not an opt-in — permitting DNS, established flows, a
+ * baseline of agent APIs and
  * package registries, and the domains you add.
  */
 

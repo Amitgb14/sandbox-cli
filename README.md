@@ -415,7 +415,9 @@ it looked rather than printing a zero.
 | `--memory` | Container memory limit, e.g. `2g` (default: unlimited) |
 | `--cpus` | Container CPU limit, e.g. `1.5` (default: unlimited) |
 | `--no-hardening` | Disable the default cap-drop / no-new-privileges / pids-limit (debug) |
-| `--allow` | Enable the egress allowlist and permit a domain, e.g. `--allow example.com` (repeatable; baseline registries always allowed) |
+| `--allow` | Permit a domain on the egress allowlist, e.g. `--allow example.com` (repeatable; the allowlist is on by default and the baseline registries are always permitted) |
+| `--network` | `allowlist` (default), `default` to run unrestricted for one run, or `none` to reach nothing |
+| `--profile` | `dev` (default, warns when a control is unavailable) or `prod` (refuses) |
 | `--cache` | Persist package-manager caches (npm/pip/cargo/go) in named volumes across runs |
 | `--secret` | Brokered credential `NAME=file:PATH \| cmd:COMMAND \| env:VAR`, resolved at run time and kept off the command line (repeatable) |
 | `--worktree` | Run in a git worktree for `BRANCH` (created if absent) — parallel per-branch agents |
@@ -854,6 +856,55 @@ read the file and trust it — load it deliberately with
 `sandbox-cli --config ./.sandbox.yaml`. Discovery stops at the repository root
 (or your home directory), so a stray config in a shared parent is never picked up.
 
+## Security profiles
+
+Two profiles, and neither is the lax one. Local development is where a
+prompt-injected agent has the most valuable thing in reach — your machine, your
+credentials, your other repositories — so no profile relaxes the host boundary.
+**Both are secure; they differ in what they optimise within a secure baseline.**
+
+The one difference of kind: a control this host cannot provide is a **warning**
+under `dev`, because you are there to read it, and a **refusal** under `prod`,
+because nobody is watching an unattended run and one that degraded quietly is
+worse than one that stopped.
+
+| | `dev` (default) | `prod` |
+|---|---|---|
+| Egress | allowlist + baseline | allowlist, **baseline off** |
+| Persisted agent login | on | **off** — no long-lived credential in the container |
+| Host history mount | on | off |
+| seccomp missing on the daemon | warns | **refuses** |
+| memory / cpus / pids | as configured | bounded |
+
+```sh
+sandbox-cli claude --profile prod
+```
+
+A project `.sandbox.yaml` may **demand** the stricter profile and may never ask
+for the weaker one — the same direction-of-travel rule the network keys follow.
+
+### Check the host first
+
+`prod` runs unattended, so ask whether the machine can deliver it *before* you
+schedule anything on it:
+
+```console
+$ sandbox-cli doctor --profile prod
+profile: prod
+
+  ok    docker daemon      reachable
+  FAIL  seccomp            no syscall filter is applied; the container gets the full syscall table
+  ok    egress firewall    a container here can program the nat, redirect, owner and conntrack rules
+  ok    isolation runtime  only the default runtime is registered: runc
+
+sandbox-cli: this host cannot satisfy the prod profile: seccomp
+```
+
+Non-zero exit under `prod`, so a scheduler notices. The firewall check is
+*tried*, not queried — rootless and userns-remapped daemons cannot program
+iptables, and that is a property of the daemon rather than something you can ask
+about. Under `dev` the same host passes with warnings.
+
 ## Security model
 
 > A full security audit of this codebase was carried out on 2026-07-26: 22 issues
@@ -894,7 +945,7 @@ read the file and trust it — load it deliberately with
   bombs. Tune these under `security:` in config; add memory/CPU limits with
   `--memory` / `--cpus`; or use `--no-hardening` to fall back to the unhardened
   behavior while debugging.
-- **Optional egress allowlist.** With `network: allowlist` (or `--allow DOMAIN`),
+- **Egress allowlist, on by default.** Outbound traffic is default-deny;
   outbound traffic is default-denied by an in-container firewall that permits only
   DNS, established flows, a baseline of agent APIs + package registries
   (`api.anthropic.com`, `registry.npmjs.org`, `pypi.org`, `github.com`, …), and any

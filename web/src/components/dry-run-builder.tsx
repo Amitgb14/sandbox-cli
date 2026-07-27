@@ -37,7 +37,7 @@ const LINE_COLOR: Record<string, string> = {
  */
 export function DryRunBuilder({ className }: { className?: string }) {
   const [agent, setAgent] = useState("claude");
-  const [on, setOn] = useState<Set<OptionId>>(new Set<OptionId>(["allow"]));
+  const [on, setOn] = useState<Set<OptionId>>(new Set<OptionId>());
 
   const lines = useMemo(() => buildArgv(agent, on), [agent, on]);
   const reach = hostReach(agent, on);
