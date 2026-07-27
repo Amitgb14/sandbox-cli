@@ -575,16 +575,22 @@ func (d *DockerCLI) Runtimes(ctx context.Context) ([]string, error) {
 type FirewallProbe int
 
 const (
-	// FirewallOK: the container programmed the rules the entrypoint needs.
-	FirewallOK FirewallProbe = iota
-	// FirewallBlocked: it could not. The reason says what failed.
-	FirewallBlocked
 	// FirewallUnknown: the question could not be asked — no image to test with,
-	// or the probe itself timed out. Distinct from Blocked on purpose: a caller
-	// that treats "could not tell" as "broken" turns a slow daemon into a hard
+	// or the probe timed out. Distinct from Blocked on purpose: a caller that
+	// treats "could not tell" as "broken" turns a slow daemon into a hard
 	// refusal. Returned as a value rather than sniffed out of the reason string,
 	// which used to be a substring match across a package boundary.
-	FirewallUnknown
+	//
+	// It is the zero value deliberately. An unset field, a zero-valued struct, or
+	// a future path that returns without deciding then reports "I do not know",
+	// which prod refuses — rather than "this host is fine", which it would accept.
+	// The rule for this subsystem is to fail closed, and an enum whose accidental
+	// value is the permissive one does the opposite.
+	FirewallUnknown FirewallProbe = iota
+	// FirewallOK: the container programmed the rules the entrypoint needs.
+	FirewallOK
+	// FirewallBlocked: it could not. The reason says what failed.
+	FirewallBlocked
 )
 
 // FirewallProgrammable reports whether a container on this daemon can actually
@@ -602,8 +608,9 @@ const (
 //
 // The probe *writes* rather than lists. `iptables -L` only proves the table can
 // be read, and a host that lists rules perfectly well can still lack the nat
-// table, xt_owner or conntrack — every one of which the real entrypoint needs
-// (`-t nat -N`, `-j REDIRECT`, `-m owner --uid-owner`, `-m conntrack`). Passing
+// table, xt_REDIRECT, xt_owner or conntrack — every one of which the real
+// entrypoint needs (`-t nat -N`, `-j REDIRECT`, `-m owner --uid-owner`,
+// `-m conntrack`), and each of which is a separate kernel module. Passing
 // a read-only probe and then failing the run is exactly the 3am failure this
 // command exists to prevent, so the probe programs the same kinds of rule the
 // entrypoint does. The container is --rm and its netns is its own, so the rules
@@ -613,6 +620,11 @@ func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image string) (Fir
 		return FirewallUnknown, "no base image to test with"
 	}
 	if err := exec.CommandContext(ctx, d.bin(), "image", "inspect", image).Run(); err != nil {
+		// The deadline can land here too, and reporting an unbuilt image for one
+		// that exists sends the user to build something they already have.
+		if ctx.Err() != nil {
+			return FirewallUnknown, "the probe timed out"
+		}
 		return FirewallUnknown, "the base image is not built yet"
 	}
 	// `--entrypoint sh` rather than an absolute path: where iptables lives is the
@@ -622,7 +634,8 @@ func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image string) (Fir
 	const probe = `set -e
 iptables -t nat -N SANDBOX_DOCTOR
 iptables -A OUTPUT -m owner --uid-owner 0 -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT`
+iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
+iptables -t nat -A SANDBOX_DOCTOR -p tcp --dport 443 -j REDIRECT --to-ports 3128`
 	out, err := exec.CommandContext(ctx, d.bin(), "run", "--rm",
 		"--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--user", "0",
 		"--network", "none", "--entrypoint", "sh", image, "-c", probe).CombinedOutput()

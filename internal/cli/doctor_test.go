@@ -180,6 +180,56 @@ func TestInitScaffoldsAConfigThatLoads(t *testing.T) {
 	}
 }
 
+// TestInitScaffoldsInstructionsThatWork covers what the test above cannot: the
+// scaffold as written has no uncommented keys, so loading it proves almost
+// nothing. What matters is whether following its instructions produces the
+// setting the user asked for.
+//
+// It did not. The parent `network:` key was commented out while its children
+// were left at the old indentation, so uncommenting the child alone yielded a
+// stray top-level key — and yaml.Unmarshal drops unknown keys without
+// complaining, so a user asking to *tighten* to `none` silently got the
+// allowlist instead. Silently discarding a request for more confinement is the
+// wrong direction for this file to fail in.
+func TestInitScaffoldsInstructionsThatWork(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// The structural property that makes the instruction followable: the child
+	// must be indented *under* the commented parent, so uncommenting both yields
+	// valid YAML. It previously sat at the parent's own indentation, which meant
+	// uncommenting produced a stray top-level `mode:` — and yaml.Unmarshal drops
+	// unknown keys silently, so a request to tighten to `none` became the
+	// allowlist with no error at all.
+	if !strings.Contains(scaffoldConfig, "\n# network:\n#   mode: none") {
+		t.Error("the commented `mode:` is not nested under the commented `network:`; " +
+			"uncommenting as instructed would produce a stray top-level key that is silently dropped")
+	}
+
+	// And following the instruction really produces the setting.
+	strict := uncomment(scaffoldConfig, "# network:", "#   mode: none")
+	if err := os.WriteFile(filepath.Join(dir, ".sandbox.yaml"), []byte(strict), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(dir, "")
+	if err != nil {
+		t.Fatalf("the scaffold's own stricter variant does not load: %v", err)
+	}
+	if cfg.Network.Mode != "none" {
+		t.Errorf("network.mode = %q, want none — the tightening the scaffold documents was dropped", cfg.Network.Mode)
+	}
+}
+
+// uncomment strips the leading "# " from the named lines, which is what a user
+// does by hand.
+func uncomment(doc string, lines ...string) string {
+	out := doc
+	for _, l := range lines {
+		out = strings.Replace(out, l, strings.Replace(l, "# ", "", 1), 1)
+	}
+	return out
+}
+
 // The runtime check is an "ok" that still has something to say under prod, and
 // its remedy used to be dropped because remedies only printed for non-OK checks
 // — so the actionable half never reached the screen.

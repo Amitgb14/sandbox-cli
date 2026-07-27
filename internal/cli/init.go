@@ -31,22 +31,25 @@ const scaffoldConfig = `# sandbox configuration (https://github.com/Amitgb14/san
 # flows, a baseline of agent APIs + package registries, and the domains below —
 # so npm/pip/git keep working while blocking arbitrary exfiltration. (Also
 # available ad hoc via --allow DOMAIN.)
+# Egress is already default-denied with the baseline, and a project file may only
+# ever *tighten* what is in force — so "mode: default" here is a weakening, is
+# refused, and would make every sandbox-cli command in this directory fail.
+#
+# To go stricter, uncomment BOTH lines (the parent and the child); a child on its
+# own is not a "network" setting at all, and an unknown top-level key is dropped
+# without complaint — so a request to tighten would be silently ignored.
 # network:
-  # mode is commented out on purpose. Egress is already default-denied with the
-  # baseline, and a project file may only ever *tighten* what is in force — so
-  # "mode: default" here is a weakening and is refused, which would make every
-  # sandbox-cli command in this directory fail. Uncomment only to go stricter:
-  #   mode: none        # reach nothing at all
-  # allow:
-  #   - internal.registry.example.com
-  # baseline: false   # drop the built-in domains so "allow" is the WHOLE list.
-  #                   # npm/pip/git then stop working unless you list their hosts,
-  #                   # and forgetting the agent's own API leaves it unable to
-  #                   # reach its model. Use when github.com must not be reachable
-  #                   # — it is a write endpoint, so a token in the container can
-  #                   # be pushed out through it. An empty list is refused, not
-  #                   # run open; say "mode: none" to reach nothing at all.
-  #                   # (baseline: true is refused here — it widens egress.)
+#   mode: none            # reach nothing at all
+#   allow:
+#     - internal.registry.example.com
+#   baseline: false     # drop the built-in domains so "allow" is the WHOLE list.
+#                       # npm/pip/git then stop working unless you list their
+#                       # hosts, and forgetting the agent's own API leaves it
+#                       # unable to reach its model. Use when github.com must not
+#                       # be reachable — it is a write endpoint, so a token in the
+#                       # container can be pushed out through it. An empty list is
+#                       # refused, not run open; "mode: none" reaches nothing.
+#                       # (baseline: true is refused here — it widens egress.)
 
 # Ports published to the host. A bare or HOST:CONTAINER spec binds 127.0.0.1;
 # write 0.0.0.0:3000:3000 to expose it to your network deliberately.

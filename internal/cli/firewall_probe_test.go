@@ -76,6 +76,15 @@ func TestFirewallProbeReportsATimeoutAsUnknown(t *testing.T) {
 	if probe == runtime.FirewallBlocked {
 		t.Errorf("a timed-out probe reported the host as blocked: %s", reason)
 	}
+	// Assert the reason, not just the classification. A 1ms deadline expires
+	// before the docker CLI has even started, so this returns through the *image
+	// inspect* call rather than the probe run — and that path used to report "the
+	// base image is not built yet" for an image that plainly exists, sending the
+	// user to build something they already had. A negative assertion passed
+	// either way and proved nothing.
+	if !strings.Contains(reason, "timed out") {
+		t.Errorf("a timed-out probe was explained as %q, which is not what happened", reason)
+	}
 }
 
 // Runtimes must at least report the runtime the daemon is using.
