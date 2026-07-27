@@ -365,3 +365,29 @@ func TestClassifiedFieldsAreActuallyEnforced(t *testing.T) {
 		}
 	}
 }
+
+// TestNetworkModeRefusalNamesWhatIsActuallyInForce pins the wording, because the
+// first version of this message was wrong twice.
+//
+// It told a "egress is now default-denied" story unconditionally, which is false
+// when a user's own config chose `none` and the project asks for `default` — the
+// same branch, a different cause. And it offered `--network default` as the fix,
+// which cannot work: this error is returned while the config is being loaded,
+// before any flag override is applied, so a user who followed it got the
+// identical message and had one more reason to distrust it.
+func TestNetworkModeRefusalNamesWhatIsActuallyInForce(t *testing.T) {
+	err := loadWithUserAndProject(t, "network:\n  mode: none\n", "network:\n  mode: default\n")
+	if err == nil {
+		t.Fatal("a project weakening none -> default was accepted")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `"none"`) {
+		t.Errorf("the refusal does not name the mode actually in force:\n%s", msg)
+	}
+	if strings.Contains(msg, "--network") {
+		t.Errorf("the refusal offers --network, which cannot rescue a load-time error:\n%s", msg)
+	}
+	if !strings.Contains(msg, "--config") {
+		t.Errorf("the refusal does not name a remedy that works:\n%s", msg)
+	}
+}

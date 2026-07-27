@@ -133,7 +133,24 @@ func restrictedProjectKeys(src, inherited Config) []string {
 	// "this code needs stricter confinement than your default" is exactly what a
 	// project file is for; the same key saying "actually, less" is the attack.
 	if src.Network.Mode != "" && networkStrength(src.Network.Mode) < networkStrength(inherited.Network.Mode) {
-		add("network.mode")
+		// The common way to reach this is not an attack but an upgrade: egress is
+		// now default-denied, so a `mode: default` that used to match the built-in
+		// default — and that `sandbox-cli init` itself once scaffolded — became a
+		// weakening overnight and fails every command in the directory. The key
+		// name alone would not explain that, so this one carries its own note.
+		//
+		// It names the mode actually in force rather than telling the
+		// default-denied story unconditionally: the same branch fires when a
+		// user's own config chose `none` and the project asks for `default`, and
+		// blaming a changed default there would be false.
+		//
+		// The remedies are the two that work. `--network` is deliberately not one
+		// of them: this error is returned while the config is being loaded, before
+		// any flag override is applied, so a user who followed that advice would
+		// get the identical message and rightly trust it less.
+		add("network.mode (\"" + src.Network.Mode + "\" is weaker than the \"" +
+			inheritedNetworkMode(inherited) + "\" already in force; remove the key, " +
+			"or load this file deliberately with --config)")
 	}
 	// baseline is the same shape one level down: turning the built-in egress
 	// domains off narrows, turning them back on widens.
@@ -160,6 +177,15 @@ func restrictedProjectKeys(src, inherited Config) []string {
 
 	sort.Strings(bad)
 	return bad
+}
+
+// inheritedNetworkMode spells the mode in force for a message, including the
+// empty value that means "the built-in default".
+func inheritedNetworkMode(inherited Config) string {
+	if inherited.Network.Mode == "" {
+		return "default"
+	}
+	return inherited.Network.Mode
 }
 
 // networkStrength ranks the network modes by how much they confine. Used only to

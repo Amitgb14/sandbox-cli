@@ -208,6 +208,15 @@ entrypoint with `NET_ADMIN` — predates the root-phase hardening and costs ~166
 `--no-hardening` contradict the allowlist, so the *default* yields to them with a warning while an
 explicitly requested allowlist still refuses.
 
+`sandbox-cli doctor` (`internal/cli/doctor.go`) is the profile's preflight: it asks whether the
+*host* can deliver what the profile promises — seccomp actually applied, a container able to
+program iptables (tried, not queried, since rootless and userns-remapped daemons cannot), which
+runtimes are registered — and applies the same asymmetry, warning under dev and failing with a
+non-zero exit under prod. A question that could not be *asked* counts as a failure under prod
+too: it does not get to assume the answer it would prefer. The runtime check reports rather than
+refuses, because prod does not yet *select* a stronger runtime and failing for something the tool
+does not do would be theatre.
+
 ### The trust boundary (read before touching config, mounts, or the entrypoint)
 
 An audit found the container→host boundary did not hold — 22 issues, all reproduced end to end,

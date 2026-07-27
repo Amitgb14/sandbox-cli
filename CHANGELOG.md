@@ -31,6 +31,15 @@ version is tagged.
   passed and no allowlist was explicitly requested, the default yields with a
   warning rather than erroring about a posture you did not choose.
 
+  **If you have a `.sandbox.yaml` with `network: mode: default`, remove that
+  key.** It used to match the built-in default and do nothing; now that egress is
+  default-denied it is a *weakening*, and a project config may not weaken — so
+  every sandbox-cli command in that directory fails, including read-only ones.
+  Older `sandbox-cli init` scaffolds contained exactly that line, so any project
+  you scaffolded is affected. The scaffold no longer writes it, and the refusal
+  now names the mode actually in force and how to proceed: remove the key, or
+  load the file deliberately with `--config ./.sandbox.yaml`.
+
   **On restricted daemons this may need `--network default`.** Enforcing an
   allowlist means the container starts as root with `NET_ADMIN` to program
   iptables, then drops privileges. Rootless Docker, userns-remapped daemons and
@@ -40,6 +49,14 @@ version is tagged.
   `--network default` there, or set `network.mode: default` in your config.
 
 ### Added
+
+- **`sandbox-cli doctor`** — checks whether *this host* can deliver what a
+  profile promises: docker reachable, a syscall filter actually applied, whether
+  a container here can really program the egress firewall, and which OCI runtimes
+  are registered. The verdict follows the profile: under dev an unsatisfiable
+  control is a warning, under prod it is a failure with a non-zero exit. Run
+  `sandbox-cli doctor --profile prod` on a machine *before* scheduling anything
+  on it — the alternative is learning from a failed job at 3am.
 
 - **Security profiles: `--profile dev` (default) and `--profile prod`.** Both are
   secure; they differ in what they optimise. dev warns when a control cannot be
