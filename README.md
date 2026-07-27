@@ -857,8 +857,10 @@ read the file and trust it — load it deliberately with
 ## Security model
 
 > A full security audit of this codebase was carried out on 2026-07-26: 22 issues
-> found, all reproduced end to end and all fixed. The findings, the threat model,
-> and the limits that are still open are recorded in
+> found, all reproduced end to end and all fixed. A same-day re-audit of those
+> fixes, and a later external review of the pull request, each found more; those
+> are fixed too. The findings, the threat model, the per-round counts and the
+> limits that are still open are recorded in
 > [`docs/security/audit-2026-07-26.md`](docs/security/audit-2026-07-26.md).
 
 

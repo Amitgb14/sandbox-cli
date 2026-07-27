@@ -10,6 +10,15 @@
 // but never what they were worth. The credential broker exists to keep secret
 // values off the argv and out of config files; writing them to a log would hand
 // that back.
+//
+// The guest command *is* recorded verbatim, and that is the known soft edge in
+// the rule above: an argv is the other classic place a token ends up
+// (`-- curl -H "Authorization: Bearer …"`). It is kept because a run log that
+// cannot say what ran answers nothing, and because redaction here would have to
+// guess — a heuristic that scans argv for secrets misses the ones it does not
+// recognise while implying it caught them all, which is worse than a documented
+// limitation. Treat sessions.jsonl as sensitive; it is written 0600 for this
+// reason as much as for the project names.
 package audit
 
 import (
@@ -36,13 +45,23 @@ type SessionMeta struct {
 
 	// Network is the resolved posture: "default", "none" or "allowlist".
 	Network string
-	// EgressEnforcedBy is "name" when the in-container proxy decided each
-	// connection by hostname, "address" when only the address-matching firewall
-	// applied, and "" when there was no allowlist. Recorded because
-	// `network: allowlist` alone does not say which regime a past run was under,
-	// and the two differ in exactly the way that matters: an address-matched run
-	// permitted every host sharing an allowlisted address.
-	EgressEnforcedBy string
+	// EgressEnforcementRequested is "name" when the run asked for the
+	// in-container proxy to decide each connection by hostname, "address" when
+	// only the address-matching firewall was asked for, and "" when there was no
+	// allowlist. Recorded because `network: allowlist` alone does not say which
+	// regime a past run was under, and the two differ in exactly the way that
+	// matters: an address-matched run permitted every host sharing an allowlisted
+	// address.
+	//
+	// Named for a *request*, not an outcome, because that is all the host can
+	// honestly know. The container takes the proxy path only if
+	// `sandbox-egress-proxy` is on its PATH and the `sandbox-proxy` user resolves;
+	// otherwise it falls through to address matching. With a user-supplied
+	// --image or `image:` those can be absent, and this field previously claimed
+	// "name" for a run that was address-matched. Observing it for real needs the
+	// entrypoint to report back what it did — worth doing, and until it exists an
+	// accurate name beats a confident wrong value.
+	EgressEnforcementRequested string
 	// EgressAllow is the resolved allowlist, when one was in force. Recording it
 	// is the point: the domains come from several merged layers, so "what was
 	// this run permitted to reach" is otherwise unanswerable afterwards.
@@ -80,7 +99,7 @@ type record struct {
 	Branch      string   `json:"branch,omitempty"`
 	Command     []string `json:"command,omitempty"`
 	Network     string   `json:"network,omitempty"`
-	EnforcedBy  string   `json:"egress_enforced_by,omitempty"`
+	EnforcedBy  string   `json:"egress_enforcement_requested,omitempty"`
 	EgressAllow []string `json:"egress_allow,omitempty"`
 	EnvNames    []string `json:"env_names,omitempty"`
 	ExitCode    int      `json:"exit_code"`
@@ -107,6 +126,12 @@ func NewJSONLSink(dir string) Sink {
 	return &JSONLSink{Path: filepath.Join(dir, "sessions.jsonl")}
 }
 
+// maxLogBytes is the size at which the log is rotated. One run is a few hundred
+// bytes, so this holds a long history while bounding a file nothing else ever
+// prunes — an append-only log with no ceiling is a slow leak in the user's home
+// directory.
+const maxLogBytes = 8 << 20
+
 // RecordSession appends meta as one JSON object.
 func (s *JSONLSink) RecordSession(meta SessionMeta) {
 	if s == nil || s.Path == "" {
@@ -115,6 +140,7 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
 		return
 	}
+	s.rotateIfLarge()
 	line, err := json.Marshal(record{
 		Time:        time.Now().Format(time.RFC3339),
 		Image:       meta.Image,
@@ -124,7 +150,7 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 		Branch:      meta.Branch,
 		Command:     meta.Command,
 		Network:     meta.Network,
-		EnforcedBy:  meta.EgressEnforcedBy,
+		EnforcedBy:  meta.EgressEnforcementRequested,
 		EgressAllow: meta.EgressAllow,
 		EnvNames:    meta.EnvNames,
 		ExitCode:    meta.ExitCode,
@@ -143,4 +169,18 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 	}
 	defer f.Close()
 	f.Write(append(line, '\n'))
+}
+
+// rotateIfLarge moves the log aside once it passes maxLogBytes, keeping exactly
+// one previous generation.
+//
+// Best-effort like everything else here: if the rename fails the run still
+// proceeds and the log simply keeps growing, which is the lesser of the two
+// failures.
+func (s *JSONLSink) rotateIfLarge() {
+	fi, err := os.Stat(s.Path)
+	if err != nil || fi.Size() < maxLogBytes {
+		return
+	}
+	_ = os.Rename(s.Path, s.Path+".1")
 }

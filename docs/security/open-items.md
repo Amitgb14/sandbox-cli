@@ -381,7 +381,7 @@ connection on, say, tcp/9999 shows the agent a refusal and tells the user nothin
 **Also added:** the run log now records *which regime* enforced a run —
 
 ```json
-{"network":"allowlist","egress_enforced_by":"name", …}
+{"network":"allowlist","egress_enforcement_requested":"name", …}
 ```
 
 `network: allowlist` alone could not distinguish an address-matched run (which
@@ -475,6 +475,24 @@ Options: document it; scope the HOME per project (losing "log in once"); or
 verify the bootstrap binary before exec. Decide rather than leave it implicit.
 
 </details>
+
+---
+
+## The egress proxy is unsupervised — known, and fail-closed
+
+The proxy is started with `&` and the entrypoint then `exec`s the guest, so
+nothing restarts it. If it dies mid-session every tcp/80 and tcp/443 connection
+fails closed, which is the right direction — but it fails *silently*, and the
+symptom (an allowlisted host suddenly unreachable) does not name its cause.
+
+Recorded rather than fixed because a supervisor in the entrypoint is a second
+long-lived root-adjacent process, and the failure it guards against has not been
+observed. If you see an allowlisted domain stop resolving part-way through a run
+under `--allow`, check whether `sandbox-egress-proxy` is still alive in the
+container before suspecting the allowlist.
+
+Note also that the guest becomes PID 1 and so inherits reaping duty for the
+proxy's process.
 
 ---
 

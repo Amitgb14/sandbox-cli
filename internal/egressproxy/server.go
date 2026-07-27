@@ -67,7 +67,14 @@ func (s *Server) handle(client net.Conn) {
 	defer client.Close()
 	_ = client.SetReadDeadline(time.Now().Add(handshakeTimeout))
 
-	br := bufio.NewReader(client)
+	// Sized to the ClientHello limit rather than bufio's 4 KiB default. peekRecord
+	// caps its peek at br.Size(), so a smaller buffer silently truncated any hello
+	// above ~4 KiB — the extensions vector then overran and the connection was
+	// refused as "no hostname". Large ALPN, session-ticket and PQ-hybrid key-share
+	// extensions do exceed that in the wild, and the symptom is the worst kind
+	// this component can produce: an allowlisted host appearing to fail for no
+	// stated reason, rather than a policy denial.
+	br := bufio.NewReaderSize(client, maxClientHello+512)
 	host, port, explicit, err := s.peek(br)
 	if err != nil {
 		// A connection that sent nothing at all is a probe or an abandoned dial —
@@ -200,6 +207,15 @@ func parseConnect(b []byte) (string, int, bool) {
 		if n, err := strconv.Atoi(p); err == nil {
 			port = n
 		}
+	}
+	// The redirect only ever sends tcp/80 and tcp/443 here, so an explicit
+	// CONNECT to anything else is a client reaching the proxy directly on
+	// loopback and asking it to open a port the redirect would never have
+	// produced. Not a widening — the address rules still permit an allowlisted
+	// IP on any port — but this component's remit is the two web ports, and a
+	// component should not quietly do more than it says.
+	if port != 80 && port != 443 {
+		return "", 0, false
 	}
 	h := normalizeHost(hostport)
 	if h == "" || !plausibleHostname(h) {

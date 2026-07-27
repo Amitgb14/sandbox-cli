@@ -86,6 +86,16 @@ func Args(dir string) []string {
 // unlike GIT_ATTR_SOURCE, which needs git 2.40 — and it is why Env() is now
 // defence in depth rather than the whole defence.
 //
+// Enumerated across every scope the agent can write, which means *not* passing
+// `--local`. That flag reads only `.git/config`, and git honours a second
+// agent-writable scope above it: with `extensions.worktreeConfig = true` in
+// `.git/config`, a linked worktree's `.git/worktrees/<name>/config.worktree`
+// takes precedence — and `--local` does not list it. Both files are inside the
+// common `.git`, which `--worktree` mode bind-mounts read-write, so the agent
+// writes all of it. Confirmed: a driver defined there, selected by the
+// `$GIT_DIR/info/attributes` this comment already concedes cannot be overridden,
+// ran a command on the host through a fully hardened `git add -A`.
+//
 // Deliberately not cached: the agent can add a driver between one git command and
 // the next, so the answer is only true for the invocation it is built for. One
 // `git config --list` per hardened command is a few milliseconds.
@@ -93,9 +103,9 @@ func neutralizedDrivers(dir string) []string {
 	if dir == "" {
 		return nil
 	}
-	cmd := exec.Command(gitBin, "config", "--local", "--name-only", "--list")
+	cmd := exec.Command(gitBin, "config", "--name-only", "--list")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = untrustedScopeEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		return nil // no local config to read: nothing defined, nothing to blank
@@ -116,6 +126,21 @@ func neutralizedDrivers(dir string) []string {
 		args = append(args, "-c", key+"=")
 	}
 	return args
+}
+
+// untrustedScopeEnv reads config from the scopes the agent can write — local and
+// worktree — while excluding the ones it cannot.
+//
+// Dropping `--local` is what picks up worktree scope; nulling global and system
+// is what keeps that from also sweeping in the user's own machine-wide settings.
+// The distinction is deliberate rather than incidental: a global `filter.lfs.*`
+// is a legitimate setup that lives outside any repository, so blanking it would
+// change what a snapshot contains for a git-lfs user. The agent cannot write
+// there, so it is not the threat this enumerates against.
+func untrustedScopeEnv() []string {
+	return append(os.Environ(),
+		"LC_ALL=C", "GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
 }
 
 // runsACommand reports whether a config key's value is executed by git.
@@ -200,6 +225,10 @@ var dangerousConfigKeys = map[string]bool{
 	"credential.helper":         true,
 	"core.gitproxy":             true,
 	"core.attributesfile":       true,
+	// Not itself a command, but the switch that brings a whole second
+	// agent-writable config scope into play — turning it on is the enabling step
+	// for hiding a filter driver where `--local` cannot see it.
+	"extensions.worktreeconfig": true,
 }
 
 // ConfigChange is one key that differs between two snapshots.
@@ -210,14 +239,18 @@ type ConfigChange struct {
 	Dangerous bool   // git executes this value
 }
 
-// SnapshotConfig records a repository's local git config.
+// SnapshotConfig records the git config of the scopes the agent can write.
 //
 // Reading config executes nothing, so this is safe to run against a repository
 // the agent controls — unlike almost everything else git does there.
+//
+// Covers worktree scope as well as local, for the reason neutralizedDrivers
+// does: a change reported to the user must not miss the scope that outranks the
+// one being reported.
 func SnapshotConfig(dir string) map[string]string {
-	cmd := exec.Command(gitBin, "config", "--local", "--list", "-z")
+	cmd := exec.Command(gitBin, "config", "--list", "-z")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = untrustedScopeEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -231,6 +264,13 @@ func SnapshotConfig(dir string) map[string]string {
 		// value containing either cannot forge an entry.
 		key, value, _ := strings.Cut(entry, "\n")
 		m[strings.ToLower(strings.TrimSpace(key))] = value
+	}
+	// Nothing read means nothing to report, and the caller distinguishes "no
+	// config" from "an empty one" by nil. Without `--local`, git exits 0 outside a
+	// repository — it simply has no scopes left to read once global and system are
+	// nulled — where it used to exit non-zero and return early.
+	if len(m) == 0 {
+		return nil
 	}
 	return m
 }

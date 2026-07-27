@@ -40,6 +40,48 @@ version is tagged.
 
 ### Fixed
 
+- **A filter driver hidden in worktree-scoped git config could run a command on
+  the host.** `githard` enumerates the repository's filter and diff drivers and
+  blanks them, which is what stops a `.gitattributes` from selecting something
+  git will execute. It read them with `git config --local`, which lists only
+  `.git/config` — but git honours a scope above that one: with
+  `extensions.worktreeConfig` set, a linked worktree's `config.worktree` wins,
+  and `--local` cannot see it. Both files are inside the `.git` that
+  `--worktree` mode mounts read-write. Drivers are now read from every scope the
+  agent can write; your *global* config is deliberately left alone, so a
+  legitimate `git-lfs` setup keeps working.
+
+- **The shared docker network was accepted on name alone.** It exists to turn
+  inter-container communication off, but any pre-existing network of the right
+  name passed — including one created by hand or by a compose file, with that
+  communication left on. The property is now verified, and a network that does
+  not have it is refused with the command to remove it.
+
+- **Large TLS handshakes to an allowlisted host could fail.** The egress proxy
+  read hellos into a 4 KiB buffer while allowing 16 KiB, so a connection with
+  large ALPN or post-quantum key-share extensions was truncated and refused as
+  if it had named no host at all.
+
+- **A published port could stop answering under `--allow` on daemons configured
+  with `userland-proxy: false`.** The firewall rule assumed connections arrive
+  re-originated from the bridge gateway. It now states the actual rule —
+  everything may reach a published port except the container's own bridge peers
+  — which holds under either daemon setting.
+
+### Changed
+
+- The run log field `egress_enforced_by` is now `egress_enforcement_requested`.
+  It records what the run asked for, which is all the host can know: the
+  container falls back to address matching if a custom image lacks the proxy, and
+  the old name asserted an outcome that was sometimes wrong.
+
+- `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` and
+  `DOCKER_CONTEXT` join the reserved environment names. They never reach the
+  container — they steer the docker client itself — so they cannot be forwarded
+  as secrets.
+
+- The run log rotates at 8 MB, keeping one previous generation.
+
 - **`context list` could not find sessions from sandboxed runs** ([#15](https://github.com/Amitgb14/sandbox-cli/issues/15)). Claude
   Code names its transcript directory after the working directory, and inside the
   sandbox that is always `/workspace`. The wrapper already redirected those writes

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -107,4 +108,103 @@ func TestHooksDirIsDetected(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".git", "hooks")); err != nil {
 		t.Skip("this git does not create .git/hooks")
 	}
+}
+
+// TestArgsNeutralisesWorktreeScopedDrivers pins the scope the enumeration used
+// to miss.
+//
+// neutralizedDrivers is the load-bearing half of this package: the attribute
+// side is unbounded, so the defence is to read every driver out of the config
+// and blank it with -c. It read with `git config --local`, which lists only
+// .git/config — while git honours a scope above it. Set
+// extensions.worktreeConfig in .git/config and a linked worktree's
+// .git/worktrees/<name>/config.worktree wins, invisible to --local.
+//
+// Both files are inside the common .git, which --worktree mode bind-mounts
+// read-write, so the agent writes all of it. Selected by the
+// $GIT_DIR/info/attributes that has no -c override, a driver hidden there ran a
+// command on the host through a fully hardened `git add -A`.
+func TestArgsNeutralisesWorktreeScopedDrivers(t *testing.T) {
+	repo := initRepo(t)
+	writeAndCommit(t, repo)
+
+	linked := filepath.Join(t.TempDir(), "wt")
+	run(t, repo, "worktree", "add", "-q", "-b", "hostile", linked)
+	run(t, repo, "config", "extensions.worktreeConfig", "true")
+	run(t, linked, "config", "--worktree", "filter.pwn.clean", "sh -c 'echo pwned'")
+
+	// Precondition: the driver really is hidden from the old enumeration. Without
+	// this, a passing test could just mean the trap was never armed.
+	out := output(t, linked, "config", "--local", "--name-only", "--list")
+	if strings.Contains(out, "filter.pwn.clean") {
+		t.Fatal("precondition failed: --local sees the worktree-scoped driver, so this proves nothing")
+	}
+
+	got := strings.Join(Args(linked), " ")
+	if !strings.Contains(got, "filter.pwn.clean=") {
+		t.Errorf("Args() does not blank the worktree-scoped driver git would run.\ngot: %s", got)
+	}
+}
+
+// The other half of the same decision: a driver in the user's *global* config is
+// left alone. The agent cannot write there, and blanking it would break a
+// legitimate git-lfs setup by silently changing what a snapshot contains.
+func TestArgsLeavesTheUsersGlobalDriversAlone(t *testing.T) {
+	repo := initRepo(t)
+	home := t.TempDir()
+	global := filepath.Join(home, ".gitconfig")
+	if err := os.WriteFile(global, []byte("[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+
+	if got := strings.Join(Args(repo), " "); strings.Contains(got, "filter.lfs.clean=") {
+		t.Errorf("Args() blanked a global driver the agent cannot write.\ngot: %s", got)
+	}
+}
+
+// SnapshotConfig has the same reach, so a config change the user is told about
+// cannot be hidden in the scope that outranks the one being reported.
+func TestSnapshotConfigSeesWorktreeScope(t *testing.T) {
+	repo := initRepo(t)
+	writeAndCommit(t, repo)
+	linked := filepath.Join(t.TempDir(), "wt")
+	run(t, repo, "worktree", "add", "-q", "-b", "hostile2", linked)
+	run(t, repo, "config", "extensions.worktreeConfig", "true")
+	run(t, linked, "config", "--worktree", "core.fsmonitor", "sh -c 'echo pwned'")
+
+	if _, ok := SnapshotConfig(linked)["core.fsmonitor"]; !ok {
+		t.Error("SnapshotConfig cannot see worktree-scoped config, so a change there is never reported")
+	}
+	// And the key that enables the whole scope is reported as dangerous.
+	if !dangerousConfigKeys["extensions.worktreeconfig"] {
+		t.Error("extensions.worktreeConfig is the enabling step and must be flagged")
+	}
+}
+
+func writeAndCommit(t *testing.T, repo string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, repo, "add", "-A")
+	run(t, repo, "commit", "-qm", "init")
+}
+
+func run(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+}
+
+func output(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, _ := cmd.Output()
+	return string(out)
 }

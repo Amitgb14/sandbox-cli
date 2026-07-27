@@ -175,7 +175,9 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
 ### The trust boundary (read before touching config, mounts, or the entrypoint)
 
 An audit found the container→host boundary did not hold — 22 issues, all reproduced end to end,
-from host code execution to mounting `/` read-write. All of them are fixed.
+from host code execution to mounting `/` read-write. A same-day re-audit of those fixes, and a
+later external review of the pull request, each found more. All are fixed;
+`docs/security/audit-2026-07-26.md` is the ledger and carries the per-round counts.
 `docs/security/audit-2026-07-26.md` is the tracked record (findings, threat model, what was done)
 and `docs/security/open-items.md` is the live backlog of what is still open (the allowlist matches resolved **IPs** rather than names, and the agent
 still holds raw credentials — both need the egress proxy). `docs/proposals/security-hardening.md`
@@ -208,11 +210,21 @@ has the phased design notes, and is gitignored. The rules that follow from it:
   additionally requires the target to look like a real git directory (`HEAD` +
   `objects/`), because its fallback takes *two directories up* from that string and
   used to hand back `/` for `gitdir: $HOME`.
-- **`SANDBOX_RUN_AS` and `SANDBOX_EGRESS_ALLOW` are instructions, not settings**
-  (`config.IsReservedEnv`). They cannot be set or forwarded from outside. The list is
-  exact names, not a `SANDBOX_*` prefix, because `SANDBOX_STATUSLINE_*` is a documented
-  user knob read *after* the drop — check which side of the drop a new variable lands on
-  before adding it.
+- **Some environment variables are instructions, not settings** (`config.IsReservedEnv`).
+  They cannot be set or forwarded from outside. Three groups, and a new variable should be
+  matched against the reason for whichever it resembles:
+  - *sandbox-cli's own control variables* — `SANDBOX_RUN_AS`, `SANDBOX_EGRESS_ALLOW`,
+    `SANDBOX_INGRESS_PORTS`, `SANDBOX_PROXY_PORT`. The list is exact names, not a
+    `SANDBOX_*` prefix, because `SANDBOX_STATUSLINE_*` is a documented user knob read
+    *after* the privilege drop — check which side of the drop a new variable lands on
+    before adding it.
+  - *interpreter and loader controls* — `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_AUDIT`,
+    `LD_LIBRARY_PATH`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `IFS`, `GLOBIGNORE`. Not ours, but
+    they decide what the container's root phase *executes* before its first line runs.
+  - *docker client controls* — `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`,
+    `DOCKER_TLS_VERIFY`, `DOCKER_CONTEXT`. These never reach the container; they steer the
+    docker binary sandbox-cli runs, which is the one child that still receives forwarded
+    values (`runtime.childEnv`).
 
 - **Host-side `git` runs inside a repository the agent controls**, so every git
   invocation sandbox-cli makes on its own behalf goes through `internal/githard`

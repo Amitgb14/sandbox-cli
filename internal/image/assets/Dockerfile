@@ -430,7 +430,12 @@ if [ -n "${SANDBOX_PROXY_PORT:-}" ] && command -v sandbox-egress-proxy >/dev/nul
     iptables -t nat -A SANDBOX_EGRESS -m owner --uid-owner "$proxy_uid" -j RETURN
     iptables -t nat -A SANDBOX_EGRESS -p tcp --dport 80 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
     iptables -t nat -A SANDBOX_EGRESS -p tcp --dport 443 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
-    iptables -t nat -A OUTPUT -j SANDBOX_EGRESS
+    # -C then -A: the chain above is created-or-flushed, but the jump into it
+    # lives in OUTPUT and would stack a duplicate every time this ran. One run
+    # per container makes that harmless today, which is exactly why it would go
+    # unnoticed the first time the setup is re-run.
+    iptables -t nat -C OUTPUT -j SANDBOX_EGRESS 2>/dev/null \
+      || iptables -t nat -A OUTPUT -j SANDBOX_EGRESS
     # Loopback must be reachable so the redirect has somewhere to land, and the
     # proxy itself is allowed out — it is the thing enforcing the allowlist.
     iptables -A OUTPUT -m owner --uid-owner "$proxy_uid" -j ACCEPT
@@ -494,17 +499,34 @@ iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # || true: under set -e a failing substitution would abort the whole setup, and
 # a missing default route is not a reason to refuse to run.
 gw="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}' || true)"
+# The container's own bridge subnet — the address range its peers live in, and
+# the only range that must not reach a published port.
+#
+# Anchoring on the gateway alone assumed docker's userland proxy, which
+# re-originates the connection from the gateway address. With
+# "userland-proxy": false (common on Linux servers) it is pure DNAT: the source
+# stays the original client, which is 127.0.0.1 for the loopback-bound publish
+# that is sandbox-cli's default, and an arbitrary external address otherwise.
+# Neither matches "$gw", so the published port would silently stop answering
+# under --allow — the exact regression these rules were written to avoid.
+#
+# So the property is expressed directly instead of by proxy: everything may
+# reach a published port except this container's bridge peers.
+subnet="$(ip route 2>/dev/null | awk '/proto kernel/ && /src/ {print $1; exit}' || true)"
 for p in $(printf '%s' "$ingress" | tr ',' ' '); do
   [ -z "$p" ] && continue
   proto="${p%%:*}"
   port="$(printf '%s' "${p#*:}" | tr '-' ':')"
-  if [ -n "$gw" ]; then
-    iptables -A INPUT -s "$gw" -p "$proto" --dport "$port" -j ACCEPT
-  else
-    # No default route to anchor to: publishing was asked for, so the port stays
-    # open rather than silently not answering.
-    iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
+  # The gateway is inside the subnet, so it is admitted before peers are denied.
+  [ -n "$gw" ] && iptables -A INPUT -s "$gw" -p "$proto" --dport "$port" -j ACCEPT
+  # Pure DNAT of a loopback-bound publish arrives on eth0 with a 127/8 source
+  # (route_localnet), so the `-i lo` rule above does not cover it.
+  iptables -A INPUT -s 127.0.0.0/8 -p "$proto" --dport "$port" -j ACCEPT
+  if [ -n "$subnet" ]; then
+    iptables -A INPUT -s "$subnet" -p "$proto" --dport "$port" -j DROP
   fi
+  # Everyone else: publishing is an explicit request for ingress.
+  iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
 done
 
 iptables -A INPUT -m limit --limit 12/min --limit-burst 20 \

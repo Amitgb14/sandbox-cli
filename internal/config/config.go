@@ -175,11 +175,26 @@ var reservedEnvNames = map[string]bool{
 	"PS4":             true,
 	"IFS":             true,
 	"GLOBIGNORE":      true,
+
+	// Docker *client* variables. These never reach the container — they steer the
+	// docker binary sandbox-cli runs, which is the one child that still receives
+	// forwarded values (see runtime.childEnv). DOCKER_HOST points it at another
+	// daemon entirely; DOCKER_CONFIG names a directory whose config.json can set
+	// credential helpers; the TLS pair decides who it trusts. Reaching them takes
+	// a deliberate `--secret DOCKER_HOST=...` — project configs cannot declare
+	// secrets — so this is closing a narrow door, but the list is exactly the
+	// place to close it.
+	"DOCKER_HOST":       true,
+	"DOCKER_CONFIG":     true,
+	"DOCKER_CERT_PATH":  true,
+	"DOCKER_TLS_VERIFY": true,
+	"DOCKER_CONTEXT":    true,
 }
 
 const reservedEnvReason = "this variable decides what the container's root-phase startup does or " +
-	"executes — which user it drops to, what egress it permits, or which file its interpreter " +
-	"sources before the first line runs — and cannot be set or forwarded from outside"
+	"executes — which user it drops to, what egress it permits, which file its interpreter " +
+	"sources before the first line runs, or which docker daemon the run is sent to — and cannot " +
+	"be set or forwarded from outside"
 
 // ValidEnvName reports whether name is usable as an environment variable name.
 //

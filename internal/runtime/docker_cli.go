@@ -360,7 +360,15 @@ func exitCodeOf(err error) (int, error) {
 // sandbox-cli itself. That mattered: secrets used to be placed in our own
 // environment, so a secret named PATH or DOCKER_HOST redirected the docker and
 // git subprocesses spawned after the injection — and the preflight ran before
-// it, so nothing noticed. Scoping them to the child removes the class.
+// it, so nothing noticed. Scoping them to the child narrows the class sharply:
+// git and every later subprocess of ours are out of reach.
+//
+// It does not remove it, and the comment used to overstate this. The child is
+// docker, so a value named DOCKER_HOST, DOCKER_CONFIG, DOCKER_CERT_PATH,
+// DOCKER_TLS_VERIFY or DOCKER_CONTEXT still steers the docker client itself —
+// at another daemon, or at a config.json naming credential helpers. Those names
+// are refused by config.IsReservedEnv for that reason; this scoping is what
+// makes the rest of the environment safe to forward.
 //
 // Returns nil when there is nothing extra, which makes exec inherit our
 // environment exactly as before.
@@ -390,16 +398,30 @@ func childEnv(spec RunSpec) []string {
 // other at all, while DNS, egress and published ports are unaffected.
 const SandboxNetwork = "sandbox-cli"
 
-// EnsureNetwork creates the shared sandbox network if it is not already there.
+// EnsureNetwork creates the shared sandbox network if it is not already there,
+// and verifies that an existing one actually has the property it exists for.
 //
 // A failure is returned rather than swallowed: falling back to the default bridge
 // would silently put the container somewhere every other container can reach,
 // which is the condition this exists to prevent.
+//
+// The same argument applies to a network that merely *looks* right. This used to
+// accept any network of the name, so one created by hand, by an older build, or
+// by a compose file passed and was used as-is with inter-container communication
+// left on — a silent fail-open in the exact layer being added. The point of the
+// network is `enable_icc=false`; existence is not the property, so existence is
+// not what is checked.
 func (d *DockerCLI) EnsureNetwork(ctx context.Context, name string) error {
 	if name == "" {
 		return nil
 	}
-	if err := exec.CommandContext(ctx, d.bin(), "network", "inspect", name).Run(); err == nil {
+	if icc, err := d.networkICC(ctx, name); err == nil {
+		if icc != "false" {
+			return fmt.Errorf("the docker network %q exists but has inter-container communication enabled "+
+				"(com.docker.network.bridge.enable_icc=%s), so another container could reach this sandbox; "+
+				"remove it with `docker network rm %s` and it will be recreated correctly",
+				name, iccValueForMessage(icc), name)
+		}
 		return nil
 	}
 	out, err := exec.CommandContext(ctx, d.bin(), "network", "create",
@@ -413,6 +435,29 @@ func (d *DockerCLI) EnsureNetwork(ctx context.Context, name string) error {
 		return fmt.Errorf("creating the sandbox network %q: %s: %w", name, strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// networkICC reports the enable_icc option of an existing network. The error is
+// how "no such network" is distinguished from "exists but unreadable" — only the
+// first is a reason to create one.
+func (d *DockerCLI) networkICC(ctx context.Context, name string) (string, error) {
+	out, err := exec.CommandContext(ctx, d.bin(), "network", "inspect", name,
+		"--format", `{{index .Options "com.docker.network.bridge.enable_icc"}}`).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// iccValueForMessage renders the option for a human. Docker omits the key
+// entirely when it was never set, which prints as an empty string and reads as
+// though nothing is wrong — but an unset enable_icc *is* ICC on, which is the
+// whole problem.
+func iccValueForMessage(v string) string {
+	if v == "" || v == "<no value>" {
+		return "unset, which means enabled"
+	}
+	return v
 }
 
 // Seccomp is the syscall filter docker normally applies. sandbox-cli does not

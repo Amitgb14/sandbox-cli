@@ -415,7 +415,11 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		// NET_ADMIN/NET_RAW to program iptables; SETUID/SETGID so the entrypoint's
 		// `setpriv` can drop root -> the intended user before the agent runs
 		// (cap-drop ALL from hardening would otherwise block setresuid/setresgid).
-		capAdd = append(capAdd, "NET_ADMIN", "NET_RAW", "SETUID", "SETGID")
+		// Copied first: append onto a slice with spare capacity would write
+		// through into cfg.Security.CapAdd's backing array, mutating the caller's
+		// config. BuildArgs is documented as pure and BuildSpec is held to the
+		// same standard.
+		capAdd = append(append([]string(nil), capAdd...), "NET_ADMIN", "NET_RAW", "SETUID", "SETGID")
 		dockerUser = "root"
 		entrypoint = "/usr/local/bin/sandbox-firewall"
 		network = runtime.SandboxNetwork // allowlist needs networking, not "none"
