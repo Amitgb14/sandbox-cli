@@ -11,6 +11,44 @@ version is tagged.
 
 ## Unreleased
 
+### Changed — breaking
+
+- **Egress is now bounded by default.** Runs previously had unrestricted network
+  access; they now use the allowlist with the built-in baseline, so `npm`, `pip`
+  and `git` keep working while everything else is denied by name and logged.
+  Pass `--network default` to decline it for a run, or `--allow DOMAIN` to extend
+  it.
+
+  The reason is concrete: with `--persist-auth` (on by default) the agent's HOME
+  holds a long-lived OAuth refresh token it can read, and unbounded egress meant
+  nothing stopped it being posted anywhere. Be clear on what this buys — the
+  baseline contains `github.com`, a write endpoint, so this converts silent
+  exfiltration to any host into exfiltration through a small set of named,
+  logged hosts. Use `network.baseline: false` with an explicit `allow` when you
+  need the stronger property.
+
+  `--user root` and `--no-hardening` contradict the allowlist, so when either is
+  passed and no allowlist was explicitly requested, the default yields with a
+  warning rather than erroring about a posture you did not choose.
+
+### Added
+
+- **Security profiles: `--profile dev` (default) and `--profile prod`.** Both are
+  secure; they differ in what they optimise. dev warns when a control cannot be
+  satisfied, because someone is watching. prod refuses, because nobody is.
+
+  prod sets: allowlist egress with the baseline off, no persisted agent auth (so
+  no long-lived credential is ever in the container), no host history mount,
+  seccomp required rather than hoped for, and bounded memory/CPU/pids. A
+  configuration that no longer delivers those is refused at load rather than run
+  weaker than asked.
+
+  A project `.sandbox.yaml` may *raise* the profile and never lower it — the same
+  direction-of-travel rule the network keys follow.
+
+- **`--network allowlist|default|none`** and the config keys `profile`,
+  `persist_auth` and `sync`.
+
 ### Added
 
 - **`sandbox-cli ps` and `sandbox-cli clean`.** Two things left containers behind

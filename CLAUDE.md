@@ -180,6 +180,34 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   way: they used to travel through sandbox-cli's own environment, where a secret named `PATH`
   redirected the subprocesses spawned next.
 
+### Security profiles
+
+`--profile dev` (default) and `--profile prod` (`internal/config/profile.go`). The split is
+deliberately **not** lax/strict: local development is where a prompt-injected agent has the most
+valuable thing in reach, so no profile relaxes the host boundary. Both are secure; they differ in
+what they optimise within a secure baseline, and in one thing of kind rather than degree — dev
+**warns** when a control cannot be satisfied, prod **refuses**, because nobody is watching a
+production run and one that degraded quietly is the failure the profile exists to prevent.
+
+Three rules hold it together. A profile is the **base** config layer, under the user's own config
+rather than over it, so a trusted config can still tune a setup — a profile that cannot be adjusted
+gets abandoned. What stops that hollowing prod out is `ValidateProfile`, which asserts the settings
+that *define* prod against the configuration that will actually run. And selection is the
+security-critical part: a project `.sandbox.yaml` may **raise** the profile and never lower it,
+because a repository that could select the weaker one would drop the run out of prod and leave
+every other refusal in `trust.go` decorative.
+
+prod turning persisted auth off is the substantive answer to the credential problem, and worth
+knowing why: the default auth path is not an API key but an **OAuth refresh token** in the
+persisted HOME, readable by the agent. prod does not mount it, so there is nothing to steal — no
+TLS-terminating proxy required. Design: `docs/proposals/security-profiles.md` (gitignored).
+
+Dev's egress default is `allowlist` with the baseline on, changed from unrestricted for the same
+credential reason. The recorded objection — that allowlist mode puts every run through the root
+entrypoint with `NET_ADMIN` — predates the root-phase hardening and costs ~166ms. `--user root` and
+`--no-hardening` contradict the allowlist, so the *default* yields to them with a warning while an
+explicitly requested allowlist still refuses.
+
 ### The trust boundary (read before touching config, mounts, or the entrypoint)
 
 An audit found the container→host boundary did not hold — 22 issues, all reproduced end to end,

@@ -440,7 +440,27 @@ func Default() Config {
 		Home:     "/sandbox/home",
 		Hostname: "sandbox",
 		Env:      map[string]string{},
-		Network:  NetworkSpec{Mode: "default"},
+		// allowlist, not "default". Dev's egress is bounded because dev is where
+		// the developer's own long-lived credential is in reach: the persisted
+		// agent HOME holds an OAuth refresh token the agent can read, and with
+		// unbounded egress nothing stopped it being posted anywhere.
+		//
+		// The baseline stays on, so npm, pip and git keep working — that is what
+		// the baseline is for, and a control that breaks a normal workflow gets
+		// switched off rather than obeyed. Be clear about what this does and does
+		// not buy: the baseline contains github.com, a write endpoint, so this
+		// converts silent exfiltration to any host into exfiltration through a
+		// small set of named, logged, auditable hosts. A real reduction in reach
+		// and a large gain in attributability; not containment of a capable
+		// attacker. Only `baseline: false` with an explicit allow is that, which
+		// is why it is prod's setting and not dev's.
+		//
+		// The recorded objection was that allowlist mode puts every run through
+		// the root entrypoint with NET_ADMIN. That was written before the root
+		// phase was hardened — BASH_ENV and friends reserved, PATH pinned, the
+		// agent HOME off the image PATH — and it costs ~166ms of startup. Still a
+		// privileged phase, no longer the larger risk.
+		Network: NetworkSpec{Mode: "allowlist"},
 		// Secure-by-default hardening. Dropping all capabilities and forbidding
 		// privilege escalation is essentially free for the non-root `sandbox`
 		// user and closes the obvious escape routes; the pids cap blunts fork

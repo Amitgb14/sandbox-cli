@@ -376,15 +376,16 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		return runtime.RunSpec{}, fmt.Errorf(
 			"--user root cannot be combined with the egress allowlist: the firewall drops privileges "+
 				"after programming itself, and a guest left as root keeps NET_ADMIN and can flush the "+
-				"rules. Drop one of the two (the allowlist already runs the container as root for setup, "+
-				"then drops to %q)", defaultRunAsUser)
+				"rules. Drop one of the two, or pass --network default to run this one without the "+
+				"allowlist (which already runs the container as root for setup, then drops to %q)",
+			defaultRunAsUser)
 	}
 	if allowlist && opts.NoHardening {
 		return runtime.RunSpec{}, fmt.Errorf(
 			"--no-hardening cannot be combined with the egress allowlist: the firewall starts the " +
 				"container as root with NET_ADMIN and drops privileges, and the hardening you are " +
 				"disabling is what stops the guest regaining them — the combination is wider than " +
-				"either alone. Drop one of the two")
+				"either alone. Drop one of the two, or pass --network default to run this one without the allowlist")
 	}
 
 	// An allowlist that resolved to nothing must refuse, not run. The firewall is
