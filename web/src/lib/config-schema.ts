@@ -42,103 +42,100 @@ export type ConfigSample = {
 export const CONFIG_SAMPLES: ConfigSample[] = [
   {
     id: "starter",
-    label: "Starter",
-    hint: "sandbox-cli init",
-    yaml: `# .sandbox.yaml — commit this with the project
-# Only /workspace is mounted; HOME is fake and dies with the container.
+    label: "Project file",
+    hint: ".sandbox.yaml",
+    yaml: `# .sandbox.yaml — commit this with the project.
+# It travels with the repo, so it is treated as UNTRUSTED: it may describe
+# the project, and tighten the sandbox, but never loosen it.
+
+# hostname: sandbox     # cosmetic
+
+# cache:
+#   enabled: true       # npm/pip/cargo/go caches survive the --rm container
+
+# network:
+#   mode: none          # tighter than the default allowlist. "default" is
+#                       # REFUSED here — a project may not widen egress.
+
+# profile: prod         # a repo that handles untrusted input may demand the
+#                       # stricter profile. It may never ask for the weaker one.
+`,
+    note: "Almost nothing belongs here, and that is the design. A .sandbox.yaml travels with the repository and the agent can rewrite it mid-run, so the keys that choose an image, mount a host path, forward a credential or relax confinement are refused outright — and any network.mode or profile that weakens what is already in force is refused too. Setting one makes every sandbox-cli command in that directory fail, on purpose.",
+  },
+  {
+    id: "user",
+    label: "Your own config",
+    hint: "~/.config/sandbox/config.yaml",
+    yaml: `# ~/.config/sandbox/config.yaml — yours, trusted, never in a repo.
+
+profile: dev            # dev warns when a control is unavailable; prod refuses
 
 env_allow:              # host vars forwarded ONLY if they are set
   - ANTHROPIC_API_KEY
   - OPENAI_API_KEY
 
 network:
-  mode: default         # default | none | allowlist
-`,
-    note: "sandbox-cli init writes a fuller, fully-commented version of this file into the current directory. Zero config is required — every key below has a working default.",
-  },
-  {
-    id: "dev",
-    label: "Dev server",
-    hint: "ports, mounts, caches",
-    yaml: `ports:                  # published to the host
-  - 3000:3000           # no address given => binds 127.0.0.1
-  - 0.0.0.0:8080:8080   # reachable from your network, deliberately
+  mode: allowlist       # the default. "default" = unrestricted, "none" = nothing
+  allow:
+    - internal.registry.example.com
+  # baseline: false     # drop the built-in domains so "allow" is the WHOLE list
 
-mounts:                 # extra binds beyond the automatic /workspace one
-  - { host: ./fixtures, container: /workspace/fixtures, mode: ro }
+ports:
+  - 3000:3000           # no address given => binds 127.0.0.1
+
+mounts:
   - { host: ~/datasets, container: /data, mode: rw }
 
-cache:
-  enabled: true         # npm/pip/cargo/go caches survive the --rm container
-
-env:
-  NODE_ENV: development
+secrets:                # resolved at run time, forwarded by name only
+  GITHUB_TOKEN:
+    command: gh auth token
 `,
-    note: "Declaring the dev-server port here is the point: sandbox-cli run -- npm run dev then just works. Flags add to the list rather than replacing it, so -P 9229 opens a debugger port for one run without disturbing the project's own.",
+    note: "Everything the project file may not say lives here, because typing a path into your own home directory is a deliberate act that cloning a repository is not. An explicit --config <path> is the third layer, for a checked-in file you have actually read.",
   },
   {
     id: "locked",
     label: "Locked down",
-    hint: "egress + hardening",
-    yaml: `network:
-  mode: allowlist       # default-deny egress, enforced inside the container
-  allow:                # on top of the baseline agent APIs + registries
-    - internal.registry.example.com
-
-security:               # secure-by-default; these are the defaults, tunable
-  no_new_privileges: true
-  cap_drop: [ALL]
-  cap_add: []
-  pids_limit: 1024
-  memory: 4g            # opt-in — empty means unlimited
-  cpus: "2"
-
-runtime: runsc          # gVisor; kata-runtime for a microVM. Must be
-                        # registered with the docker daemon.
-`,
-    note: "A run that asks for an allowlist and cannot program the firewall refuses to start rather than running open. Memory and CPU stay unlimited unless you set them, because an unexpected OOM-kill is worse than an unbounded but observed container.",
-  },
-  {
-    id: "secrets",
-    label: "Secrets & snapshots",
-    hint: "credentials, crash safety",
-    yaml: `secrets:                # resolved at run time, forwarded by name
-  GITHUB_TOKEN:
-    command: gh auth token        # stdout of a host command
-  ANTHROPIC_API_KEY:
-    file: ~/.secrets/anthropic    # contents of a host file
-  NPM_TOKEN:
-    env: NPM_TOKEN                # a host env var
-
-snapshot:               # crash safety net — sandbox-cli recover
-  enabled: true
-  interval: 2m          # how often the workspace is snapshotted
-  retention: 336h       # 14d, then old snapshots are pruned
-`,
-    note: "Exactly one of file, command or env per secret. The raw value never lands on the docker command line, in --dry-run output, or in this file — so the file stays safe to commit.",
-  },
-  {
-    id: "every",
-    label: "Every key",
-    hint: "the whole schema",
-    yaml: `image: my-org/dev:latest   # default: the built-in sandbox-base:<gen>-<hash>
-workdir: /workspace
-user: sandbox              # sandbox | root
-home: /sandbox/home        # the fake, ephemeral HOME
-hostname: sandbox
-runtime: ""                # "" = docker's default (runc)
-
-mounts:
-  - { host: ./data, container: /workspace/data, mode: ro }
-
-env:
-  NODE_ENV: development
-env_allow:
-  - ANTHROPIC_API_KEY
+    hint: "prod, or close to it",
+    yaml: `profile: prod           # allowlist + baseline off, no persisted login,
+                        # no host history, seccomp required, bounded resources
 
 network:
-  mode: default
+  allow:                # prod starts with an EMPTY list: name what you need,
+    - api.anthropic.com # and an allowlist resolving to nothing is refused
+
+security:
+  seccomp: required     # refuse to run unless the daemon applies a filter
+  memory: 2g
+  cpus: "2"
+  pids_limit: 512
+
+runtime: runsc          # gVisor — a shared kernel is not a boundary for
+                        # untrusted agents. sandbox-cli doctor --profile prod
+                        # tells you whether this host has one registered.
+`,
+    note: "Run sandbox-cli doctor --profile prod on a machine before scheduling anything on it: it checks whether the host can actually deliver this — seccomp applied, a container able to program the egress firewall — and exits non-zero if not, rather than letting an unattended run proceed in a weaker configuration than it asked for.",
+  },
+  {
+    id: "full",
+    label: "Everything",
+    hint: "config show",
+    yaml: `image: ""                # "" = the built-in content-addressed sandbox-base
+workdir: /workspace
+user: sandbox
+home: /sandbox/home
+hostname: ""
+profile: dev
+persist_auth: true       # agent login survives --rm (agent wrappers only)
+sync: true               # mount this project's host agent history
+
+mounts: []
+env: {}
+env_allow: []
+
+network:
+  mode: allowlist        # allowlist | default | none
   allow: []
+  baseline: null         # null/true = keep the built-in domains
 
 ports: []
 
@@ -147,21 +144,20 @@ security:
   cap_drop: [ALL]
   cap_add: []
   pids_limit: 1024
-  memory: ""
+  memory: ""             # "" = unlimited
   cpus: ""
-  seccomp: ""              # "" = docker's default profile
+  seccomp: ""            # "" = docker's default; "required" = refuse without one
 
 cache:
   enabled: false
-  paths: []                # added to the built-in cache dirs
+  paths: []
 
 snapshot:
-  enabled: true
   interval: 2m
   retention: 336h
 
-secrets:
-  GITHUB_TOKEN: { command: gh auth token }
+secrets: {}
+runtime: ""              # "" = docker's default (runc)
 `,
     note: "Everything sandbox-cli reads, with its default value. sandbox-cli config show prints the merged result for the current directory, and sandbox-cli config validate checks that it is internally consistent without starting a container.",
   },
@@ -173,6 +169,14 @@ export type ConfigKey = {
   /** What you get when the key is absent. */
   fallback: string;
   body: string;
+  /**
+   * Where this key may be set. "project" means a committed .sandbox.yaml may
+   * carry it; "user" means only your own config or an explicit --config, because
+   * a repository setting it could reach the host or widen what the container
+   * reaches. "tighten" means a project may set it, but only in the stricter
+   * direction. Absent means project — the harmless majority.
+   */
+  where?: "user" | "tighten";
 };
 
 export type ConfigGroup = {
@@ -190,27 +194,52 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
     keys: [
       {
         key: "image",
+        where: "user",
         type: "string",
         fallback: "built-in sandbox-base",
         body: "The base image tag is content-addressed (sandbox-base:<gen>-<hash>) so it rebuilds itself whenever the image definition changes. Pinning your own tag opts out of that.",
       },
       {
         key: "workdir",
+        where: "user",
         type: "path",
         fallback: "/workspace",
         body: "Where the project is mounted and where the guest command starts.",
       },
       {
         key: "user",
+        where: "user",
         type: "sandbox | root",
         fallback: "sandbox",
         body: "Non-root by default — which is also why agents accept --dangerously-skip-permissions in here; they refuse it as root. On macOS, bind-mount ownership is virtualized, so files are still written as you.",
       },
       {
         key: "home",
+        where: "user",
         type: "path",
         fallback: "/sandbox/home",
         body: "The fake HOME. Nothing under it is host-connected unless an agent wrapper persists its login there.",
+      },
+      {
+        key: "profile",
+        where: "tighten",
+        type: "dev | prod",
+        fallback: "dev",
+        body: "dev warns when a control the host cannot provide is missing, because a developer is watching. prod refuses, because nobody is. prod also means allowlist egress with the baseline off, no persisted login, no host history mount, seccomp required and bounded resources. Both are secure — they differ in what they optimise, not in whether the boundary holds. A project may demand prod and may never ask for dev.",
+      },
+      {
+        key: "persist_auth",
+        where: "tighten",
+        type: "bool",
+        fallback: "true for agent wrappers",
+        body: "Keeps the agent login across runs by mounting a sandbox-owned host directory as the agent's whole HOME. Worth knowing what that directory holds: a long-lived OAuth refresh token the agent can read. prod turns this off, which is why prod needs no TLS-intercepting proxy to protect a credential — it simply never carries one.",
+      },
+      {
+        key: "sync",
+        where: "tighten",
+        type: "bool",
+        fallback: "true",
+        body: "Mounts this project's host agent history so sessions resolve on both sides of the sandbox. The one default that reaches a host path outside the workspace, scoped to the single project bucket.",
       },
       {
         key: "hostname",
@@ -220,6 +249,7 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
       },
       {
         key: "runtime",
+        where: "user",
         type: "string",
         fallback: "docker default (runc)",
         body: "Any OCI runtime the daemon has registered: kata-runtime for a microVM with its own kernel, runsc for gVisor. Mounts, hardening, allowlist and caches all work unchanged on top.",
@@ -233,24 +263,28 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
     keys: [
       {
         key: "mounts",
+        where: "user",
         type: "list of { host, container, mode }",
         fallback: "just /workspace",
         body: "host may start with ~ and may be relative to the config file that declared it. mode is ro unless you say rw. Refusals no key overrides: never /, never your home directory, never an ancestor of it.",
       },
       {
         key: "env",
+        where: "user",
         type: "map",
         fallback: "empty",
         body: "Literal values injected into the container. Merged key by key, so a project file can add one without wiping your user-level set.",
       },
       {
         key: "env_allow",
+        where: "user",
         type: "list",
         fallback: "the agent's own suggestion",
         body: "A default-deny allowlist of host variables, forwarded only when actually set. The one list that appends across layers instead of replacing.",
       },
       {
         key: "secrets",
+        where: "user",
         type: "map of { file | command | env }",
         fallback: "none",
         body: "Brokered credentials, resolved at run time and forwarded by name. Exactly one source per secret; a command: source can fetch a short-lived token fresh each run.",
@@ -264,18 +298,28 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
     keys: [
       {
         key: "network.mode",
-        type: "default | none | allowlist",
-        fallback: "default",
-        body: "allowlist programs a default-deny egress firewall inside the container at startup, then drops back to the non-root user. If it cannot be programmed, the run fails instead of running open.",
+        where: "tighten",
+        type: "allowlist | default | none",
+        fallback: "allowlist",
+        body: "allowlist is the default: a default-deny egress firewall is programmed inside the container at startup, then privileges drop back to the non-root user. If it cannot be programmed, the run fails instead of running open. Pass --network default to decline it for one run, or none to reach nothing at all. A project file may tighten this and never loosen it.",
+      },
+      {
+        key: "network.baseline",
+        where: "tighten",
+        type: "bool",
+        fallback: "true — the built-in domains are permitted",
+        body: "false drops the built-in domain set so allow is the WHOLE list. It exists because allow could only ever add, leaving no way to decline github.com — which is a write endpoint, and so a channel for any token the agent holds. Turning it off is deliberately awkward: npm, pip and git stop working unless you list their hosts.",
       },
       {
         key: "network.allow",
+        where: "user",
         type: "list",
         fallback: "baseline only",
         body: "Extra domains on top of the built-in baseline — agent APIs plus the common package registries — so npm install and git keep working. Replaces rather than appends, so a project can fully redefine it.",
       },
       {
         key: "ports",
+        where: "user",
         type: "list",
         fallback: "nothing published",
         body: "A spec with no address of its own binds to 127.0.0.1, not every interface — the one place sandbox-cli deliberately differs from docker -p. Write 0.0.0.0:3000:3000 to expose it on purpose.",
@@ -289,33 +333,38 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
     keys: [
       {
         key: "security.no_new_privileges",
+        where: "user",
         type: "bool",
         fallback: "true",
         body: "Blocks setuid privilege escalation inside the container.",
       },
       {
         key: "security.cap_drop / cap_add",
+        where: "user",
         type: "list",
         fallback: "[ALL] / none",
         body: "All Linux capabilities are dropped, which is essentially free for the non-root sandbox user. Add one back only when a tool genuinely needs it.",
       },
       {
         key: "security.pids_limit",
+        where: "user",
         type: "int",
         fallback: "1024",
         body: "A fork-bomb guard set well above real build and agent process counts. 0 disables it.",
       },
       {
         key: "security.memory / cpus",
+        where: "user",
         type: "string",
         fallback: "unlimited",
         body: "Opt-in resource caps, e.g. 2g and 1.5. Empty leaves the container unbounded — sandbox-cli measures usage rather than throttling it.",
       },
       {
         key: "security.seccomp",
+        where: "user",
         type: "string",
         fallback: "docker's default profile",
-        body: "Point at your own seccomp profile when the default one blocks something you need.",
+        body: "Point at your own seccomp profile when the default one blocks something you need — or set \"required\" to refuse the run unless the daemon actually applies one. Some daemons apply none and say nothing; sandbox-cli doctor tells you which yours is.",
       },
     ],
   },
