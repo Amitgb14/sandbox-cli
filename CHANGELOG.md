@@ -31,6 +31,14 @@ version is tagged.
   passed and no allowlist was explicitly requested, the default yields with a
   warning rather than erroring about a posture you did not choose.
 
+  **On restricted daemons this may need `--network default`.** Enforcing an
+  allowlist means the container starts as root with `NET_ADMIN` to program
+  iptables, then drops privileges. Rootless Docker, userns-remapped daemons and
+  some CI runners cannot grant that, and the firewall fails *closed* — so the
+  run aborts rather than proceeding unfiltered. Previously only people who
+  passed `--allow` could reach that path; now anyone can. Use
+  `--network default` there, or set `network.mode: default` in your config.
+
 ### Added
 
 - **Security profiles: `--profile dev` (default) and `--profile prod`.** Both are

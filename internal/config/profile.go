@@ -93,11 +93,16 @@ func profileBase(name string) Config {
 		cfg.Security.CPUs = "2"
 		cfg.Security.PidsLimit = int64Ptr(512)
 
-		// Prod may carry untrusted agents, so a container namespace is not the
-		// boundary. Left empty rather than guessed: which stronger runtime is
-		// registered is a property of the host, and `doctor --profile prod`
-		// reports it rather than this file assuming it.
+		// Nothing published. Prod is likelier to be multi-tenant, and an inbound
+		// port is the one thing that opens the boundary the other way.
 		cfg.Ports = []string{}
+
+		// Runtime is deliberately left as the host default rather than set to
+		// runsc or kata here: prod may carry untrusted agents, for which a
+		// container namespace is not the boundary, but which stronger runtime is
+		// registered is a property of the machine. `doctor --profile prod` is
+		// where that gets checked, and until it exists this profile does not
+		// pretend to provide it.
 	case ProfileDev:
 		// Today's defaults. Dev's own hardening is expressed in Default() so that
 		// running without a profile and running `--profile dev` cannot drift
@@ -132,9 +137,20 @@ func ResolveProfile(flag, user, project string) (string, error) {
 		return flag, nil
 	}
 	chosen := ProfileDev
-	if KnownProfile(user) {
+	// A typo in the one key that selects the security posture must not be
+	// indistinguishable from not setting it. `profile: prodd` used to fail
+	// KnownProfile, be discarded, and run as dev — persisted auth mounted, host
+	// history synced, baseline on, seccomp merely warned about — while the
+	// operator believed they had asked for prod.
+	if user != "" {
+		if !KnownProfile(user) {
+			return "", fmt.Errorf("unknown profile %q in your config (known: %s)", user, strings.Join(ProfileNames(), ", "))
+		}
 		chosen = user
 	}
+	// The project branch stays silent on an unrecognised value: it can only ever
+	// raise, so a name that matches nothing is already inert, and erroring would
+	// let a repository fail a run by writing nonsense.
 	if KnownProfile(project) && profileStrength[project] > profileStrength[chosen] {
 		chosen = project
 	}
@@ -173,11 +189,27 @@ func ValidateProfile(name string, cfg Config) error {
 	if cfg.Security.Seccomp != SeccompRequired {
 		bad = append(bad, "security.seccomp must be \"required\"")
 	}
-	if isRootUserName(cfg.User) {
+	if IsRootUser(cfg.User) {
 		bad = append(bad, "user must not be root")
 	}
 	if len(cfg.Security.CapAdd) > 0 {
 		bad = append(bad, fmt.Sprintf("security.cap_add must be empty, has %v", cfg.Security.CapAdd))
+	}
+	// Resource bounds and published ports are in prod's stated guarantees, so
+	// they are asserted rather than merely defaulted. A base layer a later config
+	// can quietly raise is not a guarantee, and a table that promises one is
+	// worse than a table that does not.
+	if cfg.Security.Memory == "" {
+		bad = append(bad, "security.memory must be set (a runaway agent must not take a shared host down)")
+	}
+	if cfg.Security.CPUs == "" {
+		bad = append(bad, "security.cpus must be set")
+	}
+	if cfg.Security.PidsLimit == nil || *cfg.Security.PidsLimit <= 0 {
+		bad = append(bad, "security.pids_limit must be a positive bound")
+	}
+	if len(cfg.Ports) > 0 {
+		bad = append(bad, fmt.Sprintf("ports must be empty, has %v (publishing opens the boundary inward)", cfg.Ports))
 	}
 	if len(bad) == 0 {
 		return nil
@@ -186,12 +218,19 @@ func ValidateProfile(name string, cfg Config) error {
 		name, strings.Join(bad, "\n  - "))
 }
 
-// isRootUserName matches the spellings docker accepts for uid 0, the same set
-// sandbox.isRootUser refuses alongside an allowlist.
-func isRootUserName(u string) bool {
-	switch strings.TrimSpace(u) {
-	case "root", "0", "0:0", "root:root":
-		return true
+// IsRootUser reports whether a --user/config value asks to run as uid 0.
+//
+// One implementation, because there were three and they disagreed. docker
+// accepts `user`, `uid`, `user:group` and `uid:gid`, so only the part before the
+// colon decides — and a version that matched a fixed list of spellings missed
+// `0:1000`, while the one that split on the colon missed `root:root`. The
+// disagreement had teeth: the CLI would decline to yield the default allowlist
+// for `--user 0:1000` and BuildSpec would then refuse the run, which is exactly
+// the regression the yield exists to prevent.
+func IsRootUser(user string) bool {
+	u := strings.TrimSpace(user)
+	if i := strings.IndexByte(u, ':'); i >= 0 {
+		u = u[:i]
 	}
-	return false
+	return u == "root" || u == "0"
 }

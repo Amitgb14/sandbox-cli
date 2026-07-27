@@ -553,7 +553,7 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		Entrypoint: entrypoint,
 
 		NoNewPrivileges: noNewPriv,
-		Seccomp:         sec.Seccomp,
+		Seccomp:         seccompArg(sec.Seccomp),
 		CapDrop:         capDrop,
 		CapAdd:          capAdd,
 		PidsLimit:       pids,
@@ -697,16 +697,7 @@ const defaultRunAsUser = "sandbox"
 // isRootUser reports whether a --user/config value asks to run as uid 0, by name
 // or by number. The entrypoint makes the same judgement on the resolved uid, so
 // checking only the spelling "root" would miss `--user 0` and `--user 0:0`.
-func isRootUser(user string) bool {
-	u := strings.TrimSpace(user)
-	if u == "root" {
-		return true
-	}
-	if i := strings.IndexByte(u, ':'); i >= 0 {
-		u = u[:i]
-	}
-	return u == "0"
-}
+func isRootUser(user string) bool { return config.IsRootUser(user) }
 
 // isExistingDir reports whether p is a directory that is already there.
 func isExistingDir(p string) bool {
@@ -725,4 +716,21 @@ func namesHost(addHosts []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// seccompArg turns the Seccomp config value into what docker should be handed.
+//
+// SeccompRequired is a *policy* — "refuse unless the daemon applies a filter" —
+// not a profile reference, and Session.enforceSeccomp is what acts on it. Docker
+// treats any seccomp= value other than "unconfined" as a path to a profile file
+// and reads it client-side, so letting the sentinel through rendered
+// `--security-opt seccomp=required` and every prod run died with
+// "opening seccomp profile (required) failed". The policy has been checked by
+// the time a container is started; what docker wants here is the daemon default,
+// which is spelled by saying nothing.
+func seccompArg(v string) string {
+	if v == config.SeccompRequired {
+		return ""
+	}
+	return v
 }

@@ -49,6 +49,11 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	if err := s.Runtime.Available(ctx); err != nil {
 		return 1, err
 	}
+	// Before the image build, not after: a policy check that needs no image at
+	// all should not cost minutes of `docker build` before it refuses.
+	if err := s.enforceSeccomp(ctx); err != nil {
+		return 1, err
+	}
 	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
 		return 1, fmt.Errorf("preparing image %q: %w", spec.Image, err)
 	}
@@ -56,10 +61,11 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 		return 1, err
 	}
 	// Said once, on the way in, while the user can still do something about it.
-	if err := s.enforceSeccomp(ctx); err != nil {
-		return 1, err
-	}
-	if w, ok := s.Runtime.(interface{ WarnIfSeccompDisabled(context.Context) }); ok {
+	// Skipped when the policy required one: enforceSeccomp has already asked the
+	// daemon and refused if the answer was no, so warning here would be a second
+	// `docker info` for a question whose answer cannot be bad.
+	if w, ok := s.Runtime.(interface{ WarnIfSeccompDisabled(context.Context) }); ok &&
+		s.Cfg.Security.Seccomp != config.SeccompRequired {
 		w.WarnIfSeccompDisabled(ctx)
 	}
 
@@ -100,13 +106,15 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	// Built here, before the container starts, and deliberately not left to the
 	// launch itself: a fan-out of detached runs against a cold image would
 	// otherwise trigger one concurrent build per container.
+	// Before the image build, not after: a policy check that needs no image at
+	// all should not cost minutes of `docker build` before it refuses.
+	if err := s.enforceSeccomp(ctx); err != nil {
+		return "", err
+	}
 	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
 		return "", fmt.Errorf("preparing image %q: %w", spec.Image, err)
 	}
 	if err := s.Runtime.EnsureNetwork(ctx, spec.Network); err != nil {
-		return "", err
-	}
-	if err := s.enforceSeccomp(ctx); err != nil {
 		return "", err
 	}
 

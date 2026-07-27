@@ -156,3 +156,33 @@ func TestLoadRefusesAUserConfigThatHollowsOutProd(t *testing.T) {
 		t.Errorf("the refusal does not name the setting at fault: %v", err)
 	}
 }
+
+// A typo in the key that selects the security posture must not read as "not
+// set". `profile: prodd` used to be discarded silently and run as dev, with
+// persisted auth mounted and seccomp merely warned about, while the operator
+// believed they had asked for prod.
+func TestResolveProfileRefusesAnUnknownNameInAConfigFile(t *testing.T) {
+	if _, err := ResolveProfile("", "prodd", ""); err == nil {
+		t.Error("an unknown profile in the user's config was silently downgraded to dev")
+	}
+	// A project may only raise, so an unrecognised value there is already inert
+	// and must not be able to fail someone's run.
+	if got, err := ResolveProfile("", ProfileProd, "nonsense"); err != nil || got != ProfileProd {
+		t.Errorf("an unrecognised project profile broke the run: %q, %v", got, err)
+	}
+}
+
+// The consolidated root check has to cover every spelling docker accepts, since
+// three divergent copies previously disagreed about exactly these.
+func TestIsRootUserCoversEverySpelling(t *testing.T) {
+	for _, u := range []string{"root", "0", "0:0", "root:root", "0:1000", "root:staff", " root "} {
+		if !IsRootUser(u) {
+			t.Errorf("IsRootUser(%q) = false, want true", u)
+		}
+	}
+	for _, u := range []string{"", "sandbox", "1000", "1000:0", "rooted", "toor"} {
+		if IsRootUser(u) {
+			t.Errorf("IsRootUser(%q) = true, want false", u)
+		}
+	}
+}

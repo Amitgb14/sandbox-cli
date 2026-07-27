@@ -124,14 +124,19 @@ func npmAgentBootstrap(bin, pkg string) []string {
 // It exists because `sync` became a config key when profiles arrived: prod turns
 // it off, and a setting the profile promises has to hold whether the user passed
 // --no-sync or not.
+// Fails closed. This decides whether to mount the one default that reaches a
+// host path outside the workspace, so "I could not determine the policy" must
+// not resolve to "mount it". Benign today — newSession makes the identical call
+// moments later and aborts the run — but a fail-open default one refactor away
+// from mattering is not worth keeping.
 func syncEnabled(rf *runFlags) bool {
 	wd, err := os.Getwd()
 	if err != nil {
-		return true
+		return false
 	}
 	cfg, err := config.LoadProfile(wd, rf.config, rf.profile)
 	if err != nil {
-		return true
+		return false
 	}
 	return cfg.SyncEnabled()
 }

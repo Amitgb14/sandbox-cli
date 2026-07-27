@@ -106,7 +106,7 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	// refuses, because then the user has stated both intentions and only one can
 	// hold.
 	if cfg.Network.Mode == "allowlist" && rf.network == "" && len(rf.allow) == 0 &&
-		cfg.Profile != config.ProfileProd && (rf.noHardening || isRootRequest(rf.user)) {
+		cfg.Profile != config.ProfileProd && (rf.noHardening || config.IsRootUser(rf.user)) {
 		which := "--user root"
 		if rf.noHardening {
 			which = "--no-hardening"
@@ -403,14 +403,4 @@ var exitCode int
 func isDirPath(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.IsDir()
-}
-
-// isRootRequest reports whether a --user value asks for uid 0. Mirrors
-// sandbox.isRootUser, which is unexported and applies one layer down.
-func isRootRequest(user string) bool {
-	switch strings.TrimSpace(user) {
-	case "root", "0", "0:0", "root:root":
-		return true
-	}
-	return false
 }
