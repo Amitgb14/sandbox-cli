@@ -517,6 +517,28 @@ baseline alone. These need more:
 | `aider` | `astral.sh` | fetches uv before installing Aider |
 | `openhands` | `api.github.com` | asks for the latest release tag; falls back to a pinned version without it |
 | `continue` | `api.continue.dev` | fetches its default config |
+| `claude` | `claude.ai`, `downloads.claude.ai` | installer script + release payload, for the self-updating install — see below |
+
+`claude` is the one row that is about **staying current** rather than installing.
+It runs either way: the image already carries an npm-installed copy. But the
+version it keeps up to date lives in the persisted HOME, installed on first run
+from `claude.ai/install.sh` and updated from `downloads.claude.ai` thereafter —
+neither of which is in the baseline. Without them the run silently falls back to
+the image's copy and stays on whatever version that image was built with. Since
+the allowlist is now the *default*, this applies to a plain `sandbox-cli claude`,
+not only to runs that pass `--allow`:
+
+```sh
+sandbox-cli claude --allow claude.ai --allow downloads.claude.ai
+```
+
+Or put them in your own config (`~/.config/sandbox/config.yaml`) so every run has
+them:
+
+```yaml
+network:
+  allow: [claude.ai, downloads.claude.ai]
+```
 
 **You will also need your model provider's API host**, which the baseline only
 covers for Anthropic and OpenAI. Add e.g. `generativelanguage.googleapis.com`
