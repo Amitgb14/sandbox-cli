@@ -207,123 +207,100 @@ func TestShareNamespaceRefusedByNewSession(t *testing.T) {
 	}
 }
 
-// TestShareFlagOptionalValue pins the three shapes --share must parse: a bare
-// flag (NoOptDefVal), --flag=NAME, and absent. NoOptDefVal being "true" is
-// what makes the value optional at all, and is also what stops the agent
-// wrappers' splitter (run.go:91) from swallowing the token that follows.
-func TestShareFlagOptionalValue(t *testing.T) {
-	cases := []struct {
-		in   []string
-		want string
+// TestShareFlagsParse pins the replacement for the old optional-value --share.
+// --share is a plain bool again and --share-name is a plain string, so every
+// spelling either consumes its value or is a parse error -- there is no shape
+// that quietly means something else.
+func TestShareFlagsParse(t *testing.T) {
+	for _, c := range []struct {
+		in        []string
+		wantShare string
+		wantName  string
 	}{
-		{[]string{"--share"}, "true"},
-		{[]string{"--share=work"}, "work"},
-		{[]string{}, "false"},
-	}
-	for _, c := range cases {
+		{[]string{"--share"}, "true", ""},
+		{[]string{}, "false", ""},
+		{[]string{"--share", "--share-name", "work"}, "true", "work"}, // space form
+		{[]string{"--share", "--share-name=work"}, "true", "work"},    // equals form
+		{[]string{"--share=false"}, "false", ""},
+	} {
 		cmd := newRunCmd()
 		if err := cmd.Flags().Parse(c.in); err != nil {
 			t.Fatalf("Parse(%v): %v", c.in, err)
 		}
-		fl := cmd.Flags().Lookup("share")
-		if got := fl.Value.String(); got != c.want {
-			t.Errorf("Parse(%v): share value = %q, want %q", c.in, got, c.want)
+		if got := cmd.Flags().Lookup("share").Value.String(); got != c.wantShare {
+			t.Errorf("Parse(%v): share = %q, want %q", c.in, got, c.wantShare)
 		}
-		if fl.NoOptDefVal != "true" {
-			t.Errorf("share.NoOptDefVal = %q, want %q", fl.NoOptDefVal, "true")
+		if got := cmd.Flags().Lookup("share-name").Value.String(); got != c.wantName {
+			t.Errorf("Parse(%v): share-name = %q, want %q", c.in, got, c.wantName)
 		}
 	}
 }
 
-// TestShareFlagAcceptsAllBoolSpellings proves --share still recognizes every
-// spelling strconv.ParseBool accepts, not just the literal "true"/"false"
-// pflag's own BoolVar used to parse. Scripts written against the old
-// BoolVar-backed --share pass values like --share=0 or --share=FALSE
-// expecting sharing to turn off; those must still disable sharing rather than
-// being treated as a namespace name (which would silently turn it on).
-func TestShareFlagAcceptsAllBoolSpellings(t *testing.T) {
-	off := []string{"0", "f", "F", "false", "FALSE", "False"}
-	on := []string{"1", "t", "T", "true", "TRUE", "True"}
-
-	for _, s := range off {
-		rf := &runFlags{}
-		if err := (&shareValue{rf: rf}).Set(s); err != nil {
-			t.Errorf("Set(%q) = %v, want nil", s, err)
-			continue
-		}
-		if rf.share {
-			t.Errorf("Set(%q): share = true, want false", s)
-		}
-		if rf.shareName != "" {
-			t.Errorf("Set(%q): shareName = %q, want empty", s, rf.shareName)
-		}
+// TestShareNameConsumesItsValue is the regression test for the reason this flag
+// exists. Under the optional-value --share, `--share work --project=/x` left
+// --share bare (mounting the whole shared root rather than the leaf) and
+// forwarded BOTH later tokens to the guest -- so --project was silently dropped
+// and the failure was toward more access. A StringVar has no NoOptDefVal, so the
+// space form consumes its value and later flags still parse as flags.
+func TestShareNameConsumesItsValue(t *testing.T) {
+	cmd := newRunCmd()
+	if err := cmd.Flags().Parse([]string{"--share", "--share-name", "work", "--project=/x"}); err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
-
-	for _, s := range on {
-		rf := &runFlags{}
-		if err := (&shareValue{rf: rf}).Set(s); err != nil {
-			t.Errorf("Set(%q) = %v, want nil", s, err)
-			continue
-		}
-		if !rf.share {
-			t.Errorf("Set(%q): share = false, want true", s)
-		}
-		if rf.shareName != "" {
-			t.Errorf("Set(%q): shareName = %q, want empty (no namespace)", s, rf.shareName)
-		}
+	if got := cmd.Flags().Lookup("share-name").Value.String(); got != "work" {
+		t.Errorf("share-name = %q, want %q", got, "work")
 	}
+	if got := cmd.Flags().Lookup("project").Value.String(); got != "/x" {
+		t.Errorf("project = %q, want %q -- the flag after --share-name was swallowed", got, "/x")
+	}
+	if rest := cmd.Flags().Args(); len(rest) != 0 {
+		t.Errorf("leftover args = %#v, want none", rest)
+	}
+}
 
-	// End to end through the real flag, matching how a script actually invokes
-	// the CLI: --share=0 must land the flag's own String() at "false".
-	for _, s := range []string{"--share=0", "--share=FALSE"} {
+// TestShareBoolSpellingsAreBoolsAgain: --share is a pflag.BoolVar once more, so
+// every ParseBool spelling means on/off and nothing else can be mistaken for a
+// namespace. --share=no is a parse error, as it was before the flag ever took a
+// value -- which is the fail-open regression this design removes by construction
+// rather than by a reserved-word list.
+func TestShareBoolSpellingsAreBoolsAgain(t *testing.T) {
+	for _, s := range []string{"--share=0", "--share=FALSE", "--share=f"} {
 		cmd := newRunCmd()
 		if err := cmd.Flags().Parse([]string{s}); err != nil {
-			t.Fatalf("Parse(%v): %v", s, err)
+			t.Fatalf("Parse(%q): %v", s, err)
 		}
 		if got := cmd.Flags().Lookup("share").Value.String(); got != "false" {
-			t.Errorf("Parse(%q): share value = %q, want %q", s, got, "false")
+			t.Errorf("Parse(%q): share = %q, want false", s, got)
+		}
+	}
+	for _, s := range []string{"--share=no", "--share=off", "--share=yes", "--share=work"} {
+		if err := newRunCmd().Flags().Parse([]string{s}); err == nil {
+			t.Errorf("Parse(%q) = nil, want a parse error (it is a bool flag)", s)
 		}
 	}
 }
 
-// TestShareFlagRejectsUnsafeName proves the CLI parse step itself refuses a
-// namespace that would escape the shared directory, rather than accepting it
-// and failing later inside newSession.
-func TestShareFlagRejectsUnsafeName(t *testing.T) {
-	if err := newRunCmd().Flags().Parse([]string{"--share=../../.ssh"}); err == nil {
-		t.Error("Parse(--share=../../.ssh) = nil, want an error")
-	}
-	// An empty value must be an error, not a silent no-op: --share= is not the
-	// same request as a bare --share, and validateShareName already refuses "".
-	if err := newRunCmd().Flags().Parse([]string{"--share="}); err == nil {
-		t.Error("Parse(--share=) = nil, want an error")
+// TestShareNameRejectsUnsafeName proves the CLI refuses an escaping namespace at
+// the point of use rather than accepting it and failing deeper in.
+func TestShareNameRejectsUnsafeName(t *testing.T) {
+	for _, name := range []string{"../../.ssh", "/etc", "a/b", ""} {
+		rf := &runFlags{share: true, shareName: name}
+		if name == "" {
+			continue // empty means "no namespace", not an invalid one
+		}
+		if _, _, err := newSession(rf); err == nil {
+			t.Errorf("newSession(--share-name %q) = nil error, want a refusal", name)
+		}
 	}
 }
 
-// TestShareFlagHelpIsUnchangedShape guards the pflag rendering choice: with
-// Type() reporting "bool", pflag renders a plain --share with no "[=...]"
-// value hint, matching the old BoolVar's help line. It inspects only the flag
-// column (the token right after "--"), not the description text, which
-// legitimately mentions "--share=NAME" in prose.
-func TestShareFlagHelpIsUnchangedShape(t *testing.T) {
-	usage := newRunCmd().Flags().FlagUsages()
-	var flagCol string
-	found := false
-	for _, line := range strings.Split(usage, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "--share") {
-			continue
-		}
-		found = true
-		fields := strings.Fields(trimmed)
-		flagCol = fields[0]
-		break
-	}
-	if !found {
-		t.Fatalf("FlagUsages() has no --share line:\n%s", usage)
-	}
-	if flagCol != "--share" {
-		t.Errorf("--share flag column = %q, want %q (a value hint changed the rendered shape)", flagCol, "--share")
+// TestShareNameNeedsShare: naming a namespace without asking to share is refused
+// rather than implied. Implying it would make one flag switch on the
+// cross-project channel, and would leave --share=false --share-name X as a
+// contradiction resolvable only by guessing.
+func TestShareNameNeedsShare(t *testing.T) {
+	if _, _, err := newSession(&runFlags{shareName: "work"}); err == nil {
+		t.Error("newSession(--share-name work, no --share) = nil error, want a refusal")
 	}
 }
 
@@ -371,38 +348,5 @@ func TestSeedReadmeStillSeedsAndDoesNotClobber(t *testing.T) {
 	b2, err := os.ReadFile(filepath.Join(dir, "README.md"))
 	if err != nil || string(b2) != string(b) {
 		t.Error("seedSharedReadme clobbered an existing README")
-	}
-}
-
-// TestShareValueRefusesOffSpellings pins the fail-open regression: --share=no
-// was a hard parse error under the old pflag.BoolVar, and once --share took an
-// optional value "no" became a namespace name with sharing switched ON. An
-// operator disabling the cross-project channel would have silently enabled it.
-func TestShareValueRefusesOffSpellings(t *testing.T) {
-	for _, s := range []string{"no", "No", "NO", "n", "off", "OFF", "yes", "y", "on"} {
-		rf := &runFlags{}
-		v := &shareValue{rf: rf}
-		if err := v.Set(s); err == nil {
-			t.Errorf("--share=%s accepted: share=%v shareName=%q, want a refusal", s, rf.share, rf.shareName)
-		}
-	}
-}
-
-// TestShareValueBoolSpellingsStillWork: the ParseBool spellings must keep
-// meaning on and off, since scripts in the wild already pass them.
-func TestShareValueBoolSpellingsStillWork(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want bool
-	}{{"true", true}, {"TRUE", true}, {"1", true}, {"t", true},
-		{"false", false}, {"FALSE", false}, {"0", false}, {"f", false}} {
-		rf := &runFlags{}
-		if err := (&shareValue{rf: rf}).Set(tc.in); err != nil {
-			t.Errorf("--share=%s = %v, want nil", tc.in, err)
-			continue
-		}
-		if rf.share != tc.want || rf.shareName != "" {
-			t.Errorf("--share=%s -> share=%v name=%q, want share=%v name=\"\"", tc.in, rf.share, rf.shareName, tc.want)
-		}
 	}
 }

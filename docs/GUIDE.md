@@ -615,7 +615,7 @@ one-way channel, mount it by hand instead
 (`--mount ~/.config/sandbox/shared:/shared:ro` on the consumer). For history,
 `git init --bare` a repo inside it and push from both sides.
 
-Give `--share` a value (`--share=NAME`, equals sign required) to mount
+Add `--share-name NAME` (alongside `--share`) to mount
 `~/.config/sandbox/shared/NAME` at `/shared/NAME` instead — a namespace for two
 concurrent runs that would otherwise clobber each other's filename. It stops the
 collision, but it is **not** an isolation boundary: any sandbox using a bare
@@ -1056,7 +1056,7 @@ Common flags (work on `run` and on every agent wrapper):
 | `--worktree BRANCH` | Run in a git worktree for BRANCH |
 | `--detach` | Start in the background, print the container name (guest must exit on its own) |
 | `--share` | Mount `~/.config/sandbox/shared` at `/shared` (exchange files between sandboxes) |
-| `--share=NAME` | Mount `~/.config/sandbox/shared/NAME` at `/shared/NAME` instead (per-run namespace; avoids collisions, not an isolation boundary; `=` required) |
+| `--share-name NAME` | With `--share`, mount `~/.config/sandbox/shared/NAME` at `/shared/NAME` instead of the root (avoids collisions; not an isolation boundary) |
 | `--paste` | Mount `~/Desktop`, `~/Downloads`, `~/Pictures` read-only at their host paths (pasted image paths resolve) |
 | `--git` | Forward git identity + trust the workspace |
 | `-P, --publish 3000` | Publish a container port to the host (repeatable; `127.0.0.1` unless you give an address) |

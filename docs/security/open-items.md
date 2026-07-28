@@ -449,7 +449,7 @@ binaries win.
 - **`--cache` volumes are shared across agents and projects** by design, so
   content planted in one is consumed at build time in another. Opt-in, and the
   cost of making them per-project is the reason they exist.
-- **`--share` is a cross-project channel, and `--share=NAME` does not partition
+- **`--share` is a cross-project channel, and `--share-name` does not partition
   it.** The shared directory (`~/.config/sandbox/shared`) is mounted read-write
   into every sandbox using a bare `--share`, so **its contents are
   attacker-controlled**. Two escapes through that were found and fixed (below);

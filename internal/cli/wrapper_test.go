@@ -107,27 +107,23 @@ func TestSplitWrapperArgs(t *testing.T) {
 			wantGuest: []string{"--dangerously-skip-permissions"},
 		},
 		{
-			name:      "--share=NAME is a sandbox flag",
-			in:        []string{"--share=work", "--dangerously-skip-permissions"},
-			wantFlags: []string{"--share=work"},
+			name:      "--share-name=NAME is a sandbox flag",
+			in:        []string{"--share", "--share-name=work", "--dangerously-skip-permissions"},
+			wantFlags: []string{"--share", "--share-name=work"},
 			wantGuest: []string{"--dangerously-skip-permissions"},
 		},
 		{
-			// The space form does NOT namespace, and the failure is toward more
-			// access rather than less: --share stays bare (the whole shared root
-			// gets mounted, not the leaf) and every sandbox flag after the name
-			// is forwarded to the agent as prompt text -- so --project is
-			// silently dropped and the current directory is mounted instead.
-			//
-			// This is pflag's behaviour for any flag with NoOptDefVal set, and it
-			// predates --share=NAME (BoolVar set it too). It is pinned here
-			// because --share=NAME is what gives anyone a reason to type the
-			// space form: a footgun documented only in prose is one the suite
-			// cannot notice changing.
-			name:      "--share NAME (space form) loses the name AND the flags after it",
-			in:        []string{"--share", "work", "--project=/x"},
-			wantFlags: []string{"--share"},
-			wantGuest: []string{"work", "--project=/x"},
+			// The regression test for why --share-name exists at all. When the
+			// namespace was an optional value on --share, this exact line left
+			// --share bare (mounting the whole shared root rather than the leaf)
+			// and forwarded "work" AND --project=/x to the agent, so --project
+			// was silently dropped -- a failure toward more access, from a
+			// spelling that looks right. A StringVar has no NoOptDefVal, so the
+			// splitter consumes the value and keeps going.
+			name:      "--share-name NAME (space form) consumes its value and keeps parsing",
+			in:        []string{"--share", "--share-name", "work", "--project=/x", "-p", "hi"},
+			wantFlags: []string{"--share", "--share-name", "work", "--project=/x"},
+			wantGuest: []string{"-p", "hi"},
 		},
 	}
 	cmd := newClaudeCmd() // real command so Flags() knows sandbox's flag set

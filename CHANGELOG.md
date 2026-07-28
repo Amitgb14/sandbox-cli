@@ -13,28 +13,24 @@ version is tagged.
 
 ### Added
 
-- **`--share=NAME`** namespaces the shared directory: `~/.config/sandbox/shared/NAME`
-  is mounted at `/shared/NAME`, so two sandboxes running at once no longer
-  overwrite each other's handoff files. A bare `--share` is unchanged (the whole
-  shared dir at `/shared`). The name must be a single `[A-Za-z0-9._-]` segment,
-  and the value needs the equals sign.
+- **`--share-name NAME`** namespaces the shared directory: with `--share`,
+  `~/.config/sandbox/shared/NAME` is mounted at `/shared/NAME`, so two sandboxes
+  running at once no longer overwrite each other's handoff files. A bare
+  `--share` is unchanged (the whole shared dir at `/shared`), and `--share`
+  itself is still a plain boolean. The name must be a single `[A-Za-z0-9._-]`
+  segment, and both `--share-name work` and `--share-name=work` work.
+
+  It needs `--share` as well rather than implying it: a namespace is a way of
+  sharing, not an alternative to it, and one flag quietly switching on a
+  cross-project channel is the wrong default.
 
   A namespace avoids **collisions**, not access: a run using a bare `--share`
   still has the whole shared directory read-write and can read every namespace
   in it. It is not an isolation boundary — don't put anything secret in one.
 
-### Changed
-
-- **`--share=no`, `--share=off`, `--share=yes` and `--share=on` are refused**
-  with an explanatory error. Under the old boolean `--share` these were parse
-  errors; once the flag took an optional value they would have become namespaces
-  *named* `no`/`off`, silently switching sharing **on** for anyone using them to
-  turn it off. `--share=true`/`--share=false` (and `1`/`0`/`t`/`f`) keep working
-  as they always did. Omit the flag entirely to disable sharing.
-
 ### Fixed
 
-- **`--share=NAME` could be pointed at another namespace, or at the whole shared
+- **A `--share` namespace could be pointed at another namespace, or at the whole shared
   directory, by a symlink planted inside it.** The shared directory is
   read-write to any sandbox using a bare `--share`, so its contents are
   attacker-controlled; a relative symlink such as `ln -s . NAME` stayed inside

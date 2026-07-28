@@ -6,8 +6,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
@@ -85,7 +83,7 @@ func seedShareNamespaceReadme(dir, name, target string) {
 	readme := fmt.Sprintf(`# Shared sandbox namespace: %s
 
 This directory is mounted at `+"`%s`"+` inside sandboxes started with
-`+"`--share=%s`"+`, and lives on the host at `+"`~/.config/sandbox/shared/%s`"+`.
+`+"`--share --share-name %s`"+`, and lives on the host at `+"`~/.config/sandbox/shared/%s`"+`.
 
 A namespace prevents *collisions*, not access. Two sandboxes using different
 names can both write `+"`notes.md`"+` without overwriting each other, which is what
@@ -158,7 +156,7 @@ func shareNamespaceDir(root, name string) (hostDir, target string, err error) {
 	// resolves to the root itself, which handed the whole shared directory back
 	// as the mount source. The container has this directory read-write whenever
 	// any run uses a bare --share, so it plants the link and a later
-	// --share=work mounts every other namespace read-write. Refuse the symlink
+	// --share-name work mounts every other namespace read-write. Refuse the symlink
 	// itself: the namespace must be a real directory, created here or by a
 	// previous run, and nothing else.
 	fi, err := r.Lstat(name)
@@ -216,72 +214,3 @@ func shareNamespaceDir(root, name string) (hostDir, target string, err error) {
 	// docs/security/open-items.md §8 rather than papered over.
 	return resolved, target, nil
 }
-
-// shareValue is the pflag.Value behind --share, which takes an OPTIONAL value.
-// pflag resolves `--flag=x` to x, and a bare `--flag` to NoOptDefVal; a value is
-// optional only when NoOptDefVal is non-empty, which is also what stops the
-// agent wrappers' splitter (run.go:91) from eating the next token. Reporting
-// "bool" as the Type keeps the help line identical to the old BoolVar (pflag
-// only prints a `[=…]` value hint for non-bool types).
-//
-// Every spelling strconv.ParseBool accepts (1, t, T, true, TRUE, True, 0, f,
-// F, false, FALSE, False) is reserved as an on/off spelling, so none of them
-// can ever be namespace names; every other string that passes
-// validateShareName is one. This has to be checked with ParseBool, not a
-// literal "true"/"false" switch: --share used to be a pflag.BoolVar, so
-// scripts already in the wild pass spellings like --share=0 or --share=FALSE
-// expecting sharing to turn off, and a namespace named "0" would silently
-// re-enable the cross-sandbox channel they asked to disable.
-type shareValue struct{ rf *runFlags }
-
-// offSpellings are the words a user reaches for to turn a flag off that
-// strconv.ParseBool does NOT accept. Reserving them is the difference between a
-// wrong command failing and a wrong command doing the opposite of what it says:
-// `--share=no` was a hard parse error under the old BoolVar, and without this it
-// becomes a namespace literally named "no" with sharing switched ON — an
-// operator disabling the cross-project channel would silently enable it. The
-// on-spellings are reserved for symmetry, so `--share=yes` cannot mean a
-// namespace either.
-var offSpellings = map[string]bool{
-	"no": true, "n": true, "off": true,
-	"yes": true, "y": true, "on": true,
-}
-
-func (v *shareValue) Set(s string) error {
-	if b, err := strconv.ParseBool(s); err == nil {
-		v.rf.share, v.rf.shareName = b, ""
-		return nil
-	}
-	if offSpellings[strings.ToLower(s)] {
-		return fmt.Errorf("%q is reserved (as are no, n, off, yes, y, on and the true/false spellings) "+
-			"because it reads as switching the flag rather than naming a namespace: "+
-			"omit --share entirely to disable sharing, use a bare --share for the shared root, "+
-			"or pick a distinguishable name such as %q", s, s+"-ns")
-	}
-	if err := validateShareName(s); err != nil {
-		return err
-	}
-	v.rf.share, v.rf.shareName = true, s
-	return nil
-}
-
-func (v *shareValue) String() string {
-	// Called by pflag at registration time (to capture DefValue) before rf is
-	// ever set on a real flag instance, so this must tolerate a nil rf.
-	if v == nil || v.rf == nil {
-		return "false"
-	}
-	if !v.rf.share {
-		return "false"
-	}
-	if v.rf.shareName == "" {
-		return "true"
-	}
-	return v.rf.shareName
-}
-
-func (v *shareValue) Type() string { return "bool" }
-
-// IsBoolFlag keeps pflag from printing a bogus "(default …)" suffix on the
-// help line, the same as it does for a real BoolVar.
-func (v *shareValue) IsBoolFlag() bool { return true }

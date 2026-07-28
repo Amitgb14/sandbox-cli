@@ -260,9 +260,20 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	// what makes it a channel: two agents that share nothing else — different
 	// repos, different worktrees, different containers — can hand a file over
 	// through it. Opt-in, because a cross-project channel is exactly the kind of
-	// reach the sandbox otherwise refuses by default. --share=NAME namespaces it
-	// to <shared>/NAME at /shared/NAME, so two concurrent runs that both want a
-	// private handoff spot don't clobber the same filename in the shared root.
+	// reach the sandbox otherwise refuses by default. --share-name NAME
+	// namespaces it to <shared>/NAME at /shared/NAME, so two concurrent runs
+	// that both want their own handoff spot don't clobber the same filename in
+	// the shared root.
+	//
+	// --share-name requires --share rather than implying it. Implying would mean
+	// one flag silently switching on the cross-project channel, and would leave
+	// `--share=false --share-name work` as a contradiction to resolve by
+	// guessing — with the wrong guess enabling sharing for someone who wrote
+	// "false". Requiring both makes the opt-in one deliberate act with no
+	// ambiguous spelling, at the cost of one extra word.
+	if rf.shareName != "" && !rf.share {
+		return nil, sandbox.Options{}, fmt.Errorf("--share-name %q needs --share as well: a namespace is a way of sharing, not an alternative to it", rf.shareName)
+	}
 	if rf.share {
 		root := config.SharedDir()
 		if root == "" {
@@ -375,8 +386,16 @@ func addRunFlags(cmd *cobra.Command, rf *runFlags) {
 	f.BoolVar(&rf.hostGateway, "host-gateway", false, "map host.docker.internal to the host so the agent can reach host MCP servers (Linux)")
 	f.BoolVar(&rf.git, "git", false, "forward host git identity and trust the workspace so git commits just work in-container")
 	f.StringVar(&rf.runtime, "runtime", "", "OCI runtime for stronger isolation, e.g. kata-runtime (microVM) or runsc (gVisor); must be registered with docker")
-	shareFlag := f.VarPF(&shareValue{rf: rf}, "share", "", "mount the shared dir (~/.config/sandbox/shared) at /shared so agents in different projects can exchange files; --share=NAME (with the equals sign) mounts the NAME subdirectory at /shared/NAME instead, so concurrent runs don't clobber each other's files")
-	shareFlag.NoOptDefVal = "true" // makes the value optional: a bare --share still means the shared root
+	f.BoolVar(&rf.share, "share", false, "mount the shared dir (~/.config/sandbox/shared) at /shared so agents in different projects can exchange files")
+	// A separate string flag rather than an optional value on --share. An
+	// optional-value flag needs NoOptDefVal, and NoOptDefVal is also what tells
+	// pflag (and splitWrapperArgs) that the flag does NOT consume the next token
+	// — so `--share NAME` silently left --share bare, mounted the whole shared
+	// root rather than the leaf, and forwarded NAME and every sandbox flag after
+	// it to the guest as arguments. The failure was toward more access, from a
+	// spelling that looks correct. A StringVar consumes its value in both forms,
+	// so there is no spelling of this that fails open.
+	f.StringVar(&rf.shareName, "share-name", "", "with --share, mount ~/.config/sandbox/shared/NAME at /shared/NAME instead of the root, so concurrent runs don't clobber each other's files")
 	f.BoolVar(&rf.paste, "paste", false, "mount ~/Desktop, ~/Downloads and ~/Pictures read-only at their host paths so an image path pasted into the agent resolves")
 	f.BoolVar(&rf.detach, "detach", false, "run in the background and print the container name; the guest gets no terminal, so it must be a command (or an agent in its non-interactive mode) that exits on its own")
 	f.BoolVar(&rf.noSnapshot, "no-snapshot", false, "disable the crash safety net (periodic snapshots of the workspace under refs/sandbox)")

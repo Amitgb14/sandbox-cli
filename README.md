@@ -424,7 +424,7 @@ it looked rather than printing a zero.
 | `--worktree` | Run in a git worktree for `BRANCH` (created if absent) — parallel per-branch agents |
 | `--detach` | Start in the background and print the container name, so one terminal can launch several agents (the guest must exit on its own) |
 | `--share` | Mount the shared dir (`~/.config/sandbox/shared`) at `/shared` so agents in different projects can exchange files |
-| `--share=NAME` | Mount `~/.config/sandbox/shared/NAME` at `/shared/NAME` instead — a per-run namespace that avoids collisions, not an isolation boundary (equals sign required) |
+| `--share-name NAME` | With `--share`, mount `~/.config/sandbox/shared/NAME` at `/shared/NAME` instead of the root — avoids collisions between concurrent runs; not an isolation boundary |
 | `--paste` | Mount `~/Desktop`, `~/Downloads` and `~/Pictures` read-only at their host paths, so an image path pasted into the agent resolves inside the container |
 | `--git` | Forward host git identity and trust the workspace so `git` commits just work in-container |
 | `-P, --publish` | Publish a container port to the host, e.g. `-P 3000` or `-P 8080:3000` (repeatable; binds `127.0.0.1` unless you give an address) |
@@ -718,13 +718,14 @@ same filename clobber each other. Give `--share` a value to get a
 sub-directory of your own instead:
 
 ```sh
-sandbox-cli claude --share=api-review --project ~/web-ui   # /shared/api-review
-sandbox-cli claude --share=perf --project ~/backend        # /shared/perf
+sandbox-cli claude --share --share-name api-review --project ~/web-ui   # /shared/api-review
+sandbox-cli claude --share --share-name perf       --project ~/backend  # /shared/perf
 ```
 
-`--share=NAME` mounts `~/.config/sandbox/shared/NAME` at `/shared/NAME`, created
-on first use, instead of the shared root. Three things worth knowing before you
-reach for it:
+`--share-name NAME` mounts `~/.config/sandbox/shared/NAME` at `/shared/NAME`,
+created on first use, instead of the shared root. It needs `--share` as well —
+a namespace is a way of sharing, not an alternative to it. Two things worth
+knowing before you reach for it:
 
 - **It prevents collisions. It is not an isolation boundary.** A namespaced run
   is not handed the other namespaces, which is what stops the accidental
@@ -734,11 +735,6 @@ reach for it:
   space; they are not a confidentiality mechanism, and nothing secret should go
   in one.
 - **Use a bare `--share` on both sides** when the point is to hand a file over.
-- **The equals sign is required.** `--share NAME` doesn't work — `NAME` is taken
-  as the start of the guest command, or forwarded straight to the agent, not
-  read as the flag's value. Worse, every *sandbox* flag after it is silently
-  dropped too, so `--share NAME --project ~/proj` mounts the current directory
-  rather than `~/proj`. Use `--share=NAME`.
 
 A few things worth knowing about `--share` generally:
 
