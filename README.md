@@ -31,7 +31,7 @@ All" while limiting the blast radius to the project it's already meant to edit.
 
 ## Requirements
 
-- Docker (Docker Desktop on macOS)
+- Docker (Docker Desktop on macOS), or [Podman](#using-podman)
 - Go 1.25+ only if you build from source
 
 ## Install
@@ -763,10 +763,78 @@ unchanged on top of it.
   `--user "$(id -u):$(id -g)"` if ownership matters (note: the agent's ephemeral
   HOME is owned by the image's `sandbox` user, so prefer this for non-agent runs).
 
+## Using Podman
+
+Docker is the default; Podman is a supported alternative and needs no other
+change. Rootless Podman in particular is a stronger starting point than rootful
+Docker — the engine itself runs as you rather than as root.
+
+```sh
+sandbox-cli claude --engine podman
+```
+
+To stop typing it, put it in **your own** config (`~/.config/sandbox/config.yaml`):
+
+```yaml
+engine: podman
+```
+
+It is deliberately not a project key. A committed `.sandbox.yaml` choosing which
+binary sandbox-cli executes would be choosing what runs on your machine, so it is
+refused there for the same reason `runtime` and `image` are.
+
+### Setting up
+
+**macOS and Windows** need a VM, which Podman manages for you:
+
+```sh
+brew install podman        # or your platform's package
+podman machine init
+podman machine start
+```
+
+**Native Linux** talks to the host directly — no machine step.
+
+Then check the host can actually deliver the isolation, rather than finding out
+from a run:
+
+```sh
+sandbox-cli doctor --engine podman
+```
+
+### What differs from Docker
+
+Nothing you have to do, but four things worth knowing:
+
+- **The first run rebuilds the base image.** Podman keeps its own image store, so
+  it will not reuse Docker's. One wait, not a recurring cost.
+- **Each sandbox gets its own network.** Docker shares one network with
+  inter-container communication switched off; Podman's netavark has no
+  equivalent, and its `isolate` option blocks traffic between *different*
+  networks while leaving same-network peers reachable — so sandbox-cli gives
+  each run an isolated network of its own instead. `sandbox-cli clean` reaps any
+  a killed run left behind.
+- **The egress allowlist works identically**, including rootless. Programming the
+  firewall from inside the container needs `NET_ADMIN`, and a rootless container
+  has it within its own network namespace.
+- **Do not pass `--user`.** On native Linux, rootless Podman maps your host user
+  to container uid 0, and passing `--user "$(id -u):$(id -g)"` maps it into the
+  subuid range instead, which makes `/workspace` unreadable. sandbox-cli handles
+  the mapping (`--userns=keep-id`) and relabels bind mounts for SELinux, so files
+  the agent writes come back owned by your own uid:gid.
+
+### Known limits
+
+- `sandbox-cli ps`, `clean` and `stats` need to be told which engine to look at —
+  `--engine podman`, or the config key. They do not search both.
+- Verified on macOS (Podman machine) and on Fedora with SELinux enforcing.
+  Other rootless Linux setups should behave the same, but have not been measured.
+
 ## Platform support
 
-sandbox-cli runs anywhere Docker does. Almost everything works identically across
-platforms; the differences are all about the boundary the host can provide.
+sandbox-cli runs anywhere Docker or [Podman](#using-podman) does. Almost
+everything works identically across platforms; the differences are all about the
+boundary the host can provide.
 
 | Capability | macOS (Docker Desktop) | Linux (native Docker) | Windows (Docker Desktop / WSL2) |
 |---|---|---|---|

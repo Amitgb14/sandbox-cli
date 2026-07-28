@@ -132,6 +132,10 @@ export const SETUP_PATHS: SetupPath[] = [
         title: "Expect the image to build again",
         body: "Podman keeps its own image store, so the first run rebuilds the base image even if Docker already has it. That is one wait, not a recurring cost.",
       },
+      {
+        title: "On native Linux, do not pass --user",
+        body: "Rootless Podman maps your host user to container uid 0, so the usual Linux advice — passing --user \"$(id -u):$(id -g)\" — maps it into the subuid range instead and makes /workspace unreadable. sandbox-cli handles the mapping and relabels bind mounts for SELinux, so files the agent writes come back owned by your own uid:gid. Pass nothing.",
+      },
       VERIFY_STEP,
       FIRST_RUN_STEP,
     ],
