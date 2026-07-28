@@ -1,6 +1,12 @@
 import { GithubMark, Wordmark } from "@/components/logo";
 import { DOC_URL, REPO_URL, VERSION } from "@/lib/site";
 
+/**
+ * Outbound links only. There is deliberately no "on this page" index here — the
+ * header's grouped menus are the in-page navigation, and repeating them at the
+ * bottom made the footer a second table of contents for a page you have by then
+ * already scrolled through.
+ */
 const COLUMNS = [
   {
     title: "Docs",
@@ -20,22 +26,12 @@ const COLUMNS = [
       { label: "Development", href: DOC_URL.development },
     ],
   },
-  {
-    title: "On this page",
-    links: [
-      { label: "Why", href: "#threat" },
-      { label: "Features", href: "#features" },
-      { label: "Config file", href: "#config" },
-      { label: "Agents", href: "#agents" },
-      { label: "Compare", href: "#compare" },
-    ],
-  },
 ];
 
 export function SiteFooter() {
   return (
     <footer className="border-t bg-surface">
-      <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-10 px-5 py-12 sm:grid-cols-2 sm:px-6 lg:grid-cols-[1.4fr_repeat(3,minmax(0,1fr))]">
+      <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-10 px-5 py-12 sm:grid-cols-2 sm:px-6 lg:grid-cols-[1.4fr_repeat(2,minmax(0,1fr))]">
         <div className="flex flex-col gap-3">
           <Wordmark className="text-[1.05rem]" />
           <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
