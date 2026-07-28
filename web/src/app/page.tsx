@@ -16,6 +16,7 @@ import { ComparisonTable } from "@/components/comparison-table";
 import { CapabilityChart } from "@/components/capability-chart";
 import { PlatformTable } from "@/components/platform-table";
 import { SetupGuide } from "@/components/setup-guide";
+import { DeployGuide } from "@/components/deploy-guide";
 import { InstallCard } from "@/components/install-card";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -297,6 +298,28 @@ export default function Home() {
             />
             <PlatformTable />
           </div>
+        </Section>
+
+        {/* --------------------------------------------------------- deploy */}
+        <Section id="deploy" tinted>
+          <SectionHead
+            eyebrow="local development and production"
+            title="Two deployments. Neither of them is the lax one."
+            lead={
+              <>
+                The same tool runs on the machine where you work and on the machine nobody is
+                watching, and those pull in different directions — but not towards a weaker
+                boundary. Local development is where a prompt-injected agent has the most valuable
+                thing in reach, so{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  --profile
+                </code>{" "}
+                changes what each optimises within a secure baseline, plus one thing of kind: a
+                control this host cannot provide is a warning under dev and a refusal under prod.
+              </>
+            }
+          />
+          <DeployGuide />
         </Section>
 
         {/* ---------------------------------------------------------- setup */}

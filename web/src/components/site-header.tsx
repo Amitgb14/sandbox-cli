@@ -21,6 +21,7 @@ const NAV = [
   { href: "#config", label: "Config" },
   { href: "#agents", label: "Agents" },
   { href: "#compare", label: "Compare" },
+  { href: "#deploy", label: "Dev & prod" },
   { href: "#setup", label: "Setup" },
 ];
 

@@ -45,6 +45,7 @@ throughout.
 | `parallel-agents.tsx` | Three branches, three containers, one repo — the `--worktree` story as a diagram. |
 | `live-gauge.tsx` | The three places sandbox-cli reports usage (footer gauge, Claude status line, peak summary), with numbers that walk client-side only. |
 | `agent-explorer.tsx` | All fifteen adapters: install route, forwarded env, `--allow` domains, and the per-agent gotcha. |
+| `deploy-guide.tsx` | Local development and production as two step-by-step paths, over a matrix of what `--profile` changes — the selected column stays lit while you read, because the section is about the difference. The prod path ends with the invariants re-checked on the fully-merged config. |
 | `capability-chart.tsx` | Recharts. An **emphasis** bar chart (accent + two grays), not a rainbow — palette validated for the light surface: every adjacent pair clears the CVD and normal-vision separation floors and all three clear 3:1 contrast. |
 
 ## Where the content comes from
@@ -55,6 +56,9 @@ Copy and data mirror the repository — `README.md`, `CLAUDE.md`,
 - `site.ts` — version, install routes, repo and doc URLs
 - `agents.ts` — the fifteen adapters, delivery, sizes, forwarded env, baseline domains
 - `features.ts` — every shipped capability, grouped
+- `setup.ts` — per-platform setup, every path ending in `doctor`
+- `deploy.ts` — the dev and prod paths, and what `--profile` changes between
+  them; mirrors `internal/config/profile.go`
 - `comparison.ts` — the landscape table, the 0–5 scores behind the chart, the platform matrix
 - `argv.ts` — the model of `runtime.BuildArgs` behind the command builder
 - `reach.ts` — host paths and what is at stake in each
