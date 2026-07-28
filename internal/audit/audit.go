@@ -43,8 +43,17 @@ type SessionMeta struct {
 	// Branch is the git branch the workspace was on, when it had one.
 	Branch string
 
+	// Engine is the container engine that executed the run ("docker", "podman").
+	// Recorded for the reason the detached-run labels are: a fact not stamped is
+	// one no later command can recover, and "which engine ran this" is not
+	// derivable from anything else in the line.
+	Engine string
 	// Network is the resolved posture: "default", "none" or "allowlist".
 	Network string
+	// NetworkName is the network object the container actually joined. Under
+	// podman that is per-run rather than shared, so the posture alone no longer
+	// identifies it.
+	NetworkName string
 	// EgressEnforcementRequested is "name" when the run asked for the
 	// in-container proxy to decide each connection by hostname, "address" when
 	// only the address-matching firewall was asked for, and "" when there was no
@@ -98,7 +107,9 @@ type record struct {
 	Agent       string   `json:"agent,omitempty"`
 	Branch      string   `json:"branch,omitempty"`
 	Command     []string `json:"command,omitempty"`
+	Engine      string   `json:"engine,omitempty"`
 	Network     string   `json:"network,omitempty"`
+	NetworkName string   `json:"network_name,omitempty"`
 	EnforcedBy  string   `json:"egress_enforcement_requested,omitempty"`
 	EgressAllow []string `json:"egress_allow,omitempty"`
 	EnvNames    []string `json:"env_names,omitempty"`
@@ -149,7 +160,9 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 		Agent:       meta.Agent,
 		Branch:      meta.Branch,
 		Command:     meta.Command,
+		Engine:      meta.Engine,
 		Network:     meta.Network,
+		NetworkName: meta.NetworkName,
 		EnforcedBy:  meta.EgressEnforcementRequested,
 		EgressAllow: meta.EgressAllow,
 		EnvNames:    meta.EnvNames,

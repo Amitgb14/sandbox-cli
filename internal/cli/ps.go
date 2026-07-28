@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 )
 
@@ -50,6 +51,7 @@ type psRow struct {
 
 func newPsCmd() *cobra.Command {
 	var all bool
+	var engineFlag, cfgPath string
 	cmd := &cobra.Command{
 		Use:   "ps",
 		Short: "List sandbox containers, including ones left behind",
@@ -61,7 +63,8 @@ func newPsCmd() *cobra.Command {
 			"removes those.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rows, err := sandboxContainers(all)
+			bin := engineBin(cfgPath, engineFlag)
+			rows, err := sandboxContainers(bin, all)
 			if err != nil {
 				return err
 			}
@@ -82,11 +85,15 @@ func newPsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&all, "all", "a", false, "include exited containers (detached runs are kept after they finish)")
+	cmd.Flags().StringVar(&engineFlag, "engine", "", "container engine: docker (default) or podman")
+	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "explicit config file path")
+
 	return cmd
 }
 
 func newCleanCmd() *cobra.Command {
 	var force bool
+	var engineFlag, cfgPath string
 	cmd := &cobra.Command{
 		Use:   "clean",
 		Short: "Remove exited sandbox containers",
@@ -97,7 +104,8 @@ func newCleanCmd() *cobra.Command {
 			"them may be an agent still working in your project.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rows, err := sandboxContainers(true)
+			bin := engineBin(cfgPath, engineFlag)
+			rows, err := sandboxContainers(bin, true)
 			if err != nil {
 				return err
 			}
@@ -117,22 +125,25 @@ func newCleanCmd() *cobra.Command {
 				// Still try the network: "nothing to remove" is precisely the state in
 				// which a leftover network is worth collecting, and returning early
 				// meant it never was.
-				removeSandboxNetworkIfUnused()
+				removeSandboxNetworkIfUnused(bin)
 				return nil
 			}
 			for _, r := range targets {
-				rm := exec.Command("docker", "rm", "-f", r.Name)
+				rm := exec.Command(bin, "rm", "-f", r.Name)
 				if out, err := rm.CombinedOutput(); err != nil {
 					fmt.Fprintf(os.Stderr, "sandbox-cli: removing %s: %s\n", r.Name, strings.TrimSpace(string(out)))
 					continue
 				}
 				fmt.Printf("removed %s (%s)\n", r.Name, r.Status)
 			}
-			removeSandboxNetworkIfUnused()
+			removeSandboxNetworkIfUnused(bin)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "also remove RUNNING containers — one may be an agent still working")
+	cmd.Flags().StringVar(&engineFlag, "engine", "", "container engine: docker (default) or podman")
+	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "explicit config file path")
+
 	return cmd
 }
 
@@ -140,7 +151,7 @@ func newCleanCmd() *cobra.Command {
 // keeps this to sandbox-cli's own containers rather than everything on the
 // machine, and the format string is chosen so a value can never contain the
 // separator (names, labels and status have no tabs).
-func sandboxContainers(all bool) ([]psRow, error) {
+func sandboxContainers(bin string, all bool) ([]psRow, error) {
 	base := []string{"ps", "--filter", "label=" + sandboxLabel}
 	if all {
 		base = append(base, "--all")
@@ -152,7 +163,7 @@ func sandboxContainers(all bool) ([]psRow, error) {
 	// then parsed as empty, which is not "Up", so `clean` force-removed a
 	// container sandbox-cli never created. Names are constrained by docker itself,
 	// so a name list cannot be made to grow.
-	nameOut, err := exec.Command("docker", append(append([]string{}, base...), "--format", "{{.Names}}")...).Output()
+	nameOut, err := exec.Command(bin, append(append([]string{}, base...), "--format", "{{.Names}}")...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("listing sandbox containers (is the docker daemon running?): %w", err)
 	}
@@ -170,7 +181,7 @@ func sandboxContainers(all bool) ([]psRow, error) {
 
 	// Labels and status are for display only, and are matched back by name. A row
 	// naming anything not in the set above is discarded rather than shown.
-	detailOut, _ := exec.Command("docker", append(append([]string{}, base...),
+	detailOut, _ := exec.Command(bin, append(append([]string{}, base...),
 		"--format", "{{.Names}}\t{{.Status}}\t{{.Label \"sandbox.repo\"}}\t{{.Label \"sandbox.branch\"}}\t{{.Label \"sandbox.agent\"}}")...).Output()
 	byName := map[string]psRow{}
 	for _, r := range parsePsRows(string(detailOut)) {
@@ -230,20 +241,45 @@ func dash(s string) string {
 // to would take that sandbox's networking away mid-run. docker refuses that
 // anyway, but relying on the refusal would mean printing an error for a normal
 // situation.
-func removeSandboxNetworkIfUnused() {
-	rows, err := sandboxContainers(true)
+// engineBin is the container binary the supporting commands should speak to.
+//
+// ps, clean and stats used to hardcode docker, which made a detached podman run
+// invisible to all three: `podman ps` showed it, `sandbox-cli ps` showed a
+// docker container instead, and `clean` reported nothing to do while both sat
+// there. A supervision command that cannot see the thing it supervises is worse
+// than absent, because it answers.
+func engineBin(cfgPath, engineFlag string) string {
+	if engineFlag != "" {
+		return engineFlag
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = "."
+	}
+	cfg, err := config.LoadProfile(wd, cfgPath, "")
+	if err != nil || cfg.Engine == "" {
+		return "docker"
+	}
+	return cfg.Engine
+}
+
+func removeSandboxNetworkIfUnused(bin string) {
+	// The reaper runs first, unconditionally. It used to sit behind the
+	// "no containers left" guard, which meant it never ran on a podman-only
+	// machine (sandboxContainers failed against a missing docker) and was
+	// short-circuited on a mixed one by any docker container. Since a detached
+	// run deliberately leaves its network with machine lifetime, that was a leak
+	// with no collector.
+	removeStaleSandboxNetworks(bin)
+
+	rows, err := sandboxContainers(bin, true)
 	if err != nil || len(rows) > 0 {
 		return
 	}
-	// Podman gives each sandbox its own network — netavark has no equivalent of
-	// enable_icc, and its `isolate` option leaves same-network peers reachable —
-	// so there are many to reap rather than one. A run that was killed before its
-	// deferred cleanup leaves one behind, which is the case this exists for.
-	removeStaleSandboxNetworks()
-	if err := exec.Command("docker", "network", "inspect", runtime.SandboxNetwork).Run(); err != nil {
+	if err := exec.Command(bin, "network", "inspect", runtime.SandboxNetwork).Run(); err != nil {
 		return // not there; nothing to do
 	}
-	if out, err := exec.Command("docker", "network", "rm", runtime.SandboxNetwork).CombinedOutput(); err != nil {
+	if out, err := exec.Command(bin, "network", "rm", runtime.SandboxNetwork).CombinedOutput(); err != nil {
 		// Something outside sandbox-cli may be attached. Not an error worth
 		// failing the command over.
 		_ = out
@@ -254,26 +290,29 @@ func removeSandboxNetworkIfUnused() {
 
 // removeStaleSandboxNetworks removes the per-run networks podman leaves behind.
 //
-// Only reached once no sandbox containers remain, so anything matching the
-// prefix is by definition unattached. Best-effort and quiet on failure: a leaked
-// network is untidy, and a `clean` that fails because of one is worse.
-func removeStaleSandboxNetworks() {
-	for _, bin := range []string{"podman", "docker"} {
-		if _, err := exec.LookPath(bin); err != nil {
+// Scoped to the engine actually in use rather than sweeping both: deleting
+// sandbox-cli-* networks on an engine this run was never configured for is a
+// broader licence than the docker path takes.
+//
+// Best-effort and quiet on failure: a leaked network is untidy, and a `clean`
+// that fails because of one is worse. Anything carrying the per-run prefix is
+// unattached by the time it is reachable — a running container holds its network
+// open, so `network rm` simply refuses and this moves on.
+func removeStaleSandboxNetworks(bin string) {
+	if _, err := exec.LookPath(bin); err != nil {
+		return
+	}
+	out, err := exec.Command(bin, "network", "ls", "--format", "{{.Name}}").Output()
+	if err != nil {
+		return
+	}
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name = strings.TrimSpace(name)
+		if !strings.HasPrefix(name, runtime.SandboxNetwork+"-") {
 			continue
 		}
-		out, err := exec.Command(bin, "network", "ls", "--format", "{{.Name}}").Output()
-		if err != nil {
-			continue
-		}
-		for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			name = strings.TrimSpace(name)
-			if !strings.HasPrefix(name, runtime.SandboxNetwork+"-") {
-				continue
-			}
-			if err := exec.Command(bin, "network", "rm", name).Run(); err == nil {
-				fmt.Printf("removed network %s\n", name)
-			}
+		if err := exec.Command(bin, "network", "rm", name).Run(); err == nil {
+			fmt.Printf("removed network %s\n", name)
 		}
 	}
 }

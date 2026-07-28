@@ -97,8 +97,10 @@ func TestPodmanGivesEachSandboxItsOwnNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("podman run did not start: %v", err)
 	}
-	defer exec.Command("podman", "rm", "-f", name).Run()
+	// LIFO: the network must be removed *after* the container, or podman refuses
+	// (it is still attached) and the test leaks the network it created.
 	defer exec.Command("podman", "network", "rm", runtime.SandboxNetwork+"-"+name).Run()
+	defer exec.Command("podman", "rm", "-f", name).Run()
 
 	out, err := exec.Command("podman", "inspect", name,
 		"--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}").Output()

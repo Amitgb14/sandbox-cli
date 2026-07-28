@@ -96,3 +96,62 @@ func TestRemoveNetworkRefusesTheSharedOne(t *testing.T) {
 	d.RemoveNetwork(t.Context(), SandboxNetwork) // must be a no-op, not an attempt
 	d.RemoveNetwork(t.Context(), "")
 }
+
+// TestPerRunNetworkRefusesRatherThanFallingBack is the regression for the worst
+// bug in the first version of this work.
+//
+// On failure it used to reset spec.Network to the shared name and let the run
+// proceed, with a comment claiming that was "a weaker arrangement, not an open
+// one". Neither half was true. Under podman nothing ever creates `sandbox-cli`
+// — ownsNetwork returns false for that exact name, so EnsureNetwork no-ops on
+// it — so the run died on podman's own "network not found" with the real reason
+// discarded. And where the name *did* exist, joining it was worse: its isolation
+// was never checked, so the run silently got the peer-reachability hole the
+// per-run design exists to close.
+func TestPerRunNetworkRefusesRatherThanFallingBack(t *testing.T) {
+	// A binary that cannot be executed makes EnsureNetwork fail, which is the
+	// path under test.
+	d := &DockerCLI{Bin: "/nonexistent-engine-binary", Engine: EnginePodman}
+	spec := RunSpec{Network: SandboxNetwork, Name: "sandbox-abc123"}
+
+	cleanup, err := d.perRunNetwork(t.Context(), &spec)
+	if err == nil {
+		t.Fatal("a failed network creation was allowed to proceed")
+	}
+	if cleanup != nil {
+		t.Error("a failed creation returned a cleanup for a network that does not exist")
+	}
+	// The refusal *is* the error. spec.Network is deliberately not mutated on
+	// failure, so there is nothing half-applied for a caller to act on — the
+	// old code's mistake was continuing at all, not which name it continued with.
+	if !strings.Contains(err.Error(), "isolated network") {
+		t.Errorf("the error does not say what failed: %v", err)
+	}
+}
+
+// Without a container name there is nothing to derive a per-run network from,
+// and sharing one would defeat the isolation. Refuse rather than share.
+func TestPerRunNetworkRefusesWithoutAContainerName(t *testing.T) {
+	d := &DockerCLI{Bin: "podman"}
+	spec := RunSpec{Network: SandboxNetwork}
+	if _, err := d.perRunNetwork(t.Context(), &spec); err == nil {
+		t.Error("a nameless podman run silently shared one network with every other sandbox")
+	}
+}
+
+// Docker shares one network, so perRunNetwork must be inert for it — no rewrite,
+// no cleanup, no daemon call.
+func TestPerRunNetworkIsInertForDocker(t *testing.T) {
+	d := &DockerCLI{Bin: "/nonexistent-engine-binary", Engine: EngineDocker}
+	spec := RunSpec{Network: SandboxNetwork, Name: "sandbox-abc123"}
+	cleanup, err := d.perRunNetwork(t.Context(), &spec)
+	if err != nil || cleanup != nil || spec.Network != SandboxNetwork {
+		t.Errorf("docker path was not inert: net=%q cleanup=%v err=%v", spec.Network, cleanup != nil, err)
+	}
+	// And `none` is left alone under either engine.
+	p := &DockerCLI{Bin: "podman"}
+	spec = RunSpec{Network: "none", Name: "sandbox-abc123"}
+	if _, err := p.perRunNetwork(t.Context(), &spec); err != nil || spec.Network != "none" {
+		t.Errorf("network: none was rewritten to %q", spec.Network)
+	}
+}

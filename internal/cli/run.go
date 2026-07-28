@@ -148,7 +148,7 @@ func execute(rf *runFlags, guest []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(dockerCommandLine(spec))
+		fmt.Println(dockerCommandLine(spec, sess.Cfg.Engine))
 		return nil
 	}
 
@@ -276,9 +276,15 @@ func startDetached(rf *runFlags, sess *sandbox.Session, opts sandbox.Options) er
 	if err != nil {
 		return err
 	}
+	// Name the engine that actually ran it: printing `docker logs` for a podman
+	// container hands the user a command that fails.
+	engine := sess.Cfg.Engine
+	if engine == "" {
+		engine = "docker"
+	}
 	fmt.Fprintf(os.Stderr, "sandbox-cli: started %s in the background\n", name)
-	fmt.Fprintf(os.Stderr, "  logs:  docker logs -f %s\n", name)
-	fmt.Fprintf(os.Stderr, "  stop:  docker stop %s\n", name)
+	fmt.Fprintf(os.Stderr, "  logs:  %s logs -f %s\n", engine, name)
+	fmt.Fprintf(os.Stderr, "  stop:  %s stop %s\n", engine, name)
 	// Worth saying once, at the moment it can still be acted on: an agent left in
 	// its interactive mode has no terminal in there and will sit until stopped.
 	if rf.persistName != "" {
@@ -315,11 +321,18 @@ func warnDirtyWorktree(rf *runFlags) {
 	fmt.Fprintf(os.Stderr, "  Commit with: sandbox-cli worktree commit %s -m \"...\"\n", rf.worktree)
 }
 
-// dockerCommandLine renders the docker invocation for --dry-run, quoting args
+// dockerCommandLine renders the engine invocation for --dry-run, quoting args
 // that contain whitespace so the output is copy-pasteable.
-func dockerCommandLine(spec runtime.RunSpec) string {
+//
+// It takes the engine because "copy-pasteable" was only true for docker: under
+// --engine podman the printed command ran the other engine, which is the one
+// thing --dry-run exists to be exact about.
+func dockerCommandLine(spec runtime.RunSpec, engine string) string {
+	if engine == "" {
+		engine = "docker"
+	}
 	var b strings.Builder
-	b.WriteString("docker")
+	b.WriteString(engine)
 	for _, a := range runtime.BuildArgs(spec) {
 		b.WriteByte(' ')
 		b.WriteString(shellQuote(a))

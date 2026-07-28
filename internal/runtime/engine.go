@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -89,7 +90,7 @@ func (d *DockerCLI) seccompApplied(ctx context.Context) (applied, known bool) {
 		var sec struct {
 			SeccompEnabled *bool `json:"seccompEnabled"`
 		}
-		if json.Unmarshal(trimSpaceBytes(out), &sec) != nil || sec.SeccompEnabled == nil {
+		if json.Unmarshal(bytes.TrimSpace(out), &sec) != nil || sec.SeccompEnabled == nil {
 			return false, false
 		}
 		return *sec.SeccompEnabled, true
@@ -99,7 +100,7 @@ func (d *DockerCLI) seccompApplied(ctx context.Context) (applied, known bool) {
 		return false, false
 	}
 	var opts []string
-	if json.Unmarshal(trimSpaceBytes(out), &opts) != nil {
+	if json.Unmarshal(bytes.TrimSpace(out), &opts) != nil {
 		return false, false
 	}
 	return !seccompDisabled(opts), true
@@ -188,6 +189,3 @@ func (d *DockerCLI) RemoveNetwork(ctx context.Context, name string) {
 	}
 	_ = exec.CommandContext(ctx, d.bin(), "network", "rm", name).Run()
 }
-
-// trimSpaceBytes is bytes.TrimSpace without importing bytes into this file.
-func trimSpaceBytes(b []byte) []byte { return []byte(strings.TrimSpace(string(b))) }

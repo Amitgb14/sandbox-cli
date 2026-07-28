@@ -25,7 +25,7 @@ func TestDryRunInvariants(t *testing.T) {
 		CapDrop:         []string{"ALL"},
 		PidsLimit:       1024,
 	}
-	line := dockerCommandLine(spec)
+	line := dockerCommandLine(spec, "")
 
 	mustContain := []string{
 		"--rm",
@@ -68,7 +68,7 @@ func TestDryRunShowsPublishedPorts(t *testing.T) {
 		Home:    "/sandbox/home",
 		Ports:   []string{"127.0.0.1:3000:3000", "0.0.0.0:8080:80"},
 	}
-	line := dockerCommandLine(spec)
+	line := dockerCommandLine(spec, "")
 
 	for _, want := range []string{"-p 127.0.0.1:3000:3000", "-p 0.0.0.0:8080:80"} {
 		if !strings.Contains(line, want) {
@@ -93,7 +93,7 @@ func TestDryRunDetached(t *testing.T) {
 
 		NoNewPrivileges: true,
 		CapDrop:         []string{"ALL"},
-	})
+	}, "")
 
 	for _, s := range []string{
 		"-d",

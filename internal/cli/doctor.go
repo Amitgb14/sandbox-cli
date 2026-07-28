@@ -84,6 +84,12 @@ func newDoctorCmd() *cobra.Command {
 				return err
 			}
 			if engineFlag != "" {
+				// Validated rather than executed: an unvalidated flag turned
+				// `--engine dokcer` into "dokcer not found on PATH" instead of the
+				// config error Validate already gives for the same typo.
+				if !runtime.KnownEngine(engineFlag) {
+					return fmt.Errorf("--engine %q: want %s", engineFlag, strings.Join(runtime.EngineNames(), " or "))
+				}
 				engine = engineFlag
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), doctorTimeout)

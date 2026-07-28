@@ -485,6 +485,13 @@ func boolPtr(b bool) *bool    { return &b }
 func int64Ptr(n int64) *int64 { return &n }
 
 // Validate checks that the merged config is internally consistent.
+// ValidEngine reports whether name is a container engine sandbox-cli speaks.
+//
+// Duplicated from runtime.KnownEngine only in the sense that config cannot
+// import runtime without a cycle; the two lists are asserted equal by test, so
+// adding an engine in one place and not the other fails rather than drifts.
+func ValidEngine(name string) bool { return name == "docker" || name == "podman" }
+
 func (c Config) Validate() error {
 	if c.Image == "" {
 		return fmt.Errorf("image must not be empty")
@@ -492,7 +499,7 @@ func (c Config) Validate() error {
 	// A typo here would otherwise be executed: NewEngine treats an unknown name
 	// as the binary to run, so `engine: dokcer` becomes a confusing "executable
 	// file not found" from deep inside a run rather than a config error.
-	if c.Engine != "" && c.Engine != "docker" && c.Engine != "podman" {
+	if c.Engine != "" && !ValidEngine(c.Engine) {
 		return fmt.Errorf("engine %q: want docker or podman", c.Engine)
 	}
 	// An image reference beginning with a dash is read by docker as another flag,

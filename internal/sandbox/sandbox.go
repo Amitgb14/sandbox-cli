@@ -86,7 +86,7 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	// moment nothing has happened yet.
 	started := time.Now()
 	code, runErr := s.Runtime.Run(ctx, spec)
-	s.Audit.RecordSession(auditMeta(spec, opts, code, time.Since(started)))
+	s.Audit.RecordSession(auditMeta(s.Cfg, spec, opts, code, time.Since(started)))
 	return code, runErr
 }
 
@@ -130,7 +130,7 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	name, startErr := s.Runtime.Start(ctx, spec)
 	// A detached run has no exit code to wait for — the record says it was
 	// launched, and `sandbox-cli ps` is where its fate lives.
-	meta := auditMeta(spec, opts, 0, time.Since(started))
+	meta := auditMeta(s.Cfg, spec, opts, 0, time.Since(started))
 	meta.Detached = true
 	s.Audit.RecordSession(meta)
 	return name, startErr
@@ -217,7 +217,7 @@ func forwardedValues(cfg config.Config, opts Options) (map[string]string, error)
 // auditMeta assembles the record for one run. Everything here is already
 // resolved on the spec, which is the point: the log describes what actually ran,
 // not what the flags asked for.
-func auditMeta(spec runtime.RunSpec, opts Options, exitCode int, took time.Duration) audit.SessionMeta {
+func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode int, took time.Duration) audit.SessionMeta {
 	m := audit.SessionMeta{
 		Image:    spec.Image,
 		Workdir:  spec.Workdir,
@@ -255,6 +255,12 @@ func auditMeta(spec runtime.RunSpec, opts Options, exitCode int, took time.Durat
 			m.EgressEnforcementRequested = "name"
 		}
 	}
+	m.Engine = cfg.Engine
+	if m.Engine == "" {
+		m.Engine = "docker"
+	}
+	m.NetworkName = spec.Network
+
 	return m
 }
 
