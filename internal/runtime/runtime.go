@@ -25,16 +25,31 @@ type Mount struct {
 // turns it into docker arguments and is exhaustively unit-tested, so this struct
 // is the single choke point for the isolation invariants.
 type RunSpec struct {
-	Image    string
-	Name     string   // container name (--name); enables `docker stats`, snapshots
-	Workdir  string   // working dir inside the container (e.g. /workspace)
-	Command  []string // guest argv, e.g. ["claude", "--dangerously-skip-permissions"]
-	TTY      bool     // allocate an interactive pty (-it)
-	Remove   bool     // --rm: destroy container on exit
-	Hostname string   // container hostname
-	Home     string   // value for HOME inside the container (fake, ephemeral)
-	User     string   // "" => image default; else "root", "sandbox", or uid:gid
-	Network  string   // "" => docker default bridge; "none" => no network
+	// HostUserMapping asks the engine to map the container's unprivileged user to
+	// the host user running sandbox-cli, and to relabel bind mounts for SELinux.
+	//
+	// Empty for docker, which needs neither: Docker Desktop virtualizes
+	// bind-mount ownership and the daemon runs as root, so /workspace is simply
+	// writable. Rootless podman maps the host user to container uid 0, so a
+	// workspace appears root-owned and the sandbox user (1001) cannot write to
+	// it — and on SELinux-enforcing distributions the mount is denied outright,
+	// so it cannot read it either. Measured on Fedora inside a podman machine:
+	// today's flags fail both read and write, relabelling alone fixes only read.
+	//
+	// Rendered as `--userns=keep-id:uid=N,gid=N` plus `relabel=shared` on each
+	// bind. This is the fourth place the engines differ, after the three in
+	// engine.go.
+	HostUserMapping string
+	Image           string
+	Name            string   // container name (--name); enables `docker stats`, snapshots
+	Workdir         string   // working dir inside the container (e.g. /workspace)
+	Command         []string // guest argv, e.g. ["claude", "--dangerously-skip-permissions"]
+	TTY             bool     // allocate an interactive pty (-it)
+	Remove          bool     // --rm: destroy container on exit
+	Hostname        string   // container hostname
+	Home            string   // value for HOME inside the container (fake, ephemeral)
+	User            string   // "" => image default; else "root", "sandbox", or uid:gid
+	Network         string   // "" => docker default bridge; "none" => no network
 	// Runtime selects the OCI runtime (docker --runtime). "" uses docker's default
 	// (runc, a shared-kernel container). Set to a stronger-isolation runtime the
 	// host has registered, e.g. "kata-runtime" (microVM, own kernel) or "runsc"

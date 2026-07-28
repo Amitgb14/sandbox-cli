@@ -782,8 +782,12 @@ platforms; the differences are all about the boundary the host can provide.
    native Linux; not yet independently verified on Docker Desktop.
 2. `host.docker.internal` resolves automatically on Docker Desktop, so the flag is
    optional there; it's required on native Linux.
-3. On native Linux, `/workspace` files are owned by the container user's uid — use
-   `--user "$(id -u):$(id -g)"` if that matters. Docker Desktop virtualizes this.
+3. On native Linux **with Docker**, `/workspace` files are owned by the container
+   user's uid — use `--user "$(id -u):$(id -g)"` if that matters. Docker Desktop
+   virtualizes this. Under **rootless Podman that advice inverts**: your host uid
+   maps into the subuid range, so passing it makes the workspace unreadable.
+   sandbox-cli maps the container user onto you automatically there
+   (`--userns=keep-id`), and files land as your own uid:gid — pass nothing.
 4. Docker Desktop runs containers inside its own managed Linux VM and doesn't allow
    registering custom OCI runtimes — so you can't *select* Kata/gVisor. (You already
    get a VM boundary from Docker Desktop itself.)

@@ -58,7 +58,14 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   between *different* networks while leaving same-network peers reachable — confirmed by reading one
   container's data from another — so podman gets **one isolated network per sandbox**, where docker
   shares one. Podman answers `info` with different shapes too, and via JSON keys rather than template
-  field names, because its Go struct names and JSON keys disagree. This is the single choke point for the isolation invariants (only
+  field names, because its Go struct names and JSON keys disagree. A **fourth** difference showed up
+later and only on native Linux, which is why the first version looked complete: rootless podman maps
+the host user to container **uid 0**, so a bind-mounted workspace appears root-owned and the sandbox
+user cannot write to it — and SELinux denies the bind outright, so it cannot read it either.
+`RunSpec.HostUserMapping` renders `--userns=keep-id:uid=1001,gid=1001` plus `relabel=shared`, and the
+container user goes numeric so the *group* maps too (`--user sandbox` left files owned by
+host-uid:subgid). Docker gets none of it, which is what keeps the golden `--dry-run` test meaningful
+rather than merely passing. This is the single choke point for the isolation invariants (only
   declared mounts are host-connected; `HOME` is always the fake path; host home is never mounted)
   and is exhaustively unit-tested. `docker_cli.go` is the only backend today, hidden behind the
   `Runtime` interface.

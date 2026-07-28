@@ -30,6 +30,16 @@ version is tagged.
 
   `doctor` speaks both dialects and reports the engine it actually checked.
 
+  On **native Linux** rootless Podman the workspace needed two more things, and
+  neither has a Docker equivalent: the host user is mapped onto the container's
+  (`--userns=keep-id`), because rootless Podman otherwise maps you to container
+  uid 0 and the sandbox user cannot write to its own workspace; and bind mounts
+  are relabelled for SELinux, without which Fedora/RHEL deny the mount outright
+  so the agent cannot even read it. Files written by the agent come back owned by
+  your own uid:gid. Note this **inverts the README's Docker advice**: do *not*
+  pass `--user "$(id -u):$(id -g)"` under rootless Podman — your host uid maps
+  into the subuid range and the workspace becomes unreadable.
+
 
 ## 0.0.1beta.7 — 2026-07-27
 

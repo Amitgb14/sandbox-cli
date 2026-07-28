@@ -1323,3 +1323,83 @@ func TestBuildSpec_JoinsTheIsolatedNetwork(t *testing.T) {
 		t.Errorf("network: none produced %q", spec.Network)
 	}
 }
+
+// TestPodmanMapsTheHostUserOntoTheWorkspace is the regression for a bug that
+// only appears on the platform podman is most used on.
+//
+// It worked on macOS, where the podman machine VM virtualizes bind-mount
+// ownership the way Docker Desktop does — so the first version of podman
+// support looked complete. On native Linux rootless podman it did not: the host
+// user maps to container uid 0, so the workspace appears root-owned and the
+// sandbox user (1001) cannot write to it, and on SELinux-enforcing
+// distributions the bind is denied outright so it cannot read it either.
+// Measured on Fedora with SELinux enforcing: today's flags failed both, and
+// relabelling alone fixed only the read.
+func TestPodmanMapsTheHostUserOntoTheWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Engine = "podman"
+	cfg.Network.Mode = "default" // keep this case about the mount, not the firewall
+
+	spec, err := BuildSpec(cfg, Options{Project: dir, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.HostUserMapping == "" {
+		t.Fatal("podman spec carries no userns mapping; the workspace would be unwritable on Linux")
+	}
+	argv := strings.Join(runtime.BuildArgs(spec), " ")
+	if !strings.Contains(argv, "--userns=keep-id:uid=1001,gid=1001") {
+		t.Errorf("argv lacks the keep-id mapping:\n%s", argv)
+	}
+	if !strings.Contains(argv, "relabel=shared") {
+		t.Errorf("argv lacks the SELinux relabel, so the mount is denied on Fedora/RHEL:\n%s", argv)
+	}
+	// Numeric user, so the *group* maps too. `--user sandbox` set the uid but
+	// left the group at 0, and a file written into the workspace came back owned
+	// by host-uid:subgid (501:100000) — the right user, a group the host has no
+	// name for. `--user 1001:1001` lands it as the host's own uid:gid.
+	if !strings.Contains(argv, "--user 1001:1001") {
+		t.Errorf("podman user is not numeric uid:gid, so written files get a subgid:\n%s", argv)
+	}
+}
+
+// Docker needs none of it — its daemon runs as root and Docker Desktop
+// virtualizes ownership — and adding any of it would change the argv the golden
+// --dry-run test pins.
+func TestDockerGetsNoUserNamespaceRemapping(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Network.Mode = "default"
+
+	spec, err := BuildSpec(cfg, Options{Project: dir, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.HostUserMapping != "" {
+		t.Errorf("docker spec carries a userns mapping: %q", spec.HostUserMapping)
+	}
+	argv := strings.Join(runtime.BuildArgs(spec), " ")
+	for _, unwanted := range []string{"--userns", "relabel="} {
+		if strings.Contains(argv, unwanted) {
+			t.Errorf("docker argv contains %q, which it does not need:\n%s", unwanted, argv)
+		}
+	}
+}
+
+// An explicitly requested user is left exactly as written: the caller has said
+// what they want, and rewriting it would be the surprise.
+func TestPodmanLeavesAnExplicitUserAlone(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Engine = "podman"
+	cfg.Network.Mode = "default"
+
+	spec, err := BuildSpec(cfg, Options{Project: dir, User: "1234:5678", Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.User != "1234:5678" {
+		t.Errorf("User = %q, want the caller's own value", spec.User)
+	}
+}
