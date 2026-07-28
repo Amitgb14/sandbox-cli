@@ -28,25 +28,6 @@ version is tagged.
   still has the whole shared directory read-write and can read every namespace
   in it. It is not an isolation boundary — don't put anything secret in one.
 
-### Fixed
-
-- **A `--share` namespace could be pointed at another namespace, or at the whole shared
-  directory, by a symlink planted inside it.** The shared directory is
-  read-write to any sandbox using a bare `--share`, so its contents are
-  attacker-controlled; a relative symlink such as `ln -s . NAME` stayed inside
-  the directory and so passed the containment check, and the namespace then
-  resolved to the shared root. A namespace must now be a real directory, and its
-  resolved path must be exactly the namespace directory rather than merely
-  somewhere beneath the root.
-
-- **The seeded `README.md` followed a symlink out of the shared directory.** The
-  "is one already there?" check used `os.Stat`, which follows symlinks, so a
-  *dangling* link failed it and the subsequent write followed the same link and
-  created its target — letting a container cause a host file to be created at a
-  path it chose, outside the shared directory. Both seeders now create the file
-  with `O_EXCL`, which never follows an existing path. Affects bare `--share`
-  in earlier releases, not only the new namespaces.
-
 - **Podman is supported** (`--engine podman`, or `engine: podman` in your own
   config). Docker stays the default; the engine is a user-config key rather than
   a project one, since a repository choosing which binary runs on your machine
@@ -74,6 +55,25 @@ version is tagged.
   pass `--user "$(id -u):$(id -g)"` under rootless Podman — your host uid maps
   into the subuid range and the workspace becomes unreadable.
 
+
+### Fixed
+
+- **A `--share` namespace could be pointed at another namespace, or at the whole shared
+  directory, by a symlink planted inside it.** The shared directory is
+  read-write to any sandbox using a bare `--share`, so its contents are
+  attacker-controlled; a relative symlink such as `ln -s . NAME` stayed inside
+  the directory and so passed the containment check, and the namespace then
+  resolved to the shared root. A namespace must now be a real directory, and its
+  resolved path must be exactly the namespace directory rather than merely
+  somewhere beneath the root.
+
+- **The seeded `README.md` followed a symlink out of the shared directory.** The
+  "is one already there?" check used `os.Stat`, which follows symlinks, so a
+  *dangling* link failed it and the subsequent write followed the same link and
+  created its target — letting a container cause a host file to be created at a
+  path it chose, outside the shared directory. Both seeders now create the file
+  with `O_EXCL`, which never follows an existing path. Affects bare `--share`
+  in earlier releases, not only the new namespaces.
 
 ## 0.0.1beta.7 — 2026-07-27
 
