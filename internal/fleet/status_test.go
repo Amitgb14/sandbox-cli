@@ -45,6 +45,7 @@ func container(branch, state string, started, finished time.Time) runtime.Contai
 		Name: "sandbox-app-" + branch,
 		Labels: map[string]string{
 			sandbox.LabelCLI:    "1",
+			sandbox.LabelFleet:  "1",
 			sandbox.LabelRepo:   testRepoID,
 			sandbox.LabelBranch: branch,
 		},
@@ -137,9 +138,10 @@ func TestStatusStateAndElapsed(t *testing.T) {
 		t.Errorf("nil container elapsed = %v, want 0", got)
 	}
 
-	// A branch with no container reports a placeholder rather than an empty cell.
-	if got := (Status{Branch: "x"}).State(); got != "—" {
-		t.Errorf("State() with no container = %q", got)
+	// A branch with no container has no elapsed time to report. How that renders
+	// is the CLI's business (cli.fleetState), not this package's.
+	if got := (Status{Branch: "x"}).Running(); got {
+		t.Error("a branch with no container reports Running")
 	}
 }
 

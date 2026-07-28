@@ -19,6 +19,7 @@ type ContainerInfo struct {
 	Labels     map[string]string // the sandbox.* labels the run was started with
 	State      string            // "running", "exited", "created", "dead", …
 	ExitCode   int               // meaningful once State is "exited"
+	CreatedAt  time.Time         // when docker created it; always set
 	StartedAt  time.Time         // zero if never started
 	FinishedAt time.Time         // zero while still running
 }
@@ -113,14 +114,35 @@ func (d *DockerCLI) Containers(ctx context.Context, labels map[string]string) ([
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	return d.inspect(ctx, ids)
+	// One `docker inspect` per batch rather than one for every id at once: a long
+	// fleet history is a long argv, and the limit it eventually hits (E2BIG) would
+	// show up as an inscrutable exec failure on exactly the machines that have been
+	// using this the longest.
+	var infos []ContainerInfo
+	for start := 0; start < len(ids); start += inspectBatch {
+		end := start + inspectBatch
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch, err := d.inspect(ctx, ids[start:end])
+		if err != nil {
+			return nil, err
+		}
+		infos = append(infos, batch...)
+	}
+	sortNewestFirst(infos)
+	return infos, nil
 }
+
+// inspectBatch caps how many container ids go on one `docker inspect` argv.
+const inspectBatch = 100
 
 // dockerInspect mirrors the subset of `docker inspect` output we rely on.
 type dockerInspect struct {
-	ID    string `json:"Id"`
-	Name  string `json:"Name"`
-	State struct {
+	ID      string `json:"Id"`
+	Name    string `json:"Name"`
+	Created string `json:"Created"`
+	State   struct {
 		Status     string `json:"Status"`
 		ExitCode   int    `json:"ExitCode"`
 		StartedAt  string `json:"StartedAt"`
@@ -144,6 +166,7 @@ func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo,
 	for _, r := range raw {
 		infos = append(infos, ContainerInfo{
 			ID:         r.ID,
+			CreatedAt:  parseDockerTime(r.Created),
 			Name:       strings.TrimPrefix(r.Name, "/"),
 			Labels:     r.Config.Labels,
 			State:      r.State.Status,
@@ -152,9 +175,19 @@ func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo,
 			FinishedAt: parseDockerTime(r.State.FinishedAt),
 		})
 	}
-	// Newest first: the run you just started is the one you are looking for.
-	sort.Slice(infos, func(i, j int) bool { return infos[i].StartedAt.After(infos[j].StartedAt) })
 	return infos, nil
+}
+
+// sortNewestFirst orders containers so the run you just started is first.
+//
+// "Newest" is creation, not start. A container in `created` state has a zero
+// StartedAt, so sorting on that put a just-launched run *last*, behind the
+// previous exited one — and a caller asking for the latest container would then
+// read the old run's exit code and verify label, which is how `land` would judge
+// a new run by an old verdict. Creation order is launch order, and docker always
+// sets it.
+func sortNewestFirst(infos []ContainerInfo) {
+	sort.Slice(infos, func(i, j int) bool { return infos[i].CreatedAt.After(infos[j].CreatedAt) })
 }
 
 // parseDockerTime converts docker's RFC3339-with-nanoseconds timestamps. Docker

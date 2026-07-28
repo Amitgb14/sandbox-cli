@@ -34,9 +34,14 @@ type LandResult struct {
 	// to ask, or a pass forced past a failure — so the caller must say "unverified"
 	// rather than "failed". A task that only *ran* is never reported as passed.
 	Verified bool
-	// Forced records that Force overrode a failed verify, so the CLI can say so
-	// rather than printing an ordinary success.
+	// Forced records that Force overrode a run that did not pass, so the CLI can
+	// say so rather than printing an ordinary success.
 	Forced bool
+	// ForcedUnchecked narrows Forced: the run never reached its verify at all
+	// (killed, out of memory) rather than running it and failing. Reported apart
+	// because "the tests said no" and "nothing ever asked the tests" are different
+	// things to have decided to land.
+	ForcedUnchecked bool
 }
 
 // defaultLandMessage is used when land has to commit a worktree the agent left
@@ -83,7 +88,8 @@ func (r *Runner) Land(ctx context.Context, branch string, opts LandOptions) (Lan
 		return res, err
 	}
 	res.Verified = verdict == verifyPassed
-	res.Forced = verdict == verifyForced
+	res.Forced = verdict == verifyForced || verdict == verifyForcedUnchecked
+	res.ForcedUnchecked = verdict == verifyForcedUnchecked
 
 	// 3. There must be a worktree to land from.
 	if _, exists, err := worktree.Path(r.Repo, branch); err != nil {
@@ -186,9 +192,10 @@ func (r *Runner) Land(ctx context.Context, branch string, opts LandOptions) (Lan
 type verifyVerdict int
 
 const (
-	verifyNone   verifyVerdict = iota // no verify was declared, or no record survives
-	verifyPassed                      // declared, and the run exited 0
-	verifyForced                      // declared, failed, and the caller overrode it
+	verifyNone            verifyVerdict = iota // no verify was declared, or no record survives
+	verifyPassed                               // declared, and the run exited 0
+	verifyForced                               // declared, failed its verify, caller overrode
+	verifyForcedUnchecked                      // declared, never reached its verify, caller overrode
 )
 
 // checkVerified reads back whether this branch's run passed the verify command it
@@ -220,10 +227,17 @@ func (r *Runner) checkVerified(ctx context.Context, branch string, force bool) (
 	if c.ExitCode == 0 {
 		return verifyPassed, nil
 	}
-	if force {
-		return verifyForced, nil
-	}
 	declared := c.Labels[sandbox.LabelVerify]
+	if force {
+		// Two different things to have overridden, kept apart all the way to the
+		// message: a verify that ran and said no, and a run that died before its
+		// verify ever ran. Collapsing them would have --force report "failed its
+		// verify" for a container the OOM killer took.
+		if c.ExitCode == VerifyFailedExit {
+			return verifyForced, nil
+		}
+		return verifyForcedUnchecked, nil
+	}
 	if c.ExitCode == VerifyFailedExit {
 		return verifyNone, fmt.Errorf("%q did not pass its verify (%s); "+
 			"read the output with `sandbox-cli fleet logs %s`, fix it and run again, or land it anyway with --force",

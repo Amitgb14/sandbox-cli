@@ -41,6 +41,14 @@ const (
 	// was sent to work towards".
 	LabelBase = "sandbox.base"
 
+	// LabelFleet marks a container that a `fleet run` launched, as opposed to an
+	// interactive detached session in the same repository. Without it every fleet
+	// command is repo-scoped rather than fleet-scoped: `fleet stop --all` reaches a
+	// detached `sandbox-cli claude`, `fleet clean` reaps it, and max_parallel counts
+	// it — so one open interactive session blocks a `max_parallel: 1` fleet forever
+	// on a slot that will never free.
+	LabelFleet = "sandbox.fleet"
+
 	// LabelVerify is the task's definition of done, when it declared one. Its
 	// presence is what lets `land` tell "this run had no check" from "this run
 	// passed its check"; the verdict itself is the container's exit code.

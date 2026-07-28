@@ -382,3 +382,26 @@ func TestLandUnknownBranch(t *testing.T) {
 		t.Fatalf("expected a no-worktree error, got %v", err)
 	}
 }
+
+// The drift CLAUDE.md warns about for this package: an agent that runs
+// `git checkout -b` inside its own worktree puts the branch and the directory out
+// of sync. worktree.Path falls back to the name-derived directory and reports it
+// as existing, so without the HeadBranch assertion land would `add -A && commit`
+// the work onto whatever branch the checkout moved to, then merge the untouched
+// original — or report "nothing to land" having already made the commit.
+func TestLandRefusesWhenTheAgentMovedTheWorktreeToAnotherBranch(t *testing.T) {
+	_, _, wt, r := landFixture(t)
+	gitIn(t, wt, "checkout", "-q", "-b", "agent-renamed-this")
+	if err := os.WriteFile(filepath.Join(wt, "work.txt"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.Land(context.Background(), "feature-a", LandOptions{})
+	if err == nil || !strings.Contains(err.Error(), "agent-renamed-this") {
+		t.Fatalf("expected a refusal naming the branch the worktree moved to, got %v", err)
+	}
+	// Nothing may have been committed on the way to refusing.
+	if out := gitIn(t, wt, "status", "--porcelain"); !strings.Contains(out, "work.txt") {
+		t.Errorf("the work was committed despite the refusal; status: %q", out)
+	}
+}

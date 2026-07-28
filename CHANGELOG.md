@@ -13,6 +13,47 @@ version is tagged.
 
 ### Added
 
+- **`sandbox-cli fleet`** runs several agents at once — one per git branch, each
+  in its own worktree and its own detached container, from a single `fleet.yaml`
+  — then supervises them and lands the results by branch name:
+  `fleet run`, `status`, `logs`, `stop`, `land`, `clean`.
+
+  ```yaml
+  agent: claude
+  max_parallel: 3
+  defaults: { memory: 4g, cpus: "2" }
+  tasks:
+    - branch: feature-a
+      prompt: implement the login form
+      verify: go build ./... && go test ./...
+  ```
+
+  Fleet agents are **autonomous by construction**: nothing is attached to a
+  background container, so each one starts in its non-interactive mode with
+  approvals skipped — the container, not the prompt, is the boundary. Only
+  agents with a verified headless mode may appear in a fleet file (`claude`,
+  `codex` today); anything else is rejected before a container starts.
+
+  A task may declare a **`verify:`** command. It runs inside the container after
+  the agent, and its exit code decides whether the work is done — which is the
+  difference between an agent that stopped and an agent that succeeded. A task
+  with no verify still runs, but `fleet land` reports it as *unverified* rather
+  than passed.
+
+  **`fleet land`** is the only command that writes to your base branch, and it
+  refuses rather than guessing: while the agent is still running, when the work
+  failed its verify (`--force` to override), when your checkout has moved off the
+  branch the work was launched for (`--onto BRANCH` to say it is deliberate),
+  when another agent is working in the checkout being merged into, and when that
+  checkout is dirty. On conflict it stops with git's own message and leaves the
+  merge in place.
+
+  Fleet containers are **kept after they exit** — their logs and exit codes are
+  the only record a background run leaves — and reaped by `fleet clean`.
+  `--profile prod` applies to every task, which is the posture an unattended run
+  usually wants: nobody is watching, so a control that could not be satisfied
+  should refuse rather than warn.
+
 - **`--share-name NAME`** namespaces the shared directory: with `--share`,
   `~/.config/sandbox/shared/NAME` is mounted at `/shared/NAME`, so two sandboxes
   running at once no longer overwrite each other's handoff files. A bare

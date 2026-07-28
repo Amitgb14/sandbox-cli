@@ -58,6 +58,7 @@ func (r *Runner) Plan(ctx context.Context, spec Spec) ([]Planned, error) {
 			Allow:          spec.Defaults.Allow,
 			Labels: map[string]string{
 				sandbox.LabelCLI:    "1",
+				sandbox.LabelFleet:  "1",
 				sandbox.LabelRepo:   r.RepoID,
 				sandbox.LabelBranch: t.Branch,
 				sandbox.LabelAgent:  agent.Name,
@@ -113,7 +114,14 @@ func (r *Runner) Stop(ctx context.Context, branch string) ([]string, error) {
 		if err := r.Controller.Stop(ctx, c.ID); err != nil {
 			return stopped, err
 		}
-		stopped = append(stopped, c.Labels[sandbox.LabelBranch])
+		// Report the container name when there is no branch label. Appending the
+		// label unguarded printed a bare "stopped " line for a container the caller
+		// then had no way to identify.
+		if b := c.Labels[sandbox.LabelBranch]; b != "" {
+			stopped = append(stopped, b)
+		} else {
+			stopped = append(stopped, c.Name)
+		}
 	}
 	return stopped, nil
 }
@@ -171,7 +179,7 @@ func (r *Runner) Clean(ctx context.Context, branch string, worktrees bool) (Clea
 		return res, nil
 	}
 
-	for _, b := range r.worktreeBranches(branch) {
+	for _, b := range r.worktreeBranches(branch, infos) {
 		if running[b] {
 			continue // already reported above
 		}
@@ -189,15 +197,36 @@ func (r *Runner) Clean(ctx context.Context, branch string, worktrees bool) (Clea
 	return res, nil
 }
 
-// worktreeBranches lists this repository's sandbox worktrees, narrowed to one
-// branch when given.
-func (r *Runner) worktreeBranches(branch string) []string {
+// worktreeBranches lists the sandbox worktrees this *fleet* created, narrowed to
+// one branch when given.
+//
+// Intersected with the fleet's own containers rather than taken from
+// worktree.List alone. `worktree list` reports every sandbox-managed checkout of
+// the repository, including ones an ordinary `--worktree` run made, and removing
+// those is not what `fleet clean --worktrees` promises. Committed work survives on
+// the branch either way, so this was never data loss — but a command that removes
+// more than its name says will eventually be run by someone who believed the name.
+//
+// A branch whose container has already been reaped by an earlier `clean` is
+// therefore not removed by a later one. That is the right trade: the alternative
+// is guessing from a directory name, and the fleet is not the only thing allowed
+// to make worktrees.
+func (r *Runner) worktreeBranches(branch string, fleetContainers []runtime.ContainerInfo) []string {
+	launched := make(map[string]bool, len(fleetContainers))
+	for _, c := range fleetContainers {
+		if b := c.Labels[sandbox.LabelBranch]; b != "" {
+			launched[b] = true
+		}
+	}
 	wts, err := worktree.List(r.Repo)
 	if err != nil {
 		return nil
 	}
 	var out []string
 	for _, wt := range wts {
+		if !launched[wt.Branch] {
+			continue
+		}
 		if branch == "" || wt.Branch == branch {
 			out = append(out, wt.Branch)
 		}
@@ -208,9 +237,15 @@ func (r *Runner) worktreeBranches(branch string) []string {
 // containers returns this repository's containers, optionally narrowed to one
 // branch.
 func (r *Runner) containers(ctx context.Context, branch string) ([]runtime.ContainerInfo, error) {
+	// sandbox.fleet, not just sandbox.repo: everything built on this — stop, clean,
+	// logs, and the max_parallel slot count — must reach only what `fleet run`
+	// started. Filtering by repository alone would sweep in an interactive
+	// `sandbox-cli claude --detach` in the same project, which is someone's live
+	// session.
 	labels := map[string]string{
-		sandbox.LabelCLI:  "1",
-		sandbox.LabelRepo: r.RepoID,
+		sandbox.LabelCLI:   "1",
+		sandbox.LabelFleet: "1",
+		sandbox.LabelRepo:  r.RepoID,
 	}
 	if branch != "" {
 		labels[sandbox.LabelBranch] = branch

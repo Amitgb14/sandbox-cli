@@ -56,14 +56,24 @@ func (d Descriptor) Autonomous(prompt string, extra []string) []string {
 	return concat(d.Command, d.AutonomousArgs(prompt), extra)
 }
 
-// claudeBootstrap ensures a self-updating Claude install exists in the persisted
+// ClaudeBootstrap ensures a self-updating Claude install exists in the persisted
 // HOME (~/.local/bin, installed via the native installer on first run) and execs
 // it. The baked npm copy in /usr/local/bin is the offline fallback. Because the
 // persisted install is user-writable, Claude Code keeps itself up to date across
 // runs — the baked copy could not (root-owned).
-const claudeBootstrap = `export PATH="$HOME/.local/bin:$PATH"
+//
+// PATH is **appended** to, never prepended. That HOME is writable by the agent
+// and shared by every session using this adapter, so a prepend would let a
+// planted $HOME/.local/bin/git shadow the image's for every later run — the same
+// shape as the root-phase hazard in CLAUDE.md, one privilege drop later. The
+// wanted binary is reached by absolute path instead, which needs no PATH
+// precedence at all.
+const ClaudeBootstrap = `export PATH="$PATH:$HOME/.local/bin"
 if [ ! -x "$HOME/.local/bin/claude" ]; then
   command -v curl >/dev/null 2>&1 && curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1 || true
+fi
+if [ -x "$HOME/.local/bin/claude" ]; then
+  exec "$HOME/.local/bin/claude" "$@"
 fi
 exec claude "$@"`
 
@@ -81,7 +91,7 @@ var registry = map[string]Descriptor{
 		},
 		// The trailing "claude" is $0 for the bootstrap shell, so the guest args
 		// land in "$@" and reach the real binary.
-		Command: []string{"sh", "-c", claudeBootstrap, "claude"},
+		Command: []string{"sh", "-c", ClaudeBootstrap, "claude"},
 		AutonomousArgs: func(prompt string) []string {
 			// -p is Claude Code's headless "print" mode: run the prompt and exit.
 			// Skipping permissions is what keeps it from blocking on a prompt no

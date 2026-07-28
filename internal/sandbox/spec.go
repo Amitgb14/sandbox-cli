@@ -63,6 +63,11 @@ type Options struct {
 	Agent  string // agent adapter name ("claude", "codex"), empty for a plain run
 	Base   string // the branch this work is expected to land on
 
+	// Fleet marks this container as launched by `fleet run` rather than by an
+	// interactive command, so the fleet's own stop/clean/slot-counting reach only
+	// what the fleet started.
+	Fleet bool
+
 	// Verify is the task's definition of done — a shell command the container runs
 	// after the agent. This field is the *record* of it, stamped as a label so a
 	// later command can tell a run that had no check from one that passed its
@@ -74,6 +79,17 @@ type Options struct {
 	// as the agent's whole HOME so its login/config survives the ephemeral
 	// container (log in once). Set by the claude/codex wrappers.
 	AuthPersistDir string
+}
+
+// boolLabel renders a flag as a label value, or "" so the omit-when-empty rule
+// above drops it: a container that is not a fleet container carries no
+// sandbox.fleet label at all, rather than one saying "false" that a filter would
+// have to know to exclude.
+func boolLabel(b bool) string {
+	if b {
+		return "1"
+	}
+	return ""
 }
 
 // isReservedEnv reports whether name is one of the control variables consumed by
@@ -527,6 +543,7 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		LabelAgent:  opts.Agent,
 		LabelBase:   opts.Base,
 		LabelVerify: opts.Verify,
+		LabelFleet:  boolLabel(opts.Fleet),
 	} {
 		if v != "" {
 			labels[k] = v

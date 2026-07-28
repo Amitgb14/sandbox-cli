@@ -151,6 +151,7 @@ func (r *Runner) options(spec Spec, agent agents.Descriptor, task Task, worktree
 		Branch:  task.Branch,
 		Agent:   agent.Name,
 		Base:    base,
+		Fleet:   true,
 		Verify:  task.Verify,
 		Command: withVerify(agent.Autonomous(task.Prompt, task.Args), task.Verify),
 
@@ -166,13 +167,25 @@ func (r *Runner) options(spec Spec, agent agents.Descriptor, task Task, worktree
 		ExtraMounts: sandbox.LinkedWorktreeMounts(worktreePath),
 	}
 
-	// Persist the agent's login, exactly as the interactive wrapper does. Without
-	// it a detached agent starts, finds itself logged out, and dies unattended.
-	if dir := config.AgentStateDir(agent.PersistDir); dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return sandbox.Options{}, fmt.Errorf("creating auth persist dir %s: %w", dir, err)
+	// Persist the agent's login, exactly as the interactive wrapper does — gate
+	// included. Without the mount a detached agent starts, finds itself logged
+	// out, and dies unattended; without the *gate* it gets that HOME even under a
+	// profile whose whole point is that it does not exist.
+	//
+	// The default auth path is not an API key but an OAuth refresh token sitting
+	// in that directory, readable by the agent. prod turns persist_auth off so
+	// there is nothing there to steal, and BuildSpec mounts AuthPersistDir
+	// whenever it is non-empty — it does not re-check the config. So the check
+	// belongs here, on every path that builds Options, and ValidateProfile cannot
+	// stand in for it: that validates the resolved Config, and this would be a
+	// leak in the Options.
+	if r.Session.Cfg.PersistAuthEnabled() {
+		if dir := config.AgentStateDir(agent.PersistDir); dir != "" {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return sandbox.Options{}, fmt.Errorf("creating auth persist dir %s: %w", dir, err)
+			}
+			opts.AuthPersistDir = dir
 		}
-		opts.AuthPersistDir = dir
 	}
 	return opts, nil
 }
@@ -181,6 +194,7 @@ func (r *Runner) options(spec Spec, agent agents.Descriptor, task Task, worktree
 func (r *Runner) runningFor(ctx context.Context, branch string) (*runtime.ContainerInfo, error) {
 	infos, err := r.Inspector.Containers(ctx, map[string]string{
 		sandbox.LabelCLI:    "1",
+		sandbox.LabelFleet:  "1",
 		sandbox.LabelRepo:   r.RepoID,
 		sandbox.LabelBranch: branch,
 	})

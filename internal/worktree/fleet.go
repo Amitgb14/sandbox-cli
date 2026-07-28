@@ -93,6 +93,20 @@ func IsClean(dir string) (bool, error) {
 // and commits it with message. It reports committed=false, with no error, when
 // the worktree is clean — landing a branch whose agent already committed is not
 // a failure. A non-zero git exit is returned as *ErrGitFailed.
+//
+// It verifies that the checkout is still *on* branch before staging anything, and
+// that check is the point rather than a formality. Path falls back to the
+// name-derived directory and reports it as existing, so an agent that ran
+// `git checkout -b` inside its own worktree — the exact drift this package exists
+// to handle — would otherwise have `add -A && commit` land its work on whatever
+// branch the checkout moved to, and the merge that follows would take the
+// untouched original. A commit made on the wrong branch after a refusal would be
+// the worst of both.
+//
+// The dirty check is a direct `status --porcelain` rather than Dirty(), which
+// swallows every error by design because it feeds a status column. Here an
+// unreadable worktree must refuse: reading it as "clean" would merge the branch
+// without the agent's uncommitted work and report success.
 func CommitAll(dir, branch, message string) (committed bool, err error) {
 	path, exists, err := Path(dir, branch)
 	if err != nil {
@@ -101,7 +115,20 @@ func CommitAll(dir, branch, message string) (committed bool, err error) {
 	if !exists {
 		return false, fmt.Errorf("no worktree for branch %q", branch)
 	}
-	if dirty := Dirty(dir, branch, 1); len(dirty) == 0 {
+	if on := HeadBranch(path); on != branch {
+		where := "a detached HEAD"
+		if on != "" {
+			where = fmt.Sprintf("%q", on)
+		}
+		return false, fmt.Errorf("the worktree for %q is on %s; "+
+			"the agent moved it, so committing here would put the work on the wrong branch. "+
+			"Check %s and commit it yourself", branch, where, path)
+	}
+	out, err := runGit(path, "status", "--porcelain")
+	if err != nil {
+		return false, &ErrGitFailed{Err: err}
+	}
+	if strings.TrimSpace(out) == "" {
 		return false, nil
 	}
 	if _, err := runGit(path, "add", "-A"); err != nil {

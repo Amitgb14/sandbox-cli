@@ -2,14 +2,6 @@ package cli
 
 import "github.com/spf13/cobra"
 
-// codexEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
-// Codex CLI session, applied only if present in the host environment.
-var codexEnvAllow = []string{
-	"OPENAI_API_KEY",
-	"OPENAI_BASE_URL",
-	"CODEX_HOME",
-}
-
 func newCodexCmd() *cobra.Command {
 	rf := &runFlags{}
 	cmd := &cobra.Command{
@@ -28,7 +20,7 @@ func newCodexCmd() *cobra.Command {
 		// parsed manually from the pre-`--` portion in runWrapper.
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWrapper(cmd, rf, args, []string{"codex"}, codexEnvAllow, nil)
+			return runWrapper(cmd, rf, args, codexAgent.Command, codexAgent.EnvAllow, nil)
 		},
 	}
 	// Persists Codex's login in a sandbox-owned host dir (~/.config/sandbox/

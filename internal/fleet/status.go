@@ -40,15 +40,6 @@ type Status struct {
 	WorktreePath string
 }
 
-// State reports the container state as a display string, or "—" when the branch
-// has no container.
-func (s Status) State() string {
-	if s.Container == nil {
-		return "—"
-	}
-	return s.Container.State
-}
-
 // Running reports whether an agent is still working this branch.
 func (s Status) Running() bool { return s.Container != nil && s.Container.Running() }
 
@@ -61,8 +52,9 @@ func (s Status) Running() bool { return s.Container != nil && s.Container.Runnin
 // this is a status table, and one unreadable worktree must not blank the rest.
 func (r *Runner) Status(ctx context.Context, base string) ([]Status, error) {
 	infos, err := r.Inspector.Containers(ctx, map[string]string{
-		sandbox.LabelCLI:  "1",
-		sandbox.LabelRepo: r.RepoID,
+		sandbox.LabelCLI:   "1",
+		sandbox.LabelFleet: "1",
+		sandbox.LabelRepo:  r.RepoID,
 	})
 	if err != nil {
 		return nil, err

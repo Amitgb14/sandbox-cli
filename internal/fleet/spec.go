@@ -87,6 +87,35 @@ const (
 )
 
 // Load reads and validates a fleet.yaml.
+//
+// # Where this file sits on the trust boundary
+//
+// A fleet file carries privilege-relevant settings: `defaults.allow` widens the
+// egress allowlist, `defaults.git` forwards the host git identity, and
+// `defaults.memory`/`cpus` override the caps a profile set. `internal/config`
+// refuses exactly that class of key from a project `.sandbox.yaml`, on the
+// grounds that a repository is untrusted input and discovery is not a deliberate
+// act. `-f` defaults to ./fleet.yaml, so this file *is* discovered from the
+// repository — and the difference has to be argued rather than inherited from a
+// flag default.
+//
+// The argument: running `fleet run` at all is the deliberate act. Nobody types it
+// by walking into a directory; it launches agents that will edit the repository
+// autonomously, which is a larger decision than any single key in here. A
+// `.sandbox.yaml` by contrast is consulted by every ordinary `sandbox-cli run`,
+// where the user's intent was to run one command in one project and a planted
+// file would change what that meant. So this file has **CLI-flag trust**: it may
+// say anything a flag may say, because reaching it required the same kind of act.
+//
+// Two consequences to keep true if this changes:
+//
+//   - It must stay *named*, never *discovered upward*. `-f` looks in the current
+//     directory only; no walk to the repository root, and no `~/.config` fallback.
+//     A file found by searching is a file someone else can place.
+//   - It must not become a way to weaken the profile. There is no `profile:` key
+//     here on purpose: the profile comes from `--profile` or the user's own
+//     config, which is where `config.trust` can enforce that a project may raise
+//     it and never lower it.
 func Load(path string) (Spec, error) {
 	f, err := os.Open(path)
 	if err != nil {

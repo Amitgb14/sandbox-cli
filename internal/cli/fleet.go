@@ -21,6 +21,20 @@ import (
 // defaultFleetFile is looked up in the current directory when -f is omitted.
 const defaultFleetFile = "fleet.yaml"
 
+// Config selection for the whole command group, registered once on the parent as
+// persistent flags rather than per subcommand.
+//
+// --profile is here for the same reason `run` has one: prod is the profile an
+// unattended fleet most wants — nobody is watching, so a control that quietly
+// could not be satisfied is exactly the failure it exists to prevent — and
+// without a flag the only way to ask for it would be a config file. A supervision
+// command that can only be told about a security posture in writing is one that
+// will be run without it.
+var (
+	fleetCfgPath string
+	fleetProfile string
+)
+
 // newFleetCmd is the multi-agent command group: launch several agents from one
 // task file, watch them, and land what they produced.
 func newFleetCmd() *cobra.Command {
@@ -42,6 +56,8 @@ func newFleetCmd() *cobra.Command {
 			"  sandbox-cli fleet land feature-a\n" +
 			"  sandbox-cli fleet clean",
 	}
+	cmd.PersistentFlags().StringVarP(&fleetCfgPath, "config", "c", "", "explicit sandbox config file path")
+	cmd.PersistentFlags().StringVar(&fleetProfile, "profile", "", "security profile for every task: dev or prod")
 	cmd.AddCommand(
 		newFleetRunCmd(),
 		newFleetStatusCmd(),
@@ -55,10 +71,9 @@ func newFleetCmd() *cobra.Command {
 
 func newFleetRunCmd() *cobra.Command {
 	var (
-		file       string
-		configPath string
-		dryRun     bool
-		build      bool
+		file   string
+		dryRun bool
+		build  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -86,7 +101,7 @@ func newFleetRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			r, err := newFleetRunner(configPath)
+			r, err := newFleetRunner(fleetCfgPath, fleetProfile)
 			if err != nil {
 				return err
 			}
@@ -111,7 +126,6 @@ func newFleetRunCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", defaultFleetFile, "fleet task file")
-	cmd.Flags().StringVarP(&configPath, "config", "c", "", "explicit sandbox config file path")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what each task would do and exit")
 	cmd.Flags().BoolVar(&build, "build", false, "force rebuild of the base image before launching")
 	return cmd
@@ -127,7 +141,7 @@ func newFleetStatusCmd() *cobra.Command {
 			"branch (what there is to land).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := newFleetRunner("")
+			r, err := newFleetRunner(fleetCfgPath, fleetProfile)
 			if err != nil {
 				return err
 			}
@@ -164,7 +178,7 @@ func newFleetLogsCmd() *cobra.Command {
 			"exits, so this works for finished runs too — until `fleet clean` reaps it.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := newFleetRunner("")
+			r, err := newFleetRunner(fleetCfgPath, fleetProfile)
 			if err != nil {
 				return err
 			}
@@ -192,7 +206,7 @@ func newFleetStopCmd() *cobra.Command {
 			if branch == "" && !all {
 				return fmt.Errorf("name a branch, or pass --all to stop every running agent")
 			}
-			r, err := newFleetRunner("")
+			r, err := newFleetRunner(fleetCfgPath, fleetProfile)
 			if err != nil {
 				return err
 			}
@@ -235,7 +249,7 @@ func newFleetLandCmd() *cobra.Command {
 			"them with `sandbox-cli fleet clean BRANCH --worktrees`.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := newFleetRunner("")
+			r, err := newFleetRunner(fleetCfgPath, fleetProfile)
 			if err != nil {
 				return err
 			}
@@ -254,6 +268,8 @@ func newFleetLandCmd() *cobra.Command {
 			// Say which kind of merge this was. "passed its verify" and "nobody
 			// checked" must never look the same on the way past.
 			switch {
+			case res.ForcedUnchecked:
+				fmt.Printf("warning: %s never reached its verify and was landed with --force; nothing checked this work\n", res.Branch)
 			case res.Forced:
 				fmt.Printf("warning: %s failed its verify and was landed with --force\n", res.Branch)
 			case res.Verified:
@@ -287,7 +303,7 @@ func newFleetCleanCmd() *cobra.Command {
 			if len(args) == 1 {
 				branch = args[0]
 			}
-			r, err := newFleetRunner("")
+			r, err := newFleetRunner(fleetCfgPath, fleetProfile)
 			if err != nil {
 				return err
 			}
@@ -316,7 +332,7 @@ func newFleetCleanCmd() *cobra.Command {
 
 // newFleetRunner wires a fleet Runner to the docker backend and the repository
 // the command was invoked in.
-func newFleetRunner(configPath string) (*fleet.Runner, error) {
+func newFleetRunner(configPath, profile string) (*fleet.Runner, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -325,8 +341,14 @@ func newFleetRunner(configPath string) (*fleet.Runner, error) {
 	// container must be confined exactly as its interactive twin is, and the way
 	// to guarantee that is to build it from the same configuration rather than
 	// from a second, simpler one.
-	cfg, err := config.LoadProfile(wd, configPath, "")
+	cfg, err := config.LoadProfile(wd, configPath, profile)
 	if err != nil {
+		return nil, err
+	}
+	// LoadProfile runs ValidateProfile but not this: without it a malformed user
+	// config is caught by `run` and waved through by `fleet run`, which is the
+	// wrong way round — a fleet launches N containers from it unattended.
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	sess := sandbox.New(cfg)

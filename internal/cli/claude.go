@@ -11,31 +11,6 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 )
 
-// claudeEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
-// Claude Code session, applied only if present in the host environment. Nothing
-// else about the host crosses the boundary.
-var claudeEnvAllow = []string{
-	"ANTHROPIC_API_KEY",
-	"ANTHROPIC_AUTH_TOKEN",
-	"ANTHROPIC_BASE_URL",
-	"CLAUDE_CODE_USE_BEDROCK",
-	"CLAUDE_CODE_USE_VERTEX",
-}
-
-// claudeBootstrap ensures a self-updating Claude install exists in the persisted
-// HOME (~/.local/bin, installed via the native installer on first run) and execs
-// it. The baked npm copy in /usr/local/bin is the offline fallback. Because the
-// persisted install is user-writable, Claude Code keeps itself up to date across
-// runs — the baked copy could not (root-owned).
-const claudeBootstrap = `export PATH="$PATH:$HOME/.local/bin"
-if [ ! -x "$HOME/.local/bin/claude" ]; then
-  command -v curl >/dev/null 2>&1 && curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1 || true
-fi
-if [ -x "$HOME/.local/bin/claude" ]; then
-  exec "$HOME/.local/bin/claude" "$@"
-fi
-exec claude "$@"`
-
 // claudeStatuslineSettings is the managed-settings.json (highest precedence, does
 // not touch the user's own settings) that points Claude Code's status line at the
 // baked cgroup mem/cpu script.
@@ -73,7 +48,7 @@ func newClaudeCmd() *cobra.Command {
 		// parsed manually from the pre-`--` portion in runWrapper.
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentCmd := []string{"sh", "-c", claudeBootstrap, "claude"}
+			agentCmd := claudeAgent.Command
 			afterParse := func() error {
 				if !rf.noStatusline {
 					if p, err := ensureClaudeStatuslineSettings(); err != nil {
@@ -92,7 +67,7 @@ func newClaudeCmd() *cobra.Command {
 				}
 				return nil
 			}
-			return runWrapper(cmd, rf, args, agentCmd, claudeEnvAllow, afterParse)
+			return runWrapper(cmd, rf, args, agentCmd, claudeAgent.EnvAllow, afterParse)
 		},
 	}
 	// Persists Claude's login in a sandbox-owned host dir (~/.config/sandbox/
