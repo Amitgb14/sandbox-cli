@@ -106,6 +106,12 @@ func TestSplitWrapperArgs(t *testing.T) {
 			wantFlags: []string{"--project=/x"},
 			wantGuest: []string{"--dangerously-skip-permissions"},
 		},
+		{
+			name:      "--share=NAME is a sandbox flag",
+			in:        []string{"--share=work", "--dangerously-skip-permissions"},
+			wantFlags: []string{"--share=work"},
+			wantGuest: []string{"--dangerously-skip-permissions"},
+		},
 	}
 	cmd := newClaudeCmd() // real command so Flags() knows sandbox's flag set
 	for _, c := range cases {

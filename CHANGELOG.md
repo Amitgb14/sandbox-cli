@@ -13,6 +13,44 @@ version is tagged.
 
 ### Added
 
+- **`--share=NAME`** namespaces the shared directory: `~/.config/sandbox/shared/NAME`
+  is mounted at `/shared/NAME`, so two sandboxes running at once no longer
+  overwrite each other's handoff files. A bare `--share` is unchanged (the whole
+  shared dir at `/shared`). The name must be a single `[A-Za-z0-9._-]` segment,
+  and the value needs the equals sign.
+
+  A namespace avoids **collisions**, not access: a run using a bare `--share`
+  still has the whole shared directory read-write and can read every namespace
+  in it. It is not an isolation boundary — don't put anything secret in one.
+
+### Changed
+
+- **`--share=no`, `--share=off`, `--share=yes` and `--share=on` are refused**
+  with an explanatory error. Under the old boolean `--share` these were parse
+  errors; once the flag took an optional value they would have become namespaces
+  *named* `no`/`off`, silently switching sharing **on** for anyone using them to
+  turn it off. `--share=true`/`--share=false` (and `1`/`0`/`t`/`f`) keep working
+  as they always did. Omit the flag entirely to disable sharing.
+
+### Fixed
+
+- **`--share=NAME` could be pointed at another namespace, or at the whole shared
+  directory, by a symlink planted inside it.** The shared directory is
+  read-write to any sandbox using a bare `--share`, so its contents are
+  attacker-controlled; a relative symlink such as `ln -s . NAME` stayed inside
+  the directory and so passed the containment check, and the namespace then
+  resolved to the shared root. A namespace must now be a real directory, and its
+  resolved path must be exactly the namespace directory rather than merely
+  somewhere beneath the root.
+
+- **The seeded `README.md` followed a symlink out of the shared directory.** The
+  "is one already there?" check used `os.Stat`, which follows symlinks, so a
+  *dangling* link failed it and the subsequent write followed the same link and
+  created its target — letting a container cause a host file to be created at a
+  path it chose, outside the shared directory. Both seeders now create the file
+  with `O_EXCL`, which never follows an existing path. Affects bare `--share`
+  in earlier releases, not only the new namespaces.
+
 - **Podman is supported** (`--engine podman`, or `engine: podman` in your own
   config). Docker stays the default; the engine is a user-config key rather than
   a project one, since a repository choosing which binary runs on your machine

@@ -48,8 +48,12 @@ type runFlags struct {
 	git         bool
 	runtime     string
 	share       bool
-	paste       bool
-	detach      bool
+	// shareName namespaces --share: empty means the shared root at /shared
+	// (today's behaviour), a name means <shared>/NAME at /shared/NAME so two
+	// concurrent sandboxes cannot silently overwrite the same filename.
+	shareName string
+	paste     bool
+	detach    bool
 
 	// Crash safety net (internal/rescue). noSnapshot opts out entirely;
 	// snapshotInterval overrides the configured cadence for this run.
@@ -256,18 +260,30 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	// what makes it a channel: two agents that share nothing else — different
 	// repos, different worktrees, different containers — can hand a file over
 	// through it. Opt-in, because a cross-project channel is exactly the kind of
-	// reach the sandbox otherwise refuses by default.
+	// reach the sandbox otherwise refuses by default. --share=NAME namespaces it
+	// to <shared>/NAME at /shared/NAME, so two concurrent runs that both want a
+	// private handoff spot don't clobber the same filename in the shared root.
 	if rf.share {
-		dir := config.SharedDir()
-		if dir == "" {
+		root := config.SharedDir()
+		if root == "" {
 			return nil, sandbox.Options{}, fmt.Errorf("--share: cannot determine the config directory (no HOME?)")
 		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, sandbox.Options{}, fmt.Errorf("creating shared dir %s: %w", dir, err)
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			return nil, sandbox.Options{}, fmt.Errorf("creating shared dir %s: %w", root, err)
 		}
-		seedSharedReadme(dir)
-		opts.ExtraMounts = append(opts.ExtraMounts, dir+":"+sharedTarget+":rw")
-		fmt.Fprintf(os.Stderr, "sandbox-cli: sharing %s at %s\n", dir, sharedTarget)
+		seedSharedReadme(root)
+
+		dir, target := root, sharedTarget
+		if rf.shareName != "" {
+			var err error
+			dir, target, err = shareNamespaceDir(root, rf.shareName)
+			if err != nil {
+				return nil, sandbox.Options{}, fmt.Errorf("--share: %w", err)
+			}
+			seedShareNamespaceReadme(dir, rf.shareName, target)
+		}
+		opts.ExtraMounts = append(opts.ExtraMounts, dir+":"+target+":rw")
+		fmt.Fprintf(os.Stderr, "sandbox-cli: sharing %s at %s\n", dir, target)
 	}
 
 	// --paste: make an image path pasted into the agent resolve, by mounting the
@@ -349,7 +365,8 @@ func addRunFlags(cmd *cobra.Command, rf *runFlags) {
 	f.BoolVar(&rf.hostGateway, "host-gateway", false, "map host.docker.internal to the host so the agent can reach host MCP servers (Linux)")
 	f.BoolVar(&rf.git, "git", false, "forward host git identity and trust the workspace so git commits just work in-container")
 	f.StringVar(&rf.runtime, "runtime", "", "OCI runtime for stronger isolation, e.g. kata-runtime (microVM) or runsc (gVisor); must be registered with docker")
-	f.BoolVar(&rf.share, "share", false, "mount the shared dir (~/.config/sandbox/shared) at /shared so agents in different projects can exchange files")
+	shareFlag := f.VarPF(&shareValue{rf: rf}, "share", "", "mount the shared dir (~/.config/sandbox/shared) at /shared so agents in different projects can exchange files; --share=NAME (with the equals sign) mounts the NAME subdirectory at /shared/NAME instead, so concurrent runs don't clobber each other's files")
+	shareFlag.NoOptDefVal = "true" // makes the value optional: a bare --share still means the shared root
 	f.BoolVar(&rf.paste, "paste", false, "mount ~/Desktop, ~/Downloads and ~/Pictures read-only at their host paths so an image path pasted into the agent resolves")
 	f.BoolVar(&rf.detach, "detach", false, "run in the background and print the container name; the guest gets no terminal, so it must be a command (or an agent in its non-interactive mode) that exits on its own")
 	f.BoolVar(&rf.noSnapshot, "no-snapshot", false, "disable the crash safety net (periodic snapshots of the workspace under refs/sandbox)")
