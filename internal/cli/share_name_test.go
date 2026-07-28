@@ -41,7 +41,11 @@ func TestShareNamespaceDirCreatesLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shareNamespaceDir: %v", err)
 	}
-	if want := filepath.Join(root, "work"); hostDir != want {
+	// The mount source is the RESOLVED path: docker resolves it again at run
+	// time, so handing it the unresolved string meant checking one path and
+	// mounting another. realpath here rather than filepath.Join(root, ...)
+	// because t.TempDir() hands back /var/... on macOS, which is /private/var.
+	if want := filepath.Join(realpath(t, root), "work"); hostDir != want {
 		t.Errorf("hostDir = %q, want %q", hostDir, want)
 	}
 	if target != "/shared/work" {
@@ -142,7 +146,7 @@ func TestShareNamespaceMountsLeafOnly(t *testing.T) {
 		t.Fatalf("newSession: %v", err)
 	}
 
-	want := filepath.Join(root, "sandbox", "shared", "work") + ":/shared/work:rw"
+	want := filepath.Join(realpath(t, root), "sandbox", "shared", "work") + ":/shared/work:rw"
 	if !containsStr(opts.ExtraMounts, want) {
 		t.Errorf("ExtraMounts = %#v, want to contain %q", opts.ExtraMounts, want)
 	}

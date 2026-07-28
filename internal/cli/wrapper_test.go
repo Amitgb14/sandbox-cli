@@ -112,6 +112,23 @@ func TestSplitWrapperArgs(t *testing.T) {
 			wantFlags: []string{"--share=work"},
 			wantGuest: []string{"--dangerously-skip-permissions"},
 		},
+		{
+			// The space form does NOT namespace, and the failure is toward more
+			// access rather than less: --share stays bare (the whole shared root
+			// gets mounted, not the leaf) and every sandbox flag after the name
+			// is forwarded to the agent as prompt text -- so --project is
+			// silently dropped and the current directory is mounted instead.
+			//
+			// This is pflag's behaviour for any flag with NoOptDefVal set, and it
+			// predates --share=NAME (BoolVar set it too). It is pinned here
+			// because --share=NAME is what gives anyone a reason to type the
+			// space form: a footgun documented only in prose is one the suite
+			// cannot notice changing.
+			name:      "--share NAME (space form) loses the name AND the flags after it",
+			in:        []string{"--share", "work", "--project=/x"},
+			wantFlags: []string{"--share"},
+			wantGuest: []string{"work", "--project=/x"},
+		},
 	}
 	cmd := newClaudeCmd() // real command so Flags() knows sandbox's flag set
 	for _, c := range cases {

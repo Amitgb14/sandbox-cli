@@ -449,9 +449,35 @@ binaries win.
 - **`--cache` volumes are shared across agents and projects** by design, so
   content planted in one is consumed at build time in another. Opt-in, and the
   cost of making them per-project is the reason they exist.
+- **`--share` is a cross-project channel, and `--share=NAME` does not partition
+  it.** The shared directory (`~/.config/sandbox/shared`) is mounted read-write
+  into every sandbox using a bare `--share`, so **its contents are
+  attacker-controlled**. Two escapes through that were found and fixed (below);
+  what remains is stated here rather than only in a README the container can
+  rewrite:
+  - A namespace prevents *collisions*, not access. Any bare-`--share` peer reads
+    and writes every namespace beneath the root. It is not an isolation
+    boundary, and the docs no longer imply it is.
+  - **TOCTOU between the identity check and docker's mount.** `shareNamespaceDir`
+    resolves the namespace, refuses a symlink, and asserts the resolved path *is*
+    the namespace directory — then returns a path string that docker resolves
+    again when it mounts. A concurrently running bare-`--share` container can
+    `rmdir` the leaf and replace it with a symlink in that window, redirecting
+    the bind mount past both the identity check and `RefuseUnsafeHostPath`.
+    Not cheaply closable: docker takes a path, not an fd, so there is no handle
+    to pass and no way to make check and use atomic. Mitigated by returning the
+    *resolved* path (removing the symlinked-leaf variable at check time) and
+    bounded by the fact that the attacker must already have `--share` and be
+    running concurrently. **Residual, accepted, recorded.**
+
+  Fixed in the same change: a relative in-root symlink (`ln -s . NAME`) resolved
+  to the shared root and mounted every namespace; and the seeded `README.md` was
+  written with Stat-then-write, so a dangling symlink was followed and created a
+  host file at a container-chosen path outside the shared directory.
 
 Use `--no-persist-auth` for a genuinely untrusted run: the HOME is then ephemeral
-and none of the above applies, at the price of logging in again.
+and none of the above applies, at the price of logging in again. For `--share`,
+the equivalent is not passing it — it is off by default for this reason.
 
 <details><summary>Original entry</summary>
 

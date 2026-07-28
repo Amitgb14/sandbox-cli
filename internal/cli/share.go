@@ -201,9 +201,20 @@ func shareNamespaceDir(root, name string) (hostDir, target string, err error) {
 	}
 
 	target = path.Join(sharedTarget, name)
-	// Return the unresolved hostDir as the mount source, matching what the
-	// user typed; the containment check above is what makes that safe.
-	return hostDir, target, nil
+	// Hand back the RESOLVED path, not the one the user typed. Docker resolves
+	// the mount source itself at run time, so passing the unresolved string
+	// meant the path we checked and the path docker acts on were two different
+	// things — and the shared directory is writable by any bare --share peer,
+	// so the difference is attacker-supplied. Passing `resolved` is strictly no
+	// worse (it is the same directory) and removes the symlinked-leaf variable
+	// entirely.
+	//
+	// It does NOT close the race: between this return and docker's mount, a
+	// concurrent container can still swap the leaf. Docker takes a path string
+	// rather than an fd, so there is no handle to pass and nothing here can make
+	// the check and the use atomic. Recorded as residual in
+	// docs/security/open-items.md §8 rather than papered over.
+	return resolved, target, nil
 }
 
 // shareValue is the pflag.Value behind --share, which takes an OPTIONAL value.
@@ -242,7 +253,10 @@ func (v *shareValue) Set(s string) error {
 		return nil
 	}
 	if offSpellings[strings.ToLower(s)] {
-		return fmt.Errorf("%q is not a namespace name; omit --share entirely to disable sharing, or use a bare --share to enable it", s)
+		return fmt.Errorf("%q is reserved (as are no, n, off, yes, y, on and the true/false spellings) "+
+			"because it reads as switching the flag rather than naming a namespace: "+
+			"omit --share entirely to disable sharing, use a bare --share for the shared root, "+
+			"or pick a distinguishable name such as %q", s, s+"-ns")
 	}
 	if err := validateShareName(s); err != nil {
 		return err
@@ -271,11 +285,3 @@ func (v *shareValue) Type() string { return "bool" }
 // IsBoolFlag keeps pflag from printing a bogus "(default …)" suffix on the
 // help line, the same as it does for a real BoolVar.
 func (v *shareValue) IsBoolFlag() bool { return true }
-
-// underDir was here. It is gone deliberately rather than left for a future
-// caller: "is p somewhere under root" is the question that let `ln -s .`
-// through, since it answers true when p IS root. Anything mounting a path
-// derived from user input wants identity (this path is that directory), which
-// is what shareNamespaceDir now checks. config.withinDir and
-// sandbox.isAncestor remain for the ancestor questions that really are
-// ancestor questions.

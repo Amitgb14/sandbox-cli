@@ -273,6 +273,16 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		}
 		seedSharedReadme(root)
 
+		// The root is a derived path rather than user input, so this can
+		// essentially never fire — which is the reason to apply it, not a reason
+		// to skip it. CLAUDE.md states that every host path that gets
+		// bind-mounted goes through this refusal; an exception "because it is
+		// obviously safe" is how that stops being true, and the namespace path
+		// below already pays the same cost.
+		if err := sandbox.RefuseUnsafeHostPath(root); err != nil {
+			return nil, sandbox.Options{}, fmt.Errorf("--share: %w", err)
+		}
+
 		dir, target := root, sharedTarget
 		if rf.shareName != "" {
 			var err error
