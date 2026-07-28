@@ -106,6 +106,25 @@ func TestSplitWrapperArgs(t *testing.T) {
 			wantFlags: []string{"--project=/x"},
 			wantGuest: []string{"--dangerously-skip-permissions"},
 		},
+		{
+			name:      "--share-name=NAME is a sandbox flag",
+			in:        []string{"--share", "--share-name=work", "--dangerously-skip-permissions"},
+			wantFlags: []string{"--share", "--share-name=work"},
+			wantGuest: []string{"--dangerously-skip-permissions"},
+		},
+		{
+			// The regression test for why --share-name exists at all. When the
+			// namespace was an optional value on --share, this exact line left
+			// --share bare (mounting the whole shared root rather than the leaf)
+			// and forwarded "work" AND --project=/x to the agent, so --project
+			// was silently dropped -- a failure toward more access, from a
+			// spelling that looks right. A StringVar has no NoOptDefVal, so the
+			// splitter consumes the value and keeps going.
+			name:      "--share-name NAME (space form) consumes its value and keeps parsing",
+			in:        []string{"--share", "--share-name", "work", "--project=/x", "-p", "hi"},
+			wantFlags: []string{"--share", "--share-name", "work", "--project=/x"},
+			wantGuest: []string{"-p", "hi"},
+		},
 	}
 	cmd := newClaudeCmd() // real command so Flags() knows sandbox's flag set
 	for _, c := range cases {
