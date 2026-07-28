@@ -387,6 +387,7 @@ func NewRootCmd() *cobra.Command {
 		newDoctorCmd(),
 		newCleanCmd(),
 		newUsageCmd(),
+		newFleetCmd(),
 		newWorktreeCmd(),
 		newRecoverCmd(),
 		newContextCmd(),
