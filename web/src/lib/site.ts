@@ -4,7 +4,7 @@
  * page has exactly one place to update when the CLI changes.
  */
 
-export const VERSION = "0.0.1beta.7";
+export const VERSION = "0.0.1beta.8";
 
 export const REPO_URL = "https://github.com/Amitgb14/sandbox-cli";
 export const RELEASES_URL = `${REPO_URL}/releases`;
@@ -55,8 +55,13 @@ export const INSTALL_ROUTES: InstallRoute[] = [
     id: "go",
     label: "Go",
     hint: "Go 1.25+",
-    lines: [`go install github.com/Amitgb14/sandbox-cli/cmd/sandbox-cli@v${VERSION}`],
-    note: "Builds from source into $GOBIN. Drop the version suffix for @latest.",
+    lines: ["go install github.com/Amitgb14/sandbox-cli/cmd/sandbox-cli@latest"],
+    // Deliberately @latest rather than @v<VERSION>: the release tags are not
+    // semver (0.0.1beta.8, no `v`, no `-` before the pre-release), so the module
+    // proxy cannot resolve one — `@v0.0.1beta.8` fails with "invalid version"
+    // and @latest lands on a pseudo-version of the default branch. Pinning a
+    // release is what the install script is for.
+    note: `Builds from source into $GOBIN, at whatever the default branch is. The release tags are not valid semver, so go install cannot pin one — use the install script with --version ${VERSION} when you need this exact release.`,
   },
   {
     id: "source",
