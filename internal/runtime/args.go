@@ -92,7 +92,19 @@ func BuildArgs(s RunSpec) []string {
 		if m.RO {
 			mt += ",readonly"
 		}
+		// relabel=shared is the --mount spelling of :z. Without it SELinux denies
+		// the mount outright on Fedora/RHEL/CentOS, so the agent cannot even read
+		// its own workspace. "shared" rather than "private" because the user works
+		// in that directory too, and a private label would lock them out of it.
+		if !m.Volume && s.HostUserMapping != "" {
+			mt += ",relabel=shared"
+		}
 		a = append(a, "--mount", mt)
+	}
+
+	// Placed after the mounts so the relabel and the mapping read together.
+	if s.HostUserMapping != "" {
+		a = append(a, "--userns="+s.HostUserMapping)
 	}
 
 	a = append(a, "-w", s.Workdir)

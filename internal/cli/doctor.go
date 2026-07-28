@@ -64,7 +64,7 @@ type check struct {
 const doctorTimeout = 90 * time.Second
 
 func newDoctorCmd() *cobra.Command {
-	var profile, cfgPath string
+	var profile, cfgPath, engineFlag string
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check whether this host can deliver what a profile promises",
@@ -79,13 +79,22 @@ func newDoctorCmd() *cobra.Command {
 			"anything on it.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := resolveDoctorProfile(cfgPath, profile)
+			name, engine, err := resolveDoctorTarget(cfgPath, profile)
 			if err != nil {
 				return err
 			}
+			if engineFlag != "" {
+				// Validated rather than executed: an unvalidated flag turned
+				// `--engine dokcer` into "dokcer not found on PATH" instead of the
+				// config error Validate already gives for the same typo.
+				if !runtime.KnownEngine(engineFlag) {
+					return fmt.Errorf("--engine %q: want %s", engineFlag, strings.Join(runtime.EngineNames(), " or "))
+				}
+				engine = engineFlag
+			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), doctorTimeout)
 			defer cancel()
-			return reportDoctor(name, runDoctorChecks(ctx, name))
+			return reportDoctor(name, runDoctorChecks(ctx, name, engine))
 		},
 	}
 	cmd.Flags().StringVar(&profile, "profile", "", "profile to check against: dev (default) or prod")
@@ -93,23 +102,27 @@ func newDoctorCmd() *cobra.Command {
 	// deliberately, so the command that diagnoses a configuration has to be able
 	// to read the same configuration a run would.
 	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "explicit config file path")
+	cmd.Flags().StringVar(&engineFlag, "engine", "", "container engine to check: docker (default) or podman")
 	return cmd
 }
 
 // resolveDoctorProfile honours the same layers a run would, so `doctor` reports
 // on the profile that would actually be in force here rather than on a guess.
-func resolveDoctorProfile(cfgPath, flag string) (string, error) {
-	wd, err := os.Getwd()
-	if err != nil {
+func resolveDoctorTarget(cfgPath, flag string) (profile, engine string, err error) {
+	wd, werr := os.Getwd()
+	if werr != nil {
 		wd = "."
 	}
 	cfg, err := config.LoadProfile(wd, cfgPath, flag)
 	if err != nil {
 		// A configuration that cannot resolve is itself the finding, and the
 		// message already says which key is at fault.
-		return "", err
+		return "", "", err
 	}
-	return cfg.Profile, nil
+	// The engine matters as much as the profile: checking docker on a machine
+	// configured for podman answers a question nobody asked, and would have
+	// reported a healthy docker while every run went elsewhere.
+	return cfg.Profile, cfg.Engine, nil
 }
 
 // doctorRuntime is the slice of the docker backend doctor needs. An interface so
@@ -122,22 +135,25 @@ type doctorRuntime interface {
 }
 
 // newDoctorRuntime is a var so tests can substitute a host.
-var newDoctorRuntime = func() doctorRuntime { return runtime.NewDockerCLI() }
+var newDoctorRuntime = func(engine string) doctorRuntime { return runtime.NewEngine(engine) }
 
-func runDoctorChecks(ctx context.Context, profile string) []check {
-	d := newDoctorRuntime()
+func runDoctorChecks(ctx context.Context, profile, engine string) []check {
+	d := newDoctorRuntime(engine)
+	if engine == "" {
+		engine = "docker"
+	}
 
 	if err := d.Available(ctx); err != nil {
 		// Nothing below can be answered without a daemon, and reporting six
 		// unknowns would bury the one fact that matters.
 		return []check{{
-			name:   "docker daemon",
+			name:   engine + " daemon",
 			status: statusWeak,
 			detail: err.Error(),
-			remedy: "start Docker and run this again",
+			remedy: "start " + engine + " and run this again",
 		}}
 	}
-	out := []check{{name: "docker daemon", status: statusOK, detail: "reachable"}}
+	out := []check{{name: engine + " daemon", status: statusOK, detail: "reachable"}}
 	out = append(out, checkSeccomp(ctx, d))
 	out = append(out, checkFirewall(ctx, d))
 	out = append(out, checkRuntimes(ctx, d, profile))
@@ -154,7 +170,7 @@ func checkSeccomp(ctx context.Context, d doctorRuntime) check {
 	case unavailable:
 		c.status = statusWeak
 		c.detail = "no syscall filter is applied; the container gets the full syscall table"
-		c.remedy = "Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\""
+		c.remedy = "on Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\""
 	default:
 		c.status = statusOK
 		c.detail = "the daemon applies a profile"

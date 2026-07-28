@@ -36,6 +36,13 @@ type Config struct {
 	// "kata-runtime" (microVM) or "runsc" (gVisor).
 	Runtime string `yaml:"runtime"`
 
+	// Engine is the container engine: "docker" (default) or "podman".
+	//
+	// User-config only, like `runtime`: it chooses which binary sandbox-cli
+	// executes, so a repository that could set it would choose what runs on your
+	// machine.
+	Engine string `yaml:"engine"`
+
 	// Profile selects the security profile: "dev" (interactive, warns) or "prod"
 	// (unattended, refuses). See profile.go. A project config may raise this and
 	// never lower it, which is what stops a hostile repository dropping a run out
@@ -478,9 +485,22 @@ func boolPtr(b bool) *bool    { return &b }
 func int64Ptr(n int64) *int64 { return &n }
 
 // Validate checks that the merged config is internally consistent.
+// ValidEngine reports whether name is a container engine sandbox-cli speaks.
+//
+// Duplicated from runtime.KnownEngine only in the sense that config cannot
+// import runtime without a cycle; the two lists are asserted equal by test, so
+// adding an engine in one place and not the other fails rather than drifts.
+func ValidEngine(name string) bool { return name == "docker" || name == "podman" }
+
 func (c Config) Validate() error {
 	if c.Image == "" {
 		return fmt.Errorf("image must not be empty")
+	}
+	// A typo here would otherwise be executed: NewEngine treats an unknown name
+	// as the binary to run, so `engine: dokcer` becomes a confusing "executable
+	// file not found" from deep inside a run rather than a config error.
+	if c.Engine != "" && !ValidEngine(c.Engine) {
+		return fmt.Errorf("engine %q: want docker or podman", c.Engine)
 	}
 	// An image reference beginning with a dash is read by docker as another flag,
 	// not as the image: `image: "--privileged"` rendered a real --privileged into

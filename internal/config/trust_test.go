@@ -289,6 +289,7 @@ var projectKeyPolicy = map[string]bool{ // field name -> may a project file set 
 	"Snapshot": false,
 	"Secrets":  false,
 	"Runtime":  false,
+	"Engine":   false,
 	// Direction-checked, like Network: a project may demand a stronger profile
 	// and never a weaker one, and may turn the credential mounts off but not on.
 	"Profile":     false,
@@ -339,6 +340,7 @@ func TestClassifiedFieldsAreActuallyEnforced(t *testing.T) {
 		"Snapshot": "snapshot:\n  enabled: false\n",
 		"Secrets":  "secrets:\n  T:\n    env: HOME\n",
 		"Runtime":  "runtime: runsc\n",
+		"Engine":   "engine: podman\n",
 		// Direction-checked: the sample must *weaken* something already in force,
 		// so each of these is paired with a stricter user-level config below.
 		"Profile":     "profile: dev\n",

@@ -531,24 +531,25 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// delete both at the moment they become interesting. Reaping is a later,
 	// explicit step.
 	return runtime.RunSpec{
-		Image:    image,
-		Name:     containerName(opts),
-		Workdir:  workdir,
-		Command:  opts.Command,
-		TTY:      tty,
-		Detach:   opts.Detach,
-		Labels:   labels,
-		Remove:   !opts.Detach,
-		Hostname: cfg.Hostname,
-		Home:     cfg.Home,
-		User:     dockerUser,
-		Network:  network,
-		Runtime:  runtimeName,
-		Env:      env,
-		EnvNames: envNames,
-		Mounts:   mounts,
-		AddHosts: addHosts,
-		Ports:    ports,
+		Image:           image,
+		Name:            containerName(opts),
+		Workdir:         workdir,
+		Command:         opts.Command,
+		TTY:             tty,
+		Detach:          opts.Detach,
+		Labels:          labels,
+		Remove:          !opts.Detach,
+		Hostname:        cfg.Hostname,
+		Home:            cfg.Home,
+		User:            hostMappedUser(cfg.Engine, dockerUser),
+		Network:         network,
+		HostUserMapping: hostUserMapping(cfg.Engine),
+		Runtime:         runtimeName,
+		Env:             env,
+		EnvNames:        envNames,
+		Mounts:          mounts,
+		AddHosts:        addHosts,
+		Ports:           ports,
 
 		Entrypoint: entrypoint,
 
@@ -733,4 +734,46 @@ func seccompArg(v string) string {
 		return ""
 	}
 	return v
+}
+
+// sandboxUID/sandboxGID are the image's unprivileged user, numerically. The
+// engines need the number rather than the name in one specific place; see
+// hostMappedUser.
+const (
+	sandboxUID = "1001"
+	sandboxGID = "1001"
+)
+
+// hostUserMapping is the --userns value for the engine, or "" when it needs
+// none.
+//
+// Only podman does. Rootless podman maps the host user to container uid 0, so a
+// bind-mounted workspace appears root-owned and the sandbox user cannot write to
+// it — measured on native Linux (Fedora, SELinux enforcing): today's flags fail
+// both read and write. keep-id remaps so container 1001 *is* the host user.
+//
+// Docker gets "" and its argv is unchanged, which is what keeps the golden
+// --dry-run test honest rather than merely passing.
+func hostUserMapping(engine string) string {
+	if engine != "podman" {
+		return ""
+	}
+	return "keep-id:uid=" + sandboxUID + ",gid=" + sandboxGID
+}
+
+// hostMappedUser renders the container user numerically under podman.
+//
+// `--user sandbox` sets the uid but leaves the group at 0, so a file written
+// into the workspace came back owned by host-uid:subgid (501:100000) — the right
+// user, a group the host does not have. `--user 1001:1001` maps both, and the
+// file lands as the host's own uid:gid (501:1000). The name is kept for docker,
+// where it is more legible and the mapping question does not arise.
+//
+// An explicitly requested user is left exactly as the caller wrote it: they have
+// said what they want, and second-guessing it here would be the surprise.
+func hostMappedUser(engine, user string) string {
+	if engine != "podman" || user != defaultRunAsUser {
+		return user
+	}
+	return sandboxUID + ":" + sandboxGID
 }

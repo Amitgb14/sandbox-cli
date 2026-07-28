@@ -37,8 +37,15 @@ func TestEnsureNetworkRefusesAnICCEnabledNetwork(t *testing.T) {
 	if err == nil {
 		t.Fatal("EnsureNetwork accepted a network with inter-container communication enabled")
 	}
-	if !strings.Contains(err.Error(), "inter-container communication") {
-		t.Errorf("error does not explain the problem: %v", err)
+	// Assert the substance, not the prose: that it names the network, says peers
+	// could reach it, and gives the command to fix it. The wording is
+	// engine-neutral now — podman calls this `isolate`, docker `enable_icc` —
+	// and a test that pins one engine's phrasing breaks on the other's.
+	msg := err.Error()
+	for _, want := range []string{name, "reach", "network rm"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
 	}
 
 	// And the one it creates itself passes.

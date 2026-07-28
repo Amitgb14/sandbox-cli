@@ -22,8 +22,10 @@ type statRow struct {
 
 func newStatsCmd() *cobra.Command {
 	var (
-		interval time.Duration
-		once     bool
+		interval   time.Duration
+		once       bool
+		engineFlag string
+		cfgPath    string
 	)
 	cmd := &cobra.Command{
 		Use:   "stats",
@@ -32,11 +34,13 @@ func newStatsCmd() *cobra.Command {
 			"containers. Run it in a second terminal alongside an interactive agent\n" +
 			"session (where the inline gauge can't be drawn). Press Ctrl-C to exit.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStats("docker", interval, once)
+			return runStats(engineBin(cfgPath, engineFlag), interval, once)
 		},
 	}
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "refresh interval")
 	cmd.Flags().BoolVar(&once, "once", false, "print a single snapshot and exit")
+	cmd.Flags().StringVar(&engineFlag, "engine", "", "container engine: docker (default) or podman")
+	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "explicit config file path")
 	return cmd
 }
 

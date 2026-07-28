@@ -20,7 +20,11 @@ export type SetupPath = {
   label: string;
   /** The container engine this path uses. */
   engine: string;
-  /** Set when the path does not work today; the UI leads with this. */
+  /**
+   * Set when a path does not work today; the UI leads with this. Nothing sets
+   * it now that Podman is supported — kept because the honest thing to do with
+   * an engine that does not work is say so on the page rather than omit it.
+   */
   unsupported?: string;
   steps: SetupStep[];
 };
@@ -111,23 +115,29 @@ export const SETUP_PATHS: SetupPath[] = [
   {
     id: "podman",
     label: "Podman",
-    engine: "not supported yet",
-    unsupported:
-      "sandbox-cli shells out to a binary named docker and cannot yet be pointed at anything else, so Podman does not work today — including through podman-docker, which only supplies the name.",
+    engine: "rootless Podman",
     steps: [
       {
-        title: "What is actually missing",
-        body: "Three things, and only the first is trivial. The container engine is hardcoded rather than configurable, so there is no flag or config key to select Podman. The shared network is created with com.docker.network.bridge.enable_icc=false, a Docker bridge option Podman's netavark backend does not accept — and that option is the thing that stops one sandbox reading another. And the seccomp and runtime checks parse `docker info` JSON, whose shape differs under Podman.",
+        title: "Install Podman and start its VM",
+        code: "brew install podman        # or your distribution's package\npodman machine init\npodman machine start",
+        body: "The machine step is macOS and Windows only; on Linux Podman talks to the host directly. Rootless is the default and is the interesting case — the container runs as your user, not root.",
+      },
+      INSTALL_STEP,
+      {
+        title: "Tell sandbox-cli to use it",
+        code: "sandbox-cli run --engine podman -- true\n\n# or permanently, in ~/.config/sandbox/config.yaml:\n#   engine: podman",
+        body: "Docker stays the default. The engine is a user-config key rather than a project one: a repository that could choose which binary runs on your machine would be choosing what executes.",
       },
       {
-        title: "Why it is worth doing properly",
-        body: "Rootless Podman is a genuinely stronger default than rootful Docker, so this is not a box to tick. But an egress allowlist needs to program iptables from inside the container, and a rootless engine may not permit that — in which case sandbox-cli fails closed and refuses the run rather than proceeding unfiltered. Getting that path right is the work, not the flag.",
+        title: "Expect the image to build again",
+        body: "Podman keeps its own image store, so the first run rebuilds the base image even if Docker already has it. That is one wait, not a recurring cost.",
       },
       {
-        title: "In the meantime",
-        code: "sandbox-cli doctor",
-        body: "If you try Podman behind a docker-named shim anyway, run doctor first. It will tell you whether the daemon can be queried and whether a container can program the firewall, which is exactly where this is expected to fall over.",
+        title: "On native Linux, do not pass --user",
+        body: "Rootless Podman maps your host user to container uid 0, so the usual Linux advice — passing --user \"$(id -u):$(id -g)\" — maps it into the subuid range instead and makes /workspace unreadable. sandbox-cli handles the mapping and relabels bind mounts for SELinux, so files the agent writes come back owned by your own uid:gid. Pass nothing.",
       },
+      VERIFY_STEP,
+      FIRST_RUN_STEP,
     ],
   },
 ];

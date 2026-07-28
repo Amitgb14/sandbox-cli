@@ -334,6 +334,9 @@ func mergeInto(dst *Config, src Config, baseDir string) {
 	if src.Runtime != "" {
 		dst.Runtime = src.Runtime
 	}
+	if src.Engine != "" {
+		dst.Engine = src.Engine
+	}
 	if src.PersistAuth != nil {
 		dst.PersistAuth = src.PersistAuth
 	}

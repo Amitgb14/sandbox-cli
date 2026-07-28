@@ -11,6 +11,36 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **Podman is supported** (`--engine podman`, or `engine: podman` in your own
+  config). Docker stays the default; the engine is a user-config key rather than
+  a project one, since a repository choosing which binary runs on your machine
+  would be choosing what executes.
+
+  Rootless Podman can program the egress firewall from inside the container —
+  measured, not assumed — so the allowlist works there exactly as it does under
+  Docker, with no weaker mode.
+
+  Inter-container isolation needed a different mechanism rather than a different
+  spelling. netavark rejects `enable_icc` outright, and its `isolate=true` blocks
+  traffic between *different* networks while leaving same-network peers
+  reachable. So under Podman each sandbox gets its own isolated network: no peers
+  by construction. `sandbox-cli clean` reaps any left behind by a killed run.
+
+  `doctor` speaks both dialects and reports the engine it actually checked.
+
+  On **native Linux** rootless Podman the workspace needed two more things, and
+  neither has a Docker equivalent: the host user is mapped onto the container's
+  (`--userns=keep-id`), because rootless Podman otherwise maps you to container
+  uid 0 and the sandbox user cannot write to its own workspace; and bind mounts
+  are relabelled for SELinux, without which Fedora/RHEL deny the mount outright
+  so the agent cannot even read it. Files written by the agent come back owned by
+  your own uid:gid. Note this **inverts the README's Docker advice**: do *not*
+  pass `--user "$(id -u):$(id -g)"` under rootless Podman — your host uid maps
+  into the subuid range and the workspace becomes unreadable.
+
+
 ## 0.0.1beta.7 — 2026-07-27
 
 ### Changed — breaking
