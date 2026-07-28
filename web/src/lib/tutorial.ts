@@ -277,6 +277,13 @@ export const OPTION_GROUPS: OptionGroup[] = [
         dir: "widen",
       },
       {
+        flag: "--share-name NAME",
+        key: "—",
+        what: "With --share, mount the NAME subdirectory at /shared/NAME instead of the root.",
+        fallback: "The whole shared directory, which two concurrent runs will write over each other in.",
+        dir: "tighten",
+      },
+      {
         flag: "--add-host HOST:IP",
         key: "—",
         what: "An extra /etc/hosts entry, passed through to the engine. Repeatable.",
