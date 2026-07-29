@@ -216,3 +216,28 @@ func TestPlanRequiresRepo(t *testing.T) {
 		t.Fatal("expected an error outside a git repository")
 	}
 }
+
+// A plan is read to decide whether a task will do what was meant, so it reports
+// the agent invocation and the check — not the shell bootstrap that finds the
+// binary, which buried both when it was included.
+func TestPlanReportsTheInvocationNotTheBootstrap(t *testing.T) {
+	r, _ := testRunner()
+	r.Repo = newTestRepo(t) // Plan resolves worktree paths, so it needs a real repo
+	plans, err := r.Plan(context.Background(), Spec{
+		Agent: "claude",
+		Tasks: []Task{{Branch: "feature-a", Prompt: "do it", Verify: "go test ./..."}},
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	got := strings.Join(plans[0].Command, " ")
+	if strings.Contains(got, "install.sh") || strings.Contains(got, "$HOME") {
+		t.Errorf("the plan carries the bootstrap script: %q", got)
+	}
+	if !strings.HasPrefix(got, "claude ") || !strings.Contains(got, "do it") {
+		t.Errorf("the plan should read as `claude … do it`, got %q", got)
+	}
+	if plans[0].Verify != "go test ./..." {
+		t.Errorf("verify not reported: %q", plans[0].Verify)
+	}
+}

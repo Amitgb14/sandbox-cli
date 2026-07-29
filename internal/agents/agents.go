@@ -56,6 +56,17 @@ func (d Descriptor) Autonomous(prompt string, extra []string) []string {
 	return concat(d.Command, d.AutonomousArgs(prompt), extra)
 }
 
+// Invocation is the same run written the way a person would type it: the agent's
+// name and its arguments, without the shell bootstrap that finds the binary.
+//
+// For display only — `fleet run --dry-run` reports what a task will *do*, and an
+// eight-line install script pasted in front of every prompt buries exactly the
+// two things the reader is checking. Never use it to start anything: the
+// bootstrap it omits is what makes the agent exist in the container.
+func (d Descriptor) Invocation(prompt string, extra []string) []string {
+	return concat([]string{d.Name}, d.AutonomousArgs(prompt), extra)
+}
+
 // ClaudeBootstrap ensures a self-updating Claude install exists in the persisted
 // HOME (~/.local/bin, installed via the native installer on first run) and execs
 // it. The baked npm copy in /usr/local/bin is the offline fallback. Because the

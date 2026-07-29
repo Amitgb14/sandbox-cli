@@ -22,7 +22,14 @@ type Planned struct {
 	Branch         string
 	WorktreePath   string
 	WorktreeExists bool // false => the run would create it
+
+	// Command is the *agent's* argv, and Verify the task's check. The container
+	// actually runs withVerify(Command, Verify) — the two composed into a shell
+	// wrapper. They are reported apart because a plan is read to answer "will this
+	// task do what I meant", and a multi-line wrapper script pasted into that
+	// answer buries the prompt and the check that are the whole of it.
 	Command        []string
+	Verify         string
 	Memory, CPUs   string
 	Allow          []string
 	Labels         map[string]string
@@ -52,7 +59,8 @@ func (r *Runner) Plan(ctx context.Context, spec Spec) ([]Planned, error) {
 			Branch:         t.Branch,
 			WorktreePath:   path,
 			WorktreeExists: exists,
-			Command:        withVerify(agent.Autonomous(t.Prompt, t.Args), t.Verify),
+			Command:        agent.Invocation(t.Prompt, t.Args),
+			Verify:         t.Verify,
 			Memory:         spec.Defaults.Memory,
 			CPUs:           spec.Defaults.CPUs,
 			Allow:          spec.Defaults.Allow,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -90,11 +91,17 @@ func newFleetRunCmd() *cobra.Command {
 			"  tasks:\n" +
 			"    - branch: feature-a\n" +
 			"      prompt: implement the login form\n" +
+			"      verify: go build ./... && go test ./...\n" +
 			"    - branch: feature-b\n" +
 			"      prompt: add rate limiting\n\n" +
+			"A task's `verify` runs inside its container after the agent, and its exit\n" +
+			"code decides whether the work is done — `fleet land` refuses a branch that\n" +
+			"failed it. A task without one still runs, but lands reported as unverified.\n\n" +
 			"With max_parallel set below the task count this command stays attached,\n" +
 			"starting the remaining tasks as earlier agents exit. Otherwise it returns as\n" +
-			"soon as the containers are up.",
+			"soon as the containers are up.\n\n" +
+			"A fully commented example is in docs/examples/fleet.yaml; the walkthrough is\n" +
+			"docs/GUIDE.md, \"Running a fleet\".",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spec, err := fleet.Load(file)
@@ -387,6 +394,20 @@ func newFleetRunner(configPath, profile string) (*fleet.Runner, error) {
 }
 
 // printFleetPlan renders `fleet run --dry-run`.
+// shellJoin renders an argv for reading, quoting only the arguments that need it
+// so a prompt full of spaces stays one visible unit.
+func shellJoin(argv []string) string {
+	out := make([]string, 0, len(argv))
+	for _, a := range argv {
+		if a == "" || strings.ContainsAny(a, " \t\n\"'$`\\") {
+			out = append(out, strconv.Quote(a))
+			continue
+		}
+		out = append(out, a)
+	}
+	return strings.Join(out, " ")
+}
+
 func printFleetPlan(ctx context.Context, r *fleet.Runner, spec fleet.Spec) error {
 	plans, err := r.Plan(ctx, spec)
 	if err != nil {
@@ -402,7 +423,12 @@ func printFleetPlan(ctx context.Context, r *fleet.Runner, spec fleet.Spec) error
 		}
 		fmt.Printf("branch:   %s\n", p.Branch)
 		fmt.Printf("worktree: %s (%s)\n", p.WorktreePath, verb)
-		fmt.Printf("command:  %s\n", strings.Join(p.Command, " "))
+		fmt.Printf("agent:    %s\n", shellJoin(p.Command))
+		if p.Verify != "" {
+			fmt.Printf("verify:   %s\n", p.Verify)
+		} else {
+			fmt.Printf("verify:   (none — this task will land unverified)\n")
+		}
 		limits := "unlimited"
 		if p.Memory != "" || p.CPUs != "" {
 			limits = fmt.Sprintf("memory=%s cpus=%s", orNone(p.Memory), orNone(p.CPUs))
