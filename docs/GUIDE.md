@@ -593,6 +593,131 @@ the name.
 Everything else is unchanged — the same mounts, the same fake HOME, the same
 hardening. A background container reaches exactly what a foreground one does.
 
+### Running a fleet
+
+`--detach` launches agents one command at a time and leaves you to track them
+with docker. A **fleet** does the same fan-out from one file, and then answers the
+question the section above cannot: *which of these actually worked?*
+
+Write a `fleet.yaml` (there is a fuller, commented one in
+[`docs/examples/fleet.yaml`](examples/fleet.yaml)):
+
+```yaml
+agent: claude
+max_parallel: 2
+defaults:
+  memory: 4g
+  cpus: "2"
+  git: true          # so the agents' commits carry your name and email
+
+tasks:
+  - branch: feature-login
+    prompt: Implement the login form in src/auth/. Add tests. Commit when they pass.
+    verify: go build ./... && go test ./...
+
+  - branch: feature-ratelimit
+    prompt: Add per-IP rate limiting to src/server/. Add tests. Commit when they pass.
+    verify: go test ./src/server/...
+```
+
+Then the whole loop, all of it from your normal checkout:
+
+```sh
+# 0. Log in once per agent, if you haven't. A fleet cannot answer a login prompt.
+sandbox-cli claude
+
+# 1. See what it would do, without launching anything.
+sandbox-cli fleet run --dry-run
+
+# 2. Fan out. One branch, one worktree and one container per task.
+sandbox-cli fleet run
+
+# 3. Watch. Whether each agent is running, how it ended, and what it produced.
+sandbox-cli fleet status
+
+# 4. Read one agent's transcript.
+sandbox-cli fleet logs feature-login          # -f to follow live
+
+# 5. Stop one early if it is going wrong.
+sandbox-cli fleet stop feature-login          # or --all
+
+# 6. Land the work: commits whatever the agent left, then merges into your branch.
+sandbox-cli fleet land feature-login
+
+# 7. Reap the finished containers (and --worktrees for their checkouts).
+sandbox-cli fleet clean
+```
+
+`fleet run` looks for `fleet.yaml` in the current directory; `-f path` names
+another.
+
+**`verify` is the point.** Without it, a fleet is a fan-out with a nicer status
+table — every agent "succeeds" the moment it stops talking, including the one
+that confidently did nothing and the one that deleted the failing test. A
+`verify:` command runs *inside the container after the agent*, and its exit code
+is the verdict:
+
+```
+BRANCH             STATE       ELAPSED  DIRTY  AHEAD
+feature-login      exited 0    4m12s    0      3
+feature-ratelimit  exited 90   2m03s    7      0
+```
+
+Exit `90` means the agent finished and its verify said no. `fleet land` refuses
+that branch until you fix it or override with `--force`.
+
+A task with no `verify` still runs — this is a fleet of agents, not a CI system —
+but `fleet land` reports it as *unverified* rather than passed, because nothing
+checked it.
+
+**`fleet land` refuses rather than guessing.** It is the only command that writes
+to your base branch, so it stops when:
+
+- the agent is still running — its next action could change what you just merged
+- the work failed its verify (`--force` to land anyway)
+- **your checkout has moved** since the agent was launched. Each container records
+  the branch its work was meant for, so if you started the fleet on `main` and are
+  now on `release-2`, landing stops rather than putting the work on a branch
+  nobody chose. Check out the recorded branch, or say `--onto release-2` to mean
+  it deliberately
+- another agent is working in the checkout being merged into — the merge would
+  rewrite files under it
+- that checkout is dirty, or the agent moved its own worktree to another branch
+
+On a conflict it stops with git's own message and leaves the merge in place for
+you to finish. It never resolves anything itself.
+
+**For an unattended run, add `--profile prod`:**
+
+```sh
+sandbox-cli fleet run --profile prod
+```
+
+dev *warns* when a control cannot be satisfied; prod *refuses*. Nobody is
+watching a fleet, so a warning goes into a log no one reads. prod also declines
+to mount the persisted agent login at all — worth knowing, because it means each
+task needs credentials from the environment instead (`ANTHROPIC_API_KEY`).
+
+**Two constraints worth knowing before you write a fleet file:**
+
+- **Only agents with a verified headless mode may appear** — `claude` and `codex`
+  today. Anything else is rejected when the file is parsed, before a single
+  container starts, because the alternative is an unattended agent waiting
+  forever on a keystroke.
+- **One agent per branch**, enforced by docker's own refusal to reuse a container
+  name. A task whose branch already has a running agent is refused rather than
+  joined; two agents in one checkout lose work silently.
+
+**Fleet containers are kept after they exit**, like any detached run — their logs
+and exit codes are the only record. `fleet clean` reaps them; add `--worktrees` to
+remove the checkouts too, which skips any with uncommitted work rather than
+discarding it.
+
+`fleet` commands only ever touch containers the fleet started. An interactive
+`sandbox-cli claude --detach` session in the same repository is not stopped by
+`fleet stop --all`, not reaped by `fleet clean`, and does not count against
+`max_parallel`.
+
 ### Handing files between two sandboxes
 
 Two sandboxes are blind to each other by design — each sees its own project and

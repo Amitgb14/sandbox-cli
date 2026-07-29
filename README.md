@@ -519,11 +519,57 @@ off. One limitation worth knowing: snapshots honour `.gitignore`, so ignored
 paths are not captured — that is what keeps a `node_modules` from being committed
 every two minutes.
 
-## Parallel agents (git worktrees)
+## Many agents at once (`fleet`)
 
-`--worktree BRANCH` runs the sandbox in a dedicated git worktree for `BRANCH`
-instead of your working copy, so you can run several agents at once — each on its
-own branch, in its own container, with no collisions:
+`sandbox-cli fleet` runs several agents from one file — each on its own branch, in
+its own git worktree, in its own background container — and then tells you which
+of them actually worked:
+
+```yaml
+# fleet.yaml
+agent: claude
+max_parallel: 2
+defaults: { memory: 4g, cpus: "2", git: true }
+
+tasks:
+  - branch: feature-login
+    prompt: Implement the login form in src/auth/. Add tests. Commit when they pass.
+    verify: go build ./... && go test ./...
+
+  - branch: feature-ratelimit
+    prompt: Add per-IP rate limiting to src/server/. Add tests. Commit when they pass.
+    verify: go test ./src/server/...
+```
+
+```sh
+sandbox-cli fleet run                     # fan out
+sandbox-cli fleet status                  # who is running, what they produced
+sandbox-cli fleet logs feature-login      # what one agent actually said
+sandbox-cli fleet land feature-login      # commit + merge into your branch
+sandbox-cli fleet clean                   # reap the finished containers
+```
+
+The **`verify:`** command is what makes this more than a fan-out. It runs inside
+the container after the agent, and its exit code — not the agent's say-so —
+decides whether the work is done. `fleet land` refuses to merge a branch that
+failed it, along with a handful of other ambiguities: a still-running agent, a
+checkout that moved to a different branch since launch, an agent working in the
+branch being merged into. It never resolves a conflict itself.
+
+Only agents with a verified headless mode may appear in a fleet (`claude`,
+`codex` today) — an unattended agent that stops to ask permission hangs rather
+than fails. Add `--profile prod` for an unattended run: it refuses where dev
+warns, which is what you want when nobody is watching.
+
+Full walkthrough: **[Running a fleet](docs/GUIDE.md#running-a-fleet)**. Commented
+example: [`docs/examples/fleet.yaml`](docs/examples/fleet.yaml).
+
+## One agent at a time (git worktrees)
+
+`--worktree BRANCH` is the single-agent case underneath all of that: it runs the
+sandbox in a dedicated git worktree for `BRANCH` instead of your working copy, so
+you can run several agents at once — each on its own branch, in its own container,
+with no collisions:
 
 ```sh
 sandbox-cli claude --worktree feature-a -- -p "implement A"

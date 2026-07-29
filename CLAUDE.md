@@ -187,9 +187,58 @@ rather than merely passing. This is the single choke point for the isolation inv
   exists to keep secret values off the argv and out of config files, and a log is a file — so
   `SessionMeta` has nowhere to put a value, deliberately. Best-effort and silent on failure: the
   run is what the user asked for, the record is a courtesy.
+- **`internal/agents`** — the agents the fleet knows how to start, as data: guest argv,
+  `EnvAllow`, persisted-HOME name, and `Autonomous(prompt)`. Only agents with a **verified
+  headless mode** are in it, because a fleet is unattended and an agent that stops to ask
+  permission does not fail — it hangs. The `claude`/`codex` wrappers read the same table
+  (`cli/descriptors.go`), and that is the whole point: the table was introduced alongside a
+  second copy of Claude's bootstrap script and the two had already diverged, one *prepending*
+  the agent-writable HOME to `PATH` where the other appended. Two copies of a
+  security-relevant script drift silently. Deliberately **not** in a descriptor: anything
+  producing host paths — the status-line mount, the history mount, the persisted HOME itself.
+  A descriptor says what runs inside the container and which host variable *names* may cross.
+- **`internal/fleet`** — one agent per branch, each in its own worktree and its own detached
+  container, from one `fleet.yaml`. It owns **no isolation policy**: every task becomes the
+  same `sandbox.Options` a `--worktree` run produces, with `Detach` set, so the boundary is
+  defined in one place for both. That inheritance is a rule with teeth — it means every gate
+  on the run path must be repeated here, and the one that was missed was `persist_auth`:
+  `BuildSpec` mounts `AuthPersistDir` whenever it is non-empty, so prod's "the refresh token
+  is never mounted" held for `run` and not for `fleet`. `ValidateProfile` cannot catch that
+  class; it validates the resolved `Config`, and the leak is in the `Options`.
+  `verify` is what makes a run *autonomous* rather than merely headless: a shell command,
+  wrapped around the agent's argv by `withVerify`, whose exit code becomes the container's
+  (`0`, or `VerifyFailedExit`). In the container because a verify running on the host would
+  be host code selected by a file the agent can write; through `"$@"` because the argv
+  carries the prompt, which would otherwise rewrite the script judging it. `land` is the only
+  operation that writes to the base branch and refuses on every ambiguity — see below.
+  `fleet.yaml` has **CLI-flag trust**, argued in `Load`'s doc comment: it is named with `-f`,
+  never discovered upward, and carries no `profile:` key.
 - **`internal/githard`** — neutralises the parts of a repository's git config that make git *run
   commands*, for every git call sandbox-cli makes on its own behalf. See the trust-boundary
   section below.
+
+### Container labels, and the two `land` invariants
+
+Every container is stamped with `sandbox.cli` plus, when there is something true to say,
+`sandbox.repo`/`branch`/`agent`/`base`/`fleet`/`verify` (`internal/sandbox/labels.go`). Docker
+is the state store, so **a fact not stamped is one no later command can recover** — and the
+keys are constants because three packages now read them. Two are easy to get wrong:
+
+- `sandbox.repo` is `worktree.RepoID`, an **id, not a path**: two clones of a same-named repo
+  would otherwise share a label namespace. A `Runner` therefore carries both (`Repo` for git,
+  `RepoID` for labels).
+- `sandbox.fleet` separates a fleet container from an interactive `--detach` session in the
+  same repo. Without it `fleet stop --all` reaches someone's live session, `fleet clean` reaps
+  it, and `max_parallel` counts it — one open interactive session would block a
+  `max_parallel: 1` fleet forever on a slot that never frees.
+
+`land` merges into the checked-out branch, and two refusals are load-bearing rather than
+cautious. **The recorded base and `HEAD` are not competing answers**: the label is the intent,
+`HEAD` is the only branch git can merge into, so a disagreement is a refusal (`--onto` to
+override) and never a preference. And **the worktree must still be on the branch being
+landed**: `worktree.Path` falls back to a name-derived directory, so an agent that ran
+`git checkout -b` inside its worktree would otherwise have `add -A` commit the work onto the
+branch it moved to, and the merge would take the untouched original.
 - **`internal/creds`** — a deliberate **stub seam** for a future credential broker. Today it
   resolves secret *references* on the host; the values reach the container via
   `RunSpec.ForwardedEnv`, which the docker child gets and `BuildArgs` never renders. Keep it that

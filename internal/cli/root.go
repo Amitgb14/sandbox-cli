@@ -4,7 +4,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -189,52 +188,14 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	if projectDir == "" {
 		projectDir, _ = os.Getwd()
 	}
-	// The path comes from a `.git` pointer file inside the workspace, which the
-	// agent can rewrite, and it is about to be mounted read-write at its own host
-	// location — so it goes through the same non-overridable refusals as the
-	// workspace itself. worktree.GitCommonDir already requires the target to look
-	// like a real git directory; this is the second layer, and the one that would
-	// still hold if that check were ever loosened.
-	if gitDir, ok := worktree.GitCommonDir(config.ExpandTilde(projectDir)); ok && sandbox.RefuseUnsafeHostPath(gitDir) == nil {
-		opts.ExtraMounts = append(opts.ExtraMounts, gitDir+":"+gitDir+":rw")
-
-		// The worktree is mounted a second time at its own host path, not only at
-		// /workspace. The parent repo records each linked worktree by absolute path
-		// and treats a record whose path has vanished as a deleted worktree, so
-		// inside the container every one of them reads as "prunable: gitdir file
-		// points to non-existent location" — the host paths simply aren't there.
-		// The parent .git above is mounted read-write so the agent can commit, which
-		// means a `git worktree prune` (or the one `git gc` runs for itself) reaches
-		// out of the container and deletes the user's entire worktree registry,
-		// orphaning every worktree including the one it is running in. Making the
-		// path resolve is one extra bind of a directory that is already mounted, so
-		// it grants no reach the container did not have a moment ago.
-		if wt, err := filepath.Abs(config.ExpandTilde(projectDir)); err == nil {
-			opts.ExtraMounts = append(opts.ExtraMounts, wt+":"+wt+":rw")
-		}
-	}
-
-	// .git/hooks read-only, over the read-write workspace.
-	//
-	// The agent has to be able to edit project files, but hooks are not project
-	// source: they are programs the *user's* git runs, on the host, as them. An
-	// agent that writes .git/hooks/pre-commit is not editing the project, it is
-	// waiting for the user's next commit. Confirmed as a live escape.
-	//
-	// hooks specifically, not .git as a whole: agents legitimately run `git config`
-	// and git itself writes indexes, refs and logs constantly. Changes to
-	// .git/config are watched instead (see watchGitConfig) — detected rather than
-	// prevented, because preventing them breaks ordinary work.
-	// The workspace's own .git/hooks is handled in BuildSpec, which knows where the
-	// workspace lands inside the container. This is the other one: a linked
-	// worktree runs the hooks from the parent repository's common directory, and
-	// that directory is bind-mounted read-write at its host path so git works at
-	// all — so its hooks need covering at that same host path.
-	if common, ok := worktree.GitCommonDir(config.ExpandTilde(projectDir)); ok {
-		if h := filepath.Join(common, "hooks"); isDirPath(h) {
-			opts.ExtraMounts = append(opts.ExtraMounts, h+":"+h+":ro")
-		}
-	}
+	// The three binds a linked worktree needs — the parent .git, the worktree at
+	// its own host path, and the parent's hooks read-only over it — together with
+	// the refusals that guard them. Shared with the fleet runner, which builds its
+	// own Options and would otherwise have to repeat both the mounts and the
+	// safety check. The workspace's *own* .git/hooks is handled in BuildSpec,
+	// which knows where the workspace lands inside the container; this is the
+	// parent repository's, which a linked worktree also runs.
+	opts.ExtraMounts = append(opts.ExtraMounts, sandbox.LinkedWorktreeMounts(projectDir)...)
 
 	// The branch drives the live gauge and the post-run summary, and — with
 	// --detach — the container's name and its sandbox.branch label. It matters
@@ -426,6 +387,7 @@ func NewRootCmd() *cobra.Command {
 		newDoctorCmd(),
 		newCleanCmd(),
 		newUsageCmd(),
+		newFleetCmd(),
 		newWorktreeCmd(),
 		newRecoverCmd(),
 		newContextCmd(),

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"io"
 	"os"
 	"os/exec"
@@ -416,7 +417,7 @@ func TestAnnounceBroadCredentials(t *testing.T) {
 // exec is what still lets the agent self-update, which is why it lives there.
 func TestBootstrapDoesNotShadowSystemBinaries(t *testing.T) {
 	scripts := map[string]string{
-		"claude":    claudeBootstrap,
+		"claude":    agents.ClaudeBootstrap,
 		"npm agent": npmAgentBootstrap("gemini", "@google/gemini-cli")[2],
 	}
 	for name, script := range scripts {
