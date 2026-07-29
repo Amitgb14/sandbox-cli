@@ -107,7 +107,7 @@ func resolveSession(infos []runtime.ContainerInfo, ref string) (runtime.Containe
 		switch {
 		case c.ID == ref || shortID(c.ID) == ref || c.Name == ref || c.Labels[sandbox.LabelBranch] == ref:
 			exact = append(exact, c)
-		case ref != "" && (strings.HasPrefix(c.ID, ref) || strings.HasPrefix(c.Name, ref)):
+		case strings.HasPrefix(c.ID, ref) || strings.HasPrefix(c.Name, ref):
 			prefix = append(prefix, c)
 		}
 	}
@@ -249,9 +249,11 @@ func renderSessions(w io.Writer, rows []runtime.ContainerInfo, all bool, now tim
 	if err := tw.Flush(); err != nil {
 		return err
 	}
-	// A hint, not a second table, and only where a person is reading: piping the
-	// listing into another command should get the listing and nothing else.
-	if anyRunning && isTerminalStats(os.Stdout) {
+	// A hint, not a second table, and only where a person is reading it: piping
+	// the listing into another command should get the listing and nothing else.
+	// The terminal test is on the writer actually being written to, so a caller
+	// redirecting the table somewhere never gets advice mixed into it.
+	if f, ok := w.(*os.File); anyRunning && ok && isTerminalStats(f) {
 		fmt.Fprintln(w, "\nwatch one with `sandbox-cli logs <id> --follow`, or `sandbox-cli attach <id>`")
 	}
 	return nil
@@ -453,7 +455,7 @@ func stopSessions(ctx context.Context, rt sessionRuntime, targets []runtime.Cont
 		stopped++
 	}
 	if stopped > 0 {
-		fmt.Fprintln(out, "their logs and exit codes are kept; `sandbox-cli clean` removes them")
+		fmt.Fprintln(out, "logs and exit codes are kept; `sandbox-cli clean` removes them")
 	}
 	return nil
 }
