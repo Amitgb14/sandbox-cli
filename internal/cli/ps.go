@@ -103,9 +103,17 @@ func newCleanCmd() *cobra.Command {
 // `clean` asks. Deliberately narrower than "not running": a paused or restarting
 // container is somebody's live run in an odd moment, and reaping it because it
 // was not literally "running" at the instant we looked is how a supervision
-// command destroys the thing it supervises.
+// command destroys the thing it supervises. An unreadable state ("") counts as
+// live for the same reason — not knowing is not a licence.
+//
+// `created` is the exception, and it is one of kind rather than degree: a
+// container that never started ran no agent, wrote nothing, and has no in-flight
+// write to protect. A detached run whose start failed leaves exactly that husk
+// behind, with Remove=false, and without this case the only way to remove it was
+// `clean --force` — whose flag help warns about killing an agent that may still
+// be working, which is a much scarier thing than what the user is actually doing.
 func sessionFinished(c runtime.ContainerInfo) bool {
-	return c.State == "exited" || c.State == "dead"
+	return c.State == "exited" || c.State == "dead" || c.State == "created"
 }
 
 func dash(s string) string {
