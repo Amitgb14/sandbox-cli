@@ -18,6 +18,7 @@ import (
 // touch a running agent) are assertable without docker.
 type fakeController struct {
 	stopped []string
+	killed  []string
 	removed []string
 	logged  string
 }
@@ -29,6 +30,14 @@ func (f *fakeController) Logs(_ context.Context, id string, _ bool, _, _ io.Writ
 
 func (f *fakeController) Stop(_ context.Context, id string) error {
 	f.stopped = append(f.stopped, id)
+	return nil
+}
+
+// Kill is recorded separately from Stop: nothing in the fleet should reach for
+// it, and a test that could not tell the two apart would not notice if something
+// started to.
+func (f *fakeController) Kill(_ context.Context, id string) error {
+	f.killed = append(f.killed, id)
 	return nil
 }
 

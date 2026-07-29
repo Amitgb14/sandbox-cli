@@ -34,10 +34,13 @@ type contextScope struct {
 func contextCmd(sc contextScope) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "context",
-		Short: "List the conversations agents have had here",
+		Short: "List past agent conversations (not running sandboxes — that is `list`)",
 		Long: "Agents keep their conversation transcripts in their own private layout under\n" +
 			"HOME, and sandbox-cli persists that HOME so the sessions survive the container.\n" +
 			"This is how you see them, and get the id to resume one by.\n\n" +
+			"This is about *conversations*, which outlive the containers they happened in.\n" +
+			"For the containers themselves — what is running right now — use `sandbox-cli\n" +
+			"list`.\n\n" +
 			"`sandbox-cli context` and `sandbox-cli context list` are the same command.",
 		Example: "  sandbox-cli context\n" +
 			"  sandbox-cli claude context list\n" +

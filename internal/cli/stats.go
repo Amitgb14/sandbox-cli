@@ -10,10 +10,13 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
 
 // statRow is one container's live resource usage.
 type statRow struct {
+	ID   string
 	Name string
 	Mem  string
 	CPU  string
@@ -29,10 +32,12 @@ func newStatsCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "stats",
-		Short: "Live memory/CPU of running sandbox containers",
-		Long: "Shows a live, refreshing table of memory and CPU for all running sandbox\n" +
-			"containers. Run it in a second terminal alongside an interactive agent\n" +
-			"session (where the inline gauge can't be drawn). Press Ctrl-C to exit.",
+		Short: "Live memory/CPU of running sandbox sessions",
+		Long: "Shows a live, refreshing table of memory and CPU for every running sandbox\n" +
+			"session. Run it in a second terminal alongside an interactive agent (where\n" +
+			"the inline gauge can't be drawn). Press Ctrl-C to exit.\n\n" +
+			"The ID column is the same one `sandbox-cli list` shows, so a row here can be\n" +
+			"handed straight to `attach`, `logs` or `kill`.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStats(engineBin(cfgPath, engineFlag), interval, once)
 		},
@@ -45,8 +50,12 @@ func newStatsCmd() *cobra.Command {
 }
 
 func runStats(dockerBin string, interval time.Duration, once bool) error {
+	// Named after the engine actually configured, not after docker: on a
+	// podman-only machine the old message told the user to install something they
+	// had deliberately not installed.
 	if _, err := exec.LookPath(dockerBin); err != nil {
-		return fmt.Errorf("docker not found on PATH: %w", err)
+		return fmt.Errorf("%s is not on your PATH, so there is nothing to sample\n"+
+			"  install it, or select the engine you do have with --engine podman", dockerBin)
 	}
 
 	clear := isTerminalStats(os.Stdout) && !once
@@ -94,9 +103,9 @@ func renderStats(dockerBin string, out *os.File, clear bool) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "CONTAINER\tMEM\tCPU\tPIDS")
+	fmt.Fprintln(tw, "ID\tCONTAINER\tMEM\tCPU\tPIDS")
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Name, r.Mem, r.CPU, r.PIDs)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ID, r.Name, r.Mem, r.CPU, r.PIDs)
 	}
 	return tw.Flush()
 }
@@ -118,9 +127,15 @@ func collectSandboxStats(dockerBin string) ([]statRow, error) {
 }
 
 func sampleSandboxStats(dockerBin string) ([]statRow, error) {
-	ids, err := exec.Command(dockerBin, "ps", "--filter", "name=sandbox-", "--format", "{{.ID}}").Output()
+	// Filtered by label, not by a `sandbox-` name prefix. The label is stamped on
+	// every container this tool starts and nothing else; the name is a convention,
+	// so the prefix both missed nothing today and would quietly start reporting
+	// somebody else's `sandbox-postgres` tomorrow. It is also the filter `list`
+	// uses, which is what makes the two commands describe the same set.
+	ids, err := exec.Command(dockerBin, "ps",
+		"--filter", "label="+sandbox.LabelCLI+"=1", "--format", "{{.ID}}").Output()
 	if err != nil {
-		return nil, fmt.Errorf("listing sandbox containers: %w", err)
+		return nil, fmt.Errorf("listing sandbox sessions: %w", err)
 	}
 	idList := strings.Fields(strings.TrimSpace(string(ids)))
 	if len(idList) == 0 {
@@ -128,10 +143,10 @@ func sampleSandboxStats(dockerBin string) ([]statRow, error) {
 	}
 
 	args := append([]string{"stats", "--no-stream",
-		"--format", "{{.Name}}|{{.MemUsage}}|{{.CPUPerc}}|{{.PIDs}}"}, idList...)
+		"--format", "{{.ID}}|{{.Name}}|{{.MemUsage}}|{{.CPUPerc}}|{{.PIDs}}"}, idList...)
 	out, err := exec.Command(dockerBin, args...).Output()
 	if err != nil {
-		return nil, fmt.Errorf("reading docker stats: %w", err)
+		return nil, fmt.Errorf("reading %s stats: %w", dockerBin, err)
 	}
 
 	var rows []statRow
@@ -139,11 +154,11 @@ func sampleSandboxStats(dockerBin string) ([]statRow, error) {
 		if line == "" {
 			continue
 		}
-		f := strings.SplitN(line, "|", 4)
-		if len(f) != 4 {
+		f := strings.SplitN(line, "|", 5)
+		if len(f) != 5 {
 			continue
 		}
-		rows = append(rows, statRow{Name: f[0], Mem: f[1], CPU: f[2], PIDs: f[3]})
+		rows = append(rows, statRow{ID: f[0], Name: f[1], Mem: f[2], CPU: f[3], PIDs: f[4]})
 	}
 	return rows, nil
 }

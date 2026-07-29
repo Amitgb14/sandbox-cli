@@ -22,6 +22,8 @@ type fakeHost struct {
 	runtimesErr error
 	firewall    runtime.FirewallProbe
 	firewallWhy string
+	imageThere  bool
+	imageKnown  bool
 }
 
 func (f fakeHost) Available(context.Context) error { return f.unavailable }
@@ -31,6 +33,9 @@ func (f fakeHost) SeccompUnavailable(context.Context) (bool, bool) {
 func (f fakeHost) Runtimes(context.Context) ([]string, error) { return f.runtimes, f.runtimesErr }
 func (f fakeHost) FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string) {
 	return f.firewall, f.firewallWhy
+}
+func (f fakeHost) ImagePresent(context.Context, string) (bool, bool) {
+	return f.imageThere, f.imageKnown
 }
 
 func withHost(t *testing.T, h fakeHost) {
@@ -42,7 +47,13 @@ func withHost(t *testing.T, h fakeHost) {
 
 // healthy is a host that satisfies everything.
 func healthy() fakeHost {
-	return fakeHost{seccompKnow: true, firewall: runtime.FirewallOK, runtimes: []string{"runc"}}
+	return fakeHost{
+		seccompKnow: true,
+		firewall:    runtime.FirewallOK,
+		runtimes:    []string{"runc"},
+		imageThere:  true,
+		imageKnown:  true,
+	}
 }
 
 // TestDoctorVerdictFollowsTheProfile is the whole point of the command: the same
@@ -119,6 +130,55 @@ func TestDoctorReportsAnUnbuiltImageAsUnknown(t *testing.T) {
 		if c.name == "egress firewall" && c.status != statusUnknown {
 			t.Errorf("an unbuilt image was reported as status %v, want unknown", c.status)
 		}
+	}
+}
+
+// TestDoctorReportsAMissingBaseImageWithoutFailingAnything.
+//
+// A machine that has not built the image yet is not broken — the first run
+// builds it, which is the design. What the reader wants is the heads-up that
+// their first run will take a few minutes, so the check reports it as ok and
+// says so, and prod does not refuse over it.
+func TestDoctorReportsAMissingBaseImageWithoutFailingAnything(t *testing.T) {
+	h := healthy()
+	h.imageThere = false
+	withHost(t, h)
+
+	checks := runDoctorChecks(context.Background(), config.ProfileProd, "docker")
+	var saw bool
+	for _, c := range checks {
+		if c.name != "base image" {
+			continue
+		}
+		saw = true
+		if c.status != statusOK {
+			t.Errorf("an unbuilt base image was reported as status %v, want ok", c.status)
+		}
+		if !strings.Contains(c.detail, "not built yet") {
+			t.Errorf("the detail should say the first run will build it: %q", c.detail)
+		}
+	}
+	if !saw {
+		t.Fatal("no base image check ran")
+	}
+	if err := reportDoctor(config.ProfileProd, checks); err != nil {
+		t.Errorf("prod refused a host whose only gap was an unbuilt image: %v", err)
+	}
+}
+
+// TestDoctorCannotTellWhetherTheImageIsThere: absent and unreachable are
+// different answers, and prod does not get to assume the one it would prefer.
+func TestDoctorCannotTellWhetherTheImageIsThere(t *testing.T) {
+	h := healthy()
+	h.imageThere, h.imageKnown = false, false
+	withHost(t, h)
+
+	checks := runDoctorChecks(context.Background(), config.ProfileProd, "docker")
+	if err := reportDoctor(config.ProfileProd, checks); err == nil {
+		t.Error("prod should refuse a question that could not be asked")
+	}
+	if err := reportDoctor(config.ProfileDev, checks); err != nil {
+		t.Errorf("dev should stay quiet about a question it could not ask: %v", err)
 	}
 }
 

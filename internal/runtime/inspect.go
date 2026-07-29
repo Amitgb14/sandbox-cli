@@ -22,6 +22,14 @@ type ContainerInfo struct {
 	CreatedAt  time.Time         // when docker created it; always set
 	StartedAt  time.Time         // zero if never started
 	FinishedAt time.Time         // zero while still running
+
+	// OpenStdin and TTY are how the container was started, and together they say
+	// what attaching to it can do. A detached run has neither — `--detach`
+	// replaces `-i`/`-it` on purpose — so attaching to one shows its output and
+	// cannot type at it. `attach` reads these to say so up front, rather than
+	// leaving someone typing into a container that is not listening.
+	OpenStdin bool
+	TTY       bool
 }
 
 // Running reports whether the container is still executing its guest command.
@@ -45,8 +53,21 @@ type Controller interface {
 	Logs(ctx context.Context, id string, follow bool, stdout, stderr io.Writer) error
 	// Stop asks the guest to exit, killing it after a grace period.
 	Stop(ctx context.Context, id string) error
+	// Kill terminates the guest immediately, with no chance to finish what it was
+	// writing. Separate from Stop because the difference is the difference between
+	// an agent that closed the file it was editing and one that did not, so a
+	// caller has to ask for it by name.
+	Kill(ctx context.Context, id string) error
 	// Remove deletes a stopped container along with its logs.
 	Remove(ctx context.Context, id string) error
+}
+
+// Attacher is the optional capability of connecting a terminal to a container
+// that is already running. Kept out of Controller because it is a different kind
+// of act: Controller's methods do one thing and return, this one hands the
+// caller's stdio to another process for as long as they want it.
+type Attacher interface {
+	Attach(ctx context.Context, id string, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
 // Logs implements Controller.
@@ -76,6 +97,39 @@ func (d *DockerCLI) Stop(ctx context.Context, id string) error {
 		return fmt.Errorf("stopping %s: %s", short(id), strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// Kill implements Controller. No grace period: the guest gets SIGKILL and never
+// runs another instruction, which is why `sandbox-cli kill` reaches this only
+// when asked with --force.
+func (d *DockerCLI) Kill(ctx context.Context, id string) error {
+	if out, err := exec.CommandContext(ctx, d.bin(), "kill", id).CombinedOutput(); err != nil {
+		return fmt.Errorf("killing %s: %s", short(id), strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// Attach implements Attacher.
+//
+// --sig-proxy=false is the load-bearing part. By default `docker attach` forwards
+// signals to the container, so the Ctrl-C someone presses to stop *looking* at an
+// agent would instead stop the agent — from a command whose whole purpose is to
+// observe one. Attaching is a way to look, and looking must not be able to end a
+// run; `kill` is a separate word on purpose. With sig-proxy off, Ctrl-C ends this
+// client and leaves the guest working.
+func (d *DockerCLI) Attach(ctx context.Context, id string, stdin io.Reader, stdout, stderr io.Writer) error {
+	cmd := exec.CommandContext(ctx, d.bin(), "attach", "--sig-proxy=false", id)
+	cmd.Stdin = stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	// Detaching is how an attach is *meant* to end, and the caller's context being
+	// cancelled is the same event arriving another way — neither is a failure worth
+	// reporting. The same bargain Logs makes.
+	if err != nil && ctx.Err() != nil {
+		return nil
+	}
+	return err
 }
 
 // Remove implements Controller.
@@ -149,7 +203,9 @@ type dockerInspect struct {
 		FinishedAt string `json:"FinishedAt"`
 	} `json:"State"`
 	Config struct {
-		Labels map[string]string `json:"Labels"`
+		Labels    map[string]string `json:"Labels"`
+		OpenStdin bool              `json:"OpenStdin"`
+		Tty       bool              `json:"Tty"`
 	} `json:"Config"`
 }
 
@@ -173,6 +229,8 @@ func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo,
 			ExitCode:   r.State.ExitCode,
 			StartedAt:  parseDockerTime(r.State.StartedAt),
 			FinishedAt: parseDockerTime(r.State.FinishedAt),
+			OpenStdin:  r.Config.OpenStdin,
+			TTY:        r.Config.Tty,
 		})
 	}
 	return infos, nil

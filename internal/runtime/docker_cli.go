@@ -106,6 +106,26 @@ func (d *DockerCLI) EnsureImage(ctx context.Context, ref string, forceBuild bool
 	return d.builder(ctx, ref)
 }
 
+// ImagePresent reports whether ref is already in the local image store, and
+// whether that could be determined at all.
+//
+// The second return is not decoration. `image inspect` fails both when the image
+// is absent and when the daemon cannot be reached, and those are different
+// answers: "your first run will spend a few minutes building" is useful, "your
+// first run will fail" is a different report entirely. A caller that collapsed
+// them would tell someone with a stopped daemon to expect a slow build.
+func (d *DockerCLI) ImagePresent(ctx context.Context, ref string) (present, known bool) {
+	if err := exec.CommandContext(ctx, d.bin(), "image", "inspect", ref).Run(); err == nil {
+		return true, true
+	}
+	// Absent and unreachable both land here, so ask a question only a reachable
+	// daemon can answer to tell them apart.
+	if err := exec.CommandContext(ctx, d.bin(), "image", "ls", "-q").Run(); err != nil {
+		return false, false
+	}
+	return false, true
+}
+
 // Builder builds the given image reference. Set by the image package.
 type Builder func(ctx context.Context, ref string) error
 
