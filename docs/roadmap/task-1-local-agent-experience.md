@@ -64,10 +64,10 @@ sandbox-cli kill <session>        # stop it
 
 **1.1 `list`** (alias `ps`, so the muscle memory keeps working)
 
-- Columns: `ID`, `NAME`, `AGENT`, `BRANCH`, `STATUS`, `UPTIME`.
+- Columns: `ID`, `NAME`, `AGENT`, `BRANCH`, `STATUS`, `ELAPSED`.
 - `ID` is the container id abbreviated to 12 characters — the same identity `attach`,
   `logs` and `kill` accept, and the same one `stats` shows.
-- `STATUS` distinguishes `running` from `exited (N)`; `UPTIME` is how long it has been
+- `STATUS` distinguishes `running` from `exited (N)`; `ELAPSED` is how long it has been
   running, or how long it ran.
 - Flags: `--all` (include exited — detached runs are kept on purpose), `--quiet` (ids
   only, for scripting), `--engine`, `--config`.

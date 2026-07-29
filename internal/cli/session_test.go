@@ -19,6 +19,7 @@ type fakeSessionRuntime struct {
 	containers []runtime.ContainerInfo
 	listErr    error
 	askedFor   map[string]string
+	failStop   map[string]bool
 
 	stopped  []string
 	killed   []string
@@ -35,6 +36,9 @@ func (f *fakeSessionRuntime) Logs(_ context.Context, id string, _ bool, _, _ io.
 }
 func (f *fakeSessionRuntime) Stop(_ context.Context, id string) error {
 	f.stopped = append(f.stopped, id)
+	if f.failStop[id] {
+		return errors.New("no such container: " + id)
+	}
 	return nil
 }
 func (f *fakeSessionRuntime) Kill(_ context.Context, id string) error {
@@ -240,6 +244,36 @@ func TestKillIsGracefulUnlessForced(t *testing.T) {
 	}
 }
 
+// TestOneFailedStopDoesNotAbandonTheRest.
+//
+// Returning at the first error would leave the remaining sessions neither
+// attempted nor mentioned, so a `--all` that stumbled on one container would
+// report that one and leave the user guessing about the others — the same
+// "unsure which half ran" problem killTargets' all-or-nothing resolution exists
+// to prevent, one stage later. Every target is tried, every target gets a line,
+// and the failure still reaches the exit code.
+func TestOneFailedStopDoesNotAbandonTheRest(t *testing.T) {
+	f := &fakeSessionRuntime{failStop: map[string]bool{"aaaa1111": true}}
+	targets := []runtime.ContainerInfo{
+		sess("aaaa1111", "sandbox-repo-a", "a", "running"),
+		sess("bbbb2222", "sandbox-repo-b", "b", "running"),
+		sess("cccc3333", "sandbox-repo-c", "c", "running"),
+	}
+	var out bytes.Buffer
+	err := stopSessions(context.Background(), f, targets, false, &out)
+	if err == nil {
+		t.Fatal("a failed stop must still reach the exit code")
+	}
+	if len(f.stopped) != 3 {
+		t.Errorf("attempted %v, want all three tried", f.stopped)
+	}
+	for _, name := range []string{"sandbox-repo-a", "sandbox-repo-b", "sandbox-repo-c"} {
+		if !strings.Contains(out.String(), name) {
+			t.Errorf("%s went unmentioned, so its state is anyone's guess:\n%s", name, out.String())
+		}
+	}
+}
+
 // TestKillSkipsSessionsThatAlreadyFinished — asking for a state something is
 // already in is not an error, and must not report a stop that never happened.
 func TestKillSkipsSessionsThatAlreadyFinished(t *testing.T) {
@@ -337,28 +371,28 @@ func TestSessionListingSaysWhatToDoWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestSessionUptimeMeasuresTheRightWindow: a running session has been up since
+// TestSessionElapsedMeasuresTheRightWindow: a running session has been up since
 // it started, a finished one ran for as long as it ran — reporting "now minus
 // start" for a container that exited an hour ago would make every dead session
 // look like the busiest one on the machine.
-func TestSessionUptimeMeasuresTheRightWindow(t *testing.T) {
+func TestSessionElapsedMeasuresTheRightWindow(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 
 	live := sess("a", "sandbox-a", "", "running")
 	live.StartedAt = now.Add(-90 * time.Second)
-	if got := sessionUptime(live, now); got != "1m30s" {
+	if got := sessionElapsed(live, now); got != "1m30s" {
 		t.Errorf("running uptime = %q, want 1m30s", got)
 	}
 
 	done := sess("b", "sandbox-b", "", "exited")
 	done.StartedAt = now.Add(-3 * time.Hour)
 	done.FinishedAt = now.Add(-2 * time.Hour)
-	if got := sessionUptime(done, now); got != "1h0m" {
+	if got := sessionElapsed(done, now); got != "1h0m" {
 		t.Errorf("finished uptime = %q, want the hour it ran, not the hour since", got)
 	}
 
 	never := sess("c", "sandbox-c", "", "created")
-	if got := sessionUptime(never, now); got != "-" {
+	if got := sessionElapsed(never, now); got != "-" {
 		t.Errorf("a session that never started = %q, want a dash", got)
 	}
 }

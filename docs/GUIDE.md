@@ -1013,7 +1013,7 @@ sandbox-cli clean                   # remove finished sessions' containers
 ```
 
 ```
-ID            NAME                     AGENT   BRANCH     STATUS      UPTIME
+ID            NAME                     AGENT   BRANCH     STATUS      ELAPSED
 a1b2c3d4e5f6  sandbox-myapp-feature-a  claude  feature-a  running     4m12s
 9f8e7d6c5b4a  sandbox-myapp-feature-b  codex   feature-b  exited (0)  11m3s
 ```

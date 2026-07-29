@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,6 +66,12 @@ func sessionEngine(cfgPath, engineFlag string) (sessionRuntime, string, error) {
 // that is created, restarting or paused still lists. Those states are all
 // somebody's live run in an odd moment, and a listing that hides a container is
 // worse than one that shows a state you have to read.
+//
+// That makes this deliberately *not* the inverse of `clean`'s sessionFinished,
+// which also reaps `created`. The two questions are asymmetric on purpose:
+// showing something costs a line, and removing it costs whatever it was. A
+// `created` husk from a failed detached start is worth surfacing — it is how you
+// learn the start failed — and is still safe to reap, because it never ran.
 func sandboxSessions(ctx context.Context, rt sessionRuntime, engine string, all bool) ([]runtime.ContainerInfo, error) {
 	infos, err := rt.Containers(ctx, map[string]string{sandbox.LabelCLI: "1"})
 	if err != nil {
@@ -93,10 +100,15 @@ func sandboxSessions(ctx context.Context, rt sessionRuntime, engine string, all 
 //
 // Ambiguity refuses and lists the candidates. Stopping the wrong agent is not
 // undone by running the command again, so a guess here is not worth the
-// keystrokes it saves. The single exception is liveness: when several matches
-// share a branch and exactly one of them is still running, that one is the
-// session, because a name for work in progress cannot reasonably mean the
-// container that finished yesterday.
+// keystrokes it saves.
+//
+// The single exception is liveness, and it applies to *any* ambiguous tier —
+// prefix collisions as much as a branch with a history — because the reasoning
+// is about what a name means rather than about which field matched: a reference
+// to work in progress cannot reasonably mean the container that finished
+// yesterday while one is still going. It is also the narrowest possible
+// widening, since the three verbs this feeds either act on a running session or
+// decline to (`attach` refuses a finished one, `stopSessions` skips it).
 func resolveSession(infos []runtime.ContainerInfo, ref string) (runtime.ContainerInfo, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -231,7 +243,7 @@ func renderSessions(w io.Writer, rows []runtime.ContainerInfo, all bool, now tim
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tAGENT\tBRANCH\tSTATUS\tUPTIME")
+	fmt.Fprintln(tw, "ID\tNAME\tAGENT\tBRANCH\tSTATUS\tELAPSED")
 	anyRunning := false
 	for _, c := range rows {
 		anyRunning = anyRunning || c.Running()
@@ -244,7 +256,7 @@ func renderSessions(w io.Writer, rows []runtime.ContainerInfo, all bool, now tim
 			shortID(c.ID), termsafe.Clean(c.Name),
 			dash(termsafe.Clean(c.Labels[sandbox.LabelAgent])),
 			dash(termsafe.Clean(c.Labels[sandbox.LabelBranch])),
-			sessionStatus(c), sessionUptime(c, now))
+			sessionStatus(c), sessionElapsed(c, now))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -432,12 +444,22 @@ func killTargets(infos []runtime.ContainerInfo, refs []string, all bool) ([]runt
 	return out, nil
 }
 
+// stopSessions signals every target, and reports on every target.
+//
+// One failure does not end the batch. Returning at the first error would leave
+// the rest neither attempted nor mentioned, so a `--all` that stumbled on one
+// container would tell the user about that one and leave them guessing at the
+// state of the others — which is the "unsure which half ran" problem
+// killTargets' all-or-nothing resolution exists to prevent, reintroduced one
+// stage later. Every session gets its line, and the failures are joined at the
+// end so the exit code still says something went wrong.
 func stopSessions(ctx context.Context, rt sessionRuntime, targets []runtime.ContainerInfo, force bool, out io.Writer) error {
 	if len(targets) == 0 {
 		fmt.Fprintln(out, "no running sandbox sessions")
 		return nil
 	}
 	stopped := 0
+	var failed []error
 	for _, c := range targets {
 		if !c.Running() {
 			// Not an error: the user asked for a state this session is already in.
@@ -449,7 +471,9 @@ func stopSessions(ctx context.Context, rt sessionRuntime, targets []runtime.Cont
 			verb, act = "killed", rt.Kill
 		}
 		if err := act(ctx, c.ID); err != nil {
-			return err
+			fmt.Fprintf(out, "%s could not be stopped\n", termsafe.Clean(c.Name))
+			failed = append(failed, err)
+			continue
 		}
 		fmt.Fprintf(out, "%s %s\n", verb, termsafe.Clean(c.Name))
 		stopped++
@@ -457,7 +481,7 @@ func stopSessions(ctx context.Context, rt sessionRuntime, targets []runtime.Cont
 	if stopped > 0 {
 		fmt.Fprintln(out, "logs and exit codes are kept; `sandbox-cli clean` removes them")
 	}
-	return nil
+	return errors.Join(failed...)
 }
 
 // shortID is the 12-character form docker itself displays, and the one every
@@ -486,8 +510,14 @@ func sessionStatus(c runtime.ContainerInfo) string {
 	return c.State
 }
 
-// sessionUptime is how long a session has been running, or how long it ran.
-func sessionUptime(c runtime.ContainerInfo, now time.Time) string {
+// sessionElapsed is how long a session has been running, or how long it ran.
+//
+// Named for the column, and the column is named ELAPSED rather than UPTIME
+// because half the rows are finished ones, for which "uptime" reads as a claim
+// that they are still up. `fleet status` has carried the same value under the
+// same name since it shipped, so this is the tool agreeing with itself rather
+// than a new word.
+func sessionElapsed(c runtime.ContainerInfo, now time.Time) string {
 	if c.StartedAt.IsZero() {
 		return "-"
 	}
