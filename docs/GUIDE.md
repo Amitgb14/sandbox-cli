@@ -144,6 +144,19 @@ sandbox-cli run --mount ~/datasets:/workspace/data:ro -- python train.py
 sandbox-cli run --env-allow ANTHROPIC_API_KEY -- some-tool
 ```
 
+**See what is running, and get at it:**
+
+```sh
+sandbox-cli list             # every sandbox session on this machine
+sandbox-cli logs feature-a -f   # follow one, by branch, id or container name
+sandbox-cli attach feature-a    # put this terminal on it (Ctrl-C detaches)
+sandbox-cli kill feature-a      # ask it to stop
+```
+
+This is how you reach a run nothing is attached to — one you started with
+`--detach`, or one whose sandbox-cli you killed while the container kept going.
+See [Sessions](#sessions).
+
 **Run several agents at once, each on its own branch:** see
 [Parallel agents](#parallel-agents-with-git-worktrees).
 
@@ -982,9 +995,53 @@ ports:
 Flags add to that list rather than replacing it, so `-P 9229` opens a debugger
 port for one run without disturbing the project's own.
 
+### Sessions
+
+A **session** is a container sandbox-cli started. Most finish while you are
+watching; two kinds do not. A `--detach`ed run is meant to keep going, and a
+sandbox-cli that was killed leaves its container running — the daemon owns it,
+not the client — so an agent can still be working in your project with nothing
+attached to it.
+
+```sh
+sandbox-cli list                    # what is running (alias: ps)
+sandbox-cli list --all              # including finished sessions
+sandbox-cli logs <session> --follow # read, or follow, what it wrote
+sandbox-cli attach <session>        # connect this terminal to it
+sandbox-cli kill <session>          # ask it to stop; --force to insist
+sandbox-cli clean                   # remove finished sessions' containers
+```
+
+```
+ID            NAME                     AGENT   BRANCH     STATUS      UPTIME
+a1b2c3d4e5f6  sandbox-myapp-feature-a  claude  feature-a  running     4m12s
+9f8e7d6c5b4a  sandbox-myapp-feature-b  codex   feature-b  exited (0)  11m3s
+```
+
+`<session>` is the `ID`, the container name, or the branch — whichever you have
+to hand. If a name matches more than one session the command refuses and lists
+them rather than picking; the exception is a branch with an old container and a
+live one, where the live one is meant. With exactly one sandbox running you can
+leave the name out of `logs` and `attach` (but not `kill` — stopping the wrong
+agent costs its work).
+
+Three behaviours worth knowing before you need them:
+
+- **Ctrl-C out of `attach` detaches; it does not stop the agent.** Attaching is
+  a way to look.
+- **A detached session has no keyboard.** It was started without stdin because
+  nothing was attached to it. `attach` will say so; `logs --follow` is usually
+  what you meant.
+- **`kill` is polite by default** — SIGTERM and a grace period, so the agent
+  finishes the file it was writing. `--force` is SIGKILL.
+
+Nothing here can reach a container sandbox-cli did not start: a name is matched
+against our own labelled containers, never handed to docker to resolve.
+
 ### Live resource metrics
 Non-interactive runs show a live memory/CPU gauge; every run prints a peak-usage
-summary at the end. `sandbox-cli stats` shows a live table of running sandboxes.
+summary at the end. `sandbox-cli stats` shows a live table of running sandboxes,
+with the same session `ID` the commands above take.
 Disable with `--no-metrics`.
 
 During an interactive agent session, only `claude` shows the gauge on screen — it
@@ -1159,6 +1216,11 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli droid [args]` | Run Droid (installed on first use) |
 | `sandbox-cli init` | Scaffold a `.sandbox.yaml` |
 | `sandbox-cli config show\|path\|validate` | Inspect the effective config |
+| `sandbox-cli list` (alias `ps`) | Sandbox sessions running now; `--all` includes finished ones |
+| `sandbox-cli logs SESSION [-f]` | Read or follow what a session wrote |
+| `sandbox-cli attach SESSION` | Connect this terminal to a running session (Ctrl-C detaches) |
+| `sandbox-cli kill SESSION\|--all` | Stop sessions; `--force` for SIGKILL |
+| `sandbox-cli clean` | Remove the containers of finished sessions |
 | `sandbox-cli stats` | Live table of running sandboxes |
 | `sandbox-cli worktree list\|path\|rm` | Manage `--worktree` worktrees |
 | `sandbox-cli worktree git BRANCH ...` | Run git inside a worktree, by branch name |
