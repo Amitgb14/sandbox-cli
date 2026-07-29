@@ -1163,3 +1163,18 @@ version tag is pushed — see `.github/workflows/release.yml`.
 The isolation invariants live in one pure function, `runtime.BuildArgs`, and are
 asserted by `internal/runtime/args_test.go` and the `--dry-run` golden test in
 `internal/cli/dryrun_test.go`.
+
+## What's next
+
+Three pieces of work, in order, each with its own scope document under
+[`docs/roadmap/`](docs/roadmap/README.md):
+
+1. **[Better local / dev agent experience](docs/roadmap/task-1-local-agent-experience.md)**
+   — sessions you can list, attach to, follow and stop; a `doctor` that answers "is my
+   setup good?"; clearer errors. *In progress.*
+2. **[Multi-agent support](docs/roadmap/task-2-multi-agent.md)** — several agents in
+   parallel over git worktrees, orchestrated from the CLI.
+3. **[Stronger isolation for Linux production](docs/roadmap/task-3-stronger-isolation.md)**
+   — Kata Containers, so each sandbox gets its own kernel rather than sharing the host's.
+
+The roadmap index also records what is deliberately *deferred*, which is most of the rest.
