@@ -216,6 +216,11 @@ rather than merely passing. This is the single choke point for the isolation inv
 - **`internal/githard`** — neutralises the parts of a repository's git config that make git *run
   commands*, for every git call sandbox-cli makes on its own behalf. See the trust-boundary
   section below.
+- **`internal/creds`** — a deliberate **stub seam** for a future credential broker. Today it
+  resolves secret *references* on the host; the values reach the container via
+  `RunSpec.ForwardedEnv`, which the docker child gets and `BuildArgs` never renders. Keep it that
+  way: they used to travel through sandbox-cli's own environment, where a secret named `PATH`
+  redirected the subprocesses spawned next.
 
 ### Container labels, and the two `land` invariants
 
@@ -239,11 +244,32 @@ override) and never a preference. And **the worktree must still be on the branch
 landed**: `worktree.Path` falls back to a name-derived directory, so an agent that ran
 `git checkout -b` inside its worktree would otherwise have `add -A` commit the work onto the
 branch it moved to, and the merge would take the untouched original.
-- **`internal/creds`** — a deliberate **stub seam** for a future credential broker. Today it
-  resolves secret *references* on the host; the values reach the container via
-  `RunSpec.ForwardedEnv`, which the docker child gets and `BuildArgs` never renders. Keep it that
-  way: they used to travel through sandbox-cli's own environment, where a secret named `PATH`
-  redirected the subprocesses spawned next.
+
+### Sessions (`list` / `logs` / `attach` / `kill`)
+
+`internal/cli/session.go` is the supervision layer, and it exists because a container
+outlives the process that started it: the daemon owns it, so a `kill -9` on sandbox-cli
+leaves the agent running and still writing to `/workspace`, and `--detach` means to. It is
+built on the labels above via `runtime.Inspector`/`Controller`/`Attacher` — `clean` and
+`stats` were moved onto the same label filter so the listing and the reaper cannot disagree
+about what exists.
+
+The rule that makes it safe is one line in `resolveSession`: **a reference is matched
+against a listing filtered by `sandbox.cli` and is never handed to the engine to resolve.**
+`sandbox-cli kill postgres` must find nothing rather than somebody's database, and passing
+the string through to `docker kill` would fail toward more reach. Ambiguity refuses and
+lists the candidates — the one exception is liveness, since a branch with an old container
+and a live one can only mean the live one.
+
+Two asymmetries are deliberate and worth keeping. `logs` and `attach` infer their target
+when exactly one sandbox is running; `kill` does not, because reading the wrong session
+costs a second and stopping the wrong agent costs its work. And `attach` renders
+`--sig-proxy=false`, so the Ctrl-C that stops you *looking* at an agent cannot stop the
+agent — `Controller.Kill` is reachable only through `kill --force`.
+
+Label values are printed through `termsafe.Clean`: they are text from the repository, and a
+tab-separated table should not be forgeable by a branch name. That is the same regression
+the old text-parsing `ps` was built around, carried forward.
 
 ### Security profiles
 

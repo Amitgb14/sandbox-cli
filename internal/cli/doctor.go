@@ -132,6 +132,7 @@ type doctorRuntime interface {
 	SeccompUnavailable(context.Context) (bool, bool)
 	Runtimes(context.Context) ([]string, error)
 	FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string)
+	ImagePresent(context.Context, string) (bool, bool)
 }
 
 // newDoctorRuntime is a var so tests can substitute a host.
@@ -154,10 +155,39 @@ func runDoctorChecks(ctx context.Context, profile, engine string) []check {
 		}}
 	}
 	out := []check{{name: engine + " daemon", status: statusOK, detail: "reachable"}}
+	out = append(out, checkBaseImage(ctx, d))
 	out = append(out, checkSeccomp(ctx, d))
 	out = append(out, checkFirewall(ctx, d))
 	out = append(out, checkRuntimes(ctx, d, profile))
 	return out
+}
+
+// checkBaseImage is the everyday question the other checks do not answer: not
+// "is this host safe enough", but "is my first run going to take three minutes".
+//
+// A missing image is reported as **ok**, deliberately, and it is worth saying
+// why rather than leaving it looking like a mistake. Nothing is wrong with a
+// machine that has not built the image yet — the first run builds it, which is
+// the design. What the reader needs is not a warning but a heads-up, and the
+// runtime check below already establishes that an "ok" here may still have
+// something to tell you.
+func checkBaseImage(ctx context.Context, d doctorRuntime) check {
+	c := check{name: "base image"}
+	ref := image.Ref()
+	present, known := d.ImagePresent(ctx, ref)
+	switch {
+	case !known:
+		c.status = statusUnknown
+		c.detail = "the daemon could not be asked which images it has"
+	case present:
+		c.status = statusOK
+		c.detail = "built and ready (" + ref + ")"
+	default:
+		c.status = statusOK
+		c.detail = "not built yet — the first run builds it, which takes a few minutes"
+		c.remedy = "build it now with `sandbox-cli run --build -- true` if you would rather wait for it here"
+	}
+	return c
 }
 
 func checkSeccomp(ctx context.Context, d doctorRuntime) check {
@@ -251,8 +281,12 @@ func reportDoctor(profile string, checks []check) error {
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	strict := profile == config.ProfileProd
 	var blocking []string
+	weaker := 0
 
 	for _, c := range checks {
+		if c.status != statusOK {
+			weaker++
+		}
 		mark, fatal := verdict(c.status, strict)
 		fmt.Fprintf(tw, "  %s\t%s\t%s\n", mark, c.name, c.detail)
 		// Printed whatever the status: the runtime check is deliberately an "ok"
@@ -271,13 +305,41 @@ func reportDoctor(profile string, checks []check) error {
 	fmt.Println()
 
 	if len(blocking) == 0 {
-		fmt.Printf("this host can run the %s profile\n", profile)
+		// Two readings of the same checks. Under prod the question was "may this
+		// host run unattended work", and the answer is a verdict. Under dev the
+		// question someone actually typed is "is my setup good?", which a line
+		// about profiles does not answer — so say plainly that it will work, and
+		// how much of what prod would insist on is missing, without pretending
+		// that makes it broken.
+		switch {
+		case strict:
+			fmt.Printf("this host can run the %s profile\n", profile)
+		case weaker == 0:
+			fmt.Println("ready: everything sandbox-cli needs is here")
+		default:
+			fmt.Printf("ready for everyday use — %s above %s weaker than `--profile prod` would accept\n",
+				plural(weaker, "check", "checks"), isAre(weaker))
+		}
 		return nil
 	}
 	// An error, so the exit code is non-zero and a scheduler notices.
 	return fmt.Errorf("this host cannot satisfy the %s profile: %s\n"+
 		"  fix the above, or use --profile dev, which warns instead of refusing",
 		profile, strings.Join(blocking, ", "))
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+func isAre(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }
 
 // verdict turns a status into a mark and whether it blocks, which is the one

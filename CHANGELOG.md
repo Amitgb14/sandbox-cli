@@ -13,6 +13,31 @@ version is tagged.
 
 ### Added
 
+- **Sessions you can get at.** A container outlives the terminal that started it
+  — a killed sandbox-cli leaves its agent running, and `--detach` means to — so
+  four commands now reach one:
+
+  ```sh
+  sandbox-cli list                    # what is running (alias: ps)
+  sandbox-cli logs <session> --follow
+  sandbox-cli attach <session>        # Ctrl-C detaches; it does not stop the agent
+  sandbox-cli kill <session>          # SIGTERM and a grace period; --force for SIGKILL
+  ```
+
+  A session is named by its id, its container name, or its branch. An ambiguous
+  name is refused with the candidates listed rather than guessed at, and a
+  reference can only ever reach containers sandbox-cli started — `kill postgres`
+  finds nothing rather than your database. `logs` and `attach` may be used with
+  no name when exactly one sandbox is running; `kill` may not.
+
+- `sandbox-cli list` shows a session id and an uptime, and `stats` shows the same
+  id, so a row from either can be handed to `attach`, `logs` or `kill`.
+
+- `sandbox-cli doctor` now reports whether the base image is built, so a first
+  run that is about to spend a few minutes building says so beforehand. Without
+  `--profile prod` it closes with whether the setup is ready for everyday use
+  rather than with a verdict about profiles.
+
 - **`sandbox-cli fleet`** runs several agents at once — one per git branch, each
   in its own worktree and its own detached container, from a single `fleet.yaml`
   — then supervises them and lands the results by branch name:
@@ -96,6 +121,15 @@ version is tagged.
   pass `--user "$(id -u):$(id -g)"` under rootless Podman — your host uid maps
   into the subuid range and the workspace becomes unreadable.
 
+### Changed
+
+- `sandbox-cli ps` is now `sandbox-cli list`; `ps` stays as an alias and takes
+  the same flags.
+- `sandbox-cli clean --force` asks a running agent to exit and waits for the
+  grace period, instead of removing it mid-write.
+- `sandbox-cli stats` selects sandboxes by label rather than by a `sandbox-`
+  name prefix, so it reports exactly the containers this tool started, and shows
+  the session id alongside the container name.
 
 ### Fixed
 

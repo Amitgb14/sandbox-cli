@@ -1,21 +1,25 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
-// Finding a sandbox again after the CLI is gone.
+// Reaping what a run left behind.
 //
-// Two things leave containers behind, and neither had a command:
+// The listing itself lives in session.go; this is the other half — removing the
+// containers that were kept on purpose, and the networks nothing is on any more.
+//
+// Two things leave containers behind:
 //
 //   - A `kill -9` on sandbox-cli. The daemon owns the container, not the `docker
 //     run` client, so killing the client leaves the agent running and still
@@ -26,204 +30,90 @@ import (
 //     are the whole supervision story and --rm would discard both at the moment
 //     they become interesting. Reaping was always meant to be "a later, explicit
 //     step"; this is that step.
-//
-// Every container carries sandbox.repo/branch/agent labels, so both are findable.
-// The labels are what makes this possible at all — docker is the state store, and
-// a fact not stamped there is one no later command can recover.
-
-// sandboxLabel is stamped on every container sandbox-cli starts, so `ps` finds
-// exactly ours and nothing else on the machine.
-//
-// Deliberately sandbox.cli and not sandbox.repo: the repo/branch/agent labels
-// describe the work and are omitted when there is nothing true to say, so a run
-// started outside a git repository carried none of them and was invisible here.
-const sandboxLabel = "sandbox.cli"
-
-// psRow is one sandbox container as `docker ps` reports it.
-type psRow struct {
-	Name   string
-	Status string
-	Repo   string
-	Branch string
-	Agent  string
-	Age    string
-}
-
-func newPsCmd() *cobra.Command {
-	var all bool
-	var engineFlag, cfgPath string
-	cmd := &cobra.Command{
-		Use:   "ps",
-		Short: "List sandbox containers, including ones left behind",
-		Long: "List containers started by sandbox-cli.\n\n" +
-			"Running ones include any orphaned by a killed sandbox-cli — the container\n" +
-			"outlives the client, so an agent can still be working in your project with\n" +
-			"nothing attached to it. --all also shows exited detached runs, which are\n" +
-			"kept on purpose so their exit code and logs survive; `sandbox-cli clean`\n" +
-			"removes those.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			bin := engineBin(cfgPath, engineFlag)
-			rows, err := sandboxContainers(bin, all)
-			if err != nil {
-				return err
-			}
-			if len(rows) == 0 {
-				if all {
-					fmt.Println("no sandbox containers")
-				} else {
-					fmt.Println("no running sandbox containers (--all includes exited ones)")
-				}
-				return nil
-			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tAGENT\tBRANCH\tSTATUS")
-			for _, r := range rows {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Name, dash(r.Agent), dash(r.Branch), r.Status)
-			}
-			return w.Flush()
-		},
-	}
-	cmd.Flags().BoolVarP(&all, "all", "a", false, "include exited containers (detached runs are kept after they finish)")
-	cmd.Flags().StringVar(&engineFlag, "engine", "", "container engine: docker (default) or podman")
-	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "explicit config file path")
-
-	return cmd
-}
 
 func newCleanCmd() *cobra.Command {
 	var force bool
 	var engineFlag, cfgPath string
 	cmd := &cobra.Command{
 		Use:   "clean",
-		Short: "Remove exited sandbox containers",
-		Long: "Remove sandbox containers that have exited.\n\n" +
-			"Detached runs are deliberately kept after they finish so their exit code and\n" +
-			"`docker logs` survive; this is how you reap them once you have read what you\n" +
-			"needed. Running containers are never touched without --force, because one of\n" +
-			"them may be an agent still working in your project.",
+		Short: "Remove sandbox sessions that have finished",
+		Long: "Removes the containers of sessions that have exited.\n\n" +
+			"Detached and fleet runs are deliberately kept after they finish so their exit\n" +
+			"code and their logs survive; this is how you reap them once you have read\n" +
+			"what you needed. Running sessions are never touched without --force, because\n" +
+			"one of them may be an agent still working in your project — and with --force\n" +
+			"they are asked to exit first, exactly as `sandbox-cli kill` asks, rather than\n" +
+			"being shot mid-write.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			bin := engineBin(cfgPath, engineFlag)
-			rows, err := sandboxContainers(bin, true)
+			rt, engine, err := sessionEngine(cfgPath, engineFlag)
 			if err != nil {
 				return err
 			}
-			var targets []psRow
-			for _, r := range rows {
-				// Anything not plainly exited is treated as live: "Up", "Restarting",
-				// "Removing", and "?" (status could not be matched) all mean do not
-				// touch this without --force.
-				running := !strings.HasPrefix(r.Status, "Exited") && !strings.HasPrefix(r.Status, "Created")
-				if running && !force {
+			ctx := cmd.Context()
+			infos, err := sandboxSessions(ctx, rt, engine, true)
+			if err != nil {
+				return err
+			}
+			var targets []runtime.ContainerInfo
+			for _, c := range infos {
+				// Anything not plainly finished counts as live: running, restarting,
+				// paused and an unreadable state all mean do not touch this without
+				// --force.
+				if !sessionFinished(c) && !force {
 					continue
 				}
-				targets = append(targets, r)
+				targets = append(targets, c)
 			}
 			if len(targets) == 0 {
 				fmt.Println("nothing to clean")
-				// Still try the network: "nothing to remove" is precisely the state in
+				// Still try the networks: "nothing to remove" is precisely the state in
 				// which a leftover network is worth collecting, and returning early
 				// meant it never was.
-				removeSandboxNetworkIfUnused(bin)
+				removeSandboxNetworkIfUnused(ctx, rt, engine)
 				return nil
 			}
-			for _, r := range targets {
-				rm := exec.Command(bin, "rm", "-f", r.Name)
-				if out, err := rm.CombinedOutput(); err != nil {
-					fmt.Fprintf(os.Stderr, "sandbox-cli: removing %s: %s\n", r.Name, strings.TrimSpace(string(out)))
+			for _, c := range targets {
+				if !sessionFinished(c) {
+					// --force reached a live agent. Stop is SIGTERM plus a grace period,
+					// so it gets to finish the write it was in the middle of; `rm -f`
+					// used to take that away, and the file it was writing is in the
+					// user's project.
+					if err := rt.Stop(ctx, c.ID); err != nil {
+						fmt.Fprintf(os.Stderr, "sandbox-cli: %v\n", err)
+						continue
+					}
+				}
+				if err := rt.Remove(ctx, c.ID); err != nil {
+					fmt.Fprintf(os.Stderr, "sandbox-cli: %v\n", err)
 					continue
 				}
-				fmt.Printf("removed %s (%s)\n", r.Name, r.Status)
+				fmt.Printf("removed %s (%s)\n", termsafe.Clean(c.Name), sessionStatus(c))
 			}
-			removeSandboxNetworkIfUnused(bin)
+			removeSandboxNetworkIfUnused(ctx, rt, engine)
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&force, "force", false, "also remove RUNNING containers — one may be an agent still working")
-	cmd.Flags().StringVar(&engineFlag, "engine", "", "container engine: docker (default) or podman")
-	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "explicit config file path")
-
+	cmd.Flags().BoolVar(&force, "force", false, "also remove RUNNING sessions — one may be an agent still working")
+	addSessionFlags(cmd, &engineFlag, &cfgPath)
 	return cmd
 }
 
-// sandboxContainers asks docker for our containers. The label filter is what
-// keeps this to sandbox-cli's own containers rather than everything on the
-// machine, and the format string is chosen so a value can never contain the
-// separator (names, labels and status have no tabs).
-func sandboxContainers(bin string, all bool) ([]psRow, error) {
-	base := []string{"ps", "--filter", "label=" + sandboxLabel}
-	if all {
-		base = append(base, "--all")
-	}
-
-	// The authoritative set of names comes from a format carrying NOTHING
-	// attacker-controlled. Label values do: they are branch names and repo paths,
-	// and a label containing a newline forged an entire extra row — whose Status
-	// then parsed as empty, which is not "Up", so `clean` force-removed a
-	// container sandbox-cli never created. Names are constrained by docker itself,
-	// so a name list cannot be made to grow.
-	nameOut, err := exec.Command(bin, append(append([]string{}, base...), "--format", "{{.Names}}")...).Output()
-	if err != nil {
-		return nil, fmt.Errorf("listing sandbox containers (is the docker daemon running?): %w", err)
-	}
-	real := map[string]bool{}
-	var order []string
-	for _, n := range strings.Split(string(nameOut), "\n") {
-		if n = strings.TrimSpace(n); n != "" && !real[n] {
-			real[n] = true
-			order = append(order, n)
-		}
-	}
-	if len(order) == 0 {
-		return nil, nil
-	}
-
-	// Labels and status are for display only, and are matched back by name. A row
-	// naming anything not in the set above is discarded rather than shown.
-	detailOut, _ := exec.Command(bin, append(append([]string{}, base...),
-		"--format", "{{.Names}}\t{{.Status}}\t{{.Label \"sandbox.repo\"}}\t{{.Label \"sandbox.branch\"}}\t{{.Label \"sandbox.agent\"}}")...).Output()
-	byName := map[string]psRow{}
-	for _, r := range parsePsRows(string(detailOut)) {
-		if real[r.Name] {
-			byName[r.Name] = r
-		}
-	}
-
-	rows := make([]psRow, 0, len(order))
-	for _, n := range order {
-		if r, ok := byName[n]; ok {
-			rows = append(rows, r)
-			continue
-		}
-		rows = append(rows, psRow{Name: n, Status: "?"})
-	}
-	return rows, nil
-}
-
-// parsePsRows splits docker's tab-separated output.
+// sessionFinished reports whether a session is over, which is the question
+// `clean` asks. Deliberately narrower than "not running": a paused or restarting
+// container is somebody's live run in an odd moment, and reaping it because it
+// was not literally "running" at the instant we looked is how a supervision
+// command destroys the thing it supervises. An unreadable state ("") counts as
+// live for the same reason — not knowing is not a licence.
 //
-// Trimming per line and only of line endings, never with TrimSpace on the whole
-// output: the trailing fields are the optional labels, so a container with no
-// repo/branch/agent — every run started outside a git repository — ends its line
-// in empty fields, and TrimSpace ate them. The row then had two fields instead of
-// five, failed a length check, and was silently dropped. Short rows are padded
-// rather than skipped for the same reason: a missing label is a blank column, not
-// a reason to hide the container.
-func parsePsRows(out string) []psRow {
-	var rows []psRow
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			continue
-		}
-		f := strings.Split(line, "\t")
-		for len(f) < 5 {
-			f = append(f, "")
-		}
-		rows = append(rows, psRow{Name: f[0], Status: f[1], Repo: f[2], Branch: f[3], Agent: f[4]})
-	}
-	return rows
+// `created` is the exception, and it is one of kind rather than degree: a
+// container that never started ran no agent, wrote nothing, and has no in-flight
+// write to protect. A detached run whose start failed leaves exactly that husk
+// behind, with Remove=false, and without this case the only way to remove it was
+// `clean --force` — whose flag help warns about killing an agent that may still
+// be working, which is a much scarier thing than what the user is actually doing.
+func sessionFinished(c runtime.ContainerInfo) bool {
+	return c.State == "exited" || c.State == "dead" || c.State == "created"
 }
 
 func dash(s string) string {
@@ -233,14 +123,6 @@ func dash(s string) string {
 	return s
 }
 
-// removeSandboxNetworkIfUnused reaps the shared network once nothing is on it.
-//
-// It is one long-lived object rather than one per run, so this is tidiness rather
-// than the orphan problem a per-run network would have created — and it is
-// deliberately conditional: removing a network another sandbox is still attached
-// to would take that sandbox's networking away mid-run. docker refuses that
-// anyway, but relying on the refusal would mean printing an error for a normal
-// situation.
 // engineBin is the container binary the supporting commands should speak to.
 //
 // ps, clean and stats used to hardcode docker, which made a detached podman run
@@ -263,17 +145,25 @@ func engineBin(cfgPath, engineFlag string) string {
 	return cfg.Engine
 }
 
-func removeSandboxNetworkIfUnused(bin string) {
+// removeSandboxNetworkIfUnused reaps the shared network once nothing is on it.
+//
+// It is one long-lived object rather than one per run, so this is tidiness rather
+// than the orphan problem a per-run network would have created — and it is
+// deliberately conditional: removing a network another sandbox is still attached
+// to would take that sandbox's networking away mid-run. docker refuses that
+// anyway, but relying on the refusal would mean printing an error for a normal
+// situation.
+func removeSandboxNetworkIfUnused(ctx context.Context, rt sessionRuntime, bin string) {
 	// The reaper runs first, unconditionally. It used to sit behind the
 	// "no containers left" guard, which meant it never ran on a podman-only
-	// machine (sandboxContainers failed against a missing docker) and was
+	// machine (the listing failed against a missing docker) and was
 	// short-circuited on a mixed one by any docker container. Since a detached
 	// run deliberately leaves its network with machine lifetime, that was a leak
 	// with no collector.
 	removeStaleSandboxNetworks(bin)
 
-	rows, err := sandboxContainers(bin, true)
-	if err != nil || len(rows) > 0 {
+	infos, err := sandboxSessions(ctx, rt, bin, true)
+	if err != nil || len(infos) > 0 {
 		return
 	}
 	if err := exec.Command(bin, "network", "inspect", runtime.SandboxNetwork).Run(); err != nil {

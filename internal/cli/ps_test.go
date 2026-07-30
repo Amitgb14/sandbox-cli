@@ -1,43 +1,10 @@
 package cli
 
-import "testing"
+import (
+	"testing"
 
-// TestParsePsRows covers the shape of docker's output, and one bug in
-// particular: the trailing fields are the optional labels, so a container with
-// no repo/branch/agent — every run started outside a git repository — ends its
-// line in empty fields. Trimming the whole output with TrimSpace ate them, the
-// row came back with two fields instead of five, and the container was silently
-// dropped from the listing. A container nobody can list is one nobody can stop.
-func TestParsePsRows(t *testing.T) {
-	out := "sandbox-abc\tUp 23 seconds\t\t\t\n" +
-		"sandbox-def\tExited (0) 2 minutes ago\trepo-1234\tfeature/x\tclaude\n"
-
-	rows := parsePsRows(out)
-	if len(rows) != 2 {
-		t.Fatalf("parsed %d rows, want 2: %+v", len(rows), rows)
-	}
-	if rows[0].Name != "sandbox-abc" || rows[0].Status != "Up 23 seconds" {
-		t.Errorf("row 0 = %+v", rows[0])
-	}
-	if rows[0].Repo != "" || rows[0].Branch != "" || rows[0].Agent != "" {
-		t.Errorf("row 0 should have empty labels, got %+v", rows[0])
-	}
-	if rows[1].Agent != "claude" || rows[1].Branch != "feature/x" || rows[1].Repo != "repo-1234" {
-		t.Errorf("row 1 = %+v", rows[1])
-	}
-
-	if len(parsePsRows("")) != 0 {
-		t.Error("empty output should yield no rows")
-	}
-	if len(parsePsRows("\n\n")) != 0 {
-		t.Error("blank lines should yield no rows")
-	}
-	// A short row is padded, not dropped: a missing label is a blank column.
-	short := parsePsRows("sandbox-xyz\tUp 1 second\n")
-	if len(short) != 1 || short[0].Name != "sandbox-xyz" {
-		t.Errorf("a short row must still list: %+v", short)
-	}
-}
+	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+)
 
 func TestDashRendersEmptyColumns(t *testing.T) {
 	if dash("") != "-" || dash("   ") != "-" {
@@ -45,5 +12,27 @@ func TestDashRendersEmptyColumns(t *testing.T) {
 	}
 	if dash("claude") != "claude" {
 		t.Error("a real value must pass through")
+	}
+}
+
+// TestCleanOnlyReapsSessionsThatAreOver.
+//
+// "Finished" is deliberately narrower than "not running": a paused or restarting
+// container is somebody's live run caught in an odd moment, and reaping it
+// because it was not literally running at the instant we looked is how a
+// supervision command destroys the thing it supervises. An unreadable state is
+// live for the same reason.
+//
+// `created` is reapable, and the difference is one of kind: a container that
+// never started ran no agent and has no in-flight write to protect. It is the
+// husk a failed detached start leaves behind, and without this the only way to
+// remove one was --force, which warns about killing an agent that may still be
+// working — a far scarier thing than what the user is actually doing.
+func TestCleanOnlyReapsSessionsThatAreOver(t *testing.T) {
+	over := map[string]bool{"exited": true, "dead": true, "created": true}
+	for _, state := range []string{"running", "restarting", "paused", "removing", "created", "exited", "dead", ""} {
+		if got := sessionFinished(runtime.ContainerInfo{State: state}); got != over[state] {
+			t.Errorf("sessionFinished(%q) = %v, want %v", state, got, over[state])
+		}
 	}
 }

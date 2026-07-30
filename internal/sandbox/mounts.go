@@ -74,7 +74,8 @@ func RefuseUnsafeHostPath(path string) error {
 	case samePath(path, realHome):
 		return fmt.Errorf("refusing to mount your home directory %q; cd into a specific project first", path)
 	case isAncestorOnDisk(path, realHome):
-		return fmt.Errorf("%q is an ancestor of your home directory; too broad to mount safely", path)
+		return fmt.Errorf("%q is an ancestor of your home directory; too broad to mount safely — "+
+			"name the project you want the agent to work on instead", path)
 	}
 	return nil
 }
