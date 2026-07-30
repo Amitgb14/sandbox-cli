@@ -7,7 +7,7 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { formatBytesShort } from "@/lib/format";
+import { formatBytesShort, LOCALE } from "@/lib/format";
 import type { MetricSample } from "@/lib/types";
 
 /**
@@ -29,7 +29,7 @@ const memConfig = {
 } satisfies ChartConfig;
 
 function timeTick(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
 }
 
 export function CpuChart({ samples, height = 160 }: { samples: MetricSample[]; height?: number }) {

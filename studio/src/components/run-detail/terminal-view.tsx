@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Terminal, WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,6 +39,16 @@ export function TerminalView({ run }: { run: Run }) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // The timestamps toggle is labelled with the current clock, which cannot be
+  // rendered during the first pass: "use client" does not mean "not rendered on
+  // the server", so the server wrote one minute into the HTML and the browser
+  // hydrated with another. Filled in after mount; the placeholder keeps the
+  // button the same width so nothing shifts when it arrives.
+  const [clockLabel, setClockLabel] = useState("--:--");
+  useEffect(() => {
+    setClockLabel(formatClock(new Date().toISOString()).slice(0, 5));
+  }, []);
 
   useEffect(() => {
     if (!follow) return;
@@ -89,7 +99,7 @@ export function TerminalView({ run }: { run: Run }) {
                 aria-label="Show timestamps"
                 className="h-7 px-2 text-[11px] text-white/50 hover:bg-white/10 hover:text-white data-[state=on]:bg-white/10 data-[state=on]:text-white"
               >
-                {formatClock(new Date().toISOString()).slice(0, 5)}
+                {clockLabel}
               </Toggle>
             </TooltipTrigger>
             <TooltipContent>Timestamps</TooltipContent>

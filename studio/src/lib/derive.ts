@@ -1,3 +1,4 @@
+import { LOCALE } from "@/lib/format";
 import { runOutcome, type Run, type RunOutcome, type Worktree } from "@/lib/types";
 
 /**
@@ -37,7 +38,7 @@ export function bucketByDay(runs: Run[], days = 14, now = Date.now()): DayBucket
     const key = dayKey(d);
     buckets.set(key, {
       date: key,
-      label: d.toLocaleDateString([], { month: "short", day: "numeric" }),
+      label: d.toLocaleDateString(LOCALE, { month: "short", day: "numeric" }),
       total: 0,
       passed: 0,
       failed: 0,

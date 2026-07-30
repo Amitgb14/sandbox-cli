@@ -1,5 +1,6 @@
 "use client";
 
+import { Fragment } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Moon, PlugZap, Search, Sun } from "lucide-react";
@@ -33,19 +34,30 @@ export function AppHeader() {
 
       <Breadcrumb className="min-w-0">
         <BreadcrumbList>
+          {/*
+            The separator is a sibling of the item, never a child of it.
+            BreadcrumbSeparator renders its own <li>, and BreadcrumbItem is an
+            <li> too — nesting them put an <li> inside an <li>, which is invalid
+            HTML, so the parser relocated it and the hydrated tree stopped
+            matching the server's.
+
+            Rendered between items by index rather than on `!c.current`: the two
+            agree only while the last crumb is the current one, and the version
+            keyed on `current` leaves a trailing separator the moment it isn't.
+          */}
           {crumbs.map((c, i) => (
-            <BreadcrumbItem key={`${c.href}-${i}`} className="min-w-0">
-              {c.current ? (
-                <BreadcrumbPage className="max-w-[16rem] truncate">{c.label}</BreadcrumbPage>
-              ) : (
-                <>
+            <Fragment key={`${c.href}-${i}`}>
+              <BreadcrumbItem className="min-w-0">
+                {c.current ? (
+                  <BreadcrumbPage className="max-w-[16rem] truncate">{c.label}</BreadcrumbPage>
+                ) : (
                   <BreadcrumbLink asChild>
                     <Link href={c.href}>{c.label}</Link>
                   </BreadcrumbLink>
-                  <BreadcrumbSeparator />
-                </>
-              )}
-            </BreadcrumbItem>
+                )}
+              </BreadcrumbItem>
+              {i < crumbs.length - 1 && <BreadcrumbSeparator />}
+            </Fragment>
           ))}
         </BreadcrumbList>
       </Breadcrumb>
