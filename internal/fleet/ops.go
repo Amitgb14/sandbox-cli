@@ -20,6 +20,7 @@ import (
 // mount source that is not the one the real run will use.
 type Planned struct {
 	Branch         string
+	Agent          string // the agent this task resolved to, task-level or fleet-wide
 	WorktreePath   string
 	WorktreeExists bool // false => the run would create it
 
@@ -28,42 +29,61 @@ type Planned struct {
 	// wrapper. They are reported apart because a plan is read to answer "will this
 	// task do what I meant", and a multi-line wrapper script pasted into that
 	// answer buries the prompt and the check that are the whole of it.
-	Command        []string
-	Verify         string
-	Memory, CPUs   string
-	Allow          []string
+	Command      []string
+	Verify       string
+	Memory, CPUs string
+	Allow        []string
+
+	// Mounts are the host paths this task would get on top of its workspace — the
+	// linked worktree's .git, and `--share`'s handoff directory when asked for.
+	// Reported because a mount is the widest thing a launch option can add, and a
+	// dry run that did not mention it would be describing a smaller container than
+	// the one about to start.
+	Mounts []string
+
 	Labels         map[string]string
 	AlreadyRunning bool   // an agent already holds this branch; the run would refuse
 	RunningInName  string // that agent's container name
 }
 
 // Plan resolves what Launch would do for each task. It touches nothing.
-func (r *Runner) Plan(ctx context.Context, spec Spec) ([]Planned, error) {
-	agent, ok := agents.Lookup(spec.Agent)
-	if !ok {
-		return nil, fmt.Errorf("unknown agent %q", spec.Agent)
-	}
+//
+// opts narrows the plan exactly as it narrows the run, so `--dry-run --only
+// feature-a` describes the command it is a rehearsal for rather than the whole
+// file.
+func (r *Runner) Plan(ctx context.Context, spec Spec, opts LaunchOptions) ([]Planned, error) {
 	if r.Repo == "" {
 		return nil, fmt.Errorf("fleet needs a git repository: run it from inside one")
+	}
+	tasks, err := r.selectTasks(ctx, spec, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	base := worktree.HeadBranch(r.Repo)
 
-	out := make([]Planned, 0, len(spec.Tasks))
-	for _, t := range spec.Tasks {
+	out := make([]Planned, 0, len(tasks))
+	for _, t := range tasks {
+		agent, ok := agents.Lookup(spec.AgentFor(t))
+		if !ok {
+			return nil, fmt.Errorf("unknown agent %q for branch %q", spec.AgentFor(t), t.Branch)
+		}
 		path, exists, err := worktree.Path(r.Repo, t.Branch)
 		if err != nil {
 			return nil, err
 		}
+		lim := spec.LimitsFor(t)
 		p := Planned{
 			Branch:         t.Branch,
+			Agent:          agent.Name,
 			WorktreePath:   path,
 			WorktreeExists: exists,
 			Command:        agent.Invocation(t.Prompt, t.Args),
 			Verify:         t.Verify,
-			Memory:         spec.Defaults.Memory,
-			CPUs:           spec.Defaults.CPUs,
-			Allow:          spec.Defaults.Allow,
+			Memory:         lim.Memory,
+			CPUs:           lim.CPUs,
+			Allow:          lim.Allow,
+			Mounts:         append(sandbox.LinkedWorktreeMounts(path), opts.ExtraMounts...),
 			Labels: map[string]string{
 				sandbox.LabelCLI:    "1",
 				sandbox.LabelFleet:  "1",

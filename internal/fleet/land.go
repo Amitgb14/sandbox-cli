@@ -2,11 +2,45 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
+
+// The refusals Land can make that are about *one branch* rather than about the
+// repository it would land into. Sentinels because `land --all` has to tell the
+// two apart, and the rule it applies is exactly this distinction: a branch that
+// cannot be landed is skipped and the fleet carries on, while anything wrong
+// with the base — a checkout that moved, uncommitted work in it, a conflict —
+// stops the whole run, because it will be just as wrong for the next branch and
+// landing more on top of it makes it harder to undo.
+//
+// Their text is never printed; each one is attached to a message written for the
+// person reading it (see branchRefusal). Classifying an error and explaining it
+// are different jobs, and making one string do both is what produces the
+// "not verified: feature-a did not pass its verify" shape.
+var (
+	ErrAgentRunning  = errors.New("agent still running")
+	ErrNotVerified   = errors.New("not verified")
+	ErrNoWorktree    = errors.New("no worktree")
+	ErrNothingToLand = errors.New("nothing to land")
+)
+
+// branchRefusal pairs a message with the sentinel that classifies it.
+func branchRefusal(kind error, format string, args ...any) error {
+	return refusal{kind: kind, msg: fmt.Sprintf(format, args...)}
+}
+
+type refusal struct {
+	kind error
+	msg  string
+}
+
+func (r refusal) Error() string { return r.msg }
+func (r refusal) Unwrap() error { return r.kind }
 
 // LandOptions are the caller's choices for one landing. A struct rather than
 // three more positional arguments, because each one exists to override a refusal
@@ -75,7 +109,8 @@ func (r *Runner) Land(ctx context.Context, branch string, opts LandOptions) (Lan
 	if busy, err := r.runningFor(ctx, branch); err != nil {
 		return res, err
 	} else if busy != nil {
-		return res, fmt.Errorf("agent is still running on %q (%s); stop it first with `sandbox-cli fleet stop %s`",
+		return res, branchRefusal(ErrAgentRunning,
+			"agent is still running on %q (%s); stop it first with `sandbox-cli fleet stop %s`",
 			branch, busy.Name, branch)
 	}
 
@@ -95,7 +130,7 @@ func (r *Runner) Land(ctx context.Context, branch string, opts LandOptions) (Lan
 	if _, exists, err := worktree.Path(r.Repo, branch); err != nil {
 		return res, err
 	} else if !exists {
-		return res, fmt.Errorf("no worktree for branch %q; nothing to land", branch)
+		return res, branchRefusal(ErrNoWorktree, "no worktree for branch %q; nothing to land", branch)
 	}
 
 	// 4. The merge target is whatever the main checkout is on — git offers no
@@ -174,7 +209,7 @@ func (r *Runner) Land(ctx context.Context, branch string, opts LandOptions) (Lan
 
 	// 9. Nothing to land is a no-op worth stating, not a merge of zero commits.
 	if worktree.Ahead(r.Repo, branch, base) == 0 {
-		return res, fmt.Errorf("%q has no commits beyond %s; nothing to land", branch, base)
+		return res, branchRefusal(ErrNothingToLand, "%q has no commits beyond %s; nothing to land", branch, base)
 	}
 
 	// 10. The merge itself. --no-ff keeps the branch a revertible unit.
@@ -184,6 +219,114 @@ func (r *Runner) Land(ctx context.Context, branch string, opts LandOptions) (Lan
 	}
 	res.Merged = true
 	return res, nil
+}
+
+// Skipped is one branch `land --all` passed over, and why. Reported rather than
+// dropped: a fleet of five that lands three is a useful outcome, and an
+// unexplained two is not.
+type Skipped struct {
+	Branch string
+	Reason string
+}
+
+// LandAllResult is what one `fleet land --all` did.
+type LandAllResult struct {
+	Landed  []LandResult
+	Skipped []Skipped
+}
+
+// LandAll lands every branch of this fleet that can be landed, oldest first,
+// stopping at the first refusal that is about the repository rather than about a
+// branch.
+//
+// Landing five branches one command at a time is the common case, and doing it
+// by hand has a failure mode this does not: after the second merge the checkout
+// has moved on, so the third `land` is being run against a base that is no
+// longer what the fleet was launched against. Here the base is re-checked before
+// every merge, because Land re-reads it — the loop deliberately does not cache
+// it.
+//
+// Oldest first is the launch order, which is the closest thing to the order the
+// fleet file wrote: `land` takes no fleet file, so the containers are the only
+// record of what ran, and reversing docker's newest-first listing is what turns
+// that into the sequence a person would expect.
+//
+// Nothing here is atomic and it is not trying to be. Each land is its own merge
+// commit; if the fourth conflicts, the first three are landed and the conflict
+// is left in the working tree exactly as a single `land` leaves it.
+func (r *Runner) LandAll(ctx context.Context, opts LandOptions) (LandAllResult, error) {
+	var res LandAllResult
+
+	branches, err := r.landableBranches(ctx)
+	if err != nil {
+		return res, err
+	}
+	if len(branches) == 0 {
+		return res, fmt.Errorf("no fleet branches to land in %s; `sandbox-cli fleet status` shows what there is", r.Repo)
+	}
+
+	for _, b := range branches {
+		one, err := r.Land(ctx, b, opts)
+		if err == nil {
+			res.Landed = append(res.Landed, one)
+			continue
+		}
+		if skippable(err) {
+			res.Skipped = append(res.Skipped, Skipped{Branch: b, Reason: err.Error()})
+			continue
+		}
+		// A refusal about the base branch. Return what was landed so far along with
+		// it — the caller has to print both, since some of these merges have
+		// already happened and saying only "failed" would be false.
+		return res, fmt.Errorf("stopped at %s: %w", b, err)
+	}
+	return res, nil
+}
+
+// skippable reports whether a Land refusal is about the branch alone, in which
+// case the next branch may still be landable.
+func skippable(err error) bool {
+	for _, s := range []error{ErrAgentRunning, ErrNotVerified, ErrNoWorktree, ErrNothingToLand} {
+		if errors.Is(err, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// landableBranches lists this fleet's branches in launch order.
+//
+// Taken from the containers rather than from `worktree list`, for the same
+// reason `fleet clean --worktrees` intersects the two: a worktree an ordinary
+// `--worktree` run made is not this fleet's to land. A branch whose container
+// has been reaped is therefore not landed by --all; it is still landable by
+// name, which is the trade `clean` already makes and this keeps consistent.
+func (r *Runner) landableBranches(ctx context.Context) ([]string, error) {
+	infos, err := r.containers(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	type entry struct {
+		branch string
+		order  int
+	}
+	seen := map[string]bool{}
+	var entries []entry
+	for i, c := range infos {
+		b := c.Labels[sandbox.LabelBranch]
+		if b == "" || seen[b] {
+			continue
+		}
+		seen[b] = true
+		entries = append(entries, entry{branch: b, order: i})
+	}
+	// Containers arrive newest first; reverse to launch order.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].order > entries[j].order })
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.branch)
+	}
+	return out, nil
 }
 
 // verifyVerdict is what land could establish about a branch's definition of done.
@@ -239,13 +382,13 @@ func (r *Runner) checkVerified(ctx context.Context, branch string, force bool) (
 		return verifyForcedUnchecked, nil
 	}
 	if c.ExitCode == VerifyFailedExit {
-		return verifyNone, fmt.Errorf("%q did not pass its verify (%s); "+
+		return verifyNone, branchRefusal(ErrNotVerified, "%q did not pass its verify (%s); "+
 			"read the output with `sandbox-cli fleet logs %s`, fix it and run again, or land it anyway with --force",
 			branch, declared, branch)
 	}
 	// Any other code means the run never reached its verify — killed, stopped, or
 	// out of memory — so nothing has judged this work at all.
-	return verifyNone, fmt.Errorf("%q exited %d without reaching its verify (%s); "+
+	return verifyNone, branchRefusal(ErrNotVerified, "%q exited %d without reaching its verify (%s); "+
 		"the work is unchecked. See `sandbox-cli fleet logs %s`, or land it anyway with --force",
 		branch, c.ExitCode, declared, branch)
 }

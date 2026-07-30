@@ -236,36 +236,11 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		return nil, sandbox.Options{}, fmt.Errorf("--share-name %q needs --share as well: a namespace is a way of sharing, not an alternative to it", rf.shareName)
 	}
 	if rf.share {
-		root := config.SharedDir()
-		if root == "" {
-			return nil, sandbox.Options{}, fmt.Errorf("--share: cannot determine the config directory (no HOME?)")
+		mount, err := shareMount(rf.shareName)
+		if err != nil {
+			return nil, sandbox.Options{}, err
 		}
-		if err := os.MkdirAll(root, 0o700); err != nil {
-			return nil, sandbox.Options{}, fmt.Errorf("creating shared dir %s: %w", root, err)
-		}
-		seedSharedReadme(root)
-
-		// The root is a derived path rather than user input, so this can
-		// essentially never fire — which is the reason to apply it, not a reason
-		// to skip it. CLAUDE.md states that every host path that gets
-		// bind-mounted goes through this refusal; an exception "because it is
-		// obviously safe" is how that stops being true, and the namespace path
-		// below already pays the same cost.
-		if err := sandbox.RefuseUnsafeHostPath(root); err != nil {
-			return nil, sandbox.Options{}, fmt.Errorf("--share: %w", err)
-		}
-
-		dir, target := root, sharedTarget
-		if rf.shareName != "" {
-			var err error
-			dir, target, err = shareNamespaceDir(root, rf.shareName)
-			if err != nil {
-				return nil, sandbox.Options{}, fmt.Errorf("--share: %w", err)
-			}
-			seedShareNamespaceReadme(dir, rf.shareName, target)
-		}
-		opts.ExtraMounts = append(opts.ExtraMounts, dir+":"+target+":rw")
-		fmt.Fprintf(os.Stderr, "sandbox-cli: sharing %s at %s\n", dir, target)
+		opts.ExtraMounts = append(opts.ExtraMounts, mount)
 	}
 
 	// --paste: make an image path pasted into the agent resolve, by mounting the

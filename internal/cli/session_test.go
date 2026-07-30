@@ -450,3 +450,29 @@ func TestHumanDurationNeverPrintsGoDurations(t *testing.T) {
 		}
 	}
 }
+
+// A fleet task and a session someone started by hand are treated differently by
+// every other command — `fleet stop --all` does not reach an interactive
+// session, `fleet clean` does not reap one, max_parallel does not count one — so
+// the listing is the one place that difference must not be invisible. It is
+// exactly where somebody decides what to kill.
+func TestSessionListingMarksFleetContainers(t *testing.T) {
+	interactive := sess("aaaa1111", "sandbox-a-main", "main", "running")
+	fleetOne := sess("bbbb2222", "sandbox-a-feature", "feature", "running")
+	fleetOne.Labels[sandbox.LabelFleet] = "1"
+
+	var out bytes.Buffer
+	if err := renderSessions(&out, []runtime.ContainerInfo{interactive, fleetOne}, true, time.Now()); err != nil {
+		t.Fatalf("renderSessions: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if !strings.Contains(lines[0], "KIND") {
+		t.Fatalf("no KIND column in the header: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "interactive") {
+		t.Errorf("a hand-started session should read as interactive: %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "fleet") {
+		t.Errorf("a fleet task should be marked as one: %q", lines[2])
+	}
+}

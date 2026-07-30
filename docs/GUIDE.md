@@ -158,7 +158,7 @@ This is how you reach a run nothing is attached to — one you started with
 See [Sessions](#sessions).
 
 **Run several agents at once, each on its own branch:** see
-[Parallel agents](#parallel-agents-with-git-worktrees).
+[Running agents in parallel](#running-agents-in-parallel).
 
 ---
 
@@ -215,7 +215,29 @@ sandbox-cli claude \
 `cmd:` sources are great for short-lived tokens (`gh auth token`, `op read`,
 `vault read`).
 
-### Parallel agents with git worktrees
+### Running agents in parallel
+
+One feature with four rungs, not four features. The unit is always the same —
+**one agent, one branch, one worktree, one container** — and each rung adds one
+thing to it:
+
+| | | |
+|---|---|---|
+| **[One agent per branch](#one-agent-per-branch)** | `--worktree feature-a` | a checkout of its own, so two agents don't collide |
+| **[In the background](#in-the-background)** | `--detach` | one terminal can start several |
+| **[A fleet](#a-fleet)** | `fleet run` | all of them from one file, and an answer to *which of these worked?* |
+| **[Handing files over](#handing-files-between-agents)** | `--share` | one directory two sandboxes can both see |
+
+You can stop at any rung. A fleet is not a different mechanism from
+`--worktree --detach`; it is the same one, written down and supervised — every
+fleet task becomes exactly the options a `--worktree` run produces, which is why
+the isolation is identical and why anything that tightens one tightens both.
+
+Whatever rung you are on, the running agents are
+[sessions](#sessions): `sandbox-cli list` shows them all, and `logs`, `attach`
+and `kill` take a branch name.
+
+#### One agent per branch
 
 Normally the sandbox mounts your working copy at `/workspace`. Two agents running
 at once would then edit the same files and fight over the same branch.
@@ -349,6 +371,361 @@ use `--worktree`; run the agent in a normal checkout instead.
 - Don't run two agents on the *same* branch — they'd share one worktree and
   collide. One branch per agent.
 - Commit before you start: an agent can only build on what's in HEAD.
+
+#### In the background
+
+`--worktree` gives each agent its own branch, but every run still holds a
+terminal. `--detach` starts the container in the background and returns
+immediately, so one terminal can launch several:
+
+```sh
+sandbox-cli claude --worktree feature-a --detach -- -p "implement A"
+sandbox-cli claude --worktree feature-b --detach -- -p "implement B"
+```
+
+```
+sandbox-cli: started sandbox-myapp-f379c0cd-feature-a in the background
+  logs:  docker logs -f sandbox-myapp-f379c0cd-feature-a
+  stop:  docker stop sandbox-myapp-f379c0cd-feature-a
+  note:  nothing is attached — the agent must be in a mode that exits on its own
+```
+
+The container name goes to stdout on its own line, so `NAME=$(sandbox-cli claude
+--worktree feature-a --detach -- -p "…")` works in a script.
+
+**Step by step.** The whole cycle, from launching two agents to landing their
+work, runs from your normal checkout:
+
+```sh
+# 1. Log in once per agent, if you haven't. A detached run cannot answer a login
+#    prompt, so do this interactively first — it persists across runs.
+sandbox-cli claude
+
+# 2. Fan out. --git so the agent's commits carry your name and email.
+sandbox-cli claude --worktree feature-a --detach --git -- -p "implement A, then commit"
+sandbox-cli claude --worktree feature-b --detach --git -- -p "implement B, then commit"
+
+# 3. Check on them. Running, exited, and with what exit code.
+docker ps -a --filter label=sandbox.repo --format \
+  'table {{.Names}}\t{{.Status}}\t{{.Label "sandbox.branch"}}'
+
+# 4. Read the transcript of one.
+docker logs sandbox-myapp-f379c0cd-feature-a          # add -f to follow live
+
+# 5. Stop one early if it is going wrong.
+docker stop sandbox-myapp-f379c0cd-feature-a
+
+# 6. Review the work. The branch is already in your repo.
+git log feature-a
+git diff main...feature-a
+
+# 7. Commit anything the agent left uncommitted (skip if it committed its own).
+sandbox-cli worktree git feature-a status
+sandbox-cli worktree commit feature-a -m "implement A"
+
+# 8. Merge.
+git checkout main
+git merge feature-a
+
+# 9. Reap both halves: the container, then the worktree.
+docker rm sandbox-myapp-f379c0cd-feature-a
+sandbox-cli worktree rm feature-a
+```
+
+Steps 6–8 are the same as for a foreground `--worktree` run — detaching changes
+how the agent is launched, not how its work comes back. Step 9 has the one extra
+piece: a detached container is not removed on exit, so it stays until you say so.
+
+**Try it without launching anything.** `--dry-run` prints the exact docker
+command, including `-d`, the labels and the absence of `--rm`:
+
+```sh
+sandbox-cli claude --worktree feature-a --detach --dry-run -- -p "implement A"
+```
+
+**The guest must exit by itself.** There is no terminal inside a detached
+container: an agent started in its normal interactive mode will draw a UI nobody
+can see and wait for a keystroke that never comes, until you stop it. Use the
+agent's non-interactive form — `claude -p "…"`, `codex exec "…"`,
+`droid exec "…"` — or an ordinary command like `npm test`.
+
+**The container is kept after it exits**, unlike every other sandbox run. That is
+the point: its exit code and its output are the only record that the work
+happened, and `--rm` would delete both at the moment they become useful. Read
+them back with ordinary docker commands, and reap when you're done:
+
+```sh
+docker ps -a --filter label=sandbox.branch=feature-a   # state and exit code
+docker logs sandbox-myapp-f379c0cd-feature-a           # what the agent said
+docker rm  sandbox-myapp-f379c0cd-feature-a            # when you've read both
+```
+
+Each run is stamped with `sandbox.repo`, `sandbox.branch`, `sandbox.agent` and
+`sandbox.base` labels, which is how you find a container later without having
+kept its name.
+
+**One agent per branch is enforced**, and by construction rather than by a check:
+a detached container is named `sandbox-<repo>-<branch>`, and docker refuses a
+duplicate name. A second detached run on a branch that already has one fails
+immediately rather than putting two agents in one checkout, which would lose
+work silently. If the first one has finished, `docker rm` its container to free
+the name.
+
+Everything else is unchanged — the same mounts, the same fake HOME, the same
+hardening. A background container reaches exactly what a foreground one does.
+
+#### A fleet
+
+`--detach` launches agents one command at a time and leaves you to track them
+yourself. A **fleet** does the same fan-out from one file, and then answers the
+question the rung above cannot: *which of these actually worked?*
+
+Write a `fleet.yaml` (there is a fuller, commented one in
+[`docs/examples/fleet.yaml`](examples/fleet.yaml)):
+
+```yaml
+agent: claude        # the default for tasks that name no agent
+max_parallel: 2
+defaults:
+  memory: 4g
+  cpus: "2"
+  git: true          # so the agents' commits carry your name and email
+
+tasks:
+  - branch: feature-login
+    prompt: Implement the login form in src/auth/. Add tests. Commit when they pass.
+    verify: go build ./... && go test ./...
+
+  - branch: feature-ratelimit
+    agent: codex     # a different agent for this branch
+    memory: 8g       # and its own limits
+    prompt: Add per-IP rate limiting to src/server/. Add tests. Commit when they pass.
+    verify: go test ./src/server/...
+```
+
+Then the whole loop, all of it from your normal checkout:
+
+```sh
+# 0. Log in once per agent, if you haven't. A fleet cannot answer a login prompt.
+sandbox-cli claude
+
+# 1. See what it would do, without launching anything.
+sandbox-cli fleet run --dry-run
+
+# 2. Fan out. One branch, one worktree and one container per task.
+sandbox-cli fleet run
+
+# 3. Watch. Whether each agent is running, how it ended, and what it produced.
+sandbox-cli fleet status                      # --watch to redraw until you stop it
+
+# 4. Read one agent's transcript.
+sandbox-cli fleet logs feature-login          # -f to follow live
+
+# 5. Stop one early if it is going wrong.
+sandbox-cli fleet stop feature-login          # or --all
+
+# 6. Land the work: commits whatever the agent left, then merges into your branch.
+sandbox-cli fleet land feature-login          # or --all, for every branch that can be
+
+# 7. Reap the finished containers (and --worktrees for their checkouts).
+sandbox-cli fleet clean
+```
+
+`fleet run` looks for `fleet.yaml` in the current directory; `-f path` names
+another.
+
+**A fleet can mix agents.** `agent:` at the top is the default; a task that names
+its own overrides it, so you can put Claude on one branch and Codex on another
+and compare what comes back — or use whichever is better at each job:
+
+```yaml
+agent: claude
+tasks:
+  - branch: feature-login
+    prompt: Implement the login form.
+  - branch: feature-ratelimit
+    agent: codex
+    prompt: Add per-IP rate limiting.
+```
+
+The fleet-wide `agent:` becomes optional once every task names one. Which agents
+are eligible, and what each one needs from you first, is in
+[AGENTS.md](AGENTS.md#agents-a-fleet-can-run).
+
+The boundary does not change when you mix: an agent gets exactly the container it
+would get on its own. What *does* change is the setup — **each agent you name
+needs its own login (or its own key exported) before the run**, because none of
+them can answer a login prompt from a detached container. `sandbox-cli codex`
+once is enough, and `fleet run --dry-run` says so when it sees a mixed file.
+
+**A task can also raise its own limits** — `memory`, `cpus` and `allow`, for the
+one branch that needs a bigger build or one more domain. `memory` and `cpus`
+replace the fleet-wide value; `allow` *adds* to it, so a task cannot quietly ask
+for a narrower allowlist than the one written a few lines above it.
+
+**When something goes wrong part-way**, you do not have to re-run the file:
+
+```sh
+sandbox-cli fleet run --only feature-login   # just the task that failed
+sandbox-cli fleet run --resume               # everything not already running or done
+```
+
+`--resume` is what to reach for after a Ctrl-C: with `max_parallel` below the
+task count, `fleet run` stays attached to start later tasks as earlier ones exit,
+so interrupting it ends the *scheduling* while the containers already up carry
+on. `--resume` skips those, skips anything that exited 0, and starts the rest.
+
+**`verify` is the point.** Without it, a fleet is a fan-out with a nicer status
+table — every agent "succeeds" the moment it stops talking, including the one
+that confidently did nothing and the one that deleted the failing test. A
+`verify:` command runs *inside the container after the agent*, and its exit code
+is the verdict:
+
+```
+ID            BRANCH             AGENT   STATE       ELAPSED  DIRTY  AHEAD
+a1b2c3d4e5f6  feature-login      claude  exited 0    4m12s    0      3
+b2c3d4e5f6a7  feature-ratelimit  codex   exited 90   2m03s    7      0
+```
+
+Exit `90` means the agent finished and its verify said no. `fleet land` refuses
+that branch until you fix it or override with `--force`.
+
+That `ID` is the same one `sandbox-cli list` prints and the same one `logs`,
+`attach` and `kill` accept — a fleet agent is a [session](#sessions) like any
+other, and this table is the branch-shaped view of it.
+
+A task with no `verify` still runs — this is a fleet of agents, not a CI system —
+but `fleet land` reports it as *unverified* rather than passed, because nothing
+checked it.
+
+**`fleet land` refuses rather than guessing.** It is the only command that writes
+to your base branch, so it stops when:
+
+- the agent is still running — its next action could change what you just merged
+- the work failed its verify (`--force` to land anyway)
+- **your checkout has moved** since the agent was launched. Each container records
+  the branch its work was meant for, so if you started the fleet on `main` and are
+  now on `release-2`, landing stops rather than putting the work on a branch
+  nobody chose. Check out the recorded branch, or say `--onto release-2` to mean
+  it deliberately
+- another agent is working in the checkout being merged into — the merge would
+  rewrite files under it
+- that checkout is dirty, or the agent moved its own worktree to another branch
+
+On a conflict it stops with git's own message and leaves the merge in place for
+you to finish. It never resolves anything itself.
+
+**`fleet land --all`** lands every branch of the fleet, oldest first, and applies
+one rule to those refusals: a problem with *the branch* — still running, failed
+its verify, nothing to merge — skips that branch and reports it, and the rest
+carry on; a problem with *the branch being merged into* stops there, because it
+will be just as wrong for the next one. What already landed is printed either
+way, since those merges are commits in your branch whatever happens next.
+
+**For an unattended run, add `--profile prod`:**
+
+```sh
+sandbox-cli fleet run --profile prod
+```
+
+dev *warns* when a control cannot be satisfied; prod *refuses*. Nobody is
+watching a fleet, so a warning goes into a log no one reads. prod also declines
+to mount the persisted agent login at all — worth knowing, because it means each
+task needs credentials from the environment instead (`ANTHROPIC_API_KEY`).
+
+**Three constraints worth knowing before you write a fleet file:**
+
+- **Only agents with a verified headless mode may appear** — `claude`, `codex`,
+  `gemini`, `opencode` and `droid` today. Anything else is rejected when the file
+  is parsed, before a single container starts, because the alternative is an
+  unattended agent waiting forever on a keystroke.
+- **One agent per branch**, enforced by docker's own refusal to reuse a container
+  name. A task whose branch already has a running agent is refused rather than
+  joined; two agents in one checkout lose work silently.
+- **The fleet has to fit in the machine.** Before anything starts, sandbox-cli
+  multiplies how many agents run at once by the widest per-task memory cap and
+  compares it with what the host has. Too big and it refuses, naming the
+  arithmetic — lower `max_parallel`, or lower the cap. Note it is the
+  *concurrent* count, not the task count: twenty tasks at `max_parallel: 2` is
+  two agents' worth of memory, and an ordinary thing to run on a laptop.
+
+**Fleet containers are kept after they exit**, like any detached run — their logs
+and exit codes are the only record. `fleet clean` reaps them; add `--worktrees` to
+remove the checkouts too, which skips any with uncommitted work rather than
+discarding it.
+
+`fleet` commands only ever touch containers the fleet started. An interactive
+`sandbox-cli claude --detach` session in the same repository is not stopped by
+`fleet stop --all`, not reaped by `fleet clean`, and does not count against
+`max_parallel`. `sandbox-cli list` marks which is which in its `KIND` column,
+because that is where you decide what to kill.
+
+#### Handing files between agents
+
+Two sandboxes are blind to each other by design — each sees its own project and
+nothing more. When one agent produces something another needs (an API contract, a
+schema, a generated client), `--share` gives them one directory in common:
+
+```sh
+sandbox-cli claude --share --project ~/web-ui     # produces /shared/openapi.yaml
+sandbox-cli claude --share --project ~/backend    # consumes it
+```
+
+Then say it in the prompt: *"write the API contract to `/shared/openapi.yaml`"*,
+and on the other side *"read `/shared/openapi.yaml` and implement it"*. The same
+directory shows up for every sandbox using the flag — different worktrees,
+different projects, doesn't matter. It lives on the host at
+`~/.config/sandbox/shared`, so you can inspect and edit it like any folder.
+
+It's read-write for every sandbox that mounts it and keeps no history. For a
+one-way channel, mount it by hand instead
+(`--mount ~/.config/sandbox/shared:/shared:ro` on the consumer). For history,
+`git init --bare` a repo inside it and push from both sides.
+
+Add `--share-name NAME` (alongside `--share`) to mount
+`~/.config/sandbox/shared/NAME` at `/shared/NAME` instead — a namespace for two
+concurrent runs that would otherwise clobber each other's filename. It stops the
+collision, but it is **not** an isolation boundary: any sandbox using a bare
+`--share` has the whole shared directory read-write and can read and modify
+every namespace in it. Use a bare `--share` on both sides when the point is to
+hand a file across, and don't put anything secret in a namespace.
+
+**Between fleet agents**, there is a convention rather than a mechanism, and that
+is deliberate: files in a shared directory, or nothing. There is no messaging
+protocol here and none is planned — two agents that need to coordinate step by
+step are one task, not two.
+
+What works is a **producer and a consumer, named in the prompts**:
+
+```yaml
+tasks:
+  - branch: api-contract
+    prompt: |
+      Design the API for the new billing flow and write it to
+      /shared/billing/openapi.yaml. Do not implement anything.
+    verify: test -s /shared/billing/openapi.yaml
+
+  - branch: api-client
+    prompt: |
+      Read /shared/billing/openapi.yaml and implement a typed client for it in
+      src/api/. If the file is not there, stop and say so.
+    verify: go build ./...
+```
+
+Three things make that work rather than merely look like it does:
+
+- **`--share` is not on by default and a fleet file cannot turn it on**, because
+  a cross-project directory is exactly the reach the sandbox otherwise refuses.
+  Pass it to the whole fleet on the command line —
+  `sandbox-cli fleet run --share` — where turning it on is a deliberate act you
+  can see in your shell history.
+- **Order them with `max_parallel: 1`** if the consumer genuinely needs the
+  producer's output. Tasks start in file order, so one slot means the producer
+  finishes first. There is no `depends_on:` and there will not be one — a
+  dependency graph is the beginning of a workflow engine, and this is a CLI.
+- **Have the consumer's prompt say what to do when the file is not there.** An
+  agent that invents an API rather than stopping is the failure mode, and its
+  `verify` is what catches it.
 
 ### Crash recovery
 
@@ -504,263 +881,6 @@ sandbox-cli recover prune --superseded=false   # only the 14-day expiry
   afterwards — there is just nothing periodic behind it. Commit from inside a
   detached run, or use `sandbox-cli worktree commit BRANCH` when it finishes.
 - `--no-snapshot` turns it off for a run.
-### Running an agent in the background
-
-`--worktree` gives each agent its own branch, but every run still holds a
-terminal. `--detach` starts the container in the background and returns
-immediately, so one terminal can launch several:
-
-```sh
-sandbox-cli claude --worktree feature-a --detach -- -p "implement A"
-sandbox-cli claude --worktree feature-b --detach -- -p "implement B"
-```
-
-```
-sandbox-cli: started sandbox-myapp-f379c0cd-feature-a in the background
-  logs:  docker logs -f sandbox-myapp-f379c0cd-feature-a
-  stop:  docker stop sandbox-myapp-f379c0cd-feature-a
-  note:  nothing is attached — the agent must be in a mode that exits on its own
-```
-
-The container name goes to stdout on its own line, so `NAME=$(sandbox-cli claude
---worktree feature-a --detach -- -p "…")` works in a script.
-
-**Step by step.** The whole cycle, from launching two agents to landing their
-work, runs from your normal checkout:
-
-```sh
-# 1. Log in once per agent, if you haven't. A detached run cannot answer a login
-#    prompt, so do this interactively first — it persists across runs.
-sandbox-cli claude
-
-# 2. Fan out. --git so the agent's commits carry your name and email.
-sandbox-cli claude --worktree feature-a --detach --git -- -p "implement A, then commit"
-sandbox-cli claude --worktree feature-b --detach --git -- -p "implement B, then commit"
-
-# 3. Check on them. Running, exited, and with what exit code.
-docker ps -a --filter label=sandbox.repo --format \
-  'table {{.Names}}\t{{.Status}}\t{{.Label "sandbox.branch"}}'
-
-# 4. Read the transcript of one.
-docker logs sandbox-myapp-f379c0cd-feature-a          # add -f to follow live
-
-# 5. Stop one early if it is going wrong.
-docker stop sandbox-myapp-f379c0cd-feature-a
-
-# 6. Review the work. The branch is already in your repo.
-git log feature-a
-git diff main...feature-a
-
-# 7. Commit anything the agent left uncommitted (skip if it committed its own).
-sandbox-cli worktree git feature-a status
-sandbox-cli worktree commit feature-a -m "implement A"
-
-# 8. Merge.
-git checkout main
-git merge feature-a
-
-# 9. Reap both halves: the container, then the worktree.
-docker rm sandbox-myapp-f379c0cd-feature-a
-sandbox-cli worktree rm feature-a
-```
-
-Steps 6–8 are the same as for a foreground `--worktree` run — detaching changes
-how the agent is launched, not how its work comes back. Step 9 has the one extra
-piece: a detached container is not removed on exit, so it stays until you say so.
-
-**Try it without launching anything.** `--dry-run` prints the exact docker
-command, including `-d`, the labels and the absence of `--rm`:
-
-```sh
-sandbox-cli claude --worktree feature-a --detach --dry-run -- -p "implement A"
-```
-
-**The guest must exit by itself.** There is no terminal inside a detached
-container: an agent started in its normal interactive mode will draw a UI nobody
-can see and wait for a keystroke that never comes, until you stop it. Use the
-agent's non-interactive form — `claude -p "…"`, `codex exec "…"`,
-`droid exec "…"` — or an ordinary command like `npm test`.
-
-**The container is kept after it exits**, unlike every other sandbox run. That is
-the point: its exit code and its output are the only record that the work
-happened, and `--rm` would delete both at the moment they become useful. Read
-them back with ordinary docker commands, and reap when you're done:
-
-```sh
-docker ps -a --filter label=sandbox.branch=feature-a   # state and exit code
-docker logs sandbox-myapp-f379c0cd-feature-a           # what the agent said
-docker rm  sandbox-myapp-f379c0cd-feature-a            # when you've read both
-```
-
-Each run is stamped with `sandbox.repo`, `sandbox.branch`, `sandbox.agent` and
-`sandbox.base` labels, which is how you find a container later without having
-kept its name.
-
-**One agent per branch is enforced**, and by construction rather than by a check:
-a detached container is named `sandbox-<repo>-<branch>`, and docker refuses a
-duplicate name. A second detached run on a branch that already has one fails
-immediately rather than putting two agents in one checkout, which would lose
-work silently. If the first one has finished, `docker rm` its container to free
-the name.
-
-Everything else is unchanged — the same mounts, the same fake HOME, the same
-hardening. A background container reaches exactly what a foreground one does.
-
-### Running a fleet
-
-`--detach` launches agents one command at a time and leaves you to track them
-with docker. A **fleet** does the same fan-out from one file, and then answers the
-question the section above cannot: *which of these actually worked?*
-
-Write a `fleet.yaml` (there is a fuller, commented one in
-[`docs/examples/fleet.yaml`](examples/fleet.yaml)):
-
-```yaml
-agent: claude
-max_parallel: 2
-defaults:
-  memory: 4g
-  cpus: "2"
-  git: true          # so the agents' commits carry your name and email
-
-tasks:
-  - branch: feature-login
-    prompt: Implement the login form in src/auth/. Add tests. Commit when they pass.
-    verify: go build ./... && go test ./...
-
-  - branch: feature-ratelimit
-    prompt: Add per-IP rate limiting to src/server/. Add tests. Commit when they pass.
-    verify: go test ./src/server/...
-```
-
-Then the whole loop, all of it from your normal checkout:
-
-```sh
-# 0. Log in once per agent, if you haven't. A fleet cannot answer a login prompt.
-sandbox-cli claude
-
-# 1. See what it would do, without launching anything.
-sandbox-cli fleet run --dry-run
-
-# 2. Fan out. One branch, one worktree and one container per task.
-sandbox-cli fleet run
-
-# 3. Watch. Whether each agent is running, how it ended, and what it produced.
-sandbox-cli fleet status
-
-# 4. Read one agent's transcript.
-sandbox-cli fleet logs feature-login          # -f to follow live
-
-# 5. Stop one early if it is going wrong.
-sandbox-cli fleet stop feature-login          # or --all
-
-# 6. Land the work: commits whatever the agent left, then merges into your branch.
-sandbox-cli fleet land feature-login
-
-# 7. Reap the finished containers (and --worktrees for their checkouts).
-sandbox-cli fleet clean
-```
-
-`fleet run` looks for `fleet.yaml` in the current directory; `-f path` names
-another.
-
-**`verify` is the point.** Without it, a fleet is a fan-out with a nicer status
-table — every agent "succeeds" the moment it stops talking, including the one
-that confidently did nothing and the one that deleted the failing test. A
-`verify:` command runs *inside the container after the agent*, and its exit code
-is the verdict:
-
-```
-BRANCH             STATE       ELAPSED  DIRTY  AHEAD
-feature-login      exited 0    4m12s    0      3
-feature-ratelimit  exited 90   2m03s    7      0
-```
-
-Exit `90` means the agent finished and its verify said no. `fleet land` refuses
-that branch until you fix it or override with `--force`.
-
-A task with no `verify` still runs — this is a fleet of agents, not a CI system —
-but `fleet land` reports it as *unverified* rather than passed, because nothing
-checked it.
-
-**`fleet land` refuses rather than guessing.** It is the only command that writes
-to your base branch, so it stops when:
-
-- the agent is still running — its next action could change what you just merged
-- the work failed its verify (`--force` to land anyway)
-- **your checkout has moved** since the agent was launched. Each container records
-  the branch its work was meant for, so if you started the fleet on `main` and are
-  now on `release-2`, landing stops rather than putting the work on a branch
-  nobody chose. Check out the recorded branch, or say `--onto release-2` to mean
-  it deliberately
-- another agent is working in the checkout being merged into — the merge would
-  rewrite files under it
-- that checkout is dirty, or the agent moved its own worktree to another branch
-
-On a conflict it stops with git's own message and leaves the merge in place for
-you to finish. It never resolves anything itself.
-
-**For an unattended run, add `--profile prod`:**
-
-```sh
-sandbox-cli fleet run --profile prod
-```
-
-dev *warns* when a control cannot be satisfied; prod *refuses*. Nobody is
-watching a fleet, so a warning goes into a log no one reads. prod also declines
-to mount the persisted agent login at all — worth knowing, because it means each
-task needs credentials from the environment instead (`ANTHROPIC_API_KEY`).
-
-**Two constraints worth knowing before you write a fleet file:**
-
-- **Only agents with a verified headless mode may appear** — `claude` and `codex`
-  today. Anything else is rejected when the file is parsed, before a single
-  container starts, because the alternative is an unattended agent waiting
-  forever on a keystroke.
-- **One agent per branch**, enforced by docker's own refusal to reuse a container
-  name. A task whose branch already has a running agent is refused rather than
-  joined; two agents in one checkout lose work silently.
-
-**Fleet containers are kept after they exit**, like any detached run — their logs
-and exit codes are the only record. `fleet clean` reaps them; add `--worktrees` to
-remove the checkouts too, which skips any with uncommitted work rather than
-discarding it.
-
-`fleet` commands only ever touch containers the fleet started. An interactive
-`sandbox-cli claude --detach` session in the same repository is not stopped by
-`fleet stop --all`, not reaped by `fleet clean`, and does not count against
-`max_parallel`.
-
-### Handing files between two sandboxes
-
-Two sandboxes are blind to each other by design — each sees its own project and
-nothing more. When one agent produces something another needs (an API contract, a
-schema, a generated client), `--share` gives them one directory in common:
-
-```sh
-sandbox-cli claude --share --project ~/web-ui     # produces /shared/openapi.yaml
-sandbox-cli claude --share --project ~/backend    # consumes it
-```
-
-Then say it in the prompt: *"write the API contract to `/shared/openapi.yaml`"*,
-and on the other side *"read `/shared/openapi.yaml` and implement it"*. The same
-directory shows up for every sandbox using the flag — different worktrees,
-different projects, doesn't matter. It lives on the host at
-`~/.config/sandbox/shared`, so you can inspect and edit it like any folder.
-
-It's read-write for every sandbox that mounts it and keeps no history. For a
-one-way channel, mount it by hand instead
-(`--mount ~/.config/sandbox/shared:/shared:ro` on the consumer). For history,
-`git init --bare` a repo inside it and push from both sides.
-
-Add `--share-name NAME` (alongside `--share`) to mount
-`~/.config/sandbox/shared/NAME` at `/shared/NAME` instead — a namespace for two
-concurrent runs that would otherwise clobber each other's filename. It stops the
-collision, but it is **not** an isolation boundary: any sandbox using a bare
-`--share` has the whole shared directory read-write and can read and modify
-every namespace in it. Use a bare `--share` on both sides when the point is to
-hand a file across, and don't put anything secret in a namespace.
-
 ### Finding your past conversations
 
 Agent logins persist in a sandbox-owned home, and so do the conversations the
@@ -1225,6 +1345,12 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli worktree list\|path\|rm` | Manage `--worktree` worktrees |
 | `sandbox-cli worktree git BRANCH ...` | Run git inside a worktree, by branch name |
 | `sandbox-cli worktree commit BRANCH -m ...` | Commit what the agent left there |
+| `sandbox-cli fleet run` | Launch every task in a `fleet.yaml`; `--only`, `--resume`, `--dry-run`, `--share` ([story](#a-fleet)) |
+| `sandbox-cli fleet status [--watch]` | One line per branch: agent, state, what it produced |
+| `sandbox-cli fleet logs BRANCH [-f]` | What one fleet agent said |
+| `sandbox-cli fleet stop [BRANCH\|--all]` | Stop a fleet agent |
+| `sandbox-cli fleet land BRANCH\|--all` | Commit and merge finished work, refusing on any ambiguity |
+| `sandbox-cli fleet clean [--worktrees]` | Reap finished fleet containers (and clean checkouts) |
 | `sandbox-cli recover` | What a crashed run left behind, and what's broken ([runbook](#after-a-crash-step-by-step)) |
 | `sandbox-cli recover list\|show\|restore` | Find and restore work from a crashed run |
 | `sandbox-cli recover repair` | Fix a repository a crashed sandbox broke |

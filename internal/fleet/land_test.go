@@ -405,3 +405,117 @@ func TestLandRefusesWhenTheAgentMovedTheWorktreeToAnotherBranch(t *testing.T) {
 		t.Errorf("the work was committed despite the refusal; status: %q", out)
 	}
 }
+
+// landAllFixture builds a repo with three feature worktrees, each with one
+// commit, and a runner whose inspector reports an exited container per branch —
+// what `fleet run` leaves behind.
+func landAllFixture(t *testing.T) (repo string, r *Runner, cs []runtime.ContainerInfo) {
+	t.Helper()
+	repo = newTestRepo(t)
+	base := worktree.HeadBranch(repo)
+	if base == "" {
+		t.Skip("repo has a detached HEAD after init")
+	}
+	for _, b := range []string{"feat-1", "feat-2", "feat-3"} {
+		info, err := worktree.Resolve(repo, b)
+		if err != nil {
+			t.Fatalf("Resolve %s: %v", b, err)
+		}
+		gitIn(t, info.Path, "commit", "--allow-empty", "-qm", "work on "+b)
+		cs = append(cs, exitedOn(repo, b, base))
+	}
+	// Containers come back newest first, which for these fixtures means the
+	// reverse of launch order.
+	for i, j := 0, len(cs)-1; i < j; i, j = i+1, j-1 {
+		cs[i], cs[j] = cs[j], cs[i]
+	}
+	r = &Runner{Inspector: &fakeInspector{containers: cs}, Repo: repo, RepoID: testRepoID, Out: io.Discard}
+	return repo, r, cs
+}
+
+// Landing five branches one command at a time is the common case; --all is that,
+// in launch order, with the base re-checked before every merge.
+func TestLandAllLandsEveryBranch(t *testing.T) {
+	repo, r, _ := landAllFixture(t)
+
+	res, err := r.LandAll(context.Background(), LandOptions{})
+	if err != nil {
+		t.Fatalf("LandAll: %v", err)
+	}
+	if len(res.Landed) != 3 {
+		t.Fatalf("expected three branches landed, got %d (%+v)", len(res.Landed), res.Skipped)
+	}
+	// Oldest first: the containers were listed newest-first, so a --all that
+	// simply followed the listing would land them backwards.
+	for i, want := range []string{"feat-1", "feat-2", "feat-3"} {
+		if res.Landed[i].Branch != want {
+			t.Errorf("landed[%d] = %s, want %s (launch order)", i, res.Landed[i].Branch, want)
+		}
+	}
+	log := gitIn(t, repo, "log", "--oneline")
+	for _, want := range []string{"feat-1", "feat-2", "feat-3"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("%s is not in the base branch history:\n%s", want, log)
+		}
+	}
+}
+
+// The rule --all runs on: a refusal about one branch skips that branch, and the
+// others still land. A fleet of three where one failed its verify should give
+// you the other two.
+func TestLandAllSkipsABranchAndCarriesOn(t *testing.T) {
+	_, r, cs := landAllFixture(t)
+	for i := range cs {
+		if cs[i].Labels[sandbox.LabelBranch] == "feat-2" {
+			cs[i].Labels[sandbox.LabelVerify] = "go test ./..."
+			cs[i].ExitCode = VerifyFailedExit
+		}
+	}
+
+	res, err := r.LandAll(context.Background(), LandOptions{})
+	if err != nil {
+		t.Fatalf("a failed verify on one branch must not stop the others: %v", err)
+	}
+	if len(res.Landed) != 2 {
+		t.Errorf("expected the other two landed, got %d", len(res.Landed))
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Branch != "feat-2" {
+		t.Fatalf("expected feat-2 skipped, got %+v", res.Skipped)
+	}
+	// Skipped, but explained: an unaccounted-for branch is the thing that makes a
+	// partial land untrustworthy.
+	if !strings.Contains(res.Skipped[0].Reason, "did not pass its verify") {
+		t.Errorf("skip reason should say why: %q", res.Skipped[0].Reason)
+	}
+}
+
+// The other half of the rule: a refusal about the branch being merged *into*
+// stops the run, because it will be just as wrong for the next branch — and
+// what has already landed is reported rather than swallowed by the error.
+func TestLandAllStopsOnARefusalAboutTheBase(t *testing.T) {
+	repo, r, _ := landAllFixture(t)
+	// Dirty the base checkout after the first merge would have happened: with
+	// uncommitted work in it, land refuses for every branch from then on.
+	if err := os.WriteFile(filepath.Join(repo, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := r.LandAll(context.Background(), LandOptions{})
+	if err == nil {
+		t.Fatal("expected a dirty base checkout to stop the run")
+	}
+	if len(res.Landed) != 0 {
+		t.Errorf("nothing should have landed into a dirty checkout, got %+v", res.Landed)
+	}
+	if !strings.Contains(err.Error(), "stopped at feat-1") {
+		t.Errorf("the error should name the branch it stopped on: %v", err)
+	}
+}
+
+func TestLandAllWithNoFleetBranches(t *testing.T) {
+	repo := newTestRepo(t)
+	r := &Runner{Inspector: &fakeInspector{}, Repo: repo, RepoID: testRepoID, Out: io.Discard}
+	if _, err := r.LandAll(context.Background(), LandOptions{}); err == nil {
+		t.Error("expected an error rather than a silent success when there is nothing to land")
+	}
+}

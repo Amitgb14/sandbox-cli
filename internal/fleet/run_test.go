@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
@@ -16,7 +17,7 @@ func testOptions(t *testing.T, cfg config.Config, task Task) sandbox.Options {
 		t.Fatal("no claude descriptor")
 	}
 	r := &Runner{Session: sandbox.New(cfg), Repo: "/repo", RepoID: testRepoID}
-	opts, err := r.options(Spec{Agent: "claude"}, agent, task, t.TempDir(), "main")
+	opts, err := r.options(Spec{Agent: "claude"}, LaunchOptions{}, agent, task, t.TempDir(), "main")
 	if err != nil {
 		t.Fatalf("options: %v", err)
 	}
@@ -54,5 +55,62 @@ func TestOptionsPersistAuthByDefault(t *testing.T) {
 func TestOptionsMarkTheContainerAsFleetOwned(t *testing.T) {
 	if !testOptions(t, config.Default(), Task{Branch: "feature-a", Prompt: "x"}).Fleet {
 		t.Error("fleet containers are not marked as fleet-owned")
+	}
+}
+
+// The per-task agent has to reach the container, not just the validation: the
+// argv it starts, the label `fleet status` reads back, and the persisted HOME it
+// logs in through must all be that agent's rather than the fleet-wide one.
+func TestOptionsUseThePerTaskAgent(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	codex, ok := agents.Lookup("codex")
+	if !ok {
+		t.Skip("no codex descriptor")
+	}
+	spec := Spec{Agent: "claude", Tasks: []Task{{Branch: "feature-b", Prompt: "do it", Agent: "codex"}}}
+
+	r := &Runner{Session: sandbox.New(config.Default()), Repo: "/repo", RepoID: testRepoID}
+	opts, err := r.options(spec, LaunchOptions{}, codex, spec.Tasks[0], t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("options: %v", err)
+	}
+	if opts.Agent != "codex" {
+		t.Errorf("container label says %q; `fleet status` would name the wrong agent", opts.Agent)
+	}
+	if len(opts.Command) == 0 || opts.Command[0] != "codex" {
+		t.Errorf("argv should start codex, got %v", opts.Command)
+	}
+	// The persisted HOME is per agent, so a task running codex must not be handed
+	// claude's login directory.
+	if !strings.Contains(opts.AuthPersistDir, codex.PersistDir) {
+		t.Errorf("AuthPersistDir = %q, want codex's own", opts.AuthPersistDir)
+	}
+}
+
+// Per-task limits must reach docker, or the key is decorative.
+func TestOptionsApplyPerTaskLimits(t *testing.T) {
+	spec := Spec{
+		Agent:    "claude",
+		Defaults: Defaults{Memory: "4g", CPUs: "2", Allow: []string{"example.com"}},
+		Tasks:    []Task{{Branch: "big", Prompt: "p", Memory: "16g", Allow: []string{"docs.example.com"}}},
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	agent, ok := agents.Lookup("claude")
+	if !ok {
+		t.Fatal("no claude descriptor")
+	}
+	r := &Runner{Session: sandbox.New(config.Default()), Repo: "/repo", RepoID: testRepoID}
+	opts, err := r.options(spec, LaunchOptions{}, agent, spec.Tasks[0], t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("options: %v", err)
+	}
+	if opts.Memory != "16g" {
+		t.Errorf("memory = %q, want the task's 16g", opts.Memory)
+	}
+	if opts.CPUs != "2" {
+		t.Errorf("cpus = %q, want the inherited default", opts.CPUs)
+	}
+	if len(opts.Allow) != 2 {
+		t.Errorf("allow should be the union of fleet and task, got %v", opts.Allow)
 	}
 }

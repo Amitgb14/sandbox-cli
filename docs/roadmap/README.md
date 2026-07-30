@@ -13,7 +13,7 @@ the one before it is good enough to use daily.
 | # | Task | What it really means | State |
 |---|------|----------------------|-------|
 | 1 | [Better local / dev agent experience](task-1-local-agent-experience.md) | Make the everyday loop pleasant and reliable: sessions you can see, attach to, follow and stop; a `doctor` that answers "is my setup good?"; errors that say what to do. | **In progress** — branch `feature/local-agent-experience` |
-| 2 | [Multi-agent support](task-2-multi-agent.md) | Run several agents safely in parallel (git worktrees), orchestrated from the CLI. No GUI. | Partly built (`fleet`, `worktree`); not started as a task |
+| 2 | [Multi-agent support](task-2-multi-agent.md) | Run several agents safely in parallel (git worktrees), orchestrated from the CLI. No GUI. | **In progress** — branch `feature/multi-agent` |
 | 3 | [Stronger isolation for Linux production](task-3-stronger-isolation.md) | When the code is untrusted, give each sandbox its own kernel — Kata on Linux, Firecracker later. | Not started |
 
 ## Why this order

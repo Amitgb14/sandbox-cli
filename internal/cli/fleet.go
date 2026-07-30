@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/image"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -72,9 +74,13 @@ func newFleetCmd() *cobra.Command {
 
 func newFleetRunCmd() *cobra.Command {
 	var (
-		file   string
-		dryRun bool
-		build  bool
+		file      string
+		dryRun    bool
+		build     bool
+		only      []string
+		resume    bool
+		share     bool
+		shareName string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -83,7 +89,7 @@ func newFleetRunCmd() *cobra.Command {
 			"branch. A task whose branch already has a running agent is refused: two\n" +
 			"agents in one worktree overwrite each other's work.\n\n" +
 			"Example fleet.yaml:\n\n" +
-			"  agent: claude\n" +
+			"  agent: claude          # the default for tasks that name no agent\n" +
 			"  max_parallel: 3\n" +
 			"  defaults:\n" +
 			"    memory: 4g\n" +
@@ -93,15 +99,22 @@ func newFleetRunCmd() *cobra.Command {
 			"      prompt: implement the login form\n" +
 			"      verify: go build ./... && go test ./...\n" +
 			"    - branch: feature-b\n" +
+			"      agent: codex       # a different agent for this branch\n" +
+			"      memory: 8g         # and its own limits\n" +
 			"      prompt: add rate limiting\n\n" +
 			"A task's `verify` runs inside its container after the agent, and its exit\n" +
 			"code decides whether the work is done — `fleet land` refuses a branch that\n" +
 			"failed it. A task without one still runs, but lands reported as unverified.\n\n" +
 			"With max_parallel set below the task count this command stays attached,\n" +
 			"starting the remaining tasks as earlier agents exit. Otherwise it returns as\n" +
-			"soon as the containers are up.\n\n" +
+			"soon as the containers are up. Ctrl-C there stops the scheduling, not the\n" +
+			"agents already running — `--resume` picks the rest up.\n\n" +
 			"A fully commented example is in docs/examples/fleet.yaml; the walkthrough is\n" +
-			"docs/GUIDE.md, \"Running a fleet\".",
+			"docs/GUIDE.md, \"Running agents in parallel\".",
+		Example: "  sandbox-cli fleet run\n" +
+			"  sandbox-cli fleet run --dry-run\n" +
+			"  sandbox-cli fleet run --only feature-a\n" +
+			"  sandbox-cli fleet run --resume",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spec, err := fleet.Load(file)
@@ -113,14 +126,36 @@ func newFleetRunCmd() *cobra.Command {
 				return err
 			}
 			ctx := cmd.Context()
+			opts := fleet.LaunchOptions{Only: only, Resume: resume, Build: build}
+			// --share is a command-line flag and deliberately not a fleet.yaml key.
+			// A cross-project directory is exactly the reach the sandbox otherwise
+			// refuses, so switching it on stays an act you can see in your shell
+			// history rather than a line in a file that gets copied between repos.
+			if shareName != "" && !share {
+				return fmt.Errorf("--share-name %q needs --share as well: a namespace is a way of sharing, not an alternative to it", shareName)
+			}
+			if share {
+				mount, err := shareMount(shareName)
+				if err != nil {
+					return err
+				}
+				opts.ExtraMounts = append(opts.ExtraMounts, mount)
+			}
 			if dryRun {
-				return printFleetPlan(ctx, r, spec)
+				return printFleetPlan(ctx, r, spec, opts)
 			}
 
-			results, err := r.Launch(ctx, spec, build)
+			results, err := r.Launch(ctx, spec, opts)
 			printLaunchResults(results)
 			if err != nil {
 				return err
+			}
+			if len(results) == 0 {
+				// Only reachable through --resume: everything the file asks for is
+				// already running or already done. Saying so is the answer to the
+				// question that was asked, and silence would read as a failure.
+				fmt.Println("nothing to start; `sandbox-cli fleet status` shows where the fleet is")
+				return nil
 			}
 			for _, res := range results {
 				if res.Err != nil {
@@ -135,17 +170,33 @@ func newFleetRunCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&file, "file", "f", defaultFleetFile, "fleet task file")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what each task would do and exit")
 	cmd.Flags().BoolVar(&build, "build", false, "force rebuild of the base image before launching")
+	cmd.Flags().StringSliceVar(&only, "only", nil, "start only these branches from the file (repeatable, or comma-separated)")
+	cmd.Flags().BoolVar(&resume, "resume", false, "skip tasks already running or already finished successfully")
+	cmd.Flags().BoolVar(&share, "share", false, "mount the shared handoff directory at /shared in every task, so one agent can leave a file for another")
+	cmd.Flags().StringVar(&shareName, "share-name", "", "namespace the shared directory (requires --share)")
 	return cmd
 }
 
+// statusWatchInterval is how often --watch redraws. Agent runs last minutes, so
+// two seconds is already far finer than the thing being watched changes — it is
+// the interval people type into `watch -n2`, which is what this replaces.
+const statusWatchInterval = 2 * time.Second
+
 func newFleetStatusCmd() *cobra.Command {
 	var base string
+	var watch bool
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show every branch's agent, and what it produced",
-		Long: "One line per branch: whether its agent is running, how long it ran, how many\n" +
-			"files it left uncommitted, and how many commits it is ahead of the base\n" +
-			"branch (what there is to land).",
+		Long: "One line per branch: which agent is on it, whether that agent is running, how\n" +
+			"long it ran, how many files it left uncommitted, and how many commits it is\n" +
+			"ahead of the base branch (what there is to land).\n\n" +
+			"The ID column is the same one `sandbox-cli list` prints, and the same one\n" +
+			"`logs`, `attach` and `kill` accept — a fleet agent is a session like any\n" +
+			"other, and this table is the branch-shaped view of it.\n\n" +
+			"--watch redraws every couple of seconds until you stop it.",
+		Example: "  sandbox-cli fleet status\n" +
+			"  sandbox-cli fleet status --watch",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := newFleetRunner(fleetCfgPath, fleetProfile)
@@ -155,25 +206,77 @@ func newFleetStatusCmd() *cobra.Command {
 			if base == "" {
 				base = worktree.Branch(r.Repo)
 			}
-			rows, err := r.Status(cmd.Context(), base)
-			if err != nil {
-				return err
+			if !watch {
+				return printFleetStatus(cmd.Context(), r, base, os.Stdout)
 			}
-			if len(rows) == 0 {
-				fmt.Println("no fleet branches (run `sandbox-cli fleet run` to start one)")
-				return nil
-			}
-			tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "BRANCH\tSTATE\tELAPSED\tDIRTY\tAHEAD")
-			for _, s := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\n",
-					s.Branch, fleetState(s), fleetElapsed(s), s.Dirty, s.Ahead)
-			}
-			return tw.Flush()
+			return watchFleetStatus(cmd.Context(), r, base, os.Stdout)
 		},
 	}
 	cmd.Flags().StringVar(&base, "base", "", "branch to count commits against (default: the branch you have checked out)")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "redraw every two seconds until interrupted")
 	return cmd
+}
+
+// printFleetStatus draws the table once.
+func printFleetStatus(ctx context.Context, r *fleet.Runner, base string, w io.Writer) error {
+	rows, err := r.Status(ctx, base)
+	if err != nil {
+		return err
+	}
+	return renderFleetStatus(w, rows)
+}
+
+// renderFleetStatus is split out from the command so the columns — the tool's
+// branch-shaped answer to "where is my fleet" — are testable without a daemon.
+func renderFleetStatus(w io.Writer, rows []fleet.Status) error {
+	if len(rows) == 0 {
+		fmt.Fprintln(w, "no fleet branches (run `sandbox-cli fleet run` to start one)")
+		return nil
+	}
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tBRANCH\tAGENT\tSTATE\tELAPSED\tDIRTY\tAHEAD")
+	for _, s := range rows {
+		// Branch and agent are label values, which is text from the repository
+		// arriving in a tab-separated table on a terminal. Cleaned for the same
+		// reason `list` cleans them: a branch name must not be able to forge a row.
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%d\n",
+			fleetSessionID(s), termsafe.Clean(s.Branch), dash(termsafe.Clean(s.Agent)),
+			fleetState(s), fleetElapsed(s), s.Dirty, s.Ahead)
+	}
+	return tw.Flush()
+}
+
+// watchFleetStatus redraws until the context is cancelled.
+//
+// It clears the screen and reprints rather than rewriting rows in place: the
+// table changes shape as branches appear and disappear, and a partial redraw
+// that got that wrong would show a mixture of two moments, which is worse than
+// a flicker. Ctrl-C cancels the context, which ends the loop — and, as
+// everywhere else in this tool, stopping the *watching* stops nothing else.
+func watchFleetStatus(ctx context.Context, r *fleet.Runner, base string, w io.Writer) error {
+	ticker := time.NewTicker(statusWatchInterval)
+	defer ticker.Stop()
+	for {
+		fmt.Fprint(w, "\033[H\033[2J")
+		if err := printFleetStatus(ctx, r, base, w); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "\nwatching every %s — Ctrl-C to stop; the agents keep running\n", statusWatchInterval)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+// fleetSessionID is the branch's current container in the form `list` prints, so
+// one id works in both tables. A branch with no container has none to give.
+func fleetSessionID(s fleet.Status) string {
+	if s.Container == nil {
+		return "—"
+	}
+	return shortID(s.Container.ID)
 }
 
 func newFleetLogsCmd() *cobra.Command {
@@ -236,9 +339,9 @@ func newFleetStopCmd() *cobra.Command {
 
 func newFleetLandCmd() *cobra.Command {
 	var message, onto string
-	var force bool
+	var force, all bool
 	cmd := &cobra.Command{
-		Use:   "land BRANCH",
+		Use:   "land [BRANCH]",
 		Short: "Merge a finished branch into your current branch",
 		Long: "Commits whatever the agent left in BRANCH's worktree, then merges BRANCH\n" +
 			"(--no-ff) into the branch you have checked out. It refuses while the agent is\n" +
@@ -253,37 +356,35 @@ func newFleetLandCmd() *cobra.Command {
 			"passed — nothing has said the work is right, only that the agent stopped.\n" +
 			"--force lands work whose verify failed.\n\n" +
 			"After a successful land the worktree and container are left in place; remove\n" +
-			"them with `sandbox-cli fleet clean BRANCH --worktrees`.",
-		Args: cobra.ExactArgs(1),
+			"them with `sandbox-cli fleet clean BRANCH --worktrees`.\n\n" +
+			"--all lands every branch of the fleet, oldest first. A branch that cannot be\n" +
+			"landed — still running, failed its verify, nothing to merge — is skipped and\n" +
+			"reported, and the rest carry on; anything wrong with the branch being merged\n" +
+			"*into* stops there, because it will be just as wrong for the next one.",
+		Example: "  sandbox-cli fleet land feature-a\n" +
+			"  sandbox-cli fleet land --all",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			switch {
+			case all && len(args) == 1:
+				return fmt.Errorf("--all lands every branch, so it takes no branch name")
+			case !all && len(args) == 0:
+				return fmt.Errorf("name a branch to land, or pass --all\n" +
+					"  `sandbox-cli fleet status` shows what there is")
+			}
 			r, err := newFleetRunner(fleetCfgPath, fleetProfile)
 			if err != nil {
 				return err
 			}
-			res, err := r.Land(cmd.Context(), args[0], fleet.LandOptions{
-				Message: message,
-				Onto:    onto,
-				Force:   force,
-			})
+			opts := fleet.LandOptions{Message: message, Onto: onto, Force: force}
+			if all {
+				return landAll(cmd.Context(), r, opts)
+			}
+			res, err := r.Land(cmd.Context(), args[0], opts)
 			if err != nil {
 				return err
 			}
-			if res.Committed {
-				fmt.Printf("committed uncommitted work in %s\n", res.Branch)
-			}
-			fmt.Printf("merged %s into %s\n", res.Branch, res.Base)
-			// Say which kind of merge this was. "passed its verify" and "nobody
-			// checked" must never look the same on the way past.
-			switch {
-			case res.ForcedUnchecked:
-				fmt.Printf("warning: %s never reached its verify and was landed with --force; nothing checked this work\n", res.Branch)
-			case res.Forced:
-				fmt.Printf("warning: %s failed its verify and was landed with --force\n", res.Branch)
-			case res.Verified:
-				fmt.Printf("%s passed its verify\n", res.Branch)
-			default:
-				fmt.Printf("note: %s was landed unverified (no verify command recorded for this run)\n", res.Branch)
-			}
+			printLanded(res)
 			fmt.Printf("clean up with: sandbox-cli fleet clean %s --worktrees\n", res.Branch)
 			return nil
 		},
@@ -291,7 +392,52 @@ func newFleetLandCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&message, "message", "m", "", "commit message for uncommitted worktree changes (default: an auto-generated one)")
 	cmd.Flags().StringVar(&onto, "onto", "", "land onto this branch deliberately, overriding the branch recorded at launch; it must be the one checked out")
 	cmd.Flags().BoolVar(&force, "force", false, "land even though the run failed its verify command")
+	cmd.Flags().BoolVar(&all, "all", false, "land every branch of the fleet that can be landed, oldest first")
 	return cmd
+}
+
+// landAll runs and reports a `fleet land --all`.
+//
+// What was landed is printed even when the run stopped, and before the error:
+// some of those merges are already commits in the user's branch, and an error
+// message that arrived alone would say the opposite of what happened.
+func landAll(ctx context.Context, r *fleet.Runner, opts fleet.LandOptions) error {
+	res, err := r.LandAll(ctx, opts)
+	for _, one := range res.Landed {
+		printLanded(one)
+	}
+	for _, s := range res.Skipped {
+		fmt.Printf("skipped %s: %s\n", s.Branch, s.Reason)
+	}
+	if err != nil {
+		return err
+	}
+	if len(res.Landed) == 0 {
+		fmt.Println("nothing was landed")
+		return nil
+	}
+	fmt.Println("clean up with: sandbox-cli fleet clean --worktrees")
+	return nil
+}
+
+// printLanded says what one merge was. "Passed its verify" and "nobody checked"
+// must never look the same on the way past — which matters more under --all,
+// where the lines scroll.
+func printLanded(res fleet.LandResult) {
+	if res.Committed {
+		fmt.Printf("committed uncommitted work in %s\n", res.Branch)
+	}
+	fmt.Printf("merged %s into %s\n", res.Branch, res.Base)
+	switch {
+	case res.ForcedUnchecked:
+		fmt.Printf("warning: %s never reached its verify and was landed with --force; nothing checked this work\n", res.Branch)
+	case res.Forced:
+		fmt.Printf("warning: %s failed its verify and was landed with --force\n", res.Branch)
+	case res.Verified:
+		fmt.Printf("%s passed its verify\n", res.Branch)
+	default:
+		fmt.Printf("note: %s was landed unverified (no verify command recorded for this run)\n", res.Branch)
+	}
 }
 
 func newFleetCleanCmd() *cobra.Command {
@@ -408,10 +554,14 @@ func shellJoin(argv []string) string {
 	return strings.Join(out, " ")
 }
 
-func printFleetPlan(ctx context.Context, r *fleet.Runner, spec fleet.Spec) error {
-	plans, err := r.Plan(ctx, spec)
+func printFleetPlan(ctx context.Context, r *fleet.Runner, spec fleet.Spec, opts fleet.LaunchOptions) error {
+	plans, err := r.Plan(ctx, spec, opts)
 	if err != nil {
 		return err
+	}
+	if len(plans) == 0 {
+		fmt.Println("nothing to start")
+		return nil
 	}
 	for i, p := range plans {
 		if i > 0 {
@@ -437,18 +587,40 @@ func printFleetPlan(ctx context.Context, r *fleet.Runner, spec fleet.Spec) error
 		if len(p.Allow) > 0 {
 			fmt.Printf("egress:   baseline + %s\n", strings.Join(p.Allow, ", "))
 		}
+		for _, m := range p.Mounts {
+			fmt.Printf("mount:    %s\n", m)
+		}
 		if p.AlreadyRunning {
 			fmt.Printf("SKIPPED:  an agent is already running on this branch (%s)\n", p.RunningInName)
 		}
 	}
+	// A mixed fleet's login requirement, said once at the end where it can be
+	// acted on. Each agent needs its own login (or its own key) before an
+	// unattended run, and finding that out from a container that exited 1 four
+	// minutes in is the expensive way to learn it.
+	if names := spec.Agents(); len(names) > 1 {
+		fmt.Printf("\nthis fleet mixes %s — each needs its own login before an unattended run\n",
+			strings.Join(names, " and "))
+	}
 	return nil
 }
 
+// printLaunchResults reports the tasks that did not start. The successful ones
+// have already announced themselves from the runner as they went, which is what
+// you want while a fan-out is in progress.
+//
+// The agent is named because a fleet may mix them: "feature-b: …" leaves you
+// looking up which agent that branch was running before you can read the error.
 func printLaunchResults(results []fleet.LaunchResult) {
 	for _, res := range results {
-		if res.Err != nil {
-			fmt.Fprintf(os.Stderr, "sandbox-cli: %s: %v\n", res.Branch, res.Err)
+		if res.Err == nil {
+			continue
 		}
+		who := res.Branch
+		if res.Agent != "" {
+			who = fmt.Sprintf("%s (%s)", res.Branch, res.Agent)
+		}
+		fmt.Fprintf(os.Stderr, "sandbox-cli: %s: %v\n", who, res.Err)
 	}
 }
 

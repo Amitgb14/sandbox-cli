@@ -130,6 +130,46 @@ func (d *DockerCLI) runtimeNames(ctx context.Context) ([]string, error) {
 	return parseRuntimeNames(out)
 }
 
+// HostMemoryBytes reports how much memory the engine says the machine has, and
+// whether it could be asked at all.
+//
+// "The machine" is the engine's machine, not this process's: on macOS and
+// Windows the daemon runs in a VM with a memory budget of its own, and that
+// budget — not the laptop's 64GB — is what a container's --memory cap competes
+// for. Asking docker is therefore not a roundabout way of reading /proc; it is
+// the only way to get the right number.
+//
+// The same JSON-key-versus-template-field split as everywhere else in this
+// dialect: podman's Go struct names and its JSON keys disagree, so it is asked
+// for JSON and read by key.
+//
+// A false second return means "could not be determined", never zero — a caller
+// that treated an unknown host as an empty one would refuse every fleet.
+func (d *DockerCLI) HostMemoryBytes(ctx context.Context) (int64, bool) {
+	if d.engine() == EnginePodman {
+		out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .Host}}").Output()
+		if err != nil {
+			return 0, false
+		}
+		var host struct {
+			MemTotal *int64 `json:"memTotal"`
+		}
+		if json.Unmarshal(bytes.TrimSpace(out), &host) != nil || host.MemTotal == nil {
+			return 0, false
+		}
+		return *host.MemTotal, *host.MemTotal > 0
+	}
+	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .MemTotal}}").Output()
+	if err != nil {
+		return 0, false
+	}
+	var total int64
+	if json.Unmarshal(bytes.TrimSpace(out), &total) != nil {
+		return 0, false
+	}
+	return total, total > 0
+}
+
 // networkCreateArgs is how each engine is asked for a network no other sandbox
 // can reach into.
 //

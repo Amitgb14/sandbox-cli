@@ -13,6 +13,61 @@ version is tagged.
 
 ### Added
 
+- **A fleet can mix agents.** `agent:` on a task overrides the fleet-wide one, so
+  one file can put Claude on one branch and Codex on another:
+
+  ```yaml
+  agent: claude
+  tasks:
+    - branch: feature-login
+      prompt: Implement the login form.
+    - branch: feature-ratelimit
+      agent: codex
+      memory: 8g
+      prompt: Add per-IP rate limiting.
+  ```
+
+  The fleet-wide `agent:` is optional once every task names one. Each agent you
+  name needs its own login before an unattended run — none of them can answer a
+  login prompt from a detached container — and `fleet run --dry-run` says so when
+  it sees a mixed file.
+
+- **Three more agents are eligible for a fleet**: `gemini`, `opencode` and
+  `droid`, alongside `claude` and `codex`. As before, only agents with a verified
+  headless mode may appear, because a fleet is unattended and an agent that stops
+  to ask permission does not fail — it hangs. See
+  [AGENTS.md](docs/AGENTS.md#agents-a-fleet-can-run).
+
+- **Per-task limits.** `memory`, `cpus` and `allow` on a task, for the one branch
+  that needs a bigger build or one more domain. `memory` and `cpus` replace the
+  fleet-wide value; `allow` adds to it.
+
+- **`sandbox-cli fleet land --all`** lands every branch of the fleet, oldest
+  first. A branch that cannot be landed — still running, failed its verify,
+  nothing to merge — is skipped and reported, and the rest carry on; a problem
+  with the branch being merged *into* stops there.
+
+- **`sandbox-cli fleet run --only BRANCH`** re-runs one task without editing the
+  file, and **`--resume`** picks up an interrupted run: it skips branches whose
+  agent is still working and branches that already exited 0, and starts the rest.
+  That is what to reach for after a Ctrl-C during a `max_parallel` run, which ends
+  the scheduling but not the containers already up.
+
+- **`sandbox-cli fleet status --watch`** redraws every two seconds, and the table
+  gained `ID` and `AGENT` columns. The id is the one `list` prints and `logs`,
+  `attach` and `kill` accept.
+
+- **`sandbox-cli fleet run --share`** (and `--share-name`) mounts the shared
+  handoff directory at `/shared` in every task, so one agent can leave a file for
+  another. It is a flag rather than a `fleet.yaml` key on purpose: a
+  cross-project directory stays something you type. The pattern for using it is
+  in the guide.
+
+- **A fleet that cannot fit in the machine is refused before anything starts**,
+  with the arithmetic named — how many agents run at once, times the widest
+  per-task memory cap, against what the host has. It is the concurrent count, not
+  the task count, so twenty tasks at `max_parallel: 2` is still two agents' worth.
+
 - **Sessions you can get at.** A container outlives the terminal that started it
   — a killed sandbox-cli leaves its agent running, and `--detach` means to — so
   four commands now reach one:
@@ -130,8 +185,20 @@ version is tagged.
 - `sandbox-cli stats` selects sandboxes by label rather than by a `sandbox-`
   name prefix, so it reports exactly the containers this tool started, and shows
   the session id alongside the container name.
+- `sandbox-cli list` gained a `KIND` column separating a fleet task from a
+  session you started by hand. Every other command already treated them
+  differently; the listing was the one place it was invisible, which is where you
+  decide what to kill.
+- `sandbox-cli fleet land` now takes `--all` and so accepts no branch name with
+  it; naming a branch remains required otherwise.
 
 ### Fixed
+
+- **`max_parallel` counted containers that were not the fleet's.** One open
+  `sandbox-cli claude --detach` session in the same repository occupied a slot it
+  never freed, so a `max_parallel: 1` fleet waited behind it indefinitely. The
+  documented behaviour — fleet commands reach only what the fleet started — was
+  true everywhere except the slot count.
 
 - **A `--share` namespace could be pointed at another namespace, or at the whole shared
   directory, by a symlink planted inside it.** The shared directory is

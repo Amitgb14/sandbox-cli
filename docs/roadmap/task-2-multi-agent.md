@@ -3,12 +3,15 @@
 **Goal.** Run several agents safely in parallel — usually one per git worktree — with basic
 orchestration from the CLI. No GUI required.
 
-**Branch.** Not started. To be cut from `main` after task 1 ships and has been used for a
-while.
+**Branch.** `feature/multi-agent`, in progress.
 
 This task is mostly *consolidation*. Two thirds of it already exists as `worktree` and
 `fleet`; what is missing is the part that makes them feel like one feature with one mental
 model rather than two subsystems that happen to share a repository.
+
+**Where it stands.** Everything under *Required features* is built except the two items
+marked ⏳ below, and the open questions are answered where the code forced an answer. The
+acceptance criteria at the bottom carry their state.
 
 ---
 
@@ -38,74 +41,104 @@ adds it in one place, for both.
 
 ## Required features
 
-### 1. One mental model with task 1
+### 1. One mental model with task 1 — ✅
 
 A fleet container is a session. After task 1 exists, this task makes that true everywhere:
 
-- Fleet runs appear in `sandbox-cli list` (they already carry the labels), marked as
-  fleet rather than interactive.
-- `attach`, `logs` and `kill` work on a fleet session by branch name, so there is one way
-  to reach a running agent regardless of how it was started.
-- `fleet status` stays branch-oriented — the branch is the fleet's unit of work — but its
-  ID column matches `list`'s.
+- ✅ Fleet runs appear in `sandbox-cli list` (they already carry the labels), marked as
+  fleet rather than interactive — a `KIND` column, from the same `sandbox.fleet` label
+  `fleet stop --all` and `fleet clean` filter on, so the listing and the reaper cannot
+  disagree.
+- ✅ `attach`, `logs` and `kill` work on a fleet session by branch name (`resolveSession`
+  already matched the branch label; confirmed rather than built).
+- ✅ `fleet status` stays branch-oriented — the branch is the fleet's unit of work — and
+  its ID column matches `list`'s. It gained an `AGENT` column at the same time, which a
+  mixed fleet needs to be legible at all.
 
-### 2. Fleet lifecycle gaps
+### 2. Fleet lifecycle gaps — ✅
 
-- **`fleet land --all`** — land every branch that passed its verify, in order, stopping at
-  the first conflict. Landing five branches one command at a time is the common case
-  today.
-- **Re-run a single task** (`fleet run --only BRANCH`) without editing the file, for the
-  one task that failed.
-- **Resume an interrupted `fleet run`** — with `max_parallel` set, the command stays
-  attached to start later tasks as earlier ones exit; a Ctrl-C there currently ends the
-  scheduling, not the running containers. It should be resumable rather than restart-only.
-- **`fleet status --watch`** — the thing people currently do with `watch -n2`.
+- ✅ **`fleet land --all`**, oldest first. The rule it applies is a distinction rather
+  than a list: a refusal about *the branch* skips it and the rest carry on, a refusal
+  about *the base branch* stops there, because it will be just as wrong for the next one.
+  What already landed is printed either way — those merges are commits whatever happens
+  next.
+- ✅ **`fleet run --only BRANCH`** (repeatable, comma-separated). A branch the file does
+  not contain is an error listing what it does contain, because launching nothing looks
+  exactly like success.
+- ✅ **`fleet run --resume`** — skips branches still running and branches whose last
+  container exited 0, starts everything else. Composes with `--only`.
+- ✅ **`fleet status --watch`**.
 
-### 3. Per-task expressiveness
+### 3. Per-task expressiveness — ✅
 
-- **A different agent per task** (`agent:` on a task, overriding the spec-level one), so a
-  fleet can put Claude on one branch and Codex on another and compare.
-- **Per-task `defaults` overrides** — memory, cpus, allow — for the one task that needs
-  more than the rest.
-- **Explicit ordering or dependency** between tasks, if and only if a real case turns up.
-  Recorded here so it is a decision rather than a drift; the default answer is no, because
-  a dependency graph is the beginning of a workflow engine and this is a CLI.
+- ✅ **A different agent per task** (`agent:` on a task, overriding the spec-level one).
+  The fleet-wide `agent:` became optional when every task names one. Eligible agents grew
+  from two to five — claude, codex, gemini, opencode, droid — each with a headless argv
+  pinned by `TestEveryAgentHasAVerifiedHeadlessArgv`, so adding a sixth means verifying it
+  rather than guessing at its flags.
+- ✅ **Per-task `memory` / `cpus` / `allow`**. Caps replace the fleet-wide value; `allow`
+  adds to it, because a task that could subtract would be asking for a narrower allowlist
+  than the file's author wrote a line above.
+- ✅ **Explicit ordering or dependency** — decided, and the answer is no. `max_parallel: 1`
+  plus file order is the ordering primitive, and it is enough for the one real case
+  (producer before consumer, §5). A `depends_on:` is the beginning of a workflow engine.
 
-### 4. Concurrency and resource sanity
+### 4. Concurrency and resource sanity — ✅
 
-- `max_parallel` counts only fleet containers today (correctly — otherwise one open
-  interactive session blocks a `max_parallel: 1` fleet forever). It should also refuse
-  obviously unrunnable fleets up front: N tasks × the per-task memory limit against what
-  the machine has.
-- A per-fleet total budget, if the above proves too blunt.
+- ✅ `max_parallel` now really does count only fleet containers. It did not: `waitForSlot`
+  filtered on repo alone, so one open interactive `--detach` session held a slot it never
+  freed — the exact failure `sandbox.fleet` exists to prevent, in the one place that did
+  not use the label. Fixed and tested.
+- ✅ Obviously unrunnable fleets are refused up front — but on the *concurrent* agent
+  count, not the task count, since bounding concurrency is what `max_parallel` is for.
+  Host memory comes from the engine rather than `/proc`, because on macOS the daemon's VM
+  budget is the number a `--memory` cap competes for. A host that cannot be measured
+  proceeds: this is resource sanity, not a boundary control.
+- ⏳ A per-fleet total budget, if the above proves too blunt. Not yet needed.
 
-### 5. Getting work between agents
+### 5. Getting work between agents — ✅
 
-`--share` / `--share-name` is the mechanism and it is deliberately opt-in — a
-cross-project channel is exactly the reach the sandbox otherwise refuses. What is missing
-is the *convention*: a documented pattern for how two fleet agents hand a file over, and
-whether a fleet should get a namespace per run automatically.
+✅ `fleet run --share` / `--share-name` now exist, going through the same `shareMount` the
+run path uses. It stays a **flag rather than a `fleet.yaml` key**: a cross-project
+directory should be something you type, not something a file copied between repositories
+turns on.
+
+✅ The convention is documented in the guide — a producer and a consumer named in the
+prompts, `max_parallel: 1` when the consumer genuinely needs the producer's output, and a
+consumer prompt that says what to do when the file is not there (an agent that invents the
+API rather than stopping is the failure mode, and `verify` is what catches it).
+
+Decided: **no namespace per run automatically.** The whole point is that two agents see the
+same directory; a per-run namespace would default the feature to not working, and
+`--share-name` is there for the collision case.
 
 Explicitly **not** an agent-to-agent protocol. Files in a shared directory, or nothing.
 
-### 6. Documentation
+### 6. Documentation — ✅
 
-`docs/GUIDE.md` already has "Running a fleet" and the worktree cycle. This task merges
-them into one narrative — parallel agents, from `--worktree` for one to `fleet` for many —
-because today they read as two unrelated features.
+✅ `docs/GUIDE.md` now has one **Running agents in parallel** section with four rungs —
+one agent per branch, in the background, a fleet, handing files over — stated as one
+feature that grows rather than four. `docs/AGENTS.md` gained *Agents a fleet can run*.
 
 ---
 
 ## Open questions
 
-Recorded rather than guessed:
+Recorded rather than guessed. Two are now answered, by the code:
 
-- Does `fleet` become the front door for parallel work, with `--worktree` as the
-  single-agent special case, or do they stay separate commands?
+- **Does `fleet` become the front door for parallel work, with `--worktree` as the
+  single-agent special case, or do they stay separate commands?** They stay separate, and
+  the guide now says why: they are rungs of one ladder, not alternatives. A fleet task
+  *is* a `--worktree --detach` run — same `sandbox.Options`, same boundary — so making
+  `fleet` the front door would mean writing a file to run one agent.
 - Should `land` gain a `--no-ff` alternative (rebase, squash) or stay one merge strategy?
   One strategy is easier to reason about when the thing being merged was written
-  unattended.
-- Is there a case for a fleet across *repositories*, or is one repo the boundary?
+  unattended. **Still open** — `land --all` did not force it, and the argument for one
+  strategy got stronger now that five merges can happen from one command.
+- **Is there a case for a fleet across *repositories*, or is one repo the boundary?** One
+  repo. `Runner` is built around a single `RepoID`, every label is scoped by it, and
+  `land` merges into one checkout. A cross-repo fleet is several fleets and a shared
+  directory, which already works.
 
 ---
 
@@ -122,11 +155,18 @@ Recorded rather than guessed:
 
 ## Done when
 
-1. A running fleet agent can be listed, attached to, followed and stopped with the same
+1. ✅ A running fleet agent can be listed, attached to, followed and stopped with the same
    commands as any other session.
-2. `fleet land --all` and `fleet run --only BRANCH` exist, and an interrupted scheduled
-   run can be resumed.
-3. A fleet can mix agents across tasks.
-4. The guide has one story about running agents in parallel, not two.
-5. Every gate on the `run` path is verifiably repeated on the fleet path — the
-   `persist_auth` class of leak has a test, not a comment.
+2. ✅ `fleet land --all` and `fleet run --only BRANCH` exist, and an interrupted scheduled
+   run can be resumed (`fleet run --resume`).
+3. ✅ A fleet can mix agents across tasks.
+4. ✅ The guide has one story about running agents in parallel, not two.
+5. ✅ Every gate on the `run` path is verifiably repeated on the fleet path — the
+   `persist_auth` class of leak has a test, not a comment. `internal/fleet/gates_test.go`
+   classifies every field of `sandbox.Options` and fails when the struct grows one that is
+   not classified, so the next field of that class is a decision rather than an omission.
+
+**What has not been done: an end-to-end run.** Every claim above is covered by unit tests,
+and none of it has been exercised against a live Docker daemon on this branch — `make
+test-integration` and a real mixed-agent `fleet run` are the remaining check before this
+is called finished.

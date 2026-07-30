@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
 
@@ -44,6 +45,45 @@ read-write by every sandbox using --share, so treat it as scratch space with one
 owner per file rather than a database. For versioned handover, keep a git repo
 in here and push to it from both sides.
 `
+
+// shareMount resolves --share (with an optional namespace) into the bind-mount
+// string, creating and seeding the host directory, and announces it.
+//
+// One function rather than two copies because a fleet shares the same way an
+// interactive run does — `sandbox-cli fleet run --share` and `sandbox-cli claude
+// --share` must arrange the identical mount, and the containment checks below
+// are the sort of code that must exist once.
+func shareMount(name string) (string, error) {
+	root := config.SharedDir()
+	if root == "" {
+		return "", fmt.Errorf("--share: cannot determine the config directory (no HOME?)")
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", fmt.Errorf("creating shared dir %s: %w", root, err)
+	}
+	seedSharedReadme(root)
+
+	// The root is a derived path rather than user input, so this can essentially
+	// never fire — which is the reason to apply it, not a reason to skip it.
+	// CLAUDE.md states that every host path that gets bind-mounted goes through
+	// this refusal; an exception "because it is obviously safe" is how that stops
+	// being true, and the namespace path below already pays the same cost.
+	if err := sandbox.RefuseUnsafeHostPath(root); err != nil {
+		return "", fmt.Errorf("--share: %w", err)
+	}
+
+	dir, target := root, sharedTarget
+	if name != "" {
+		var err error
+		dir, target, err = shareNamespaceDir(root, name)
+		if err != nil {
+			return "", fmt.Errorf("--share: %w", err)
+		}
+		seedShareNamespaceReadme(dir, name, target)
+	}
+	fmt.Fprintf(os.Stderr, "sandbox-cli: sharing %s at %s\n", dir, target)
+	return dir + ":" + target + ":rw", nil
+}
 
 // seedSharedReadme writes the explainer into dir unless something is already
 // there. Best-effort by design: the mount is the part that matters and has

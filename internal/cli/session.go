@@ -243,7 +243,7 @@ func renderSessions(w io.Writer, rows []runtime.ContainerInfo, all bool, now tim
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tAGENT\tBRANCH\tSTATUS\tELAPSED")
+	fmt.Fprintln(tw, "ID\tNAME\tKIND\tAGENT\tBRANCH\tSTATUS\tELAPSED")
 	anyRunning := false
 	for _, c := range rows {
 		anyRunning = anyRunning || c.Running()
@@ -252,8 +252,11 @@ func renderSessions(w io.Writer, rows []runtime.ContainerInfo, all bool, now tim
 		// where an ESC is an instruction rather than a character. Clean also
 		// collapses newlines and tabs, so no label can forge a row or a column in a
 		// table whose separator is a tab.
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			shortID(c.ID), termsafe.Clean(c.Name),
+		//
+		// KIND is not cleaned because it is not repository text: sessionKind maps a
+		// label to one of two words this file owns.
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			shortID(c.ID), termsafe.Clean(c.Name), sessionKind(c),
 			dash(termsafe.Clean(c.Labels[sandbox.LabelAgent])),
 			dash(termsafe.Clean(c.Labels[sandbox.LabelBranch])),
 			sessionStatus(c), sessionElapsed(c, now))
@@ -491,6 +494,21 @@ func shortID(id string) string {
 		return id[:12]
 	}
 	return id
+}
+
+// sessionKind separates a fleet task from a session someone started by hand.
+//
+// The distinction is already load-bearing everywhere else — `fleet stop --all`
+// does not reach an interactive session, `fleet clean` does not reap one, and
+// max_parallel does not count one — so a listing that showed them alike was the
+// one place the difference was invisible, exactly where somebody decides what to
+// kill. Derived from the same sandbox.fleet label those commands filter on, so
+// the table and the reaper cannot disagree.
+func sessionKind(c runtime.ContainerInfo) string {
+	if c.Labels[sandbox.LabelFleet] != "" {
+		return "fleet"
+	}
+	return "interactive"
 }
 
 // sessionStatus says how a session is, and how it ended when it has.

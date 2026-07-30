@@ -10,16 +10,23 @@
 #
 #   sandbox-cli fleet run -f fleet.yaml --dry-run
 
-# The agent every task runs. Only agents with a verified headless mode may
-# appear here — a fleet is unattended, and an agent that stopped to ask for
-# permission would hang until you noticed. Today: claude, codex.
+# The agent tasks run when they do not name one of their own. Only agents with a
+# verified headless mode may appear — a fleet is unattended, and an agent that
+# stopped to ask for permission would hang until you noticed. Today:
+# claude, codex, gemini, opencode, droid.
+#
+# This key is optional if every task below names its own agent.
 agent: claude
 
 # How many run at once. Below the task count, `fleet run` stays attached and
 # starts the rest as earlier agents exit. Omit it and everything starts at once.
+#
+# It is also what bounds the fleet's memory footprint: sandbox-cli refuses to
+# start a fleet whose concurrent agents cannot fit in the machine, and this is
+# the number to lower when it does.
 max_parallel: 2
 
-# Applied to every task.
+# Applied to every task that does not override them.
 defaults:
   # Finite by default on purpose: three unbounded agents will take a laptop down.
   # Set either to "0" to opt out deliberately.
@@ -60,19 +67,39 @@ tasks:
       Commit your work when the tests pass.
     verify: go test ./src/server/...
 
-    # Extra arguments appended after the agent's own flags — the way to pass
-    # something the fleet file has no key for.
-    # args: ["--model", "opus"]
+    # A different agent for this one branch, overriding `agent:` above. Put two
+    # agents on the same problem to compare what comes back, or on different
+    # problems because one of them is better at it.
     #
-    # Note: memory, cpus, allow, cache and git are fleet-wide (`defaults:`) for
-    # now. A task cannot yet raise its own limits.
+    # Each agent you name needs its own login (or its own key exported) *before*
+    # the fleet runs — none of them can answer a login prompt from a detached
+    # container. `sandbox-cli codex` once is enough.
+    agent: codex
+
+    # Per-task limits, for the one branch that needs more than the rest.
+    # memory and cpus replace the defaults; allow *adds* to them.
+    memory: 8g
+    # cpus: "4"
+    # allow: [docs.example.com]
+
+    # Extra arguments appended after the agent's own flags — the way to pass
+    # something the fleet file has no key for. They are that agent's flags, so a
+    # task that changes agent almost certainly wants its own:
+    # args: ["--model", "opus"]
 
 # Then:
 #
 #   sandbox-cli fleet status              # who is running, what they produced
+#   sandbox-cli fleet status --watch      # the same, redrawn until you stop it
 #   sandbox-cli fleet logs feature-login  # what an agent actually said (-f to follow)
 #   sandbox-cli fleet land feature-login  # commit + merge, refusing on any ambiguity
+#   sandbox-cli fleet land --all          # every branch that can be landed
 #   sandbox-cli fleet clean               # reap the finished containers
+#
+# If something goes wrong part-way:
+#
+#   sandbox-cli fleet run --resume            # pick up where an interrupted run stopped
+#   sandbox-cli fleet run --only feature-login  # re-run the one task that failed
 #
 # For an unattended run, add --profile prod: it refuses where dev warns, which is
 # what you want when nobody is watching the terminal.
