@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   ArrowDown,
   ArrowUp,
@@ -64,11 +65,33 @@ import type { Worktree } from "@/lib/types";
  * worktree puts the two out of sync.
  */
 export default function WorktreesPage() {
+  // useSearchParams needs a boundary: a branch can be pointed at by link
+  // (?branch=feat/x) from the command palette.
+  return (
+    <Suspense fallback={<Skeleton className="h-[28rem] w-full" />}>
+      <WorktreesContent />
+    </Suspense>
+  );
+}
+
+function WorktreesContent() {
   const repoFilter = useUi((s) => s.repoFilter);
   const { data, isPending } = useWorktrees();
-  const [query, setQuery] = useState("");
+  const search = useSearchParams();
+  const [query, setQuery] = useState(() => search.get("branch") ?? "");
   const [landing, setLanding] = useState<Worktree | null>(null);
   const [removing, setRemoving] = useState<Worktree | null>(null);
+
+  // Seeded from the link on mount above; this catches the case where the
+  // palette points at another branch while the page is already open. It follows
+  // the param rather than the box, so typing afterwards is never overwritten.
+  const linked = search.get("branch");
+  const lastLinked = useRef(linked);
+  useEffect(() => {
+    if (linked === lastLinked.current) return;
+    lastLinked.current = linked;
+    setQuery(linked ?? "");
+  }, [linked]);
 
   const land = useLandWorktree();
   const remove = useRemoveWorktree();

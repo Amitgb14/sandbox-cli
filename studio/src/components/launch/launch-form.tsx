@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Bot, GitBranch, Play, ShieldCheck, Terminal } from "lucide-react";
 import { toast } from "sonner";
@@ -77,6 +77,34 @@ export function LaunchForm() {
   });
   const [worktreeMode, setWorktreeMode] = useState<"main" | "new" | "existing">("main");
   const [newBranch, setNewBranch] = useState("");
+
+  /**
+   * `?branch=` arrives from the worktrees page's "Start an agent here" and from
+   * the palette. It carries the branch alone, so the repository has to be looked
+   * up from it — a branch is only meaningful inside the repo that holds it, and
+   * selecting the branch without its repo would leave the picker empty.
+   *
+   * It fires once, on the first load of the worktree list rather than on mount,
+   * because the list is fetched: applying it repeatedly would fight whatever the
+   * person picked afterwards.
+   */
+  const deepLinkBranch = search.get("branch");
+  const deepLinkApplied = useRef(false);
+
+  useEffect(() => {
+    if (deepLinkApplied.current || !deepLinkBranch || !worktrees) return;
+    const match = worktrees.find((w) => !w.primary && w.branch === deepLinkBranch);
+    if (!match) return;
+    deepLinkApplied.current = true;
+    const repo = REPOS.find((r) => r.id === match.repoId);
+    setReq((prev) => ({
+      ...prev,
+      workspace: repo?.root ?? prev.workspace,
+      worktree: match.branch,
+      base: match.base ?? prev.base,
+    }));
+    setWorktreeMode("existing");
+  }, [deepLinkBranch, worktrees]);
 
   function patch(next: Partial<LaunchRequest>) {
     setReq((prev) => ({ ...prev, ...next }));
