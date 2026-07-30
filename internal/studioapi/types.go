@@ -231,8 +231,12 @@ const (
 type LogEvent struct {
 	Type   LogEventType `json:"type"`
 	Stream string       `json:"stream,omitempty"` // "stdout" | "stderr", on Type "log"
-	Data   string       `json:"data,omitempty"`   // one line, newline stripped
-	Error  string       `json:"error,omitempty"`  // on Type "error"
+	// Data is one line with its newline stripped, and is deliberately *not*
+	// omitempty: a blank line is ordinary log output, and omitting the field for
+	// it would make `data` optional in the contract — forcing every consumer to
+	// coalesce a missing string on the hottest path in a log viewer.
+	Data  string `json:"data"`
+	Error string `json:"error,omitempty"` // on Type "error"
 }
 
 // RunMetrics is a single point-in-time resource sample for one run — the same

@@ -5,6 +5,19 @@
 // send — camelCase, ISO-8601 timestamps (Go's encoding/json renders time.Time
 // as RFC3339), no server-only fields. Keep the two files in sync by hand;
 // there is no generator wiring them together yet.
+//
+// Three things a client must get right, all enforced server-side (see
+// internal/studioapi/guard.go, and the trust model in README.md):
+//
+//   1. Any request carrying a body must send `Content-Type: application/json`.
+//      A bodiless POST (e.g. /runs/:id/stop with no options) needs no header.
+//   2. Requests must reach the server by a loopback name — `localhost` or
+//      `127.0.0.1`, matching whatever `-addr` it was started on. A page served
+//      from another origin must be named in `-cors-origin`, or it is refused
+//      outright rather than merely prevented from reading the response.
+//   3. With a token configured, send `Authorization: Bearer <token>`. The one
+//      exception is the WebSocket log stream, where the browser API cannot set
+//      headers: pass `?token=<token>` on that URL only.
 
 export interface ErrorResponse {
   error: string;
@@ -143,11 +156,23 @@ export interface RunRecoverResponse {
   matchesWorkingTree: boolean;
 }
 
-/** One line streamed from GET /runs/{id}/logs as SSE `event: log`. */
-export interface LogEvent {
-  stream: "stdout" | "stderr";
-  data: string;
-}
+export type LogEventType = "log" | "error" | "end";
+
+/**
+ * One event of GET /runs/{id}/logs, identical on both transports: a WebSocket
+ * text frame carries exactly this object, and an SSE `data:` line carries
+ * exactly this object with `event:` repeating its `type`.
+ *
+ * A discriminated union, so narrowing on `type` gives you the fields that
+ * event actually has. The "end" case is the one worth handling explicitly:
+ * without it you cannot tell a stream that finished from a connection that
+ * dropped, and an incomplete log rendered as a complete one is how a
+ * half-finished agent run reads as a finished one.
+ */
+export type LogEvent =
+  | { type: "log"; stream: "stdout" | "stderr"; data: string }
+  | { type: "error"; data: string; error: string }
+  | { type: "end"; data: string };
 
 /** A single resource sample — GET /runs/{id}/metrics, or one entry of GET /stats. */
 export interface RunMetrics {

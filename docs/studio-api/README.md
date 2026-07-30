@@ -21,32 +21,63 @@ make build-studio-api
 
 Flags: `-addr` (default `127.0.0.1:4319`, loopback), `-project` (default: cwd),
 `-config`, `-profile` (`dev`/`prod`, same meaning as the CLI's `--profile`),
-`-token` (or `$SANDBOX_STUDIO_TOKEN`), `-cors-origin` (repeatable).
+`-token` (or `$SANDBOX_STUDIO_TOKEN`), `-cors-origin` (repeatable),
+`-allow-host` (repeatable).
 
 ## Trust model
 
 This is an HTTP server that can start containers and stop/kill them, on
 request, with no confirmation prompt — that is a new local attack surface the
 CLI itself does not have, and it deserves the same care as everything else in
-`CLAUDE.md`'s trust-boundary section. Three defaults hold the line:
+`CLAUDE.md`'s trust-boundary section. The question it has to answer is one a
+terminal answered for free: **who may ask this process to start a container?**
 
-- **Binds to loopback by default** (`127.0.0.1:4319`). Nothing off the machine
-  can reach it unless you deliberately rebind `-addr`.
-- **No CORS headers unless you ask for them.** A browser tab open on some
-  other site cannot read this API's responses cross-origin — the classic
-  "malicious webpage drives your local admin API" class of attack (the same
-  one Ollama, various print/scan services, and dev servers have all shipped
-  at one point) is closed by default. Studio's own frontend, if served from a
-  different origin (a Next dev server on another port, say), needs an
-  explicit `-cors-origin http://localhost:3000`.
+The first version answered it with CORS, and that was not enough. Refusing to
+*reflect* an unlisted origin stops a page reading the response; the request
+still arrives, and the container still starts. A cross-origin `POST` carrying a
+`text/plain` body is a CORS "simple request" — no preflight ever happens — and
+`POST /runs/{id}/stop` needs no body at all. So a page you merely visited could
+drive this control plane and simply not see the replies.
+
+Four checks now hold the line, in the order `internal/studioapi/guard.go`
+applies them:
+
+- **The `Host` header must name a loopback address** (or one you named with
+  `-allow-host`). This is what catches DNS rebinding: a page on
+  `attacker.example` whose DNS answer is `127.0.0.1` satisfies the browser's
+  same-origin policy — as far as the browser is concerned the origin *is*
+  `attacker.example` — so its `Origin` looks legitimate. What gives it away is
+  the name it dialled. `-allow-host` **adds to** loopback rather than replacing
+  it.
+- **An unlisted `Origin` is refused outright**, not merely denied a CORS
+  header. This is the check that actually stops the attack above. A browser
+  attaches `Origin` to every cross-origin request, including WebSocket
+  handshakes — which matters, because a WebSocket upgrade is exempt from CORS
+  entirely, so reflecting origins would have protected the log stream not at
+  all. Non-browser clients (curl, your own backend) send no `Origin` and are
+  unaffected; the token governs those.
 - **Optional bearer token** (`-token` / `$SANDBOX_STUDIO_TOKEN`), required on
-  every request but `/health`. A second, cheap layer on top of the two above:
-  it does not stop another local process that can already reach 127.0.0.1,
-  but it stops one that happens to guess the port.
+  every request but `/health`, compared in constant time. It does not stop
+  another local process that can already reach 127.0.0.1, but it stops one that
+  happens to guess the port. The single exception to "in a header" is the
+  WebSocket log stream, where the browser API cannot set headers at all:
+  `?token=` is accepted on the upgrade handshake and nowhere else.
+- **A JSON content type is required on any body**, and bodies are capped at
+  1 MiB. Defense in depth behind the origin check — a body this server parses
+  as JSON should be labelled as JSON, and insisting on that also means a
+  cross-origin `POST` cannot stay "simple" enough to skip its preflight.
+
+**Binding off loopback** (`-addr 0.0.0.0:4319`) drops the first check's
+protection to whatever your network provides, and the server says so once at
+startup. Set `-token` if you do it.
 
 None of this replaces the container boundary — it is scoped to "who may ask
-this process to start or stop containers," which is a question the CLI never
-had to answer because a terminal already answers it.
+this process to start or stop containers." Everything *inside* that boundary is
+unchanged: `POST /runs` builds the same `sandbox.Options` a `--worktree` run
+does, so `sandbox.ResolveWorkspace` still refuses to mount `/`, the host home,
+or an ancestor of it, `config.IsReservedEnv` still refuses the control
+variables, and `persist_auth` is re-checked here for the same reason
+`internal/fleet` re-checks it.
 
 ## Contract
 
@@ -66,22 +97,63 @@ there is no code generation step (yet) tying them together.
 | POST | `/runs` | Launch a run — always detached (see below) |
 | POST | `/runs/{id}/stop` | Stop (or `{"force":true}` to kill) a running run |
 | POST | `/runs/{id}/recover` | Restore the crash-recovery snapshot associated with this run's branch |
-| GET | `/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
-| GET | `/runs/{id}/metrics` | One resource sample, or a live stream with `?stream=1` |
+| GET | `/runs/{id}/logs` | Log stream — WebSocket if the client upgrades, SSE otherwise (`?follow=1` to keep it open) |
+| GET | `/runs/{id}/metrics` | One resource sample, or a live SSE stream with `?stream=1` |
 | GET | `/stats` | One resource sample per live run, host-wide |
 | GET/POST | `/worktrees` | List / create managed git worktrees |
-| GET/DELETE | `/worktrees/{branch}` | Read / remove (`?force=1`) one worktree |
+| GET/DELETE | `/worktrees/{branch...}` | Read / remove (`?force=1`) one worktree |
 
-### Why SSE, not WebSocket
+A run is addressed by short id, container name, or branch — the same three
+references `sandbox-cli list`/`kill`/`logs` accept, resolved the same way (matched
+against this tool's own containers, never handed to the engine, ambiguity refused
+with the candidates listed). The worktree routes take a *whole* branch name,
+slashes included, so `GET /worktrees/feat/studio-api` works. Run paths are single
+segment, so address a slash-bearing branch by id or name there — `GET
+/runs?branch=feat/studio-api` finds it.
 
-This repository's stated convention (`CLAUDE.md`) is standard library plus
-`cobra` and `yaml.v3` — nothing else. Go's `net/http` has no server-side
-WebSocket support, and every stream this API offers (`docker logs -f`,
-resource samples) is one-directional: server to client, nothing sent back
-over the same connection. That is exactly what Server-Sent Events are for,
-and it costs no new dependency. If a future need turns up for the client to
-push messages over the same connection, that is the point to revisit this
-choice — not before.
+### Log streaming: WebSocket and SSE
+
+`GET /runs/{id}/logs` speaks both, and they carry the **identical** payload — a
+`LogEvent` per WebSocket text frame, or per SSE `data:` line with `event:`
+repeating its `type` — so picking a transport does not change how a client reads
+a stream.
+
+```ts
+const ws = new WebSocket(`ws://127.0.0.1:4319/runs/${id}/logs?follow=1`);
+ws.onmessage = (e) => {
+  const ev: LogEvent = JSON.parse(e.data);
+  if (ev.type === "log") append(ev.stream, ev.data);
+  if (ev.type === "end") markFinished();
+};
+```
+
+```sh
+curl -N 'http://127.0.0.1:4319/runs/<id>/logs?follow=1'   # SSE, no handshake needed
+```
+
+Use the WebSocket from a browser. `EventSource` cannot carry an `Authorization`
+header, so a token-protected server cannot serve a browser log viewer over SSE at
+all; the WebSocket takes `?token=` for exactly that reason. Use SSE from curl or
+any plain HTTP client.
+
+The WebSocket is hand-rolled against RFC 6455 (`internal/studioapi/websocket.go`)
+rather than pulled in as a dependency, because this repository's stated
+convention (`CLAUDE.md`) is the standard library plus `cobra` and `yaml.v3`, and
+what a one-directional log stream needs is a small, fully specified subset: the
+handshake, unmasked server text frames, and enough of the client direction to
+answer a ping and notice a close. Deliberately absent, since nothing here uses
+them: `permessage-deflate`, subprotocol negotiation, and reassembly of
+fragmented client messages. Anything that needs those is the point to argue for
+a real library.
+
+`/runs/{id}/metrics?stream=1` stays SSE-only: it is a sampler on a timer with
+nothing to negotiate, and a chart does not need a socket.
+
+Both transports end with an explicit event — `{"type":"end"}` on success,
+`{"type":"error","error":"…"}` otherwise — because a client cannot otherwise
+tell a stream that finished from a connection that dropped, and an incomplete
+log rendered as a complete one is how a half-finished agent run reads as a
+finished one.
 
 ### Runs are always detached
 
