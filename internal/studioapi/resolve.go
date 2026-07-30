@@ -110,7 +110,12 @@ func shortID(id string) string {
 // toRun converts a docker-reported container into the wire Run type. Every
 // field comes from runtime.ContainerInfo or its sandbox.* labels — never
 // re-derived, since docker is the state store.
-func toRun(c runtime.ContainerInfo) Run {
+// workspaceDir is where every sandbox mounts the project. It is not exported by
+// internal/sandbox, so it is stated once here rather than spelled inline at the
+// one place that has to recognise which of several mounts is the workspace.
+const workspaceDir = "/workspace"
+
+func toRun(c runtime.ContainerInfo, engine string) Run {
 	r := Run{
 		ID:          shortID(c.ID),
 		ContainerID: c.ID,
@@ -126,6 +131,32 @@ func toRun(c runtime.ContainerInfo) Run {
 		CreatedAt:   c.CreatedAt,
 		OpenStdin:   c.OpenStdin,
 		TTY:         c.TTY,
+
+		Image:    c.Image,
+		Command:  c.Command,
+		Workdir:  c.Workdir,
+		Engine:   engine,
+		EnvNames: c.EnvNames(),
+		Network:  RunNetwork{Mode: c.NetworkMode, Allowlisted: c.EgressAllowlisted()},
+		Security: RunSecurity{
+			CapDrop:     c.Security.CapDrop,
+			CapAdd:      c.Security.CapAdd,
+			SecurityOpt: c.Security.SecurityOpt,
+			PidsLimit:   c.Security.PidsLimit,
+			MemoryBytes: c.Security.MemoryBytes,
+			NanoCPUs:    c.Security.NanoCPUs,
+		},
+	}
+
+	r.Mounts = make([]RunMount, 0, len(c.Mounts))
+	for _, m := range c.Mounts {
+		r.Mounts = append(r.Mounts, RunMount{Source: m.Source, Destination: m.Destination, ReadWrite: m.ReadWrite})
+		// The workspace is named by where it lands, not by its host path: the
+		// host path is whatever project this was, and /workspace is the one
+		// destination every sandbox has.
+		if m.Destination == workspaceDir {
+			r.Workspace = m.Source
+		}
 	}
 	if c.Labels[sandbox.LabelFleet] != "" {
 		r.Kind = RunKindFleet
@@ -141,6 +172,13 @@ func toRun(c runtime.ContainerInfo) Run {
 	if !c.FinishedAt.IsZero() {
 		t := c.FinishedAt
 		r.FinishedAt = &t
+	}
+	// Only for a run that has both ends. A running container has no duration
+	// yet, and reporting "now minus start" would be a number that changes on
+	// every poll for a field a client will read as final.
+	if !c.StartedAt.IsZero() && !c.FinishedAt.IsZero() && c.FinishedAt.After(c.StartedAt) {
+		ms := c.FinishedAt.Sub(c.StartedAt).Milliseconds()
+		r.DurationMS = &ms
 	}
 	return r
 }

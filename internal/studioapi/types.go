@@ -214,6 +214,54 @@ type Run struct {
 	// always detached.
 	OpenStdin bool `json:"openStdin"`
 	TTY       bool `json:"tty"`
+
+	// What the run actually was, read back off the container rather than
+	// re-derived from a config file that may have been edited since. The labels
+	// above say what the launcher *intended*; these say what docker gave it,
+	// which is the question someone reviewing a finished run is asking.
+	Image      string      `json:"image"`
+	Command    []string    `json:"command"`
+	Workdir    string      `json:"workdir"`
+	Workspace  string      `json:"workspace"` // the host path mounted at /workspace
+	Engine     string      `json:"engine"`
+	DurationMS *int64      `json:"durationMs"`
+	Mounts     []RunMount  `json:"mounts"`
+	Network    RunNetwork  `json:"network"`
+	Security   RunSecurity `json:"security"`
+
+	// EnvNames is names only, never values. The credential broker exists to keep
+	// secret values off the argv and out of config files; an API response is one
+	// more file, in a browser's cache. internal/audit makes the same trade and
+	// has nowhere to put a value on purpose.
+	EnvNames []string `json:"envNames"`
+}
+
+// RunMount is one host path a run could reach.
+type RunMount struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	ReadWrite   bool   `json:"readWrite"`
+}
+
+// RunNetwork is the egress posture this container actually ran with.
+//
+// Read from the container: Mode is docker's own network mode, and Allowlisted
+// comes from the control variable the entrypoint acts on, so a run that asked
+// for an allowlist and got one is distinguishable from one that did not.
+type RunNetwork struct {
+	Mode        string `json:"mode"`
+	Allowlisted bool   `json:"allowlisted"`
+}
+
+// RunSecurity is the confinement docker applied, read back rather than assumed.
+// Zero means unset for the numeric fields — not "zero bytes of memory".
+type RunSecurity struct {
+	CapDrop     []string `json:"capDrop"`
+	CapAdd      []string `json:"capAdd"`
+	SecurityOpt []string `json:"securityOpt"`
+	PidsLimit   int64    `json:"pidsLimit"`
+	MemoryBytes int64    `json:"memoryBytes"`
+	NanoCPUs    int64    `json:"nanoCpus"`
 }
 
 // RunsResponse is the body of GET /runs.

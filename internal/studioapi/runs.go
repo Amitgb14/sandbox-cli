@@ -38,7 +38,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	runs := make([]Run, 0, len(infos))
 	for _, c := range infos {
-		runs = append(runs, toRun(c))
+		runs = append(runs, toRun(c, s.Engine))
 	}
 	writeJSON(w, http.StatusOK, RunsResponse{Runs: runs})
 }
@@ -50,7 +50,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toRun(c))
+	writeJSON(w, http.StatusOK, toRun(c, s.Engine))
 }
 
 // handleCreateRun is POST /runs. It always launches detached — see
@@ -94,7 +94,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, Run{Name: name})
 		return
 	}
-	writeJSON(w, http.StatusCreated, toRun(run))
+	writeJSON(w, http.StatusCreated, toRun(run, s.Engine))
 }
 
 // buildRunOptions turns a request into sandbox.Options, following the same
@@ -189,7 +189,7 @@ func (s *Server) handleStopRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !c.Running() {
-		writeJSON(w, http.StatusOK, toRun(c))
+		writeJSON(w, http.StatusOK, toRun(c, s.Engine))
 		return
 	}
 	act := s.RT.Stop
@@ -201,8 +201,8 @@ func (s *Server) handleStopRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if updated, err := s.resolveRun(r.Context(), c.ID); err == nil {
-		writeJSON(w, http.StatusOK, toRun(updated))
+		writeJSON(w, http.StatusOK, toRun(updated, s.Engine))
 		return
 	}
-	writeJSON(w, http.StatusOK, toRun(c))
+	writeJSON(w, http.StatusOK, toRun(c, s.Engine))
 }

@@ -20,6 +20,25 @@
 #
 #   go run ./cmd/sandbox-studio-api -cors-origin http://localhost:3100
 #
+# ── Brokered secrets do not survive the move ─────────────────────────────────
+#
+# A `secrets:` entry with a `command:` is resolved by running that command
+# wherever the API process is — so in a container it runs there, not on your
+# machine. A config carrying
+#
+#   secrets:
+#     GITHUB_TOKEN:
+#       command: gh auth token
+#
+# fails every launch with `exit status 127`: `gh` is not in the API image, and
+# installing it would not help, because your GitHub login is not in there
+# either. Mounting ~/.config/gh would work and would hand this container your
+# credentials, which is a poor trade for a convenience.
+#
+# The point of a brokered secret is to pull a short-lived token from *your*
+# tooling, so it belongs to a host process. Either drop `secrets:` from the
+# config you pass as SANDBOX_CONFIG, or run the API on the host.
+#
 # ── Why the paths look redundant ─────────────────────────────────────────────
 #
 # When the API asks the daemon for a container with `-v /a/b:/workspace`, the
