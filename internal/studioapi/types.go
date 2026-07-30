@@ -127,6 +127,28 @@ type UsageSnapshot struct {
 	Path      *string       `json:"path"`
 }
 
+// DoctorCheck is one host property, as `sandbox-cli doctor` reports it.
+//
+// UnderDev and UnderProd both travel because the same fact means different
+// things to the two profiles — a control the host cannot provide warns under
+// dev and refuses under prod — and a reader deciding whether this machine is
+// ready for unattended work should not have to switch profiles and ask again.
+type DoctorCheck struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Result    string `json:"result"` // "pass" | "warn" | "fail" | "unknown"
+	Detail    string `json:"detail"`
+	Remedy    string `json:"remedy,omitempty"`
+	UnderDev  string `json:"underDev"`  // "warn" | "fail"
+	UnderProd string `json:"underProd"` // "warn" | "fail"
+}
+
+// DoctorResponse is the body of GET /v1/doctor.
+type DoctorResponse struct {
+	Profile string        `json:"profile"`
+	Checks  []DoctorCheck `json:"checks"`
+}
+
 // AgentAuth is where an agent's login is persisted, and whether it is there yet.
 type AgentAuth struct {
 	Persisted bool   `json:"persisted"`

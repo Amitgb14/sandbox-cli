@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/doctor"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 )
 
@@ -40,9 +41,9 @@ func (f fakeHost) ImagePresent(context.Context, string) (bool, bool) {
 
 func withHost(t *testing.T, h fakeHost) {
 	t.Helper()
-	orig := newDoctorRuntime
-	t.Cleanup(func() { newDoctorRuntime = orig })
-	newDoctorRuntime = func(string) doctorRuntime { return h }
+	orig := doctor.NewRuntime
+	t.Cleanup(func() { doctor.NewRuntime = orig })
+	doctor.NewRuntime = func(string) doctor.Runtime { return h }
 }
 
 // healthy is a host that satisfies everything.
@@ -106,7 +107,7 @@ func TestDoctorFailsProdWhenTheFirewallCannotBeProgrammed(t *testing.T) {
 	// And it must say what to do, since --network default is the way out.
 	var found bool
 	for _, c := range checks {
-		if c.name == "egress firewall" && strings.Contains(c.remedy, "--network default") {
+		if c.Name == "egress firewall" && strings.Contains(c.Remedy, "--network default") {
 			found = true
 		}
 	}
@@ -127,8 +128,8 @@ func TestDoctorReportsAnUnbuiltImageAsUnknown(t *testing.T) {
 	withHost(t, h)
 
 	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev, "docker") {
-		if c.name == "egress firewall" && c.status != statusUnknown {
-			t.Errorf("an unbuilt image was reported as status %v, want unknown", c.status)
+		if c.Name == "egress firewall" && c.Status != doctor.StatusUnknown {
+			t.Errorf("an unbuilt image was reported as status %v, want unknown", c.Status)
 		}
 	}
 }
@@ -147,15 +148,15 @@ func TestDoctorReportsAMissingBaseImageWithoutFailingAnything(t *testing.T) {
 	checks := runDoctorChecks(context.Background(), config.ProfileProd, "docker")
 	var saw bool
 	for _, c := range checks {
-		if c.name != "base image" {
+		if c.Name != "base image" {
 			continue
 		}
 		saw = true
-		if c.status != statusOK {
-			t.Errorf("an unbuilt base image was reported as status %v, want ok", c.status)
+		if c.Status != doctor.StatusOK {
+			t.Errorf("an unbuilt base image was reported as status %v, want ok", c.Status)
 		}
-		if !strings.Contains(c.detail, "not built yet") {
-			t.Errorf("the detail should say the first run will build it: %q", c.detail)
+		if !strings.Contains(c.Detail, "not built yet") {
+			t.Errorf("the detail should say the first run will build it: %q", c.Detail)
 		}
 	}
 	if !saw {
@@ -191,9 +192,9 @@ func TestDoctorReportsStrongerRuntimesWithoutRequiringThem(t *testing.T) {
 	withHost(t, h)
 	var saw bool
 	for _, c := range runDoctorChecks(context.Background(), config.ProfileProd, "docker") {
-		if c.name == "isolation runtime" {
+		if c.Name == "isolation runtime" {
 			saw = true
-			if c.status != statusOK || !strings.Contains(c.detail, "runsc") {
+			if c.Status != doctor.StatusOK || !strings.Contains(c.Detail, "runsc") {
 				t.Errorf("runsc present but not reported: %+v", c)
 			}
 		}
@@ -213,7 +214,7 @@ func TestDoctorReportsStrongerRuntimesWithoutRequiringThem(t *testing.T) {
 func TestDoctorSaysOneThingWhenDockerIsAbsent(t *testing.T) {
 	withHost(t, fakeHost{unavailable: errors.New("cannot reach the docker daemon")})
 	checks := runDoctorChecks(context.Background(), config.ProfileDev, "docker")
-	if len(checks) != 1 || checks[0].name != "docker daemon" {
+	if len(checks) != 1 || checks[0].Name != "docker daemon" {
 		t.Errorf("expected a single docker-daemon finding, got %d checks", len(checks))
 	}
 }
@@ -391,19 +392,19 @@ func TestDoctorPrintsTheRuntimeRemedyEvenThoughTheCheckPasses(t *testing.T) {
 
 	var c check
 	for _, got := range runDoctorChecks(context.Background(), config.ProfileProd, "docker") {
-		if got.name == "isolation runtime" {
+		if got.Name == "isolation runtime" {
 			c = got
 		}
 	}
-	if c.remedy == "" {
+	if c.Remedy == "" {
 		t.Fatal("prod says nothing about the missing stronger runtime")
 	}
-	if c.status != statusOK {
-		t.Errorf("status = %v; the runtime gap is reported, not failed", c.status)
+	if c.Status != doctor.StatusOK {
+		t.Errorf("status = %v; the runtime gap is reported, not failed", c.Status)
 	}
 	// A newline inside the detail would end the tabwriter column block, so a
 	// check added after this one would silently misalign.
-	if strings.Contains(c.detail, "\n") {
+	if strings.Contains(c.Detail, "\n") {
 		t.Error("detail contains a newline, which breaks the tabwriter column block")
 	}
 }
@@ -418,8 +419,8 @@ func TestDoctorTreatsATimedOutProbeAsUnknown(t *testing.T) {
 	withHost(t, h)
 
 	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev, "docker") {
-		if c.name == "egress firewall" && c.status != statusUnknown {
-			t.Errorf("a timed-out probe was reported as %v, want unknown", c.status)
+		if c.Name == "egress firewall" && c.Status != doctor.StatusUnknown {
+			t.Errorf("a timed-out probe was reported as %v, want unknown", c.Status)
 		}
 	}
 }

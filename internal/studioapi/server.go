@@ -104,6 +104,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs/{id}/metrics", s.handleRunMetrics)
 	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("GET /v1/usage", s.handleUsage)
+	mux.HandleFunc("GET /v1/doctor", s.handleDoctor)
 	mux.HandleFunc("GET /v1/worktrees", s.handleListWorktrees)
 	mux.HandleFunc("POST /v1/worktrees", s.handleCreateWorktree)
 	mux.HandleFunc("GET /v1/worktrees/{branch}", s.handleGetWorktree)
