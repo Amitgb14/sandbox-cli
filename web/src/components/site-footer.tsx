@@ -1,11 +1,28 @@
+import Link from "next/link";
 import { GithubMark, Wordmark } from "@/components/logo";
-import { DOC_URL, REPO_URL, VERSION } from "@/lib/site";
+import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, VERSION } from "@/lib/site";
+
+export type FooterLink = { label: string; href: string };
+
+/**
+ * "On this page" is per route. It is a parameter for the same reason the
+ * header's nav is: a sub-page listing the landing page's anchors renders links
+ * that quietly do nothing.
+ */
+const ON_THIS_PAGE: FooterLink[] = [
+  { label: "Why", href: "#threat" },
+  { label: "Features", href: "#features" },
+  { label: "Config file", href: "#config" },
+  { label: "Agents", href: "#agents" },
+  { label: "Compare", href: "#compare" },
+];
 
 const COLUMNS = [
   {
     title: "Docs",
     links: [
       { label: "User guide", href: DOC_URL.guide },
+      { label: "Running agents in parallel", href: MULTI_AGENT_PATH },
       { label: "Agent reference", href: DOC_URL.agents },
       { label: "Security model", href: DOC_URL.security },
       { label: "Changelog", href: DOC_URL.changelog },
@@ -20,19 +37,10 @@ const COLUMNS = [
       { label: "Development", href: DOC_URL.development },
     ],
   },
-  {
-    title: "On this page",
-    links: [
-      { label: "Why", href: "#threat" },
-      { label: "Features", href: "#features" },
-      { label: "Config file", href: "#config" },
-      { label: "Agents", href: "#agents" },
-      { label: "Compare", href: "#compare" },
-    ],
-  },
 ];
 
-export function SiteFooter() {
+export function SiteFooter({ onThisPage = ON_THIS_PAGE }: { onThisPage?: FooterLink[] } = {}) {
+  const columns = [...COLUMNS, { title: "On this page", links: onThisPage }];
   return (
     <footer className="border-t bg-surface">
       <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-10 px-5 py-12 sm:grid-cols-2 sm:px-6 lg:grid-cols-[1.4fr_repeat(3,minmax(0,1fr))]">
@@ -53,20 +61,31 @@ export function SiteFooter() {
           </a>
         </div>
 
-        {COLUMNS.map((c) => (
+        {columns.map((c) => (
           <div key={c.title} className="flex flex-col gap-2.5">
             <p className="eyebrow">{c.title}</p>
             <ul className="flex flex-col gap-1.5">
               {c.links.map((l) => (
                 <li key={l.label}>
-                  <a
-                    href={l.href}
-                    target={l.href.startsWith("#") ? undefined : "_blank"}
-                    rel={l.href.startsWith("#") ? undefined : "noopener noreferrer"}
-                    className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    {l.label}
-                  </a>
+                  {l.href.startsWith("/") ? (
+                    // An internal route: next/link, so basePath is applied and
+                    // it is not opened in a new tab like the GitHub links are.
+                    <Link
+                      href={l.href}
+                      className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {l.label}
+                    </Link>
+                  ) : (
+                    <a
+                      href={l.href}
+                      target={l.href.startsWith("#") ? undefined : "_blank"}
+                      rel={l.href.startsWith("#") ? undefined : "noopener noreferrer"}
+                      className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {l.label}
+                    </a>
+                  )}
                 </li>
               ))}
             </ul>

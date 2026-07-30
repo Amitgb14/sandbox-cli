@@ -12,6 +12,27 @@ npm run lint
 npm run build    # static export -> web/out
 ```
 
+## Routes
+
+| Route | What it is |
+|---|---|
+| `/` | The landing page — the argument, the interactive proofs, install. |
+| `/multi-agent` | **Running agents in parallel**: the fleet doc. One agent per branch, mixing agents across tasks, `verify`, landing, the share convention, the guardrails. Linked from the header nav, the footer, and the landing page's parallel-agents section. |
+
+The multi-agent story got its own route rather than another band on the landing
+page because it is the one feature people arrive already looking for, and it is
+long: a file format, five eligible agents, a lifecycle and seven refusals. The
+landing page argues *why containment*; this argues *how to run ten agents inside
+it*. `MULTI_AGENT_PATH` in `src/lib/site.ts` is the only place the path appears,
+and it carries a trailing slash because `trailingSlash: true` makes the export
+emit `multi-agent/index.html`.
+
+Cross-route links go through `next/link`, not a raw `<a href>`, so `basePath`
+is applied if the site is ever served from a subpath. In-page anchors stay plain
+anchors. `SiteHeader` and `SiteFooter` therefore take their nav as a prop, with
+the landing page's sections as the default — a sub-page that inherited `#threat`
+would render links that quietly do nothing.
+
 ## Design direction
 
 Light, near-monochrome, in the spirit of a modern security-tooling page: white
@@ -42,7 +63,8 @@ throughout.
 | `blast-radius.tsx` | One switch flips twelve host locations between *reachable* and *not a path at all*, with a live count and the stake behind each one. |
 | `dry-run-builder.tsx` | Toggle real sandbox flags and watch the actual `docker` argv assemble, line by line, in the order `runtime.BuildArgs` emits them. Each flag is marked as widening or tightening the boundary, and a counter tracks host paths in reach. |
 | `egress-visualizer.tsx` | Requests fly at the firewall: registries and agent APIs sail through, exfiltration stops dead. One switch turns the allowlist off to show the difference. |
-| `parallel-agents.tsx` | Three branches, three containers, one repo — the `--worktree` story as a diagram. |
+| `parallel-agents.tsx` | Three branches, three containers, one repo — the `--worktree` story as a diagram. Used on both routes. |
+| `code-block.tsx` | The dark terminal block, extracted so the multi-agent doc can use it six times. `lang` decides one thing: whether a `$` is drawn, and it is drawn per *command* — a line after one ending in `\` is the same command continued. |
 | `live-gauge.tsx` | The three places sandbox-cli reports usage (footer gauge, Claude status line, peak summary), with numbers that walk client-side only. |
 | `agent-explorer.tsx` | All fifteen adapters: install route, forwarded env, `--allow` domains, and the per-agent gotcha. |
 | `deploy-guide.tsx` | Local development and production as two step-by-step paths, over a matrix of what `--profile` changes — the selected column stays lit while you read, because the section is about the difference. The prod path ends with the invariants re-checked on the fully-merged config. |
@@ -64,6 +86,10 @@ Copy and data mirror the repository — `README.md`, `CLAUDE.md`,
 - `reach.ts` — host paths and what is at stake in each
 - `egress.ts` — destinations and their verdicts
 - `classify.ts` — the boundary classifier behind the simulator
+- `fleet.ts` — the multi-agent doc: the four rungs, the agents eligible for a
+  fleet and the argv each is started with, the lifecycle, `land`'s refusals and
+  which of them `--all` skips versus stops on, the share convention. Mirrors
+  `internal/fleet`, `internal/agents` and `docs/examples/fleet.yaml`
 
 If the CLI's behaviour changes, update those files and the page follows.
 **`VERSION` in `src/lib/site.ts` is the only place the release number appears.**

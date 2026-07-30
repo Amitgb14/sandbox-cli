@@ -166,7 +166,16 @@ Recorded rather than guessed. Two are now answered, by the code:
    classifies every field of `sandbox.Options` and fails when the struct grows one that is
    not classified, so the next field of that class is a decision rather than an omission.
 
-**What has not been done: an end-to-end run.** Every claim above is covered by unit tests,
-and none of it has been exercised against a live Docker daemon on this branch — `make
-test-integration` and a real mixed-agent `fleet run` are the remaining check before this
-is called finished.
+**Verified against a live daemon** (Docker 28.0.4 on macOS, 7.7g / 10 CPUs): `make
+test-integration` passes, `internal/fleet` included. Two things that could only be
+guessed at without one were checked directly — `HostMemoryBytes` against both dialects
+(docker answers `MemTotal`, podman answers `memTotal` under `.Host`, which is why podman
+is asked for JSON and read by key), and the capacity refusal, which declined a 3 × 8g
+fleet on that machine before starting anything.
+
+**What has not been done: a mixed-agent `fleet run` that actually starts containers.**
+Everything up to the launch is covered; the launch itself is not. It needs a login per
+agent in the persisted agent homes and spends real API quota, so it stays a deliberate
+manual check rather than something a test suite does. The shape of it: a two-task file
+with one Claude task and one Codex task, `max_parallel: 1`, trivial prompts, then `fleet
+status` → `fleet land --all`.

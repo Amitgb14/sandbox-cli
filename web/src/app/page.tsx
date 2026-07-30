@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ArrowUpRight, Check, FileCode2, Lock, ShieldCheck, X } from "lucide-react";
 import { GithubMark } from "@/components/logo";
 import { SiteHeader } from "@/components/site-header";
@@ -22,7 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { AGENTS, BAKED_COUNT } from "@/lib/agents";
 import { HISTORY_NOTE } from "@/lib/features";
-import { DOC_URL, REPO_URL, VERSION } from "@/lib/site";
+import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, VERSION } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const EXPOSED = [
@@ -218,6 +219,19 @@ export default function Home() {
             }
           />
           <ParallelAgents />
+
+          <div className="mt-6 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
+            <span>
+              Several at once, from one file, with the work checked before it lands —
+            </span>
+            <Link
+              href={MULTI_AGENT_PATH}
+              className="inline-flex items-center gap-1 font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-foreground"
+            >
+              running agents in parallel
+              <ArrowUpRight className="size-3.5" />
+            </Link>
+          </div>
 
           <div className="mt-14">
             <SectionHead

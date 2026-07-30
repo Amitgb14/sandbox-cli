@@ -11,6 +11,14 @@ export const RELEASES_URL = `${REPO_URL}/releases`;
 export const RAW_INSTALL_URL =
   "https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh";
 
+/**
+ * The multi-agent doc's route. A constant because three files link to it, and
+ * with a trailing slash because `trailingSlash: true` in next.config.ts makes
+ * the export emit `multi-agent/index.html` — linking without it costs a
+ * redirect on the hosts that do one and a 404 on the hosts that do not.
+ */
+export const MULTI_AGENT_PATH = "/multi-agent/";
+
 export const DOC_URL = {
   guide: `${REPO_URL}/blob/main/docs/GUIDE.md`,
   agents: `${REPO_URL}/blob/main/docs/AGENTS.md`,
