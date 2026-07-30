@@ -96,3 +96,72 @@ func TestWithVerifyEncodesTheFailureExitCode(t *testing.T) {
 		t.Errorf("VerifyFailedExit changed to %d; it is a contract with containers that already exist", VerifyFailedExit)
 	}
 }
+
+// A verify that calls `exit` must still be reported as a failed verify, not as a
+// run that never reached one.
+//
+// The two are different states everywhere downstream: `fleet status` prints
+// `failed` against `unchecked`, and `land` refuses with "did not pass its
+// verify" against "exited N without reaching its verify; the work is unchecked".
+// Interpolating the verify into the wrapper's own shell collapsed them, and it
+// collapsed them for the *most* careful verify scripts — the ones that guard
+// with `test -d x || { echo; exit 1; }` or open with `set -e`.
+func TestVerifyRunsInASubshellSoExitCannotBypassTheContract(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	dir := t.TempDir()
+
+	cases := []struct {
+		name     string
+		verify   string
+		agentRC  string
+		wantCode int
+	}{
+		{
+			name:     "guard clause exits 1",
+			verify:   "test -d built || { echo 'nothing built' >&2; exit 1; }",
+			agentRC:  "0",
+			wantCode: VerifyFailedExit,
+		},
+		{
+			name:     "set -e on a failing command",
+			verify:   "set -e\nfalse\necho unreachable",
+			agentRC:  "0",
+			wantCode: VerifyFailedExit,
+		},
+		{
+			name:     "explicit exit 0 still passes",
+			verify:   "set -e\nexit 0",
+			agentRC:  "1", // the agent's own code must not decide this
+			wantCode: 0,
+		},
+		{
+			name:     "plain non-zero command",
+			verify:   "false",
+			agentRC:  "0",
+			wantCode: VerifyFailedExit,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			argv := withVerify([]string{"sh", "-c", "exit " + tc.agentRC}, tc.verify)
+			cmd := exec.Command(argv[0], argv[1:]...)
+			cmd.Dir = dir
+			err := cmd.Run()
+
+			code := 0
+			if err != nil {
+				var ee *exec.ExitError
+				if !errors.As(err, &ee) {
+					t.Fatalf("running the wrapper: %v", err)
+				}
+				code = ee.ExitCode()
+			}
+			if code != tc.wantCode {
+				t.Errorf("container exit = %d, want %d", code, tc.wantCode)
+			}
+		})
+	}
+}
