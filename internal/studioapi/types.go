@@ -203,10 +203,36 @@ type RunRecoverResponse struct {
 	MatchesWorkingTree bool `json:"matchesWorkingTree"`
 }
 
-// LogEvent is one line streamed from GET /runs/:id/logs (SSE `event: log`).
+// LogEventType discriminates a LogEvent. A client switching on it exhaustively
+// knows the difference between "the run's output ended" and "the connection
+// did", which is the one thing a log viewer must not guess: an incomplete
+// stream that renders as a complete one is how a half-finished agent run reads
+// as a finished one.
+type LogEventType string
+
+const (
+	LogEventLog LogEventType = "log"
+	// LogEventError carries a failure of the stream itself (docker unreachable
+	// mid-follow, say), not anything the container printed to stderr.
+	LogEventError LogEventType = "error"
+	// LogEventEnd is the last event of a stream that finished on its own terms.
+	LogEventEnd LogEventType = "end"
+)
+
+// Stream names for LogEvent.Stream.
+const (
+	StreamStdout = "stdout"
+	StreamStderr = "stderr"
+)
+
+// LogEvent is one event of GET /runs/:id/logs, identical on both transports: a
+// WebSocket text frame carries exactly this object, and an SSE `data:` line
+// carries exactly this object with `event:` repeating its Type.
 type LogEvent struct {
-	Stream string `json:"stream"` // "stdout" | "stderr"
-	Data   string `json:"data"`
+	Type   LogEventType `json:"type"`
+	Stream string       `json:"stream,omitempty"` // "stdout" | "stderr", on Type "log"
+	Data   string       `json:"data,omitempty"`   // one line, newline stripped
+	Error  string       `json:"error,omitempty"`  // on Type "error"
 }
 
 // RunMetrics is a single point-in-time resource sample for one run — the same
