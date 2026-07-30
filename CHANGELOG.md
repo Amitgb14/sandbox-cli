@@ -11,6 +11,26 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **`fleet status` says whether anything actually checked the work.** A new
+  `VERIFY` column reports `passed`, `failed`, `unchecked`, `none` or `pending`.
+  `exited 0` was the same code for "its verify passed" and "it declared no
+  verify", which are the two states you most need to tell apart in the table
+  where you decide what to land.
+
+- **`fleet clean` no longer makes finished work unlandable.** `land` reads the
+  branch, its base and its verify result off the container, so reaping one is
+  how a passing branch becomes mergeable only by hand. A branch with commits not
+  in its base, or with uncommitted work, is now kept and reported; `--force`
+  reaps it anyway. Running agents and dirty worktrees are protected as before.
+
+- **Re-running a branch explains itself.** A finished container still holds its
+  branch's container name, and docker answered that with `Conflict. The
+  container name "/sandbox-…" is already in use by container "<64 hex chars>"`.
+  `fleet run` now names the branch, the exit code, and the two commands that
+  clear it, and `--dry-run` reports it before anything starts.
+
 ### Added
 
 - **A fleet can mix agents.** `agent:` on a task overrides the fleet-wide one, so

@@ -176,6 +176,27 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, tas
 		return res
 	}
 
+	// A finished container still holds the branch's container name, and docker
+	// refuses to create a second one with a name in use. Left to the engine that
+	// surfaces as `Conflict. The container name "/sandbox-<repo>-<branch>" is
+	// already in use by container "<64 hex chars>"` — which names neither the
+	// branch nor the fleet nor the command that fixes it, and reads like a bug in
+	// docker rather than a decision this tool made. The name is deliberate: it is
+	// what enforces one agent per branch. So the refusal is worth saying in the
+	// tool's own words, and pointing at the logs first, since reaping is what
+	// discards them.
+	stale, err := r.exitedFor(ctx, task.Branch)
+	if err != nil {
+		res.Err = err
+		return res
+	}
+	if stale != nil {
+		res.Err = fmt.Errorf("%q already has a finished container (%s, exit %d) holding its name; "+
+			"read it with `sandbox-cli fleet logs %s`, then `sandbox-cli fleet clean %s` to run again",
+			task.Branch, stale.Name, stale.ExitCode, task.Branch, task.Branch)
+		return res
+	}
+
 	info, err := worktree.Resolve(r.Repo, task.Branch)
 	if err != nil {
 		res.Err = err
@@ -267,12 +288,7 @@ func (r *Runner) options(spec Spec, lo LaunchOptions, agent agents.Descriptor, t
 
 // runningFor returns the running container working branch, or nil.
 func (r *Runner) runningFor(ctx context.Context, branch string) (*runtime.ContainerInfo, error) {
-	infos, err := r.Inspector.Containers(ctx, map[string]string{
-		sandbox.LabelCLI:    "1",
-		sandbox.LabelFleet:  "1",
-		sandbox.LabelRepo:   r.RepoID,
-		sandbox.LabelBranch: branch,
-	})
+	infos, err := r.branchContainers(ctx, branch)
 	if err != nil {
 		return nil, err
 	}
@@ -282,6 +298,35 @@ func (r *Runner) runningFor(ctx context.Context, branch string) (*runtime.Contai
 		}
 	}
 	return nil, nil
+}
+
+// exitedFor returns the most recent finished container for branch, or nil.
+//
+// Containers arrive newest first, so the first match is the one whose name is in
+// the way.
+func (r *Runner) exitedFor(ctx context.Context, branch string) (*runtime.ContainerInfo, error) {
+	infos, err := r.branchContainers(ctx, branch)
+	if err != nil {
+		return nil, err
+	}
+	for i := range infos {
+		if !infos[i].Running() {
+			return &infos[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// branchContainers lists this fleet's containers for one branch. Filtered on
+// sandbox.fleet like every other lookup here, so an interactive `--detach`
+// session on the same branch is not mistaken for a fleet agent.
+func (r *Runner) branchContainers(ctx context.Context, branch string) ([]runtime.ContainerInfo, error) {
+	return r.Inspector.Containers(ctx, map[string]string{
+		sandbox.LabelCLI:    "1",
+		sandbox.LabelFleet:  "1",
+		sandbox.LabelRepo:   r.RepoID,
+		sandbox.LabelBranch: branch,
+	})
 }
 
 // waitForSlot blocks until fewer than max of this fleet's containers are

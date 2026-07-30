@@ -146,3 +146,57 @@ func TestStatusStateAndElapsed(t *testing.T) {
 }
 
 func ptr(c runtime.ContainerInfo) *runtime.ContainerInfo { return &c }
+
+// The distinction the VERIFY column exists for: `exited 0` is the same code for
+// "its check passed" and "nothing checked it", and this repository's own first
+// fleet run read the second as the first — on a branch whose agent had died on
+// an API error and whose verify said yes unconditionally.
+func TestVerifyStateSeparatesPassedFromUnchecked(t *testing.T) {
+	now := time.Now()
+	withVerify := func(c runtime.ContainerInfo, code int) runtime.ContainerInfo {
+		c.Labels[sandbox.LabelVerify] = "go test ./..."
+		c.ExitCode = code
+		return c
+	}
+	exited := func(branch string) runtime.ContainerInfo {
+		return container(branch, "exited", now.Add(-time.Hour), now)
+	}
+
+	cases := []struct {
+		name string
+		in   *runtime.ContainerInfo
+		want VerifyState
+	}{
+		{"no container to ask", nil, VerifyUnknown},
+		{"ran with no verify declared", ptr(exited("a")), VerifyNone},
+		{"declared and passed", ptr(withVerify(exited("b"), 0)), VerifyPassed},
+		{"declared and failed", ptr(withVerify(exited("c"), VerifyFailedExit)), VerifyFailed},
+		{"died before its verify", ptr(withVerify(exited("d"), 137)), VerifyUnchecked},
+		{"still running", ptr(withVerify(container("e", "running", now, time.Time{}), 0)), VerifyPending},
+	}
+	for _, tc := range cases {
+		if got := verifyState(tc.in); got != tc.want {
+			t.Errorf("%s: verifyState = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The column is only useful if Status actually fills it in.
+func TestStatusReportsVerifyState(t *testing.T) {
+	now := time.Now()
+	c := container("feature-a", "exited", now.Add(-time.Hour), now)
+	c.Labels[sandbox.LabelVerify] = "make test"
+	c.ExitCode = VerifyFailedExit
+
+	r := &Runner{Inspector: &fakeInspector{containers: []runtime.ContainerInfo{c}}, Repo: "/repo", RepoID: testRepoID}
+	rows, err := r.Status(context.Background(), "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one row, got %d", len(rows))
+	}
+	if rows[0].Verify != VerifyFailed {
+		t.Errorf("Verify = %q, want %q", rows[0].Verify, VerifyFailed)
+	}
+}

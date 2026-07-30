@@ -1,8 +1,10 @@
 package fleet
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
@@ -112,5 +114,41 @@ func TestOptionsApplyPerTaskLimits(t *testing.T) {
 	}
 	if len(opts.Allow) != 2 {
 		t.Errorf("allow should be the union of fleet and task, got %v", opts.Allow)
+	}
+}
+
+// Docker's duplicate-name refusal is what enforces one agent per branch, so a
+// finished container holding the name is a decision this tool made — not a
+// docker malfunction. Left to the engine it surfaces as `Conflict. The container
+// name "/sandbox-<repo>-<branch>" is already in use by container "<64 hex>"`,
+// which names neither the branch, nor the fleet, nor the command that clears it.
+func TestLaunchRefusesWhenAFinishedContainerHoldsTheName(t *testing.T) {
+	now := time.Now()
+	done := container("feature-a", "exited", now.Add(-time.Hour), now)
+	done.ExitCode = 1
+	r, _ := testRunner(done)
+
+	res := r.launchOne(context.Background(), Spec{Agent: "claude"}, LaunchOptions{},
+		Task{Branch: "feature-a", Prompt: "do it"}, "main", false)
+	if res.Err == nil {
+		t.Fatal("expected a refusal, got none")
+	}
+	for _, want := range []string{"feature-a", "fleet logs", "fleet clean"} {
+		if !strings.Contains(res.Err.Error(), want) {
+			t.Errorf("refusal must mention %q, got: %v", want, res.Err)
+		}
+	}
+}
+
+// And it must not fire on a branch that has never run, or every first launch
+// would refuse.
+func TestLaunchProceedsWhenNoContainerHoldsTheName(t *testing.T) {
+	r, _ := testRunner()
+	res := r.launchOne(context.Background(), Spec{Agent: "claude"}, LaunchOptions{},
+		Task{Branch: "fresh-branch", Prompt: "do it"}, "main", false)
+	// It gets past the name check and fails later, on the worktree, because this
+	// runner has no real repository. What matters is *which* refusal it is.
+	if res.Err != nil && strings.Contains(res.Err.Error(), "holding its name") {
+		t.Errorf("refused a branch with no container: %v", res.Err)
 	}
 }

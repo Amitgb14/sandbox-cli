@@ -44,6 +44,13 @@ type Planned struct {
 	Labels         map[string]string
 	AlreadyRunning bool   // an agent already holds this branch; the run would refuse
 	RunningInName  string // that agent's container name
+
+	// NameHeldBy is a *finished* container still occupying this branch's container
+	// name, which the run would also refuse. Reported separately from
+	// AlreadyRunning because the fix is the opposite: one is waited out or
+	// stopped, the other is reaped. A plan that said "will start" and then hit
+	// docker's name conflict is the inconsistency this field exists to close.
+	NameHeldBy string
 }
 
 // Plan resolves what Launch would do for each task. It touches nothing.
@@ -103,6 +110,8 @@ func (r *Runner) Plan(ctx context.Context, spec Spec, opts LaunchOptions) ([]Pla
 		if busy, err := r.runningFor(ctx, t.Branch); err == nil && busy != nil {
 			p.AlreadyRunning = true
 			p.RunningInName = busy.Name
+		} else if stale, err := r.exitedFor(ctx, t.Branch); err == nil && stale != nil {
+			p.NameHeldBy = stale.Name
 		}
 		out = append(out, p)
 	}
@@ -161,15 +170,48 @@ type CleanResult struct {
 	Kept       []string // human-readable reasons something was not removed
 }
 
+// unlandedWork reports why branch's container must not be reaped yet, or "".
+//
+// Docker is the state store, and that cuts both ways: `land` reads the branch,
+// its base and its verify result off the container, so removing one does not
+// merely discard logs — it discards the record that makes the work landable.
+// This protected running agents and nothing else, which meant the tidy-up
+// command run just before landing could make landing impossible, and a branch
+// that had passed its verify could only be merged by hand afterwards.
+//
+// The test is whether the branch still has something to land: commits not in its
+// base, or uncommitted files in its worktree. `fleet land` zeroes both, so the
+// ordinary land-then-clean sequence reaps exactly what it did before.
+func (r *Runner) unlandedWork(branch string, c runtime.ContainerInfo) string {
+	if branch == "" {
+		return ""
+	}
+	// The recorded base, not the checked-out one: `land` treats the label as the
+	// intent, and counting against a branch the user happens to be standing on
+	// would call work unlanded on the strength of where their HEAD is.
+	base := c.Labels[sandbox.LabelBase]
+	if base == "" {
+		base = worktree.Branch(r.Repo)
+	}
+	if n := worktree.Ahead(r.Repo, branch, base); n > 0 {
+		return fmt.Sprintf("%d commit(s) not in %s", n, base)
+	}
+	if n := len(worktree.Dirty(r.Repo, branch, dirtyLimit)); n > 0 {
+		return fmt.Sprintf("%d uncommitted file(s)", n)
+	}
+	return ""
+}
+
 // Clean removes the exited containers of this repository's fleet, and — only
 // when worktrees is set — their checkouts too.
 //
-// Containers are safe to reap: they hold logs and an exit code, both of which
-// the user has had the chance to read. Worktrees are not: uncommitted work in
-// one exists nowhere else, so a dirty worktree is always kept and reported
-// rather than removed, and a branch whose agent is still running is never
-// touched at all.
-func (r *Runner) Clean(ctx context.Context, branch string, worktrees bool) (CleanResult, error) {
+// Three things are kept rather than removed, and the reason is the same each
+// time: what exists nowhere else is not the command's to discard. A branch whose
+// agent is still running is untouched entirely; a dirty worktree is kept; and a
+// container whose branch still has work to land is kept, because it is the only
+// record `land` can read. force overrides the last of those — the first two are
+// not negotiable here, and `worktree rm --force` is where that decision lives.
+func (r *Runner) Clean(ctx context.Context, branch string, worktrees, force bool) (CleanResult, error) {
 	var res CleanResult
 	if r.Controller == nil {
 		return res, errNoController
@@ -190,14 +232,28 @@ func (r *Runner) Clean(ctx context.Context, branch string, worktrees bool) (Clea
 	}
 
 	reaped := map[string]bool{}
+	held := map[string]bool{}
 	for _, c := range infos {
 		if c.Running() {
 			continue
 		}
+		b := c.Labels[sandbox.LabelBranch]
+		if !force {
+			if why := r.unlandedWork(b, c); why != "" {
+				// Reported once per branch: a branch with several old containers
+				// would otherwise print the same refusal for each of them.
+				if !held[b] {
+					held[b] = true
+					res.Kept = append(res.Kept, fmt.Sprintf(
+						"%s: %s to land; `sandbox-cli fleet land %s` first, or reap it anyway with `fleet clean --force`",
+						b, why, b))
+				}
+				continue
+			}
+		}
 		if err := r.Controller.Remove(ctx, c.ID); err != nil {
 			return res, err
 		}
-		b := c.Labels[sandbox.LabelBranch]
 		if b != "" && !reaped[b] {
 			reaped[b] = true
 			res.Containers = append(res.Containers, b)
@@ -208,7 +264,7 @@ func (r *Runner) Clean(ctx context.Context, branch string, worktrees bool) (Clea
 	}
 
 	for _, b := range r.worktreeBranches(branch, infos) {
-		if running[b] {
+		if running[b] || held[b] {
 			continue // already reported above
 		}
 		if dirty := worktree.Dirty(r.Repo, b, 1); len(dirty) > 0 {

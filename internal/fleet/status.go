@@ -15,6 +15,50 @@ import (
 // should not cost thousands of strings to say "dirty".
 const dirtyLimit = 50
 
+// VerifyState is what the recorded run says about a branch's definition of done.
+//
+// It is a separate column because `exited 0` answers a different question than
+// the one it gets read as. A container exits 0 when its verify passed — and also
+// when the task declared no verify at all, and also when it declared one that
+// says yes unconditionally. The distinction is already stamped on every
+// container (sandbox.LabelVerify); it was simply absent from the table where the
+// landing decision is made, so "nothing checked this" and "this passed" looked
+// identical at the moment they differ most.
+type VerifyState string
+
+const (
+	VerifyUnknown   VerifyState = ""          // no container left to ask
+	VerifyNone      VerifyState = "none"      // it ran, and nothing checked it
+	VerifyPending   VerifyState = "pending"   // declared, still running
+	VerifyPassed    VerifyState = "passed"    // declared, and the run exited 0
+	VerifyFailed    VerifyState = "failed"    // declared, ran, said no
+	VerifyUnchecked VerifyState = "unchecked" // declared, but the run died before reaching it
+)
+
+// verifyState classifies a container exactly as land's checkVerified does.
+//
+// Keeping the two in step matters more than the few lines it costs: a table
+// reporting "passed" for a branch that `land` will refuse is worse than no
+// column at all, because it invites the decision it then blocks.
+func verifyState(c *runtime.ContainerInfo) VerifyState {
+	switch {
+	case c == nil:
+		return VerifyUnknown
+	case c.Labels[sandbox.LabelVerify] == "":
+		return VerifyNone
+	case c.Running():
+		return VerifyPending
+	case c.ExitCode == 0:
+		return VerifyPassed
+	case c.ExitCode == VerifyFailedExit:
+		return VerifyFailed
+	default:
+		// Any other code means the container died before its verify ran — killed,
+		// stopped, or out of memory — so nothing has judged this work at all.
+		return VerifyUnchecked
+	}
+}
+
 // Status is one branch's line in the supervisor table: is the agent still
 // working, how did it end, and did it leave anything behind.
 type Status struct {
@@ -41,6 +85,10 @@ type Status struct {
 	// Ahead counts commits on this branch not yet in the base branch: what there
 	// is to land.
 	Ahead int
+
+	// Verify is what the branch's own definition of done said, or that it had
+	// none. Read from the container, so it is empty once one is reaped.
+	Verify VerifyState
 
 	// WorktreePath is the checkout the agent worked in, empty if it is gone.
 	WorktreePath string
@@ -107,6 +155,7 @@ func (r *Runner) Status(ctx context.Context, base string) ([]Status, error) {
 		if s.Container != nil {
 			s.Agent = s.Container.Labels[sandbox.LabelAgent]
 		}
+		s.Verify = verifyState(s.Container)
 		s.Elapsed = elapsed(s.Container, now)
 		out = append(out, s)
 	}

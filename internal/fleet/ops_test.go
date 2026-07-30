@@ -97,7 +97,7 @@ func TestCleanLeavesRunningAlone(t *testing.T) {
 	done := container("feature-b", "exited", now.Add(-time.Hour), now.Add(-time.Minute))
 	r, ctl := testRunner(run, done)
 
-	res, err := r.Clean(context.Background(), "", false)
+	res, err := r.Clean(context.Background(), "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestCleanWithoutWorktreesRemovesNoCheckouts(t *testing.T) {
 	now := time.Now()
 	r, _ := testRunner(container("feature-b", "exited", now.Add(-time.Hour), now))
 
-	res, err := r.Clean(context.Background(), "", false)
+	res, err := r.Clean(context.Background(), "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,5 +248,76 @@ func TestPlanReportsTheInvocationNotTheBootstrap(t *testing.T) {
 	}
 	if plans[0].Verify != "go test ./..." {
 		t.Errorf("verify not reported: %q", plans[0].Verify)
+	}
+}
+
+// clean must not reap the record that land reads. Docker is the state store, so
+// removing a finished container discards the branch, base and verify result
+// `land` needs — which is how a branch that passed its check becomes mergeable
+// only by hand. Observed on this repository's own first fleet run: a `clean`
+// run before landing left `fleet land --all` reporting "no fleet branches".
+func TestCleanKeepsAContainerWhoseBranchHasWorkToLand(t *testing.T) {
+	repo := newTestRepo(t)
+	base := gitIn(t, repo, "rev-parse", "--abbrev-ref", "HEAD")
+	gitIn(t, repo, "checkout", "-qb", "feature-b")
+	if err := os.WriteFile(filepath.Join(repo, "work.txt"), []byte("done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "add", ".")
+	gitIn(t, repo, "commit", "-qm", "the agent's work")
+	gitIn(t, repo, "checkout", "-q", base)
+
+	now := time.Now()
+	done := container("feature-b", "exited", now.Add(-time.Hour), now)
+	done.Labels[sandbox.LabelBase] = base
+	r, ctl := testRunner(done)
+	r.Repo = repo
+
+	res, err := r.Clean(context.Background(), "", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctl.removed) != 0 {
+		t.Errorf("reaped a container holding landable work: %v", ctl.removed)
+	}
+	if len(res.Kept) != 1 || !strings.Contains(res.Kept[0], "feature-b") {
+		t.Fatalf("expected feature-b reported as kept, got %v", res.Kept)
+	}
+	if !strings.Contains(res.Kept[0], "fleet land") {
+		t.Errorf("the refusal must say how to proceed, got %q", res.Kept[0])
+	}
+
+	// --force is the override, and it has to actually override: a guard with no
+	// way past it becomes a reason to stop using the command.
+	if _, err := r.Clean(context.Background(), "", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(ctl.removed) != 1 || ctl.removed[0] != done.ID {
+		t.Errorf("--force did not reap the container, removed %v", ctl.removed)
+	}
+}
+
+// The other half: once the work is landed there is nothing to protect, so the
+// ordinary land-then-clean sequence must reap exactly what it always did.
+func TestCleanReapsABranchWithNothingLeftToLand(t *testing.T) {
+	repo := newTestRepo(t)
+	base := gitIn(t, repo, "rev-parse", "--abbrev-ref", "HEAD")
+	gitIn(t, repo, "branch", "feature-b")
+
+	now := time.Now()
+	done := container("feature-b", "exited", now.Add(-time.Hour), now)
+	done.Labels[sandbox.LabelBase] = base
+	r, ctl := testRunner(done)
+	r.Repo = repo
+
+	res, err := r.Clean(context.Background(), "", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctl.removed) != 1 {
+		t.Errorf("expected the container reaped, removed %v", ctl.removed)
+	}
+	if len(res.Kept) != 0 {
+		t.Errorf("expected nothing kept, got %v", res.Kept)
 	}
 }
