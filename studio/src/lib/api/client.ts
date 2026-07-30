@@ -89,6 +89,20 @@ interface RequestOptions<T> {
   /** Simulated latency for the fixture path, so loading states are real. */
   latencyMs?: number;
   signal?: AbortSignal;
+  /**
+   * Pull the payload out of the daemon's envelope, for the endpoints that have
+   * one — `GET /v1/agents` answers `{"agents": [...]}`, not a bare array.
+   *
+   * Applied to live responses only. The fixtures are the shape the components
+   * consume, which is the point of them: a fixture that mirrored the wire
+   * envelope would make every screen unwrap it twice, and the envelope is the
+   * daemon's business rather than the UI's.
+   *
+   * This exists because the two halves of Studio were built to a contract
+   * nobody arbitrated, and `agents.filter is not a function` is what that looks
+   * like at runtime — a crash three screens in, not a type error at build time.
+   */
+  unwrap?: (body: unknown) => T;
 }
 
 export async function request<T>(path: string, opts: RequestOptions<T>): Promise<T> {
@@ -109,7 +123,8 @@ export async function request<T>(path: string, opts: RequestOptions<T>): Promise
       );
     }
     if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
+    const body: unknown = await res.json();
+    return (opts.unwrap ? opts.unwrap(body) : body) as T;
   }
 
   await sleep(opts.latencyMs ?? 180);

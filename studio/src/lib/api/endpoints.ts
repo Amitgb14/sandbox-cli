@@ -41,7 +41,12 @@ export const api = {
   daemon: () =>
     request<DaemonInfo>("/v1/health", { fixture: () => MOCK_DAEMON, latencyMs: 120 }),
 
-  runs: () => request<Run[]>("/v1/runs", { fixture: () => MOCK_RUNS, latencyMs: 260 }),
+  runs: () =>
+    request<Run[]>("/v1/runs", {
+      fixture: () => MOCK_RUNS,
+      latencyMs: 260,
+      unwrap: (b) => (b as { runs: Run[] }).runs,
+    }),
 
   run: (id: string) =>
     request<Run>(`/v1/runs/${id}`, {
@@ -110,10 +115,18 @@ export const api = {
     }),
 
   agents: () =>
-    request<Agent[]>("/v1/agents", { fixture: () => MOCK_AGENTS, latencyMs: 200 }),
+    request<Agent[]>("/v1/agents", {
+      fixture: () => MOCK_AGENTS,
+      latencyMs: 200,
+      unwrap: (b) => (b as { agents: Agent[] }).agents,
+    }),
 
   worktrees: () =>
-    request<Worktree[]>("/v1/worktrees", { fixture: () => MOCK_WORKTREES, latencyMs: 240 }),
+    request<Worktree[]>("/v1/worktrees", {
+      fixture: () => MOCK_WORKTREES,
+      latencyMs: 240,
+      unwrap: (b) => (b as { worktrees: Worktree[] }).worktrees,
+    }),
 
   removeWorktree: (branch: string) =>
     request<void>(`/v1/worktrees/${encodeURIComponent(branch)}`, {
