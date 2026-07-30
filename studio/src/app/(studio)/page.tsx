@@ -141,7 +141,7 @@ export default function DashboardPage() {
             description="Which adapters are doing the work."
             aside={
               <Button asChild variant="ghost" size="sm" className="h-7 text-xs">
-                <Link href="/agents">All fifteen</Link>
+                <Link href="/agents">All agents</Link>
               </Button>
             }
           >

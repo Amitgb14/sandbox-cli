@@ -254,9 +254,12 @@ export function CommandPalette() {
                     <span className="ml-auto text-xs text-muted-foreground">{a.label}</span>
                   </CommandItem>
                 ))}
-              <CommandItem value="agents all fifteen adapters" onSelect={() => go("/agents")}>
+              {/* Counted, not spelled out: the adapter queue in
+                  docs/proposals/agent-adapters.md is still being worked
+                  through, and a hardcoded "fifteen" becomes wrong silently. */}
+              <CommandItem value="agents all adapters" onSelect={() => go("/agents")}>
                 <Bot className="size-4" />
-                <span>See all fifteen adapters</span>
+                <span>See all {agents.length} adapters</span>
               </CommandItem>
             </CommandGroup>
           </>

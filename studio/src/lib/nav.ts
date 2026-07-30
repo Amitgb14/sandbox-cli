@@ -76,7 +76,7 @@ export const NAV: NavGroup[] = [
         title: "Agents",
         href: "/agents",
         icon: Bot,
-        hint: "The fifteen adapters, their logins and what crosses the boundary",
+        hint: "Every adapter, its login and what crosses the boundary",
         shortcut: "A",
       },
     ],

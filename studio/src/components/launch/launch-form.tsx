@@ -95,8 +95,14 @@ export function LaunchForm() {
   const blocked = preview.refusals.length > 0;
 
   const agentMeta = agents?.find((a) => a.name === req.agent);
+  // Matched by repo **id**, never by a name derived from the workspace path.
+  // Two clones of a same-named repo would otherwise share a namespace — and the
+  // name-derived version was already wrong here, because a worktree path
+  // carries the id (`intrupt-web-1f3ab902`) while the workspace directory
+  // carries the name (`intrupt_web`), so it matched nothing for those repos.
+  const selectedRepoId = REPOS.find((r) => r.root === req.workspace)?.id ?? null;
   const repoWorktrees = (worktrees ?? []).filter(
-    (w) => !w.primary && w.path.includes(shortRepoId(req.workspace)),
+    (w) => !w.primary && w.repoId === selectedRepoId,
   );
 
   function submit() {
@@ -545,11 +551,6 @@ export function LaunchForm() {
       </aside>
     </div>
   );
-}
-
-/** Best-effort repo id from a workspace path, for matching worktrees. */
-function shortRepoId(workspace: string): string {
-  return workspace.split("/").filter(Boolean).pop() ?? "";
 }
 
 function Section({
