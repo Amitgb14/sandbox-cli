@@ -52,6 +52,42 @@ type AgentInfo struct {
 	// prints, so a launch preview and a dry run cannot disagree about what is
 	// about to happen.
 	AutonomousInvocation []string `json:"autonomousInvocation"`
+
+	// Delivery is how the binary reaches the container. Four adapters are baked
+	// into the base image and the rest are installed lazily into the persisted
+	// HOME on first use — baking every adapter would put hundreds of megabytes in
+	// front of every user for agents most will never run. This is a fact about
+	// assets/Dockerfile rather than about the descriptor, which is why it is a
+	// list here and cannot be read off agents.Descriptor.
+	Delivery string `json:"delivery"` // "baked" | "npm"
+
+	// The fields below are host-side, not from the descriptor — a descriptor
+	// deliberately says only what runs inside the container and which host
+	// variable *names* may cross. Studio runs on the host, so it can answer them.
+
+	// Auth reports whether this agent has logged in yet: the sandbox-owned HOME
+	// mounted for it, whether it exists, and when it last changed. Never its
+	// contents — the persisted directory holds an OAuth refresh token.
+	Auth AgentAuth `json:"auth"`
+
+	// StatusLine and HistorySync are true for claude alone, and that is a
+	// deliberate limit rather than an oversight: no other agent has a status-line
+	// hook, and only claude mounts the host's per-project history bucket.
+	StatusLine  bool `json:"statusLine"`
+	HistorySync bool `json:"historySync"`
+
+	// Sessions and ContextStore come from the persisted record of what has
+	// actually been confirmed on this machine. An agent with no verified
+	// descriptor is reported untracked rather than guessed at.
+	Sessions     int    `json:"sessions"`
+	ContextStore string `json:"contextStore"` // "verified" | "empty" | "missing" | "untracked"
+}
+
+// AgentAuth is where an agent's login is persisted, and whether it is there yet.
+type AgentAuth struct {
+	Persisted bool   `json:"persisted"`
+	Path      string `json:"path"`
+	LastSeen  string `json:"lastSeen,omitempty"` // RFC3339, or absent when never
 }
 
 // AgentsResponse is the body of GET /agents.
