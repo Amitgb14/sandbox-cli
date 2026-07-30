@@ -428,3 +428,42 @@ func TestRoutesAreServedUnderTheV1Prefix(t *testing.T) {
 		}
 	}
 }
+
+// Empty lists must marshal as `[]`, never `null` or absent.
+//
+// Worktree.Dirty carried `omitempty`, so a *clean* worktree — the common case —
+// sent no `dirty` key at all, and the UI's `w.dirty.length` threw on it. A
+// list-valued field that disappears when empty makes the ordinary case the one
+// every client has to guard, and the crash arrives in production rather than in
+// the fixture that was used to build the screen.
+func TestEmptyListsMarshalAsArraysNotNull(t *testing.T) {
+	body, err := json.Marshal(WorktreesResponse{Worktrees: []Worktree{{
+		Branch: "feature-a",
+		Path:   "/tmp/feature-a",
+		Dirty:  []string{},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body); !strings.Contains(got, `"dirty":[]`) {
+		t.Errorf("a clean worktree must send an empty dirty list, got %s", got)
+	}
+
+	// And the enclosing envelopes, for the same reason.
+	for _, tc := range []struct {
+		name, want string
+		v          any
+	}{
+		{"worktrees", `"worktrees":[]`, WorktreesResponse{Worktrees: []Worktree{}}},
+		{"runs", `"runs":[]`, RunsResponse{Runs: []Run{}}},
+		{"agents", `"agents":[]`, AgentsResponse{Agents: []AgentInfo{}}},
+	} {
+		b, err := json.Marshal(tc.v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), tc.want) {
+			t.Errorf("%s: want %s in %s", tc.name, tc.want, b)
+		}
+	}
+}

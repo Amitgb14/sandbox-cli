@@ -76,6 +76,11 @@ func (s *Server) handleDeleteWorktree(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) toWorktree(info worktree.Info) Worktree {
 	dirty := worktree.Dirty(s.Project, info.Branch, 0)
+	if dirty == nil {
+		// A nil slice marshals to `null`, not `[]`, so a clean worktree would
+		// still hand the client something it has to guard before iterating.
+		dirty = []string{}
+	}
 	return Worktree{
 		Branch:     info.Branch,
 		Path:       info.Path,

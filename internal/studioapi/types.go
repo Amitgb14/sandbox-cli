@@ -231,9 +231,15 @@ type StatsResponse struct {
 
 // Worktree describes one git worktree sandbox-cli manages for the project.
 type Worktree struct {
-	Branch     string   `json:"branch"`
-	Path       string   `json:"path"`
-	Dirty      []string `json:"dirty,omitempty"` // modified/untracked paths
+	Branch string `json:"branch"`
+	Path   string `json:"path"`
+
+	// Dirty is the modified/untracked paths, and is always present — never
+	// `omitempty`. A clean worktree is the common case, and omitting the field
+	// for it sent no key at all, which every client then reads as `undefined`
+	// rather than as "nothing dirty". A list-valued field that vanishes when
+	// empty makes the ordinary case the one that crashes.
+	Dirty      []string `json:"dirty"`
 	DirtyCount int      `json:"dirtyCount"`
 }
 

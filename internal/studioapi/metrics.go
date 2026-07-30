@@ -107,7 +107,10 @@ func (s *Server) sampleMetrics(ctx context.Context, ids []string) ([]RunMetrics,
 	if err != nil {
 		return nil, fmt.Errorf("reading %s stats: %w", s.Engine, err)
 	}
-	var rows []RunMetrics
+	// Non-nil so an idle host marshals `[]` rather than `null`: a list-valued
+	// field that becomes null when empty makes "nothing is running" the case
+	// clients crash on, which is the case they see most.
+	rows := make([]RunMetrics, 0)
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
