@@ -35,11 +35,7 @@ func (s *Server) handleRunMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming not supported by this connection"))
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	writeSSEHeaders(w, flusher)
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()

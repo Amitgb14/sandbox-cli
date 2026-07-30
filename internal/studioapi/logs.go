@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -48,9 +49,15 @@ func (s *Server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) streamLogsWS(w http.ResponseWriter, r *http.Request, c runtime.ContainerInfo) {
 	ws, err := upgradeWebSocket(w, r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		if !errors.Is(err, errUpgradeAborted) {
+			writeError(w, http.StatusBadRequest, err)
+		}
 		return
 	}
+	// A backstop for the paths the switch below cannot reach — a panic in the
+	// stream, recovered by the middleware. wsConn.close covers the ordinary exits
+	// gracefully; this only guarantees the socket does not outlive the handler.
+	defer ws.conn.Close()
 
 	// A hijacked connection is no longer watched by net/http, so a closed tab
 	// arrives as a read error in readLoop and nowhere else. Cancelling this context

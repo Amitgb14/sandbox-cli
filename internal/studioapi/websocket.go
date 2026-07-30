@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -96,9 +97,15 @@ type wsConn struct {
 	closed bool
 }
 
+// errUpgradeAborted marks the one class of upgrade failure that happens *after*
+// the hijack: the connection is already gone, so a caller must not try to answer
+// with an HTTP status it can no longer send.
+var errUpgradeAborted = errors.New("websocket upgrade aborted")
+
 // upgradeWebSocket performs the handshake and hands back the hijacked
-// connection. On error nothing has been written, so the caller can still answer
-// with a normal HTTP status.
+// connection. Every validation happens before the hijack, so an error that is
+// not errUpgradeAborted leaves the response untouched and the caller can still
+// answer with a normal HTTP status.
 func upgradeWebSocket(w http.ResponseWriter, r *http.Request) (*wsConn, error) {
 	if v := r.Header.Get("Sec-WebSocket-Version"); v != "13" {
 		return nil, fmt.Errorf("unsupported Sec-WebSocket-Version %q: this server speaks 13", v)
@@ -124,11 +131,11 @@ func upgradeWebSocket(w http.ResponseWriter, r *http.Request) (*wsConn, error) {
 	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 	if _, err := buf.WriteString(handshake); err != nil {
 		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w: writing the handshake: %v", errUpgradeAborted, err)
 	}
 	if err := buf.Flush(); err != nil {
 		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w: flushing the handshake: %v", errUpgradeAborted, err)
 	}
 	_ = conn.SetWriteDeadline(time.Time{})
 	// buf.Reader, not a fresh one: a client that sent data immediately after the
