@@ -4,7 +4,22 @@
 list, attach to, follow and stop, good defaults, a helpful `doctor`, and agents that are
 easy to run.
 
-**Branch.** `feature/local-agent-experience`.
+**Status.** Shipped — merged to `main` as
+[#35](https://github.com/Amitgb14/sandbox-cli/pull/35) (`05be0d8`) from
+`feature/local-agent-experience`. Every required feature below is built and every
+"done when" criterion is met.
+
+`make test-integration` has since passed on a branch carrying all of this work — the
+task 2 branch, which included every commit here — so the corrected
+`internal/cli/stats_integration_test.go` is verified against a real daemon rather than
+merely compiled.
+
+**The gap that remains is coverage, not correctness:** no integration test exercises
+`list`, `logs`, `attach` or `kill`. The suite covers `stats`, isolation, egress and
+worktrees; the four session commands are proved only by unit tests against a fake
+backend. `attach`'s Ctrl-C-detaches behaviour and `kill --force` in particular have
+never run against a container. The manual pass in #35's description is still the only
+thing that would exercise them, and an integration test for them is the obvious follow-up.
 
 This is the task that decides whether the tool gets used. Everything in it is about the
 minutes between "I want an agent to do this" and "I have read what it did".

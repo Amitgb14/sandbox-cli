@@ -3,7 +3,10 @@
 **Goal.** Run several agents safely in parallel — usually one per git worktree — with basic
 orchestration from the CLI. No GUI required.
 
-**Branch.** `feature/multi-agent`, in progress.
+**Status.** Shipped — merged to `main` as
+[#36](https://github.com/Amitgb14/sandbox-cli/pull/36) from `feature/multi-agent`. The
+one check still outstanding is recorded at the bottom of this document: a mixed-agent
+`fleet run` that actually starts containers.
 
 This task is mostly *consolidation*. Two thirds of it already exists as `worktree` and
 `fleet`; what is missing is the part that makes them feel like one feature with one mental
