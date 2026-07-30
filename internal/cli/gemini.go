@@ -2,22 +2,15 @@ package cli
 
 import "github.com/spf13/cobra"
 
-// geminiEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
-// Gemini CLI session, applied only if present in the host environment. Nothing
-// else about the host crosses the boundary.
+// The container argv and the forwarded variable names come from the shared
+// descriptor (internal/agents), because a fleet can run `agent: gemini` and the
+// two paths must start the same agent the same way.
 //
-// GOOGLE_APPLICATION_CREDENTIALS is deliberately absent: it names a host file
-// path that is not mounted, so forwarding it would only produce a confusing
-// "credentials file not found" instead of a clean auth prompt. Mount it
-// explicitly (`--mount ~/adc.json:/sandbox/home/adc.json:ro --env
+// GOOGLE_APPLICATION_CREDENTIALS is deliberately absent from that list: it names
+// a host file path that is not mounted, so forwarding it would only produce a
+// confusing "credentials file not found" instead of a clean auth prompt. Mount
+// it explicitly (`--mount ~/adc.json:/sandbox/home/adc.json:ro --env
 // GOOGLE_APPLICATION_CREDENTIALS=/sandbox/home/adc.json`) if you want it.
-var geminiEnvAllow = []string{
-	"GEMINI_API_KEY",
-	"GOOGLE_API_KEY",
-	"GOOGLE_GENAI_USE_VERTEXAI",
-	"GOOGLE_CLOUD_PROJECT",
-	"GOOGLE_CLOUD_LOCATION",
-}
 
 func newGeminiCmd() *cobra.Command {
 	rf := &runFlags{}
@@ -43,8 +36,7 @@ func newGeminiCmd() *cobra.Command {
 		// parsed manually from the pre-`--` portion in runWrapper.
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentCmd := npmAgentBootstrap("gemini", "@google/gemini-cli")
-			return runWrapper(cmd, rf, args, agentCmd, geminiEnvAllow, nil)
+			return runWrapper(cmd, rf, args, geminiAgent.Command, geminiAgent.EnvAllow, nil)
 		},
 	}
 	// Persists Gemini's login in a sandbox-owned host dir (~/.config/sandbox/

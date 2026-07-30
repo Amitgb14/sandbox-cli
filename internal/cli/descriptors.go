@@ -22,8 +22,11 @@ import "github.com/Amitgb14/sandbox-cli/internal/agents"
 // A missing descriptor is a programming error, not a runtime condition: these
 // names are compiled in.
 var (
-	claudeAgent = mustAgent("claude")
-	codexAgent  = mustAgent("codex")
+	claudeAgent   = mustAgent("claude")
+	codexAgent    = mustAgent("codex")
+	geminiAgent   = mustAgent("gemini")
+	opencodeAgent = mustAgent("opencode")
+	droidAgent    = mustAgent("droid")
 )
 
 func mustAgent(name string) agents.Descriptor {
