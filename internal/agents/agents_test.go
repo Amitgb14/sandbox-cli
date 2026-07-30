@@ -114,3 +114,39 @@ func TestCodexAutonomousUsesExec(t *testing.T) {
 		t.Errorf("codex autonomous argv should start the exec subcommand: %v", argv)
 	}
 }
+
+// Every descriptor in the registry is offered to `fleet run`, and a fleet is
+// unattended: an agent that stops to ask permission does not fail, it hangs
+// until someone notices. So each one must return an argv that runs to completion
+// on its own — a headless mode *and*, where the agent has an approval step, the
+// flag that skips it.
+//
+// This cannot be checked by inspection; it is checked by having run each of
+// them. The table is the record of that, and it is here so adding a descriptor
+// means adding a line to it rather than quietly widening what a fleet may name.
+func TestEveryAgentHasAVerifiedHeadlessArgv(t *testing.T) {
+	// agent -> the tokens that make its run non-interactive.
+	headless := map[string][]string{
+		"claude":   {"-p", "--dangerously-skip-permissions"},
+		"codex":    {"exec"},
+		"gemini":   {"-p", "--yolo"},
+		"opencode": {"run"},
+		"droid":    {"exec"},
+	}
+	for _, name := range Names() {
+		want, ok := headless[name]
+		if !ok {
+			t.Errorf("agent %q is in the registry with no recorded headless argv.\n"+
+				"A fleet can name it, and a fleet has no terminal: verify its non-interactive\n"+
+				"mode by running it, then add it here. Do not guess the flags.", name)
+			continue
+		}
+		d, _ := Lookup(name)
+		argv := strings.Join(d.Autonomous("do the thing", nil), " ")
+		for _, tok := range want {
+			if !strings.Contains(argv, tok) {
+				t.Errorf("%s: autonomous argv lost %q: %s", name, tok, argv)
+			}
+		}
+	}
+}

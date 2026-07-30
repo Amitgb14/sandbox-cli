@@ -2,19 +2,10 @@ package cli
 
 import "github.com/spf13/cobra"
 
-// opencodeEnvAllow is the suggested (opt-in) set of host env vars forwarded to
-// an OpenCode session, applied only if present in the host environment.
-// OpenCode is provider-agnostic, so the list spans the providers it can drive
+// The container argv and the forwarded variable names come from the shared
+// descriptor (internal/agents), because a fleet can run `agent: opencode`.
+// OpenCode is provider-agnostic, so that list spans the providers it can drive
 // rather than naming a single vendor; each is forwarded only if you have it set.
-var opencodeEnvAllow = []string{
-	"ANTHROPIC_API_KEY",
-	"OPENAI_API_KEY",
-	"GEMINI_API_KEY",
-	"GROQ_API_KEY",
-	"OPENROUTER_API_KEY",
-	"OPENCODE_CONFIG",
-	"OPENCODE_DISABLE_AUTOUPDATE",
-}
 
 func newOpencodeCmd() *cobra.Command {
 	rf := &runFlags{}
@@ -38,8 +29,7 @@ func newOpencodeCmd() *cobra.Command {
 		// parsed manually from the pre-`--` portion in runWrapper.
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentCmd := npmAgentBootstrap("opencode", "opencode-ai")
-			return runWrapper(cmd, rf, args, agentCmd, opencodeEnvAllow, nil)
+			return runWrapper(cmd, rf, args, opencodeAgent.Command, opencodeAgent.EnvAllow, nil)
 		},
 	}
 	// Persists OpenCode's login in a sandbox-owned host dir (~/.config/sandbox/

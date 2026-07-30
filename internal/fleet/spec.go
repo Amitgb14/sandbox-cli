@@ -11,6 +11,7 @@ package fleet
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -20,7 +21,8 @@ import (
 
 // Spec is a parsed fleet.yaml.
 type Spec struct {
-	// Agent names the agent to run for every task ("claude", "codex").
+	// Agent names the agent to run for tasks that do not name one of their own
+	// ("claude", "codex"). It may be omitted entirely when every task does.
 	Agent string `yaml:"agent"`
 
 	// MaxParallel caps how many agents run at the same time. Zero (the default)
@@ -65,9 +67,38 @@ type Task struct {
 	// Prompt is what the agent is asked to do, passed as a single argument.
 	Prompt string `yaml:"prompt"`
 
+	// Agent overrides the fleet-wide `agent:` for this task, so one fleet can put
+	// Claude on one branch and Codex on another and compare what comes back.
+	//
+	// Mixing agents costs nothing at the boundary — the descriptor decides the
+	// container argv and the forwarded variable *names*, and every task is
+	// confined by the same sandbox.Options either way — but it does mean each
+	// agent named here must be logged in (or have its key exported) before the
+	// fleet runs, because none of them can answer a login prompt from a detached
+	// container.
+	Agent string `yaml:"agent"`
+
 	// Args are extra arguments appended after the agent's own autonomous flags,
 	// so a task can override them (e.g. ["--model", "opus"]).
+	//
+	// They are the agent's own flags, so a task that overrides the fleet's agent
+	// almost certainly wants its own args too: `--model opus` means nothing to
+	// codex.
 	Args []string `yaml:"args"`
+
+	// Memory, CPUs and Allow override `defaults:` for this one task — the branch
+	// that needs a bigger build, or one more domain, without raising the caps for
+	// every other agent in the fleet.
+	//
+	// Memory and CPUs *replace* the default ("0" means uncapped, as at the fleet
+	// level). Allow *adds* to it: the fleet-wide list is the set of domains every
+	// agent here needs, and a task subtracting from it would be asking for a
+	// weaker allowlist than the file's author wrote one line above. Ask for less
+	// egress by moving the domain onto the tasks that need it, not by taking it
+	// away from one.
+	Memory string   `yaml:"memory"`
+	CPUs   string   `yaml:"cpus"`
+	Allow  []string `yaml:"allow"`
 
 	// Verify is a shell command run inside the container after the agent, whose
 	// exit code decides whether the task is done. It is the difference between
@@ -90,9 +121,9 @@ const (
 //
 // # Where this file sits on the trust boundary
 //
-// A fleet file carries privilege-relevant settings: `defaults.allow` widens the
-// egress allowlist, `defaults.git` forwards the host git identity, and
-// `defaults.memory`/`cpus` override the caps a profile set. `internal/config`
+// A fleet file carries privilege-relevant settings: `allow` (fleet-wide or on a
+// task) widens the egress allowlist, `defaults.git` forwards the host git
+// identity, and `memory`/`cpus` override the caps a profile set. `internal/config`
 // refuses exactly that class of key from a project `.sandbox.yaml`, on the
 // grounds that a repository is untrusted input and discovery is not a deliberate
 // act. `-f` defaults to ./fleet.yaml, so this file *is* discovered from the
@@ -159,11 +190,10 @@ func (s *Spec) applyDefaults() {
 
 // Validate reports the first problem that would make this fleet unrunnable.
 func (s Spec) Validate() error {
-	if s.Agent == "" {
-		return fmt.Errorf("agent is required (one of: %s)", strings.Join(agents.Names(), ", "))
-	}
-	if _, ok := agents.Lookup(s.Agent); !ok {
-		return fmt.Errorf("unknown agent %q (known: %s)", s.Agent, strings.Join(agents.Names(), ", "))
+	if s.Agent != "" {
+		if _, ok := agents.Lookup(s.Agent); !ok {
+			return fmt.Errorf("unknown agent %q (known: %s)", s.Agent, strings.Join(agents.Names(), ", "))
+		}
 	}
 	if len(s.Tasks) == 0 {
 		return fmt.Errorf("no tasks: a fleet needs at least one")
@@ -186,6 +216,102 @@ func (s Spec) Validate() error {
 			return fmt.Errorf("tasks[%d]: duplicate branch %q; one agent per branch", i, t.Branch)
 		}
 		seen[t.Branch] = true
+
+		// Resolved per task rather than once for the file, because `agent:` is now
+		// a default that a task may replace. A task with neither is the one case
+		// worth spelling out separately: "agent is required" is true, but it is not
+		// obvious *where* it was supposed to go once the key can appear twice.
+		switch name := s.AgentFor(t); {
+		case name == "":
+			return fmt.Errorf("tasks[%d] (%s): no agent; set a fleet-wide `agent:` or give this task its own (one of: %s)",
+				i, t.Branch, strings.Join(agents.Names(), ", "))
+		default:
+			if _, ok := agents.Lookup(name); !ok {
+				return fmt.Errorf("tasks[%d] (%s): unknown agent %q (known: %s)",
+					i, t.Branch, name, strings.Join(agents.Names(), ", "))
+			}
+		}
 	}
 	return nil
+}
+
+// AgentFor is the agent this task runs: its own if it named one, the fleet's
+// otherwise.
+func (s Spec) AgentFor(t Task) string {
+	if a := strings.TrimSpace(t.Agent); a != "" {
+		return a
+	}
+	return s.Agent
+}
+
+// Limits are one task's resolved resource and egress settings — what `defaults:`
+// said, with the task's own overrides folded in.
+//
+// Resolved in one place because two callers need the identical answer for
+// different reasons: Launch builds the container from it, and Plan prints it.
+// A dry run that disagreed with the run it describes would be worse than no dry
+// run at all.
+type Limits struct {
+	Memory string
+	CPUs   string
+	Allow  []string
+}
+
+// LimitsFor resolves one task's limits against the fleet defaults.
+func (s Spec) LimitsFor(t Task) Limits {
+	lim := Limits{
+		Memory: pickLimit(t.Memory, s.Defaults.Memory),
+		CPUs:   pickLimit(t.CPUs, s.Defaults.CPUs),
+	}
+	// Union, not replacement, and deduped so a domain named in both places is not
+	// passed to the firewall twice. Order is defaults-then-task so the printed
+	// plan reads the way the file does.
+	seen := map[string]bool{}
+	for _, d := range append(append([]string{}, s.Defaults.Allow...), t.Allow...) {
+		d = strings.TrimSpace(d)
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		lim.Allow = append(lim.Allow, d)
+	}
+	return lim
+}
+
+// pickLimit applies a task's override to a fleet-wide cap. Empty means "the task
+// said nothing"; "0" is the same explicit opt-out it is at the fleet level, and
+// has to be translated here too — applyDefaults only ever sees the `defaults:`
+// block.
+func pickLimit(task, fleet string) string {
+	if task == "" {
+		return fleet
+	}
+	if task == "0" {
+		return ""
+	}
+	return task
+}
+
+// Concurrency is how many of this fleet's agents can be running at once: the
+// max_parallel cap, or the task count when it is unset or higher.
+func (s Spec) Concurrency() int {
+	if s.MaxParallel <= 0 || s.MaxParallel > len(s.Tasks) {
+		return len(s.Tasks)
+	}
+	return s.MaxParallel
+}
+
+// Agents lists the distinct agents this fleet will start, in sorted order — for
+// the messages that have to say what a mixed fleet needs logged in.
+func (s Spec) Agents() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range s.Tasks {
+		if a := s.AgentFor(t); a != "" && !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

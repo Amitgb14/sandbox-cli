@@ -197,7 +197,7 @@ func TestPlanFlagsAlreadyRunningBranch(t *testing.T) {
 	plans, err := r.Plan(context.Background(), Spec{
 		Agent: "claude",
 		Tasks: []Task{{Branch: "feature-a", Prompt: "do it"}},
-	})
+	}, LaunchOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestPlanFlagsAlreadyRunningBranch(t *testing.T) {
 
 func TestPlanRequiresRepo(t *testing.T) {
 	r := &Runner{Inspector: &fakeInspector{}, Repo: ""}
-	if _, err := r.Plan(context.Background(), Spec{Agent: "claude", Tasks: []Task{{Branch: "a", Prompt: "p"}}}); err == nil {
+	if _, err := r.Plan(context.Background(), Spec{Agent: "claude", Tasks: []Task{{Branch: "a", Prompt: "p"}}}, LaunchOptions{}); err == nil {
 		t.Fatal("expected an error outside a git repository")
 	}
 }
@@ -235,7 +235,7 @@ func TestPlanReportsTheInvocationNotTheBootstrap(t *testing.T) {
 	plans, err := r.Plan(context.Background(), Spec{
 		Agent: "claude",
 		Tasks: []Task{{Branch: "feature-a", Prompt: "do it", Verify: "go test ./..."}},
-	})
+	}, LaunchOptions{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}

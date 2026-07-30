@@ -405,13 +405,12 @@ comes up.
 
 `--detach` starts the sandbox in the background and prints its container name, so
 one terminal can launch several agents (see
-[GUIDE.md](GUIDE.md#running-an-agent-in-the-background) for the full cycle). Two
+[GUIDE.md](GUIDE.md#in-the-background) for the full cycle). Two
 things decide whether an adapter can be used that way:
 
 1. **It needs a non-interactive mode**, because nothing is attached to answer a
-   prompt. The documented ones are `claude -p "…"`, `codex exec "…"` and
-   `droid exec "…"`; for any other adapter, check its own `--help` before
-   detaching it.
+   prompt. The five with a verified one are in the table below; for any other
+   adapter, check its own `--help` before detaching it.
 2. **Log in — and, for an adapter installed on first use, install — before
    detaching.** Both are interactive by nature and both persist afterwards, so
    one foreground run per agent is enough:
@@ -425,6 +424,43 @@ things decide whether an adapter can be used that way:
    needs network at that moment, the install host has to be on the allowlist
    under `--allow` (see the table below), and a failure shows up only as exit
    127 in `docker logs`.
+
+## Agents a fleet can run
+
+A [fleet](GUIDE.md#a-fleet) starts every agent detached, so an adapter may only
+appear in a `fleet.yaml` if it has a **verified headless mode** — a way to run a
+prompt to completion without ever asking a human anything. An agent that stops
+for approval in a fleet does not fail; it hangs until you notice, holding a slot.
+
+| `agent:` | What the fleet runs | Notes |
+|---|---|---|
+| `claude` | `claude -p PROMPT --dangerously-skip-permissions` | baked into the image |
+| `codex` | `codex exec PROMPT` | baked into the image; Codex applies its own approval policy on top — relax it through the task's `args:` |
+| `gemini` | `gemini --yolo -p PROMPT` | baked into the image; `-p` alone still stops for tool approval, which is why `--yolo` is not optional here |
+| `opencode` | `opencode run PROMPT` | baked into the image |
+| `droid` | `droid exec PROMPT` | installed on first use (~148MB) |
+
+Anything else is rejected when the file is parsed, before a single container
+starts. The other ten adapters are perfectly usable interactively — they are
+simply not ones we have confirmed will never stop and wait.
+
+Two things to do before an unattended run, and they are per agent rather than per
+fleet — **a fleet that mixes agents needs each one set up**:
+
+```sh
+sandbox-cli claude      # log in (and install, for a lazily-installed adapter)
+sandbox-cli codex       # …and again for the second agent in the file
+```
+
+`sandbox-cli fleet run --dry-run` prints a reminder when it sees a file naming
+more than one agent. Under `--profile prod` the persisted login is not mounted at
+all, so each agent needs its key in the environment instead
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …).
+
+Adding an agent to this list means verifying its headless mode by running it —
+the argv is recorded in `internal/agents` and pinned by a test, so a new
+descriptor without a verified invocation fails the build rather than quietly
+widening what a fleet may name.
 
 ## Using agents with `--allow` (egress allowlist)
 

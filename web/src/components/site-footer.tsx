@@ -1,5 +1,6 @@
+import Link from "next/link";
 import { GithubMark, Wordmark } from "@/components/logo";
-import { DOC_URL, REPO_URL, VERSION } from "@/lib/site";
+import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, VERSION } from "@/lib/site";
 
 /**
  * Outbound links only. There is deliberately no "on this page" index here — the
@@ -12,6 +13,7 @@ const COLUMNS = [
     title: "Docs",
     links: [
       { label: "User guide", href: DOC_URL.guide },
+      { label: "Running agents in parallel", href: MULTI_AGENT_PATH },
       { label: "Agent reference", href: DOC_URL.agents },
       { label: "Security model", href: DOC_URL.security },
       { label: "Changelog", href: DOC_URL.changelog },
@@ -55,6 +57,16 @@ export function SiteFooter() {
             <ul className="flex flex-col gap-1.5">
               {c.links.map((l) => (
                 <li key={l.label}>
+                  {l.href.startsWith("/") ? (
+                    // The one internal route in here: next/link, so basePath is
+                    // applied and it is not opened in a new tab like the rest.
+                    <Link
+                      href={l.href}
+                      className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {l.label}
+                    </Link>
+                  ) : (
                   <a
                     href={l.href}
                     target={l.href.startsWith("#") ? undefined : "_blank"}
@@ -63,6 +75,7 @@ export function SiteFooter() {
                   >
                     {l.label}
                   </a>
+                  )}
                 </li>
               ))}
             </ul>

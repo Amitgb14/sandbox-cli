@@ -15,10 +15,17 @@
  * exactly one of them, including the ones that were never in the nav at all
  * (#network, #parallel, #install were reachable only by scrolling).
  *
+ * One entry is a route rather than an anchor (the fleet doc). The type does not
+ * distinguish them, because nothing about *navigation* differs — what differs is
+ * how the header renders it, and that is a question about `basePath` and
+ * client-side routing rather than about this list.
+ *
  * Each item carries a `hint`. A dropdown of bare labels is a worse flat list —
  * it costs a click and returns nothing for it. The hint is what makes opening
  * the menu tell you something you did not already know from the label.
  */
+
+import { MULTI_AGENT_PATH } from "@/lib/site";
 
 export type NavLink = {
   href: string;
@@ -61,6 +68,11 @@ export const NAV: NavEntry[] = [
         href: "#parallel",
         label: "Parallel agents",
         hint: "three branches, three containers, no collisions",
+      },
+      {
+        href: MULTI_AGENT_PATH,
+        label: "Running a fleet",
+        hint: "several agents from one file, mixed across tasks, with the work checked before it lands",
       },
       {
         href: "#agents",

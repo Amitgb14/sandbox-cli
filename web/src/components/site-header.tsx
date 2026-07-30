@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Menu } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -20,7 +21,7 @@ import {
   navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu";
 import { GithubMark, Wordmark } from "@/components/logo";
-import { NAV } from "@/lib/nav";
+import { NAV, type NavEntry } from "@/lib/nav";
 import { DOC_URL, REPO_URL, VERSION } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
@@ -37,7 +38,65 @@ import { cn } from "@/lib/utils";
  *    popup centred under its trigger would hang off the viewport for the last
  *    group at exactly the widths where the row only just fits.
  */
-export function SiteHeader() {
+
+/**
+ * True for a nav target that is a route rather than an anchor on this page.
+ *
+ * Routes are rendered through `next/link` — via Base UI's `render` prop, so the
+ * menu keeps its own behaviour (`closeOnClick`, focus handling) and only the
+ * element underneath changes. A raw `<a href="/multi-agent/">` would work today
+ * and break the moment the site is served from a subpath, because `basePath` is
+ * applied by the framework's Link and by nothing else.
+ */
+function isRoute(href: string) {
+  return href.startsWith("/");
+}
+
+/** One row of the mobile sheet, a Link for routes and an anchor for anchors. */
+function MobileNavLink({
+  href,
+  label,
+  onNavigate,
+  className,
+}: {
+  href: string;
+  label: string;
+  onNavigate: () => void;
+  className?: string;
+}) {
+  const styles = cn(
+    "rounded-md text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+    className,
+  );
+  if (isRoute(href)) {
+    return (
+      <Link href={href} onClick={onNavigate} className={styles}>
+        {label}
+      </Link>
+    );
+  }
+  return (
+    <a href={href} onClick={onNavigate} className={styles}>
+      {label}
+    </a>
+  );
+}
+
+/**
+ * The nav, home link and install link are parameters so a second route can pass
+ * its own. Every default is the landing page's, so `<SiteHeader />` is unchanged
+ * — but a sub-page inheriting `#threat` and `#install` would render links that
+ * silently do nothing, since it has no such sections.
+ */
+export function SiteHeader({
+  nav = NAV,
+  homeHref = "#top",
+  installHref = "#install",
+}: {
+  nav?: NavEntry[];
+  homeHref?: string;
+  installHref?: string;
+} = {}) {
   const [stuck, setStuck] = useState(false);
   const [open, setOpen] = useState(false);
 
@@ -56,7 +115,7 @@ export function SiteHeader() {
       )}
     >
       <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-4 px-5 sm:px-6">
-        <a href="#top" className="flex items-center gap-2 text-[0.95rem]">
+        <a href={homeHref} className="flex items-center gap-2 text-[0.95rem]">
           <Wordmark />
         </a>
         <span className="hidden rounded-full border px-2 py-0.5 font-mono text-[0.65rem] text-muted-foreground sm:inline">
@@ -65,12 +124,13 @@ export function SiteHeader() {
 
         <NavigationMenu align="end" className="ml-auto hidden lg:flex">
           <NavigationMenuList className="gap-0.5">
-            {NAV.map((entry) =>
+            {nav.map((entry) =>
               entry.kind === "link" ? (
                 <NavigationMenuItem key={entry.href}>
                   <NavigationMenuLink
                     href={entry.href}
                     closeOnClick
+                    render={isRoute(entry.href) ? <Link href={entry.href} /> : undefined}
                     className={cn(
                       navigationMenuTriggerStyle(),
                       "text-muted-foreground hover:text-foreground",
@@ -91,6 +151,7 @@ export function SiteHeader() {
                           <NavigationMenuLink
                             href={item.href}
                             closeOnClick
+                            render={isRoute(item.href) ? <Link href={item.href} /> : undefined}
                             className="flex-col items-start gap-0.5 p-2.5"
                           >
                             <span className="text-[0.83rem] font-medium text-foreground">
@@ -133,7 +194,7 @@ export function SiteHeader() {
             <GithubMark className="size-3.5" />
             <span className="hidden sm:inline">GitHub</span>
           </a>
-          <a href="#install" className={cn(buttonVariants({ size: "sm" }), "hidden sm:inline-flex")}>
+          <a href={installHref} className={cn(buttonVariants({ size: "sm" }), "hidden sm:inline-flex")}>
             Install
           </a>
 
@@ -155,28 +216,26 @@ export function SiteHeader() {
                 </SheetTitle>
               </SheetHeader>
               <nav className="flex flex-col gap-4 px-4 pb-6">
-                {NAV.map((entry) =>
+                {nav.map((entry) =>
                   entry.kind === "link" ? (
-                    <a
+                    <MobileNavLink
                       key={entry.href}
                       href={entry.href}
-                      onClick={() => setOpen(false)}
-                      className="rounded-md px-2 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      {entry.label}
-                    </a>
+                      label={entry.label}
+                      onNavigate={() => setOpen(false)}
+                      className="px-2 py-2"
+                    />
                   ) : (
                     <div key={entry.label} className="flex flex-col gap-0.5">
                       <span className="eyebrow px-2 pb-1">{entry.label}</span>
                       {entry.items.map((item) => (
-                        <a
+                        <MobileNavLink
                           key={item.href}
                           href={item.href}
-                          onClick={() => setOpen(false)}
-                          className="rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                        >
-                          {item.label}
-                        </a>
+                          label={item.label}
+                          onNavigate={() => setOpen(false)}
+                          className="px-2 py-1.5"
+                        />
                       ))}
                     </div>
                   ),
@@ -190,7 +249,7 @@ export function SiteHeader() {
                   Docs
                 </a>
                 <a
-                  href="#install"
+                  href={installHref}
                   onClick={() => setOpen(false)}
                   className={cn(buttonVariants({ size: "sm" }))}
                 >

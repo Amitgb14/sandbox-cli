@@ -188,15 +188,22 @@ rather than merely passing. This is the single choke point for the isolation inv
   `SessionMeta` has nowhere to put a value, deliberately. Best-effort and silent on failure: the
   run is what the user asked for, the record is a courtesy.
 - **`internal/agents`** — the agents the fleet knows how to start, as data: guest argv,
-  `EnvAllow`, persisted-HOME name, and `Autonomous(prompt)`. Only agents with a **verified
-  headless mode** are in it, because a fleet is unattended and an agent that stops to ask
-  permission does not fail — it hangs. The `claude`/`codex` wrappers read the same table
+  `EnvAllow`, container `Env`, persisted-HOME name, and `Autonomous(prompt)`. Only agents with
+  a **verified headless mode** are in it (claude, codex, gemini, opencode, droid), because a
+  fleet is unattended and an agent that stops to ask permission does not fail — it hangs.
+  `TestEveryAgentHasAVerifiedHeadlessArgv` is where that stops being a convention: a new
+  descriptor with no recorded non-interactive argv fails the test rather than quietly widening
+  what a `fleet.yaml` may name. The wrappers for those five read the same table
   (`cli/descriptors.go`), and that is the whole point: the table was introduced alongside a
   second copy of Claude's bootstrap script and the two had already diverged, one *prepending*
   the agent-writable HOME to `PATH` where the other appended. Two copies of a
-  security-relevant script drift silently. Deliberately **not** in a descriptor: anything
-  producing host paths — the status-line mount, the history mount, the persisted HOME itself.
-  A descriptor says what runs inside the container and which host variable *names* may cross.
+  security-relevant script drift silently — which is also why `Bootstrap`/`NpmBootstrap` live
+  here rather than in `cli`, and why `Env` does: droid's `FACTORY_DISABLE_KEYRING` sat in the
+  wrapper, so a fleet running droid would have got an agent looking for a keyring the
+  container does not have, with nobody there to log in again. Deliberately **not** in a
+  descriptor: anything producing host paths — the status-line mount, the history mount, the
+  persisted HOME itself. A descriptor says what runs inside the container and which host
+  variable *names* may cross.
 - **`internal/fleet`** — one agent per branch, each in its own worktree and its own detached
   container, from one `fleet.yaml`. It owns **no isolation policy**: every task becomes the
   same `sandbox.Options` a `--worktree` run produces, with `Detach` set, so the boundary is
@@ -204,7 +211,12 @@ rather than merely passing. This is the single choke point for the isolation inv
   on the run path must be repeated here, and the one that was missed was `persist_auth`:
   `BuildSpec` mounts `AuthPersistDir` whenever it is non-empty, so prod's "the refresh token
   is never mounted" held for `run` and not for `fleet`. `ValidateProfile` cannot catch that
-  class; it validates the resolved `Config`, and the leak is in the `Options`.
+  class; it validates the resolved `Config`, and the leak is in the `Options`. So the rule is
+  now a table rather than a comment: `gates_test.go` classifies **every field of
+  `sandbox.Options`** as `fromSpec`, `gated` or `never`, and fails when the struct grows one
+  that is not in it. A new field is a new way for a fleet container to differ from the
+  interactive container it is supposed to be identical to, and that is where the decision gets
+  made rather than noticed later.
   `verify` is what makes a run *autonomous* rather than merely headless: a shell command,
   wrapped around the agent's argv by `withVerify`, whose exit code becomes the container's
   (`0`, or `VerifyFailedExit`). In the container because a verify running on the host would
@@ -212,7 +224,35 @@ rather than merely passing. This is the single choke point for the isolation inv
   carries the prompt, which would otherwise rewrite the script judging it. `land` is the only
   operation that writes to the base branch and refuses on every ambiguity — see below.
   `fleet.yaml` has **CLI-flag trust**, argued in `Load`'s doc comment: it is named with `-f`,
-  never discovered upward, and carries no `profile:` key.
+  never discovered upward, and carries no `profile:` key. What it also carries no key for is
+  `mounts:` — `--share` reaches the fleet as a **launch option** (`LaunchOptions.ExtraMounts`,
+  via the same `cli.shareMount` the run path uses), because a cross-project directory should
+  stay something you type rather than something a file copied between repositories turns on.
+
+  A task may name its own `agent:`, and its own `memory`/`cpus`/`allow`. Two resolution rules,
+  both in `spec.go` and both tested: caps **replace** the fleet-wide value (with `"0"` meaning
+  uncapped at either level), and `allow` **adds** to it — a task that could subtract would be
+  asking for a narrower allowlist than the file's author wrote one line above, and the way to
+  want less egress is to move the domain onto the tasks that need it. Mixing agents changes
+  nothing at the boundary; it changes the *setup*, since each agent named needs its own login
+  before an unattended run, which is why `--dry-run` says so for a mixed file.
+
+  `max_parallel` counts through `containers()`, which filters on `sandbox.fleet`. It used to
+  filter on repo alone, which meant one open `sandbox-cli claude --detach` session held a slot
+  it never freed — the exact failure the label exists to prevent, in the one place that did
+  not use it. And `checkCapacity` refuses a fleet whose **concurrent** agents (not its task
+  count — bounding concurrency is what `max_parallel` is *for*) cannot fit in the host's
+  memory, asked of the engine rather than of `/proc` since on macOS the daemon's VM budget is
+  the number that matters. A host that cannot be measured proceeds: this is resource sanity,
+  not a boundary control, so prod's "an unanswerable question is a failure" rule deliberately
+  does not apply.
+
+  `land --all` classifies refusals rather than collecting them: a refusal about **the branch**
+  (`ErrAgentRunning`, `ErrNotVerified`, `ErrNoWorktree`, `ErrNothingToLand`) skips that branch
+  and the rest carry on; a refusal about **the base** stops there, because it will be just as
+  wrong for the next branch. The sentinels carry no user-facing text — `branchRefusal` pairs
+  each with a message written for the person reading it, since classifying an error and
+  explaining it are different jobs.
 - **`internal/githard`** — neutralises the parts of a repository's git config that make git *run
   commands*, for every git call sandbox-cli makes on its own behalf. See the trust-boundary
   section below.
@@ -266,6 +306,13 @@ when exactly one sandbox is running; `kill` does not, because reading the wrong 
 costs a second and stopping the wrong agent costs its work. And `attach` renders
 `--sig-proxy=false`, so the Ctrl-C that stops you *looking* at an agent cannot stop the
 agent — `Controller.Kill` is reachable only through `kill --force`.
+
+The `KIND` column (`sessionKind`, from `sandbox.fleet`) exists because that distinction was
+already load-bearing everywhere else — `fleet stop --all` does not reach an interactive
+session, `fleet clean` does not reap one, `max_parallel` does not count one — and the listing
+was the one place it was invisible, which is exactly where somebody decides what to kill.
+`fleet status` carries the same session id in its own `ID` column for the mirror reason: a
+fleet agent is a session, and the two tables must not name it differently.
 
 Label values are printed through `termsafe.Clean`: they are text from the repository, and a
 tab-separated table should not be forgeable by a branch name. That is the same regression

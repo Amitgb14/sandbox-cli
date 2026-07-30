@@ -20,6 +20,12 @@ const dirtyLimit = 50
 type Status struct {
 	Branch string
 
+	// Agent is which agent worked this branch, read back from the container's
+	// label rather than from the fleet file — the file can be edited between the
+	// launch and the question, and a fleet may put a different agent on each
+	// branch. Empty when there is no container left to ask.
+	Agent string
+
 	// Container is the most recent container for this branch, or nil if the
 	// branch has a worktree but was never run (or its container was reaped).
 	Container *runtime.ContainerInfo
@@ -97,6 +103,9 @@ func (r *Runner) Status(ctx context.Context, base string) ([]Status, error) {
 			WorktreePath: paths[b],
 			Dirty:        len(worktree.Dirty(r.Repo, b, dirtyLimit)),
 			Ahead:        worktree.Ahead(r.Repo, b, base),
+		}
+		if s.Container != nil {
+			s.Agent = s.Container.Labels[sandbox.LabelAgent]
 		}
 		s.Elapsed = elapsed(s.Container, now)
 		out = append(out, s)

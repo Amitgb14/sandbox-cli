@@ -36,11 +36,51 @@ type Runner struct {
 	Out io.Writer
 }
 
+// LaunchOptions are the caller's choices for one `fleet run`, as opposed to the
+// file's. Everything here narrows or repeats what the fleet file already says;
+// nothing in it can widen the boundary.
+type LaunchOptions struct {
+	// Only restricts the run to these branches. It is how the one task that failed
+	// gets another go without editing the file — the alternative people reach for
+	// is commenting the other tasks out, and a fleet file with half its tasks
+	// commented out is one that will be run that way again by mistake.
+	//
+	// A branch named here that the file does not contain is an error rather than a
+	// no-op: it is a typo, and silently launching nothing looks exactly like
+	// success.
+	Only []string
+
+	// Resume skips tasks whose agent is already running or already finished
+	// successfully, and starts the rest.
+	//
+	// The case it exists for: `max_parallel` below the task count keeps `fleet
+	// run` attached to fill slots as agents exit, so a Ctrl-C there ends the
+	// *scheduling* while the running containers carry on. Without this the only
+	// way back is to re-run the file, which refuses every branch that still has a
+	// live agent and re-does the ones that already passed.
+	Resume bool
+
+	// Build forces a rebuild of the base image before the first launch.
+	Build bool
+
+	// ExtraMounts are added to every task's container, on top of the linked
+	// worktree's .git. Today this is only `--share`'s handoff directory.
+	//
+	// It is a launch option rather than a fleet.yaml key on purpose. `mounts:` is
+	// one of the privilege-relevant keys config.trust refuses from a project file,
+	// and while a fleet file has CLI-flag trust — reaching it required typing
+	// `fleet run` — a mount is the one thing worth keeping out of a file that gets
+	// copied between repositories. Naming it on the command line keeps the reach
+	// visible in your shell history.
+	ExtraMounts []string
+}
+
 // LaunchResult is the outcome of one task's launch. A failed task carries Err
 // and does not stop the rest of the fleet: with several independent agents, one
 // bad branch should not cost you the other launches.
 type LaunchResult struct {
 	Branch       string
+	Agent        string
 	WorktreePath string
 	ContainerID  string
 	Err          error
@@ -51,19 +91,30 @@ type LaunchResult struct {
 // docker calls negligible.
 const slotPoll = 2 * time.Second
 
-// Launch starts every task in spec, honoring max_parallel.
+// Launch starts the tasks opts selects from spec, honoring max_parallel.
 //
 // With max_parallel unset (or >= the task count) this returns as soon as the
 // containers are started — the agents keep running in the background. With a
 // lower cap it must stay attached, waiting for a container to exit before
 // starting the next task; the caller's context cancels that wait.
-func (r *Runner) Launch(ctx context.Context, spec Spec, forceBuild bool) ([]LaunchResult, error) {
-	agent, ok := agents.Lookup(spec.Agent)
-	if !ok {
-		return nil, fmt.Errorf("unknown agent %q", spec.Agent)
-	}
+//
+// No results and no error means there was nothing to start, which only
+// `--resume` can produce: everything the file asks for is already running or
+// already done. It is a legitimate answer rather than a failure, and the caller
+// says so.
+func (r *Runner) Launch(ctx context.Context, spec Spec, opts LaunchOptions) ([]LaunchResult, error) {
 	if r.Repo == "" {
 		return nil, fmt.Errorf("fleet needs a git repository: run it from inside one")
+	}
+	tasks, err := r.selectTasks(ctx, spec, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+	if err := r.checkCapacity(ctx, spec, len(tasks)); err != nil {
+		return nil, err
 	}
 
 	// The branch the fleet is expected to land on, resolved once and stamped on
@@ -74,8 +125,8 @@ func (r *Runner) Launch(ctx context.Context, spec Spec, forceBuild bool) ([]Laun
 	// behavior for those.
 	base := worktree.HeadBranch(r.Repo)
 
-	results := make([]LaunchResult, 0, len(spec.Tasks))
-	for i, task := range spec.Tasks {
+	results := make([]LaunchResult, 0, len(tasks))
+	for i, task := range tasks {
 		if err := ctx.Err(); err != nil {
 			return results, err
 		}
@@ -90,14 +141,26 @@ func (r *Runner) Launch(ctx context.Context, spec Spec, forceBuild bool) ([]Laun
 		// needs no build step of its own. What it must not do is ask for a *rebuild*
 		// N times: the launches are sequential, so the first one leaves an image the
 		// rest reuse.
-		results = append(results, r.launchOne(ctx, spec, agent, task, base, forceBuild && i == 0))
+		results = append(results, r.launchOne(ctx, spec, opts, task, base, opts.Build && i == 0))
 	}
 	return results, nil
 }
 
 // launchOne resolves a task's worktree and starts its container.
-func (r *Runner) launchOne(ctx context.Context, spec Spec, agent agents.Descriptor, task Task, base string, forceBuild bool) LaunchResult {
+func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, task Task, base string, forceBuild bool) LaunchResult {
 	res := LaunchResult{Branch: task.Branch}
+
+	// Looked up per task, not once for the fleet: `agent:` on a task overrides the
+	// file's, which is what lets one fleet compare two agents on two branches.
+	agent, ok := agents.Lookup(spec.AgentFor(task))
+	if !ok {
+		// Validate has already rejected this; a Spec built in code has not been
+		// through it, and starting a container for an agent that does not exist
+		// would fail deep inside the container instead.
+		res.Err = fmt.Errorf("unknown agent %q for branch %q", spec.AgentFor(task), task.Branch)
+		return res
+	}
+	res.Agent = agent.Name
 
 	// One agent per worktree. Two agents editing one checkout is silent data
 	// loss, so a branch that is already working is refused rather than joined.
@@ -120,7 +183,7 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, agent agents.Descript
 	}
 	res.WorktreePath = info.Path
 
-	opts, err := r.options(spec, agent, task, info.Path, base)
+	opts, err := r.options(spec, lo, agent, task, info.Path, base)
 	if err != nil {
 		res.Err = err
 		return res
@@ -136,14 +199,17 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, agent agents.Descript
 	if info.Created {
 		verb = "created"
 	}
-	r.logf("started %s on %s (%s worktree %s)", short(id), task.Branch, verb, info.Path)
+	// The agent is named because a fleet may now mix them, and "which agent is on
+	// this branch" is then not something the file answers at a glance.
+	r.logf("started %s: %s on %s (%s worktree %s)", short(id), agent.Name, task.Branch, verb, info.Path)
 	return res
 }
 
 // options turns a task into the sandbox options for its container. Everything
 // that defines the boundary comes from the same place an interactive run gets it;
 // fleet only adds the branch, the labels and Detach.
-func (r *Runner) options(spec Spec, agent agents.Descriptor, task Task, worktreePath, base string) (sandbox.Options, error) {
+func (r *Runner) options(spec Spec, lo LaunchOptions, agent agents.Descriptor, task Task, worktreePath, base string) (sandbox.Options, error) {
+	lim := spec.LimitsFor(task)
 	opts := sandbox.Options{
 		Project: worktreePath,
 		Detach:  true,
@@ -155,16 +221,25 @@ func (r *Runner) options(spec Spec, agent agents.Descriptor, task Task, worktree
 		Verify:  task.Verify,
 		Command: withVerify(agent.Autonomous(task.Prompt, task.Args), task.Verify),
 
-		EnvAllow:    agent.EnvAllow,
-		Memory:      spec.Defaults.Memory,
-		CPUs:        spec.Defaults.CPUs,
-		Allow:       spec.Defaults.Allow,
+		EnvAllow: agent.EnvAllow,
+		// The descriptor's own container settings — an agent told that it is in a
+		// container with no keyring, say. The interactive wrapper applies these
+		// too; a fleet that dropped them would fail in the one place nobody is
+		// watching. Copied rather than aliased, since Options.Env is appended to
+		// downstream.
+		Env:         append([]string(nil), agent.Env...),
+		Memory:      lim.Memory,
+		CPUs:        lim.CPUs,
+		Allow:       lim.Allow,
 		Cache:       spec.Defaults.Cache,
 		GitIdentity: spec.Defaults.Git,
 
 		// A fleet task always runs in a linked worktree, so the parent repo's .git
-		// must come along or the agent can edit files it can never commit.
-		ExtraMounts: sandbox.LinkedWorktreeMounts(worktreePath),
+		// must come along or the agent can edit files it can never commit. Anything
+		// the caller added — today only `--share`'s handoff directory — goes on top,
+		// and every task gets it: a channel one agent can write and another cannot
+		// read is not a channel.
+		ExtraMounts: append(sandbox.LinkedWorktreeMounts(worktreePath), lo.ExtraMounts...),
 	}
 
 	// Persist the agent's login, exactly as the interactive wrapper does — gate
@@ -209,15 +284,19 @@ func (r *Runner) runningFor(ctx context.Context, branch string) (*runtime.Contai
 	return nil, nil
 }
 
-// waitForSlot blocks until fewer than max of this repository's containers are
+// waitForSlot blocks until fewer than max of this fleet's containers are
 // running.
+//
+// Counted through r.containers, which filters on sandbox.fleet. Counting every
+// container of the repository instead — which this did — makes one open
+// `sandbox-cli claude --detach` session occupy a slot it never frees, so a
+// `max_parallel: 1` fleet waits behind somebody's interactive work forever. The
+// same label rule the rest of the package already followed: fleet commands reach
+// only what the fleet started.
 func (r *Runner) waitForSlot(ctx context.Context, max int) error {
 	announced := false
 	for {
-		infos, err := r.Inspector.Containers(ctx, map[string]string{
-			sandbox.LabelCLI:  "1",
-			sandbox.LabelRepo: r.RepoID,
-		})
+		infos, err := r.containers(ctx, "")
 		if err != nil {
 			return err
 		}

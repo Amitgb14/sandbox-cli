@@ -592,17 +592,23 @@ tasks:
     verify: go build ./... && go test ./...
 
   - branch: feature-ratelimit
+    agent: codex        # a different agent for this branch
+    memory: 8g          # and its own limits
     prompt: Add per-IP rate limiting to src/server/. Add tests. Commit when they pass.
     verify: go test ./src/server/...
 ```
 
 ```sh
 sandbox-cli fleet run                     # fan out
-sandbox-cli fleet status                  # who is running, what they produced
+sandbox-cli fleet status --watch          # who is running, what they produced
 sandbox-cli fleet logs feature-login      # what one agent actually said
-sandbox-cli fleet land feature-login      # commit + merge into your branch
+sandbox-cli fleet land --all              # commit + merge every branch that can be
 sandbox-cli fleet clean                   # reap the finished containers
 ```
+
+If part of it goes wrong, you do not re-run the file: `fleet run --only
+feature-login` retries the one task, and `fleet run --resume` starts whatever is
+not already running or finished.
 
 The **`verify:`** command is what makes this more than a fan-out. It runs inside
 the container after the agent, and its exit code — not the agent's say-so —
@@ -611,12 +617,15 @@ failed it, along with a handful of other ambiguities: a still-running agent, a
 checkout that moved to a different branch since launch, an agent working in the
 branch being merged into. It never resolves a conflict itself.
 
-Only agents with a verified headless mode may appear in a fleet (`claude`,
-`codex` today) — an unattended agent that stops to ask permission hangs rather
-than fails. Add `--profile prod` for an unattended run: it refuses where dev
+A fleet can **mix agents**: `agent:` at the top is the default, and a task that
+names its own overrides it — put Claude on one branch and Codex on another and
+compare. Only agents with a verified headless mode may appear (`claude`, `codex`,
+`gemini`, `opencode`, `droid`), because an unattended agent that stops to ask
+permission hangs rather than fails, and each one you name needs its own login
+before the run. Add `--profile prod` for an unattended run: it refuses where dev
 warns, which is what you want when nobody is watching.
 
-Full walkthrough: **[Running a fleet](docs/GUIDE.md#running-a-fleet)**. Commented
+Full walkthrough: **[Running a fleet](docs/GUIDE.md#a-fleet)**. Commented
 example: [`docs/examples/fleet.yaml`](docs/examples/fleet.yaml).
 
 ## One agent at a time (git worktrees)
@@ -730,7 +739,7 @@ docker logs "$NAME"
 
 Isolation is identical to a foreground run — same mounts, same fake HOME, same
 hardening. Full walkthrough in
-[docs/GUIDE.md](docs/GUIDE.md#running-an-agent-in-the-background).
+[docs/GUIDE.md](docs/GUIDE.md#in-the-background).
 
 ### Commands
 

@@ -10,8 +10,10 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 )
 
-// shareMount is the mount entry --share is expected to append.
-func shareMount(t *testing.T) string {
+// wantShareMount is the mount entry --share is expected to append, spelled out
+// here rather than taken from shareMount — a test that asked the code under test
+// what it should produce would agree with it whatever it did.
+func wantShareMount(t *testing.T) string {
 	t.Helper()
 	dir := config.SharedDir()
 	if dir == "" {
@@ -33,7 +35,7 @@ func TestShareMountsSharedDir(t *testing.T) {
 		t.Fatalf("newSession: %v", err)
 	}
 
-	want := shareMount(t)
+	want := wantShareMount(t)
 	if !containsStr(opts.ExtraMounts, want) {
 		t.Errorf("ExtraMounts = %#v, want to contain %q", opts.ExtraMounts, want)
 	}

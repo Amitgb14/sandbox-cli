@@ -32,6 +32,17 @@ type Descriptor struct {
 	// nothing else about the host environment crosses the boundary.
 	EnvAllow []string
 
+	// Env are NAME=VALUE settings sandbox-cli itself puts in the container, as
+	// opposed to EnvAllow's "forward the host's value if it has one". They exist
+	// for agents that behave wrongly in a container unless told something about it
+	// — a keyring that is not there, a browser that cannot open — and the values
+	// are constants compiled in here, never anything read from the host.
+	//
+	// In the descriptor rather than in the wrapper because a fleet gets no
+	// wrapper: `agent: droid` with FACTORY_DISABLE_KEYRING left behind is an agent
+	// that logs in every run and, unattended, cannot.
+	Env []string
+
 	// Command is the container argv that starts the agent, to which caller
 	// arguments are appended. It may be a shell bootstrap rather than the bare
 	// binary (see claudeBootstrap).
@@ -125,6 +136,70 @@ var registry = map[string]Descriptor{
 			// its own approval policy on top; a task that needs it relaxed passes
 			// the relevant flag through the fleet task's `args:` rather than having
 			// sandbox-cli guess at flag names that change between releases.
+			return []string{"exec", prompt}
+		},
+	},
+	"gemini": {
+		Name:       "gemini",
+		PersistDir: "gemini",
+		// GOOGLE_APPLICATION_CREDENTIALS is deliberately absent: it names a host
+		// file path that is not mounted, so forwarding it would produce a confusing
+		// "credentials file not found" instead of a clean auth prompt.
+		EnvAllow: []string{
+			"GEMINI_API_KEY",
+			"GOOGLE_API_KEY",
+			"GOOGLE_GENAI_USE_VERTEXAI",
+			"GOOGLE_CLOUD_PROJECT",
+			"GOOGLE_CLOUD_LOCATION",
+		},
+		Command: NpmBootstrap("gemini", "@google/gemini-cli"),
+		AutonomousArgs: func(prompt string) []string {
+			// -p is Gemini CLI's non-interactive prompt mode, and --yolo is its
+			// auto-approve. Both are needed: -p alone runs to completion but still
+			// stops at a tool it wants confirmed, which detached means it hangs.
+			return []string{"--yolo", "-p", prompt}
+		},
+	},
+	"opencode": {
+		Name:       "opencode",
+		PersistDir: "opencode",
+		// Provider-agnostic, so the list spans the providers it can drive rather
+		// than naming a vendor; each is forwarded only if the host has it set.
+		EnvAllow: []string{
+			"ANTHROPIC_API_KEY",
+			"OPENAI_API_KEY",
+			"GEMINI_API_KEY",
+			"GROQ_API_KEY",
+			"OPENROUTER_API_KEY",
+			"OPENCODE_CONFIG",
+			"OPENCODE_DISABLE_AUTOUPDATE",
+		},
+		Command: NpmBootstrap("opencode", "opencode-ai"),
+		AutonomousArgs: func(prompt string) []string {
+			// `opencode run` executes one message and exits. It has no TUI to draw
+			// and no approval step to reach, which is what makes it usable here.
+			return []string{"run", prompt}
+		},
+	},
+	"droid": {
+		Name:       "droid",
+		PersistDir: "droid",
+		EnvAllow: []string{
+			"FACTORY_API_KEY",
+			"FACTORY_API_BASE_URL",
+			"FACTORY_APP_BASE_URL",
+			"FACTORY_AIRGAP_ENABLED",
+			"FACTORY_ENV",
+		},
+		// Droid stores credentials in a file today, which persists correctly in the
+		// agent HOME; this keeps that true if the upstream default ever flips to a
+		// keyring, which a container has no daemon for. Goose demonstrated how
+		// easily that ships unnoticed.
+		Env:     []string{"FACTORY_DISABLE_KEYRING=1"},
+		Command: NpmBootstrap("droid", "droid"),
+		AutonomousArgs: func(prompt string) []string {
+			// `droid exec` is Factory's documented headless mode — the one the
+			// FACTORY_API_KEY path exists for.
 			return []string{"exec", prompt}
 		},
 	},
