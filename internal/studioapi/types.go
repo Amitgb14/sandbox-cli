@@ -29,8 +29,29 @@ type HealthResponse struct {
 // detached, and an agent that stops to ask permission would just hang.
 type AgentInfo struct {
 	Name       string   `json:"name"`
+	Label      string   `json:"label"`
 	PersistDir string   `json:"persistDir"`
 	EnvAllow   []string `json:"envAllow"`
+
+	// Env is what sandbox-cli itself sets in the container for this agent — the
+	// keyring droid must not look for, and so on. Distinct from EnvAllow, which
+	// is host values forwarded by *name* only if the host has them.
+	Env []string `json:"env"`
+
+	// HeadlessVerified is true for every agent listed here, and saying so
+	// explicitly is not redundant: internal/agents only registers adapters with a
+	// confirmed non-interactive argv (TestEveryAgentHasAVerifiedHeadlessArgv is
+	// where that stops being a convention), because a Studio-launched run is
+	// always detached and an agent that stops to ask permission does not fail —
+	// it hangs. A client that cannot see the flag cannot warn about the agents
+	// that would, so the field is sent rather than inferred from membership.
+	HeadlessVerified bool `json:"headlessVerified"`
+
+	// AutonomousInvocation is the argv a fleet task or a detached run would start
+	// this agent with, prompt elided — the same string `fleet run --dry-run`
+	// prints, so a launch preview and a dry run cannot disagree about what is
+	// about to happen.
+	AutonomousInvocation []string `json:"autonomousInvocation"`
 }
 
 // AgentsResponse is the body of GET /agents.

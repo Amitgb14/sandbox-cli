@@ -22,10 +22,22 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		envAllow := append([]string(nil), d.EnvAllow...)
 		sort.Strings(envAllow)
+		env := append([]string(nil), d.Env...)
+		if env == nil {
+			env = []string{}
+		}
+		// The prompt is elided rather than filled with a sample: this is shown as
+		// "what would run", and a placeholder in argv position reads as a value
+		// someone chose.
+		invocation := d.Invocation("<prompt>", nil)
 		out = append(out, AgentInfo{
-			Name:       d.Name,
-			PersistDir: d.PersistDir,
-			EnvAllow:   envAllow,
+			Name:                 d.Name,
+			Label:                d.Name,
+			PersistDir:           d.PersistDir,
+			EnvAllow:             envAllow,
+			Env:                  env,
+			HeadlessVerified:     true,
+			AutonomousInvocation: invocation,
 		})
 	}
 	writeJSON(w, http.StatusOK, AgentsResponse{Agents: out})
