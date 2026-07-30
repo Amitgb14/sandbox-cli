@@ -62,3 +62,11 @@ func withVerify(argv []string, verify string) []string {
 	// "sh" is $0 for the wrapper, so the agent's own argv lands in "$@" whole.
 	return append([]string{"sh", "-c", script, "sh"}, argv...)
 }
+
+// WithVerify is withVerify, exported for callers outside this package that
+// launch a container the same way a fleet task does — today internal/studioapi,
+// whose POST /runs accepts the same optional `verify:` a fleet task declares and
+// must wrap the guest argv identically so `fleet status`/`land`'s reading of
+// VerifyFailedExit stays meaningful regardless of which caller launched the
+// container.
+func WithVerify(argv []string, verify string) []string { return withVerify(argv, verify) }

@@ -1,0 +1,281 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Sandbox Studio theme.
+ *
+ * Dark is the default and the designed mode — light is a selected alternative,
+ * stepped for the light surface rather than an automatic flip.
+ *
+ * Two families of colour live here and they must not be confused:
+ *
+ *   - UI chrome (--background … --primary) — the product surface. `--primary`
+ *     is the brand violet and never appears as a data series.
+ *   - Data-visualisation slots (--chart-1 … --chart-8, --status-*) — assigned in
+ *     fixed order, never cycled. Validated with the dataviz validator against
+ *     *these* surfaces: dark #121214 passes all six checks for all eight slots
+ *     (worst adjacent CVD ΔE 8.4, worst normal-vision ΔE 19.3, all ≥ 3:1);
+ *     light #ffffff passes with slots 3/4/5 below 3:1, which is why every chart
+ *     ships a legend, direct labels and a table view.
+ *
+ * Status colours are reserved. `--status-good` is not "series 9".
+ */
+
+:root {
+  --radius: 0.625rem;
+
+  /* UI chrome — light */
+  --background: #fafafa;
+  --foreground: #09090b;
+  --card: #ffffff;
+  --card-foreground: #09090b;
+  --popover: #ffffff;
+  --popover-foreground: #09090b;
+  --primary: #5b3df5;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+  --destructive: #d03b3b;
+  --destructive-foreground: #ffffff;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #5b3df5;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #09090b;
+  --sidebar-primary: #5b3df5;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f4f4f5;
+  --sidebar-accent-foreground: #18181b;
+  --sidebar-border: #e4e4e7;
+  --sidebar-ring: #5b3df5;
+
+  /* Categorical slots — light steps, fixed order, never cycled */
+  --chart-1: #2a78d6; /* blue */
+  --chart-2: #eb6834; /* orange */
+  --chart-3: #1baf7a; /* aqua */
+  --chart-4: #eda100; /* yellow */
+  --chart-5: #e87ba4; /* magenta */
+  --chart-6: #008300; /* green */
+  --chart-7: #4a3aa7; /* violet */
+  --chart-8: #e34948; /* red */
+
+  /* Status — fixed, never themed, never reused as a series */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --status-idle: #898781;
+  --status-running: #2a78d6;
+
+  /* Chart chrome */
+  --viz-surface: #ffffff;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #c3c2b7;
+  --viz-muted: #898781;
+
+  /* The boundary vocabulary the CLI itself argues in, carried into the UI:
+     inside the sandbox, outside it, and deliberately widened. */
+  --contained: #0ca30c;
+  --exposed: #d03b3b;
+  --caution: #b45309;
+}
+
+.dark {
+  /* UI chrome — dark */
+  --background: #0a0a0c;
+  --foreground: #fafafa;
+  --card: #121214;
+  --card-foreground: #fafafa;
+  --popover: #16161a;
+  --popover-foreground: #fafafa;
+  --primary: #7b61ff;
+  --primary-foreground: #ffffff;
+  --secondary: #1c1c20;
+  --secondary-foreground: #fafafa;
+  --muted: #18181b;
+  --muted-foreground: #8b8b94;
+  --accent: #1f1f24;
+  --accent-foreground: #fafafa;
+  --destructive: #e66767;
+  --destructive-foreground: #ffffff;
+  --border: #26262b;
+  --input: #26262b;
+  --ring: #7b61ff;
+
+  --sidebar: #101013;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #7b61ff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1f1f24;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #26262b;
+  --sidebar-ring: #7b61ff;
+
+  /* The same eight hues, stepped for the dark surface — not a second palette */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
+
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --status-idle: #898781;
+  --status-running: #3987e5;
+
+  --viz-surface: #121214;
+  --viz-grid: #26262b;
+  --viz-axis: #383840;
+  --viz-muted: #8b8b94;
+
+  --contained: #0ca30c;
+  --exposed: #e66767;
+  --caution: #fab219;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
+
+  --color-status-good: var(--status-good);
+  --color-status-warning: var(--status-warning);
+  --color-status-serious: var(--status-serious);
+  --color-status-critical: var(--status-critical);
+  --color-status-idle: var(--status-idle);
+  --color-status-running: var(--status-running);
+
+  --color-viz-surface: var(--viz-surface);
+  --color-viz-grid: var(--viz-grid);
+  --color-viz-axis: var(--viz-axis);
+  --color-viz-muted: var(--viz-muted);
+
+  --color-contained: var(--contained);
+  --color-exposed: var(--exposed);
+  --color-caution: var(--caution);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Columns that must align vertically get tabular figures; standalone stat
+     values keep proportional ones (dataviz § Typeface & figures). */
+  table,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  /* A hairline top highlight — the one piece of "material" in the UI, used on
+     cards and the terminal chrome so surfaces read as lifted rather than
+     outlined twice. */
+  .surface-sheen {
+    box-shadow: inset 0 1px 0 0 color-mix(in oklab, var(--foreground) 6%, transparent);
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9999px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* A run that is live gets one moving thing on screen and no more. */
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--status-running) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px color-mix(in oklab, var(--status-running) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--status-running) 0%, transparent);
+  }
+}
+
+.live-dot {
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
