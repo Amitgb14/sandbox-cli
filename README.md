@@ -1236,10 +1236,11 @@ Three pieces of work, in order, each with its own scope document under
 
 1. **[Better local / dev agent experience](docs/roadmap/task-1-local-agent-experience.md)**
    — sessions you can list, attach to, follow and stop; a `doctor` that answers "is my
-   setup good?"; clearer errors. *In progress.*
+   setup good?"; clearer errors. *Shipped.*
 2. **[Multi-agent support](docs/roadmap/task-2-multi-agent.md)** — several agents in
-   parallel over git worktrees, orchestrated from the CLI.
+   parallel over git worktrees, orchestrated from the CLI. *Shipped.*
 3. **[Stronger isolation for Linux production](docs/roadmap/task-3-stronger-isolation.md)**
    — Kata Containers, so each sandbox gets its own kernel rather than sharing the host's.
+   *Next.*
 
 The roadmap index also records what is deliberately *deferred*, which is most of the rest.
