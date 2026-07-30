@@ -94,12 +94,14 @@ func (s *Server) authorized(r *http.Request) bool {
 		return true
 	}
 	presented := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if presented == "" && isWebSocketUpgrade(r) {
+	if presented == "" && r.Method == http.MethodGet && isWebSocketUpgrade(r) {
 		// The browser WebSocket API cannot set request headers, so a token-protected
 		// server would have no way to serve a browser log stream at all. Narrowed to
-		// the upgrade handshake for that reason: any other request has headers
-		// available and must use them, since a query parameter lands in access logs
-		// and shell history.
+		// a GET carrying an upgrade — which is the only shape a handshake takes — for
+		// that reason: every other request has headers available and must use them,
+		// since a query parameter lands in access logs and shell history. Without the
+		// method check, any request at all could authenticate by query string just by
+		// claiming to be an upgrade.
 		presented = r.URL.Query().Get("token")
 	}
 	return subtle.ConstantTimeCompare([]byte(presented), []byte(s.Token)) == 1

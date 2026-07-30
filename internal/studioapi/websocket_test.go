@@ -227,6 +227,21 @@ func TestWebSocketTokenViaQueryParameter(t *testing.T) {
 	if resp3.StatusCode != http.StatusUnauthorized {
 		t.Errorf("upgrade with a wrong ?token= = %d, want 401", resp3.StatusCode)
 	}
+
+	// The query-string route is for handshakes only. Without the method check, any
+	// request could authenticate by query string just by claiming to be an upgrade
+	// — and a POST that launches a container is the last place to accept a
+	// credential from a URL.
+	req := httptest.NewRequest(http.MethodPost, "/runs?token=secret", strings.NewReader(`{"command":["echo"]}`))
+	req.Host = testHost
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("POST /runs?token= with upgrade headers = %d, want 401: %s", rec.Code, rec.Body.String())
+	}
 }
 
 // TestSSERemainsTheDefaultTransport pins that a plain GET still gets Server-Sent
