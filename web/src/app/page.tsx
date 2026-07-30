@@ -17,6 +17,10 @@ import { CapabilityChart } from "@/components/capability-chart";
 import { PlatformTable } from "@/components/platform-table";
 import { SetupGuide } from "@/components/setup-guide";
 import { DeployGuide } from "@/components/deploy-guide";
+import { TutorialSteps } from "@/components/tutorial-steps";
+import { OptionCatalog } from "@/components/option-catalog";
+import { ChallengeTable } from "@/components/challenge-table";
+import { ProfileDiff } from "@/components/profile-diff";
 import { InstallCard } from "@/components/install-card";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -335,8 +339,62 @@ export default function Home() {
           </div>
         </Section>
 
+        {/* ------------------------------------------------------- tutorial */}
+        <Section id="tutorial" tinted>
+          <SectionHead
+            eyebrow="getting started"
+            title="Your first ten minutes, end to end"
+            lead={
+              <>
+                Everything above explains one idea at a time and can be read in any order. This is
+                the part that is a <em>sequence</em>: install, check the host, read the argv, push on
+                the boundary, then run the agent. Each step says what you should see, so you can
+                tell whether to continue or stop.
+              </>
+            }
+          />
+          <TutorialSteps />
+
+          <div id="options" className="mt-14 scroll-mt-20">
+            <SectionHead
+              eyebrow="the whole surface"
+              title="Every option, grouped by the question you came with"
+              lead={
+                <>
+                  The builder above is the interactive half — fifteen flags that move the boundary,
+                  so you can watch the argv change. This is the reference half: all of them,
+                  including the many that move nothing, with what happens when you leave each one
+                  out. Most of the time the answer is that you do not need it.
+                </>
+              }
+            />
+            <OptionCatalog />
+          </div>
+
+          <div id="profiles" className="mt-14 scroll-mt-20">
+            <SectionHead
+              eyebrow="dev vs prod"
+              title="What actually differs"
+              lead="Same tool, same host boundary, two dispositions. Nothing on this table is a security control being relaxed — the ones that would be are not on it, because no profile can move them."
+            />
+            <ProfileDiff />
+          </div>
+
+          <div id="troubleshooting" className="mt-14 scroll-mt-20">
+            <SectionHead
+              eyebrow="challenges and workarounds"
+              title="What goes wrong, and why it is usually working"
+              lead="Nearly everything below is a deliberate default doing its job in a way that reads like a failure the first time. Knowing which decision produced the symptom is what tells you whether to work around it or change it."
+            />
+            <ChallengeTable />
+          </div>
+        </Section>
+
         {/* -------------------------------------------------------- install */}
-        <Section id="install" tinted>
+        {/* Untinted: the tutorial above took the tinted slot to keep the bands
+            alternating, and the footer is bg-surface, so a tinted section here
+            would run straight into it. */}
+        <Section id="install">
           <div className="grid grid-cols-1 items-start gap-10 lg:grid-cols-[1fr_minmax(0,30rem)]">
             <div>
               <SectionHead
