@@ -467,3 +467,66 @@ func TestEmptyListsMarshalAsArraysNotNull(t *testing.T) {
 		}
 	}
 }
+
+// A launch refused because the branch's container name is taken must say so in
+// this tool's words, and as 409 rather than 502.
+//
+// Docker's own message is `Conflict. The container name "/sandbox-<repo>-<branch>"
+// is already in use by container "<64 hex chars>"` — which names neither the
+// branch nor a run id, and forwarded as 502 claims the daemon misbehaved when it
+// did exactly its job. The name *is* the enforcement: it refuses duplicates
+// atomically, which is what stops two agents landing in one checkout.
+func TestCreateRunExplainsAContainerNameConflict(t *testing.T) {
+	s, fr := newTestServer(t)
+
+	// First launch succeeds and leaves a container holding the branch's name.
+	first := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"echo", "hi"},
+		Branch:  "feature-x",
+	})
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first launch = %d, want 201: %s", first.Code, first.Body.String())
+	}
+
+	// The engine refuses the second, exactly as docker does.
+	fr.mu.Lock()
+	fr.startErr = fmt.Errorf(`Conflict. The container name "/sandbox-repo-feature-x" is already in use`)
+	fr.mu.Unlock()
+
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"echo", "hi"},
+		Branch:  "feature-x",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("second launch = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"feature-x", "already running"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the refusal must mention %q, got %s", want, body)
+		}
+	}
+	// And it must not be docker's raw text.
+	if strings.Contains(body, "Conflict. The container name") {
+		t.Errorf("docker's own message was forwarded verbatim: %s", body)
+	}
+}
+
+// An engine failure that is *not* a name conflict must still surface as one.
+func TestCreateRunStillReportsOtherEngineFailures(t *testing.T) {
+	s, fr := newTestServer(t)
+	fr.mu.Lock()
+	fr.startErr = fmt.Errorf("no space left on device")
+	fr.mu.Unlock()
+
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"echo", "hi"},
+		Branch:  "feature-y",
+	})
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no space left") {
+		t.Errorf("the engine's error must survive: %s", rec.Body.String())
+	}
+}

@@ -1,6 +1,7 @@
 package studioapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -83,6 +84,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	name, err := s.Session.Start(r.Context(), opts, false)
 	if err != nil {
+		if msg, held := s.nameHeldBy(r.Context(), opts); held {
+			writeError(w, http.StatusConflict, fmt.Errorf("%s", msg))
+			return
+		}
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -205,4 +210,53 @@ func (s *Server) handleStopRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toRun(c, s.Engine))
+}
+
+// nameHeldBy explains a failed launch when the branch's container name is
+// already taken, and reports whether that is what happened.
+//
+// Called *after* Start fails, never before it. The name is the enforcement:
+// docker refuses a duplicate atomically, and sandbox.containerName documents why
+// that matters — a check-then-launch has a window in which a second launch
+// passes the same check, and two agents in one checkout is silent data loss. So
+// this listing only ever explains a refusal that already happened; it never
+// decides whether to launch.
+//
+// Without it the caller got docker's own words, forwarded as a 502: `Conflict.
+// The container name "/sandbox-<repo>-<branch>" is already in use by container
+// "<64 hex chars>"`. That names neither the branch nor the run nor anything a
+// client can act on, and 502 says the daemon misbehaved when in fact it did
+// exactly its job.
+func (s *Server) nameHeldBy(ctx context.Context, opts sandbox.Options) (string, bool) {
+	if opts.Branch == "" || opts.RepoID == "" {
+		// A run with no branch gets a timestamped name, which cannot collide.
+		return "", false
+	}
+	infos, err := s.RT.Containers(ctx, map[string]string{
+		sandbox.LabelCLI:    "1",
+		sandbox.LabelRepo:   opts.RepoID,
+		sandbox.LabelBranch: opts.Branch,
+	})
+	if err != nil || len(infos) == 0 {
+		return "", false
+	}
+	// Newest first, and a live agent outranks a finished one: if both exist, the
+	// one the caller needs to know about is the one still writing.
+	c := infos[0]
+	for i := range infos {
+		if infos[i].Running() {
+			c = infos[i]
+			break
+		}
+	}
+	if c.Running() {
+		return fmt.Sprintf(
+			"an agent is already running on %q (run %s); stop it before starting another — "+
+				"two agents in one checkout overwrite each other's work",
+			opts.Branch, shortID(c.ID)), true
+	}
+	return fmt.Sprintf(
+		"a finished run (%s, exit %d) still holds %q's container name; "+
+			"read it with GET /v1/runs/%s/logs, then remove it with `sandbox-cli clean` to run again",
+		shortID(c.ID), c.ExitCode, opts.Branch, shortID(c.ID)), true
 }
