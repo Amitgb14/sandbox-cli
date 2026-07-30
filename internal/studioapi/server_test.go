@@ -165,7 +165,7 @@ func decodeBody[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 
 func TestHandleHealth(t *testing.T) {
 	s, _ := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/health", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/health", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -177,7 +177,7 @@ func TestHandleHealth(t *testing.T) {
 
 func TestHandleAgentsOnlyListsHeadlessCapable(t *testing.T) {
 	s, _ := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/agents", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/agents", nil)
 	got := decodeBody[AgentsResponse](t, rec)
 	if len(got.Agents) == 0 {
 		t.Fatal("expected at least one agent")
@@ -191,7 +191,7 @@ func TestHandleAgentsOnlyListsHeadlessCapable(t *testing.T) {
 
 func TestCreateRunWithPlainCommand(t *testing.T) {
 	s, fr := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
 		Command: []string{"echo", "hi"},
 		Branch:  "feature-x",
 	})
@@ -212,7 +212,7 @@ func TestCreateRunWithPlainCommand(t *testing.T) {
 
 func TestCreateRunRequiresAgentOrCommand(t *testing.T) {
 	s, _ := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{Branch: "x"})
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{Branch: "x"})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
@@ -220,7 +220,7 @@ func TestCreateRunRequiresAgentOrCommand(t *testing.T) {
 
 func TestCreateRunWithAgentBuildsAutonomousArgv(t *testing.T) {
 	s, fr := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
 		Agent:  "claude",
 		Prompt: "fix the bug",
 		Branch: "feature-y",
@@ -243,24 +243,24 @@ func TestCreateRunWithAgentBuildsAutonomousArgv(t *testing.T) {
 
 func TestListGetAndStopRun(t *testing.T) {
 	s, fr := newTestServer(t)
-	create := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
 		Command: []string{"sleep", "100"},
 		Branch:  "feature-z",
 	})
 	run := decodeBody[Run](t, create)
 
-	list := doRequest(t, s.Handler(), http.MethodGet, "/runs", nil)
+	list := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs", nil)
 	runs := decodeBody[RunsResponse](t, list)
 	if len(runs.Runs) != 1 {
 		t.Fatalf("listed %d runs, want 1", len(runs.Runs))
 	}
 
-	get := doRequest(t, s.Handler(), http.MethodGet, "/runs/"+run.ID, nil)
+	get := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID, nil)
 	if get.Code != http.StatusOK {
 		t.Fatalf("GET /runs/%s status = %d: %s", run.ID, get.Code, get.Body.String())
 	}
 
-	stop := doRequest(t, s.Handler(), http.MethodPost, "/runs/"+run.ID+"/stop", RunStopRequest{})
+	stop := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs/"+run.ID+"/stop", RunStopRequest{})
 	stopped := decodeBody[Run](t, stop)
 	if stopped.State != RunStateExited {
 		t.Errorf("state after stop = %q, want exited", stopped.State)
@@ -270,12 +270,12 @@ func TestListGetAndStopRun(t *testing.T) {
 	}
 
 	// Finished runs drop out of the default (live-only) listing.
-	list2 := doRequest(t, s.Handler(), http.MethodGet, "/runs", nil)
+	list2 := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs", nil)
 	runs2 := decodeBody[RunsResponse](t, list2)
 	if len(runs2.Runs) != 0 {
 		t.Errorf("listed %d live runs after stop, want 0", len(runs2.Runs))
 	}
-	listAll := doRequest(t, s.Handler(), http.MethodGet, "/runs?all=1", nil)
+	listAll := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs?all=1", nil)
 	runsAll := decodeBody[RunsResponse](t, listAll)
 	if len(runsAll.Runs) != 1 {
 		t.Errorf("listed %d runs with all=1, want 1", len(runsAll.Runs))
@@ -284,7 +284,7 @@ func TestListGetAndStopRun(t *testing.T) {
 
 func TestGetRunNotFound(t *testing.T) {
 	s, _ := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/runs/doesnotexist", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/doesnotexist", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
@@ -292,13 +292,13 @@ func TestGetRunNotFound(t *testing.T) {
 
 func TestRunLogsStreamsBothChannels(t *testing.T) {
 	s, _ := newTestServer(t)
-	create := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
 		Command: []string{"true"},
 		Branch:  "feature-logs",
 	})
 	run := decodeBody[Run](t, create)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/runs/"+run.ID+"/logs", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/logs", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -316,7 +316,7 @@ func TestCORSOnlyReflectsConfiguredOrigins(t *testing.T) {
 	s.CORSOrigins = []string{"http://localhost:3000"}
 	h := s.Handler()
 
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -324,7 +324,7 @@ func TestCORSOnlyReflectsConfiguredOrigins(t *testing.T) {
 		t.Errorf("allowed origin got no CORS header, got %q", got)
 	}
 
-	req2 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
 	req2.Header.Set("Origin", "http://evil.example")
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
@@ -338,14 +338,14 @@ func TestTokenRequiredExceptHealth(t *testing.T) {
 	s.Token = "secret"
 	h := s.Handler()
 
-	if rec := doRequest(t, h, http.MethodGet, "/health", nil); rec.Code != http.StatusOK {
+	if rec := doRequest(t, h, http.MethodGet, "/v1/health", nil); rec.Code != http.StatusOK {
 		t.Errorf("/health without token = %d, want 200", rec.Code)
 	}
-	if rec := doRequest(t, h, http.MethodGet, "/runs", nil); rec.Code != http.StatusUnauthorized {
+	if rec := doRequest(t, h, http.MethodGet, "/v1/runs", nil); rec.Code != http.StatusUnauthorized {
 		t.Errorf("/runs without token = %d, want 401", rec.Code)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -361,7 +361,7 @@ func TestWorktreeLifecycle(t *testing.T) {
 	s, _ := newTestServer(t)
 	initGitRepo(t, s.Project)
 
-	create := doRequest(t, s.Handler(), http.MethodPost, "/worktrees", WorktreeCreateRequest{Branch: "feature-a"})
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/worktrees", WorktreeCreateRequest{Branch: "feature-a"})
 	if create.Code != http.StatusCreated {
 		t.Fatalf("create status = %d: %s", create.Code, create.Body.String())
 	}
@@ -370,23 +370,23 @@ func TestWorktreeLifecycle(t *testing.T) {
 		t.Errorf("unexpected worktree: %+v", wt)
 	}
 
-	list := doRequest(t, s.Handler(), http.MethodGet, "/worktrees", nil)
+	list := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees", nil)
 	wts := decodeBody[WorktreesResponse](t, list)
 	if len(wts.Worktrees) != 1 {
 		t.Fatalf("listed %d worktrees, want 1", len(wts.Worktrees))
 	}
 
-	get := doRequest(t, s.Handler(), http.MethodGet, "/worktrees/feature-a", nil)
+	get := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees/feature-a", nil)
 	if get.Code != http.StatusOK {
 		t.Fatalf("get status = %d: %s", get.Code, get.Body.String())
 	}
 
-	del := doRequest(t, s.Handler(), http.MethodDelete, "/worktrees/feature-a", nil)
+	del := doRequest(t, s.Handler(), http.MethodDelete, "/v1/worktrees/feature-a", nil)
 	if del.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d: %s", del.Code, del.Body.String())
 	}
 
-	getAfter := doRequest(t, s.Handler(), http.MethodGet, "/worktrees/feature-a", nil)
+	getAfter := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees/feature-a", nil)
 	if getAfter.Code != http.StatusNotFound {
 		t.Fatalf("get-after-delete status = %d, want 404", getAfter.Code)
 	}
@@ -405,4 +405,26 @@ func initGitRepo(t *testing.T, dir string) {
 	}
 	run("init", "-q", "-b", "main")
 	run("commit", "--allow-empty", "-q", "-m", "init")
+}
+
+// The prefix is a contract with a separate codebase — studio/src/lib/api builds
+// every request as `${API_BASE}/v1/...`, and its daemon probe decides between
+// live and fixture data on the strength of one call to /v1/health. A 404 there
+// does not surface as an error: the UI silently renders mock data that looks
+// entirely plausible. That is how the two halves shipped unable to talk to each
+// other, so the prefix is pinned rather than left to the route list.
+func TestRoutesAreServedUnderTheV1Prefix(t *testing.T) {
+	s, _ := newTestServer(t)
+	h := s.Handler()
+
+	if rec := doRequest(t, h, http.MethodGet, "/v1/health", nil); rec.Code != http.StatusOK {
+		t.Errorf("GET /v1/health = %d, want 200 — the UI's probe path", rec.Code)
+	}
+	// Unprefixed must not answer, or a UI pointed at the wrong base would work
+	// in development and fail wherever the prefix is enforced.
+	for _, p := range []string{"/health", "/agents", "/runs", "/stats", "/worktrees"} {
+		if rec := doRequest(t, h, http.MethodGet, p, nil); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404 — routes live under /v1 only", p, rec.Code)
+		}
+	}
 }

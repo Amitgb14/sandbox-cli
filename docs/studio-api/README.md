@@ -19,7 +19,7 @@ make build-studio-api
 ./bin/sandbox-studio-api -project /path/to/repo
 ```
 
-Flags: `-addr` (default `127.0.0.1:4319`, loopback), `-project` (default: cwd),
+Flags: `-addr` (default `127.0.0.1:8787`, loopback), `-project` (default: cwd),
 `-config`, `-profile` (`dev`/`prod`, same meaning as the CLI's `--profile`),
 `-token` (or `$SANDBOX_STUDIO_TOKEN`), `-cors-origin` (repeatable).
 
@@ -30,7 +30,7 @@ request, with no confirmation prompt — that is a new local attack surface the
 CLI itself does not have, and it deserves the same care as everything else in
 `CLAUDE.md`'s trust-boundary section. Three defaults hold the line:
 
-- **Binds to loopback by default** (`127.0.0.1:4319`). Nothing off the machine
+- **Binds to loopback by default** (`127.0.0.1:8787`). Nothing off the machine
   can reach it unless you deliberately rebind `-addr`.
 - **No CORS headers unless you ask for them.** A browser tab open on some
   other site cannot read this API's responses cross-origin — the classic
@@ -59,18 +59,18 @@ there is no code generation step (yet) tying them together.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/health` | Liveness + which engine/project/profile this instance manages |
-| GET | `/agents` | Agents this API can launch headlessly (a subset of `internal/agents` — only those with a verified non-interactive mode) |
-| GET | `/runs` | List runs (`?all=1`, `?repo=`, `?branch=`, `?agent=`, `?fleet=1`) |
-| GET | `/runs/{id}` | One run, by id/name/branch — same three references `sandbox-cli list`/`kill`/`logs` accept |
-| POST | `/runs` | Launch a run — always detached (see below) |
-| POST | `/runs/{id}/stop` | Stop (or `{"force":true}` to kill) a running run |
-| POST | `/runs/{id}/recover` | Restore the crash-recovery snapshot associated with this run's branch |
-| GET | `/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
-| GET | `/runs/{id}/metrics` | One resource sample, or a live stream with `?stream=1` |
-| GET | `/stats` | One resource sample per live run, host-wide |
-| GET/POST | `/worktrees` | List / create managed git worktrees |
-| GET/DELETE | `/worktrees/{branch}` | Read / remove (`?force=1`) one worktree |
+| GET | `/v1/health` | Liveness + which engine/project/profile this instance manages |
+| GET | `/v1/agents` | Agents this API can launch headlessly (a subset of `internal/agents` — only those with a verified non-interactive mode) |
+| GET | `/v1/runs` | List runs (`?all=1`, `?repo=`, `?branch=`, `?agent=`, `?fleet=1`) |
+| GET | `/v1/runs/{id}` | One run, by id/name/branch — same three references `sandbox-cli list`/`kill`/`logs` accept |
+| POST | `/v1/runs` | Launch a run — always detached (see below) |
+| POST | `/v1/runs/{id}/stop` | Stop (or `{"force":true}` to kill) a running run |
+| POST | `/v1/runs/{id}/recover` | Restore the crash-recovery snapshot associated with this run's branch |
+| GET | `/v1/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
+| GET | `/v1/runs/{id}/metrics` | One resource sample, or a live stream with `?stream=1` |
+| GET | `/v1/stats` | One resource sample per live run, host-wide |
+| GET/POST | `/v1/worktrees` | List / create managed git worktrees |
+| GET/DELETE | `/v1/worktrees/{branch}` | Read / remove (`?force=1`) one worktree |
 
 ### Why SSE, not WebSocket
 

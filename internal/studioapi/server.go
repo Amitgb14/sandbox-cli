@@ -86,21 +86,27 @@ func New(cfg config.Config, project string) (*Server, error) {
 
 // Handler returns the routed, middleware-wrapped HTTP handler.
 func (s *Server) Handler() http.Handler {
+	// The prefix is written into each pattern rather than applied with
+	// http.StripPrefix: the middleware wraps this mux, so it sees the request
+	// path *before* any stripping, and the /health auth exemption in authorized()
+	// matches on that path. Stripping would leave the exemption reading a path
+	// that no longer arrives, which fails in the quiet direction — health would
+	// start demanding a token, and the UI's probe would report the daemon down.
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /agents", s.handleAgents)
-	mux.HandleFunc("GET /runs", s.handleListRuns)
-	mux.HandleFunc("POST /runs", s.handleCreateRun)
-	mux.HandleFunc("GET /runs/{id}", s.handleGetRun)
-	mux.HandleFunc("POST /runs/{id}/stop", s.handleStopRun)
-	mux.HandleFunc("POST /runs/{id}/recover", s.handleRecoverRun)
-	mux.HandleFunc("GET /runs/{id}/logs", s.handleRunLogs)
-	mux.HandleFunc("GET /runs/{id}/metrics", s.handleRunMetrics)
-	mux.HandleFunc("GET /stats", s.handleStats)
-	mux.HandleFunc("GET /worktrees", s.handleListWorktrees)
-	mux.HandleFunc("POST /worktrees", s.handleCreateWorktree)
-	mux.HandleFunc("GET /worktrees/{branch}", s.handleGetWorktree)
-	mux.HandleFunc("DELETE /worktrees/{branch}", s.handleDeleteWorktree)
+	mux.HandleFunc("GET "+healthPath, s.handleHealth)
+	mux.HandleFunc("GET /v1/agents", s.handleAgents)
+	mux.HandleFunc("GET /v1/runs", s.handleListRuns)
+	mux.HandleFunc("POST /v1/runs", s.handleCreateRun)
+	mux.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
+	mux.HandleFunc("POST /v1/runs/{id}/stop", s.handleStopRun)
+	mux.HandleFunc("POST /v1/runs/{id}/recover", s.handleRecoverRun)
+	mux.HandleFunc("GET /v1/runs/{id}/logs", s.handleRunLogs)
+	mux.HandleFunc("GET /v1/runs/{id}/metrics", s.handleRunMetrics)
+	mux.HandleFunc("GET /v1/stats", s.handleStats)
+	mux.HandleFunc("GET /v1/worktrees", s.handleListWorktrees)
+	mux.HandleFunc("POST /v1/worktrees", s.handleCreateWorktree)
+	mux.HandleFunc("GET /v1/worktrees/{branch}", s.handleGetWorktree)
+	mux.HandleFunc("DELETE /v1/worktrees/{branch}", s.handleDeleteWorktree)
 	return s.withMiddleware(mux)
 }
 
@@ -138,8 +144,14 @@ func (s *Server) applyCORS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 }
 
+// healthPath is the one route exempt from the bearer token, named once because
+// two places must agree on it: the route registered above and the exemption
+// below. They were two literals, so prefixing the routes would have moved one
+// and not the other.
+const healthPath = "/v1/health"
+
 func (s *Server) authorized(r *http.Request) bool {
-	if s.Token == "" || r.URL.Path == "/health" {
+	if s.Token == "" || r.URL.Path == healthPath {
 		return true
 	}
 	return r.Header.Get("Authorization") == "Bearer "+s.Token

@@ -44,7 +44,7 @@ func run() error {
 		token   string
 		origins corsOrigins
 	)
-	flag.StringVar(&addr, "addr", "127.0.0.1:4319",
+	flag.StringVar(&addr, "addr", "127.0.0.1:8787",
 		"address to listen on — loopback by default; see docs/studio-api/README.md before binding this to a network interface")
 	flag.StringVar(&project, "project", "",
 		"host directory this server manages (default: current directory)")
