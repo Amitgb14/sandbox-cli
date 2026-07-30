@@ -64,7 +64,9 @@ export function TerminalView({ run }: { run: Run }) {
   );
 
   return (
-    <div className="surface-sheen overflow-hidden rounded-lg border bg-[#0c0c0f]">
+    // `relative` anchors "Jump to latest" below. Without a positioned ancestor
+    // an absolute child walks up to the sticky header and lands off-screen.
+    <div className="surface-sheen relative overflow-hidden rounded-lg border bg-[#0c0c0f]">
       <div className="flex flex-wrap items-center gap-2 border-b border-white/5 px-3 py-1.5">
         <Terminal className="size-3.5 text-white/40" />
         <span className="font-mono text-[11px] tracking-wide text-white/40 uppercase">
@@ -176,7 +178,7 @@ export function TerminalView({ run }: { run: Run }) {
       {!follow && live && (
         <Button
           size="sm"
-          className="absolute right-6 bottom-24 shadow-lg"
+          className="absolute right-4 bottom-12 shadow-lg"
           onClick={() => setFollow(true)}
         >
           <ArrowDownToLine className="size-3.5" />

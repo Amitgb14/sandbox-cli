@@ -217,7 +217,10 @@ export function RunsTable({ runs, loading }: { runs: Run[]; loading?: boolean })
               ))
             ) : table.getRowModel().rows.length === 0 ? (
               <TableRow className="hover:bg-transparent">
-                <TableCell colSpan={runColumns.length} className="p-0">
+                {/* Visible leaf columns, not every declared column: `memory` and
+                    `profile` start hidden, so the declared count would span more
+                    cells than the row has and skew the empty state. */}
+                <TableCell colSpan={table.getVisibleLeafColumns().length} className="p-0">
                   <EmptyState
                     icon={Activity}
                     title={filtered ? "No runs match these filters" : "No runs recorded yet"}
