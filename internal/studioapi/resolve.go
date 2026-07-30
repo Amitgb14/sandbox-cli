@@ -128,6 +128,8 @@ func toRun(c runtime.ContainerInfo, engine string) Run {
 		Base:        c.Labels[sandbox.LabelBase],
 		Agent:       c.Labels[sandbox.LabelAgent],
 		Verify:      c.Labels[sandbox.LabelVerify],
+		Profile:     c.Labels[sandbox.LabelProfile],
+		Prompt:      c.Labels[sandbox.LabelPrompt],
 		CreatedAt:   c.CreatedAt,
 		OpenStdin:   c.OpenStdin,
 		TTY:         c.TTY,

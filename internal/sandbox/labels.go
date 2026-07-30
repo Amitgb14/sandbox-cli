@@ -1,5 +1,7 @@
 package sandbox
 
+import "unicode/utf8"
+
 // The docker labels stamped on every container sandbox-cli starts.
 //
 // These are the addressing mechanism for everything that happens *after* the
@@ -53,4 +55,54 @@ const (
 	// presence is what lets `land` tell "this run had no check" from "this run
 	// passed its check"; the verdict itself is the container's exit code.
 	LabelVerify = "sandbox.verify"
+
+	// LabelProfile is the security profile in force at launch — dev or prod.
+	//
+	// Recorded because it cannot be recovered afterwards and it is the first
+	// question asked of a finished run: a container's capabilities and mounts
+	// say what it *got*, but not which posture it was launched under, and the
+	// config that decided it may have been edited since. Every other reviewable
+	// fact about a run is stamped for exactly this reason.
+	LabelProfile = "sandbox.profile"
+
+	// LabelPrompt is what an agent was asked to do, when a caller supplied the
+	// prompt as a value rather than burying it in an argv.
+	//
+	// Stamped because "what was this agent told to do" is unanswerable later
+	// otherwise — the prompt survives only inside the container's command, where
+	// reading it back means parsing an agent-specific argv and knowing which
+	// position holds it.
+	//
+	// It is a label, so treat it as readable: anything that can talk to the
+	// daemon can `docker inspect` it. That is the same bargain LabelVerify
+	// already makes with a user-authored shell command, and the reason a prompt
+	// is the *only* free text stamped — a secret value never becomes one, which
+	// is what the credential broker exists to guarantee.
+	LabelPrompt = "sandbox.prompt"
 )
+
+// maxPromptLabel bounds what LabelPrompt carries.
+//
+// Docker holds labels in the container config it keeps in memory and writes on
+// every inspect, and a fleet prompt is routinely a page of instructions. The
+// value is truncated rather than dropped because the opening line is what
+// identifies a run in a list, and it is marked when truncated so no reader
+// mistakes a prefix for the whole instruction.
+const maxPromptLabel = 512
+
+// truncatePrompt bounds a prompt for LabelPrompt, marking it when it had to cut.
+//
+// The marker is not decoration: a client showing a prompt has to be able to tell
+// "this is what was asked" from "this is the start of what was asked", and a
+// silently clipped instruction reads as a complete one. Cuts on a rune boundary
+// so the value stays valid UTF-8 for JSON.
+func truncatePrompt(p string) string {
+	if len(p) <= maxPromptLabel {
+		return p
+	}
+	cut := maxPromptLabel
+	for cut > 0 && !utf8.ValidString(p[:cut]) {
+		cut--
+	}
+	return p[:cut] + "…[truncated]"
+}

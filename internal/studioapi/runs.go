@@ -158,6 +158,7 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 		opts.Agent = agent.Name
 		opts.EnvAllow = agent.EnvAllow
 		opts.Env = append(opts.Env, agent.Env...)
+		opts.Prompt = req.Prompt
 		opts.Command = fleet.WithVerify(agent.Autonomous(req.Prompt, nil), req.Verify)
 
 		// Same gate fleet.Runner.options applies, and for the same reason: the

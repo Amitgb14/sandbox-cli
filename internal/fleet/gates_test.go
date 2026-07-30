@@ -60,10 +60,14 @@ const (
 
 var optionsPolicy = map[string]fieldPolicy{
 	// What the task is.
-	"Project":     fromSpec,
-	"Command":     fromSpec,
-	"Branch":      fromSpec,
-	"Verify":      fromSpec,
+	"Project": fromSpec,
+	"Command": fromSpec,
+	"Branch":  fromSpec,
+	"Verify":  fromSpec,
+	// The task's own prompt, recorded as a label. fromSpec for the same reason
+	// Verify is: it is the task talking, it widens nothing, and the run path has
+	// the equivalent in the argv it builds.
+	"Prompt":      fromSpec,
 	"Detach":      fromSpec,
 	"RepoID":      fromSpec,
 	"Agent":       fromSpec,

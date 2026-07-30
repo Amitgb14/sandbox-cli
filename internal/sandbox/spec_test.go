@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
@@ -1401,5 +1402,71 @@ func TestPodmanLeavesAnExplicitUserAlone(t *testing.T) {
 	}
 	if spec.User != "1234:5678" {
 		t.Errorf("User = %q, want the caller's own value", spec.User)
+	}
+}
+
+// The two labels a finished run cannot be asked about any other way.
+//
+// A container's capabilities and mounts say what it *got*, but not which profile
+// it was launched under; and the prompt survives only inside an agent-specific
+// argv, where reading it back means knowing which position holds it. Both are
+// stamped for the same reason every other fact is: docker is the state store,
+// and a fact not recorded is one no later command can recover.
+func TestBuildSpecStampsProfileAndPrompt(t *testing.T) {
+	cfg := config.Default()
+	cfg.Profile = config.ProfileProd
+
+	spec, err := BuildSpec(cfg, Options{
+		Project: t.TempDir(),
+		Agent:   "claude",
+		Prompt:  "implement the login form",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := spec.Labels[LabelProfile]; got != config.ProfileProd {
+		t.Errorf("%s = %q, want %q", LabelProfile, got, config.ProfileProd)
+	}
+	if got := spec.Labels[LabelPrompt]; got != "implement the login form" {
+		t.Errorf("%s = %q", LabelPrompt, got)
+	}
+}
+
+// A run that built its own argv has no prompt to record, and the label is then
+// omitted rather than stamped blank — the rule every other label follows, so
+// that a label which is present always carries a fact.
+func TestBuildSpecOmitsAnEmptyPromptLabel(t *testing.T) {
+	spec, err := BuildSpec(config.Default(), Options{
+		Project: t.TempDir(),
+		Command: []string{"npm", "test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := spec.Labels[LabelPrompt]; ok {
+		t.Errorf("a run with no prompt must carry no %s label, got %q", LabelPrompt, spec.Labels[LabelPrompt])
+	}
+}
+
+// A fleet prompt is routinely a page of instructions, and docker holds labels in
+// the container config it writes on every inspect. Truncation is marked so no
+// reader mistakes a prefix for the whole instruction.
+func TestPromptLabelIsTruncatedAndSaysSo(t *testing.T) {
+	long := strings.Repeat("a", maxPromptLabel*2)
+	got := truncatePrompt(long)
+	if len(got) > maxPromptLabel+len("…[truncated]") {
+		t.Errorf("truncated prompt is %d bytes, want <= %d", len(got), maxPromptLabel+len("…[truncated]"))
+	}
+	if !strings.HasSuffix(got, "…[truncated]") {
+		t.Errorf("a truncated prompt must say so, got %q", got[len(got)-20:])
+	}
+	// Short prompts pass through untouched.
+	if got := truncatePrompt("do the thing"); got != "do the thing" {
+		t.Errorf("short prompt was altered: %q", got)
+	}
+	// And the result stays valid UTF-8, since it becomes a JSON string.
+	multibyte := strings.Repeat("é", maxPromptLabel)
+	if !utf8.ValidString(truncatePrompt(multibyte)) {
+		t.Error("truncation cut a rune in half")
 	}
 }

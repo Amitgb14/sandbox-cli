@@ -75,6 +75,17 @@ type Options struct {
 	// argv (internal/fleet.withVerify).
 	Verify string
 
+	// Prompt is what the agent was asked to do, for the record only — exactly
+	// like Verify. The prompt that actually runs travels inside Command, built
+	// by the agent descriptor; this is the same text handed over separately so
+	// it can be stamped as a label and read back without parsing an
+	// agent-specific argv to find which position holds it.
+	//
+	// Callers that build Command themselves (a plain `run -- cmd`) leave it
+	// empty, and the label is then omitted rather than stamped blank: a label
+	// that is present always carries a fact.
+	Prompt string
+
 	// AuthPersistDir, when non-empty, is a host directory bind-mounted read-write
 	// as the agent's whole HOME so its login/config survives the ephemeral
 	// container (log in once). Set by the claude/codex wrappers.
@@ -538,12 +549,14 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// container running with the workspace still mounted.
 	labels := map[string]string{LabelCLI: "1"}
 	for k, v := range map[string]string{
-		LabelRepo:   opts.RepoID,
-		LabelBranch: opts.Branch,
-		LabelAgent:  opts.Agent,
-		LabelBase:   opts.Base,
-		LabelVerify: opts.Verify,
-		LabelFleet:  boolLabel(opts.Fleet),
+		LabelRepo:    opts.RepoID,
+		LabelBranch:  opts.Branch,
+		LabelAgent:   opts.Agent,
+		LabelBase:    opts.Base,
+		LabelVerify:  opts.Verify,
+		LabelFleet:   boolLabel(opts.Fleet),
+		LabelProfile: cfg.Profile,
+		LabelPrompt:  truncatePrompt(opts.Prompt),
 	} {
 		if v != "" {
 			labels[k] = v

@@ -205,6 +205,15 @@ type Run struct {
 	Agent  string `json:"agent,omitempty"`
 	Verify string `json:"verify,omitempty"`
 
+	// Profile is the posture the run was launched under, and Prompt what the
+	// agent was asked to do. Both are read from labels stamped at launch: a
+	// container says what confinement it got but not which profile chose it, and
+	// a prompt otherwise survives only inside an agent-specific argv. Absent for
+	// containers started before either label existed, which is why both omit
+	// rather than send an empty string.
+	Profile string `json:"profile,omitempty"`
+	Prompt  string `json:"prompt,omitempty"`
+
 	CreatedAt  time.Time  `json:"createdAt"`
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
