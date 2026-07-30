@@ -412,6 +412,36 @@ type Worktree struct {
 	// empty makes the ordinary case the one that crashes.
 	Dirty      []string `json:"dirty"`
 	DirtyCount int      `json:"dirtyCount"`
+
+	Head   string `json:"head"`   // the abbreviated commit this branch points at
+	RepoID string `json:"repoId"` // the id every container of this project is labelled with
+
+	// Ahead and Behind are counted against Base. "3 ahead" says there is
+	// something to land; "3 ahead, 40 behind" says landing it will be a merge.
+	Ahead  int `json:"ahead"`
+	Behind int `json:"behind"`
+
+	// Base is the branch this work is meant to land on, taken from the label the
+	// launching run stamped rather than from whatever is checked out now — the
+	// label is the intent, and `land` treats a disagreement between the two as a
+	// refusal rather than a preference. Null when nothing recorded one.
+	Base *string `json:"base"`
+
+	// RunID is the run currently working this branch, if one is live.
+	RunID *string `json:"runId"`
+
+	// Verified is what the branch's last run said about its own definition of
+	// done: true if it passed, false if it failed or died before reaching its
+	// verify, and **null when nothing checked it** — no container left to ask, or
+	// a run that declared no verify at all. Null is not false. `land` refuses a
+	// branch that never passed, so a client showing "unverified" and "failed" the
+	// same way would be misreporting the one distinction that decides the merge.
+	Verified *bool `json:"verified"`
+
+	// CreatedAt is when the checkout appeared on disk. git records no creation
+	// time for a worktree, so this is the directory's own — accurate for the
+	// managed worktrees this lists, all of which sandbox-cli created.
+	CreatedAt string `json:"createdAt"`
 }
 
 // WorktreesResponse is the body of GET /worktrees.

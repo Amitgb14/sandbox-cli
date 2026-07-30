@@ -1,9 +1,14 @@
 package studioapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -14,9 +19,13 @@ func (s *Server) handleListWorktrees(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
+	// Containers read once for the whole listing rather than per row: it is one
+	// call to the engine either way, and asking per branch would let two rows of
+	// one response describe different moments.
+	runs := s.runsByBranch(r.Context())
 	out := make([]Worktree, 0, len(infos))
 	for _, info := range infos {
-		out = append(out, s.toWorktree(info))
+		out = append(out, s.toWorktree(info, runs))
 	}
 	writeJSON(w, http.StatusOK, WorktreesResponse{Worktrees: out})
 }
@@ -43,7 +52,7 @@ func (s *Server) handleCreateWorktree(w http.ResponseWriter, r *http.Request) {
 	if info.Created {
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, s.toWorktree(info))
+	writeJSON(w, status, s.toWorktree(info, s.runsByBranch(r.Context())))
 }
 
 // handleGetWorktree is GET /worktrees/{branch}.
@@ -58,7 +67,7 @@ func (s *Server) handleGetWorktree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("no worktree for branch %q", branch))
 		return
 	}
-	writeJSON(w, http.StatusOK, s.toWorktree(worktree.Info{Branch: branch, Path: path}))
+	writeJSON(w, http.StatusOK, s.toWorktree(worktree.Info{Branch: branch, Path: path}, s.runsByBranch(r.Context())))
 }
 
 // handleDeleteWorktree is DELETE /worktrees/{branch}?force=1. Without force,
@@ -74,17 +83,103 @@ func (s *Server) handleDeleteWorktree(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) toWorktree(info worktree.Info) Worktree {
+// runsByBranch indexes this repository's containers by the branch they worked,
+// newest first, so a listing can answer "what ran here" without one engine call
+// per row. An engine that cannot be reached yields an empty index rather than an
+// error: the worktrees are real whether or not docker is up, and a status
+// listing that fails entirely because one of its columns is unavailable is worse
+// than one with that column empty.
+func (s *Server) runsByBranch(ctx context.Context) map[string][]runtime.ContainerInfo {
+	out := map[string][]runtime.ContainerInfo{}
+	infos, err := s.RT.Containers(ctx, map[string]string{
+		sandbox.LabelCLI:  "1",
+		sandbox.LabelRepo: s.RepoID,
+	})
+	if err != nil {
+		return out
+	}
+	for _, c := range infos {
+		if b := c.Labels[sandbox.LabelBranch]; b != "" {
+			out[b] = append(out[b], c)
+		}
+	}
+	return out
+}
+
+func (s *Server) toWorktree(info worktree.Info, runs map[string][]runtime.ContainerInfo) Worktree {
 	dirty := worktree.Dirty(s.Project, info.Branch, 0)
 	if dirty == nil {
 		// A nil slice marshals to `null`, not `[]`, so a clean worktree would
 		// still hand the client something it has to guard before iterating.
 		dirty = []string{}
 	}
-	return Worktree{
+
+	wt := Worktree{
 		Branch:     info.Branch,
 		Path:       info.Path,
 		Dirty:      dirty,
 		DirtyCount: len(dirty),
+		Head:       worktree.Head(s.Project, info.Branch),
+		RepoID:     s.RepoID,
 	}
+
+	if fi, err := os.Stat(info.Path); err == nil {
+		wt.CreatedAt = fi.ModTime().UTC().Format(time.RFC3339)
+	}
+
+	// The recorded base, not the checked-out one. `land` treats the label as the
+	// intent and a disagreement with HEAD as a refusal rather than a preference,
+	// so a listing that quietly counted against whatever happens to be checked
+	// out would show a different number than the merge will use.
+	base := ""
+	for _, c := range runs[info.Branch] {
+		if b := c.Labels[sandbox.LabelBase]; b != "" {
+			base = b
+			break
+		}
+	}
+	if base == "" {
+		base = worktree.HeadBranch(s.Project)
+	}
+	if base != "" {
+		b := base
+		wt.Base = &b
+		wt.Ahead = worktree.Ahead(s.Project, info.Branch, base)
+		wt.Behind = worktree.Behind(s.Project, info.Branch, base)
+	}
+
+	for _, c := range runs[info.Branch] {
+		if c.Running() {
+			id := shortID(c.ID)
+			wt.RunID = &id
+			break
+		}
+	}
+	wt.Verified = verifiedByLastRun(runs[info.Branch])
+	return wt
+}
+
+// verifiedByLastRun reports what the branch's most recent run said about its own
+// definition of done.
+//
+// Nil is a third answer and not a synonym for false: no container left to ask,
+// or a run that declared no verify at all, means *nothing checked this* — which
+// is what `land` reports as unverified and refuses on. A client that rendered
+// nil and false the same way would erase the one distinction that decides
+// whether the work may be merged.
+//
+// Classified exactly as fleet.verifyState and land.checkVerified do, because a
+// third reading of the same two facts is a third chance for them to disagree.
+func verifiedByLastRun(cs []runtime.ContainerInfo) *bool {
+	for _, c := range cs {
+		if c.Labels[sandbox.LabelVerify] == "" {
+			continue // declared no verify: it cannot answer this
+		}
+		if c.Running() {
+			return nil // still deciding
+		}
+		passed := c.ExitCode == 0
+		return &passed
+	}
+	return nil
 }

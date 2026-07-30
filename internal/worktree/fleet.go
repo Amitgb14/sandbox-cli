@@ -155,3 +155,48 @@ func Merge(dir, branch string) error {
 	}
 	return nil
 }
+
+// Behind counts commits on base that branch does not have — how far a branch has
+// fallen behind what it is meant to land on.
+//
+// The mirror of Ahead, and worth having alongside it: "3 ahead" says there is
+// something to land, "3 ahead, 40 behind" says landing it will be a merge. Same
+// bargain as Ahead on failure — an unanswerable question counts as zero, because
+// this is a status number and one broken worktree must not blank the rest.
+func Behind(dir, branch, base string) int {
+	if branch == "" || base == "" || branch == base {
+		return 0
+	}
+	root, err := RepoRoot(dir)
+	if err != nil {
+		return 0
+	}
+	out, err := runGit(root, "rev-list", "--count", branch+".."+base)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// Head returns the abbreviated commit id a branch points at, or "" when it
+// cannot be read. Abbreviated because it is shown, not resolved: a caller that
+// needs to address the commit has the branch name, which is what every other
+// operation here takes.
+func Head(dir, branch string) string {
+	if branch == "" {
+		return ""
+	}
+	root, err := RepoRoot(dir)
+	if err != nil {
+		return ""
+	}
+	out, err := runGit(root, "rev-parse", "--short", branch)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}

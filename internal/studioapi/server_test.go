@@ -530,3 +530,45 @@ func TestCreateRunStillReportsOtherEngineFailures(t *testing.T) {
 		t.Errorf("the engine's error must survive: %s", rec.Body.String())
 	}
 }
+
+// `land` refuses a branch that never passed its verify, so "nothing checked
+// this" and "this failed" are different answers and the wire has to keep them
+// apart. Null is not false.
+func TestWorktreeVerifiedDistinguishesUncheckedFromFailed(t *testing.T) {
+	withVerify := func(state string, code int) runtime.ContainerInfo {
+		return runtime.ContainerInfo{
+			State:    state,
+			ExitCode: code,
+			Labels:   map[string]string{sandbox.LabelVerify: "go test ./..."},
+		}
+	}
+	noVerify := runtime.ContainerInfo{State: "exited", Labels: map[string]string{}}
+
+	cases := []struct {
+		name string
+		in   []runtime.ContainerInfo
+		want *bool
+	}{
+		{"no container to ask", nil, nil},
+		{"ran, declared no verify", []runtime.ContainerInfo{noVerify}, nil},
+		{"passed", []runtime.ContainerInfo{withVerify("exited", 0)}, boolPtr(true)},
+		{"failed its verify", []runtime.ContainerInfo{withVerify("exited", 90)}, boolPtr(false)},
+		{"died before its verify", []runtime.ContainerInfo{withVerify("exited", 137)}, boolPtr(false)},
+		{"still running", []runtime.ContainerInfo{withVerify("running", 0)}, nil},
+		// Newest first: an older passing run must not speak for a newer failure.
+		{"newest wins", []runtime.ContainerInfo{withVerify("exited", 90), withVerify("exited", 0)}, boolPtr(false)},
+	}
+	for _, tc := range cases {
+		got := verifiedByLastRun(tc.in)
+		switch {
+		case tc.want == nil && got != nil:
+			t.Errorf("%s: got %v, want null", tc.name, *got)
+		case tc.want != nil && got == nil:
+			t.Errorf("%s: got null, want %v", tc.name, *tc.want)
+		case tc.want != nil && got != nil && *tc.want != *got:
+			t.Errorf("%s: got %v, want %v", tc.name, *got, *tc.want)
+		}
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
