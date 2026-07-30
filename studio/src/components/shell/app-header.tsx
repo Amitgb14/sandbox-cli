@@ -130,12 +130,16 @@ function ThemeToggle() {
         <Button
           variant="ghost"
           size="icon"
-          className="size-8"
+          // `relative` is load-bearing: the two icons are stacked on top of each
+          // other so one can rotate out as the other rotates in, and an absolute
+          // child with no positioned ancestor would anchor to the sticky header
+          // instead — which put the moon off-centre in the button.
+          className="relative size-8"
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           aria-label="Toggle theme"
         >
-          <Sun className="size-4 scale-0 rotate-90 transition-transform dark:scale-100 dark:rotate-0" />
-          <Moon className="absolute size-4 scale-100 rotate-0 transition-transform dark:scale-0 dark:-rotate-90" />
+          <Sun className="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2 scale-0 rotate-90 transition-transform dark:scale-100 dark:rotate-0" />
+          <Moon className="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2 scale-100 rotate-0 transition-transform dark:scale-0 dark:-rotate-90" />
         </Button>
       </TooltipTrigger>
       <TooltipContent>

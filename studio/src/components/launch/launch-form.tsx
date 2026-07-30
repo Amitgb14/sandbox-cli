@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Bot, GitBranch, Play, ShieldCheck, Terminal } from "lucide-react";
 import { toast } from "sonner";
@@ -78,6 +78,34 @@ export function LaunchForm() {
   const [worktreeMode, setWorktreeMode] = useState<"main" | "new" | "existing">("main");
   const [newBranch, setNewBranch] = useState("");
 
+  /**
+   * `?branch=` arrives from the worktrees page's "Start an agent here" and from
+   * the palette. It carries the branch alone, so the repository has to be looked
+   * up from it — a branch is only meaningful inside the repo that holds it, and
+   * selecting the branch without its repo would leave the picker empty.
+   *
+   * It fires once, on the first load of the worktree list rather than on mount,
+   * because the list is fetched: applying it repeatedly would fight whatever the
+   * person picked afterwards.
+   */
+  const deepLinkBranch = search.get("branch");
+  const deepLinkApplied = useRef(false);
+
+  useEffect(() => {
+    if (deepLinkApplied.current || !deepLinkBranch || !worktrees) return;
+    const match = worktrees.find((w) => !w.primary && w.branch === deepLinkBranch);
+    if (!match) return;
+    deepLinkApplied.current = true;
+    const repo = REPOS.find((r) => r.id === match.repoId);
+    setReq((prev) => ({
+      ...prev,
+      workspace: repo?.root ?? prev.workspace,
+      worktree: match.branch,
+      base: match.base ?? prev.base,
+    }));
+    setWorktreeMode("existing");
+  }, [deepLinkBranch, worktrees]);
+
   function patch(next: Partial<LaunchRequest>) {
     setReq((prev) => ({ ...prev, ...next }));
   }
@@ -95,8 +123,14 @@ export function LaunchForm() {
   const blocked = preview.refusals.length > 0;
 
   const agentMeta = agents?.find((a) => a.name === req.agent);
+  // Matched by repo **id**, never by a name derived from the workspace path.
+  // Two clones of a same-named repo would otherwise share a namespace — and the
+  // name-derived version was already wrong here, because a worktree path
+  // carries the id (`intrupt-web-1f3ab902`) while the workspace directory
+  // carries the name (`intrupt_web`), so it matched nothing for those repos.
+  const selectedRepoId = REPOS.find((r) => r.root === req.workspace)?.id ?? null;
   const repoWorktrees = (worktrees ?? []).filter(
-    (w) => !w.primary && w.path.includes(shortRepoId(req.workspace)),
+    (w) => !w.primary && w.repoId === selectedRepoId,
   );
 
   function submit() {
@@ -545,11 +579,6 @@ export function LaunchForm() {
       </aside>
     </div>
   );
-}
-
-/** Best-effort repo id from a workspace path, for matching worktrees. */
-function shortRepoId(workspace: string): string {
-  return workspace.split("/").filter(Boolean).pop() ?? "";
 }
 
 function Section({
