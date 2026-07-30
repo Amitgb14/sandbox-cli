@@ -159,7 +159,13 @@ export const api = {
     }),
 
   doctor: () =>
-    request<DoctorCheck[]>("/v1/doctor", { fixture: () => MOCK_DOCTOR, latencyMs: 900 }),
+    request<DoctorCheck[]>("/v1/doctor", {
+      fixture: () => MOCK_DOCTOR,
+      latencyMs: 900,
+      // `{profile, checks}` on the wire: the profile the checks were run against
+      // is part of the answer, since the same host passes dev and fails prod.
+      unwrap: (b) => (b as { checks: DoctorCheck[] }).checks,
+    }),
 
   audit: () =>
     request<AuditRecord[]>("/v1/audit", { fixture: () => MOCK_AUDIT, latencyMs: 300 }),

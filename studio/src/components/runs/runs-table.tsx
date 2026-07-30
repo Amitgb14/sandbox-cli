@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   flexRender,
@@ -95,7 +95,21 @@ export function RunsTable({ runs, loading }: { runs: Run[]; loading?: boolean })
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
     initialState: { pagination: { pageSize: 20 } },
+    // Off, and replaced by the effect below. Auto-reset schedules its page-index
+    // update through the table's own microtask queue, which on the first pass
+    // runs before this component has finished mounting — React reports that as
+    // "a side-effect in your render function". The behaviour is worth keeping
+    // though: filtering down to five rows while you are on page three should
+    // not show you an empty page.
+    autoResetPageIndex: false,
   });
+
+  // What auto-reset did, from where React asks for it. Deliberately not keyed on
+  // the row count: rows change as runs start and finish, and a table that jumped
+  // you back to page one every time an agent exited would be unusable.
+  useEffect(() => {
+    table.setPageIndex(0);
+  }, [table, columnFilters, query]);
 
   const filtered = columnFilters.length > 0 || query.length > 0;
   const selectedRuns = table.getFilteredSelectedRowModel().rows.map((r) => r.original);
