@@ -1,0 +1,107 @@
+# Sandbox Studio, locally.
+#
+#   docker compose up                      # UI only — run the API on your host
+#   docker compose --profile api up        # UI + API in containers (see below)
+#
+# The default gives you the UI and nothing else, and that is deliberate.
+#
+# ── Why the API is opt-in ────────────────────────────────────────────────────
+#
+# The API's job is to launch containers, so running it inside one means mounting
+# the host's docker socket into it. A process that can reach that socket can
+# start a container with any mount it likes — including `/` — which is root on
+# the host. sandbox-cli exists to keep an agent's blast radius inside a
+# container; handing that same container the socket undoes it in one line.
+#
+# That is fine for a laptop you already trust, and it is not fine as a default,
+# so it lives behind `--profile api`. The recommended shape is the default one:
+# the UI in a container, the API as an ordinary host process that already has
+# the access it needs.
+#
+#   go run ./cmd/sandbox-studio-api -cors-origin http://localhost:3100
+#
+# ── Why the paths look redundant ─────────────────────────────────────────────
+#
+# When the API asks the daemon for a container with `-v /a/b:/workspace`, the
+# daemon resolves `/a/b` on the *host*, not inside the API container. So the
+# project has to live at the same absolute path in both places, or every
+# sandbox the API starts mounts a directory that does not exist. That is what
+# the `${PWD}:${PWD}` mounts are for, and why the API runs with `-project
+# ${PWD}` rather than a path of its own choosing.
+
+name: sandbox-studio
+
+services:
+  ui:
+    build:
+      context: ./studio
+      dockerfile: Dockerfile.dev
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      # Source from the host so edits are live. node_modules stays the image's
+      # copy: the host's may be built for another platform, and on macOS a bind
+      # mount of it is slow enough to notice.
+      - ./studio:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      # Read by the *browser*, not by the container — NEXT_PUBLIC_* values are
+      # inlined into the client bundle. So it has to be the URL you would type,
+      # not a compose service name: `http://api:8787` resolves inside the
+      # network and nowhere in your browser.
+      NEXT_PUBLIC_SANDBOX_API: http://localhost:8787
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Bind-mounted source on macOS and Windows does not deliver inotify
+      # events; without this the dev server never notices your edits.
+      WATCHPACK_POLLING: "true"
+
+  api:
+    profiles: [api]
+    build:
+      context: .
+      dockerfile: Dockerfile.studio-api
+    ports:
+      # Published to loopback only. The API has no authentication unless you set
+      # SANDBOX_STUDIO_TOKEN, and it can start containers.
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # Root on the host. See the note at the top of this file.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and out, so the bind mounts this server asks the daemon
+      # for resolve to the same directory the daemon sees.
+      - ${PWD}:${PWD}
+      # Agent logins, worktrees, the run audit log, the rescue snapshots — the
+      # same state the CLI reads and writes.
+      #
+      # Mounted at its host path for the same reason ${PWD} is, and it is not
+      # cosmetic: git records a linked worktree by absolute path, so the
+      # worktrees under here are registered as `${HOME}/.config/sandbox/...`.
+      # At /root/.config/sandbox they exist but resolve to nothing, and the
+      # worktree listing comes back empty with no error to explain it.
+      - ${HOME}/.config/sandbox:${HOME}/.config/sandbox
+    environment:
+      # So config.ConfigRoot and the worktree paths agree with the mount above.
+      HOME: ${HOME}
+      # Optional but recommended: with no token, every request but /v1/health is
+      # unauthenticated, and anything that can reach the port can launch a run.
+      SANDBOX_STUDIO_TOKEN: ${SANDBOX_STUDIO_TOKEN:-}
+    command:
+      - -addr
+      - 0.0.0.0:8787
+      - -project
+      - ${PWD}
+      - -cors-origin
+      - http://localhost:3100
+      # Empty means "discover normally", which is the same as not passing it.
+      #
+      # Set it when your project has a `.sandbox.yaml` carrying keys a *project*
+      # config may not (image, mounts, secrets, env_allow, a weakening
+      # network.mode). Discovery refuses those and the server will not start —
+      # correctly, because that file travels with the repository. Naming the
+      # path is the deliberate act that makes it trusted, which is exactly the
+      # escape hatch the refusal describes:
+      #
+      #   SANDBOX_CONFIG=$PWD/.sandbox.yaml docker compose --profile api up
+      - -config
+      - ${SANDBOX_CONFIG:-}

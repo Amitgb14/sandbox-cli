@@ -13,7 +13,39 @@ npm run dev        # http://localhost:3100
 npm run typecheck
 npm run lint
 npm run build
+npm run test:e2e   # Playwright: every route renders with no console errors
 ```
+
+## Without a Node toolchain
+
+`docker-compose.yml` at the repository root runs the UI in a container:
+
+```sh
+docker compose up            # http://localhost:3100
+```
+
+The API stays a host process, which is the recommended shape — it launches
+containers, so in a container it would need the host's docker socket, and
+anything holding that socket is root on the host:
+
+```sh
+go run ./cmd/sandbox-studio-api -cors-origin http://localhost:3100
+```
+
+If you want both in containers anyway, the API is behind an opt-in profile and
+the compose file explains what you are agreeing to:
+
+```sh
+docker compose --profile api up
+```
+
+Two things that file gets right and are easy to get wrong yourself. The API and
+the daemon must agree on absolute paths, because a bind mount the API asks for
+is resolved by the daemon on the *host* — so the project and
+`~/.config/sandbox` are mounted at their own paths, not at `/app` or `/root`.
+And `NEXT_PUBLIC_SANDBOX_API` is read by the **browser**, so it has to be a URL
+you could type: `http://api:8787` resolves inside the compose network and
+nowhere else.
 
 This is a **separate app from `web/`** and deliberately so. `web/` is the landing
 page: a static export, light-only, with no server. Studio talks to a local daemon,
