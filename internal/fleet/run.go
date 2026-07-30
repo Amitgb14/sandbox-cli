@@ -222,7 +222,15 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, tas
 	}
 	// The agent is named because a fleet may now mix them, and "which agent is on
 	// this branch" is then not something the file answers at a glance.
-	r.logf("started %s: %s on %s (%s worktree %s)", short(id), agent.Name, task.Branch, verb, info.Path)
+	//
+	// No id here, deliberately. This line used to open with one, but Session.Start
+	// returns the container *name* rather than an id, and every fleet container in
+	// a repository is named sandbox-<repo>-<branch> — so truncating it to docker's
+	// 12 characters printed the identical "sandbox-sand" for every task, which
+	// identifies nothing and reads like it should. The branch is the fleet's
+	// handle everywhere else (logs, stop, land all take one), and `fleet status`
+	// prints the real ids from the inspector for the commands that want one.
+	r.logf("started %s on %s (%s worktree %s)", agent.Name, task.Branch, verb, info.Path)
 	return res
 }
 
@@ -372,12 +380,4 @@ func (r *Runner) logf(format string, args ...any) {
 		w = os.Stderr
 	}
 	fmt.Fprintf(w, "sandbox-cli: "+format+"\n", args...)
-}
-
-// short truncates a container id to the 12 characters docker itself displays.
-func short(id string) string {
-	if len(id) > 12 {
-		return id[:12]
-	}
-	return id
 }
