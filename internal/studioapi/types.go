@@ -18,9 +18,25 @@ type HealthResponse struct {
 	Status          string `json:"status"` // "ok" | "degraded"
 	Version         string `json:"version"`
 	Engine          string `json:"engine"` // "docker" | "podman"
+	EngineVersion   string `json:"engineVersion"`
 	DockerAvailable bool   `json:"dockerAvailable"`
 	Project         string `json:"project"` // the host directory this server manages
 	Profile         string `json:"profile"` // "dev" | "prod"
+
+	// Host is what this machine is, as the engine and the Go runtime report it.
+	// Always present: a client showing "where am I running" has nowhere to put
+	// an absent object, and the zero values are honest — 0 bytes means the
+	// engine would not say, which is the same answer `fleet` accepts when it
+	// cannot size the host.
+	Host HostInfo `json:"host"`
+}
+
+// HostInfo is the daemon's view of the machine it runs on.
+type HostInfo struct {
+	OS       string `json:"os"`
+	Arch     string `json:"arch"`
+	CPUs     int    `json:"cpus"`
+	MemBytes int64  `json:"memBytes"`
 }
 
 // AgentInfo describes one agent adapter sandbox-cli knows how to launch
@@ -81,6 +97,34 @@ type AgentInfo struct {
 	// descriptor is reported untracked rather than guessed at.
 	Sessions     int    `json:"sessions"`
 	ContextStore string `json:"contextStore"` // "verified" | "empty" | "missing" | "untracked"
+}
+
+// UsageWindow is one subscription window: how much of it is spent, and when it
+// resets.
+//
+// Utilization is a pointer because absent and zero are different answers, and
+// this is the field where confusing them matters most. A window past its reset
+// has a cached figure describing the period that already ended, so it reports
+// null — "we cannot honestly say" — rather than a number that is merely wrong.
+type UsageWindow struct {
+	Kind        string   `json:"kind"`  // "five_hour" | "seven_day"
+	Label       string   `json:"label"` // for display: "5-hour", "Weekly"
+	Utilization *float64 `json:"utilization"`
+	ResetsAt    *string  `json:"resetsAt"`
+	Scope       string   `json:"scope,omitempty"` // the model a per-model allowance covers
+}
+
+// UsageSnapshot is one reading of an agent's usage cache.
+//
+// FetchedAt is when the *agent* last refreshed these numbers from the server,
+// not when this server read the file — and it is always sent, because these
+// figures refresh only when the agent talks to the server and an unlabelled
+// percentage can be hours stale.
+type UsageSnapshot struct {
+	Agent     string        `json:"agent"`
+	Windows   []UsageWindow `json:"windows"`
+	FetchedAt *string       `json:"fetchedAt"`
+	Path      *string       `json:"path"`
 }
 
 // AgentAuth is where an agent's login is persisted, and whether it is there yet.
