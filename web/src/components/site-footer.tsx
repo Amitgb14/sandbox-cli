@@ -2,21 +2,12 @@ import Link from "next/link";
 import { GithubMark, Wordmark } from "@/components/logo";
 import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, VERSION } from "@/lib/site";
 
-export type FooterLink = { label: string; href: string };
-
 /**
- * "On this page" is per route. It is a parameter for the same reason the
- * header's nav is: a sub-page listing the landing page's anchors renders links
- * that quietly do nothing.
+ * Outbound links only. There is deliberately no "on this page" index here — the
+ * header's grouped menus are the in-page navigation, and repeating them at the
+ * bottom made the footer a second table of contents for a page you have by then
+ * already scrolled through.
  */
-const ON_THIS_PAGE: FooterLink[] = [
-  { label: "Why", href: "#threat" },
-  { label: "Features", href: "#features" },
-  { label: "Config file", href: "#config" },
-  { label: "Agents", href: "#agents" },
-  { label: "Compare", href: "#compare" },
-];
-
 const COLUMNS = [
   {
     title: "Docs",
@@ -39,11 +30,10 @@ const COLUMNS = [
   },
 ];
 
-export function SiteFooter({ onThisPage = ON_THIS_PAGE }: { onThisPage?: FooterLink[] } = {}) {
-  const columns = [...COLUMNS, { title: "On this page", links: onThisPage }];
+export function SiteFooter() {
   return (
     <footer className="border-t bg-surface">
-      <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-10 px-5 py-12 sm:grid-cols-2 sm:px-6 lg:grid-cols-[1.4fr_repeat(3,minmax(0,1fr))]">
+      <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-10 px-5 py-12 sm:grid-cols-2 sm:px-6 lg:grid-cols-[1.4fr_repeat(2,minmax(0,1fr))]">
         <div className="flex flex-col gap-3">
           <Wordmark className="text-[1.05rem]" />
           <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
@@ -61,15 +51,15 @@ export function SiteFooter({ onThisPage = ON_THIS_PAGE }: { onThisPage?: FooterL
           </a>
         </div>
 
-        {columns.map((c) => (
+        {COLUMNS.map((c) => (
           <div key={c.title} className="flex flex-col gap-2.5">
             <p className="eyebrow">{c.title}</p>
             <ul className="flex flex-col gap-1.5">
               {c.links.map((l) => (
                 <li key={l.label}>
                   {l.href.startsWith("/") ? (
-                    // An internal route: next/link, so basePath is applied and
-                    // it is not opened in a new tab like the GitHub links are.
+                    // The one internal route in here: next/link, so basePath is
+                    // applied and it is not opened in a new tab like the rest.
                     <Link
                       href={l.href}
                       className="text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -77,14 +67,14 @@ export function SiteFooter({ onThisPage = ON_THIS_PAGE }: { onThisPage?: FooterL
                       {l.label}
                     </Link>
                   ) : (
-                    <a
-                      href={l.href}
-                      target={l.href.startsWith("#") ? undefined : "_blank"}
-                      rel={l.href.startsWith("#") ? undefined : "noopener noreferrer"}
-                      className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-                    >
-                      {l.label}
-                    </a>
+                  <a
+                    href={l.href}
+                    target={l.href.startsWith("#") ? undefined : "_blank"}
+                    rel={l.href.startsWith("#") ? undefined : "noopener noreferrer"}
+                    className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {l.label}
+                  </a>
                   )}
                 </li>
               ))}

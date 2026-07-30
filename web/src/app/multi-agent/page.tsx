@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowUpRight, Check, GitMerge, ShieldCheck, X } from "lucide
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
+import { type NavEntry } from "@/lib/nav";
 import { CodeBlock } from "@/components/code-block";
 import { ParallelAgents } from "@/components/parallel-agents";
 import { Badge } from "@/components/ui/badge";
@@ -43,15 +44,56 @@ export const metadata: Metadata = {
   twitter: { card: "summary_large_image", title: TITLE, description: DESCRIPTION },
 };
 
-/** This page's own sections, for the shared header and footer. */
-const NAV = [
-  { href: "#ladder", label: "The ladder" },
-  { href: "#quickstart", label: "Quick start" },
-  { href: "#mixing", label: "Mixing agents" },
-  { href: "#verify", label: "verify" },
-  { href: "#land", label: "Landing" },
-  { href: "#share", label: "Handing files" },
-  { href: "#guardrails", label: "Guardrails" },
+/**
+ * This page's own nav, in the same grouped shape the landing page uses — and for
+ * the same reason: seven equally weighted labels in a row give a reader no way
+ * to tell which are about *starting* agents and which are about *getting the
+ * work back*. Two groups and one link say that; a flat row of seven does not.
+ */
+const NAV: NavEntry[] = [
+  { kind: "link", href: "#ladder", label: "The ladder" },
+  {
+    kind: "group",
+    label: "Running them",
+    items: [
+      {
+        href: "#quickstart",
+        label: "Quick start",
+        hint: "one file, one command, and the whole cycle after it",
+      },
+      {
+        href: "#mixing",
+        label: "Mixing agents",
+        hint: "claude on one branch, codex on another, and which five are eligible",
+      },
+      {
+        href: "#verify",
+        label: "verify",
+        hint: "the difference between an agent that stopped and work that is right",
+      },
+    ],
+  },
+  {
+    kind: "group",
+    label: "Getting the work back",
+    items: [
+      {
+        href: "#land",
+        label: "Landing",
+        hint: "the only command that writes to your branch, and every refusal it makes",
+      },
+      {
+        href: "#share",
+        label: "Handing files over",
+        hint: "one directory two agents share — a convention, not a protocol",
+      },
+      {
+        href: "#guardrails",
+        label: "Guardrails",
+        hint: "what refuses before you find out the hard way",
+      },
+    ],
+  },
 ];
 
 export default function MultiAgentPage() {
@@ -497,7 +539,7 @@ export default function MultiAgentPage() {
         </Section>
       </main>
 
-      <SiteFooter onThisPage={NAV.map((n) => ({ label: n.label, href: n.href }))} />
+      <SiteFooter />
     </>
   );
 }
