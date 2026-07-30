@@ -11,7 +11,10 @@ import (
 func (s *Server) handleListWorktrees(w http.ResponseWriter, r *http.Request) {
 	infos, err := worktree.List(s.Project)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		// Not 502: git is local machinery, not an upstream service. A failure here
+		// means this server's own project directory could not be read, which is a
+		// server-side fault however it happened.
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	out := make([]Worktree, 0, len(infos))
@@ -36,7 +39,10 @@ func (s *Server) handleCreateWorktree(w http.ResponseWriter, r *http.Request) {
 	}
 	info, err := worktree.Resolve(s.Project, req.Branch)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		// 422 rather than 500: by far the likeliest reason git declines is the
+		// branch this request named — unknown, already checked out elsewhere, or
+		// not a valid ref — and git's own message says which.
+		writeError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 	status := http.StatusOK
@@ -51,7 +57,7 @@ func (s *Server) handleGetWorktree(w http.ResponseWriter, r *http.Request) {
 	branch := r.PathValue("branch")
 	path, exists, err := worktree.Path(s.Project, branch)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if !exists {
