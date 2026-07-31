@@ -19,6 +19,18 @@ import (
 // written files and not committed them, and a diff that showed only commits
 // would report "nothing changed" for exactly the runs worth reviewing.
 //
+// The honest limit, worth knowing before trusting the attribution: this is the
+// state of the run's workspace, not a record of what that run did to it. For a
+// --worktree or fleet run they are the same thing, because the checkout belongs
+// to that run alone. For a run started in the repository you were standing in,
+// the workspace is shared with you — so anything you had left uncommitted
+// appears here too, credited to an agent that never touched it.
+//
+// Closing that gap needs a before-image to compare against, which internal/rescue
+// already takes for the runs it snapshots; until this reads one, the endpoint
+// answers "what is uncommitted here" and a client should say so rather than
+// "what this agent changed".
+//
 // A run with no branch (a plain `run` outside a repository) has nothing to diff
 // and answers an empty list rather than an error: there is no failure here, just
 // no changes to describe.
@@ -28,11 +40,16 @@ func (s *Server) handleRunDiff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	// The run's own workspace, which is the directory it could actually change —
+	// a managed worktree for a --worktree run, and the repository itself for one
+	// started where you were standing.
+	run := toRun(c, s.Engine)
 
 	branch := c.Labels[sandbox.LabelBranch]
 	base := c.Labels[sandbox.LabelBase]
 	files := []DiffFile{}
-	if branch == "" {
+	if run.Workspace == "" {
+		// No workspace mount means nothing on disk this run could have changed.
 		writeJSON(w, http.StatusOK, files)
 		return
 	}
@@ -57,7 +74,7 @@ func (s *Server) handleRunDiff(w http.ResponseWriter, r *http.Request) {
 	for _, st := range worktree.DiffStat(s.Project, branch, base) {
 		add(st)
 	}
-	for _, st := range worktree.WorkingStat(s.Project, branch) {
+	for _, st := range worktree.WorkingStatIn(run.Workspace) {
 		add(st)
 	}
 

@@ -27,7 +27,7 @@ import type { LogLine, Run } from "@/lib/types";
  */
 export function TerminalView({ run }: { run: Run }) {
   const live = run.state === "running";
-  const { data, isPending } = useRunLogs(run.id);
+  const { data, isPending } = useRunLogs(run.id, run.state === "running");
   const { lines, streaming } = useLogStream(data, live);
 
   const follow = useUi((s) => s.terminalFollow);

@@ -36,7 +36,7 @@ const STATUS_TONE: Record<DiffFileStatus, string> = {
  * whether that is good news.
  */
 export function DiffView({ run }: { run: Run }) {
-  const { data, isPending } = useRunDiff(run.id);
+  const { data, isPending } = useRunDiff(run.id, run.state === "running");
   const view = useUi((s) => s.diffView);
   const setView = useUi((s) => s.setDiffView);
   const [selected, setSelected] = useState<string | null>(null);

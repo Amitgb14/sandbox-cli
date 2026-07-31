@@ -225,26 +225,32 @@ func DiffStat(dir, branch, base string) []FileStat {
 	return fileStats(root, base+"..."+branch)
 }
 
-// WorkingStat reports what is changed but not committed in branch's worktree.
+// WorkingStatIn reports what is changed but not committed in a checkout,
+// addressed by directory rather than by branch.
 //
-// Included alongside DiffStat wherever a run's work is shown, because that is
-// usually where an agent's output still is: an agent that wrote files and did
-// not commit has produced exactly the work worth reviewing, and a diff of
-// commits alone would call it "nothing changed".
-func WorkingStat(dir, branch string) []FileStat {
-	path, exists, err := Path(dir, branch)
-	if err != nil || !exists {
+// By directory because a run's workspace is not always a managed worktree: a
+// plain `sandbox-cli claude` mounts the repository you are standing in, and
+// resolving "the worktree for this branch" then finds nothing and reports that
+// the agent changed nothing at all — which is exactly wrong for the runs people
+// look at most.
+//
+// Included wherever a run's work is shown, because uncommitted is usually where
+// an agent's output still is: one that wrote files and did not commit has
+// produced the work worth reviewing, and a diff of commits alone calls that
+// "nothing changed".
+func WorkingStatIn(dir string) []FileStat {
+	if dir == "" {
 		return nil
 	}
 	// HEAD rather than the index: staged and unstaged both count as "not
 	// committed", and which side of `git add` a change sits on is not the
 	// question being asked.
-	stats := fileStats(path, "HEAD")
+	stats := fileStats(dir, "HEAD")
 
-	// Untracked files are not in any diff, and for a scaffolding agent they are
-	// most of the work. Counted as added with no line counts, which is honest —
-	// git has nothing to compare them against.
-	out, err := runGit(path, "ls-files", "--others", "--exclude-standard")
+	// Untracked files are in no diff, and for a scaffolding agent they are most
+	// of the work. Counted as added with no line counts, which is honest — git
+	// has nothing to compare them against.
+	out, err := runGit(dir, "ls-files", "--others", "--exclude-standard")
 	if err != nil {
 		return stats
 	}

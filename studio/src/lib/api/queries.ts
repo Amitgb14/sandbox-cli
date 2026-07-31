@@ -62,16 +62,32 @@ export function useRunMetrics(id: string, enabled = true) {
   });
 }
 
-export function useRunLogs(id: string, enabled = true) {
+/**
+ * A run's output. Polled while the run is live, fetched once when it is not.
+ *
+ * Without the poll the terminal showed whatever the agent had written by the
+ * time the page opened and never moved again — so a run that was working looked
+ * identical to one that had stopped. `claude -p` buffers its result until the
+ * turn ends, which makes this worse rather than better: the interesting output
+ * arrives all at once, and arrives after the only fetch.
+ */
+export function useRunLogs(id: string, live = false, enabled = true) {
   return useQuery({
     queryKey: qk.runLogs(id),
     queryFn: () => api.runLogs(id),
     enabled,
+    refetchInterval: live ? LIVE_MS : false,
   });
 }
 
-export function useRunDiff(id: string, enabled = true) {
-  return useQuery({ queryKey: qk.runDiff(id), queryFn: () => api.runDiff(id), enabled });
+/** The work so far. Polled while the agent is still producing it. */
+export function useRunDiff(id: string, live = false, enabled = true) {
+  return useQuery({
+    queryKey: qk.runDiff(id),
+    queryFn: () => api.runDiff(id),
+    enabled,
+    refetchInterval: live ? LIVE_MS : false,
+  });
 }
 
 export function useRunConfig(id: string, enabled = true) {
