@@ -124,6 +124,17 @@ export function useKillRun() {
   });
 }
 
+export function useRemoveRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.removeRun(id),
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: qk.runs });
+      qc.invalidateQueries({ queryKey: qk.run(id) });
+    },
+  });
+}
+
 export function useLaunchRun() {
   const qc = useQueryClient();
   return useMutation({

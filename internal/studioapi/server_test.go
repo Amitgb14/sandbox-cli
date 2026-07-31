@@ -29,6 +29,7 @@ type fakeRuntime struct {
 	containers []runtime.ContainerInfo
 	started    []runtime.RunSpec
 	stopped    []string
+	removed    []string
 	killed     []string
 	availErr   error
 	startErr   error
@@ -112,7 +113,12 @@ func (f *fakeRuntime) Kill(ctx context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeRuntime) Remove(ctx context.Context, id string) error { return nil }
+func (f *fakeRuntime) Remove(ctx context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, id)
+	return nil
+}
 
 // newTestServer builds a Server backed by fakeRuntime, with the persisted-auth
 // and rescue/audit directories redirected into a scratch dir so tests never
@@ -668,5 +674,44 @@ func TestRunWithNoAllowlistReportsNoEnforcement(t *testing.T) {
 	}
 	if got.Network.Allow == nil {
 		t.Error("allow must be an empty list, not null: clients iterate it")
+	}
+}
+
+// The API could create runs and not remove them, which left a client stuck the
+// moment a branch's container name was taken: the launch refusal could only be
+// acted on by leaving Studio for a terminal.
+func TestDeleteRunReapsAFinishedContainer(t *testing.T) {
+	s, fr := newTestServer(t)
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"true"},
+		Branch:  "feature-reap",
+	})
+	run := decodeBody[Run](t, create)
+
+	// A running container is refused. stop and remove are different acts and the
+	// difference is an agent's unsaved work, so the caller has to say which.
+	rec := doRequest(t, s.Handler(), http.MethodDelete, "/v1/runs/"+run.ID, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("deleting a running run = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "stop it first") {
+		t.Errorf("the refusal must say what to do instead: %s", rec.Body.String())
+	}
+	if len(fr.removed) != 0 {
+		t.Fatalf("a running container was removed: %v", fr.removed)
+	}
+
+	fr.mu.Lock()
+	for i := range fr.containers {
+		fr.containers[i].State = "exited"
+	}
+	fr.mu.Unlock()
+
+	rec = doRequest(t, s.Handler(), http.MethodDelete, "/v1/runs/"+run.ID, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("deleting a finished run = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	if len(fr.removed) != 1 {
+		t.Errorf("expected the container reaped, removed %v", fr.removed)
 	}
 }

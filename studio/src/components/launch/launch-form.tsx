@@ -28,6 +28,7 @@ import {
   useAgents,
   useDaemon,
   useLaunchRun,
+  useRemoveRun,
   useWorktrees,
 } from "@/lib/api/queries";
 import { localPreview } from "@/lib/api/endpoints";
@@ -62,6 +63,7 @@ export function LaunchForm() {
   const { data: daemon } = useDaemon();
   const { data: worktrees } = useWorktrees();
   const launch = useLaunchRun();
+  const removeRun = useRemoveRun();
 
   const initialAgent = (search.get("agent") as AgentName | null) ?? "claude";
   const initialRepo = REPOS.find((r) => r.id === repoFilter) ?? REPOS[0];
@@ -198,10 +200,35 @@ export function LaunchForm() {
         });
         router.push(`/runs/${id}`);
       },
-      onError: (err) =>
+      onError: (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        // A container name held by a *finished* run is the one failure here with
+        // an obvious next step, and it used to end at a message telling you to
+        // open a terminal. The daemon names the run in its refusal; offer to
+        // reap it and try again from where you already are.
+        //
+        // Only for a finished one. "An agent is already running" carries a
+        // similar message and must not get a button, because the fix there is a
+        // decision about somebody's work in progress.
+        const blocking = /a finished run \(([0-9a-f]+),/.exec(message)?.[1];
         toast.error("Could not start the run", {
-          description: err instanceof Error ? err.message : String(err),
-        }),
+          description: message,
+          duration: blocking ? 15_000 : undefined,
+          action: blocking
+            ? {
+                label: "Remove it and retry",
+                onClick: () =>
+                  removeRun.mutate(blocking, {
+                    onSuccess: () => submit(),
+                    onError: (e: unknown) =>
+                      toast.error("Could not remove that run", {
+                        description: e instanceof Error ? e.message : String(e),
+                      }),
+                  }),
+              }
+            : undefined,
+        });
+      },
     });
   }
 

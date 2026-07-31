@@ -256,8 +256,47 @@ func (s *Server) nameHeldBy(ctx context.Context, opts sandbox.Options) (string, 
 				"two agents in one checkout overwrite each other's work",
 			opts.Branch, shortID(c.ID)), true
 	}
+	// Names this API's own operation, not the CLI's. The caller is an HTTP
+	// client that has just been refused; telling it to go and run a terminal
+	// command is an instruction it cannot follow.
 	return fmt.Sprintf(
 		"a finished run (%s, exit %d) still holds %q's container name; "+
-			"read it with GET /v1/runs/%s/logs, then remove it with `sandbox-cli clean` to run again",
-		shortID(c.ID), c.ExitCode, opts.Branch, shortID(c.ID)), true
+			"read it with GET /v1/runs/%s/logs, then DELETE /v1/runs/%s to run again",
+		shortID(c.ID), c.ExitCode, opts.Branch, shortID(c.ID), shortID(c.ID)), true
+}
+
+// handleDeleteRun is DELETE /v1/runs/{id}: reap a finished run's container.
+//
+// The API could create runs and not remove them, which left a client stuck the
+// moment a branch's container name was taken — the launch refusal could only be
+// acted on by leaving Studio for a terminal. A control plane that can start
+// something it cannot clean up is a control plane you have to work around.
+//
+// A running container is refused rather than reaped. `stop` and `remove` are
+// different acts and the difference is an agent's unsaved work, so this makes
+// you say which you meant — the same reason `kill` is a separate word from
+// `stop` in the CLI.
+//
+// What this discards is the container: its logs and its exit code, which for a
+// detached run are the whole record that it happened. The *work* is untouched —
+// it is in the workspace, which is a bind mount and outlives every container
+// that ever wrote to it.
+func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
+	c, err := s.resolveRun(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if c.Running() {
+		writeError(w, http.StatusConflict, fmt.Errorf(
+			"run %s is still running; stop it first (POST /v1/runs/%s/stop) — "+
+				"removing a live container discards whatever its agent had not written yet",
+			shortID(c.ID), shortID(c.ID)))
+		return
+	}
+	if err := s.RT.Remove(r.Context(), c.ID); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

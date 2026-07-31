@@ -101,6 +101,15 @@ export const api = {
       fixture: () => undefined,
     }),
 
+  /**
+   * Reap a finished run's container. The work is untouched — that lives in the
+   * workspace, which outlives every container that wrote to it; what goes is the
+   * container's logs and exit code, which for a detached run are the whole
+   * record that it happened.
+   */
+  removeRun: (id: string) =>
+    request<void>(`/v1/runs/${id}`, { method: "DELETE", fixture: () => undefined }),
+
   launch: (req: LaunchRequest) =>
     request<{ id: string }>("/v1/runs", {
       method: "POST",

@@ -98,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs", s.handleListRuns)
 	mux.HandleFunc("POST /v1/runs", s.handleCreateRun)
 	mux.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
+	mux.HandleFunc("DELETE /v1/runs/{id}", s.handleDeleteRun)
 	mux.HandleFunc("POST /v1/runs/{id}/stop", s.handleStopRun)
 	mux.HandleFunc("POST /v1/runs/{id}/recover", s.handleRecoverRun)
 	mux.HandleFunc("GET /v1/runs/{id}/logs", s.handleRunLogs)
