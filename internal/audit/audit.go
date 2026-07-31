@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -184,10 +185,29 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 	f.Write(append(line, '\n'))
 }
 
-// rotateIfLarge moves the log aside once it passes maxLogBytes, keeping exactly
-// one previous generation.
+// MaxGenerations is how many rotated logs are kept beside the current one.
 //
-// Best-effort like everything else here: if the rename fails the run still
+// It used to be one, and that quietly deleted history. At the density this
+// writes — a few hundred bytes per run — 8 MiB is roughly twelve thousand runs,
+// so a single previous generation meant the twelve-thousandth-oldest run
+// vanished with nothing recording that it had ever existed. A fleet running
+// fifty tasks a day reached that in about eighteen months; one running five
+// hundred, in six weeks.
+//
+// Five generations is ~40 MiB and ~60,000 runs. That is a bounded cost in a
+// directory nothing else prunes, and the ceiling is the point: an append-only
+// log with no ceiling is a slow leak in someone's home directory, and a log
+// that drops the oldest without saying so is worse than one that is capped.
+const MaxGenerations = 5
+
+// rotateIfLarge moves the log aside once it passes maxLogBytes, shifting the
+// previous generations along and dropping the oldest.
+//
+// Oldest first, so no rename can overwrite a generation that has not been moved
+// yet: .4 becomes .5 before .3 becomes .4. Doing it the other way round loses
+// every generation but one, which is the bug this is fixing.
+//
+// Best-effort like everything else here: if a rename fails the run still
 // proceeds and the log simply keeps growing, which is the lesser of the two
 // failures.
 func (s *JSONLSink) rotateIfLarge() {
@@ -195,5 +215,37 @@ func (s *JSONLSink) rotateIfLarge() {
 	if err != nil || fi.Size() < maxLogBytes {
 		return
 	}
-	_ = os.Rename(s.Path, s.Path+".1")
+	// The last generation is removed rather than shifted: something has to be
+	// the end, and this is the one place it is decided.
+	_ = os.Remove(generationPath(s.Path, MaxGenerations))
+	for i := MaxGenerations - 1; i >= 1; i-- {
+		_ = os.Rename(generationPath(s.Path, i), generationPath(s.Path, i+1))
+	}
+	_ = os.Rename(s.Path, generationPath(s.Path, 1))
+}
+
+// generationPath names one rotated log. Generation 0 is the live file.
+func generationPath(base string, n int) string {
+	if n <= 0 {
+		return base
+	}
+	return base + "." + strconv.Itoa(n)
+}
+
+// Generations lists the log files that exist, newest first, starting with the
+// live one.
+//
+// Exported because a reader has to know that the history is several files: a
+// caller that opens only sessions.jsonl sees the most recent generation and
+// reports the rest as though it never happened, which is exactly the failure
+// this pairs with.
+func Generations(path string) []string {
+	var out []string
+	for n := 0; n <= MaxGenerations; n++ {
+		p := generationPath(path, n)
+		if _, err := os.Stat(p); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -93,4 +94,75 @@ func TestJSONLSinkNeverFailsARun(t *testing.T) {
 
 	var nilSink *JSONLSink
 	nilSink.RecordSession(SessionMeta{Image: "x"})
+}
+
+// Rotation used to keep exactly one previous generation, which deleted history
+// without saying so: at a few hundred bytes per run, the twelve-thousandth-oldest
+// run simply stopped existing. This pins that it now shifts along and drops only
+// the last one.
+func TestRotationShiftsGenerationsAndDropsOnlyTheOldest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sessions.jsonl")
+	sink := &JSONLSink{Path: path}
+
+	// Fill each generation with a marker so a lost or overwritten one is visible
+	// as content rather than only as a missing file.
+	write := func(p, body string) {
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 1; i <= MaxGenerations; i++ {
+		write(generationPath(path, i), "gen"+strconv.Itoa(i)+"\n")
+	}
+	// The live log, over the threshold so rotation fires.
+	write(path, strings.Repeat("x", maxLogBytes+1))
+
+	sink.rotateIfLarge()
+
+	// The live log became .1, and everything shifted along.
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the live log should have been moved aside, got err=%v", err)
+	}
+	for i := 2; i <= MaxGenerations; i++ {
+		b, err := os.ReadFile(generationPath(path, i))
+		if err != nil {
+			t.Fatalf("generation %d is missing: %v", i, err)
+		}
+		// .2 must now hold what .1 held, and so on: a shift, not an overwrite.
+		if want := "gen" + strconv.Itoa(i-1) + "\n"; string(b) != want {
+			t.Errorf("generation %d = %q, want %q — generations were overwritten rather than shifted", i, b, want)
+		}
+	}
+	// And exactly one generation was dropped, from the end.
+	if _, err := os.Stat(generationPath(path, MaxGenerations+1)); !os.IsNotExist(err) {
+		t.Errorf("nothing should exist past generation %d", MaxGenerations)
+	}
+}
+
+// A reader that opens only the live log reports everything older than the last
+// rotation as though it never happened.
+func TestGenerationsListsTheWholeHistoryNewestFirst(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sessions.jsonl")
+
+	if got := Generations(path); len(got) != 0 {
+		t.Errorf("nothing written yet, got %v", got)
+	}
+
+	for _, p := range []string{path, path + ".1", path + ".3"} {
+		if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := Generations(path)
+	want := []string{path, path + ".1", path + ".3"}
+	if len(got) != len(want) {
+		t.Fatalf("Generations = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Generations[%d] = %q, want %q (newest first, gaps skipped)", i, got[i], want[i])
+		}
+	}
 }

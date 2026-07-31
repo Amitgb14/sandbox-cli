@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 )
 
@@ -68,16 +69,35 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(filepath.Join(dir, "sessions.jsonl"))
+	// The history is several files, not one. audit rotates at 8 MiB and keeps
+	// generations beside the live log, so a reader that opened only
+	// sessions.jsonl would report everything older than the last rotation as
+	// though it had never happened — and would do it silently, which is the
+	// failure this pairs with.
+	//
+	// Newest generation first, and each file read newest-record-first, so a
+	// bounded request stops as soon as it has what it asked for instead of
+	// parsing every generation to throw most of it away.
+	for _, path := range audit.Generations(filepath.Join(dir, "sessions.jsonl")) {
+		if len(out) >= limit {
+			break
+		}
+		out = append(out, readAuditFile(path, branch, limit-len(out))...)
+	}
+	writeJSON(w, http.StatusOK, AuditResponse{Records: out})
+}
+
+// readAuditFile returns up to limit records from one generation, newest first.
+func readAuditFile(path, branch string, limit int) []AuditRecord {
+	f, err := os.Open(path)
 	if err != nil {
-		writeJSON(w, http.StatusOK, AuditResponse{Records: out})
-		return
+		// A generation that has been rotated away between listing and opening is
+		// not an error: the log is written by every run and read by this, with
+		// no lock between them.
+		return nil
 	}
 	defer f.Close()
 
-	// Read the lot, then take the tail: the file is newline-delimited with no
-	// index, so "the last N" cannot be found without walking it. Bounded by the
-	// sink's own rotation rather than by hope.
 	var all []AuditRecord
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -86,10 +106,10 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		if len(line) == 0 {
 			continue
 		}
-		var a auditLine
 		if branch != "" && !bytes.Contains(line, []byte(`"branch":`)) {
-			continue // cheap reject before parsing: most lines have no branch at all
+			continue // cheap reject before parsing: most lines carry no branch
 		}
+		var a auditLine
 		if err := json.Unmarshal(line, &a); err != nil {
 			// A line this no longer understands is skipped, not fatal — the same
 			// bargain agentctx makes with a transcript whose shape it cannot read.
@@ -102,11 +122,13 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		all = append(all, a.toRecord())
 	}
 
-	// Newest first, which is the order every other listing in this tool uses.
+	// The file is append-only, so newest is last. Reverse into the caller's
+	// order, which is the newest-first every listing in this tool uses.
+	out := make([]AuditRecord, 0, min(limit, len(all)))
 	for i := len(all) - 1; i >= 0 && len(out) < limit; i-- {
 		out = append(out, all[i])
 	}
-	writeJSON(w, http.StatusOK, AuditResponse{Records: out})
+	return out
 }
 
 func (a auditLine) toRecord() AuditRecord {

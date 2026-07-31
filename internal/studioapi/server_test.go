@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -832,5 +834,63 @@ func TestRunDiffPrefersTheBaselineWhenOneWasRecorded(t *testing.T) {
 	rec = doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/diff", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status with a baseline = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The audit log is several files: it rotates at 8 MiB and keeps generations
+// beside the live one. A reader that opened only sessions.jsonl would report
+// everything older than the last rotation as though it had never happened, and
+// would do it silently — the same class of bug as keeping one generation.
+func TestAuditReadsEveryGeneration(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	dir := config.AuditDir()
+	if dir == "" {
+		t.Skip("no config root in this environment")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(dir, "sessions.jsonl")
+
+	// Oldest generation first, so the expected order is the reverse of this.
+	write := func(path string, branches ...string) {
+		var b strings.Builder
+		for _, br := range branches {
+			b.WriteString(`{"time":"2026-07-01T00:00:00Z","branch":"` + br + `","exit_code":0}` + "\n")
+		}
+		if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(base+".2", "oldest")
+	write(base+".1", "middle")
+	write(base, "newest")
+
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/audit", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeBody[AuditResponse](t, rec).Records
+	if len(got) != 3 {
+		t.Fatalf("want three records across three generations, got %d: %+v", len(got), got)
+	}
+	for i, want := range []string{"newest", "middle", "oldest"} {
+		if got[i].Branch == nil || *got[i].Branch != want {
+			t.Errorf("record %d = %v, want %q — generations must read newest first", i, got[i].Branch, want)
+		}
+	}
+
+	// A bounded request stops once it has what it asked for, rather than reading
+	// every generation to discard most of it.
+	rec = doRequest(t, s.Handler(), http.MethodGet, "/v1/audit?limit=1", nil)
+	if one := decodeBody[AuditResponse](t, rec).Records; len(one) != 1 || *one[0].Branch != "newest" {
+		t.Errorf("limit=1 must return the newest record only, got %+v", one)
+	}
+
+	// And the branch filter reaches across generations, not just the live file.
+	rec = doRequest(t, s.Handler(), http.MethodGet, "/v1/audit?branch=oldest", nil)
+	if f := decodeBody[AuditResponse](t, rec).Records; len(f) != 1 {
+		t.Errorf("a branch only in a rotated generation must still be found, got %+v", f)
 	}
 }
