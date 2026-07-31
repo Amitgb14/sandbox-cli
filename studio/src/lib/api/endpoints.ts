@@ -171,6 +171,13 @@ export const api = {
       unwrap: (b) => (b as { runs: Run[] }).runs,
     }),
 
+  /** What one commit changed. Scoped to this daemon's project. */
+  commitDiff: (sha: string) =>
+    request<DiffFile[]>(`/v1/commits/${encodeURIComponent(sha)}/diff`, {
+      fixture: () => [],
+      latencyMs: 200,
+    }),
+
   removeWorktree: (branch: string) =>
     request<void>(`/v1/worktrees/${encodeURIComponent(branch)}`, {
       method: "DELETE",

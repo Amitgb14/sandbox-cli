@@ -28,6 +28,7 @@ export const qk = {
   worktree: (b: string) => ["worktrees", b] as const,
   worktreeCommits: (b: string) => ["worktrees", b, "commits"] as const,
   branchRuns: (b: string) => ["runs", "branch", b] as const,
+  commitDiff: (sha: string) => ["commits", sha, "diff"] as const,
   usage: ["usage"] as const,
   doctor: ["doctor"] as const,
   audit: ["audit"] as const,
@@ -127,6 +128,20 @@ export function useBranchRuns(branch: string) {
     queryKey: qk.branchRuns(branch),
     queryFn: () => api.branchRuns(branch),
     refetchInterval: LIVE_MS,
+  });
+}
+
+/**
+ * One commit's diff, fetched only once its row is opened: a branch can carry a
+ * hundred commits and none of them is worth a git invocation until someone asks
+ * to see it.
+ */
+export function useCommitDiff(sha: string, enabled: boolean) {
+  return useQuery({
+    queryKey: qk.commitDiff(sha),
+    queryFn: () => api.commitDiff(sha),
+    enabled,
+    staleTime: Infinity, // a commit is immutable; refetching one is pure waste
   });
 }
 

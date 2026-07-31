@@ -1,6 +1,7 @@
 package studioapi
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
@@ -162,4 +163,40 @@ func (s *Server) hunksFor(workspace, branch, base, baseline, after string, f Dif
 		return addedFileHunk(worktree.UntrackedContent(workspace, f.Path))
 	}
 	return []DiffHunk{}
+}
+
+// handleCommitDiff is GET /v1/commits/{sha}/diff: what one commit changed.
+//
+// Scoped to this server's project — one daemon manages one repository, so the
+// sha is looked up there and nowhere else. It is validated as hex before it
+// reaches git, because a value beginning with a dash is read as an option
+// rather than a revision, and `--upload-pack=` is the classic way that ends
+// badly. git decides whether the object exists; this decides whether the string
+// is allowed to be a question.
+func (s *Server) handleCommitDiff(w http.ResponseWriter, r *http.Request) {
+	sha := r.PathValue("sha")
+	stats := worktree.CommitStat(s.Project, sha)
+	if stats == nil {
+		writeError(w, http.StatusNotFound, fmt.Errorf("no commit %q in this project", sha))
+		return
+	}
+
+	files := make([]DiffFile, 0, len(stats))
+	for i, st := range stats {
+		f := DiffFile{
+			Path:       st.Path,
+			Status:     st.Status,
+			Insertions: st.Insertions,
+			Deletions:  st.Deletions,
+			Binary:     st.Binary,
+			Hunks:      []DiffHunk{},
+		}
+		// Same bound as a run's diff, and for the same reason: one commit can
+		// legitimately touch hundreds of files, and a screen is not a patch file.
+		if i < maxDiffFilesWithHunks && !st.Binary {
+			f.Hunks = parseUnifiedDiff(worktree.CommitFileDiff(s.Project, sha, st.Path))
+		}
+		files = append(files, f)
+	}
+	writeJSON(w, http.StatusOK, files)
 }

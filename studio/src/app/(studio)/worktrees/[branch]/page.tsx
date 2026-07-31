@@ -1,9 +1,11 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
+  ChevronDown,
+  ChevronRight,
   GitBranch,
   GitCommitHorizontal,
   Play,
@@ -16,13 +18,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/empty-state";
 import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
+import { FilePanel } from "@/components/run-detail/diff-view";
 import {
   useBranchRuns,
+  useCommitDiff,
   useWorktree,
   useWorktreeCommits,
 } from "@/lib/api/queries";
 import { DASH, formatDuration, formatRelative, pluralize } from "@/lib/format";
 import { runOutcome } from "@/lib/types";
+import type { Commit } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -180,26 +185,7 @@ export default function WorktreeDetailPage({
           ) : (
             <ul className="divide-y">
               {commits.map((c) => (
-                <li
-                  key={c.sha}
-                  className="flex flex-wrap items-center gap-3 py-2 text-sm"
-                >
-                  <GitCommitHorizontal className="size-4 shrink-0 text-muted-foreground" />
-                  <span className="font-mono text-xs">{c.shortSha}</span>
-                  {/* Text from the repository: rendered, never interpreted. */}
-                  <span className="min-w-0 flex-1 truncate">{c.subject}</span>
-                  <span className="shrink-0 font-mono text-xs">
-                    <span className="text-status-passed">+{c.insertions}</span>{" "}
-                    <span className="text-destructive">-{c.deletions}</span>
-                  </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {c.author}
-                  </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatRelative(c.date)}
-                  </span>
-                  <CopyButton value={c.sha} label="commit" />
-                </li>
+                <CommitRow key={c.sha} commit={c} />
               ))}
             </ul>
           )}
@@ -223,6 +209,73 @@ export default function WorktreeDetailPage({
         </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * One commit, and its diff when you open it.
+ *
+ * The diff is fetched on expand rather than with the list: a branch an agent has
+ * worked for a week carries a hundred commits, and none of them is worth a git
+ * invocation until someone asks to see one. Once fetched it is kept — a commit
+ * is immutable, so refetching it is pure waste.
+ */
+function CommitRow({ commit }: { commit: Commit }) {
+  const [open, setOpen] = useState(false);
+  const { data: files, isPending } = useCommitDiff(commit.sha, open);
+
+  return (
+    <li className="py-2 text-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full flex-wrap items-center gap-3 rounded-md text-left hover:bg-muted/40"
+      >
+        {open ? (
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+        )}
+        <GitCommitHorizontal className="size-4 shrink-0 text-muted-foreground" />
+        <span className="font-mono text-xs">{commit.shortSha}</span>
+        {/* Text from the repository: rendered, never interpreted. */}
+        <span className="min-w-0 flex-1 truncate">{commit.subject}</span>
+        <span className="shrink-0 font-mono text-xs">
+          <span className="text-status-passed">+{commit.insertions}</span>{" "}
+          <span className="text-destructive">-{commit.deletions}</span>
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {commit.author}
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {formatRelative(commit.date)}
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-3 pl-7">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs text-muted-foreground">
+              {commit.sha}
+            </span>
+            <CopyButton value={commit.sha} label="commit" />
+          </div>
+          {isPending && <Skeleton className="h-24 w-full rounded-md" />}
+          {!isPending && (!files || files.length === 0) && (
+            <p className="text-xs text-muted-foreground">
+              Nothing to show for this commit — it may be a merge, whose changes
+              belong to the commits it joins.
+            </p>
+          )}
+          {/* The same renderer a run's diff uses. Two would drift, and showing
+              one change two different ways is the one thing a viewer must not do. */}
+          {files?.map((f) => (
+            <FilePanel key={f.path} file={f} view="unified" />
+          ))}
+        </div>
+      )}
+    </li>
   );
 }
 

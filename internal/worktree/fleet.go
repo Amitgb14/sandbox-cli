@@ -282,6 +282,12 @@ func fileStats(dir string, revs ...string) []FileStat {
 		}
 	}
 
+	return parseNumstat(numstat, status)
+}
+
+// parseNumstat turns `git diff --numstat` output into per-file counts, taking
+// the kind of change from a name-status pass keyed by path.
+func parseNumstat(numstat string, status map[string]string) []FileStat {
 	var stats []FileStat
 	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
 		if line == "" {
@@ -501,4 +507,72 @@ func parseShortstat(line string) (files, insertions, deletions int) {
 		}
 	}
 	return files, insertions, deletions
+}
+
+// isHexSHA reports whether s is a plausible object id and nothing else.
+//
+// This is an argument-injection guard, not a validity check. A commit id
+// arriving from a client is about to become a git argument, and a value
+// beginning with a dash is read by git as an option — `--upload-pack=…` is the
+// classic. Refusing anything that is not hex is the cheap, total answer; git
+// itself decides whether the object exists.
+func isHexSHA(s string) bool {
+	if len(s) < 4 || len(s) > 40 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// CommitStat reports what one commit changed, per file.
+//
+// Through `show` rather than a diff between the commit and its parent, because
+// the parent is not always there: a root commit has none, and `sha^` fails
+// rather than returning the whole tree.
+func CommitStat(dir, sha string) []FileStat {
+	if dir == "" || !isHexSHA(sha) {
+		return nil
+	}
+	root, err := RepoRoot(dir)
+	if err != nil {
+		return nil
+	}
+	numstat, err := runGit(root, "show", "--format=", "--numstat", sha)
+	if err != nil {
+		return nil
+	}
+	status := map[string]string{}
+	if out, err := runGit(root, "show", "--format=", "--name-status", sha); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				status[fields[len(fields)-1]] = statusWord(fields[0])
+			}
+		}
+	}
+	return parseNumstat(numstat, status)
+}
+
+// CommitFileDiff returns one file's unified diff within one commit.
+func CommitFileDiff(dir, sha, path string) string {
+	if dir == "" || !isHexSHA(sha) || path == "" {
+		return ""
+	}
+	root, err := RepoRoot(dir)
+	if err != nil {
+		return ""
+	}
+	out, err := runGit(root, "show", "--format=", "--no-color", "--no-textconv",
+		"--unified=3", sha, "--", path)
+	if err != nil {
+		return ""
+	}
+	if len(out) > maxDiffBytes {
+		return out[:maxDiffBytes]
+	}
+	return out
 }

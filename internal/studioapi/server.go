@@ -114,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/worktrees", s.handleCreateWorktree)
 	mux.HandleFunc("GET /v1/worktrees/{branch}", s.handleGetWorktree)
 	mux.HandleFunc("GET /v1/worktrees/{branch}/commits", s.handleWorktreeCommits)
+	mux.HandleFunc("GET /v1/commits/{sha}/diff", s.handleCommitDiff)
 	mux.HandleFunc("DELETE /v1/worktrees/{branch}", s.handleDeleteWorktree)
 	return s.withMiddleware(mux)
 }
