@@ -200,3 +200,117 @@ func Head(dir, branch string) string {
 	}
 	return strings.TrimSpace(out)
 }
+
+// FileStat is one file's change in a diff: how it changed and by how much.
+type FileStat struct {
+	Path       string
+	Status     string // "added" | "modified" | "deleted" | "renamed"
+	Insertions int
+	Deletions  int
+	Binary     bool
+}
+
+// DiffStat reports what branch committed beyond base, per file.
+func DiffStat(dir, branch, base string) []FileStat {
+	if branch == "" || base == "" || branch == base {
+		return nil
+	}
+	root, err := RepoRoot(dir)
+	if err != nil {
+		return nil
+	}
+	// Three dots: what this branch added since it diverged, not everything that
+	// happened on base meanwhile. `land` merges, so the changes being reviewed
+	// are the branch's own.
+	return fileStats(root, base+"..."+branch)
+}
+
+// WorkingStat reports what is changed but not committed in branch's worktree.
+//
+// Included alongside DiffStat wherever a run's work is shown, because that is
+// usually where an agent's output still is: an agent that wrote files and did
+// not commit has produced exactly the work worth reviewing, and a diff of
+// commits alone would call it "nothing changed".
+func WorkingStat(dir, branch string) []FileStat {
+	path, exists, err := Path(dir, branch)
+	if err != nil || !exists {
+		return nil
+	}
+	// HEAD rather than the index: staged and unstaged both count as "not
+	// committed", and which side of `git add` a change sits on is not the
+	// question being asked.
+	stats := fileStats(path, "HEAD")
+
+	// Untracked files are not in any diff, and for a scaffolding agent they are
+	// most of the work. Counted as added with no line counts, which is honest —
+	// git has nothing to compare them against.
+	out, err := runGit(path, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return stats
+	}
+	for _, p := range strings.Split(strings.TrimSpace(out), "\n") {
+		if p != "" {
+			stats = append(stats, FileStat{Path: p, Status: "added"})
+		}
+	}
+	return stats
+}
+
+// fileStats runs numstat and name-status for one revision range and merges them:
+// numstat carries the counts, name-status the kind of change, and neither alone
+// answers "what changed and by how much".
+func fileStats(dir, rev string) []FileStat {
+	numstat, err := runGit(dir, "diff", "--numstat", rev)
+	if err != nil {
+		return nil
+	}
+	status := map[string]string{}
+	if out, err := runGit(dir, "diff", "--name-status", rev); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			status[fields[len(fields)-1]] = statusWord(fields[0])
+		}
+	}
+
+	var stats []FileStat
+	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		st := FileStat{Path: fields[2], Status: "modified"}
+		if s, ok := status[st.Path]; ok {
+			st.Status = s
+		}
+		// git reports a binary file as "-\t-\tpath". Passed through as binary
+		// with no counts rather than dropped: "changed, and cannot be shown as
+		// text" is a different fact from "did not change".
+		if fields[0] == "-" || fields[1] == "-" {
+			st.Binary = true
+		} else {
+			st.Insertions, _ = strconv.Atoi(fields[0])
+			st.Deletions, _ = strconv.Atoi(fields[1])
+		}
+		stats = append(stats, st)
+	}
+	return stats
+}
+
+func statusWord(code string) string {
+	switch {
+	case strings.HasPrefix(code, "A"):
+		return "added"
+	case strings.HasPrefix(code, "D"):
+		return "deleted"
+	case strings.HasPrefix(code, "R"):
+		return "renamed"
+	default:
+		return "modified"
+	}
+}

@@ -1,0 +1,77 @@
+package studioapi
+
+import (
+	"net/http"
+
+	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/worktree"
+)
+
+// handleRunDiff is GET /v1/runs/{id}/diff: what the agent changed.
+//
+// Read from git in the run's own workspace, not from anything the run reported
+// about itself. That is the same reason `land` reads the worktree rather than
+// trusting a summary: an agent's account of its work is the agent's account, and
+// the diff is the evidence.
+//
+// Uncommitted work is included, because that is where an agent's output usually
+// still is when you come to look at it — a run that has finished has often
+// written files and not committed them, and a diff that showed only commits
+// would report "nothing changed" for exactly the runs worth reviewing.
+//
+// A run with no branch (a plain `run` outside a repository) has nothing to diff
+// and answers an empty list rather than an error: there is no failure here, just
+// no changes to describe.
+func (s *Server) handleRunDiff(w http.ResponseWriter, r *http.Request) {
+	c, err := s.resolveRun(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	branch := c.Labels[sandbox.LabelBranch]
+	base := c.Labels[sandbox.LabelBase]
+	files := []DiffFile{}
+	if branch == "" {
+		writeJSON(w, http.StatusOK, files)
+		return
+	}
+	if base == "" {
+		base = worktree.HeadBranch(s.Project)
+	}
+
+	// Two questions, one answer: what this branch committed beyond its base, and
+	// what is still uncommitted in its checkout. Merged by path so a file that
+	// was both committed and edited again appears once, with the totals added.
+	byPath := map[string]*DiffFile{}
+	add := func(stat worktree.FileStat) {
+		f, ok := byPath[stat.Path]
+		if !ok {
+			f = &DiffFile{Path: stat.Path, Status: stat.Status, Hunks: []DiffHunk{}}
+			byPath[stat.Path] = f
+		}
+		f.Insertions += stat.Insertions
+		f.Deletions += stat.Deletions
+		f.Binary = f.Binary || stat.Binary
+	}
+	for _, st := range worktree.DiffStat(s.Project, branch, base) {
+		add(st)
+	}
+	for _, st := range worktree.WorkingStat(s.Project, branch) {
+		add(st)
+	}
+
+	for _, f := range byPath {
+		files = append(files, *f)
+	}
+	sortDiffFiles(files)
+	writeJSON(w, http.StatusOK, files)
+}
+
+func sortDiffFiles(files []DiffFile) {
+	for i := 1; i < len(files); i++ {
+		for j := i; j > 0 && files[j].Path < files[j-1].Path; j-- {
+			files[j], files[j-1] = files[j-1], files[j]
+		}
+	}
+}

@@ -90,8 +90,16 @@ export const api = {
   stopRun: (id: string) =>
     request<void>(`/v1/runs/${id}/stop`, { method: "POST", fixture: () => undefined }),
 
+  // Kill is stop with force, not a separate endpoint: the daemon exposes one
+  // route because the difference is a flag on the same act, and a second path to
+  // "end this run" is a second place for the two to disagree about what they
+  // reach.
   killRun: (id: string) =>
-    request<void>(`/v1/runs/${id}/kill`, { method: "POST", fixture: () => undefined }),
+    request<void>(`/v1/runs/${id}/stop`, {
+      method: "POST",
+      body: { force: true },
+      fixture: () => undefined,
+    }),
 
   launch: (req: LaunchRequest) =>
     request<{ id: string }>("/v1/runs", {
@@ -168,7 +176,11 @@ export const api = {
     }),
 
   audit: () =>
-    request<AuditRecord[]>("/v1/audit", { fixture: () => MOCK_AUDIT, latencyMs: 300 }),
+    request<AuditRecord[]>("/v1/audit", {
+      fixture: () => MOCK_AUDIT,
+      latencyMs: 300,
+      unwrap: (b) => (b as { records: AuditRecord[] }).records,
+    }),
 };
 
 /**

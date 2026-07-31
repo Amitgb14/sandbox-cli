@@ -297,6 +297,155 @@ type RunSecurity struct {
 	Hardening bool `json:"hardening"`
 }
 
+// LogLine is one line of a run's output, as GET /runs/{id}/logs returns it
+// without follow.
+//
+// Stream is kept rather than merged because which one a line came from is how a
+// reader tells the agent's own output from the egress proxy's DENY lines
+// interleaved with it — and TS is empty when docker recorded none, not a
+// substituted "now", since a log's value is that it says what happened when.
+type LogLine struct {
+	Seq    int    `json:"seq"`
+	TS     string `json:"ts"`
+	Stream string `json:"stream"` // "stdout" | "stderr"
+	Text   string `json:"text"`
+}
+
+// MetricSample is one reading of a running container's resource use, in the
+// units a chart wants: bytes and percentages, with the time it was taken.
+type MetricSample struct {
+	T               string  `json:"t"`
+	CPUPct          float64 `json:"cpuPct"`
+	MemBytes        int64   `json:"memBytes"`
+	MemLimitBytes   int64   `json:"memLimitBytes"` // 0 means unlimited
+	NetRxBytes      int64   `json:"netRxBytes"`
+	NetTxBytes      int64   `json:"netTxBytes"`
+	BlockReadBytes  int64   `json:"blockReadBytes"`
+	BlockWriteBytes int64   `json:"blockWriteBytes"`
+	PIDs            int     `json:"pids"`
+}
+
+// MetricSeries is the body of GET /runs/{id}/metrics.
+//
+// A series of one, for now: docker reports what a container is using *now* and
+// keeps no history, so anything longer has to be accumulated by a client that
+// stays connected to ?stream=1. Shaped as a series anyway because that is what
+// the reading is — a point on a chart — and a client should not have to change
+// its type when a second point arrives.
+type MetricSeries struct {
+	RunID   string         `json:"runId"`
+	Samples []MetricSample `json:"samples"`
+	Peak    MetricPeak     `json:"peak"`
+}
+
+// MetricPeak is the high-water mark over the samples, which is what the CLI's
+// footer summary prints when a run ends.
+type MetricPeak struct {
+	CPUPct   float64 `json:"cpuPct"`
+	MemBytes int64   `json:"memBytes"`
+}
+
+// AuditRecord is one line of the run log: what ran, how it was confined, and how
+// it ended.
+//
+// EnvNames carries names and never values, which is the rule the log itself
+// keeps — the credential broker exists so secret values stay off the argv and
+// out of files, and this is one more file.
+type AuditRecord struct {
+	Time        string   `json:"time"`
+	Image       string   `json:"image"`
+	Workspace   string   `json:"workspace"`
+	Workdir     string   `json:"workdir"`
+	Agent       *string  `json:"agent"`
+	Branch      *string  `json:"branch"`
+	Command     []string `json:"command"`
+	Engine      string   `json:"engine"`
+	Network     string   `json:"network"`
+	NetworkName string   `json:"networkName"`
+
+	// EgressEnforcementRequested is named for a *request* rather than an
+	// outcome, because that is all the host can honestly know: the container
+	// programs its own firewall, and this says what it was asked to do.
+	EgressEnforcementRequested *string  `json:"egressEnforcementRequested"`
+	EgressAllow                []string `json:"egressAllow"`
+	EnvNames                   []string `json:"envNames"`
+
+	ExitCode   int   `json:"exitCode"`
+	DurationMS int64 `json:"durationMs"`
+	Detached   bool  `json:"detached"`
+}
+
+// AuditResponse is the body of GET /v1/audit.
+type AuditResponse struct {
+	Records []AuditRecord `json:"records"`
+}
+
+// DiffFile is one file's change in a run's work.
+//
+// Hunks are empty for now and that is stated rather than hidden: this reports
+// *what* changed and by how much, which is the question a reviewer asks first,
+// and rendering the content is a second call the client can make against git
+// itself. An empty list is not a claim that the file has no content.
+type DiffFile struct {
+	Path         string     `json:"path"`
+	PreviousPath string     `json:"previousPath,omitempty"`
+	Status       string     `json:"status"` // "added" | "modified" | "deleted" | "renamed"
+	Insertions   int        `json:"insertions"`
+	Deletions    int        `json:"deletions"`
+	Binary       bool       `json:"binary,omitempty"`
+	Hunks        []DiffHunk `json:"hunks"`
+}
+
+// DiffHunk is a contiguous run of changed lines.
+type DiffHunk struct {
+	Header string     `json:"header"`
+	Lines  []DiffLine `json:"lines"`
+}
+
+// DiffLine is one line of a hunk.
+type DiffLine struct {
+	Kind    string `json:"kind"` // "add" | "del" | "ctx" | "meta"
+	OldNo   *int   `json:"oldNo"`
+	NewNo   *int   `json:"newNo"`
+	Content string `json:"content"`
+}
+
+// ResolvedConfig is the configuration a run actually got, read off its
+// container.
+type ResolvedConfig struct {
+	Profile  string      `json:"profile"`
+	Image    string      `json:"image"`
+	Workdir  string      `json:"workdir"`
+	User     string      `json:"user"`
+	Home     string      `json:"home"`
+	Engine   string      `json:"engine"`
+	Network  RunNetwork  `json:"network"`
+	Security RunSecurity `json:"security"`
+	Mounts   []RunMount  `json:"mounts"`
+	EnvAllow []string    `json:"envAllow"`
+
+	PersistAuth bool `json:"persistAuth"`
+	Sync        bool `json:"sync"`
+
+	// Fields is the layered provenance — which of default/user/project/flag
+	// supplied each value. Empty here, deliberately: a container records the
+	// resolved answer and not the layers behind it, and a guessed layer is worse
+	// than none when the entire point of the view is to say where a value came
+	// from.
+	Fields []ResolvedField `json:"fields"`
+
+	// Argv is what the container was started with. Display only.
+	Argv []string `json:"argv"`
+}
+
+// ResolvedField is one setting and the layer that supplied it.
+type ResolvedField struct {
+	Key         string `json:"key"`
+	Value       string `json:"value"`
+	Layer       string `json:"layer"`
+	RefusedFrom string `json:"refusedFrom,omitempty"`
+}
+
 // RunsResponse is the body of GET /runs.
 type RunsResponse struct {
 	Runs []Run `json:"runs"`

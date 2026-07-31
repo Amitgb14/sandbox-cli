@@ -298,16 +298,36 @@ func TestRunLogsStreamsBothChannels(t *testing.T) {
 	})
 	run := decodeBody[Run](t, create)
 
+	// Without follow the log is a document, and comes back as JSON. Framing a
+	// finished container's output as an event stream forced every client to
+	// implement a parser to read something that had already stopped changing.
 	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/logs", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "hello from stdout") || !strings.Contains(body, "hello from stderr") {
-		t.Errorf("log stream missing expected lines: %s", body)
+	lines := decodeBody[[]LogLine](t, rec)
+	if len(lines) != 2 {
+		t.Fatalf("want two lines, got %+v", lines)
 	}
-	if !strings.Contains(body, "event: log") {
-		t.Errorf("log stream missing SSE event framing: %s", body)
+	var sawOut, sawErr bool
+	for _, l := range lines {
+		if l.Stream == "stdout" && l.Text == "hello from stdout" {
+			sawOut = true
+		}
+		// Which stream a line came from is kept, because that is how a reader
+		// separates the agent's output from the proxy's DENY lines beside it.
+		if l.Stream == "stderr" && l.Text == "hello from stderr" {
+			sawErr = true
+		}
+	}
+	if !sawOut || !sawErr {
+		t.Errorf("both streams must survive, got %+v", lines)
+	}
+
+	// follow=1 is still SSE: there the connection is the point.
+	stream := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/logs?follow=1", nil)
+	if !strings.Contains(stream.Body.String(), "event: log") {
+		t.Errorf("follow=1 must stay an event stream: %s", stream.Body.String())
 	}
 }
 

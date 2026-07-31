@@ -13,34 +13,87 @@ import { test, expect } from "@playwright/test";
  * The console's own "Failed to load resource" line is dropped, because it does
  * not name the URL. The response listener records status and URL instead, which
  * is the difference between "six 404s" and "six 404s on /v1/doctor".
+ *
+ * Run it twice — once with the daemon down and once with it up. They catch
+ * different things: fixture mode exercises rendering, and live mode is the only
+ * place a contract mismatch between the two halves of Studio can appear. Every
+ * such bug found so far was invisible in fixture mode, because the fixtures are
+ * written to the shape the components want rather than the shape the daemon
+ * sends.
  */
-const routes = ["/", "/runs", "/agents", "/worktrees", "/launch", "/settings"];
+const API = process.env.NEXT_PUBLIC_SANDBOX_API ?? "http://localhost:8787";
+
+/** Static routes: everything that needs no id. */
+const routes = [
+  "/",
+  "/runs",
+  "/agents",
+  "/worktrees",
+  "/launch",
+  "/settings",
+  "/settings/doctor",
+];
+
+function watch(page: import("@playwright/test").Page) {
+  const errors: string[] = [];
+  const failed: string[] = [];
+
+  page.on("console", (m) => {
+    if (m.type() !== "error") return;
+    if (m.text().startsWith("Failed to load resource")) return; // carries no URL
+    const at = m.location();
+    const where = at.url ? ` [${at.url}:${at.lineNumber}:${at.columnNumber}]` : "";
+    errors.push(m.text() + where);
+  });
+  page.on("pageerror", (e) => errors.push(`${e.name}: ${e.message}`));
+  page.on("requestfailed", (r) => {
+    // The health probe failing is not a failure — it is how the UI *detects*
+    // that no daemon is running and switches to fixtures. Counting it would
+    // make this suite unable to pass in the one mode it must also cover.
+    // Everything else that cannot connect still counts, including a CORS block,
+    // which never reaches the response listener at all.
+    if (r.url().endsWith("/v1/health")) return;
+    failed.push(`${r.failure()?.errorText ?? "failed"} ${r.url()}`);
+  });
+  page.on("response", (r) => {
+    if (r.status() >= 400) failed.push(`${r.status()} ${r.url()}`);
+  });
+
+  return { errors, failed };
+}
 
 for (const path of routes) {
   test(`${path} renders cleanly`, async ({ page }) => {
-    const errors: string[] = [];
-    const failed: string[] = [];
-
-    page.on("console", (m) => {
-      if (m.type() !== "error") return;
-      if (m.text().startsWith("Failed to load resource")) return; // carries no URL
-      // Location turns "a component did something wrong" into a file and line.
-      const at = m.location();
-      const where = at.url ? ` [${at.url}:${at.lineNumber}:${at.columnNumber}]` : "";
-      errors.push(m.text() + where);
-    });
-    page.on("pageerror", (e) => errors.push(`${e.name}: ${e.message}`));
-    page.on("requestfailed", (r) =>
-      failed.push(`${r.failure()?.errorText ?? "failed"} ${r.url()}`),
-    );
-    page.on("response", (r) => {
-      if (r.status() >= 400) failed.push(`${r.status()} ${r.url()}`);
-    });
-
+    const { errors, failed } = watch(page);
     await page.goto(path);
     await page.waitForLoadState("networkidle");
-
     expect(errors, `JS errors on ${path}`).toEqual([]);
     expect(failed, `failed requests on ${path}`).toEqual([]);
   });
 }
+
+/**
+ * Run detail needs a real id, and it is the route that reads the most of the
+ * contract — network, security, mounts, logs, metrics, diff, config are all on
+ * this one screen. Skipped rather than failed when there is no run to open: an
+ * empty machine is not a broken one, and a test that invented an id would only
+ * ever exercise the not-found path.
+ */
+test("/runs/[id] renders cleanly", async ({ page, request }) => {
+  let id: string | undefined;
+  try {
+    const res = await request.get(`${API}/v1/runs?all=1`);
+    if (res.ok()) {
+      id = (await res.json())?.runs?.[0]?.id;
+    }
+  } catch {
+    // No daemon. Covered by the skip below.
+  }
+  test.skip(!id, "no run to open — start one, or run this with the daemon up");
+
+  const { errors, failed } = watch(page);
+  await page.goto(`/runs/${id}`);
+  await page.waitForLoadState("networkidle");
+  expect(errors, `JS errors on /runs/${id}`).toEqual([]);
+  expect(failed, `failed requests on /runs/${id}`).toEqual([]);
+});

@@ -1,6 +1,7 @@
 package studioapi
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -78,4 +79,26 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		out.Path = &p
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleUsageRefresh is POST /v1/usage/refresh.
+//
+// The numbers this API serves are a cache Claude Code keeps for its own /usage,
+// and it refreshes only when the agent talks to the server — so a reading can be
+// hours stale with nothing here able to tell. Refresh is the one way to make it
+// current: it runs a single throwaway turn, in a scratch directory so the turn
+// stays out of the project's transcript history, and re-reads.
+//
+// Deliberately a POST and deliberately not automatic. The request is spent from
+// the very window being measured, so asking for it has to be an act rather than
+// a side effect of opening a screen.
+func (s *Server) handleUsageRefresh(w http.ResponseWriter, r *http.Request) {
+	if err := agentusage.Refresh(r.Context()); err != nil {
+		// The stale reading is still the honest one, and returning it with a 200
+		// would say the refresh worked. The client keeps what it had and learns
+		// why it could not be improved.
+		writeError(w, http.StatusBadGateway, fmt.Errorf("refreshing usage: %w", err))
+		return
+	}
+	s.handleUsage(w, r)
 }

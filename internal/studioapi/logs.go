@@ -2,9 +2,11 @@ package studioapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 )
 
@@ -24,6 +26,22 @@ func (s *Server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	// Without follow the caller wants the log as a document, not a stream, and
+	// gets JSON. SSE stays for follow=1, where the connection is the point.
+	//
+	// Both shapes exist because they answer different questions: "show me what
+	// this run wrote" is a fetch, and framing it as an event stream forces every
+	// client to implement a parser to read a finished container's output.
+	if !r.URL.Query().Has("follow") {
+		lines, err := s.logLines(r.Context(), c.ID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, lines)
+		return
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming not supported by this connection"))
@@ -110,4 +128,45 @@ func writeSSE(w http.ResponseWriter, event string, v any) {
 	// SSE frames a `data:` field per line, so a payload can never itself contain
 	// a bare newline; JSON-encoding v already guarantees that.
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
+}
+
+// logLines reads a container's whole log as structured lines.
+//
+// Through runtime.Controller.Logs rather than by running the engine directly,
+// even though the engine could add --timestamps and this cannot. The Controller
+// is what the tests fake, and a handler that reached past it would be shipping a
+// path no test covers — the interface is also the seam that lets a second
+// backend exist at all.
+//
+// So TS is empty here, and that is reported rather than filled in: docker's
+// plain log carries no per-line time, and stamping every line with "when the
+// server read it" would be a value that looks like evidence and is not one.
+// Timestamps are available on the follow=1 stream, where each line is seen as it
+// happens.
+//
+// The two streams are kept apart because which one a line came from is how a
+// reader separates the agent's own output from the egress proxy's DENY lines
+// interleaved with it.
+func (s *Server) logLines(ctx context.Context, id string) ([]LogLine, error) {
+	var outBuf, errBuf bytes.Buffer
+	if err := s.RT.Logs(ctx, id, false, &outBuf, &errBuf); err != nil {
+		return nil, fmt.Errorf("reading logs: %w", err)
+	}
+
+	lines := make([]LogLine, 0, 64)
+	for _, part := range []struct {
+		buf    *bytes.Buffer
+		stream string
+	}{{&outBuf, "stdout"}, {&errBuf, "stderr"}} {
+		for _, raw := range strings.Split(part.buf.String(), "\n") {
+			if raw == "" {
+				continue
+			}
+			lines = append(lines, LogLine{Stream: part.stream, Text: raw})
+		}
+	}
+	for i := range lines {
+		lines[i].Seq = i
+	}
+	return lines, nil
 }

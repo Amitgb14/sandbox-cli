@@ -26,7 +26,7 @@ func (s *Server) handleRunMetrics(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, m)
+		writeJSON(w, http.StatusOK, toSeries(c.ID, m))
 		return
 	}
 
@@ -195,4 +195,29 @@ func parseIntOr(s string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// toSeries turns one reading into the series a chart consumes.
+//
+// A series of one is not a placeholder for something better: docker reports
+// what a container is using *now* and keeps no history, so a longer series can
+// only be accumulated by a client that stays on ?stream=1. Shaping the single
+// reading as a series anyway means that client never changes type when the
+// second point arrives.
+//
+// Peak equals the sample for the same reason — over a window of one, the
+// high-water mark is the reading.
+func toSeries(id string, m RunMetrics) MetricSeries {
+	sample := MetricSample{
+		T:             m.SampledAt.UTC().Format(time.RFC3339),
+		CPUPct:        m.CPUPercent,
+		MemBytes:      m.MemUsageBytes,
+		MemLimitBytes: m.MemLimitBytes,
+		PIDs:          m.PIDs,
+	}
+	return MetricSeries{
+		RunID:   shortID(id),
+		Samples: []MetricSample{sample},
+		Peak:    MetricPeak{CPUPct: sample.CPUPct, MemBytes: sample.MemBytes},
+	}
 }
