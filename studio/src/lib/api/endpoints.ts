@@ -42,8 +42,19 @@ export const api = {
   daemon: () =>
     request<DaemonInfo>("/v1/health", { fixture: () => MOCK_DAEMON, latencyMs: 120 }),
 
+  /**
+   * Every run, finished ones included — `?all=1`.
+   *
+   * The daemon defaults to live-only, matching `sandbox-cli list`, which is the
+   * right default for a terminal: you ask what is running now. It is the wrong
+   * one for this UI. The Runs screen exists to say how runs *ended*, the
+   * dashboard buckets fourteen days of them, and both were empty on any machine
+   * where nothing happened to be running at that moment — which is most of them,
+   * most of the time. Callers that want only the live ones filter, and the
+   * dashboard already does.
+   */
   runs: () =>
-    request<Run[]>("/v1/runs", {
+    request<Run[]>("/v1/runs?all=1", {
       fixture: () => MOCK_RUNS,
       latencyMs: 260,
       unwrap: (b) => (b as { runs: Run[] }).runs,

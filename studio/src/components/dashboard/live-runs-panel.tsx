@@ -6,12 +6,20 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/common/empty-state";
 import { LiveDot } from "@/components/common/status-badge";
 import { KindBadge, NetworkBadge } from "@/components/common/posture-badges";
 import { useKillRun, useStopRun } from "@/lib/api/queries";
-import { formatBytesShort, formatDurationTight, formatPercent } from "@/lib/format";
+import {
+  formatBytesShort,
+  formatDurationTight,
+  formatPercent,
+} from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Run } from "@/lib/types";
 
@@ -23,7 +31,13 @@ import type { Run } from "@/lib/types";
  * does not. The difference is whether the agent closed the file it was editing,
  * so neither hides behind a shared "end run".
  */
-export function LiveRunsPanel({ runs, loading }: { runs: Run[]; loading?: boolean }) {
+export function LiveRunsPanel({
+  runs,
+  loading,
+}: {
+  runs: Run[];
+  loading?: boolean;
+}) {
   const stop = useStopRun();
   const kill = useKillRun();
 
@@ -34,7 +48,9 @@ export function LiveRunsPanel({ runs, loading }: { runs: Run[]; loading?: boolea
           <CardTitle className="flex items-center gap-2 text-sm font-medium">
             {runs.length > 0 && <LiveDot />}
             In flight
-            <span className="text-muted-foreground tabular-nums">{runs.length}</span>
+            <span className="text-muted-foreground tabular-nums">
+              {runs.length}
+            </span>
           </CardTitle>
           <Button asChild variant="ghost" size="sm" className="h-7 text-xs">
             <Link href="/runs">
@@ -54,7 +70,7 @@ export function LiveRunsPanel({ runs, loading }: { runs: Run[]; loading?: boolea
           <EmptyState
             icon={MoonStar}
             title="Nothing running"
-            description="No container carries the sandbox.cli label right now. A run you start from Launch shows up here within a few seconds."
+            description="Nothing is running right now. Finished runs are kept and listed under Runs; one you start from Launch shows up here within a few seconds."
             action={
               <Button asChild size="sm" variant="outline">
                 <Link href="/launch">Launch a run</Link>
@@ -63,7 +79,9 @@ export function LiveRunsPanel({ runs, loading }: { runs: Run[]; loading?: boolea
             className="border-0 py-8"
           />
         ) : (
-          runs.map((run) => <LiveRunRow key={run.id} run={run} stop={stop} kill={kill} />)
+          runs.map((run) => (
+            <LiveRunRow key={run.id} run={run} stop={stop} kill={kill} />
+          ))
         )}
       </CardContent>
     </Card>
@@ -80,7 +98,8 @@ function LiveRunRow({
   kill: ReturnType<typeof useKillRun>;
 }) {
   const m = run.latestMetrics;
-  const memFrac = m && m.memLimitBytes > 0 ? m.memBytes / m.memLimitBytes : null;
+  const memFrac =
+    m && m.memLimitBytes > 0 ? m.memBytes / m.memLimitBytes : null;
 
   return (
     <div className="group rounded-lg border bg-card/40 p-3 transition-colors hover:bg-accent/40">
@@ -98,7 +117,9 @@ function LiveRunRow({
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <span className="font-mono">{run.agent ?? "plain run"}</span>
             <span>{run.repoName}</span>
-            <span className="tabular-nums">{formatDurationTight(run.durationMs)}</span>
+            <span className="tabular-nums">
+              {formatDurationTight(run.durationMs)}
+            </span>
             <NetworkBadge network={run.network} />
             {run.verify && (
               <Tooltip>
@@ -108,8 +129,9 @@ function LiveRunRow({
                   </span>
                 </TooltipTrigger>
                 <TooltipContent className="max-w-sm">
-                  This run&apos;s definition of done. Its exit code becomes the container&apos;s,
-                  which is what makes the run autonomous rather than merely headless.
+                  This run&apos;s definition of done. Its exit code becomes the
+                  container&apos;s, which is what makes the run autonomous
+                  rather than merely headless.
                 </TooltipContent>
               </Tooltip>
             )}
@@ -128,7 +150,8 @@ function LiveRunRow({
                   stop.mutate(run.id, {
                     onSuccess: () =>
                       toast.success(`Asked ${run.branch ?? run.name} to exit`, {
-                        description: "The guest gets a grace period to finish writing.",
+                        description:
+                          "The guest gets a grace period to finish writing.",
                       }),
                   })
                 }
@@ -137,7 +160,9 @@ function LiveRunRow({
                 <Square className="size-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Stop — asks the guest to exit, then waits</TooltipContent>
+            <TooltipContent>
+              Stop — asks the guest to exit, then waits
+            </TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -179,12 +204,18 @@ function LiveRunRow({
           value={
             m
               ? `${formatBytesShort(m.memBytes)}${
-                  m.memLimitBytes ? ` / ${formatBytesShort(m.memLimitBytes)}` : ""
+                  m.memLimitBytes
+                    ? ` / ${formatBytesShort(m.memLimitBytes)}`
+                    : ""
                 }`
               : null
           }
           frac={memFrac}
-          tone={memFrac !== null && memFrac > 0.9 ? "bg-status-warning" : "bg-chart-2"}
+          tone={
+            memFrac !== null && memFrac > 0.9
+              ? "bg-status-warning"
+              : "bg-chart-2"
+          }
         />
       </div>
     </div>
