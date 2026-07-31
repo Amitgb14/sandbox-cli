@@ -31,7 +31,7 @@ export const qk = {
   commitDiff: (sha: string) => ["commits", sha, "diff"] as const,
   usage: ["usage"] as const,
   doctor: ["doctor"] as const,
-  audit: (branch?: string) => ["audit", branch ?? "all"] as const,
+  audit: (branch?: string, limit?: number) => ["audit", branch ?? "all", limit ?? 200] as const,
 };
 
 /** Live data is polled; everything else is fetched once and invalidated. */
@@ -153,10 +153,16 @@ export function useDoctor(opts?: Partial<UseQueryOptions<Awaited<ReturnType<type
   return useQuery({ queryKey: qk.doctor, queryFn: api.doctor, staleTime: 5 * 60_000, ...opts });
 }
 
-export function useAudit(branch?: string) {
+/**
+ * The run log. `limit` matters for the dashboard: its window is fourteen days,
+ * and the default 200 is the newest 200 records — on a busy machine that is two
+ * days, and the chart's older columns come back empty because nothing was
+ * fetched for them, not because nothing ran.
+ */
+export function useAudit(branch?: string, limit?: number) {
   return useQuery({
-    queryKey: qk.audit(branch),
-    queryFn: () => api.audit(branch),
+    queryKey: qk.audit(branch, limit),
+    queryFn: () => api.audit(branch, limit),
     staleTime: 30_000,
   });
 }

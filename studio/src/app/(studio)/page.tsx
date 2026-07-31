@@ -19,9 +19,15 @@ import { AgentActivityChart } from "@/components/charts/agent-activity-chart";
 import { LiveRunsPanel } from "@/components/dashboard/live-runs-panel";
 import { BoundaryPanel } from "@/components/dashboard/boundary-panel";
 import { LandQueuePanel } from "@/components/dashboard/land-queue-panel";
-import { useRuns, useWorktrees } from "@/lib/api/queries";
+import { useAudit, useRuns, useWorktrees } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
-import { bucketByDay, byAgent, runStats, scopeToRepo } from "@/lib/derive";
+import {
+  bucketAuditByDay,
+  byAgentAudit,
+  historyStats,
+  runStats,
+  scopeToRepo,
+} from "@/lib/derive";
 import {
   formatBytesShort,
   formatDuration,
@@ -34,13 +40,29 @@ export default function DashboardPage() {
   const repoFilter = useUi((s) => s.repoFilter);
   const { data: allRuns, isPending } = useRuns();
   const { data: allWorktrees, isPending: worktreesPending } = useWorktrees();
+  // History comes from the audit log, not from containers. A container carries
+  // its own record until `fleet clean` reaps it, so a fourteen-day chart built
+  // from containers is a chart of whatever has not been tidied up yet — on this
+  // machine, seven runs out of six hundred and ninety-three.
+  const { data: history } = useAudit(undefined, 5000);
 
   const runs = scopeToRepo(allRuns ?? [], repoFilter);
   const worktrees = scopeToRepo(allWorktrees ?? [], repoFilter);
 
-  const stats = runStats(runs);
-  const days = bucketByDay(runs, 14);
-  const agents = byAgent(runs).slice(0, 7);
+  // Live facts from containers, decided ones from the log. Splitting them is
+  // the point: only a container can say what is running now, and only the log
+  // can say what has ended.
+  const liveStats = runStats(runs);
+  const past = historyStats(history ?? []);
+  const stats = {
+    ...liveStats,
+    finishedToday: past.finishedToday,
+    passRate: past.passRate,
+    decided: past.decided,
+    medianDurationMs: past.medianDurationMs,
+  };
+  const days = bucketAuditByDay(history ?? [], 14);
+  const agents = byAgentAudit(history ?? []).slice(0, 7);
   const live = runs.filter((r) => r.state === "running");
   const repoName = REPOS.find((r) => r.id === repoFilter)?.name;
 

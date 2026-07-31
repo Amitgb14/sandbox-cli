@@ -40,7 +40,10 @@ import type {
 
 export const api = {
   daemon: () =>
-    request<DaemonInfo>("/v1/health", { fixture: () => MOCK_DAEMON, latencyMs: 120 }),
+    request<DaemonInfo>("/v1/health", {
+      fixture: () => MOCK_DAEMON,
+      latencyMs: 120,
+    }),
 
   /**
    * Every run, finished ones included — `?all=1`.
@@ -100,7 +103,10 @@ export const api = {
    * one by name rather than offering a single "end run".
    */
   stopRun: (id: string) =>
-    request<void>(`/v1/runs/${id}/stop`, { method: "POST", fixture: () => undefined }),
+    request<void>(`/v1/runs/${id}/stop`, {
+      method: "POST",
+      fixture: () => undefined,
+    }),
 
   // Kill is stop with force, not a separate endpoint: the daemon exposes one
   // route because the difference is a flag on the same act, and a second path to
@@ -120,7 +126,10 @@ export const api = {
    * record that it happened.
    */
   removeRun: (id: string) =>
-    request<void>(`/v1/runs/${id}`, { method: "DELETE", fixture: () => undefined }),
+    request<void>(`/v1/runs/${id}`, {
+      method: "DELETE",
+      fixture: () => undefined,
+    }),
 
   launch: (req: LaunchRequest) =>
     request<{ id: string }>("/v1/runs", {
@@ -210,7 +219,10 @@ export const api = {
     ),
 
   usage: () =>
-    request<UsageSnapshot>("/v1/usage", { fixture: () => MOCK_USAGE, latencyMs: 200 }),
+    request<UsageSnapshot>("/v1/usage", {
+      fixture: () => MOCK_USAGE,
+      latencyMs: 200,
+    }),
 
   refreshUsage: () =>
     request<UsageSnapshot>("/v1/usage/refresh", {
@@ -234,12 +246,16 @@ export const api = {
    * the state store. This survives, which makes it the only answer to "what has
    * run here" once the containers are cleaned up.
    */
-  audit: (branch?: string) =>
-    request<AuditRecord[]>(`/v1/audit${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`, {
-      fixture: () => (branch ? MOCK_AUDIT.filter((a) => a.branch === branch) : MOCK_AUDIT),
-      latencyMs: 300,
-      unwrap: (b) => (b as { records: AuditRecord[] }).records,
-    }),
+  audit: (branch?: string, limit?: number) =>
+    request<AuditRecord[]>(
+      `/v1/audit?limit=${limit ?? 200}${branch ? `&branch=${encodeURIComponent(branch)}` : ""}`,
+      {
+        fixture: () =>
+          branch ? MOCK_AUDIT.filter((a) => a.branch === branch) : MOCK_AUDIT,
+        latencyMs: 300,
+        unwrap: (b) => (b as { records: AuditRecord[] }).records,
+      },
+    ),
 };
 
 /**
@@ -324,8 +340,12 @@ export function localPreview(req: LaunchRequest): LaunchPreview {
 
   const hostPathsInReach = [
     req.worktree ? `${req.workspace} (worktree)` : req.workspace,
-    ...(req.persistAuth && req.agent ? [`~/.config/sandbox/agents/${req.agent}`] : []),
-    ...(req.sync && req.agent === "claude" ? ["~/.claude/projects/<this project>"] : []),
+    ...(req.persistAuth && req.agent
+      ? [`~/.config/sandbox/agents/${req.agent}`]
+      : []),
+    ...(req.sync && req.agent === "claude"
+      ? ["~/.claude/projects/<this project>"]
+      : []),
     ...req.share,
   ];
 
@@ -365,16 +385,21 @@ function previewArgv(req: LaunchRequest, allow: string[]): string[] {
       cpus: req.cpus,
     },
     mounts: [
-      { host: req.workspace, container: "/workspace", mode: "rw", origin: "workspace" },
+      {
+        host: req.workspace,
+        container: "/workspace",
+        mode: "rw",
+        origin: "workspace",
+      },
       ...(req.persistAuth && req.agent
-        ? ([
+        ? [
             {
               host: `~/.config/sandbox/agents/${req.agent}`,
               container: "/sandbox/home",
               mode: "rw" as const,
               origin: "persisted-home" as const,
             },
-          ])
+          ]
         : []),
       ...req.share.map((s) => ({
         host: s,
