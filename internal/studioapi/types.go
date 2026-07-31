@@ -446,6 +446,27 @@ type ResolvedField struct {
 	RefusedFrom string `json:"refusedFrom,omitempty"`
 }
 
+// Commit is one commit on a branch.
+//
+// Subject and Author are text from the repository, exactly like a branch name:
+// render them, never interpret them.
+type Commit struct {
+	SHA        string `json:"sha"`
+	ShortSHA   string `json:"shortSha"`
+	Subject    string `json:"subject"`
+	Author     string `json:"author"`
+	Date       string `json:"date"`
+	Files      int    `json:"files"`
+	Insertions int    `json:"insertions"`
+	Deletions  int    `json:"deletions"`
+}
+
+// CommitsResponse is the body of GET /v1/worktrees/{branch}/commits.
+type CommitsResponse struct {
+	Base    string   `json:"base"`
+	Commits []Commit `json:"commits"`
+}
+
 // RunsResponse is the body of GET /runs.
 type RunsResponse struct {
 	Runs []Run `json:"runs"`

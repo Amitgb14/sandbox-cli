@@ -25,6 +25,9 @@ export const qk = {
   runConfig: (id: string) => ["runs", id, "config"] as const,
   agents: ["agents"] as const,
   worktrees: ["worktrees"] as const,
+  worktree: (b: string) => ["worktrees", b] as const,
+  worktreeCommits: (b: string) => ["worktrees", b, "commits"] as const,
+  branchRuns: (b: string) => ["runs", "branch", b] as const,
   usage: ["usage"] as const,
   doctor: ["doctor"] as const,
   audit: ["audit"] as const,
@@ -100,6 +103,31 @@ export function useAgents() {
 
 export function useWorktrees() {
   return useQuery({ queryKey: qk.worktrees, queryFn: api.worktrees, refetchInterval: 15_000 });
+}
+
+export function useWorktree(branch: string) {
+  return useQuery({
+    queryKey: qk.worktree(branch),
+    queryFn: () => api.worktree(branch),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useWorktreeCommits(branch: string) {
+  return useQuery({
+    queryKey: qk.worktreeCommits(branch),
+    queryFn: () => api.worktreeCommits(branch),
+    refetchInterval: 30_000,
+  });
+}
+
+/** Every run that worked a branch — the agent history behind one worktree. */
+export function useBranchRuns(branch: string) {
+  return useQuery({
+    queryKey: qk.branchRuns(branch),
+    queryFn: () => api.branchRuns(branch),
+    refetchInterval: LIVE_MS,
+  });
 }
 
 export function useUsage() {

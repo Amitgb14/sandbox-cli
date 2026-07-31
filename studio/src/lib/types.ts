@@ -332,6 +332,18 @@ export interface Agent {
  * name derived from one — an agent that runs `git checkout -b` inside its
  * worktree puts the two out of sync.
  */
+/** One commit on a branch. Subject and author are text from the repository. */
+export interface Commit {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  date: string;
+  files: number;
+  insertions: number;
+  deletions: number;
+}
+
 export interface Worktree {
   branch: string;
   /** Symlink-resolved, so the string here is the one git reports. */

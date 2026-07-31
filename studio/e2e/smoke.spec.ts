@@ -42,7 +42,9 @@ function watch(page: import("@playwright/test").Page) {
     if (m.type() !== "error") return;
     if (m.text().startsWith("Failed to load resource")) return; // carries no URL
     const at = m.location();
-    const where = at.url ? ` [${at.url}:${at.lineNumber}:${at.columnNumber}]` : "";
+    const where = at.url
+      ? ` [${at.url}:${at.lineNumber}:${at.columnNumber}]`
+      : "";
     errors.push(m.text() + where);
   });
   page.on("pageerror", (e) => errors.push(`${e.name}: ${e.message}`));
@@ -71,6 +73,29 @@ for (const path of routes) {
     expect(failed, `failed requests on ${path}`).toEqual([]);
   });
 }
+
+/**
+ * The worktree detail assembles three sources — git for the branch and its
+ * commits, docker for the runs — so it is the route most likely to break when
+ * any one of them changes shape. Skipped when there is no worktree, for the same
+ * reason run detail is: an empty machine is not a broken one.
+ */
+test("/worktrees/[branch] renders cleanly", async ({ page, request }) => {
+  let branch: string | undefined;
+  try {
+    const res = await request.get(`${API}/v1/worktrees`);
+    if (res.ok()) branch = (await res.json())?.worktrees?.[0]?.branch;
+  } catch {
+    // No daemon; the skip below covers it.
+  }
+  test.skip(!branch, "no worktree to open");
+
+  const { errors, failed } = watch(page);
+  await page.goto(`/worktrees/${encodeURIComponent(branch!)}`);
+  await page.waitForLoadState("networkidle");
+  expect(errors, `JS errors on /worktrees/${branch}`).toEqual([]);
+  expect(failed, `failed requests on /worktrees/${branch}`).toEqual([]);
+});
 
 /**
  * Run detail needs a real id, and it is the route that reads the most of the

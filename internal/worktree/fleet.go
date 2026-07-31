@@ -410,3 +410,95 @@ func InCommit(dir, commit, path string) bool {
 	_, err := runGit(dir, "cat-file", "-e", commit+":"+path)
 	return err == nil
 }
+
+// Commit is one commit on a branch, with what it touched.
+type Commit struct {
+	SHA        string
+	ShortSHA   string
+	Subject    string
+	Author     string
+	Date       string
+	Files      int
+	Insertions int
+	Deletions  int
+}
+
+// Commits lists what a branch has that its base does not, newest first.
+//
+// Three dots would be wrong here: this is the branch's own history, so the
+// two-dot range is the question — "what is on this branch and not on base",
+// without replaying what happened on base meanwhile.
+func Commits(dir, branch, base string, limit int) []Commit {
+	if dir == "" || branch == "" {
+		return nil
+	}
+	root, err := RepoRoot(dir)
+	if err != nil {
+		return nil
+	}
+	rev := branch
+	if base != "" && base != branch {
+		rev = base + ".." + branch
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	// A record separator that cannot appear in a subject or an author name, so a
+	// commit message containing a tab or a newline cannot forge a field. The same
+	// care the label rendering takes: this is text from the repository.
+	const sep = "\x1f"
+	format := "%H" + sep + "%h" + sep + "%s" + sep + "%an" + sep + "%aI"
+	out, err := runGit(root, "log", "--no-color", "--shortstat",
+		"--format=format:"+format, "-n", strconv.Itoa(limit), rev)
+	if err != nil {
+		return nil
+	}
+
+	var commits []Commit
+	var cur *Commit
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, sep) {
+			if cur != nil {
+				commits = append(commits, *cur)
+			}
+			f := strings.Split(line, sep)
+			if len(f) < 5 {
+				cur = nil
+				continue
+			}
+			cur = &Commit{SHA: f[0], ShortSHA: f[1], Subject: f[2], Author: f[3], Date: f[4]}
+			continue
+		}
+		if cur != nil && strings.Contains(line, "changed") {
+			cur.Files, cur.Insertions, cur.Deletions = parseShortstat(line)
+		}
+	}
+	if cur != nil {
+		commits = append(commits, *cur)
+	}
+	return commits
+}
+
+// parseShortstat reads git's " 3 files changed, 12 insertions(+), 4 deletions(-)".
+// Absent counts stay zero: a commit that only added lines has no deletions
+// clause, which is not the same as a commit that deleted none of a file it
+// rewrote — but the number is the same, and git says nothing more.
+func parseShortstat(line string) (files, insertions, deletions int) {
+	fields := strings.Fields(line)
+	for i, f := range fields {
+		n, err := strconv.Atoi(f)
+		if err != nil || i+1 >= len(fields) {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(fields[i+1], "file"):
+			files = n
+		case strings.HasPrefix(fields[i+1], "insertion"):
+			insertions = n
+		case strings.HasPrefix(fields[i+1], "deletion"):
+			deletions = n
+		}
+	}
+	return files, insertions, deletions
+}

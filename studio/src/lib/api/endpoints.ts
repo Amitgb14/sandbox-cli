@@ -16,6 +16,7 @@ import {
 import { BASELINE_EGRESS, RESERVED_ENV } from "@/lib/constants";
 import type {
   Agent,
+  Commit,
   AuditRecord,
   DaemonInfo,
   DiffFile,
@@ -143,6 +144,31 @@ export const api = {
       fixture: () => MOCK_WORKTREES,
       latencyMs: 240,
       unwrap: (b) => (b as { worktrees: Worktree[] }).worktrees,
+    }),
+
+  worktree: (branch: string) =>
+    request<Worktree>(`/v1/worktrees/${encodeURIComponent(branch)}`, {
+      fixture: () => {
+        const w = MOCK_WORKTREES.find((x) => x.branch === branch);
+        if (!w) throw new Error(`no worktree ${branch}`);
+        return w;
+      },
+      latencyMs: 140,
+    }),
+
+  worktreeCommits: (branch: string) =>
+    request<Commit[]>(`/v1/worktrees/${encodeURIComponent(branch)}/commits`, {
+      fixture: () => [],
+      latencyMs: 200,
+      unwrap: (b) => (b as { commits: Commit[] }).commits,
+    }),
+
+  /** Every run that worked this branch, finished ones included. */
+  branchRuns: (branch: string) =>
+    request<Run[]>(`/v1/runs?all=1&branch=${encodeURIComponent(branch)}`, {
+      fixture: () => MOCK_RUNS.filter((r) => r.branch === branch),
+      latencyMs: 200,
+      unwrap: (b) => (b as { runs: Run[] }).runs,
     }),
 
   removeWorktree: (branch: string) =>

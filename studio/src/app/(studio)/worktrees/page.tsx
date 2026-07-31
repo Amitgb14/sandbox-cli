@@ -43,12 +43,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { MoreHorizontal } from "lucide-react";
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState } from "@/components/common/empty-state";
 import { LiveDot } from "@/components/common/status-badge";
-import { useLandWorktree, useRemoveWorktree, useWorktrees } from "@/lib/api/queries";
+import {
+  useLandWorktree,
+  useRemoveWorktree,
+  useWorktrees,
+} from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 import { scopeToRepo } from "@/lib/derive";
 import { formatRelative, pluralize, tildify } from "@/lib/format";
@@ -98,7 +106,9 @@ function WorktreesContent() {
 
   const worktrees = scopeToRepo(data ?? [], repoFilter)
     .filter((w) => !w.primary)
-    .filter((w) => !query || w.branch.toLowerCase().includes(query.toLowerCase()));
+    .filter(
+      (w) => !query || w.branch.toLowerCase().includes(query.toLowerCase()),
+    );
 
   const busy = worktrees.filter((w) => w.runId).length;
   const dirty = worktrees.filter((w) => w.dirty.length > 0).length;
@@ -133,12 +143,18 @@ function WorktreesContent() {
             {worktrees.length} worktrees
           </Badge>
           {busy > 0 && (
-            <Badge variant="outline" className="border-status-running/40 text-status-running tabular-nums">
+            <Badge
+              variant="outline"
+              className="border-status-running/40 text-status-running tabular-nums"
+            >
               {busy} with an agent
             </Badge>
           )}
           {dirty > 0 && (
-            <Badge variant="outline" className="border-caution/40 text-caution tabular-nums">
+            <Badge
+              variant="outline"
+              className="border-caution/40 text-caution tabular-nums"
+            >
               {dirty} dirty
             </Badge>
           )}
@@ -192,7 +208,15 @@ function WorktreesContent() {
                     <div className="flex items-center gap-2">
                       {w.runId && <LiveDot />}
                       <div className="min-w-0">
-                        <p className="truncate font-mono text-sm">{w.branch}</p>
+                        {/* The branch name is the link, not the whole row: the
+                            row also carries a menu whose items are their own
+                            actions, and a row-level click would swallow them. */}
+                        <Link
+                          href={`/worktrees/${encodeURIComponent(w.branch)}`}
+                          className="truncate font-mono text-sm hover:underline"
+                        >
+                          {w.branch}
+                        </Link>
                         <p
                           className="truncate font-mono text-[11px] text-muted-foreground"
                           title={w.path}
@@ -233,7 +257,9 @@ function WorktreesContent() {
                   </TableCell>
                   <TableCell>
                     {w.dirty.length === 0 ? (
-                      <span className="text-xs text-muted-foreground">clean</span>
+                      <span className="text-xs text-muted-foreground">
+                        clean
+                      </span>
                     ) : (
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -264,7 +290,9 @@ function WorktreesContent() {
                         working
                       </Link>
                     ) : (
-                      <span className="text-xs text-muted-foreground">idle</span>
+                      <span className="text-xs text-muted-foreground">
+                        idle
+                      </span>
                     )}
                   </TableCell>
                   <TableCell className="text-xs whitespace-nowrap text-muted-foreground">
@@ -284,7 +312,9 @@ function WorktreesContent() {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-56">
                         <DropdownMenuItem asChild>
-                          <Link href={`/launch?branch=${encodeURIComponent(w.branch)}`}>
+                          <Link
+                            href={`/launch?branch=${encodeURIComponent(w.branch)}`}
+                          >
                             <Play className="size-3.5" />
                             Start an agent here
                           </Link>
@@ -297,7 +327,10 @@ function WorktreesContent() {
                           <GitMerge className="size-3.5" />
                           Land onto {w.base ?? "its base"}…
                         </DropdownMenuItem>
-                        <DropdownMenuItem variant="destructive" onClick={() => setRemoving(w)}>
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setRemoving(w)}
+                        >
                           <Trash2 className="size-3.5" />
                           Remove worktree…
                         </DropdownMenuItem>
@@ -323,7 +356,8 @@ function WorktreesContent() {
             <DialogDescription asChild>
               <div className="space-y-2 text-sm">
                 <p>
-                  This merges into <span className="font-mono">{landing?.base}</span> — the only
+                  This merges into{" "}
+                  <span className="font-mono">{landing?.base}</span> — the only
                   operation in Studio that writes to a base branch.
                 </p>
                 {landing?.verified !== true && (
@@ -335,9 +369,9 @@ function WorktreesContent() {
                 )}
                 {landing && landing.dirty.length > 0 && (
                   <p className="text-caution">
-                    {pluralize(landing.dirty.length, "file")} uncommitted. Landing commits the
-                    worktree as it stands, which is only correct if the worktree is still on the
-                    branch being landed.
+                    {pluralize(landing.dirty.length, "file")} uncommitted.
+                    Landing commits the worktree as it stands, which is only
+                    correct if the worktree is still on the branch being landed.
                   </p>
                 )}
               </div>
@@ -382,13 +416,14 @@ function WorktreesContent() {
             <DialogDescription asChild>
               <div className="space-y-2 text-sm">
                 <p>
-                  The worktree directory goes away. The branch and its commits stay in the
-                  repository.
+                  The worktree directory goes away. The branch and its commits
+                  stay in the repository.
                 </p>
                 {removing && removing.dirty.length > 0 && (
                   <p className="text-destructive">
-                    {pluralize(removing.dirty.length, "file")} uncommitted — those changes are only
-                    here, and removing the worktree discards them.
+                    {pluralize(removing.dirty.length, "file")} uncommitted —
+                    those changes are only here, and removing the worktree
+                    discards them.
                   </p>
                 )}
                 {removing?.runId && (
@@ -426,16 +461,31 @@ function WorktreesContent() {
   );
 }
 
-function VerifyCell({ verified, live }: { verified: boolean | null; live: boolean }) {
+function VerifyCell({
+  verified,
+  live,
+}: {
+  verified: boolean | null;
+  live: boolean;
+}) {
   if (live) {
     return <span className="text-xs text-muted-foreground">deciding</span>;
   }
   const map = {
     passed: { Icon: ShieldCheck, tone: "text-status-good", label: "passed" },
-    failed: { Icon: ShieldAlert, tone: "text-status-serious", label: "said no" },
-    none: { Icon: ShieldQuestion, tone: "text-muted-foreground", label: "never checked" },
+    failed: {
+      Icon: ShieldAlert,
+      tone: "text-status-serious",
+      label: "said no",
+    },
+    none: {
+      Icon: ShieldQuestion,
+      tone: "text-muted-foreground",
+      label: "never checked",
+    },
   } as const;
-  const key = verified === true ? "passed" : verified === false ? "failed" : "none";
+  const key =
+    verified === true ? "passed" : verified === false ? "failed" : "none";
   const { Icon, tone, label } = map[key];
   return (
     <span className={cn("flex items-center gap-1.5 text-xs", tone)}>

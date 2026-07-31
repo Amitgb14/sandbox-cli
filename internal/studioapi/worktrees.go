@@ -183,3 +183,50 @@ func verifiedByLastRun(cs []runtime.ContainerInfo) *bool {
 	}
 	return nil
 }
+
+// handleWorktreeCommits is GET /v1/worktrees/{branch}/commits: what this branch
+// has that its base does not.
+//
+// The base comes from the label a run stamped, falling back to the checked-out
+// branch — the same resolution the listing uses, so a screen showing "6 ahead"
+// and a screen showing six commits are counting the same thing. A view that
+// derived the base differently would eventually disagree with `land`, which is
+// the one that matters.
+func (s *Server) handleWorktreeCommits(w http.ResponseWriter, r *http.Request) {
+	branch := r.PathValue("branch")
+	path, exists, err := worktree.Path(s.Project, branch)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if !exists {
+		writeError(w, http.StatusNotFound, fmt.Errorf("no worktree for branch %q", branch))
+		return
+	}
+	_ = path
+
+	base := ""
+	for _, c := range s.runsByBranch(r.Context())[branch] {
+		if b := c.Labels[sandbox.LabelBase]; b != "" {
+			base = b
+			break
+		}
+	}
+	if base == "" {
+		base = worktree.HeadBranch(s.Project)
+	}
+
+	out := make([]Commit, 0, 32)
+	for _, c := range worktree.Commits(s.Project, branch, base, commitsLimit) {
+		out = append(out, Commit{
+			SHA: c.SHA, ShortSHA: c.ShortSHA, Subject: c.Subject,
+			Author: c.Author, Date: c.Date,
+			Files: c.Files, Insertions: c.Insertions, Deletions: c.Deletions,
+		})
+	}
+	writeJSON(w, http.StatusOK, CommitsResponse{Base: base, Commits: out})
+}
+
+// commitsLimit bounds the listing. A branch an agent has been working for a week
+// is a legitimate branch, and a screen is not a log viewer.
+const commitsLimit = 100
