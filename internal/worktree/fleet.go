@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -319,4 +320,59 @@ func statusWord(code string) string {
 	default:
 		return "modified"
 	}
+}
+
+// maxDiffBytes bounds one file's unified diff. A generated lockfile or a
+// vendored tree is a legitimate change and an unreadable one, and a viewer that
+// tries to render megabytes of it stops being a viewer. Truncation is reported
+// by the caller rather than hidden.
+const maxDiffBytes = 256 * 1024
+
+// FileDiff returns the unified diff of one path, as git writes it.
+//
+// rev selects what to compare against: a range for committed work, "HEAD" for
+// what is uncommitted in a checkout. Parsing is left to the caller — this
+// package owns talking to git, and every call here goes through runGit so the
+// repository's own config cannot make git run commands (internal/githard).
+func FileDiff(dir, rev, path string) string {
+	if dir == "" || path == "" {
+		return ""
+	}
+	// No colour, no external textconv, and three lines of context: enough to see
+	// where a change sits without shipping the file twice.
+	out, err := runGit(dir, "diff", "--no-color", "--no-textconv", "--unified=3", rev, "--", path)
+	if err != nil || out == "" {
+		return ""
+	}
+	if len(out) > maxDiffBytes {
+		return out[:maxDiffBytes]
+	}
+	return out
+}
+
+// UntrackedContent returns a new file's contents, for showing it as an addition.
+//
+// Untracked files are in no diff at all, and for an agent that scaffolds
+// something they are the whole of the work — so "git has nothing to compare
+// this against" must not become "there is nothing to show".
+func UntrackedContent(dir, path string) string {
+	if dir == "" || path == "" {
+		return ""
+	}
+	// Through git rather than os.ReadFile so the path is resolved by the thing
+	// that listed it, and a path escaping the checkout cannot be read by asking
+	// for it: `git show` only knows about files in this repository.
+	out, err := runGit(dir, "show", ":"+path)
+	if err != nil {
+		// Not yet in the index, which is the ordinary case for untracked.
+		b, rerr := os.ReadFile(filepath.Join(dir, path))
+		if rerr != nil {
+			return ""
+		}
+		out = string(b)
+	}
+	if len(out) > maxDiffBytes {
+		return out[:maxDiffBytes]
+	}
+	return out
 }

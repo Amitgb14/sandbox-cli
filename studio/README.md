@@ -74,23 +74,34 @@ Point Studio at a different daemon with `NEXT_PUBLIC_SANDBOX_API`; it defaults t
 | Method | Path | Returns |
 |---|---|---|
 | `GET` | `/v1/health` | `DaemonInfo` |
-| `GET` | `/v1/runs` | `Run[]` |
-| `POST` | `/v1/runs` | `{ id }` — launch |
-| `POST` | `/v1/runs/preview` | `LaunchPreview` — the real `BuildSpec` dry run |
+| `GET` | `/v1/runs` | `{ runs }` — live only; `?all=1` includes finished |
+| `POST` | `/v1/runs` | `Run` — launch, always detached |
 | `GET` | `/v1/runs/:id` | `Run` |
-| `GET` | `/v1/runs/:id/metrics` | `MetricSeries` |
-| `GET` | `/v1/runs/:id/logs` | `LogLine[]` |
-| `GET` | `/v1/runs/:id/diff` | `DiffFile[]` |
+| `DELETE` | `/v1/runs/:id` | `204` — reap a finished container; refuses a live one |
+| `GET` | `/v1/runs/:id/metrics` | `MetricSeries`; `?stream=1` for SSE |
+| `GET` | `/v1/runs/:id/logs` | `LogLine[]`; `?follow=1` for SSE |
+| `GET` | `/v1/runs/:id/diff` | `DiffFile[]`, with hunks |
 | `GET` | `/v1/runs/:id/config` | `ResolvedConfig` |
-| `POST` | `/v1/runs/:id/stop` | `204` |
-| `POST` | `/v1/runs/:id/kill` | `204` |
-| `GET` | `/v1/agents` | `Agent[]` |
-| `GET` | `/v1/worktrees` | `Worktree[]` |
-| `POST` | `/v1/worktrees/:branch/land` | `{ merged, message }` |
-| `DELETE` | `/v1/worktrees/:branch` | `204` |
-| `GET` | `/v1/usage` · `POST /v1/usage/refresh` | `UsageSnapshot` |
-| `GET` | `/v1/doctor` | `DoctorCheck[]` |
-| `GET` | `/v1/audit` | `AuditRecord[]` |
+| `POST` | `/v1/runs/:id/stop` | `Run` — `{"force":true}` to kill |
+| `POST` | `/v1/runs/:id/recover` | restore this branch's crash snapshot |
+| `GET` | `/v1/agents` | `{ agents }` |
+| `GET` · `POST` | `/v1/worktrees` | `{ worktrees }` · create |
+| `GET` · `DELETE` | `/v1/worktrees/:branch` | `Worktree` · `204` (`?force=1`) |
+| `GET` | `/v1/stats` | one sample per live run, host-wide |
+| `GET` · `POST` | `/v1/usage` · `/v1/usage/refresh` | `UsageSnapshot` |
+| `GET` | `/v1/doctor` | `{ profile, checks }` |
+| `GET` | `/v1/audit` | `{ records }` — env by name only |
+
+Two are deliberately absent. **Kill is not its own route** — it is `stop` with
+`{"force":true}`, because the difference is a flag on one act and a second path
+to "end this run" is a second place for the two to disagree about what they
+reach. And **there is no `land`**: it merges into the base branch, and this API
+has no authentication unless a token is set, so a write endpoint that can move
+someone's `main` is a decision for whoever runs the daemon rather than a gap to
+fill quietly.
+
+The launch form's dry run is computed in the browser (`localPreview`) rather
+than by the daemon. It models a documented subset of the refusals, and says so.
 
 `src/lib/types.ts` is the whole schema, and every type names the Go struct it
 mirrors — `runtime.ContainerInfo`, `audit.SessionMeta`, `agents.Descriptor`,

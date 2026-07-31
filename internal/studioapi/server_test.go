@@ -715,3 +715,79 @@ func TestDeleteRunReapsAFinishedContainer(t *testing.T) {
 		t.Errorf("expected the container reaped, removed %v", fr.removed)
 	}
 }
+
+// Line numbers are the one thing the diff text does not carry, and getting them
+// wrong is not cosmetic — it is a viewer pointing at the wrong line of somebody's
+// file. A `-` line has an old number and no new one, an added line the reverse,
+// context has both, and "\ No newline at end of file" advances neither.
+func TestParseUnifiedDiffTracksBothSides(t *testing.T) {
+	text := strings.Join([]string{
+		"diff --git a/x.go b/x.go",
+		"index 111..222 100644",
+		"--- a/x.go",
+		"+++ b/x.go",
+		"@@ -10,4 +10,5 @@ func x() {",
+		" keep one",
+		"-gone",
+		"+added one",
+		"+added two",
+		" keep two",
+		"\\ No newline at end of file",
+	}, "\n")
+
+	hunks := parseUnifiedDiff(text)
+	if len(hunks) != 1 {
+		t.Fatalf("want one hunk, got %d", len(hunks))
+	}
+	if !strings.HasPrefix(hunks[0].Header, "@@ -10,4 +10,5 @@") {
+		t.Errorf("header lost: %q", hunks[0].Header)
+	}
+
+	type want struct {
+		kind  string
+		oldNo int // 0 means nil
+		newNo int
+		text  string
+	}
+	wants := []want{
+		{"ctx", 10, 10, "keep one"},
+		{"del", 11, 0, "gone"},
+		{"add", 0, 11, "added one"},
+		{"add", 0, 12, "added two"},
+		{"ctx", 12, 13, "keep two"},
+		{"meta", 0, 0, "\\ No newline at end of file"},
+	}
+	if len(hunks[0].Lines) != len(wants) {
+		t.Fatalf("want %d lines, got %d: %+v", len(wants), len(hunks[0].Lines), hunks[0].Lines)
+	}
+	for i, w := range wants {
+		got := hunks[0].Lines[i]
+		if got.Kind != w.kind || got.Content != w.text {
+			t.Errorf("line %d = %s %q, want %s %q", i, got.Kind, got.Content, w.kind, w.text)
+		}
+		if (w.oldNo == 0) != (got.OldNo == nil) || (w.oldNo != 0 && *got.OldNo != w.oldNo) {
+			t.Errorf("line %d oldNo = %v, want %d", i, got.OldNo, w.oldNo)
+		}
+		if (w.newNo == 0) != (got.NewNo == nil) || (w.newNo != 0 && *got.NewNo != w.newNo) {
+			t.Errorf("line %d newNo = %v, want %d", i, got.NewNo, w.newNo)
+		}
+	}
+}
+
+// A file git has never seen is shown as one addition, because "nothing to
+// compare against" must not become "nothing to show" — for an agent that
+// scaffolds a project, untracked files are most of the work.
+func TestAddedFileHunkNumbersFromOne(t *testing.T) {
+	hunks := addedFileHunk("alpha\nbeta\n")
+	if len(hunks) != 1 || len(hunks[0].Lines) != 2 {
+		t.Fatalf("want one hunk of two lines, got %+v", hunks)
+	}
+	for i, l := range hunks[0].Lines {
+		if l.Kind != "add" || l.OldNo != nil || l.NewNo == nil || *l.NewNo != i+1 {
+			t.Errorf("line %d = %+v", i, l)
+		}
+	}
+	if len(addedFileHunk("")) != 0 {
+		t.Error("an empty file has no hunk to show")
+	}
+}

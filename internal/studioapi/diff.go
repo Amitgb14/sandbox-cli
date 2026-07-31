@@ -82,6 +82,18 @@ func (s *Server) handleRunDiff(w http.ResponseWriter, r *http.Request) {
 		files = append(files, *f)
 	}
 	sortDiffFiles(files)
+
+	// Content is fetched per file, after the list is known, and only up to a
+	// bound: a run that touched four hundred files is a legitimate run, and
+	// fetching every hunk for it would turn one screen into four hundred git
+	// invocations. The files past the bound keep their counts and lose their
+	// hunks, which is the same trade `dirty` already makes when it truncates.
+	for i := range files {
+		if i >= maxDiffFilesWithHunks {
+			break
+		}
+		files[i].Hunks = s.hunksFor(run.Workspace, branch, base, files[i])
+	}
 	writeJSON(w, http.StatusOK, files)
 }
 
@@ -91,4 +103,32 @@ func sortDiffFiles(files []DiffFile) {
 			files[j], files[j-1] = files[j-1], files[j]
 		}
 	}
+}
+
+// maxDiffFilesWithHunks bounds how many files get their content fetched.
+const maxDiffFilesWithHunks = 60
+
+// hunksFor reads one file's content-level changes.
+//
+// Three sources, tried in the order that matches how work actually arrives: the
+// uncommitted state of the checkout, then anything the branch committed beyond
+// its base, then — for a file git has never seen — the file itself, presented as
+// one addition. A binary file gets none of them and says so through its own
+// flag, rather than through an empty hunk list that reads as "no changes".
+func (s *Server) hunksFor(workspace, branch, base string, f DiffFile) []DiffHunk {
+	if f.Binary {
+		return []DiffHunk{}
+	}
+	if text := worktree.FileDiff(workspace, "HEAD", f.Path); text != "" {
+		return parseUnifiedDiff(text)
+	}
+	if branch != "" && base != "" && branch != base {
+		if text := worktree.FileDiff(workspace, base+"..."+branch, f.Path); text != "" {
+			return parseUnifiedDiff(text)
+		}
+	}
+	if f.Status == "added" {
+		return addedFileHunk(worktree.UntrackedContent(workspace, f.Path))
+	}
+	return []DiffHunk{}
 }
