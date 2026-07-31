@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -14,7 +15,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError sends the failure to the caller and, for a server-side one, to the
+// log as well.
+//
+// Only 5xx is logged, and the split is the useful one. A 4xx is the caller's
+// mistake and it already has the answer in the response — logging every rejected
+// form would bury the lines that matter. A 5xx is *this* server failing to do
+// something it accepted, and the operator reading `docker compose logs api` is
+// often not the person who saw the response: a browser showing "502" with
+// nothing in the log means the only way to learn the reason is to reproduce the
+// request, which is exactly the position this was in when a launch failed on a
+// brokered secret the container could not resolve.
 func writeError(w http.ResponseWriter, status int, err error) {
+	if status >= 500 {
+		log.Printf("sandbox-studio-api: %d %v", status, err)
+	}
 	writeJSON(w, status, ErrorResponse{Error: err.Error()})
 }
 

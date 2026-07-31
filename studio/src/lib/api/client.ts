@@ -117,10 +117,12 @@ export async function request<T>(path: string, opts: RequestOptions<T>): Promise
       cache: "no-store",
     });
     if (!res.ok) {
-      throw new ApiError(
-        `${opts.method ?? "GET"} ${path} failed: ${res.status} ${res.statusText}`,
-        res.status,
-      );
+      // The daemon's own words, not just the status line. Every non-2xx body is
+      // an ErrorResponse saying what it refused and usually how to fix it —
+      // "an agent is already running on X; stop it first", "no Go toolchain in
+      // this image". Reporting `502 Bad Gateway` instead means the one thing
+      // that would have answered the question was fetched and thrown away.
+      throw new ApiError(await errorText(res, opts.method ?? "GET", path), res.status);
     }
     if (res.status === 204) return undefined as T;
     const body: unknown = await res.json();
@@ -166,4 +168,26 @@ export async function* streamNdjson<T>(
       yield JSON.parse(line) as T;
     }
   }
+}
+
+/**
+ * Pull the daemon's message out of a failed response, falling back to the status
+ * line when there is nothing better.
+ *
+ * Defensive on purpose: this runs on the error path, where the body may be
+ * empty, truncated, or HTML from something that is not the daemon at all — and a
+ * parse failure here would replace a useful message with a stack trace about
+ * JSON.
+ */
+async function errorText(res: Response, method: string, path: string): Promise<string> {
+  const fallback = `${method} ${path} failed: ${res.status} ${res.statusText}`;
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    if (typeof body?.error === "string" && body.error.trim()) {
+      return body.error;
+    }
+  } catch {
+    // Not JSON, or no body. The status line is all there is.
+  }
+  return fallback;
 }

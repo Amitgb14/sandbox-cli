@@ -505,6 +505,12 @@ export interface LaunchPreview {
 
 export interface DaemonInfo {
   version: string;
+  /**
+   * The host directory this daemon manages — one server, one project, the same
+   * "which project" question every sandbox-cli invocation answers. The Launch
+   * form defaults to it, because the alternative is defaulting to a fixture.
+   */
+  project?: string;
   engine: Engine;
   engineVersion: string;
   /** The daemon's own view of the host, as `doctor` asks it. */

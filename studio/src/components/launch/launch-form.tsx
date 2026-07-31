@@ -24,7 +24,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { TagInput } from "@/components/common/tag-input";
 import { LaunchPreview } from "@/components/launch/launch-preview";
-import { useAgents, useLaunchRun, useWorktrees } from "@/lib/api/queries";
+import { useAgents, useDaemon, useLaunchRun, useWorktrees } from "@/lib/api/queries";
 import { localPreview } from "@/lib/api/endpoints";
 import { BASELINE_EGRESS, PROFILES, RESERVED_ENV } from "@/lib/constants";
 import { REPOS } from "@/lib/mock/data";
@@ -49,6 +49,7 @@ export function LaunchForm() {
   const search = useSearchParams();
   const repoFilter = useUi((s) => s.repoFilter);
   const { data: agents } = useAgents();
+  const { data: daemon } = useDaemon();
   const { data: worktrees } = useWorktrees();
   const launch = useLaunchRun();
 
@@ -75,6 +76,19 @@ export function LaunchForm() {
     share: [],
     publish: [],
   });
+
+  // The daemon manages exactly one project, and it says which on /v1/health.
+  // Adopt it as soon as it answers, unless you have already picked something
+  // else: the initial value can only come from the fixture repos, and posting a
+  // fixture path to a live daemon fails with "project path does not exist".
+  useEffect(() => {
+    if (!daemon?.project) return;
+    setReq((prev) =>
+      prev.workspace === initialRepo.root && !prev.worktree
+        ? { ...prev, workspace: daemon.project as string }
+        : prev,
+    );
+  }, [daemon?.project, initialRepo.root]);
   const [worktreeMode, setWorktreeMode] = useState<"main" | "new" | "existing">("main");
   const [newBranch, setNewBranch] = useState("");
 
