@@ -572,3 +572,81 @@ func TestWorktreeVerifiedDistinguishesUncheckedFromFailed(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// The run detail screen reads run.network.allow.length and run.security.*, so
+// these shapes are a contract rather than an implementation detail — the UI's
+// NetworkPosture and SecurityPosture, filled from the container itself.
+//
+// The posture is read back rather than taken from config on purpose: config says
+// what was asked for, and a run reviewed later was confined by what it actually
+// got.
+func TestRunPostureIsReadBackFromTheContainer(t *testing.T) {
+	c := runtime.ContainerInfo{
+		ID:          "abcdef0123456789",
+		State:       "exited",
+		NetworkMode: "sandbox-cli",
+		User:        "1001:1001",
+		Env: []string{
+			"SANDBOX_EGRESS_ALLOW=api.anthropic.com,registry.npmjs.org,internal.example.com",
+			"SANDBOX_INGRESS_PORTS=3000,8787",
+			"HOME=/sandbox/home",
+		},
+		Mounts: []runtime.MountInfo{
+			{Source: "/host/proj", Destination: "/workspace", ReadWrite: true},
+			{Source: "/host/agents/claude", Destination: "/sandbox/home", ReadWrite: true},
+		},
+		Security: runtime.SecurityInfo{
+			CapDrop:     []string{"ALL"},
+			SecurityOpt: []string{"no-new-privileges"},
+			PidsLimit:   1024,
+			MemoryBytes: 4 * 1024 * 1024 * 1024,
+			NanoCPUs:    2e9,
+		},
+	}
+	got := toRun(c, "docker")
+
+	if got.Network.Mode != "allowlist" {
+		t.Errorf("network.mode = %q, want allowlist — the control variable is set", got.Network.Mode)
+	}
+	if len(got.Network.Allow) != 3 {
+		t.Errorf("network.allow = %v, want the three resolved domains", got.Network.Allow)
+	}
+	if !got.Network.Baseline {
+		t.Error("network.baseline: api.anthropic.com is in the list, so the baseline is part of it")
+	}
+	if got.Network.Enforcement == nil || *got.Network.Enforcement != "name" {
+		t.Errorf("network.enforcement = %v, want name — the proxy decides on the hostname", got.Network.Enforcement)
+	}
+	if len(got.Network.IngressPorts) != 2 {
+		t.Errorf("ingressPorts = %v, want two", got.Network.IngressPorts)
+	}
+
+	if !got.Security.NoNewPrivileges || !got.Security.Hardening {
+		t.Errorf("security: cap-drop ALL plus no-new-privileges is hardened, got %+v", got.Security)
+	}
+	if got.Security.Memory != "4096m" || got.Security.CPUs != "2" {
+		t.Errorf("security limits = %q/%q, want 4096m/2", got.Security.Memory, got.Security.CPUs)
+	}
+	if got.Security.User != "1001:1001" {
+		t.Errorf("security.user = %q", got.Security.User)
+	}
+
+	if len(got.Mounts) != 2 || got.Mounts[0].Host != "/host/proj" || got.Mounts[0].Mode != "rw" {
+		t.Fatalf("mounts = %+v", got.Mounts)
+	}
+	if got.Mounts[0].Origin != "workspace" || got.Mounts[1].Origin != "persisted-home" {
+		t.Errorf("mount origins = %q/%q", got.Mounts[0].Origin, got.Mounts[1].Origin)
+	}
+}
+
+// No allowlist means no enforcement, and null is the honest answer rather than
+// a string naming a mechanism that is not running.
+func TestRunWithNoAllowlistReportsNoEnforcement(t *testing.T) {
+	got := toRun(runtime.ContainerInfo{NetworkMode: "bridge"}, "docker")
+	if got.Network.Mode != "default" || got.Network.Enforcement != nil {
+		t.Errorf("network = %+v, want mode default and no enforcement", got.Network)
+	}
+	if got.Network.Allow == nil {
+		t.Error("allow must be an empty list, not null: clients iterate it")
+	}
+}

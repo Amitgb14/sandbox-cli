@@ -245,32 +245,56 @@ type Run struct {
 	EnvNames []string `json:"envNames"`
 }
 
-// RunMount is one host path a run could reach.
+// RunMount is one host path a run could reach. Named host/container/mode rather
+// than docker's source/destination/rw because that is the vocabulary the rest of
+// sandbox-cli uses — a `mounts:` entry in a config file reads the same way.
 type RunMount struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	ReadWrite   bool   `json:"readWrite"`
+	Host      string `json:"host"`
+	Container string `json:"container"`
+	Mode      string `json:"mode"` // "ro" | "rw"
+	Origin    string `json:"origin,omitempty"`
 }
 
-// RunNetwork is the egress posture this container actually ran with.
+// RunNetwork is the egress posture this container actually ran with, read back
+// off the container rather than from the config that asked for it.
 //
-// Read from the container: Mode is docker's own network mode, and Allowlisted
-// comes from the control variable the entrypoint acts on, so a run that asked
-// for an allowlist and got one is distinguishable from one that did not.
+// Allow is the *resolved* list — baseline ∪ configured — because that is what
+// the entrypoint was handed and therefore what the firewall and proxy actually
+// enforce. Baseline says whether the built-in set is part of it, which is the
+// difference between "these nine hosts plus mine" and "only mine".
 type RunNetwork struct {
-	Mode        string `json:"mode"`
-	Allowlisted bool   `json:"allowlisted"`
+	Mode        string   `json:"mode"` // "default" | "none" | "allowlist"
+	Baseline    bool     `json:"baseline"`
+	Allow       []string `json:"allow"`
+	NetworkName string   `json:"networkName,omitempty"`
+
+	// Enforcement names how the allowlist is applied, and null when there is no
+	// allowlist at all. "name" means the in-container proxy decided on the
+	// hostname; "address" would mean IP rules alone, which cannot tell two hosts
+	// sharing an address apart.
+	Enforcement  *string `json:"enforcement"`
+	IngressPorts []int   `json:"ingressPorts,omitempty"`
 }
 
 // RunSecurity is the confinement docker applied, read back rather than assumed.
-// Zero means unset for the numeric fields — not "zero bytes of memory".
 type RunSecurity struct {
-	CapDrop     []string `json:"capDrop"`
-	CapAdd      []string `json:"capAdd"`
-	SecurityOpt []string `json:"securityOpt"`
-	PidsLimit   int64    `json:"pidsLimit"`
-	MemoryBytes int64    `json:"memoryBytes"`
-	NanoCPUs    int64    `json:"nanoCpus"`
+	NoNewPrivileges bool     `json:"noNewPrivileges"`
+	CapDrop         []string `json:"capDrop"`
+	CapAdd          []string `json:"capAdd"`
+	PidsLimit       int64    `json:"pidsLimit"`
+
+	// Memory and CPUs are the strings a config file would carry ("2g", "1.5"),
+	// empty when unlimited — not "0", which reads as a limit of nothing.
+	Memory string `json:"memory"`
+	CPUs   string `json:"cpus"`
+
+	Seccomp string `json:"seccomp"`
+	User    string `json:"user"`
+
+	// Hardening is whether the confinement this tool applies by default is
+	// actually in force, so a client can say "this run was hardened" without
+	// re-deriving the rule from four fields.
+	Hardening bool `json:"hardening"`
 }
 
 // RunsResponse is the body of GET /runs.

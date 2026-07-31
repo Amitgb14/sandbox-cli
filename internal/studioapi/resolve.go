@@ -3,8 +3,11 @@ package studioapi
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
@@ -139,20 +142,22 @@ func toRun(c runtime.ContainerInfo, engine string) Run {
 		Workdir:  c.Workdir,
 		Engine:   engine,
 		EnvNames: c.EnvNames(),
-		Network:  RunNetwork{Mode: c.NetworkMode, Allowlisted: c.EgressAllowlisted()},
-		Security: RunSecurity{
-			CapDrop:     c.Security.CapDrop,
-			CapAdd:      c.Security.CapAdd,
-			SecurityOpt: c.Security.SecurityOpt,
-			PidsLimit:   c.Security.PidsLimit,
-			MemoryBytes: c.Security.MemoryBytes,
-			NanoCPUs:    c.Security.NanoCPUs,
-		},
+		Network:  runNetwork(c),
+		Security: runSecurity(c),
 	}
 
 	r.Mounts = make([]RunMount, 0, len(c.Mounts))
 	for _, m := range c.Mounts {
-		r.Mounts = append(r.Mounts, RunMount{Source: m.Source, Destination: m.Destination, ReadWrite: m.ReadWrite})
+		mode := "ro"
+		if m.ReadWrite {
+			mode = "rw"
+		}
+		r.Mounts = append(r.Mounts, RunMount{
+			Host:      m.Source,
+			Container: m.Destination,
+			Mode:      mode,
+			Origin:    mountOrigin(m.Destination),
+		})
 		// The workspace is named by where it lands, not by its host path: the
 		// host path is whatever project this was, and /workspace is the one
 		// destination every sandbox has.
@@ -192,4 +197,119 @@ func toRunState(s string) RunState {
 	default:
 		return RunStateUnknown
 	}
+}
+
+// runNetwork reads a run's egress posture back off the container.
+//
+// Mode is this tool's vocabulary, not docker's: the container reports a network
+// name, which says nothing about whether an allowlist was programmed. The
+// control variable the entrypoint acts on does, and it carries the resolved
+// domain list — baseline ∪ configured — which is what the firewall and the
+// proxy actually enforce. That makes the list authoritative in a way a config
+// file is not: it is what the container was handed, not what someone asked for.
+func runNetwork(c runtime.ContainerInfo) RunNetwork {
+	n := RunNetwork{Mode: "default", NetworkName: c.NetworkMode, Allow: []string{}}
+	if c.NetworkMode == "none" {
+		n.Mode = "none"
+	}
+
+	allow := envValue(c, "SANDBOX_EGRESS_ALLOW")
+	if allow == "" {
+		return n
+	}
+	n.Mode = "allowlist"
+	n.Allow = strings.Split(allow, ",")
+
+	// The baseline is a set, so membership of any one of its domains is the
+	// question — a list built with `baseline: false` contains none of them.
+	for _, d := range config.BaselineEgress() {
+		if slices.Contains(n.Allow, d) {
+			n.Baseline = true
+			break
+		}
+	}
+
+	// Always "name" while the in-container proxy exists: the firewall matches
+	// resolved addresses, and the proxy is what closes the gap between an address
+	// and a hostname. Reported rather than assumed by the client, so the day a
+	// run is enforced by address alone it says so.
+	enforcement := "name"
+	n.Enforcement = &enforcement
+
+	for _, p := range strings.Split(envValue(c, "SANDBOX_INGRESS_PORTS"), ",") {
+		if v, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
+			n.IngressPorts = append(n.IngressPorts, v)
+		}
+	}
+	return n
+}
+
+// runSecurity reads a run's confinement back off the container.
+func runSecurity(c runtime.ContainerInfo) RunSecurity {
+	s := RunSecurity{
+		CapDrop:   c.Security.CapDrop,
+		CapAdd:    c.Security.CapAdd,
+		PidsLimit: c.Security.PidsLimit,
+		User:      c.User,
+		Seccomp:   "default",
+	}
+	if s.CapDrop == nil {
+		s.CapDrop = []string{}
+	}
+	if s.CapAdd == nil {
+		s.CapAdd = []string{}
+	}
+	for _, opt := range c.Security.SecurityOpt {
+		switch {
+		case opt == "no-new-privileges" || opt == "no-new-privileges:true":
+			s.NoNewPrivileges = true
+		case strings.HasPrefix(opt, "seccomp="):
+			s.Seccomp = strings.TrimPrefix(opt, "seccomp=")
+		}
+	}
+	// Empty rather than "0": a limit of zero reads as "no memory allowed", and
+	// what is true is that no limit was set at all.
+	if c.Security.MemoryBytes > 0 {
+		s.Memory = fmt.Sprintf("%dm", c.Security.MemoryBytes/(1024*1024))
+	}
+	if c.Security.NanoCPUs > 0 {
+		s.CPUs = strconv.FormatFloat(float64(c.Security.NanoCPUs)/1e9, 'g', -1, 64)
+	}
+	// The hardening this tool applies by default, stated once so a client does
+	// not re-derive it from four fields and get it subtly wrong.
+	s.Hardening = s.NoNewPrivileges && slices.Contains(s.CapDrop, "ALL")
+	return s
+}
+
+// mountOrigin names why a mount exists, from where it lands. Only the
+// destinations sandbox-cli chooses itself are named; anything else came from a
+// --mount or a config entry and has no origin this can honestly claim to know.
+func mountOrigin(dest string) string {
+	switch {
+	case dest == workspaceDir:
+		return "workspace"
+	case strings.HasSuffix(dest, "/.git") || strings.Contains(dest, "/.git/"):
+		return "worktree-git"
+	case dest == "/sandbox/home":
+		return "persisted-home"
+	case strings.Contains(dest, "/.claude/projects"):
+		return "history"
+	case strings.HasPrefix(dest, "/shared"):
+		return "share"
+	default:
+		return ""
+	}
+}
+
+// envValue returns the value of one container environment variable, or "".
+// Used only for sandbox-cli's own control variables, whose values are settings
+// rather than secrets — nothing here reads a forwarded credential.
+func envValue(c runtime.ContainerInfo, name string) string {
+	prefix := name + "="
+	for _, kv := range c.Env {
+		if strings.HasPrefix(kv, prefix) {
+			return strings.TrimPrefix(kv, prefix)
+		}
+	}
+	return ""
 }

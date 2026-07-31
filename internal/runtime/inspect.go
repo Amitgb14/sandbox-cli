@@ -40,6 +40,7 @@ type ContainerInfo struct {
 	// rather than a config file that may have been edited since. A label says
 	// what the launcher intended; these say what it got.
 	Image    string   // the image reference it was started from
+	User     string   // the user the guest runs as, as docker recorded it
 	Command  []string // entrypoint + cmd, as executed
 	Workdir  string
 	Env      []string // NAME=VALUE, as docker holds them — see EnvNames
@@ -278,6 +279,7 @@ type dockerInspect struct {
 		OpenStdin  bool              `json:"OpenStdin"`
 		Tty        bool              `json:"Tty"`
 		Image      string            `json:"Image"`
+		User       string            `json:"User"`
 		Cmd        []string          `json:"Cmd"`
 		Entrypoint []string          `json:"Entrypoint"`
 		Env        []string          `json:"Env"`
@@ -330,6 +332,7 @@ func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo,
 			OpenStdin:   r.Config.OpenStdin,
 			TTY:         r.Config.Tty,
 			Image:       r.Config.Image,
+			User:        r.Config.User,
 			Command:     append(append([]string(nil), r.Config.Entrypoint...), r.Config.Cmd...),
 			Workdir:     r.Config.WorkingDir,
 			Env:         r.Config.Env,
