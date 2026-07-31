@@ -31,7 +31,7 @@ export const qk = {
   commitDiff: (sha: string) => ["commits", sha, "diff"] as const,
   usage: ["usage"] as const,
   doctor: ["doctor"] as const,
-  audit: ["audit"] as const,
+  audit: (branch?: string) => ["audit", branch ?? "all"] as const,
 };
 
 /** Live data is polled; everything else is fetched once and invalidated. */
@@ -153,8 +153,12 @@ export function useDoctor(opts?: Partial<UseQueryOptions<Awaited<ReturnType<type
   return useQuery({ queryKey: qk.doctor, queryFn: api.doctor, staleTime: 5 * 60_000, ...opts });
 }
 
-export function useAudit() {
-  return useQuery({ queryKey: qk.audit, queryFn: api.audit, staleTime: 30_000 });
+export function useAudit(branch?: string) {
+  return useQuery({
+    queryKey: qk.audit(branch),
+    queryFn: () => api.audit(branch),
+    staleTime: 30_000,
+  });
 }
 
 // ---------------------------------------------------------------------------

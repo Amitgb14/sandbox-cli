@@ -217,9 +217,15 @@ export const api = {
       unwrap: (b) => (b as { checks: DoctorCheck[] }).checks,
     }),
 
-  audit: () =>
-    request<AuditRecord[]>("/v1/audit", {
-      fixture: () => MOCK_AUDIT,
+  /**
+   * The run log. Durable in a way the runs list is not: a container carries its
+   * own history until it is reaped, and then that history is gone — docker is
+   * the state store. This survives, which makes it the only answer to "what has
+   * run here" once the containers are cleaned up.
+   */
+  audit: (branch?: string) =>
+    request<AuditRecord[]>(`/v1/audit${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`, {
+      fixture: () => (branch ? MOCK_AUDIT.filter((a) => a.branch === branch) : MOCK_AUDIT),
       latencyMs: 300,
       unwrap: (b) => (b as { records: AuditRecord[] }).records,
     }),

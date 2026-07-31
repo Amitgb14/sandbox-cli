@@ -20,6 +20,7 @@ import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
 import { FilePanel } from "@/components/run-detail/diff-view";
 import {
+  useAudit,
   useBranchRuns,
   useCommitDiff,
   useWorktree,
@@ -50,6 +51,7 @@ export default function WorktreeDetailPage({
   const { data: wt, isPending, isError } = useWorktree(branch);
   const { data: commits } = useWorktreeCommits(branch);
   const { data: runs } = useBranchRuns(branch);
+  const { data: history } = useAudit(branch);
 
   if (isPending) {
     return <Skeleton className="h-64 w-full rounded-lg" />;
@@ -65,10 +67,10 @@ export default function WorktreeDetailPage({
   }
 
   // Newest first, which is the order every listing in this tool uses.
-  const history = [...(runs ?? [])].sort((a, b) =>
+  const containers = [...(runs ?? [])].sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),
   );
-  const live = history.find((r) => r.state === "running");
+  const live = containers.find((r) => r.state === "running");
 
   return (
     <div className="space-y-5">
@@ -122,7 +124,7 @@ export default function WorktreeDetailPage({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {history.length === 0 ? (
+          {containers.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No run has worked this branch yet — or their containers have been
               reaped, which is the same thing to anything asking now. Docker is
@@ -130,7 +132,7 @@ export default function WorktreeDetailPage({
             </p>
           ) : (
             <ul className="divide-y">
-              {history.map((r) => (
+              {containers.map((r) => (
                 <li
                   key={r.id}
                   className="flex flex-wrap items-center gap-3 py-2 text-sm"
@@ -186,6 +188,66 @@ export default function WorktreeDetailPage({
             <ul className="divide-y">
               {commits.map((c) => (
                 <CommitRow key={c.sha} commit={c} />
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">
+            Run history
+            <span className="ml-2 font-normal text-muted-foreground">
+              from the audit log — survives `fleet clean`
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!history || history.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No finished run has been recorded for this branch. The log is
+              written when a run *ends*, so one still in flight is above rather
+              than here.
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {history.map((h, i) => (
+                <li
+                  key={`${h.time}-${i}`}
+                  className="flex flex-wrap items-center gap-3 py-2 text-sm"
+                >
+                  <Badge variant={h.exitCode === 0 ? "outline" : "destructive"}>
+                    exit {h.exitCode}
+                  </Badge>
+                  {h.agent ? (
+                    <Badge variant="outline">{h.agent}</Badge>
+                  ) : (
+                    <Badge variant="outline">plain run</Badge>
+                  )}
+                  {/* An agent run is described by its agent: its argv is always
+                      the same bootstrap and verify wrapper, so printing it says
+                      nothing and buries the row. A plain run has nothing else to
+                      identify it, so there the command is the point. */}
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
+                    title={h.command.join(" ")}
+                  >
+                    {h.agent
+                      ? h.image
+                      : h.command.join(" ").replace(/\s+/g, " ")}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {h.network}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                    <Timer className="size-3.5" />
+                    {formatDuration(h.durationMs)}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {formatRelative(h.time)}
+                  </span>
+                </li>
               ))}
             </ul>
           )}

@@ -2,6 +2,7 @@ package studioapi
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -55,6 +56,10 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
 		limit = v
 	}
+	// Filtering here rather than in the client because the log spans every
+	// project on the machine and rotates rather than truncates: asking for one
+	// branch's history should not mean shipping everyone else's.
+	branch := r.URL.Query().Get("branch")
 
 	out := make([]AuditRecord, 0, limit)
 	dir := config.AuditDir()
@@ -82,10 +87,16 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		var a auditLine
+		if branch != "" && !bytes.Contains(line, []byte(`"branch":`)) {
+			continue // cheap reject before parsing: most lines have no branch at all
+		}
 		if err := json.Unmarshal(line, &a); err != nil {
 			// A line this no longer understands is skipped, not fatal — the same
 			// bargain agentctx makes with a transcript whose shape it cannot read.
 			// One unparseable record must not blank the log.
+			continue
+		}
+		if branch != "" && a.Branch != branch {
 			continue
 		}
 		all = append(all, a.toRecord())
