@@ -454,6 +454,19 @@ handed. Docker is the state store: a detached container is named `sandbox-<repo>
 docker's own duplicate-name refusal enforces one agent per branch) and labelled with its repo,
 branch, agent and base branch — a fact not stamped as a label is one no later command can recover.
 
+`sandbox.Options.Console` is the **one** exception to the pty rule, and it is a different claim
+rather than a weaker one: not "give this run the terminal that launched it" — there isn't one — but
+"create a console on the container so a later `attach` has somewhere to type", which renders `-dit`.
+It exists because Studio launches every run detached, so an agent could be watched and never
+answered. The half that is easy to miss is that a console is useless alone: an agent started in its
+**headless** argv (`claude -p`) produces one final answer and never asks anything, so `Console` also
+selects the descriptor's interactive `Command`, and the two are decided together where the argv is
+built (`studioapi/buildRunOptions`) rather than separately. It is refused with `verify` — verify's
+exit code is the answer it exists to give, and an interactive session's exit code is whenever
+somebody quit — and `fleet` may never set it (`gates_test.go` classifies it `never`): a fleet is
+unattended, which is the same reason `internal/agents` only admits agents with a verified headless
+mode. An agent that stops to ask does not fail, it hangs, holding a `max_parallel` slot.
+
 ### Agent wrappers
 
 Each wrapper is one file in `internal/cli` (`claude.go`, `gemini.go`, `aider.go`, …), listed in

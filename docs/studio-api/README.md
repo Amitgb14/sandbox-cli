@@ -67,7 +67,7 @@ there is no code generation step (yet) tying them together.
 | GET | `/v1/agents` | Agents this API can launch headlessly (a subset of `internal/agents` — only those with a verified non-interactive mode) |
 | GET | `/v1/runs` | List runs (`?all=1`, `?repo=`, `?branch=`, `?agent=`, `?fleet=1`) |
 | GET | `/v1/runs/{id}` | One run, by id/name/branch — same three references `sandbox-cli list`/`kill`/`logs` accept |
-| POST | `/v1/runs` | Launch a run — always detached (see below) |
+| POST | `/v1/runs` | Launch a run — always detached; `console:true` keeps a terminal to attach to (see below) |
 | POST | `/v1/runs/{id}/stop` | Stop (or `{"force":true}` to kill) a running run |
 | POST | `/v1/runs/{id}/recover` | Restore the crash-recovery snapshot associated with this run's branch |
 | GET | `/v1/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
@@ -87,12 +87,36 @@ and it costs no new dependency. If a future need turns up for the client to
 push messages over the same connection, that is the point to revisit this
 choice — not before.
 
-### Runs are always detached
+### Runs are always detached — and `console` is what you attach to
 
-`POST /runs` has no foreground/interactive mode. An HTTP request/response
-cycle has nowhere to hold a pty, so every run this API starts is what
-`sandbox-cli run --detach` or a fleet task would produce — never `-it`. Watch
-it with `GET /runs/{id}/logs?follow=1`; there is no `/runs/{id}/attach`.
+`POST /runs` has no foreground mode. An HTTP request/response cycle has
+nowhere to hold a pty, so every run this API starts is what
+`sandbox-cli run --detach` or a fleet task would produce. Watch it with
+`GET /runs/{id}/logs?follow=1`; there is no `/runs/{id}/attach`, and there
+will not be — a terminal belongs to a terminal.
+
+That left a gap worth naming: a run could be watched and never *answered*.
+`"console": true` closes it. The container is created `-dit` — still detached,
+but keeping a pty and stdin — so `sandbox-cli attach <branch>` from any
+terminal has a keyboard, and the agent can stop and ask something.
+
+It changes two things together, because neither is useful alone:
+
+- the container keeps a console (`-dit` rather than `-d`), and
+- the agent runs its **interactive** argv rather than its headless one.
+
+A console wired to `claude -p` is a keyboard for an agent that never asks;
+the interactive argv without a console is an agent waiting on stdin that was
+never created. So it is one field, not two. `prompt` then *seeds the first
+turn* instead of being the whole run.
+
+Refused with `verify`: verify's exit code is the container's, which is how
+`land` decides the work is done, and an interactive session's exit code is
+whenever somebody quit. Refused without an `agent`, too — a plain `command`
+is already whatever argv you wrote.
+
+Nothing about it widens the boundary. A pty and an open stdin change what the
+container *listens to*, never what it can reach.
 
 ### Agent selection
 

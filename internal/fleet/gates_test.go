@@ -99,6 +99,12 @@ var optionsPolicy = map[string]fieldPolicy{
 	"NoHardening": never, // an unattended run is the last place to drop cap-drop
 	"Secrets":     never, // brokered values never travel through a file in the repository
 	"Publish":     never, // publishing a port is asking for ingress; a fleet task has no reason to
+	// A console is a keyboard for somebody who is going to attach. A fleet is
+	// unattended by definition, and internal/agents only admits agents with a
+	// verified headless mode for exactly this reason: an agent that stops to ask
+	// permission does not fail, it hangs — holding a max_parallel slot until
+	// somebody notices. never, so the fleet path leaves it zero.
+	"Console":     never,
 	"AddHosts":    never,
 	"HostGateway": never, // reaching a host service is the opposite of what a fleet is for
 	"TTY":         never, // nothing is attached; BuildSpec resolves this from Detach

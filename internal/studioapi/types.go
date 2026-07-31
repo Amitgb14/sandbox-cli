@@ -493,7 +493,9 @@ type RunsResponse struct {
 // It always launches detached: an HTTP request/response cycle has nowhere to
 // hold an interactive terminal, so unlike the CLI's `run` there is no foreground
 // mode here — every Studio run is what `sandbox-cli run --detach` or a fleet task
-// would produce, never given `-it`.
+// would produce. The one variation is Console, which asks for a run somebody
+// intends to attach to and type at; it changes the agent's argv and the
+// container's stdin, and nothing about what either can reach.
 type RunCreateRequest struct {
 	// Project is a host directory to mount at /workspace. Defaults to the
 	// server's configured project root. Mutually exclusive with Worktree.
@@ -507,10 +509,25 @@ type RunCreateRequest struct {
 	Worktree string `json:"worktree,omitempty"`
 
 	// Agent is one of the names from GET /agents. Required unless Command is set.
-	// When set, Prompt is run through the agent's autonomous/headless mode —
-	// there is no interactive agent mode over this API.
+	// When set, Prompt is run through the agent's autonomous/headless mode,
+	// unless Console asks for the interactive one.
 	Agent  string `json:"agent,omitempty"`
 	Prompt string `json:"prompt,omitempty"`
+
+	// Console starts the agent in its *interactive* mode on a container that
+	// keeps a pty and stdin open, so `sandbox-cli attach` from any terminal can
+	// answer it. Prompt, when set, seeds the first turn instead of being the
+	// whole run.
+	//
+	// It is one field for both halves deliberately. A console without the
+	// interactive argv is a keyboard wired to a headless agent that will never
+	// ask anything; the interactive argv without a console is an agent waiting on
+	// stdin that does not exist. Neither half is useful alone, so neither is
+	// separately requestable.
+	//
+	// Refused with Verify: verify's exit code is the answer it exists to give,
+	// and an interactive session's exit code is whenever the person quit.
+	Console bool `json:"console,omitempty"`
 
 	// Command is a plain guest argv, for a run with no agent (mutually exclusive
 	// with Agent).

@@ -2,6 +2,7 @@ package studioapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -140,9 +141,25 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 		branch = worktree.Branch(project)
 	}
 
+	if req.Console && req.Verify != "" {
+		// Verify's exit code is the container's, and that is the whole point of
+		// it: `land` reads it to decide whether the work is done. An interactive
+		// session's exit code says when somebody closed the window, which is not
+		// an answer to that question. Refusing beats quietly picking one.
+		return sandbox.Options{}, errors.New("console and verify cannot be combined: " +
+			"verify decides the run's exit code, and an interactive session's exit code is whenever you quit")
+	}
+	if req.Console && req.Agent == "" {
+		// A plain command already reaches a console the same way — it is the argv
+		// the caller chose. This field exists to swap an *agent* out of headless
+		// mode, and there is nothing to swap without one.
+		return sandbox.Options{}, errors.New("console needs an agent: a plain command is already whatever argv you gave it")
+	}
+
 	opts := sandbox.Options{
 		Project:     project,
 		Detach:      true,
+		Console:     req.Console,
 		RepoID:      s.RepoID,
 		Branch:      branch,
 		Base:        req.Base,
@@ -169,7 +186,18 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 		opts.EnvAllow = agent.EnvAllow
 		opts.Env = append(opts.Env, agent.Env...)
 		opts.Prompt = req.Prompt
-		opts.Command = fleet.WithVerify(agent.Autonomous(req.Prompt, nil), req.Verify)
+		// Headless or interactive, decided here because this is where the argv is
+		// built and the two must agree: Autonomous runs the prompt to completion
+		// and exits, while Command starts the agent's normal UI with the prompt
+		// seeding its first turn — which is the mode that can stop and ask.
+		if req.Console {
+			opts.Command = agent.Command
+			if req.Prompt != "" {
+				opts.Command = append(append([]string{}, agent.Command...), req.Prompt)
+			}
+		} else {
+			opts.Command = fleet.WithVerify(agent.Autonomous(req.Prompt, nil), req.Verify)
+		}
 
 		// Same gate fleet.Runner.options applies, and for the same reason: the
 		// default auth path is an OAuth refresh token sitting in this directory,

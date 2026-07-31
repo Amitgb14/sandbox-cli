@@ -477,7 +477,14 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   else if (req.workspace) body.project = req.workspace;
 
   if (req.base) body.base = req.base;
-  if (req.verify.trim()) body.verify = req.verify;
+  // Console travels: it is a property of the task ("I intend to talk to this"),
+  // not of the posture. It widens nothing — a pty and an open stdin change what
+  // the container listens to, never what it can reach.
+  if (req.console && req.agent) body.console = true;
+  // Refused together by the daemon, so the form does not send a pair it knows
+  // will 400. Verify decides the exit code; an interactive session's exit code
+  // is whenever you quit.
+  if (req.verify.trim() && !req.console) body.verify = req.verify;
   if (req.memory) body.memory = req.memory;
   if (req.cpus) body.cpus = req.cpus;
   // Domains add to the baseline and cannot subtract from it, so this narrows or

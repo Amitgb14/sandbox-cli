@@ -80,6 +80,7 @@ export function LaunchForm() {
     memory: "4g",
     cpus: "2",
     detach: false,
+    console: false,
     persistAuth: true,
     sync: true,
     statusline: true,
@@ -344,8 +345,9 @@ export function LaunchForm() {
                 rows={3}
               />
               <Hint>
-                For a detached run this is the whole instruction — nobody is
-                there to answer a follow-up question.
+                {req.console
+                  ? "This seeds the first turn rather than being the whole run — the session stays open, so a follow-up question can be answered by whoever attaches."
+                  : "For a detached run this is the whole instruction — nobody is there to answer a follow-up question."}
               </Hint>
             </Field>
           )}
@@ -614,6 +616,19 @@ export function LaunchForm() {
             hint="Nobody is attached, so `-d` replaces `-i`/`-it` and the container is not removed on exit — the exit code and its logs are the entire supervision story."
           />
 
+          <Toggle
+            id="console"
+            checked={req.console}
+            disabled={!req.agent}
+            onCheckedChange={(console) => patch({ console })}
+            label="Keep a console I can attach to"
+            hint={
+              req.agent
+                ? "Starts the agent's interactive mode on a container that keeps a terminal (`-dit`), so `sandbox-cli attach` from any window can answer it. Without this the agent runs headless: it produces one final answer and can never stop to ask."
+                : "Needs an agent. A plain command is already whatever argv you typed — there is no headless mode to swap out of."
+            }
+          />
+
           <Field label="Verify command" htmlFor="verify">
             <Input
               id="verify"
@@ -621,12 +636,24 @@ export function LaunchForm() {
               onChange={(e) => patch({ verify: e.target.value })}
               placeholder="make test"
               className="font-mono"
+              disabled={req.console}
             />
             <Hint>
-              Wrapped around the agent&apos;s argv <em>inside</em> the
-              container, and its exit code becomes the container&apos;s. In the
-              container because a verify running on the host would be host code
-              selected by a file the agent can write.
+              {req.console ? (
+                <>
+                  Not available with a console. Verify decides the run&apos;s
+                  exit code, which is how <code>land</code> knows the work is
+                  done — and an interactive session&apos;s exit code is whenever
+                  you quit. Run it yourself in the session instead.
+                </>
+              ) : (
+                <>
+                  Wrapped around the agent&apos;s argv <em>inside</em> the
+                  container, and its exit code becomes the container&apos;s. In
+                  the container because a verify running on the host would be
+                  host code selected by a file the agent can write.
+                </>
+              )}
             </Hint>
           </Field>
 

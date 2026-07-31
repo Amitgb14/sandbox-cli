@@ -27,9 +27,17 @@ func BuildArgs(s RunSpec) []string {
 	for _, k := range sortedKeys(s.Labels) {
 		a = append(a, "--label", k+"="+s.Labels[k])
 	}
-	// A detached container has nobody attached to it: no pty to allocate and no
-	// stdin to keep open. -d replaces -i/-it rather than joining them.
+	// A detached container usually has nobody attached to it: no pty to allocate
+	// and no stdin to keep open, so -d replaces -i/-it rather than joining them.
+	//
+	// The exception is a detached run that asked for a console (RunSpec.TTY still
+	// true), where -dit is the whole point: the container starts in the
+	// background *and* keeps a terminal open, so `attach` from another window has
+	// a keyboard and the agent can be answered. Nothing is attached at start
+	// either way — the difference is whether anything ever can be.
 	switch {
+	case s.Detach && s.TTY:
+		a = append(a, "-dit")
 	case s.Detach:
 		a = append(a, "-d")
 	case s.TTY:

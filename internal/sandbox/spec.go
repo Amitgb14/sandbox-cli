@@ -56,6 +56,21 @@ type Options struct {
 	// logs are the whole point of launching it).
 	Detach bool
 
+	// Console keeps a pty and stdin on a detached container so somebody can
+	// attach to it *later* and type. It is meaningless without Detach.
+	//
+	// Detach's usual reasoning — nobody is attached, so allocating a terminal
+	// hands an agent a pty it will draw its UI into for an audience of none — is
+	// right for an unattended run and wrong for a session launched from one
+	// window to be picked up from another. Docker separates the two: -d says
+	// nothing is attached *now*, -it says a console exists to attach *to*.
+	//
+	// The caller owes one more thing than the flag: an agent started in its
+	// headless mode has nothing to say to a keyboard. Console only means
+	// something alongside the agent's interactive argv, which is why the two are
+	// decided together where the argv is chosen and not here.
+	Console bool
+
 	// Identity stamped on the container as sandbox.* labels, and — for detached
 	// runs — folded into its name. Docker is the state store: a fact not recorded
 	// here is one no later command can recover.
@@ -533,8 +548,13 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// container — so without this an agent launched from a terminal is handed a
 	// pty, starts its full-screen UI, and waits forever for a keystroke from
 	// nobody. An explicit --tty does not override it: there is no terminal to give.
+	//
+	// Console is the exception, and it is a different claim rather than a louder
+	// one: not "give this run the terminal that launched it" — there isn't one —
+	// but "create a console on the container so a later attach has somewhere to
+	// type". That is what makes an agent able to ask a question and be answered.
 	if opts.Detach {
-		tty = false
+		tty = opts.Console
 	}
 
 	// Metrics require a terminal to report to. The live gauge is drawn only for

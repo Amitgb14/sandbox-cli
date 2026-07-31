@@ -519,6 +519,12 @@ export interface LaunchRequest {
   memory: string;
   cpus: string;
   detach: boolean;
+  /**
+   * Start the agent in its interactive mode on a container that keeps a
+   * terminal, so `sandbox-cli attach` can answer it. The prompt seeds the first
+   * turn rather than being the whole run.
+   */
+  console: boolean;
   persistAuth: boolean;
   sync: boolean;
   statusline: boolean;

@@ -346,13 +346,35 @@ func TestBuildArgs_Detach(t *testing.T) {
 	if containsArg(got, "-i") || containsArg(got, "-it") {
 		t.Errorf("did not expect -i/-it alongside -d, got %v", got)
 	}
-	// TTY set alongside Detach must still not produce a pty. BuildArgs renders
-	// what it is given, and sandbox.BuildSpec is what refuses the combination —
-	// but rendering `-dit` would hand an agent a UI nobody can see, so the
-	// renderer does not do it either.
+	// TTY alongside Detach is the console case, and it renders `-dit`: the
+	// container starts in the background and keeps a pty and stdin open, so an
+	// `attach` from another window has a keyboard and the agent can be answered.
+	//
+	// This used to assert the opposite — that Detach won and no pty was
+	// allocated — on the reasoning that a detached run has nobody behind it. That
+	// is true of an unattended run and false of one somebody intends to attach
+	// to; the two are now distinguishable, and sandbox.Options.Console is what
+	// asks. Note this must be checked as `-dit` rather than by looking for `-it`,
+	// which is a different flag and does not appear.
 	both := BuildArgs(RunSpec{Image: "img", Workdir: "/w", Detach: true, TTY: true})
-	if containsArg(both, "-it") {
-		t.Errorf("Detach must win over TTY, got %v", both)
+	if !containsArg(both, "-dit") {
+		t.Errorf("expected -dit for a detached spec with a console, got %v", both)
+	}
+	for _, bad := range []string{"-d", "-i", "-it"} {
+		if containsArg(both, bad) {
+			t.Errorf("did not expect %s alongside -dit, got %v", bad, both)
+		}
+	}
+}
+
+// TestBuildArgs_DetachConsoleIsOptIn pins that the console is not what a
+// detached run gets by default. Every fleet agent and every headless Studio run
+// takes the plain -d path, where a pty would be drawn for nobody and an open
+// stdin would be a keyboard nothing is holding.
+func TestBuildArgs_DetachConsoleIsOptIn(t *testing.T) {
+	got := BuildArgs(RunSpec{Image: "img", Workdir: "/w", Detach: true})
+	if containsArg(got, "-dit") {
+		t.Errorf("a detached spec without TTY must not get a console, got %v", got)
 	}
 }
 
