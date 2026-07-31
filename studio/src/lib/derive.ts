@@ -3,6 +3,7 @@ import {
   runOutcome,
   VERIFY_FAILED_EXIT,
   type AuditRecord,
+  type HistoryDay,
   type Run,
   type RunOutcome,
   type Worktree,
@@ -35,7 +36,11 @@ export interface DayBucket {
  * present. A chart that skips empty days draws a busy week and a quiet one the
  * same width, which is the one thing a volume chart exists to distinguish.
  */
-export function bucketByDay(runs: Run[], days = 14, now = Date.now()): DayBucket[] {
+export function bucketByDay(
+  runs: Run[],
+  days = 14,
+  now = Date.now(),
+): DayBucket[] {
   const buckets = new Map<string, DayBucket>();
   const start = new Date(now - (days - 1) * DAY_MS);
   start.setHours(0, 0, 0, 0);
@@ -112,11 +117,14 @@ export function runStats(runs: Run[], now = Date.now()): RunStats {
 
   const finished = runs.filter((r) => r.state === "exited");
   const finishedToday = finished.filter(
-    (r) => new Date(r.finishedAt ?? r.createdAt).getTime() >= todayStart.getTime(),
+    (r) =>
+      new Date(r.finishedAt ?? r.createdAt).getTime() >= todayStart.getTime(),
   ).length;
 
   const decidedOutcomes: RunOutcome[] = ["passed", "failed", "verify-failed"];
-  const decided = finished.filter((r) => decidedOutcomes.includes(runOutcome(r)));
+  const decided = finished.filter((r) =>
+    decidedOutcomes.includes(runOutcome(r)),
+  );
   const passed = decided.filter((r) => runOutcome(r) === "passed").length;
 
   const durations = finished
@@ -130,10 +138,21 @@ export function runStats(runs: Run[], now = Date.now()): RunStats {
     finishedToday,
     passRate: decided.length === 0 ? null : (passed / decided.length) * 100,
     decided: decided.length,
-    medianDurationMs: durations.length ? durations[Math.floor(durations.length / 2)] : null,
-    memInFlightBytes: live.reduce((sum, r) => sum + (r.latestMetrics?.memBytes ?? 0), 0),
-    memLimitBytes: live.reduce((sum, r) => sum + (r.latestMetrics?.memLimitBytes ?? 0), 0),
-    cpuInFlightPct: live.reduce((sum, r) => sum + (r.latestMetrics?.cpuPct ?? 0), 0),
+    medianDurationMs: durations.length
+      ? durations[Math.floor(durations.length / 2)]
+      : null,
+    memInFlightBytes: live.reduce(
+      (sum, r) => sum + (r.latestMetrics?.memBytes ?? 0),
+      0,
+    ),
+    memLimitBytes: live.reduce(
+      (sum, r) => sum + (r.latestMetrics?.memLimitBytes ?? 0),
+      0,
+    ),
+    cpuInFlightPct: live.reduce(
+      (sum, r) => sum + (r.latestMetrics?.cpuPct ?? 0),
+      0,
+    ),
     awaitingVerify: live.filter((r) => r.verify).length,
   };
 }
@@ -179,10 +198,15 @@ export function egressSummary(runs: Run[]) {
 export function landQueue(worktrees: Worktree[]): Worktree[] {
   return worktrees
     .filter((w) => !w.primary && !w.runId && w.ahead > 0)
-    .sort((a, b) => Number(b.verified) - Number(a.verified) || b.ahead - a.ahead);
+    .sort(
+      (a, b) => Number(b.verified) - Number(a.verified) || b.ahead - a.ahead,
+    );
 }
 
-export function scopeToRepo<T extends { repoId: string }>(items: T[], repoId: string | null): T[] {
+export function scopeToRepo<T extends { repoId: string }>(
+  items: T[],
+  repoId: string | null,
+): T[] {
   return repoId ? items.filter((i) => i.repoId === repoId) : items;
 }
 
@@ -278,12 +302,17 @@ export interface HistoryStats {
   total: number;
 }
 
-export function historyStats(records: AuditRecord[], now = Date.now()): HistoryStats {
+export function historyStats(
+  records: AuditRecord[],
+  now = Date.now(),
+): HistoryStats {
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
 
   const decidedOutcomes: RunOutcome[] = ["passed", "failed", "verify-failed"];
-  const decided = records.filter((r) => decidedOutcomes.includes(auditOutcome(r)));
+  const decided = records.filter((r) =>
+    decidedOutcomes.includes(auditOutcome(r)),
+  );
   const passed = decided.filter((r) => auditOutcome(r) === "passed").length;
 
   const durations = records
@@ -301,7 +330,10 @@ export function historyStats(records: AuditRecord[], now = Date.now()): HistoryS
     // formatPercent, which appends a sign and does not convert. Returning 0.93
     // here rendered a 93% pass rate as "1%".
     passRate: decided.length === 0 ? null : (passed / decided.length) * 100,
-    medianDurationMs: durations.length === 0 ? null : durations[Math.floor(durations.length / 2)],
+    medianDurationMs:
+      durations.length === 0
+        ? null
+        : durations[Math.floor(durations.length / 2)],
   };
 }
 
@@ -318,4 +350,26 @@ export function byAgentAudit(records: AuditRecord[]): AgentActivity[] {
     map.set(key, entry);
   }
   return [...map.values()].sort((a, b) => b.runs - a.runs);
+}
+
+/**
+ * The daemon's day buckets, in the shape the charts already take.
+ *
+ * A translation rather than a second type: the daemon computes the same buckets
+ * in SQL, and the only difference is that it has no reason to carry a display
+ * label — that is a locale question, and the locale belongs to the browser.
+ */
+export function toDayBuckets(days: HistoryDay[]): DayBucket[] {
+  return days.map((d) => ({
+    date: d.date,
+    label: new Date(d.date + "T00:00:00").toLocaleDateString(LOCALE, {
+      month: "short",
+      day: "numeric",
+    }),
+    total: d.total,
+    passed: d.passed,
+    failed: d.failed,
+    verifyFailed: d.verifyFailed,
+    stopped: d.stopped,
+  }));
 }

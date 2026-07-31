@@ -454,6 +454,32 @@ export interface ResolvedConfig {
 }
 
 /** One line of `~/.config/sandbox/audit/sessions.jsonl`. */
+/** `history.Stats` — the run log aggregated by the daemon. */
+export interface HistorySummary {
+  total: number;
+  decided: number;
+  passed: number;
+  /** Percent, or null when nothing has been decided. */
+  passRate: number | null;
+  medianDurationMs: number | null;
+  finishedToday: number;
+}
+
+/** `history.DayBucket`. */
+export interface HistoryDay {
+  date: string;
+  total: number;
+  passed: number;
+  failed: number;
+  verifyFailed: number;
+  stopped: number;
+}
+
+export interface HistoryStats {
+  stats: HistorySummary;
+  days: HistoryDay[];
+}
+
 export interface AuditRecord {
   time: string;
   image: string;

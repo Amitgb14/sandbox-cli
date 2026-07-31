@@ -58,6 +58,14 @@ function watch(page: import("@playwright/test").Page) {
     failed.push(`${r.failure()?.errorText ?? "failed"} ${r.url()}`);
   });
   page.on("response", (r) => {
+    // 501 from the history endpoint is an answer, not a fault: it is how a
+    // daemon started without -history-db says it has no index, and the
+    // dashboard falls back to counting audit records itself. The index is
+    // optional by design, so the suite has to pass in both modes — but the
+    // exemption is this one route and this one code, because a 501 anywhere
+    // else would be a route that was never finished.
+    if (r.status() === 501 && new URL(r.url()).pathname === "/v1/stats/history")
+      return;
     if (r.status() >= 400) failed.push(`${r.status()} ${r.url()}`);
   });
 

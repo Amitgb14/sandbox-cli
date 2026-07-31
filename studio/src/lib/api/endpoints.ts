@@ -1,4 +1,4 @@
-import { request } from "@/lib/api/client";
+import { ApiError, request } from "@/lib/api/client";
 import {
   MOCK_AGENTS,
   MOCK_AUDIT,
@@ -17,6 +17,7 @@ import { BASELINE_EGRESS, RESERVED_ENV } from "@/lib/constants";
 import type {
   Agent,
   Commit,
+  HistoryStats,
   AuditRecord,
   DaemonInfo,
   DiffFile,
@@ -190,6 +191,28 @@ export const api = {
       latencyMs: 200,
       unwrap: (b) => (b as { runs: Run[] }).runs,
     }),
+
+  /**
+   * The run log aggregated by the daemon, when it has an index to aggregate in.
+   *
+   * Returns null on 501, which is the daemon saying "no index configured" — not
+   * a failure. The caller then computes the same numbers from /v1/audit as it
+   * always did. That fallback is the point: the index is a faster path to the
+   * same answer, never a requirement.
+   */
+  historyStats: async (days = 14): Promise<HistoryStats | null> => {
+    try {
+      return await request<HistoryStats>(`/v1/stats/history?days=${days}`, {
+        // In fixture mode there is no daemon to aggregate anything; the caller
+        // falls back to computing from the fixture records.
+        fixture: () => null as unknown as HistoryStats,
+        latencyMs: 120,
+      });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 501) return null;
+      throw e;
+    }
+  },
 
   /** What one commit changed. Scoped to this daemon's project. */
   commitDiff: (sha: string) =>

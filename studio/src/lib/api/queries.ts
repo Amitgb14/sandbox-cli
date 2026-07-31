@@ -29,6 +29,7 @@ export const qk = {
   worktreeCommits: (b: string) => ["worktrees", b, "commits"] as const,
   branchRuns: (b: string) => ["runs", "branch", b] as const,
   commitDiff: (sha: string) => ["commits", sha, "diff"] as const,
+  historyStats: (days: number) => ["stats", "history", days] as const,
   usage: ["usage"] as const,
   doctor: ["doctor"] as const,
   audit: (branch?: string, limit?: number) => ["audit", branch ?? "all", limit ?? 200] as const,
@@ -145,6 +146,18 @@ export function useCommitDiff(sha: string, enabled: boolean) {
   });
 }
 
+/**
+ * The daemon's own aggregate of the run log. `null` means it has no index, and
+ * the caller computes the same numbers client-side instead.
+ */
+export function useHistoryStats(days = 14) {
+  return useQuery({
+    queryKey: qk.historyStats(days),
+    queryFn: () => api.historyStats(days),
+    staleTime: 30_000,
+  });
+}
+
 export function useUsage() {
   return useQuery({ queryKey: qk.usage, queryFn: api.usage, staleTime: 60_000 });
 }
@@ -159,11 +172,12 @@ export function useDoctor(opts?: Partial<UseQueryOptions<Awaited<ReturnType<type
  * days, and the chart's older columns come back empty because nothing was
  * fetched for them, not because nothing ran.
  */
-export function useAudit(branch?: string, limit?: number) {
+export function useAudit(branch?: string, limit?: number, opts?: { enabled?: boolean }) {
   return useQuery({
     queryKey: qk.audit(branch, limit),
     queryFn: () => api.audit(branch, limit),
     staleTime: 30_000,
+    enabled: opts?.enabled ?? true,
   });
 }
 
