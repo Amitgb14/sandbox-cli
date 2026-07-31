@@ -96,7 +96,7 @@ export const api = {
   launch: (req: LaunchRequest) =>
     request<{ id: string }>("/v1/runs", {
       method: "POST",
-      body: req,
+      body: toRunCreate(req),
       fixture: () => ({ id: MOCK_RUNS[0].id }),
       latencyMs: 700,
     }),
@@ -313,4 +313,57 @@ function previewArgv(req: LaunchRequest, allow: string[]): string[] {
       })),
     ],
   });
+}
+
+/**
+ * The launch form's state is not the daemon's request body, and the difference
+ * is deliberate rather than an oversight to paper over.
+ *
+ * `RunCreateRequest` rejects unknown fields, so posting the form verbatim was a
+ * 400 — and it was right to be. Most of what the form holds is a *display* of
+ * the posture a run will have, not a choice the request gets to make:
+ *
+ *   profile           the server's, fixed by whoever started it. A request that
+ *                     could pick its own profile would drop a run out of prod.
+ *   network.mode      tighten-only, and not expressible per-request at all.
+ *   envAllow          decides which host variables cross into the container.
+ *   share / publish   a mount and an inbound port — the two widest things a
+ *                     launch option can add.
+ *   persistAuth       whether an OAuth refresh token is mounted.
+ *
+ * Those are shown so you can see what you are about to get, and they come from
+ * the daemon's own config; sending them back as instructions is what the
+ * refused-key rule in internal/config/trust.go exists to prevent, one layer up.
+ *
+ * What does travel is the task: which agent, what to do, where, and the limits
+ * that only ever narrow it.
+ */
+function toRunCreate(req: LaunchRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+
+  if (req.agent) {
+    body.agent = req.agent;
+    if (req.prompt.trim()) body.prompt = req.prompt;
+  } else if (req.command.trim()) {
+    // The form is one text field and the API takes an argv. `sh -c` is the
+    // honest reading of a command line someone typed: it is what makes quotes
+    // and pipes behave the way they look, and splitting on whitespace here
+    // would silently mangle any argument containing a space.
+    body.command = ["sh", "-c", req.command];
+  }
+
+  // A worktree is addressed by branch and replaces the workspace; only one of
+  // the two ever reaches the daemon, which refuses both together.
+  if (req.worktree) body.worktree = req.worktree;
+  else if (req.workspace) body.project = req.workspace;
+
+  if (req.base) body.base = req.base;
+  if (req.verify.trim()) body.verify = req.verify;
+  if (req.memory) body.memory = req.memory;
+  if (req.cpus) body.cpus = req.cpus;
+  // Domains add to the baseline and cannot subtract from it, so this narrows or
+  // does nothing — the one network field a request may carry.
+  if (req.network.allow.length > 0) body.allow = req.network.allow;
+
+  return body;
 }

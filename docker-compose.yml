@@ -3,6 +3,11 @@
 #   docker compose up                      # UI only — run the API on your host
 #   docker compose --profile api up        # UI + API in containers (see below)
 #
+# `cp .env.example .env` first if this project has a .sandbox.yaml the API has
+# to be told to trust — compose reads .env automatically, so the setting stops
+# being something you remember on every invocation. See the note on brokered
+# secrets below before you point it at a config carrying a `secrets:` block.
+#
 # The default gives you the UI and nothing else, and that is deliberate.
 #
 # ── Why the API is opt-in ────────────────────────────────────────────────────
@@ -102,6 +107,24 @@ services:
     environment:
       # So config.ConfigRoot and the worktree paths agree with the mount above.
       HOME: ${HOME}
+
+      # This container is root and the bind-mounted repository is owned by your
+      # host user, so git refuses every command with "detected dubious ownership"
+      # and the worktrees endpoint 502s.
+      #
+      # What safe.directory protects against is a repository owned by someone
+      # else running *its* config as you — hooks, filters, textconv. Every git
+      # call sandbox-cli makes on its own behalf already goes through
+      # internal/githard, which neutralises exactly those keys with -c overrides
+      # that outrank repo config. So this is not trading that protection away;
+      # it is telling git what the mount already establishes — that this
+      # repository is yours and you asked for it to be here.
+      #
+      # Set here rather than in the image so it travels with the deployment that
+      # needs it, and so the image stays usable without it.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: "*"
       # Optional but recommended: with no token, every request but /v1/health is
       # unauthenticated, and anything that can reach the port can launch a run.
       SANDBOX_STUDIO_TOKEN: ${SANDBOX_STUDIO_TOKEN:-}
