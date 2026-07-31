@@ -86,6 +86,14 @@ type Options struct {
 	// that is present always carries a fact.
 	Prompt string
 
+	// Baseline is a crash-snapshot commit taken just before this run starts, so
+	// its changes can later be told apart from whatever was already uncommitted
+	// in the workspace. Empty when no snapshot could be taken — not a git
+	// repository, snapshots switched off — and the label is then omitted, which
+	// is what makes "we cannot attribute this precisely" a state a client can
+	// see rather than one it has to infer.
+	Baseline string
+
 	// AuthPersistDir, when non-empty, is a host directory bind-mounted read-write
 	// as the agent's whole HOME so its login/config survives the ephemeral
 	// container (log in once). Set by the claude/codex wrappers.
@@ -549,14 +557,15 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// container running with the workspace still mounted.
 	labels := map[string]string{LabelCLI: "1"}
 	for k, v := range map[string]string{
-		LabelRepo:    opts.RepoID,
-		LabelBranch:  opts.Branch,
-		LabelAgent:   opts.Agent,
-		LabelBase:    opts.Base,
-		LabelVerify:  opts.Verify,
-		LabelFleet:   boolLabel(opts.Fleet),
-		LabelProfile: cfg.Profile,
-		LabelPrompt:  truncatePrompt(opts.Prompt),
+		LabelRepo:     opts.RepoID,
+		LabelBranch:   opts.Branch,
+		LabelAgent:    opts.Agent,
+		LabelBase:     opts.Base,
+		LabelVerify:   opts.Verify,
+		LabelFleet:    boolLabel(opts.Fleet),
+		LabelProfile:  cfg.Profile,
+		LabelPrompt:   truncatePrompt(opts.Prompt),
+		LabelBaseline: opts.Baseline,
 	} {
 		if v != "" {
 			labels[k] = v

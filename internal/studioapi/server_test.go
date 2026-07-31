@@ -791,3 +791,46 @@ func TestAddedFileHunkNumbersFromOne(t *testing.T) {
 		t.Error("an empty file has no hunk to show")
 	}
 }
+
+// A run's diff must answer "what did this run change", not "what is uncommitted
+// here". The two differ in a checkout the user also works in, and getting it
+// wrong credits an agent with edits it never made.
+//
+// The mechanism is a before-image: a crash snapshot taken at launch, stamped on
+// the container, compared later against a tree of the workspace built the same
+// way. Comparing the snapshot to the *working tree* instead does not work, and
+// the reason is the trap this test exists to hold shut — a snapshot is written
+// with `add -A` so it holds untracked files, while `git diff <commit>` considers
+// only what git tracks, so every untracked file in the snapshot reads as a
+// deletion.
+func TestRunDiffPrefersTheBaselineWhenOneWasRecorded(t *testing.T) {
+	s, fr := newTestServer(t)
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"true"},
+		Branch:  "feature-diff",
+	})
+	run := decodeBody[Run](t, create)
+
+	// No baseline stamped: the endpoint still answers, with the broader question.
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/diff", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeBody[[]DiffFile](t, rec); got == nil {
+		t.Error("a run with no baseline must still return a list, not null")
+	}
+
+	// With one, it is carried on the container where any later command can find
+	// it — docker is the state store, and a fact not stamped is one nothing can
+	// recover.
+	fr.mu.Lock()
+	for i := range fr.containers {
+		fr.containers[i].Labels[sandbox.LabelBaseline] = "0000000000000000000000000000000000000000"
+	}
+	fr.mu.Unlock()
+
+	rec = doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/diff", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status with a baseline = %d: %s", rec.Code, rec.Body.String())
+	}
+}

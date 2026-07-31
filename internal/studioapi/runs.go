@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
+	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
@@ -81,6 +83,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+
+	// A before-image, taken immediately before the container starts, so this
+	// run's changes can later be told apart from whatever was already
+	// uncommitted in the workspace. Best-effort by design: no snapshot means the
+	// diff falls back to "what is uncommitted here" and says so, which is the
+	// behaviour that existed before — a run must never fail because its safety
+	// net could not be strung.
+	opts.Baseline = baselineFor(opts.Project, opts.Agent)
 
 	name, err := s.Session.Start(r.Context(), opts, false)
 	if err != nil {
@@ -300,3 +310,38 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// baselineFor records the workspace as it stands, and returns the commit.
+//
+// Through rescue's own Begin/Start/Stop rather than a second snapshot
+// implementation: that path takes one snapshot before its ticker ever fires,
+// writes through a private GIT_INDEX_FILE so the user's index, HEAD, branches
+// and working tree are untouched, and reads content through a scratch git
+// directory so the repository's own config cannot define a filter driver. None
+// of that is worth reproducing approximately.
+//
+// Stop is immediate and deliberate. This wants a before-image, not a running
+// safety net — the API server is not the process supervising this container, and
+// leaving a session open would report every run as crashed to `sandbox-cli
+// recover`, which reads an unclosed manifest as exactly that.
+func baselineFor(workspace, agent string) string {
+	if workspace == "" {
+		return ""
+	}
+	snap := rescue.Begin(workspace, agent, baselineInterval, baselineRetention)
+	if snap == nil {
+		return "" // not a repository, or snapshots switched off
+	}
+	snap.Start()
+	snap.Stop("baseline", nil)
+	return snap.LastCommit()
+}
+
+const (
+	// Long enough that the ticker never fires: this run wants the one snapshot
+	// loop() takes before it starts waiting, and nothing after it.
+	baselineInterval = time.Hour
+	// The retention rescue itself uses, since these age out through the same
+	// pruning as any other snapshot.
+	baselineRetention = 14 * 24 * time.Hour
+)

@@ -79,6 +79,21 @@ const (
 	// is the *only* free text stamped — a secret value never becomes one, which
 	// is what the credential broker exists to guarantee.
 	LabelPrompt = "sandbox.prompt"
+
+	// LabelBaseline is the crash-snapshot commit taken immediately before this
+	// run started: a before-image of the workspace, including files git does not
+	// track, written by internal/rescue through its private index.
+	//
+	// It exists so "what did this run change" can be answered at all. Without it
+	// the only available question is "what is uncommitted in this workspace",
+	// which is the same answer for a --worktree run (whose checkout belongs to
+	// that run alone) and a wrong one for a run in a checkout you also work in —
+	// there, your own unfinished edits get credited to an agent that never
+	// touched them.
+	//
+	// A commit id rather than a ref: refs move, and this must still name the tree
+	// the run actually started from when it is read a week later.
+	LabelBaseline = "sandbox.baseline"
 )
 
 // maxPromptLabel bounds what LabelPrompt carries.

@@ -266,13 +266,13 @@ func WorkingStatIn(dir string) []FileStat {
 // fileStats runs numstat and name-status for one revision range and merges them:
 // numstat carries the counts, name-status the kind of change, and neither alone
 // answers "what changed and by how much".
-func fileStats(dir, rev string) []FileStat {
-	numstat, err := runGit(dir, "diff", "--numstat", rev)
+func fileStats(dir string, revs ...string) []FileStat {
+	numstat, err := runGit(dir, append([]string{"diff", "--numstat"}, revs...)...)
 	if err != nil {
 		return nil
 	}
 	status := map[string]string{}
-	if out, err := runGit(dir, "diff", "--name-status", rev); err == nil {
+	if out, err := runGit(dir, append([]string{"diff", "--name-status"}, revs...)...); err == nil {
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) < 2 {
@@ -334,13 +334,18 @@ const maxDiffBytes = 256 * 1024
 // what is uncommitted in a checkout. Parsing is left to the caller — this
 // package owns talking to git, and every call here goes through runGit so the
 // repository's own config cannot make git run commands (internal/githard).
-func FileDiff(dir, rev, path string) string {
-	if dir == "" || path == "" {
+func FileDiff(dir string, args ...string) string {
+	if dir == "" || len(args) < 2 {
 		return ""
 	}
+	// The last argument is the path; everything before it selects what to compare.
+	path := args[len(args)-1]
+	revs := args[:len(args)-1]
 	// No colour, no external textconv, and three lines of context: enough to see
 	// where a change sits without shipping the file twice.
-	out, err := runGit(dir, "diff", "--no-color", "--no-textconv", "--unified=3", rev, "--", path)
+	gitArgs := append([]string{"diff", "--no-color", "--no-textconv", "--unified=3"}, revs...)
+	gitArgs = append(gitArgs, "--", path)
+	out, err := runGit(dir, gitArgs...)
 	if err != nil || out == "" {
 		return ""
 	}
@@ -375,4 +380,33 @@ func UntrackedContent(dir, path string) string {
 		return out[:maxDiffBytes]
 	}
 	return out
+}
+
+// StatSince reports what changed in a checkout between two trees.
+//
+// Both sides are built the same way — a snapshot written with `add -A`, so both
+// hold untracked files — which is what makes the comparison honest. Diffing a
+// snapshot against the working tree instead reports every untracked file as a
+// deletion, because `git diff <commit>` only considers what git tracks while the
+// snapshot holds everything.
+//
+// This is the difference between "what is uncommitted here" and "what did that
+// run change": anything the workspace already had is in the before-tree, so it
+// cancels out rather than being credited to an agent that never touched it.
+func StatBetween(dir, before, after string) []FileStat {
+	if dir == "" || before == "" || after == "" {
+		return nil
+	}
+	return fileStats(dir, before, after)
+}
+
+// InCommit reports whether a path existed in a commit's tree.
+func InCommit(dir, commit, path string) bool {
+	if dir == "" || commit == "" || path == "" {
+		return false
+	}
+	// cat-file -e is an existence test: it prints nothing and fails when the
+	// object is not there, which is exactly the question.
+	_, err := runGit(dir, "cat-file", "-e", commit+":"+path)
+	return err == nil
 }

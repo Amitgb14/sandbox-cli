@@ -67,7 +67,12 @@ var optionsPolicy = map[string]fieldPolicy{
 	// The task's own prompt, recorded as a label. fromSpec for the same reason
 	// Verify is: it is the task talking, it widens nothing, and the run path has
 	// the equivalent in the argv it builds.
-	"Prompt":      fromSpec,
+	"Prompt": fromSpec,
+	// A before-image of the workspace, recorded so this run's changes can be
+	// told from what was already uncommitted. fromSpec: it widens nothing — a
+	// commit id in a label grants no reach — and the run path records the same
+	// thing for the same reason.
+	"Baseline":    fromSpec,
 	"Detach":      fromSpec,
 	"RepoID":      fromSpec,
 	"Agent":       fromSpec,

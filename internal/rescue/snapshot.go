@@ -632,3 +632,84 @@ func (s *Snapshotter) prepareContentDir(ctx context.Context) bool {
 	s.contentDir, s.objectDir = dir, objDir
 	return true
 }
+
+// LastCommit is the snapshot this run last wrote, or "" if it never wrote one.
+//
+// Exposed so a caller can use a snapshot as a *before-image* rather than only as
+// a crash net: taken at launch and compared against the workspace later, it is
+// the difference between "what is uncommitted here" and "what this run changed",
+// which are not the same question in a checkout the user also works in.
+//
+// Read under the same lock the snapshot loop writes it with, because a caller
+// asking mid-run is asking while that loop is running.
+func (s *Snapshotter) LastCommit() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastCommit
+}
+
+// TreeOf writes a tree object for a workspace as it stands right now, and
+// returns its id. No ref, no commit, no session, no manifest — this is a *read*
+// of the working tree, not a safety net.
+//
+// It exists so a caller holding a snapshot commit can ask what has changed since
+// it. Comparing that commit to the working tree directly does not answer the
+// question: a snapshot is written with `add -A` and therefore holds untracked
+// files, while `git diff <commit>` only considers files git tracks — so every
+// untracked file in the snapshot reads as a deletion. Two trees built the same
+// way compare correctly.
+//
+// The safety argument is the snapshotter's, unchanged and for the same reasons:
+// a private GIT_INDEX_FILE, so the user's index, HEAD, branches and working tree
+// are never written; a scratch git directory for reading content, so the
+// repository's own config cannot define a filter driver; and every git call
+// through run(), which carries the githard flags. Adding a call here that
+// bypasses run() reopens hostile_repo_test.go.
+func TreeOf(workspace string) (string, error) {
+	if !Available() {
+		return "", fmt.Errorf("git is not available")
+	}
+	repoRoot, err := MainRepoRoot(workspace)
+	if err != nil {
+		return "", err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
+	defer cancel()
+
+	// Scratch everything: this leaves nothing behind but the objects it wrote,
+	// which are unreferenced and age out with the repository's own gc.
+	//
+	// The parent is created first. MkdirTemp does not, and the rescue directory
+	// for a repository need not exist yet — a caller that has never taken a
+	// snapshot here is the ordinary case, not an error.
+	parent := indexDir(repoRoot, "tree")
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", err
+	}
+	scratch, err := os.MkdirTemp(parent, "read-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(scratch)
+
+	s := &Snapshotter{workspace: workspace, repoRoot: repoRoot, indexFile: filepath.Join(scratch, "index")}
+	if !s.prepareContentDir(ctx) {
+		return "", fmt.Errorf("preparing a scratch git directory")
+	}
+
+	env := append([]string{"GIT_INDEX_FILE=" + s.indexFile}, snapshotIdentity...)
+	readEnv := append(append([]string{}, env...), s.contentEnv()...)
+
+	addArgs := []string{"add", "-A"}
+	if specFile := s.oversizedExcludes(ctx, readEnv); specFile != "" {
+		addArgs = append(addArgs, "--pathspec-from-file="+specFile, "--pathspec-file-nul")
+	}
+	if _, err := run(ctx, workspace, readEnv, addArgs...); err != nil {
+		return "", err
+	}
+	return run(ctx, workspace, readEnv, "write-tree")
+}

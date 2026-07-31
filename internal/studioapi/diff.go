@@ -3,6 +3,7 @@ package studioapi
 import (
 	"net/http"
 
+	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
@@ -57,9 +58,11 @@ func (s *Server) handleRunDiff(w http.ResponseWriter, r *http.Request) {
 		base = worktree.HeadBranch(s.Project)
 	}
 
-	// Two questions, one answer: what this branch committed beyond its base, and
-	// what is still uncommitted in its checkout. Merged by path so a file that
-	// was both committed and edited again appears once, with the totals added.
+	// The before-image, when the run recorded one. With it the question is "what
+	// did this run change"; without it, only "what is uncommitted here" — and the
+	// two differ in a checkout the user also works in, where their own unfinished
+	// edits would otherwise be credited to an agent that never touched them.
+	baseline := c.Labels[sandbox.LabelBaseline]
 	byPath := map[string]*DiffFile{}
 	add := func(stat worktree.FileStat) {
 		f, ok := byPath[stat.Path]
@@ -71,11 +74,28 @@ func (s *Server) handleRunDiff(w http.ResponseWriter, r *http.Request) {
 		f.Deletions += stat.Deletions
 		f.Binary = f.Binary || stat.Binary
 	}
-	for _, st := range worktree.DiffStat(s.Project, branch, base) {
-		add(st)
+	after := ""
+	if baseline != "" {
+		// The workspace as it stands, built the same way the baseline was, so the
+		// two compare like for like.
+		if t, err := rescue.TreeOf(run.Workspace); err == nil {
+			after = t
+		}
 	}
-	for _, st := range worktree.WorkingStatIn(run.Workspace) {
-		add(st)
+	if baseline != "" && after != "" {
+		for _, st := range worktree.StatBetween(run.Workspace, baseline, after) {
+			add(st)
+		}
+	} else {
+		// No snapshot was taken — not a repository, or snapshots switched off.
+		// The workspace's uncommitted state is still worth showing; it is just a
+		// broader question, and DiffScope says which one was answered.
+		for _, st := range worktree.DiffStat(s.Project, branch, base) {
+			add(st)
+		}
+		for _, st := range worktree.WorkingStatIn(run.Workspace) {
+			add(st)
+		}
 	}
 
 	for _, f := range byPath {
@@ -92,7 +112,7 @@ func (s *Server) handleRunDiff(w http.ResponseWriter, r *http.Request) {
 		if i >= maxDiffFilesWithHunks {
 			break
 		}
-		files[i].Hunks = s.hunksFor(run.Workspace, branch, base, files[i])
+		files[i].Hunks = s.hunksFor(run.Workspace, branch, base, baseline, after, files[i])
 	}
 	writeJSON(w, http.StatusOK, files)
 }
@@ -115,8 +135,19 @@ const maxDiffFilesWithHunks = 60
 // its base, then — for a file git has never seen — the file itself, presented as
 // one addition. A binary file gets none of them and says so through its own
 // flag, rather than through an empty hunk list that reads as "no changes".
-func (s *Server) hunksFor(workspace, branch, base string, f DiffFile) []DiffHunk {
+func (s *Server) hunksFor(workspace, branch, base, baseline, after string, f DiffFile) []DiffHunk {
 	if f.Binary {
+		return []DiffHunk{}
+	}
+	// Against the before-image when there is one: it is the comparison that
+	// isolates this run's work, and it holds untracked files too.
+	if baseline != "" && after != "" {
+		if text := worktree.FileDiff(workspace, baseline, after, f.Path); text != "" {
+			return parseUnifiedDiff(text)
+		}
+		if f.Status == "added" {
+			return addedFileHunk(worktree.UntrackedContent(workspace, f.Path))
+		}
 		return []DiffHunk{}
 	}
 	if text := worktree.FileDiff(workspace, "HEAD", f.Path); text != "" {
