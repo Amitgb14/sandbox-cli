@@ -16,6 +16,7 @@ import (
 	"net/http"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/history"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
@@ -48,6 +49,12 @@ type Server struct {
 	// loopback by default, that is what stops an arbitrary web page's JavaScript
 	// from driving this control plane; see docs/studio-api/README.md.
 	CORSOrigins []string
+
+	// History, when set, is a queryable index over the audit log. Optional by
+	// design: without it every history question is answered by scanning the log,
+	// which is what this did before the index existed and is still correct — the
+	// index is a faster path to the same answer, never a different one.
+	History *history.DB
 
 	// Token, when non-empty, is required as `Authorization: Bearer <Token>` on
 	// every request but /health. A second, cheap line of defense on top of
@@ -110,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/usage/refresh", s.handleUsageRefresh)
 	mux.HandleFunc("GET /v1/doctor", s.handleDoctor)
 	mux.HandleFunc("GET /v1/audit", s.handleAudit)
+	mux.HandleFunc("GET /v1/stats/history", s.handleHistoryStats)
 	mux.HandleFunc("GET /v1/worktrees", s.handleListWorktrees)
 	mux.HandleFunc("POST /v1/worktrees", s.handleCreateWorktree)
 	mux.HandleFunc("GET /v1/worktrees/{branch}", s.handleGetWorktree)

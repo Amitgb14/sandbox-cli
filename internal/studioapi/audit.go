@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/history"
 )
 
 // auditLine is the record as internal/audit writes it — snake_case, and
@@ -67,6 +71,24 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if dir == "" {
 		writeJSON(w, http.StatusOK, AuditResponse{Records: out})
 		return
+	}
+
+	// The index answers this when it exists, and the scan when it does not. The
+	// two must agree: TestIndexedAndScannedAuditAgree asserts it over the same
+	// log, because an index that quietly answers a different question is worse
+	// than no index — nothing would ever notice.
+	if s.History != nil {
+		recs, err := s.History.Runs(history.Filter{Branch: branch, Limit: limit})
+		if err == nil {
+			for _, rec := range recs {
+				out = append(out, fromHistory(rec))
+			}
+			writeJSON(w, http.StatusOK, AuditResponse{Records: out})
+			return
+		}
+		// A failing index falls back to the file rather than failing the request:
+		// the log is the record, and this is a view of it.
+		log.Printf("sandbox-studio-api: history index unavailable, scanning the log: %v", err)
 	}
 
 	// The history is several files, not one. audit rotates at 8 MiB and keeps
@@ -171,4 +193,56 @@ func (a auditLine) toRecord() AuditRecord {
 		rec.EnvNames = []string{}
 	}
 	return rec
+}
+
+// fromHistory maps an indexed row to the wire shape.
+//
+// The same mapping toRecord does from a log line, kept beside it so the two
+// cannot drift: an index that returned a different shape from the scan would be
+// a second contract nobody agreed to.
+func fromHistory(r history.Record) AuditRecord {
+	return auditLine{
+		Time: r.Time, Image: r.Image, Workspace: r.Workspace, Workdir: r.Workdir,
+		Agent: r.Agent, Branch: r.Branch, Command: r.Command, Engine: r.Engine,
+		Network: r.Network, NetworkName: r.NetworkName, EnforcedBy: r.EnforcedBy,
+		EgressAllow: r.EgressAllow, EnvNames: r.EnvNames,
+		ExitCode: r.ExitCode, DurationMS: r.DurationMS, Detached: r.Detached,
+	}.toRecord()
+}
+
+// handleHistoryStats is GET /v1/stats/history: the outcome summary and day
+// buckets, aggregated where the data is.
+//
+// It exists because the dashboard was fetching five thousand records to draw a
+// fourteen-day chart and count a pass rate in the browser. That does not scale,
+// and it was already wrong once — the fetch was capped at two hundred, so the
+// chart's older columns were empty because nothing had been fetched for them
+// rather than because nothing had run.
+//
+// Requires the index. Without one the client keeps computing this from /v1/audit
+// as it did before, which is why the endpoint 501s rather than silently scanning
+// the log: an aggregate over a scan is exactly the thing this is here to stop.
+func (s *Server) handleHistoryStats(w http.ResponseWriter, r *http.Request) {
+	if s.History == nil {
+		writeError(w, http.StatusNotImplemented,
+			fmt.Errorf("no history index; start the server with -history-db to enable aggregates"))
+		return
+	}
+	days := 14
+	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v > 0 && v <= 365 {
+		days = v
+	}
+	now := time.Now()
+
+	summary, err := s.History.Summary(now)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	buckets, err := s.History.Buckets(days, now)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, HistoryStatsResponse{Stats: summary, Days: buckets})
 }

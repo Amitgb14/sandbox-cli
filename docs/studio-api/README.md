@@ -20,6 +20,10 @@ make build-studio-api
 ```
 
 Flags: `-addr` (default `127.0.0.1:8787`, loopback), `-project` (default: cwd),
+`-history-db` (a SQLite index over the audit log; without it every history
+question is answered by scanning the log, which is the default and always
+correct), `-history-retain` (drop indexed runs older than this on start; the log
+itself is never touched),
 `-config`, `-profile` (`dev`/`prod`, same meaning as the CLI's `--profile`),
 `-token` (or `$SANDBOX_STUDIO_TOKEN`), `-cors-origin` (repeatable).
 

@@ -1,6 +1,10 @@
 package studioapi
 
-import "time"
+import (
+	"time"
+
+	"github.com/Amitgb14/sandbox-cli/internal/history"
+)
 
 // This file is the wire contract: every type here is what actually crosses the
 // HTTP boundary, JSON-tagged the way a TypeScript client wants it (camelCase,
@@ -373,6 +377,13 @@ type AuditRecord struct {
 	ExitCode   int   `json:"exitCode"`
 	DurationMS int64 `json:"durationMs"`
 	Detached   bool  `json:"detached"`
+}
+
+// HistoryStatsResponse is the body of GET /v1/stats/history: what the run log
+// says about outcomes, aggregated in the index rather than in the client.
+type HistoryStatsResponse struct {
+	Stats history.Stats       `json:"stats"`
+	Days  []history.DayBucket `json:"days"`
 }
 
 // AuditResponse is the body of GET /v1/audit.
