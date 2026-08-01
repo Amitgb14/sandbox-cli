@@ -123,6 +123,14 @@ container *listens to*, never what it can reach.
 
 ### Talking to a console run over HTTP
 
+> Running the API from `docker compose`? The console needs a **rebuilt image**
+> (`docker compose --profile api up -d --build api`) and a
+> `SANDBOX_STUDIO_TOKEN`. A stale image accepts `"console": true`, ignores it,
+> and launches the run headless — which looks exactly like the feature not
+> working. `GET /v1/stats/history` answering `404` rather than `501` is the
+> quickest way to spot a binary that predates both.
+
+
 Two endpoints, deliberately different mechanisms.
 
 **Reading** is `GET /runs/{id}/conversation`, and it comes from the agent's

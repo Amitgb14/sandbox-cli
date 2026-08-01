@@ -125,8 +125,16 @@ services:
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: "*"
-      # Optional but recommended: with no token, every request but /v1/health is
-      # unauthenticated, and anything that can reach the port can launch a run.
+      # Recommended in general, and *required* for the console: with no token,
+      # every request but /v1/health is unauthenticated and anything that can
+      # reach the port can launch a run. Typing at an already-running agent
+      # refuses outright without one — launching is a capability this API
+      # already has, a keyboard on a live session holding your workspace is not.
+      #
+      #   SANDBOX_STUDIO_TOKEN=$(openssl rand -hex 16) docker compose --profile api up -d
+      #
+      # Paste the same value into the bar Studio shows when it sees a daemon
+      # that wants one.
       SANDBOX_STUDIO_TOKEN: ${SANDBOX_STUDIO_TOKEN:-}
     command:
       - -addr
