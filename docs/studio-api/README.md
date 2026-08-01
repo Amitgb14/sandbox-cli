@@ -68,6 +68,9 @@ there is no code generation step (yet) tying them together.
 | GET | `/v1/runs` | List runs (`?all=1`, `?repo=`, `?branch=`, `?agent=`, `?fleet=1`) |
 | GET | `/v1/runs/{id}` | One run, by id/name/branch — same three references `sandbox-cli list`/`kill`/`logs` accept |
 | POST | `/v1/runs` | Launch a run — always detached; `console:true` keeps a terminal to attach to (see below) |
+| GET | `/v1/runs/{id}/conversation` | What the agent said, and whether it can be answered |
+| GET | `/v1/runs/{id}/console` | Raw pty output as SSE (base64 frames), for a terminal view |
+| POST | `/v1/runs/{id}/console/input` | Send keystrokes to a running agent's stdin — **always needs a token** |
 | POST | `/v1/runs/{id}/stop` | Stop (or `{"force":true}` to kill) a running run |
 | POST | `/v1/runs/{id}/recover` | Restore the crash-recovery snapshot associated with this run's branch |
 | GET | `/v1/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
@@ -117,6 +120,52 @@ is already whatever argv you wrote.
 
 Nothing about it widens the boundary. A pty and an open stdin change what the
 container *listens to*, never what it can reach.
+
+### Talking to a console run over HTTP
+
+Two endpoints, deliberately different mechanisms.
+
+**Reading** is `GET /runs/{id}/conversation`, and it comes from the agent's
+*transcript*, not the container's output. A console run draws a full-screen
+TUI: its stdout is cursor moves and repaints, and text scraped out of one
+mid-redraw looks like an answer without being one. The transcript is the same
+exchange as structured data, and it is written per turn while the run is in
+flight — measured at 121KB → 150KB across a run whose stdout stayed empty.
+
+The reply is `{messages: [{role, text, at}], writable}`. `writable` is the
+daemon's answer to "can this be typed at right now", which needs two facts that
+both live here: the container is running, and it was created with stdin.
+
+The run→transcript correlation has two filters and both are load-bearing. Only
+the **sandbox-owned** agent HOME is searched, because that directory is the
+container's whole HOME and a transcript anywhere else was written by something
+else — the claude wrapper really does have two verified stores, and the other
+one is your own `~/.claude`. And the window is matched on when a session
+*started*, not when it was last modified: a session still being appended to has
+a recent mtime that says nothing about which run owns it. Skipping either put a
+two-day-old conversation, from the developer's own live Claude Code session, on
+the screen of a sandbox run three minutes old. Observed, then fixed, then
+pinned by test. When nothing survives both filters the answer is *no
+conversation* rather than the closest candidate.
+
+**Answering** is `POST /runs/{id}/console/input` with `{"data": "...",
+"enter": true}`. `enter` appends `\r`, not `\n` — the container's stdin is a
+pty in raw mode, where a line feed is not a submit and the text would sit in
+the agent's input box. Without `enter` the bytes go exactly as given, so a
+client can send a control character or a partial line.
+
+This is the one endpoint that **requires a token even when the rest of the
+server does not**. Everything else here is read-only or launches a container
+the caller could have launched anyway — `POST /runs` already takes an arbitrary
+argv, so a console is not a new class of reach. What is new is a keyboard on a
+session that is *already running*, holding a workspace and, under dev's
+defaults, an OAuth refresh token in the agent's HOME. Without `-token` it
+answers `403` and says so.
+
+`GET /v1/health` reports `authRequired`, because health is the only endpoint
+that answers without a token — so it is the only way a client lacking one can
+learn it needs one, rather than failing every other request with a 401 it
+cannot explain.
 
 ### Agent selection
 

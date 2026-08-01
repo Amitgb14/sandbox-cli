@@ -31,6 +31,10 @@ type engineRuntime interface {
 	runtime.Runtime
 	runtime.Inspector
 	runtime.Controller
+	// Console is the fourth, and the only one not built on the engine's CLI:
+	// `docker attach` refuses a client with no tty, so writing to a running
+	// container's stdin goes over the API socket (internal/runtime/console.go).
+	runtime.Console
 }
 
 // Server holds everything the HTTP handlers need. One Server manages one host
@@ -112,6 +116,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs/{id}/metrics", s.handleRunMetrics)
 	mux.HandleFunc("GET /v1/runs/{id}/diff", s.handleRunDiff)
 	mux.HandleFunc("GET /v1/runs/{id}/config", s.handleRunConfig)
+	mux.HandleFunc("GET /v1/runs/{id}/conversation", s.handleRunConversation)
+	mux.HandleFunc("GET /v1/runs/{id}/console", s.handleRunConsoleStream)
+	mux.HandleFunc("POST /v1/runs/{id}/console/input", s.handleRunConsoleInput)
 	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("GET /v1/usage", s.handleUsage)
 	mux.HandleFunc("POST /v1/usage/refresh", s.handleUsageRefresh)

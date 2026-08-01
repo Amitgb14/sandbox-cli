@@ -1,6 +1,7 @@
 package studioapi
 
 import (
+	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/history"
@@ -26,6 +27,16 @@ type HealthResponse struct {
 	DockerAvailable bool   `json:"dockerAvailable"`
 	Project         string `json:"project"` // the host directory this server manages
 	Profile         string `json:"profile"` // "dev" | "prod"
+
+	// AuthRequired reports whether this daemon was started with a -token, so a
+	// client can say "you need the token" instead of failing every request with
+	// a 401 it cannot explain.
+	//
+	// Health is the one endpoint that answers unauthenticated, which is exactly
+	// why the fact belongs here: it is the only thing a client without a token
+	// can still ask. It reports *that* a token is required, never any part of
+	// the token itself.
+	AuthRequired bool `json:"authRequired"`
 
 	// Host is what this machine is, as the engine and the Go runtime report it.
 	// Always present: a client showing "where am I running" has nowhere to put
@@ -683,4 +694,26 @@ type WorktreesResponse struct {
 // WorktreeCreateRequest is the body of POST /worktrees.
 type WorktreeCreateRequest struct {
 	Branch string `json:"branch"`
+}
+
+// ConversationResponse is what a run said, and whether it can be answered.
+type ConversationResponse struct {
+	Messages []agentctx.Message `json:"messages"`
+
+	// Writable reports whether this run can be typed at right now: it is running
+	// *and* was launched with a console. Sent rather than inferred client-side,
+	// because the two facts that decide it (container state, how stdin was
+	// created) both live here.
+	Writable bool `json:"writable"`
+}
+
+// ConsoleInputRequest is one delivery of keystrokes to a run's stdin.
+type ConsoleInputRequest struct {
+	Data string `json:"data"`
+
+	// Enter appends the carriage return that submits it. Separate from Data so a
+	// client can send a partial line — and because \r is not what a caller would
+	// guess: the pty is in raw mode, where a \n arrives as a literal line feed
+	// and the agent's input box simply holds it.
+	Enter bool `json:"enter,omitempty"`
 }

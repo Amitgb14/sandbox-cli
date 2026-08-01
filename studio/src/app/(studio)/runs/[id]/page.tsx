@@ -3,12 +3,14 @@
 import { useEffect } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Activity, FileDiff, ScrollText, Settings2, SearchX, Terminal } from "lucide-react";
+import { Activity, FileDiff, ScrollText, Settings2, SearchX, MessageSquare,
+  Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/common/empty-state";
 import { RunHeader } from "@/components/run-detail/run-header";
+import { ConsoleView } from "@/components/run-detail/console-view";
 import { TerminalView } from "@/components/run-detail/terminal-view";
 import { MetricsView } from "@/components/run-detail/metrics-view";
 import { DiffView } from "@/components/run-detail/diff-view";
@@ -18,6 +20,7 @@ import { useRun } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 
 const TABS = [
+  { value: "console", label: "Console", icon: MessageSquare },
   { value: "terminal", label: "Terminal", icon: Terminal },
   { value: "metrics", label: "Metrics", icon: Activity },
   { value: "diff", label: "Changes", icon: FileDiff },
@@ -87,6 +90,9 @@ export default function RunDetailPage() {
           ))}
         </TabsList>
 
+        <TabsContent value="console">
+          <ConsoleView run={run} />
+        </TabsContent>
         <TabsContent value="terminal">
           <TerminalView run={run} />
         </TabsContent>

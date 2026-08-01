@@ -4,6 +4,7 @@ import {
   MOCK_AUDIT,
   MOCK_DAEMON,
   MOCK_DOCTOR,
+  MOCK_CONVERSATION,
   MOCK_RUNS,
   MOCK_USAGE,
   MOCK_WORKTREES,
@@ -30,7 +31,7 @@ import type {
   Run,
   UsageSnapshot,
   Worktree,
-} from "@/lib/types";
+  Conversation,} from "@/lib/types";
 
 /**
  * The daemon's surface, one function per endpoint.
@@ -129,6 +130,32 @@ export const api = {
   removeRun: (id: string) =>
     request<void>(`/v1/runs/${id}`, {
       method: "DELETE",
+      fixture: () => undefined,
+    }),
+
+  /**
+   * What a run has said, and whether it can be answered.
+   *
+   * Read from the agent's transcript rather than its terminal output: a console
+   * run draws a full-screen TUI, and text scraped out of a repaint looks like an
+   * answer without being one.
+   */
+  conversation: (id: string) =>
+    request<Conversation>(`/v1/runs/${id}/conversation`, {
+      fixture: () => ({ messages: MOCK_CONVERSATION, writable: true }),
+    }),
+
+  /**
+   * Send keystrokes to a running agent's stdin.
+   *
+   * `enter` appends the carriage return that submits — \r rather than \n,
+   * because the container's stdin is a pty in raw mode where a line feed is not
+   * a submit and the text would simply sit in the agent's input box.
+   */
+  sendConsoleInput: (id: string, data: string, enter = true) =>
+    request<void>(`/v1/runs/${id}/console/input`, {
+      method: "POST",
+      body: { data, enter },
       fixture: () => undefined,
     }),
 

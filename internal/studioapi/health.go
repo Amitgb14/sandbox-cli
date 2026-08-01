@@ -37,6 +37,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		DockerAvailable: available,
 		Project:         s.Project,
 		Profile:         profile,
+		AuthRequired:    s.Token != "",
 		Host:            s.hostInfo(r.Context()),
 	})
 }

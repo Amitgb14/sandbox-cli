@@ -22,6 +22,7 @@ export const qk = {
   runMetrics: (id: string) => ["runs", id, "metrics"] as const,
   runLogs: (id: string) => ["runs", id, "logs"] as const,
   runDiff: (id: string) => ["runs", id, "diff"] as const,
+  conversation: (id: string) => ["runs", id, "conversation"] as const,
   runConfig: (id: string) => ["runs", id, "config"] as const,
   agents: ["agents"] as const,
   worktrees: ["worktrees"] as const,
@@ -275,4 +276,39 @@ export function useTransportMode(): { mode: TransportMode; retry: () => void } {
       qc.invalidateQueries();
     },
   };
+}
+
+/**
+ * A run's conversation, polled while the run is live.
+ *
+ * Polled rather than streamed, and that is the honest shape: the source is a
+ * transcript file the agent appends to, so there is no event to subscribe to —
+ * a watcher would be polling underneath anyway. Three seconds is fast enough to
+ * notice a question and slow enough that a long session is not re-read
+ * constantly.
+ */
+export function useConversation(id: string, live: boolean) {
+  return useQuery({
+    queryKey: qk.conversation(id),
+    queryFn: () => api.conversation(id),
+    refetchInterval: live ? 3000 : false,
+  });
+}
+
+/**
+ * Send a reply to a running agent.
+ *
+ * The conversation is invalidated on success but the answer does not appear at
+ * once: the agent has to read it, think, and write its turn. The poll above is
+ * what surfaces it, which is why this does not try to show anything optimistic —
+ * a message that appeared instantly and then vanished on the next refetch would
+ * be worse than one that took a moment.
+ */
+export function useSendConsoleInput(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ data, enter }: { data: string; enter?: boolean }) =>
+      api.sendConsoleInput(id, data, enter ?? true),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.conversation(id) }),
+  });
 }

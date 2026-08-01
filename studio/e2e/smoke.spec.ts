@@ -23,6 +23,16 @@ import { test, expect } from "@playwright/test";
  */
 const API = process.env.NEXT_PUBLIC_SANDBOX_API ?? "http://localhost:8787";
 
+/**
+ * The two id-based tests below ask the daemon what exists before opening it, and
+ * that probe needs the token too. Without this they got a 401, read no id, and
+ * *skipped* — quietly turning the two routes that exercise the most of the
+ * contract into no-ops against exactly the daemon most worth testing.
+ */
+const apiHeaders = process.env.SANDBOX_STUDIO_TOKEN
+  ? { authorization: `Bearer ${process.env.SANDBOX_STUDIO_TOKEN}` }
+  : undefined;
+
 /** Static routes: everything that needs no id. */
 const routes = [
   "/",
@@ -72,6 +82,19 @@ function watch(page: import("@playwright/test").Page) {
   return { errors, failed };
 }
 
+// A daemon started with -token rejects every request but /health, and Studio
+// answers that with a bar asking for the token rather than a screen of failures.
+// The suite has to pass against both kinds of daemon, so it carries the token
+// when the environment has one — the same thing a developer does by pasting it
+// once into that bar.
+test.beforeEach(async ({ page }) => {
+  const token = process.env.SANDBOX_STUDIO_TOKEN;
+  if (!token) return;
+  await page.addInitScript((t) => {
+    localStorage.setItem("sandbox-studio-token", t);
+  }, token);
+});
+
 for (const path of routes) {
   test(`${path} renders cleanly`, async ({ page }) => {
     const { errors, failed } = watch(page);
@@ -91,7 +114,7 @@ for (const path of routes) {
 test("/worktrees/[branch] renders cleanly", async ({ page, request }) => {
   let branch: string | undefined;
   try {
-    const res = await request.get(`${API}/v1/worktrees`);
+    const res = await request.get(`${API}/v1/worktrees`, { headers: apiHeaders });
     if (res.ok()) branch = (await res.json())?.worktrees?.[0]?.branch;
   } catch {
     // No daemon; the skip below covers it.
@@ -115,7 +138,7 @@ test("/worktrees/[branch] renders cleanly", async ({ page, request }) => {
 test("/runs/[id] renders cleanly", async ({ page, request }) => {
   let id: string | undefined;
   try {
-    const res = await request.get(`${API}/v1/runs?all=1`);
+    const res = await request.get(`${API}/v1/runs?all=1`, { headers: apiHeaders });
     if (res.ok()) {
       id = (await res.json())?.runs?.[0]?.id;
     }

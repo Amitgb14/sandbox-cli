@@ -35,6 +35,28 @@ type fakeRuntime struct {
 	killed     []string
 	availErr   error
 	startErr   error
+
+	// consoleWrites records what was delivered to a container's stdin, so a test
+	// can assert the bytes rather than only that no error came back — the
+	// carriage return that submits a reply is the whole difference between a
+	// message sent and a message sitting in the agent's input box.
+	consoleWrites []string
+	consoleErr    error
+}
+
+func (f *fakeRuntime) ConsoleWrite(ctx context.Context, id string, data []byte) error {
+	if f.consoleErr != nil {
+		return f.consoleErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.consoleWrites = append(f.consoleWrites, string(data))
+	return nil
+}
+
+func (f *fakeRuntime) ConsoleStream(ctx context.Context, id string, w io.Writer) error {
+	<-ctx.Done()
+	return nil
 }
 
 func (f *fakeRuntime) Available(ctx context.Context) error { return f.availErr }
@@ -61,6 +83,11 @@ func (f *fakeRuntime) Start(ctx context.Context, spec runtime.RunSpec) (string, 
 		State:     "running",
 		CreatedAt: time.Now(),
 		StartedAt: time.Now(),
+		// What docker records for the flags BuildArgs rendered. -dit gives both,
+		// -d neither, and the console path depends on the difference — a fake
+		// that dropped it could not tell a console run from an unattended one.
+		OpenStdin: spec.TTY || !spec.Detach,
+		TTY:       spec.TTY,
 	})
 	return spec.Name, nil
 }
@@ -893,4 +920,26 @@ func TestAuditReadsEveryGeneration(t *testing.T) {
 	if f := decodeBody[AuditResponse](t, rec).Records; len(f) != 1 {
 		t.Errorf("a branch only in a rotated generation must still be found, got %+v", f)
 	}
+}
+
+// doRequestAuthed is doRequest with a bearer token, for the endpoints that
+// require one even when the rest of the server does not.
+func doRequestAuthed(t *testing.T, h http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var r io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal request body: %v", err)
+		}
+		r = bytes.NewReader(b)
+	}
+	req := httptest.NewRequest(method, path, r)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
 }

@@ -467,6 +467,25 @@ somebody quit — and `fleet` may never set it (`gates_test.go` classifies it `n
 unattended, which is the same reason `internal/agents` only admits agents with a verified headless
 mode. An agent that stops to ask does not fail, it hangs, holding a `max_parallel` slot.
 
+Reading and answering a console run over HTTP is `internal/studioapi/console.go`.
+Two halves, two mechanisms, and the split is the point: **reading** comes from the
+agent's transcript (`agentctx.Transcript`) because a TUI's stdout is repaints and
+scraping it yields plausible nonsense, while **answering** goes to the container's
+stdin over the engine's API socket (`internal/runtime/console.go`) because
+`docker attach` refuses a client with no tty and a web server has none. That file
+is the only place sandbox-cli talks to the socket instead of the binary, and it
+keeps one rule: read output, write stdin, nothing else. Two correlation filters
+decide which transcript belongs to a run, and both were learned the hard way —
+only the **sandbox-owned** store is searched (the claude wrapper has two, and the
+other is the user's own `~/.claude`), and the window matches when a session
+*started*, not when it was last modified. Without either, the developer's own live
+Claude Code session — by definition the most recently modified transcript on the
+machine — showed up as a three-minute-old sandbox run's conversation. `pickSession`
+and `sandboxStore` exist as separate functions so that stays pinned by test.
+Typing at a running agent is also the one endpoint that **requires `-token` even
+when the rest of the server does not**: launching is a capability the API already
+had, a keyboard on a live session is not.
+
 ### Agent wrappers
 
 Each wrapper is one file in `internal/cli` (`claude.go`, `gemini.go`, `aider.go`, …), listed in

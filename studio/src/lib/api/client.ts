@@ -109,9 +109,14 @@ export async function request<T>(path: string, opts: RequestOptions<T>): Promise
   const resolved = await probeDaemon();
 
   if (resolved === "live") {
+    const headers: Record<string, string> = {};
+    if (opts.body) headers["content-type"] = "application/json";
+    const token = apiToken();
+    if (token) headers.authorization = `Bearer ${token}`;
+
     const res = await fetch(`${API_BASE}${path}`, {
       method: opts.method ?? "GET",
-      headers: opts.body ? { "content-type": "application/json" } : undefined,
+      headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       signal: opts.signal,
       cache: "no-store",
@@ -190,4 +195,41 @@ async function errorText(res: Response, method: string, path: string): Promise<s
     // Not JSON, or no body. The status line is all there is.
   }
   return fallback;
+}
+
+
+/**
+ * The bearer token, when the daemon was started with one.
+ *
+ * `sandbox-studio-api -token` is optional and off by default, so most local
+ * setups send nothing and every request is accepted — the loopback bind is what
+ * holds the line there. The console is the exception: typing at a *running*
+ * agent requires a token whatever the rest of the server is doing, so this has
+ * to exist before that screen can work.
+ *
+ * Two sources, in this order:
+ *
+ *   localStorage   set from the console panel, which is where the need appears.
+ *                  Wins, because it is the one a person can change without a
+ *                  rebuild.
+ *   NEXT_PUBLIC_…  baked in at build time, for a Studio deployed next to a
+ *                  daemon that always has the same token.
+ *
+ * Deliberately not a cookie: this goes to a daemon on another origin, and a
+ * cookie would be attached by the browser to requests this code did not make.
+ */
+export const TOKEN_STORAGE_KEY = "sandbox-studio-token";
+
+export function apiToken(): string {
+  if (typeof window !== "undefined") {
+    const stored = window.localStorage.getItem(TOKEN_STORAGE_KEY);
+    if (stored) return stored;
+  }
+  return process.env.NEXT_PUBLIC_STUDIO_TOKEN ?? "";
+}
+
+export function setApiToken(token: string) {
+  if (typeof window === "undefined") return;
+  if (token) window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  else window.localStorage.removeItem(TOKEN_STORAGE_KEY);
 }

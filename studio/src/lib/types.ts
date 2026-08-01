@@ -560,6 +560,30 @@ export interface DaemonInfo {
   /** The daemon's own view of the host, as `doctor` asks it. */
   host: { os: string; arch: string; cpus: number; memBytes: number };
   profile: Profile;
+  /**
+   * Whether this daemon requires a bearer token. Reported by /v1/health, which
+   * is the one endpoint that answers without one — so it is the only thing a
+   * client lacking a token can still ask, and the only way the UI can explain a
+   * 401 instead of just showing one on every panel.
+   */
+  authRequired?: boolean;
   /** True when Studio is reading fixtures because no daemon answered. */
   mock?: boolean;
+}
+
+/** One turn of a run's conversation, from the agent's transcript. */
+export interface ConversationMessage {
+  role: "user" | "assistant";
+  text: string;
+  at?: string;
+}
+
+export interface Conversation {
+  messages: ConversationMessage[];
+  /**
+   * Whether this run can be typed at right now: running *and* launched with a
+   * console. The daemon decides it, because the two facts behind it (container
+   * state, how stdin was created) both live there.
+   */
+  writable: boolean;
 }
