@@ -119,6 +119,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs/{id}/conversation", s.handleRunConversation)
 	mux.HandleFunc("GET /v1/runs/{id}/console", s.handleRunConsoleStream)
 	mux.HandleFunc("POST /v1/runs/{id}/console/input", s.handleRunConsoleInput)
+	mux.HandleFunc("POST /v1/runs/{id}/console/resize", s.handleRunConsoleResize)
 	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("GET /v1/usage", s.handleUsage)
 	mux.HandleFunc("POST /v1/usage/refresh", s.handleUsageRefresh)

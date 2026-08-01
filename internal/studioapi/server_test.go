@@ -40,8 +40,9 @@ type fakeRuntime struct {
 	// can assert the bytes rather than only that no error came back — the
 	// carriage return that submits a reply is the whole difference between a
 	// message sent and a message sitting in the agent's input box.
-	consoleWrites []string
-	consoleErr    error
+	consoleWrites  []string
+	consoleErr     error
+	consoleResizes [][2]int
 }
 
 func (f *fakeRuntime) ConsoleWrite(ctx context.Context, id string, data []byte) error {
@@ -51,6 +52,13 @@ func (f *fakeRuntime) ConsoleWrite(ctx context.Context, id string, data []byte) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.consoleWrites = append(f.consoleWrites, string(data))
+	return nil
+}
+
+func (f *fakeRuntime) ConsoleResize(ctx context.Context, id string, rows, cols int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.consoleResizes = append(f.consoleResizes, [2]int{rows, cols})
 	return nil
 }
 

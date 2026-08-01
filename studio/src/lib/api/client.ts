@@ -157,7 +157,11 @@ export async function* streamNdjson<T>(
     yield* fixture();
     return;
   }
-  const res = await fetch(`${API_BASE}${path}`, { signal, cache: "no-store" });
+  const res = await fetch(`${API_BASE}${path}`, {
+    signal,
+    cache: "no-store",
+    headers: authHeaders(),
+  });
   if (!res.ok || !res.body) throw new ApiError(`stream ${path} failed`, res.status);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -232,4 +236,78 @@ export function setApiToken(token: string) {
   if (typeof window === "undefined") return;
   if (token) window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
   else window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+}
+
+
+/**
+ * The Authorization header, or nothing when this browser has no token.
+ *
+ * Shared by request() and the streams, because a stream that skipped it would
+ * 401 on exactly the daemons where it matters — and a live view failing while
+ * the rest of the page works is the hardest kind of gap to place.
+ */
+function authHeaders(): Record<string, string> {
+  const token = apiToken();
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
+/**
+ * A container's raw terminal output.
+ *
+ * SSE, but read with fetch rather than EventSource, and that is forced rather
+ * than preferred: EventSource cannot set a request header, so it cannot carry
+ * the bearer token this endpoint needs. A token in the query string would be a
+ * credential in the daemon's logs and in the browser's history, which is a
+ * worse trade than writing the reader by hand.
+ *
+ * Each frame is base64 — the payload is pty output carrying escape sequences
+ * and can split a UTF-8 rune mid-read, so the transport does not try to
+ * understand it. What comes back out is bytes, for a terminal emulator to
+ * interpret.
+ */
+export async function* streamConsole(
+  path: string,
+  signal?: AbortSignal,
+): AsyncGenerator<Uint8Array> {
+  const resolved = await probeDaemon();
+  if (resolved !== "live") return;
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    signal,
+    cache: "no-store",
+    headers: authHeaders(),
+  });
+  if (!res.ok || !res.body) {
+    throw new ApiError(await errorText(res, "GET", path), res.status);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line; a frame we have only half of
+    // stays in the buffer until the rest arrives.
+    const frames = buf.split("\n\n");
+    buf = frames.pop() ?? "";
+    for (const frame of frames) {
+      for (const line of frame.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload) continue;
+        let text: string;
+        try {
+          // The daemon JSON-encodes the base64 string, so it arrives quoted.
+          text = JSON.parse(payload) as string;
+        } catch {
+          continue;
+        }
+        const bin = atob(text);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        yield out;
+      }
+    }
+  }
 }

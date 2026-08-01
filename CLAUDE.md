@@ -482,6 +482,18 @@ other is the user's own `~/.claude`), and the window matches when a session
 Claude Code session — by definition the most recently modified transcript on the
 machine — showed up as a three-minute-old sandbox run's conversation. `pickSession`
 and `sandboxStore` exist as separate functions so that stays pinned by test.
+Studio can also **attach a real terminal** in the browser (`attached-terminal.tsx`,
+xterm.js, loaded on demand) over the same transport. Two things there were learned
+by measurement and are easy to get wrong again. A full-screen agent renders
+**nothing** until it is told its terminal size — a console container that had
+written zero bytes in ten minutes painted its whole UI within a second of the
+first `console/resize`, which is why attaching from a real terminal always worked
+(`docker attach` sends one) and the first browser version showed a blank
+rectangle; and since SIGWINCH only fires on a *change*, re-attaching at the same
+size needs a nudge (one column narrower and back). Keystrokes must also be
+**serialized** — one request per keypress races, and `What is 12 times 12?`
+arrived as `rtWha is21 t ime1 2s?`.
+
 Typing at a running agent is also the one endpoint that **requires `-token` even
 when the rest of the server does not**: launching is a capability the API already
 had, a keyboard on a live session is not.

@@ -159,6 +159,22 @@ export const api = {
       fixture: () => undefined,
     }),
 
+  /**
+   * Tell a container how big the attached terminal is.
+   *
+   * Looks cosmetic and is not: a full-screen agent renders nothing until it
+   * knows the size, so without this an attached console is a blank rectangle
+   * over a perfectly healthy run. `docker attach` sends one from the client
+   * terminal's dimensions, which is why attaching from a real terminal always
+   * worked and the first version of this did not.
+   */
+  resizeConsole: (id: string, rows: number, cols: number) =>
+    request<void>(`/v1/runs/${id}/console/resize`, {
+      method: "POST",
+      body: { rows, cols },
+      fixture: () => undefined,
+    }),
+
   launch: (req: LaunchRequest) =>
     request<{ id: string }>("/v1/runs", {
       method: "POST",

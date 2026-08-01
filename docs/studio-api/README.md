@@ -71,6 +71,7 @@ there is no code generation step (yet) tying them together.
 | GET | `/v1/runs/{id}/conversation` | What the agent said, and whether it can be answered |
 | GET | `/v1/runs/{id}/console` | Raw pty output as SSE (base64 frames), for a terminal view |
 | POST | `/v1/runs/{id}/console/input` | Send keystrokes to a running agent's stdin — **always needs a token** |
+| POST | `/v1/runs/{id}/console/resize` | Tell the container its terminal size — **always needs a token** |
 | POST | `/v1/runs/{id}/stop` | Stop (or `{"force":true}` to kill) a running run |
 | POST | `/v1/runs/{id}/recover` | Restore the crash-recovery snapshot associated with this run's branch |
 | GET | `/v1/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
@@ -169,6 +170,20 @@ argv, so a console is not a new class of reach. What is new is a keyboard on a
 session that is *already running*, holding a workspace and, under dev's
 defaults, an OAuth refresh token in the agent's HOME. Without `-token` it
 answers `403` and says so.
+
+**Resizing is not cosmetic.** A full-screen agent renders *nothing* until it
+knows its terminal size, so `POST /console/resize` is what turns an attached
+console from a blank rectangle into the agent's interface. Measured: a console
+container that had written zero bytes to stdout in ten minutes painted its
+whole UI, 1333 bytes of it, within a second of the first resize. `docker
+attach` sends one from the client terminal's dimensions, which is why attaching
+from a real terminal always worked and the first browser console did not.
+
+Two consequences a client has to handle. The signal only fires when the
+dimensions actually *differ*, so re-attaching at the same size paints nothing —
+Studio sends one column narrower and back. And keystrokes must be **serialized**:
+one HTTP request per keypress races, and `What is 12 times 12?` reached the
+agent as `rtWha is21 t ime1 2s?`. Studio coalesces into one in-flight write.
 
 `GET /v1/health` reports `authRequired`, because health is the only endpoint
 that answers without a token — so it is the only way a client lacking one can

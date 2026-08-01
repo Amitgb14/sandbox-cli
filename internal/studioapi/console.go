@@ -241,6 +241,39 @@ func (s *Server) handleRunConsoleInput(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleRunConsoleResize is POST /v1/runs/{id}/console/resize.
+//
+// A terminal emulator knows its own size and the container does not, and until
+// it is told, a full-screen agent renders nothing — so this is what turns an
+// attached console from a blank rectangle into the agent's interface. Same
+// token rule as input: it drives the session rather than reading it.
+func (s *Server) handleRunConsoleResize(w http.ResponseWriter, r *http.Request) {
+	if s.Token == "" {
+		writeError(w, http.StatusForbidden, fmt.Errorf(
+			"driving a running agent's console requires the server to have a -token set"))
+		return
+	}
+	c, err := s.resolveRun(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if !c.Running() || !c.TTY {
+		writeError(w, http.StatusConflict, fmt.Errorf("%s has no terminal to resize", shortID(c.ID)))
+		return
+	}
+	var req ConsoleResizeRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+		return
+	}
+	if err := s.RT.ConsoleResize(r.Context(), c.ID, req.Rows, req.Cols); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleRunConsoleStream is GET /v1/runs/{id}/console — the raw output stream,
 // for a client that renders a terminal rather than a conversation.
 func (s *Server) handleRunConsoleStream(w http.ResponseWriter, r *http.Request) {

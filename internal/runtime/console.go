@@ -204,6 +204,50 @@ func (d *DockerCLI) ConsoleStream(ctx context.Context, id string, w io.Writer) e
 	return err
 }
 
+// ConsoleResize tells a container how big its terminal is.
+//
+// Not cosmetic, which is what it looks like: a full-screen TUI renders nothing
+// at all until it knows the size, so an attach without this shows a blank
+// screen on a perfectly healthy agent. Measured — a console container that had
+// written zero bytes to stdout in ten minutes painted its entire interface,
+// 1333 bytes of it, within a second of the first resize. `docker attach` sends
+// one from the client terminal's dimensions, which is why attaching from a real
+// terminal always worked and the first version of the browser console did not.
+//
+// Best-effort by the caller's choice: a resize that fails leaves a terminal
+// drawn for the wrong width, which is worse than right and much better than
+// nothing.
+func (d *DockerCLI) ConsoleResize(ctx context.Context, id string, rows, cols int) error {
+	if rows <= 0 || cols <= 0 {
+		return fmt.Errorf("resize needs positive dimensions, got %dx%d", rows, cols)
+	}
+	sock, err := d.socketPath()
+	if err != nil {
+		return err
+	}
+	dialer := net.Dialer{Timeout: consoleDialTimeout}
+	conn, err := dialer.DialContext(ctx, "unix", sock)
+	if err != nil {
+		return fmt.Errorf("connecting to %s: %w", sock, err)
+	}
+	defer conn.Close()
+
+	req := fmt.Sprintf("POST /containers/%s/resize?h=%d&w=%d HTTP/1.1\r\n"+
+		"Host: localhost\r\nContent-Length: 0\r\n\r\n", url.PathEscape(id), rows, cols)
+	if _, err := conn.Write([]byte(req)); err != nil {
+		return fmt.Errorf("resize: %w", err)
+	}
+	br := bufio.NewReader(conn)
+	status, err := br.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("resize: %w", err)
+	}
+	if !strings.Contains(status, "200") {
+		return fmt.Errorf("resize refused: %s", strings.TrimSpace(status))
+	}
+	return nil
+}
+
 // Console is the capability this file adds to the Runtime family: read a
 // running container's output, and write to its stdin. Separated as its own
 // interface for the same reason Inspector and Controller are — a caller that
@@ -211,4 +255,5 @@ func (d *DockerCLI) ConsoleStream(ctx context.Context, id string, w io.Writer) e
 type Console interface {
 	ConsoleWrite(ctx context.Context, id string, data []byte) error
 	ConsoleStream(ctx context.Context, id string, w io.Writer) error
+	ConsoleResize(ctx context.Context, id string, rows, cols int) error
 }

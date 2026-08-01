@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Terminal, WrapText } from "lucide-react";
+import { ArrowDownToLine, Plug, Terminal, WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CopyButton } from "@/components/common/copy-button";
 import { EmptyState } from "@/components/common/empty-state";
+import { AttachedTerminal } from "@/components/run-detail/attached-terminal";
 import { useRunLogs } from "@/lib/api/queries";
 import { useLogStream } from "@/hooks/use-log-stream";
 import { useUi } from "@/lib/store";
@@ -19,11 +20,16 @@ import type { LogLine, Run } from "@/lib/types";
 /**
  * The terminal.
  *
- * Read-only, and it says so. Typing at a detached run is not possible — `-d`
- * replaces `-i`/`-it`, so the container is not listening on stdin — and offering
- * an input that silently went nowhere would be worse than offering none. An
- * attached interactive session gets a note pointing at `sandbox-cli attach`,
- * which is a real terminal.
+ * Read-only by default, and it says so: a run launched without a console has no
+ * stdin — `-d` replaces `-i`/`-it` — so offering an input that silently went
+ * nowhere would be worse than offering none.
+ *
+ * A run launched *with* a console does have stdin, and then this offers to
+ * attach: the same live pty `sandbox-cli attach` connects to, rendered by a
+ * real terminal emulator. That is a deliberate click rather than the default
+ * view, for two reasons. It loads the largest dependency in the app, and it
+ * takes the keyboard — every keystroke after it goes to the agent, Ctrl-C
+ * included.
  */
 export function TerminalView({ run }: { run: Run }) {
   const live = run.state === "running";
@@ -38,6 +44,7 @@ export function TerminalView({ run }: { run: Run }) {
   const setTimestamps = useUi((s) => s.setTerminalTimestamps);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [attached, setAttached] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // The timestamps toggle is labelled with the current clock, which cannot be
@@ -73,6 +80,15 @@ export function TerminalView({ run }: { run: Run }) {
     [lines],
   );
 
+  // Both halves have to be true: the container was created with stdin, and it
+  // is still running. A finished console run has a terminal to read and nothing
+  // listening, which is what the log view above already shows.
+  const canAttach = live && run.openStdin;
+
+  if (attached) {
+    return <AttachedTerminal run={run} onDetach={() => setAttached(false)} />;
+  }
+
   return (
     // `relative` anchors "Jump to latest" below. Without a positioned ancestor
     // an absolute child walks up to the sticky header and lands off-screen.
@@ -90,6 +106,25 @@ export function TerminalView({ run }: { run: Run }) {
         )}
 
         <div className="ml-auto flex items-center gap-1">
+          {canAttach && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setAttached(true)}
+                  className="h-7 gap-1.5 px-2 text-[11px] text-white/70 hover:bg-white/10 hover:text-white"
+                >
+                  <Plug className="size-3.5" />
+                  Attach
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                Open the agent&apos;s live terminal. Everything you type goes to
+                it — this is the same session `sandbox-cli attach` connects to.
+              </TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Toggle

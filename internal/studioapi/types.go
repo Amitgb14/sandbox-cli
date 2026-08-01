@@ -717,3 +717,9 @@ type ConsoleInputRequest struct {
 	// and the agent's input box simply holds it.
 	Enter bool `json:"enter,omitempty"`
 }
+
+// ConsoleResizeRequest is a terminal's dimensions, in character cells.
+type ConsoleResizeRequest struct {
+	Rows int `json:"rows"`
+	Cols int `json:"cols"`
+}
