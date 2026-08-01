@@ -7,10 +7,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { CopyButton } from "@/components/common/copy-button";
 import { EmptyState } from "@/components/common/empty-state";
 import { setApiToken } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/client";
-import { useConversation, useSendConsoleInput } from "@/lib/api/queries";
+import { useConversation, useDaemon, useSendConsoleInput } from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
 import type { Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -33,6 +34,10 @@ import { cn } from "@/lib/utils";
 export function ConsoleView({ run }: { run: Run }) {
   const live = run.state === "running";
   const { data, isPending, error } = useConversation(run.id, live);
+  const { data: daemon } = useDaemon();
+  // The reply box needs the same thing the terminal does: a daemon with a
+  // token. Offering one that can only 403 is worse than not offering it.
+  const consoleEnabled = daemon?.authRequired === true;
   const send = useSendConsoleInput(run.id);
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -99,7 +104,7 @@ export function ConsoleView({ run }: { run: Run }) {
         </CardContent>
       </Card>
 
-      {data?.writable ? (
+      {data?.writable && consoleEnabled ? (
         <Card>
           <CardContent className="space-y-2 pt-5">
             <Textarea
@@ -144,10 +149,38 @@ export function ConsoleView({ run }: { run: Run }) {
         </Card>
       ) : (
         <p className="px-1 text-xs text-muted-foreground">
-          {live
+          {live && run.openStdin && !consoleEnabled
+            ? "This run has a console, but the daemon was started without a token — and typing at a running agent needs one. Restart it with -token (or $SANDBOX_STUDIO_TOKEN)."
+            : live
             ? "This run has no console — it was launched without one, so the container was created with no stdin and cannot be typed at. Tick “Keep a console I can attach to” when launching."
-            : "The run has finished. Its conversation is kept; there is nothing listening to answer."}
+              : "The run has finished. Its conversation is kept; there is nothing listening to answer."}
         </p>
+      )}
+
+      {/* The way back in. Shown once the run is over, which is when it becomes
+          the only way — the container is gone but the transcript is not, and
+          the id alone is not enough to act on. */}
+      {!live && data?.resume && (
+        <Card>
+          <CardContent className="space-y-2 pt-5">
+            <p className="text-xs text-muted-foreground">
+              Carry this conversation on from your own terminal:
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1.5 font-mono text-xs">
+                {data.resume}
+              </code>
+              <CopyButton value={data.resume} label="resume command" />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              <code>--no-sync</code> is load-bearing: this session lives in the
+              sandbox-owned agent HOME, and the default history mount puts your
+              host&apos;s project bucket over exactly that path — without it the
+              agent answers &ldquo;No conversation found&rdquo; for an id that is
+              perfectly real.
+            </p>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

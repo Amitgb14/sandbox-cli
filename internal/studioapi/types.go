@@ -705,6 +705,15 @@ type ConversationResponse struct {
 	// because the two facts that decide it (container state, how stdin was
 	// created) both live here.
 	Writable bool `json:"writable"`
+
+	// SessionID is the agent's own id for this conversation, whole rather than
+	// abbreviated — Claude Code rejects anything that is not a complete UUID.
+	SessionID string `json:"sessionId,omitempty"`
+
+	// Resume is the exact line to type on the host to carry the conversation on
+	// after the container is gone. Built here rather than by a client, because
+	// the flags that make it work are not guessable from the id.
+	Resume string `json:"resume,omitempty"`
 }
 
 // ConsoleInputRequest is one delivery of keystrokes to a run's stdin.

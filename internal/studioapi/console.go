@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
@@ -59,7 +61,7 @@ func (s *Server) handleRunConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path, ok := s.transcriptFor(c)
+	path, resume, ok := s.transcriptFor(c)
 	if !ok {
 		// Not an error: a run with no agent has no transcript, and a claude run
 		// has none until it has written its first turn. Both are "nothing to show
@@ -76,7 +78,9 @@ func (s *Server) handleRunConversation(w http.ResponseWriter, r *http.Request) {
 		msgs = []agentctx.Message{}
 	}
 	writeJSON(w, http.StatusOK, ConversationResponse{
-		Messages: msgs,
+		Messages:  msgs,
+		SessionID: sessionIDFromPath(path),
+		Resume:    resume,
 		// Whether anything can be typed back. A finished run still has a readable
 		// conversation, and saying so is what stops the UI offering a reply box
 		// that would 409.
@@ -103,25 +107,25 @@ func (s *Server) handleRunConversation(w http.ResponseWriter, r *http.Request) {
 // When nothing survives both, this reports *nothing* rather than the closest
 // candidate. Showing somebody another run's conversation — and putting a reply
 // box under it, wired to a real agent's stdin — is worse than showing none.
-func (s *Server) transcriptFor(c runtime.ContainerInfo) (string, bool) {
+func (s *Server) transcriptFor(c runtime.ContainerInfo) (path, resume string, ok bool) {
 	agent := c.Labels[sandbox.LabelAgent]
 	if agent == "" {
-		return "", false
+		return "", "", false
 	}
 	f, ok := agentctx.Resolve(agent, agentctx.DefaultRoots(), time.Now())
 	if !ok || f.State != agentctx.StateVerified {
-		return "", false
+		return "", "", false
 	}
 	// Only the sandbox-owned store. A container's HOME is that directory and
 	// nothing else, so a transcript anywhere but here was written by something
 	// that is not this run.
 	f = sandboxStore(f)
 	if f.Dir == "" {
-		return "", false
+		return "", "", false
 	}
 	sessions, _, err := agentctx.List(f, agentctx.ListOpts{})
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 
 	from := c.StartedAt.Add(-conversationSlack)
@@ -132,7 +136,44 @@ func (s *Server) transcriptFor(c runtime.ContainerInfo) (string, bool) {
 		until = c.FinishedAt.Add(conversationSlack)
 	}
 
-	return pickSession(sessions, from, until)
+	path, ok = pickSession(sessions, from, until)
+	if !ok {
+		return "", "", false
+	}
+	return path, resumeCommand(f, sessionIDFromPath(path)), true
+}
+
+// resumeCommand is the line to type on the host to carry this conversation on.
+//
+// --no-sync is not optional and is the whole reason this is built here rather
+// than assembled by a client from an id. A Studio run's transcript lives in the
+// sandbox-owned agent HOME under the pooled `-workspace` bucket, and the claude
+// wrapper's default history mount puts the *host's* per-project bucket over
+// exactly that path — so the session is real, the id is right, and the plain
+// command answers "No conversation found with session ID". Measured both ways:
+// without the flag it fails, with it the agent resumed and answered a question
+// about the earlier turn.
+//
+// The resume flag itself comes from the verified descriptor, never a hardcoded
+// one, the same rule cli/recover_resume.go keeps.
+func resumeCommand(f agentctx.Finding, id string) string {
+	if id == "" || len(f.Resume) == 0 {
+		return ""
+	}
+	parts := []string{"sandbox-cli", f.Agent}
+	if f.Agent == "claude" {
+		parts = append(parts, "--no-sync")
+	}
+	parts = append(parts, f.Resume...)
+	return strings.Join(append(parts, id), " ")
+}
+
+// sessionIDFromPath reads the session id off the transcript's filename.
+//
+// Whole, never abbreviated: the listing prints ids short for reading, and
+// Claude Code rejects anything that is not a complete UUID.
+func sessionIDFromPath(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 }
 
 // pickSession is the window filter, split out because it is the part that was

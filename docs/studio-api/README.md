@@ -171,6 +171,15 @@ session that is *already running*, holding a workspace and, under dev's
 defaults, an OAuth refresh token in the agent's HOME. Without `-token` it
 answers `403` and says so.
 
+The reply also carries `sessionId` and `resume` — the exact line to type on the
+host to carry the conversation on after the container is gone. It is built by
+the daemon rather than assembled by a client from the id, because the flags are
+not guessable: a Studio session lives in the **sandbox-owned** agent HOME under
+the pooled `-workspace` bucket, and the claude wrapper's default history mount
+puts the *host's* per-project bucket over exactly that path. Without `--no-sync`
+the agent answers `No conversation found with session ID` for an id that is
+perfectly real. Measured both ways.
+
 **Resizing is not cosmetic.** A full-screen agent renders *nothing* until it
 knows its terminal size, so `POST /console/resize` is what turns an attached
 console from a blank rectangle into the agent's interface. Measured: a console

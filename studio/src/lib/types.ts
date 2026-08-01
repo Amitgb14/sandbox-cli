@@ -580,6 +580,15 @@ export interface ConversationMessage {
 
 export interface Conversation {
   messages: ConversationMessage[];
+  /** The agent's own id for this conversation, whole rather than abbreviated. */
+  sessionId?: string;
+  /**
+   * The exact line to type on the host to carry this conversation on after the
+   * container is gone. Built by the daemon, because the flags that make it work
+   * are not guessable from the id — a Studio session lives in the sandbox-owned
+   * agent HOME, which the claude wrapper's default history mount hides.
+   */
+  resume?: string;
   /**
    * Whether this run can be typed at right now: running *and* launched with a
    * console. The daemon decides it, because the two facts behind it (container

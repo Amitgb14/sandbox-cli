@@ -5,6 +5,7 @@ import { Unplug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/endpoints";
 import { streamConsole } from "@/lib/api/client";
+import { useConversation } from "@/lib/api/queries";
 import type { Run } from "@/lib/types";
 import "@xterm/xterm/css/xterm.css";
 
@@ -45,6 +46,12 @@ export function AttachedTerminal({
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Read once and held in a ref: the effect below runs for the life of the
+  // attachment and must not be torn down and rebuilt because a query resolved.
+  const { data: conversation } = useConversation(run.id, false);
+  const resumeRef = useRef<string | undefined>(undefined);
+  resumeRef.current = conversation?.resume;
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -79,11 +86,20 @@ export function AttachedTerminal({
       fit.fit();
       term.focus();
 
+      /**
+       * Resize failures are reported, not swallowed.
+       *
+       * They were swallowed at first, on "best-effort" reasoning that a
+       * terminal drawn for the wrong width beats none. That was wrong in the
+       * one case that matters: resize is what makes the agent paint at all, so
+       * a daemon started without -token answered 403 here and the result was a
+       * blank rectangle with no explanation anywhere on screen. An error that
+       * decides whether anything is visible is not best-effort.
+       */
       const pushSize = () => {
         fit.fit();
-        api.resizeConsole(run.id, term.rows, term.cols).catch(() => {
-          // Best-effort: a terminal drawn for the wrong width is worse than
-          // right and much better than the blank screen without it.
+        api.resizeConsole(run.id, term.rows, term.cols).catch((e: unknown) => {
+          setError(e instanceof Error ? e.message : "Could not size the terminal.");
         });
       };
 
@@ -102,10 +118,14 @@ export function AttachedTerminal({
       const provokeRepaint = async () => {
         fit.fit();
         const { rows, cols } = term;
-        if (cols > 2) {
-          await api.resizeConsole(run.id, rows, cols - 1).catch(() => {});
+        try {
+          if (cols > 2) await api.resizeConsole(run.id, rows, cols - 1);
+          await api.resizeConsole(run.id, rows, cols);
+        } catch (e: unknown) {
+          // Same reasoning as pushSize: if this fails the screen stays empty,
+          // so saying why is the difference between a bug report and a fix.
+          setError(e instanceof Error ? e.message : "Could not size the terminal.");
         }
-        await api.resizeConsole(run.id, rows, cols).catch(() => {});
       };
 
       const onResize = () => pushSize();
@@ -159,7 +179,14 @@ export function AttachedTerminal({
           term.write(chunk);
         }
         if (!disposed) {
+          // The run is over and the container will be reaped, but the
+          // conversation is not lost — so this ends with the way back into it
+          // rather than just an obituary. Printed into the terminal itself
+          // because that is where somebody is looking when it stops.
           term.write("\r\n\x1b[2m— the stream ended; the run has finished —\x1b[0m\r\n");
+          if (resumeRef.current) {
+            term.write(`\x1b[2m  carry it on:\x1b[0m ${resumeRef.current}\r\n`);
+          }
         }
       } catch (e) {
         if (!disposed && !controller.signal.aborted) {

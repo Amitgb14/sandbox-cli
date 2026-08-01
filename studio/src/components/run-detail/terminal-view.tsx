@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { CopyButton } from "@/components/common/copy-button";
 import { EmptyState } from "@/components/common/empty-state";
 import { AttachedTerminal } from "@/components/run-detail/attached-terminal";
-import { useRunLogs } from "@/lib/api/queries";
+import { useDaemon, useRunLogs } from "@/lib/api/queries";
 import { useLogStream } from "@/hooks/use-log-stream";
 import { useUi } from "@/lib/store";
 import { parseAnsi, stripAnsi } from "@/lib/ansi";
@@ -46,6 +46,22 @@ export function TerminalView({ run }: { run: Run }) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [attached, setAttached] = useState(false);
+  const { data: daemon } = useDaemon();
+
+  /**
+   * Whether this daemon will let anything drive a console.
+   *
+   * Typing at a running agent — and sizing its terminal, which is what makes it
+   * paint — requires the daemon to have been started with `-token`, whatever
+   * the rest of the server allows. `authRequired` is how /v1/health reports
+   * that it has one.
+   *
+   * Read here so the Attach button is simply not offered when it cannot work.
+   * Without this it opened a terminal that 403'd on resize and sat blank, which
+   * is the worst of both: an action that looks available and an empty screen
+   * with the reason three network requests away.
+   */
+  const consoleEnabled = daemon?.authRequired === true;
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // The timestamps toggle is labelled with the current clock, which cannot be
@@ -84,7 +100,12 @@ export function TerminalView({ run }: { run: Run }) {
   // Both halves have to be true: the container was created with stdin, and it
   // is still running. A finished console run has a terminal to read and nothing
   // listening, which is what the log view above already shows.
-  const canAttach = live && run.openStdin;
+  const canAttach = live && run.openStdin && consoleEnabled;
+
+  // A run that *could* be attached to, on a daemon that will not allow it.
+  // Worth telling apart from "this run has no console": the fix is a daemon
+  // flag rather than relaunching the run.
+  const consoleLockedOut = live && run.openStdin && !consoleEnabled;
 
   // An agent run with no stdin was started headless — `claude -p` and its
   // equivalents — so there is no Attach button *and* nothing will appear here
@@ -113,6 +134,22 @@ export function TerminalView({ run }: { run: Run }) {
         )}
 
         <div className="ml-auto flex items-center gap-1">
+          {consoleLockedOut && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="cursor-default px-2 text-[11px] text-white/40">
+                  console disabled
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                This run has a console, but the daemon was started without a
+                token. Typing at a running agent — and sizing its terminal, which
+                is what makes it draw — needs one. Restart with
+                <code className="mx-1">-token</code> (or
+                <code className="mx-1">$SANDBOX_STUDIO_TOKEN</code>) and attach.
+              </TooltipContent>
+            </Tooltip>
+          )}
           {canAttach && (
             <Tooltip>
               <TooltipTrigger asChild>
