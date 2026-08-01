@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Plug, Terminal, WrapText } from "lucide-react";
+import Link from "next/link";
+import { ArrowDownToLine, MessageSquare, Plug, Terminal, WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toggle } from "@/components/ui/toggle";
@@ -84,6 +85,12 @@ export function TerminalView({ run }: { run: Run }) {
   // is still running. A finished console run has a terminal to read and nothing
   // listening, which is what the log view above already shows.
   const canAttach = live && run.openStdin;
+
+  // An agent run with no stdin was started headless — `claude -p` and its
+  // equivalents — so there is no Attach button *and* nothing will appear here
+  // until it exits. Both are correct and both look like a broken screen, which
+  // is why this says so rather than showing an empty box.
+  const headless = Boolean(run.agent) && !run.openStdin;
 
   if (attached) {
     return <AttachedTerminal run={run} onDetach={() => setAttached(false)} />;
@@ -190,8 +197,22 @@ export function TerminalView({ run }: { run: Run }) {
         ) : lines.length === 0 ? (
           <EmptyState
             icon={Terminal}
-            title="No output"
-            description="The container has not written anything yet, or its output was never captured."
+            title={headless ? "A headless run writes nothing until it ends" : "No output"}
+            description={
+              headless
+                ? `${run.agent} was started in its headless mode, which produces one final answer and prints it on exit — so this stays empty while it works, however long that is. What it is saying right now is in the Console tab, read from its transcript.`
+                : "The container has not written anything yet, or its output was never captured."
+            }
+            action={
+              headless ? (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/runs/${run.id}?tab=console`}>
+                    <MessageSquare className="size-4" />
+                    Read the conversation
+                  </Link>
+                </Button>
+              ) : undefined
+            }
             className="border-0 text-white/60"
           />
         ) : (
