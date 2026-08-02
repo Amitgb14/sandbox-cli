@@ -93,7 +93,20 @@ export default function RunDetailPage() {
         <TabsContent value="console">
           <ConsoleView run={run} />
         </TabsContent>
-        <TabsContent value="terminal">
+        {/* forceMount, and only here.
+            Radix unmounts inactive tab content, which for this one meant that
+            glancing at the Console detached a live terminal: the stream closed,
+            the emulator was disposed, its scrollback went, and coming back
+            offered an Attach button as though nothing had been running. The
+            agent was never affected — detaching is only ever a reader leaving —
+            but losing your place for switching tabs is not a trade anyone
+            would make. Kept mounted and hidden instead, so the stream stays
+            open and the screen is where you left it. */}
+        <TabsContent
+          value="terminal"
+          forceMount
+          className="data-[state=inactive]:hidden"
+        >
           <TerminalView run={run} />
         </TabsContent>
         <TabsContent value="metrics">

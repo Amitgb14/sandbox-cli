@@ -150,8 +150,34 @@ export function AttachedTerminal({
         }
       };
 
-      const onResize = () => pushSize();
-      window.addEventListener("resize", onResize);
+      /**
+       * Refit when the panel's own box changes, not when the window does.
+       *
+       * The tab this lives in stays mounted and is hidden when another tab is
+       * showing, so a window resize can fire while this has *no size at all* —
+       * and fitting a zero-height element yields a 1x1 terminal, which would
+       * then be sent to the container as its new dimensions and wreck the
+       * agent's layout. A ResizeObserver answers the right question: it fires
+       * when this element is laid out again, and the guard drops the readings
+       * taken while it is hidden.
+       */
+      let wasVisible = true;
+      const observer = new ResizeObserver(() => {
+        const visible = host.clientWidth > 0 && host.clientHeight > 0;
+        if (!visible) {
+          wasVisible = false;
+          return;
+        }
+        pushSize();
+        if (!wasVisible) {
+          // Coming back from another tab. The keyboard has to follow, or the
+          // terminal is on screen and quietly ignoring everything typed at it —
+          // which reads exactly like the detach this mounting was meant to stop.
+          term.focus();
+        }
+        wasVisible = true;
+      });
+      observer.observe(host);
 
       /**
        * Keystrokes, serialized and coalesced.
@@ -216,7 +242,7 @@ export function AttachedTerminal({
           setError(e instanceof Error ? e.message : "The stream failed.");
         }
       } finally {
-        window.removeEventListener("resize", onResize);
+        observer.disconnect();
         typing.dispose();
       }
     })();
