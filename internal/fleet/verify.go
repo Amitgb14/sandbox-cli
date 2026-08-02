@@ -34,6 +34,7 @@ const VerifyFailedExit = 90
 // verify command is the definition of done — that is the whole point of the field
 // — so it, not the agent, gets the last word. Both codes are printed so `fleet
 // logs` still shows what the agent thought.
+//
 // The verify runs in a subshell, and that is load-bearing rather than tidy. It
 // used to be interpolated into this script directly, which shares one shell with
 // the mapping below — so a verify containing `exit 1`, the obvious way to write

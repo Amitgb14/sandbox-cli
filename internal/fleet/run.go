@@ -217,6 +217,21 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, tas
 		// retried are gone, and this is the only moment anyone could have read them.
 		r.logf("%s: reaped its finished container (%s, exit %d) to retry; those logs are gone",
 			task.Branch, stale.Name, stale.ExitCode)
+	} else {
+		// Nothing of the fleet's holds the name, which is not the same as the name
+		// being free — see nameHolder. Without this the one case the user is least
+		// able to guess at (their own interactive session, on a branch they also put
+		// in the fleet file) is the one that still surfaces as docker's raw conflict,
+		// which is the hole in the promise the refusal above exists to make.
+		held, err := r.nameHolder(ctx, task.Branch)
+		if err != nil {
+			res.Err = err
+			return res
+		}
+		if held != nil {
+			res.Err = interactiveNameRefusal(task.Branch, held)
+			return res
+		}
 	}
 
 	info, err := worktree.Resolve(r.Repo, task.Branch)
@@ -345,6 +360,50 @@ func (r *Runner) exitedFor(ctx context.Context, branch string) (*runtime.Contain
 		}
 	}
 	return nil, nil
+}
+
+// nameHolder returns a container of this repository that holds branch's
+// container name but is *not* the fleet's, or nil.
+//
+// Docker's name namespace does not know about labels. An interactive
+// `sandbox-cli <agent> --detach` on this branch is named sandbox-<repo>-<branch>
+// exactly as a fleet agent is, so it blocks the launch just the same — while
+// being invisible to every lookup above, all of which filter on sandbox.fleet
+// and must keep doing so, since that label is what stops `fleet stop --all` and
+// `fleet clean` reaching someone's live session.
+//
+// So this is for the refusal message and nothing else. It reports; it never
+// reaps, not even under --resume: a session someone started interactively is not
+// the fleet's to discard, and the whole point of the label is that fleet commands
+// act only on what the fleet started.
+func (r *Runner) nameHolder(ctx context.Context, branch string) (*runtime.ContainerInfo, error) {
+	infos, err := r.Inspector.Containers(ctx, map[string]string{
+		sandbox.LabelCLI:    "1",
+		sandbox.LabelRepo:   r.RepoID,
+		sandbox.LabelBranch: branch,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range infos {
+		if infos[i].Labels[sandbox.LabelFleet] == "" {
+			return &infos[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// interactiveNameRefusal explains a name held by a session the fleet did not
+// start, and names the command that clears it — which is not a fleet command.
+func interactiveNameRefusal(branch string, held *runtime.ContainerInfo) error {
+	if held.Running() {
+		return fmt.Errorf("%q's container name is held by a running interactive session (%s), not a fleet agent; "+
+			"see it with `sandbox-cli list`, then stop it with `sandbox-cli kill %s`",
+			branch, held.Name, held.Name)
+	}
+	return fmt.Errorf("%q's container name is held by a finished interactive session (%s), not a fleet agent; "+
+		"read it with `sandbox-cli logs %s`, then reap it with `sandbox-cli clean`",
+		branch, held.Name, held.Name)
 }
 
 // branchContainers lists this fleet's containers for one branch. Filtered on

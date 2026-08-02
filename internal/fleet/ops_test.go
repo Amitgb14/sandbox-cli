@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
 // fakeController records what it was asked to do, so the safety rules (never
@@ -44,6 +46,24 @@ func (f *fakeController) Kill(_ context.Context, id string) error {
 func (f *fakeController) Remove(_ context.Context, id string) error {
 	f.removed = append(f.removed, id)
 	return nil
+}
+
+// failingInspector answers every question with an error, which is the one shape
+// a plan must not paper over: "I could not ask" is not "nothing is in the way".
+type failingInspector struct{ err error }
+
+func (f *failingInspector) Containers(context.Context, map[string]string) ([]runtime.ContainerInfo, error) {
+	return nil, f.err
+}
+
+// interactiveContainer is a `--detach` session someone started by hand: labelled
+// as sandbox-cli's and as this repo's and branch's, but not as the fleet's. It
+// holds the same sandbox-<repo>-<branch> name a fleet agent would.
+func interactiveContainer(branch, state string, started, finished time.Time) runtime.ContainerInfo {
+	c := container(branch, state, started, finished)
+	delete(c.Labels, sandbox.LabelFleet)
+	c.ID = "interactive-" + branch
+	return c
 }
 
 func testRunner(cs ...runtime.ContainerInfo) (*Runner, *fakeController) {
@@ -366,6 +386,72 @@ func TestCleanKeepsAContainerWhoseBaseCannotBeRead(t *testing.T) {
 	}
 	if len(res.Kept) != 1 || !strings.Contains(res.Kept[0], "detached HEAD") {
 		t.Errorf("expected the unreadable base reported, got %v", res.Kept)
+	}
+}
+
+// A plan is read to decide whether to run, so an inspector that could not answer
+// has to say so. Dropping the error makes every branch plan as "will start" —
+// wrong in the direction that wastes the run it is a rehearsal for.
+func TestPlanFailsWhenTheInspectorCannotAnswer(t *testing.T) {
+	repo := newTestRepo(t)
+	gitIn(t, repo, "branch", "feature-a")
+	boom := errors.New("engine unreachable")
+	r := &Runner{
+		Inspector: &failingInspector{err: boom},
+		Repo:      repo,
+		RepoID:    testRepoID,
+		Out:       io.Discard,
+	}
+
+	spec := Spec{Agent: "claude", Tasks: []Task{{Branch: "feature-a", Prompt: "do it"}}}
+	if _, err := r.Plan(context.Background(), spec, LaunchOptions{}); !errors.Is(err, boom) {
+		t.Errorf("expected the inspector's error to reach the caller, got %v", err)
+	}
+}
+
+// --force with --worktrees, pinned because it is the combination the guard does
+// not cover: held stays empty under force, so a *clean* worktree on a branch with
+// unlanded commits is removed along with the container.
+//
+// That is the intended reading of --force rather than an oversight — it says reap
+// this anyway — and it is not data loss, which is the half worth asserting: the
+// commits stay on the branch, and only the checkout goes. A dirty worktree is
+// still kept, because that guard is not this flag's to override.
+func TestCleanForceWithWorktreesRemovesACleanCheckout(t *testing.T) {
+	repo := newTestRepo(t)
+	base := gitIn(t, repo, "rev-parse", "--abbrev-ref", "HEAD")
+	gitIn(t, repo, "checkout", "-qb", "feature-b")
+	if err := os.WriteFile(filepath.Join(repo, "work.txt"), []byte("done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "add", ".")
+	gitIn(t, repo, "commit", "-qm", "the agent's work")
+	gitIn(t, repo, "checkout", "-q", base)
+	head := gitIn(t, repo, "rev-parse", "feature-b")
+
+	if _, err := worktree.Resolve(repo, "feature-b"); err != nil {
+		t.Skipf("could not create a worktree: %v", err)
+	}
+
+	now := time.Now()
+	done := container("feature-b", "exited", now.Add(-time.Hour), now)
+	done.Labels[sandbox.LabelBase] = base
+	r, ctl := testRunner(done)
+	r.Repo = repo
+
+	res, err := r.Clean(context.Background(), "", true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctl.removed) != 1 {
+		t.Errorf("--force did not reap the container, removed %v", ctl.removed)
+	}
+	if len(res.Worktrees) != 1 || res.Worktrees[0] != "feature-b" {
+		t.Errorf("expected the clean checkout removed, got %v", res.Worktrees)
+	}
+	// The half that makes the above acceptable: the work is still on the branch.
+	if got := gitIn(t, repo, "rev-parse", "feature-b"); got != head {
+		t.Errorf("the branch moved: %q, want %q", got, head)
 	}
 }
 

@@ -40,7 +40,10 @@ version is tagged.
   which is what asking to resume a fleet meant — a task that failed its verify
   is exactly the one `--resume` selects, and it could not previously be retried
   without a `fleet clean` first. The logs of the run being retried are discarded,
-  so it says so.
+  so it says so. A name held by an *interactive* `--detach` session on the same
+  branch is explained too, and pointed at `sandbox-cli kill`/`clean` rather than
+  a fleet command — the fleet never reaps a session it did not start, `--resume`
+  included.
 
 ### Added
 

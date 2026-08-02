@@ -206,8 +206,70 @@ func TestLaunchProceedsWhenNoContainerHoldsTheName(t *testing.T) {
 	res := r.launchOne(context.Background(), Spec{Agent: "claude"}, LaunchOptions{},
 		Task{Branch: "fresh-branch", Prompt: "do it"}, "main", false)
 	// It gets past the name check and fails later, on the worktree, because this
-	// runner has no real repository. What matters is *which* refusal it is.
-	if res.Err != nil && strings.Contains(res.Err.Error(), "holding its name") {
+	// runner has no real repository. Both halves are asserted: that it failed at
+	// all, and *which* refusal it was. Checking only the second would keep passing
+	// if launchOne ever started succeeding here for some unrelated reason, which is
+	// the way a guard test quietly stops testing its guard.
+	if res.Err == nil {
+		t.Fatal("expected the launch to fail at the worktree, got no error")
+	}
+	if strings.Contains(res.Err.Error(), "holding its name") {
 		t.Errorf("refused a branch with no container: %v", res.Err)
+	}
+}
+
+// Docker's name namespace does not know about labels, so the branch's name can
+// be held by a session the fleet did not start — an interactive `--detach` on a
+// branch that is also in the fleet file. Every lookup in this package filters on
+// sandbox.fleet, correctly, which left that case falling through to docker's raw
+// conflict: the hole in the "it explains itself" promise, and the case a user is
+// least likely to work out unaided.
+func TestLaunchExplainsAnInteractiveSessionHoldingTheName(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name  string
+		state string
+		want  string
+	}{
+		{"finished", "exited", "sandbox-cli clean"},
+		{"running", "running", "sandbox-cli kill"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			held := interactiveContainer("feature-a", tc.state, now.Add(-time.Hour), now)
+			r, ctl := testRunner(held)
+
+			res := r.launchOne(context.Background(), Spec{Agent: "claude"}, LaunchOptions{},
+				Task{Branch: "feature-a", Prompt: "do it"}, "main", false)
+			if res.Err == nil {
+				t.Fatal("expected a refusal, got none")
+			}
+			for _, want := range []string{"feature-a", "interactive session", tc.want} {
+				if !strings.Contains(res.Err.Error(), want) {
+					t.Errorf("refusal must mention %q, got: %v", want, res.Err)
+				}
+			}
+			if len(ctl.removed) != 0 {
+				t.Errorf("reaped a session the fleet did not start: %v", ctl.removed)
+			}
+		})
+	}
+}
+
+// And --resume must not reach it either. Reaping the fleet's own stale container
+// is the caller retrying their own run; reaping someone's interactive session is
+// the fleet acting outside what it started, which is the whole reason the fleet
+// label exists.
+func TestResumeDoesNotReapAnInteractiveSession(t *testing.T) {
+	now := time.Now()
+	held := interactiveContainer("feature-a", "exited", now.Add(-time.Hour), now)
+	r, ctl := testRunner(held)
+
+	res := r.launchOne(context.Background(), Spec{Agent: "claude"}, LaunchOptions{Resume: true},
+		Task{Branch: "feature-a", Prompt: "do it"}, "main", false)
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "interactive session") {
+		t.Errorf("expected the interactive refusal even under --resume, got: %v", res.Err)
+	}
+	if len(ctl.removed) != 0 {
+		t.Errorf("--resume reaped a session the fleet did not start: %v", ctl.removed)
 	}
 }

@@ -119,11 +119,41 @@ func (r *Runner) Plan(ctx context.Context, spec Spec, opts LaunchOptions) ([]Pla
 		if t.Verify != "" {
 			p.Labels[sandbox.LabelVerify] = t.Verify
 		}
-		if busy, err := r.runningFor(ctx, t.Branch); err == nil && busy != nil {
+		// These errors propagate rather than being dropped into "nothing is in the
+		// way". Plan touches nothing, but it is read to decide whether to run, and an
+		// inspector that could not answer would otherwise produce a plan saying
+		// "will start" for every branch the run is about to refuse — a rehearsal that
+		// is wrong in exactly the direction that wastes the run.
+		busy, err := r.runningFor(ctx, t.Branch)
+		if err != nil {
+			return nil, err
+		}
+		if busy != nil {
 			p.AlreadyRunning = true
 			p.RunningInName = busy.Name
-		} else if stale, err := r.exitedFor(ctx, t.Branch); err == nil && stale != nil && wouldRefuseName(opts, r.Controller) {
-			p.NameHeldBy = stale.Name
+		} else {
+			stale, err := r.exitedFor(ctx, t.Branch)
+			if err != nil {
+				return nil, err
+			}
+			switch {
+			case stale != nil:
+				if wouldRefuseName(opts, r.Controller) {
+					p.NameHeldBy = stale.Name
+				}
+			default:
+				// The name is not the fleet's namespace, so the run also refuses on an
+				// interactive session holding it. Reported here for the same reason the
+				// fleet's own stale container is: a plan that omits a refusal the run
+				// will make is the inconsistency this field exists to close.
+				held, err := r.nameHolder(ctx, t.Branch)
+				if err != nil {
+					return nil, err
+				}
+				if held != nil {
+					p.NameHeldBy = held.Name
+				}
+			}
 		}
 		out = append(out, p)
 	}
