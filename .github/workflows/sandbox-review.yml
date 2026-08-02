@@ -28,6 +28,15 @@ jobs:
           # actually in the pull request.
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          # Without this, checkout writes the job's token into .git/config as
+          # http.https://github.com/.extraheader and leaves it there until the
+          # post-job cleanup — inside the directory this workflow bind-mounts
+          # read-write into the agent's container. The agent could read the
+          # token with one `cat`, and the allowlist below lets it reach
+          # api.github.com. Nothing after checkout needs the credential: the
+          # diff comes from objects fetch-depth 0 already pulled, and the
+          # poster takes its token from the step environment.
+          persist-credentials: false
 
       - name: Install sandbox-cli
         run: |
@@ -88,6 +97,22 @@ jobs:
           head -c 300000 pr.diff > .sandbox-review/diff.patch
           wc -c pr.diff .sandbox-review/diff.patch
 
+          # Stage everything the host will later *execute* or *trust* outside
+          # the workspace, before the agent gets write access to it.
+          #
+          # The whole checkout is bind-mounted read-write into the container,
+          # .github/ included, so running .github/scripts/post_review.py from
+          # the tree after the agent has run would be host code execution
+          # chosen by the agent — the container→host path CLAUDE.md's
+          # trust-boundary section exists to close. pr.diff is the same class
+          # one step smaller: it decides which lines a comment may anchor to,
+          # so an agent that rewrote it would widen its own posting rights.
+          #
+          # review.json is deliberately still read from the workspace. It is
+          # the agent's output, it is untrusted by construction, and
+          # post_review.py validates every field of it.
+          cp .github/scripts/post_review.py pr.diff "$RUNNER_TEMP"/
+
       - name: Write the review prompt
         run: |
           cat > .sandbox-review/prompt.md <<'PROMPT'
@@ -140,9 +165,15 @@ jobs:
           # The allowlist is wider than the agent strictly needs. github.com is
           # a write endpoint, so it is an exfiltration channel for the API key
           # this container holds while reading a diff that may carry a prompt
-          # injection. Kept at the maintainer's request; the mitigation that
-          # still holds is that the GitHub *token* is never in here — it exists
-          # only in the posting step, outside the sandbox.
+          # injection. Kept at the maintainer's request.
+          #
+          # What makes that tolerable is that the GitHub token is not reachable
+          # from in here — but that is a property this workflow has to *keep*,
+          # not one it gets for free. It holds only because checkout runs with
+          # persist-credentials: false; with the default, the token sits in
+          # .git/config inside the mount and these two domains are exactly the
+          # egress needed to use it. Do not widen this list without rechecking
+          # that.
           #
           # stdout and stderr both go to the log, never to the data file: the
           # old workflow merged them into review.md and got docker build
@@ -204,5 +235,6 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REVIEW_JSON: .sandbox-review/review.json
-          DIFF_FILE: pr.diff
-        run: python3 .github/scripts/post_review.py
+          DIFF_FILE: ${{ runner.temp }}/pr.diff
+        # The staged copies, taken before the agent could touch either.
+        run: python3 "$RUNNER_TEMP/post_review.py"
