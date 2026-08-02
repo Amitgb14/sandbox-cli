@@ -1,43 +1,73 @@
-- name: Run enhanced code review
-  env:
-    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-  run: |
-    PROMPT='You are a senior staff engineer performing a thorough code review of this pull request.
+name: Sandbox Code Review
 
-    Output in this exact markdown structure:
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
 
-    ## 📋 PR Summary
-    - What this PR does (2-4 sentences)
-    - Key changes and intent
-    - Risk level: Low / Medium / High
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
 
-    ## 🔍 Detailed Findings
-    Group findings by severity (Critical / High / Medium / Low).
-    For each issue include: Location, Issue, Why it matters, Suggested fix.
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-    ## 📊 Architecture / Flow Diagram
-    Include a Mermaid diagram only if the change involves non-trivial flow or multiple components.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
 
-    ## 🧪 Test Coverage Gaps
-    List important missing tests. Write actual test code for the most critical ones.
+      - name: Install sandbox-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-    ## ✅ Positive Notes
-    Mention well-written parts.
+      - name: Run enhanced code review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          PROMPT='You are a senior staff engineer performing a thorough code review of this pull request.
 
-    Be concise. Focus on real bugs, security, and correctness.'
+          Output in this exact markdown structure:
 
-    sandbox-cli claude \
-      --profile prod \
-      --no-metrics \
-      -- \
-      -p "$PROMPT" > review.md 2>&1 || true
+          ## 📋 PR Summary
+          - What this PR does (2-4 sentences)
+          - Key changes and intent
+          - Risk level: Low / Medium / High
 
-- name: Post rich review comment
-  env:
-    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  run: |
-    if [ -s review.md ]; then
-      gh pr comment ${{ github.event.pull_request.number }} --body "$(cat <<EOF
+          ## 🔍 Detailed Findings
+          Group findings by severity (Critical / High / Medium / Low).
+          For each issue include: Location, Issue, Why it matters, Suggested fix.
+
+          ## 📊 Architecture / Flow Diagram
+          Include a Mermaid diagram only if the change involves non-trivial flow or multiple components.
+
+          ## 🧪 Test Coverage Gaps
+          List important missing tests. Write actual test code for the most critical ones.
+
+          ## ✅ Positive Notes
+          Mention well-written parts.
+
+          Be concise. Focus on real bugs, security, and correctness.'
+
+          sandbox-cli claude \
+            --profile prod \
+            --no-metrics \
+            -- \
+            -p "$PROMPT" > review.md 2>&1 || true
+
+          echo "===== Review Output ====="
+          cat review.md || true
+
+      - name: Post rich review comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -s review.md ]; then
+            gh pr comment ${{ github.event.pull_request.number }} --body "$(cat <<EOF
 ## 🤖 Enhanced Sandbox Review
 
 $(cat review.md)
@@ -46,5 +76,6 @@ $(cat review.md)
 *Generated with sandbox-cli + Claude*
 EOF
 )"
-    fi
-
+          else
+            echo "No review content generated"
+          fi
