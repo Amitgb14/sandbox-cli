@@ -66,3 +66,33 @@ jobs:
 
           echo "===== Review Output ====="
           cat review.md || true
+
+      - name: Post inline review comments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ ! -s review.md ] || grep -q "NO_FINDINGS" review.md; then
+            echo "No findings to post"
+            exit 0
+          fi
+
+          # Create a formal review with inline comments using GitHub CLI + API
+          # We use a simple approach: post a review summary + individual line comments
+
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+            -f commit_id="$(git rev-parse HEAD)" \
+            -f event="COMMENT" \
+            -f body="## 🤖 Sandbox Code Review
+
+          Automated review completed. See inline comments for details." \
+            --input - <<EOF
+          {
+            "commit_id": "$(git rev-parse HEAD)",
+            "event": "COMMENT",
+            "body": "## 🤖 Sandbox Code Review\n\nSee inline comments below.",
+            "comments": []
+          }
+          EOF
