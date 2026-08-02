@@ -140,9 +140,9 @@ type Decision struct {
 }
 
 func (d Decision) String() string {
-	verb := "DENY"
+	verb := denyVerb
 	if d.Allowed {
-		verb = "allow"
+		verb = allowVerb
 	}
 	return fmt.Sprintf("%s %s:%d%s", verb, d.Host, d.Port, reasonSuffix(d.Reason))
 }

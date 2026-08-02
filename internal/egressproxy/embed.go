@@ -22,7 +22,7 @@ import (
 // a new file would simply be missing from the image and the proxy would fail to
 // build long after the change that caused it.
 //
-//go:embed host.go sni.go server.go origdst_linux.go origdst_other.go
+//go:embed host.go sni.go server.go origdst_linux.go origdst_other.go format.go
 var sources embed.FS
 
 // mainSource is the whole of the proxy's main package.
@@ -64,13 +64,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("sandbox-egress-proxy: listen %s: %v", addr, err)
 	}
-	fmt.Fprintf(os.Stderr, "sandbox-cli: egress proxy on %s enforcing %d name(s)\n", addr, m.Len())
+	fmt.Fprintf(os.Stderr, "%sproxy on %s enforcing %d name(s)\n", egressproxy.LogLinePrefix, addr, m.Len())
 
 	srv := egressproxy.New(m, func(d egressproxy.Decision) {
 		// Denials are the half that had no trace before. Logged to stderr, which
 		// docker captures, so ` + "`docker logs`" + ` answers "what was refused".
 		if !d.Allowed {
-			fmt.Fprintf(os.Stderr, "sandbox-cli: egress %s\n", d)
+			fmt.Fprintf(os.Stderr, "%s%s\n", egressproxy.LogLinePrefix, d)
 		}
 	})
 	log.Fatal(srv.Serve(l))

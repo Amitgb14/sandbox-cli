@@ -71,8 +71,25 @@ type RunSpec struct {
 	// or DOCKER_HOST redirected the docker and git subprocesses we spawn
 	// afterwards. Keep it out of anything that prints or renders a spec.
 	ForwardedEnv map[string]string
-	Mounts       []Mount  // bind mounts (workspace + extras)
-	AddHosts     []string // --add-host HOST:IP entries (e.g. host.docker.internal:host-gateway)
+
+	// Denials, when non-nil, collects the egress refusals the in-container proxy
+	// reports on stderr, so the run log can answer "did this run try to reach
+	// something it was not allowed to?" without scrollback.
+	//
+	// An *output* on an otherwise input-only struct, and the second field BuildArgs
+	// must never render (see ForwardedEnv). It lives here rather than on the
+	// Runtime interface because only the backend that owns the child process's
+	// stdio can see the lines, and threading a return value for it through
+	// Run/Start would change a signature four packages call for something one of
+	// them uses.
+	//
+	// Nil on a detached run, and that is not an oversight: nobody is holding that
+	// container's stderr — it goes to `docker logs` — so there is nothing here to
+	// observe and a zero would read as "nothing was denied".
+	Denials *EgressDenials
+
+	Mounts   []Mount  // bind mounts (workspace + extras)
+	AddHosts []string // --add-host HOST:IP entries (e.g. host.docker.internal:host-gateway)
 
 	// Ports are published to the host (docker -p), each already a fully-qualified
 	// IP:HOSTPORT:CONTAINERPORT spec — sandbox.NormalizePublish has resolved a

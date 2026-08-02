@@ -2,6 +2,12 @@
  * The fifteen agent wrappers, mirroring `agentCmds()` in internal/cli and the
  * per-agent sections of docs/AGENTS.md. Sizes are the on-disk installed sizes
  * measured for arm64 in July 2026 (see docs/AGENTS.md for the caveats).
+ *
+ * Deliberately absent: the *version* each first-run agent installs. Those are
+ * pinned, and the pins live in exactly one place (internal/agents/pins.go) —
+ * copying them here would create a second list to keep in step, and a stale
+ * version number on a marketing page is worse than no version number. The
+ * policy is described in FIRST_RUN_NOTE below and the numbers are not.
  */
 
 export type Agent = {
@@ -290,6 +296,18 @@ export const AGENTS: Agent[] = [
 ];
 
 export const BAKED_COUNT = AGENTS.filter((a) => a.delivery === "baked").length;
+
+/**
+ * What "installs on first use" actually does, for the agents marked `first-run`.
+ * See the note on AGENTS above for why no version numbers appear here.
+ */
+export const FIRST_RUN_NOTE = {
+  line: "sandbox-cli: installing qwen 0.21.3 into the sandbox agent home (first run only)...",
+  body: "An agent the base image does not carry is downloaded the first time you run it, into the sandbox-owned home that persists between runs — so it happens once, and it needs network at that moment. The version is pinned rather than resolved to whatever the vendor published that morning, and it is printed as it installs: a pin's cost is going stale, and staleness nobody can see is the kind that lasts. Two agents are deliberately unpinned, because one offers no version to ask for and the other replaces the first install itself.",
+  buys: "A hijacked or typosquatted release does not reach a sandbox until the pin is bumped.",
+  doesNotBuy:
+    "A compromised registry can still serve different bytes for a version it already published — that needs integrity hashes a global install has no lockfile for.",
+};
 
 /** Always permitted when the egress allowlist is on (docs/AGENTS.md). */
 export const BASELINE_DOMAINS = [

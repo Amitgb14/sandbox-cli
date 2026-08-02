@@ -98,8 +98,14 @@ export const ROWS: Row[] = [
   {
     label: "Credential broker",
     note: "Secrets off the argv and out of history",
+    // This row used to read "Excellent — file / cmd / env sources", and that was
+    // an overclaim. internal/creds resolves secret *references* so values stay
+    // off the argv and out of config files — real, but the value still lands in
+    // the container's environment where the agent can read it with printenv. A
+    // broker that terminates TLS and injects the credential is open security
+    // item 2 and is not built. Prod's blunter answer is the honest one to sell.
     cells: {
-      sandbox: s("Excellent — file / cmd / env sources"),
+      sandbox: w("Basic — references resolved; prod mounts no token at all"),
       builtin: w("Basic"),
       sbx: o("Good — proxy"),
       os: x("Varies"),
@@ -120,8 +126,11 @@ export const ROWS: Row[] = [
   {
     label: "Observability / metrics",
     note: "What is this thing actually doing",
+    // Downgraded from "Excellent" for the same reason as the row above: a live
+    // gauge, stats and one line per run are real, but there is no per-command
+    // trace and no replay. That is roadmap task 4, not a shipped capability.
     cells: {
-      sandbox: s("Excellent — live gauge, stats, summaries"),
+      sandbox: o("Good — live gauge, stats, per-run log; no per-command trace"),
       builtin: w("Limited"),
       sbx: o("Good"),
       os: w("Poor"),
@@ -219,8 +228,13 @@ export const SCORES: ScoreSeries[] = [
       Isolation: 3.5,
       Ergonomics: 5,
       Parallelism: 5,
-      "Credential hygiene": 5,
-      Observability: 5,
+      // Both of these came down with their rows above, because the chart is not
+      // allowed to say something the table does not. "Basic" scores 2 elsewhere
+      // in this chart; credential hygiene sits half a point above that only
+      // because prod does not mount the refresh token, which is a real
+      // mitigation rather than a broker.
+      "Credential hygiene": 2.5,
+      Observability: 3.5,
       "Stays local": 5,
     },
   },

@@ -90,6 +90,40 @@ it is downloading.
 If an install fails you get an explicit message and exit code 127 — not a
 mysterious "command not found".
 
+### Which version gets installed
+
+That first-run install is **pinned to a version sandbox-cli records**, not to
+whatever the vendor is publishing that day. The version is announced when it
+installs:
+
+```
+sandbox-cli: installing qwen 0.21.3 into the sandbox agent home (first run only)...
+```
+
+The pins live in one table, `internal/agents/pins.go`, and that is the only place
+to change one. The reason is the ordinary supply-chain attack — a hijacked or
+typosquatted release — which reaches you at first install and nowhere else,
+because that install is the only one sandbox-cli controls. It does **not** protect
+against a compromised registry serving different bytes for a version it already
+published; that needs integrity hashes a global npm install has no lockfile for.
+
+Two consequences worth knowing:
+
+- **A pin can go stale.** An agent that does not update itself stays on the
+  recorded version until the pin is bumped. That is why the version is printed
+  rather than installed silently — if an agent seems old, the number on that line
+  is the thing to report.
+- **Self-updating agents are unaffected after the first run.** The bootstrap
+  prefers an existing binary in the persisted agent home and execs it directly, so
+  an agent that updates itself keeps doing so; the pin only decides where it
+  starts.
+
+Two agents are deliberately **not** pinned, and the table says why in each case:
+`cursor`, because `cursor.com/install` regenerates its script per release with the
+version baked in and offers no way to ask for another; and `claude`, because
+Claude Code updates itself into the persisted home — which is why that home exists
+— so a pin would govern only a first install it immediately replaces.
+
 ---
 
 # The agents

@@ -94,3 +94,86 @@ func TestJSONLSinkNeverFailsARun(t *testing.T) {
 	var nilSink *JSONLSink
 	nilSink.RecordSession(SessionMeta{Image: "x"})
 }
+
+// TestJSONLSinkRecordsReportedDenials covers the field that answers the question
+// the policy fields cannot: `egress_allow` says what a run was *permitted* to
+// reach, never whether it went looking for anything else.
+//
+// The key names are asserted verbatim on purpose. They carry the caveat — these
+// counts come from lines the container printed on a stream the agent can also
+// write to — and a rename to `egress_denied` would quietly upgrade a report into
+// a claim.
+func TestJSONLSinkRecordsReportedDenials(t *testing.T) {
+	dir := t.TempDir()
+	NewJSONLSink(dir).RecordSession(SessionMeta{
+		Image:                     "sandbox-base:1",
+		Network:                   "allowlist",
+		EgressDeniedReported:      intp(4),
+		EgressDeniedHostsReported: []string{"gist.github.com", "docs.python.org"},
+	})
+
+	raw, err := os.ReadFile(filepath.Join(dir, "sessions.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSpace(string(raw))
+
+	var got record
+	if err := json.Unmarshal([]byte(line), &got); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	if got.EgressDenied == nil || *got.EgressDenied != 4 {
+		t.Errorf("denial count = %v, want 4", got.EgressDenied)
+	}
+	if len(got.EgressDeniedHosts) != 2 {
+		t.Errorf("denied hosts = %v, want both", got.EgressDeniedHosts)
+	}
+	for _, key := range []string{`"egress_denied_reported"`, `"egress_denied_hosts_reported"`} {
+		if !strings.Contains(line, key) {
+			t.Errorf("on-disk key %s is missing; the name is what carries the caveat:\n%s", key, line)
+		}
+	}
+}
+
+func intp(n int) *int { return &n }
+
+// TestJSONLSinkTellsUnobservedFromNothingRefused is the distinction the pointer
+// exists for, and the reason a bare int was wrong: with `omitempty` on an int,
+// "nobody looked" and "looked, and the answer was zero" both vanish, so the
+// earlier version of this test would have passed with the field hardcoded to 0.
+//
+// The zero is the more useful of the two — it is the only positive evidence a
+// run's allowlist was wide enough for everything it actually wanted.
+func TestJSONLSinkTellsUnobservedFromNothingRefused(t *testing.T) {
+	read := func(t *testing.T, meta SessionMeta) string {
+		t.Helper()
+		dir := t.TempDir()
+		NewJSONLSink(dir).RecordSession(meta)
+		raw, err := os.ReadFile(filepath.Join(dir, "sessions.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+
+	// Not observed: no allowlist, or detached, or interactive. No field at all.
+	line := read(t, SessionMeta{Image: "sandbox-base:1", Network: "default"})
+	if strings.Contains(line, "egress_denied") {
+		t.Errorf("an unobserved run recorded a denial field:\n%s", line)
+	}
+
+	// Observed, and nothing was refused. An explicit zero, not an absence.
+	line = read(t, SessionMeta{Image: "sandbox-base:1", Network: "allowlist", EgressDeniedReported: intp(0)})
+	if !strings.Contains(line, `"egress_denied_reported":0`) {
+		t.Errorf("an observed run with no denials must record an explicit 0:\n%s", line)
+	}
+
+	// And it must survive the round trip as zero rather than as nil.
+	var got record
+	if err := json.Unmarshal([]byte(line), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.EgressDenied == nil || *got.EgressDenied != 0 {
+		t.Errorf("round-tripped denial count = %v, want a pointer to 0", got.EgressDenied)
+	}
+}

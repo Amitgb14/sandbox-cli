@@ -28,6 +28,11 @@ package agents
 // at that moment — under `--allow` the npm registry is in the baseline, but a
 // vendor's own download host may not be.
 //
+// The announcement also names the version, when one is pinned (see pins.go).
+// A pin's cost is staleness, and staleness that is only visible as "the agent
+// behaves like an old one" is the kind that survives for months; printing the
+// number turns it into something the user can read and report.
+//
 // The trailing bin is sh's argv[0] for the script, so "$@" is exactly the guest
 // args appended by the caller.
 func Bootstrap(bin, install string) []string {
@@ -46,7 +51,7 @@ if [ -x "$HOME/.local/bin/` + bin + `" ]; then
   exec "$HOME/.local/bin/` + bin + `" "$@"
 fi
 if ! command -v ` + bin + ` >/dev/null 2>&1; then
-  echo "sandbox-cli: installing ` + bin + ` into the sandbox agent home (first run only)..." >&2
+  echo "sandbox-cli: installing ` + bin + installedVersionSuffix(bin) + ` into the sandbox agent home (first run only)..." >&2
   ` + install + ` >/dev/null 2>&1 || true
 fi
 if ! command -v ` + bin + ` >/dev/null 2>&1; then
@@ -59,9 +64,20 @@ exec ` + bin + ` "$@"`
 	return []string{"sh", "-c", script, bin}
 }
 
-// NpmBootstrap is Bootstrap for an agent distributed as an npm package.
-// --prefix keeps the install inside the persisted HOME, which is the only
-// writable place that survives the container.
+// installedVersionSuffix renders " <version>" for the install announcement, or
+// nothing for an agent the table deliberately leaves unpinned. It is a suffix
+// rather than a separate echo so an unpinned agent's line reads exactly as it did
+// before pins existed.
+func installedVersionSuffix(bin string) string {
+	if p, ok := installPins[bin]; ok && p.Version != "" {
+		return " " + p.Version
+	}
+	return ""
+}
+
+// NpmBootstrap is Bootstrap for an agent distributed as an npm package, pinned to
+// the version recorded in pins.go. --prefix keeps the install inside the
+// persisted HOME, which is the only writable place that survives the container.
 func NpmBootstrap(bin, pkg string) []string {
-	return Bootstrap(bin, `npm install -g --prefix "$HOME/.local" `+pkg)
+	return Bootstrap(bin, `npm install -g --prefix "$HOME/.local" `+npmSpec(bin, pkg))
 }
