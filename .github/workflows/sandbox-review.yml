@@ -137,25 +137,61 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
-          # Only api.anthropic.com. The profile drops the baseline (which
-          # includes github.com, a write endpoint), and this container holds an
-          # API key while reading a diff that may carry a prompt injection, so
-          # every domain not needed is one fewer channel out.
+          # The allowlist is wider than the agent strictly needs. github.com is
+          # a write endpoint, so it is an exfiltration channel for the API key
+          # this container holds while reading a diff that may carry a prompt
+          # injection. Kept at the maintainer's request; the mitigation that
+          # still holds is that the GitHub *token* is never in here — it exists
+          # only in the posting step, outside the sandbox.
           #
           # stdout and stderr both go to the log, never to the data file: the
           # old workflow merged them into review.md and got docker build
           # progress where it expected a review.
+          # Expected, and not a failure: the container tries to fetch the
+          # latest Claude Code into its HOME on start, the allowlist refuses
+          # claude.ai, and it falls back to the copy baked into the image. It
+          # is the first line printed and it looks like a crash, which is why
+          # it is called out here rather than left to be rediscovered.
+          echo "note: a DENY for claude.ai below is expected (baked agent is used)"
+
+          # `claude -p` prints nothing until it is done, so a six-minute review
+          # is six minutes of dead terminal. The heartbeat is deliberately not
+          # --output-format stream-json: the image is cached for up to a week
+          # and a flag the baked agent does not recognise would fail the run
+          # outright, where a printed dot cannot.
+          # The heartbeat is the background job and the agent the foreground
+          # one, rather than the other way round: polling the agent's pid with
+          # `kill -0` would depend on whether the shell has reaped it yet, and
+          # a zombie answers that probe as alive.
+          ( n=0
+            while sleep 15; do
+              n=$((n + 15))
+              echo "  … reviewing, ${n}s elapsed"
+            done ) &
+          heartbeat=$!
+          trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
+
           sandbox-cli claude \
             --profile prod \
             --no-metrics \
             --allow api.anthropic.com \
+            --allow anthropic.com \
+            --allow github.com \
+            --allow api.github.com \
+            --allow raw.githubusercontent.com \
             --env DISABLE_TELEMETRY=1 \
             --env DISABLE_ERROR_REPORTING=1 \
             --env DISABLE_AUTOUPDATER=1 \
             -- \
             -p "$(cat .sandbox-review/prompt.md)" \
             --dangerously-skip-permissions \
-            2>&1 | tee agent.log || true
+            > agent.log 2>&1 || echo "::warning::agent exited non-zero"
+
+          kill "$heartbeat" 2>/dev/null || true
+          wait "$heartbeat" 2>/dev/null || true
+
+          echo "===== agent log ====="
+          cat agent.log
 
           if [ ! -s .sandbox-review/review.json ]; then
             echo "::warning::agent produced no review.json"
