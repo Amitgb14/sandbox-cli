@@ -121,6 +121,7 @@ export async function request<T>(path: string, opts: RequestOptions<T>): Promise
       signal: opts.signal,
       cache: "no-store",
     });
+    noteAuthResult(res.status);
     if (!res.ok) {
       // The daemon's own words, not just the status line. Every non-2xx body is
       // an ErrorResponse saying what it refused and usually how to fix it —
@@ -162,6 +163,7 @@ export async function* streamNdjson<T>(
     cache: "no-store",
     headers: authHeaders(),
   });
+  noteAuthResult(res.status);
   if (!res.ok || !res.body) throw new ApiError(`stream ${path} failed`, res.status);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -277,6 +279,7 @@ export async function* streamConsole(
     cache: "no-store",
     headers: authHeaders(),
   });
+  noteAuthResult(res.status);
   if (!res.ok || !res.body) {
     throw new ApiError(await errorText(res, "GET", path), res.status);
   }
@@ -310,4 +313,48 @@ export async function* streamConsole(
       }
     }
   }
+}
+
+
+/**
+ * Whether the daemon is rejecting the token this browser holds.
+ *
+ * This exists because "no token" and "wrong token" looked identical to the UI
+ * and only one of them was recoverable. The bar that asks for a token was shown
+ * when none was stored — so a stale or mistyped one hid it, every request
+ * 401'd, and there was no way left in the interface to correct the value.
+ * Observed: a wrong token gave 401s on /usage, /worktrees and /agents with no
+ * prompt anywhere on the page.
+ *
+ * A module-level signal rather than a per-query one, because any authenticated
+ * request answers the question and nothing should have to make an extra one to
+ * ask it.
+ */
+let authRejected = false;
+const authListeners = new Set<() => void>();
+
+function noteAuthResult(status: number) {
+  // Latched: set by a 401 and never cleared by a success.
+  //
+  // Clearing on any 2xx looked tidier and was wrong — /v1/health answers 200
+  // without a token by design, and it is polled, so every rejection was wiped
+  // within a second and the bar never appeared. The flag is only interesting
+  // until somebody supplies a token, and saving one reloads the page, which
+  // resets this anyway.
+  //
+  // 403 is deliberately not counted. It is what the console endpoints answer
+  // when the *daemon* has no token — a different problem with a different fix,
+  // and treating it as a bad credential would ask for a token that cannot help.
+  if (status !== 401 || authRejected) return;
+  authRejected = true;
+  authListeners.forEach((cb) => cb());
+}
+
+export function isAuthRejected(): boolean {
+  return authRejected;
+}
+
+export function onAuthChange(cb: () => void): () => void {
+  authListeners.add(cb);
+  return () => authListeners.delete(cb);
 }
