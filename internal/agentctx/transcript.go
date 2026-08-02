@@ -148,3 +148,43 @@ func cleanBody(s string) string {
 		return r
 	}, s)
 }
+
+// FirstPrompt returns the first thing a person typed in a transcript.
+//
+// Cheap on purpose: it stops at the first real user turn rather than reading
+// the file, because the caller is identifying a session rather than reading
+// one, and a long transcript is megabytes of tool results.
+//
+// This exists to tell two concurrent sessions apart. Sandbox runs pool into one
+// `-workspace` directory, so a time window alone cannot say which transcript
+// belongs to which container — demonstrated the expensive way, with one run's
+// conversation shown under another run's id. A run's first prompt is recorded
+// on its container as a label, and comparing the two is an actual answer rather
+// than a tie-break.
+func FirstPrompt(path string) (string, bool) {
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() {
+		return "", false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	for sc.Scan() {
+		var l claudeLine
+		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
+			continue
+		}
+		if l.Type != "user" || l.Message == nil || l.IsMeta || l.IsSidechain {
+			continue
+		}
+		if text, ok := userPromptText(l.Message.Content); ok {
+			return strings.TrimSpace(text), true
+		}
+	}
+	return "", false
+}

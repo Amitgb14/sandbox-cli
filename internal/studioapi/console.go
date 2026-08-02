@@ -136,7 +136,7 @@ func (s *Server) transcriptFor(c runtime.ContainerInfo) (path, resume string, ok
 		until = c.FinishedAt.Add(conversationSlack)
 	}
 
-	path, ok = pickSession(sessions, from, until)
+	path, ok = pickSession(sessions, from, until, c.Labels[sandbox.LabelPrompt])
 	if !ok {
 		return "", "", false
 	}
@@ -176,26 +176,73 @@ func sessionIDFromPath(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 }
 
-// pickSession is the window filter, split out because it is the part that was
-// wrong and the part worth pinning.
+// pickSession decides which transcript belongs to a run, and refuses when it
+// cannot tell.
 //
-// sessions arrives newest-first, so the first survivor is the one whose last
-// write is closest to the end of the run. The comparison is on when a session
-// *started*: a session still being appended to has a recent mtime and that says
-// nothing about which run owns it — which is exactly how a two-day-old
-// conversation ended up on a fresh run's screen.
-func pickSession(sessions []agentctx.Session, from, until time.Time) (string, bool) {
+// Two filters and a tie-break, each added after the previous one was shown to
+// be insufficient — which is why this is a named function with tests rather
+// than three lines inside the caller.
+//
+// **Started, not modified.** A session still being appended to has a recent
+// mtime that says nothing about which run owns it. Matching on mtime put a
+// two-day-old conversation — the developer's own live Claude Code session — on
+// the screen of a run three minutes old.
+//
+// **The window.** A session that began before the container did cannot be that
+// container's.
+//
+// **The prompt.** Neither of the above separates two agents running at the
+// *same time*, and sandbox runs all pool into one `-workspace` directory. Not
+// hypothetical: a reviewer's conversation came back as a test run's, because
+// the test started inside the reviewer's window and had the newer mtime. A
+// run's first prompt is stamped on its container as a label and is the first
+// user turn of its transcript, so comparing them is an actual answer rather
+// than a tie-break.
+//
+// When the prompt cannot decide it — no label, or several candidates and none
+// matching — this reports *nothing*. A conversation shown under the wrong run
+// carries a reply box wired to a real agent's stdin, so a wrong answer here is
+// worse than no answer.
+func pickSession(sessions []agentctx.Session, from, until time.Time, prompt string) (string, bool) {
+	var inWindow []agentctx.Session
 	for _, sess := range sessions {
-		// A session with no start time recorded is one whose first line could not
-		// be read. Skipped rather than admitted: this filter is what keeps another
-		// run's conversation off the screen, and a value that is missing cannot
-		// pass it.
+		// A session with no start time is one whose first line could not be read.
+		// Skipped rather than admitted: a value that is missing cannot pass the
+		// filter that keeps another run's conversation off the screen.
 		if sess.Started.IsZero() || sess.Started.Before(from) || sess.Started.After(until) {
 			continue
 		}
-		return sess.Path, true
+		inWindow = append(inWindow, sess)
 	}
-	return "", false
+	switch len(inWindow) {
+	case 0:
+		return "", false
+	case 1:
+		return inWindow[0].Path, true
+	}
+
+	// More than one ran in this window, so the clock cannot separate them.
+	if prompt == "" {
+		return "", false
+	}
+	want := strings.TrimSpace(prompt)
+	var match string
+	for _, sess := range inWindow {
+		first, ok := agentctx.FirstPrompt(sess.Path)
+		if !ok || first != want {
+			continue
+		}
+		if match != "" {
+			// Two sessions opened with the same prompt inside one window. Rare, and
+			// re-running the same task twice is exactly when it happens.
+			return "", false
+		}
+		match = sess.Path
+	}
+	if match == "" {
+		return "", false
+	}
+	return match, true
 }
 
 // sandboxStore narrows a Finding to the location under the sandbox-owned agent
