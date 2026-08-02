@@ -1174,9 +1174,21 @@ about. Under `dev` the same host passes with warnings.
   `0.0.0.0:3000:3000` when you mean that. The egress allowlist filters outbound
   traffic only, so it and a published port coexist.
 
-Deliberately out of scope, with clean seams left in the code for them: a
-header-injecting secrets proxy (so the agent never sees the raw value),
-per-request egress policies, snapshots, risk scoring, and audit trails.
+Not built, with clean seams left in the code for them. Two have since become
+roadmap work rather than permanent exclusions — see [what's next](#whats-next):
+
+- **A header-injecting secrets proxy**, so the agent never sees the raw value.
+  Still out of scope: it requires terminating TLS, which is a decision rather than
+  a task ([open security item 2](docs/security/open-items.md)).
+- **Per-request egress policies** (HTTP method and path, request inspection).
+  Still out of scope, and for the same reason — it needs the same TLS
+  termination, so it should be decided once alongside the above rather than
+  twice.
+- **Snapshots** in the checkpoint/restore sense, and **audit trails** in the
+  per-command, replayable sense. Both are now planned: roadmap tasks
+  [4](docs/roadmap/task-4-run-provenance.md) and
+  [5](docs/roadmap/task-5-checkpoint-and-fork.md).
+- **Risk scoring.** Not planned.
 
 ## Alternatives & prior art
 
@@ -1194,9 +1206,9 @@ reach for microVM tooling.
 | Persistent agent auth | Excellent (dedicated persistent home) | Varies | Good | Varies | Varies |
 | Package cache persistence | Yes (`--cache` volumes) | Limited | Good | Manual | Often built-in |
 | Parallel agents (worktrees) | Excellent (built-in `--worktree`) | Poor | Good | Poor | Varies |
-| Credential broker | Excellent (`--secret` with file/cmd/env) | Basic | Good (proxy) | Varies | Good |
-| Egress / network control | Strong (allowlist with baselines) | Basic | Strong | Varies | Strong |
-| Observability / metrics | Excellent (live gauge, stats, summaries) | Limited | Good | Poor | Varies |
+| Credential broker | Basic ¹ (`--secret` resolves references; the agent still reads the value) | Basic | Good (proxy) | Varies | Good |
+| Egress / network control | Strong (allowlist enforced by hostname, fails closed) | Basic | Strong | Varies | Strong |
+| Observability / metrics | Good ² (live gauge, stats, per-run log — no per-command trace) | Limited | Good | Poor | Varies |
 | Project config | Excellent (`.sandbox.yaml`) | Limited | Good | Poor | API / config |
 | Dry-run / preview | Yes | No | Varies | No | Varies |
 | Ease of use | High (CLI-focused, good docs) | High | High | Medium | Medium (setup) |
@@ -1204,8 +1216,25 @@ reach for microVM tooling.
 | Docker dependency | Yes | No | Yes | No | No |
 | Best for | Local multi-agent workflows, ergonomics | Quick minimal protection | Strongest local isolation | Lightweight, zero deps | Scale & long-running tasks |
 
+¹ **This row used to say "Excellent", and that was wrong.** `internal/creds`
+resolves secret *references* on the host so values stay off the argv and out of
+config files — worth having, but the value still reaches the container's
+environment, where the agent can read it with `printenv`. A real broker
+terminates TLS and injects the credential so the agent never holds it; that is
+[open security item 2](docs/security/open-items.md) and it is not built. What
+sandbox-cli does have is the blunter answer, and it is a good one: under
+`--profile prod` the persisted OAuth refresh token is **not mounted at all**, so
+there is nothing in the container to steal.
+
+² Also downgraded. A live gauge, `stats`, and one run-log line per run
+(`~/.config/sandbox/audit/sessions.jsonl`, which now also records the egress
+refusals a run reported) are real, but there is no per-command trace and no
+replay — see [roadmap task 4](docs/roadmap/task-4-run-provenance.md).
+
 This is our own read of the landscape, and the ratings for other projects are a
-snapshot that will age — check their docs before choosing.
+snapshot that will age — check their docs before choosing. The two footnotes
+above are the rule this table is held to: a row we cannot defend against the code
+gets corrected here rather than quietly kept.
 
 ## Development
 
@@ -1231,7 +1260,7 @@ asserted by `internal/runtime/args_test.go` and the `--dry-run` golden test in
 
 ## What's next
 
-Three pieces of work, in order, each with its own scope document under
+Six pieces of work, in order, each with its own scope document under
 [`docs/roadmap/`](docs/roadmap/README.md):
 
 1. **[Better local / dev agent experience](docs/roadmap/task-1-local-agent-experience.md)**
@@ -1242,5 +1271,15 @@ Three pieces of work, in order, each with its own scope document under
 3. **[Stronger isolation for Linux production](docs/roadmap/task-3-stronger-isolation.md)**
    — Kata Containers, so each sandbox gets its own kernel rather than sharing the host's.
    *Next.*
+4. **[Run provenance](docs/roadmap/task-4-run-provenance.md)** — turn the one-line-per-run
+   log into a per-command record you can read back, from a channel the sandbox cannot
+   forge. *Not started.*
+5. **[Checkpoint and fork](docs/roadmap/task-5-checkpoint-and-fork.md)** — warm start, and
+   forking a sandbox so three attempts at the same fix can run from one prepared state.
+   *Not started.*
+6. **[macOS microVM](docs/roadmap/task-6-macos-microvm.md)** — a libkrun backend, because
+   `--runtime kata-runtime`/`runsc` cannot be reached on Docker Desktop at all, which is
+   where most developers are. *Not started.*
 
-The roadmap index also records what is deliberately *deferred*, which is most of the rest.
+The roadmap index also records what is deliberately *deferred* and what has been
+**considered and declined**, with reasons — which is most of the rest.
