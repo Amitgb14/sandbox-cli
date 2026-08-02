@@ -191,10 +191,32 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, tas
 		return res
 	}
 	if stale != nil {
-		res.Err = fmt.Errorf("%q already has a finished container (%s, exit %d) holding its name; "+
-			"read it with `sandbox-cli fleet logs %s`, then `sandbox-cli fleet clean %s` to run again",
-			task.Branch, stale.Name, stale.ExitCode, task.Branch, task.Branch)
-		return res
+		// Except under --resume, where the caller has already said "retry this one"
+		// and unfinished() selected this task *because* its last container exited
+		// non-zero — a failed verify above all, which is the case resume documents
+		// itself as existing for. Refusing here would leave --resume working only
+		// for tasks whose containers had already been reaped, which is the opposite
+		// of retrying the ones that failed. So the name is cleared rather than
+		// reported.
+		//
+		// Only under --resume: an ordinary re-run has asked for nothing to be
+		// discarded, and reaping is what destroys the logs. A backend that cannot
+		// remove containers still refuses, because there is nothing else it can do.
+		if wouldRefuseName(lo, r.Controller) {
+			res.Err = fmt.Errorf("%q already has a finished container (%s, exit %d) holding its name; "+
+				"read it with `sandbox-cli fleet logs %s`, then `sandbox-cli fleet clean %s` to run again",
+				task.Branch, stale.Name, stale.ExitCode, task.Branch, task.Branch)
+			return res
+		}
+		if err := r.Controller.Remove(ctx, stale.ID); err != nil {
+			res.Err = fmt.Errorf("removing the finished container holding %q's name (%s): %w",
+				task.Branch, stale.Name, err)
+			return res
+		}
+		// Said out loud because it is not recoverable: the logs of the run being
+		// retried are gone, and this is the only moment anyone could have read them.
+		r.logf("%s: reaped its finished container (%s, exit %d) to retry; those logs are gone",
+			task.Branch, stale.Name, stale.ExitCode)
 	}
 
 	info, err := worktree.Resolve(r.Repo, task.Branch)

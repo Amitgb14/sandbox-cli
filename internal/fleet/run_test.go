@@ -140,6 +140,65 @@ func TestLaunchRefusesWhenAFinishedContainerHoldsTheName(t *testing.T) {
 	}
 }
 
+// But it must not fire under --resume, which is the caller having already said
+// "retry this one". unfinished() selects a task precisely *because* its last
+// container exited non-zero — a failed verify above all — so a refusal here would
+// leave --resume working only for tasks whose containers had already been reaped:
+// the one set it was not written for.
+func TestResumeReapsTheContainerHoldingTheBranchName(t *testing.T) {
+	now := time.Now()
+	done := container("feature-a", "exited", now.Add(-time.Hour), now)
+	done.ExitCode = VerifyFailedExit
+	r, ctl := testRunner(done)
+
+	res := r.launchOne(context.Background(), Spec{Agent: "claude"}, LaunchOptions{Resume: true},
+		Task{Branch: "feature-a", Prompt: "do it"}, "main", false)
+	if res.Err != nil && strings.Contains(res.Err.Error(), "holding its name") {
+		t.Errorf("--resume was refused by the name guard it exists to get past: %v", res.Err)
+	}
+	if len(ctl.removed) != 1 || ctl.removed[0] != done.ID {
+		t.Errorf("--resume did not reap the container holding the name, removed %v", ctl.removed)
+	}
+}
+
+// A backend that cannot remove containers has nothing to reap with, so the
+// refusal stands rather than being skipped: --resume must not become a way to
+// reach docker's raw name conflict.
+func TestResumeStillRefusesWithoutAController(t *testing.T) {
+	now := time.Now()
+	done := container("feature-a", "exited", now.Add(-time.Hour), now)
+	done.ExitCode = VerifyFailedExit
+	r, _ := testRunner(done)
+	r.Controller = nil
+
+	res := r.launchOne(context.Background(), Spec{Agent: "claude"}, LaunchOptions{Resume: true},
+		Task{Branch: "feature-a", Prompt: "do it"}, "main", false)
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "holding its name") {
+		t.Errorf("expected the name refusal with no controller, got: %v", res.Err)
+	}
+}
+
+// And the plan must agree with the run about it. NameHeldBy exists to stop a
+// dry-run saying "will start" and the run then refusing; reporting a refusal
+// --resume will not make reopens the same gap from the other side.
+func TestPlanDoesNotReportANameRefusalResumeWillNotMake(t *testing.T) {
+	now := time.Now()
+	done := container("feature-a", "exited", now.Add(-time.Hour), now)
+	done.ExitCode = VerifyFailedExit
+	r, _ := testRunner(done)
+	r.Repo = newTestRepo(t)
+	gitIn(t, r.Repo, "branch", "feature-a")
+
+	spec := Spec{Agent: "claude", Tasks: []Task{{Branch: "feature-a", Prompt: "do it"}}}
+	plans, err := r.Plan(context.Background(), spec, LaunchOptions{Resume: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plans[0].NameHeldBy != "" {
+		t.Errorf("plan reports a name conflict --resume will reap, got %q", plans[0].NameHeldBy)
+	}
+}
+
 // And it must not fire on a branch that has never run, or every first launch
 // would refuse.
 func TestLaunchProceedsWhenNoContainerHoldsTheName(t *testing.T) {

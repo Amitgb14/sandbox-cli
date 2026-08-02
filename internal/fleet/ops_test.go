@@ -297,6 +297,78 @@ func TestCleanKeepsAContainerWhoseBranchHasWorkToLand(t *testing.T) {
 	}
 }
 
+// The guard has to follow the verify result, or it closes a loop: `land` refuses
+// a branch whose verify failed, so pointing that branch at `fleet land` points it
+// at the next refusal and the two commands send the user back and forth with
+// nothing in between that works. This is the branch the VERIFY column was added
+// to make visible, which makes it the case the advice must get right.
+func TestCleanDoesNotSendAFailedVerifyToLand(t *testing.T) {
+	repo := newTestRepo(t)
+	base := gitIn(t, repo, "rev-parse", "--abbrev-ref", "HEAD")
+	gitIn(t, repo, "checkout", "-qb", "feature-b")
+	if err := os.WriteFile(filepath.Join(repo, "work.txt"), []byte("done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "add", ".")
+	gitIn(t, repo, "commit", "-qm", "the agent's work")
+	gitIn(t, repo, "checkout", "-q", base)
+
+	now := time.Now()
+	done := container("feature-b", "exited", now.Add(-time.Hour), now)
+	done.Labels[sandbox.LabelBase] = base
+	done.Labels[sandbox.LabelVerify] = "go test ./..."
+	done.ExitCode = VerifyFailedExit
+	r, ctl := testRunner(done)
+	r.Repo = repo
+
+	res, err := r.Clean(context.Background(), "", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctl.removed) != 0 {
+		t.Errorf("reaped a container holding landable work: %v", ctl.removed)
+	}
+	if len(res.Kept) != 1 {
+		t.Fatalf("expected feature-b reported as kept, got %v", res.Kept)
+	}
+	if strings.Contains(res.Kept[0], "fleet land") {
+		t.Errorf("sent a failed verify to `fleet land`, which refuses it: %q", res.Kept[0])
+	}
+	for _, want := range []string{"verify failed", "fleet logs", "--force"} {
+		if !strings.Contains(res.Kept[0], want) {
+			t.Errorf("the refusal must mention %q, got %q", want, res.Kept[0])
+		}
+	}
+}
+
+// A branch with no recorded base is the detached-HEAD launch Launch deliberately
+// records nothing for. The old fallback asked worktree.Branch, which stands a
+// commit id in for a detached HEAD — so the guard silently counted commits "not
+// in <sha>" and reaped on the answer. An unanswerable question at a data-loss
+// guard fails toward keeping instead.
+func TestCleanKeepsAContainerWhoseBaseCannotBeRead(t *testing.T) {
+	repo := newTestRepo(t)
+	gitIn(t, repo, "branch", "feature-b")
+	gitIn(t, repo, "checkout", "-q", "--detach")
+
+	now := time.Now()
+	done := container("feature-b", "exited", now.Add(-time.Hour), now)
+	delete(done.Labels, sandbox.LabelBase)
+	r, ctl := testRunner(done)
+	r.Repo = repo
+
+	res, err := r.Clean(context.Background(), "", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctl.removed) != 0 {
+		t.Errorf("reaped a container whose base could not be read: %v", ctl.removed)
+	}
+	if len(res.Kept) != 1 || !strings.Contains(res.Kept[0], "detached HEAD") {
+		t.Errorf("expected the unreadable base reported, got %v", res.Kept)
+	}
+}
+
 // The other half: once the work is landed there is nothing to protect, so the
 // ordinary land-then-clean sequence must reap exactly what it always did.
 func TestCleanReapsABranchWithNothingLeftToLand(t *testing.T) {

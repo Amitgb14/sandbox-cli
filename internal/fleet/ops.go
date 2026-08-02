@@ -50,7 +50,19 @@ type Planned struct {
 	// AlreadyRunning because the fix is the opposite: one is waited out or
 	// stopped, the other is reaped. A plan that said "will start" and then hit
 	// docker's name conflict is the inconsistency this field exists to close.
+	//
+	// Empty under --resume, which reaps the stale container instead of refusing:
+	// the field says what the *run* would do, so reporting a refusal the run will
+	// not make would reopen that same inconsistency from the other side.
 	NameHeldBy string
+}
+
+// wouldRefuseName reports whether launchOne would refuse a branch whose name is
+// still held by a finished container, rather than reaping it. Shared with Plan so
+// the rehearsal and the run cannot disagree about it — the one thing NameHeldBy
+// exists to guarantee.
+func wouldRefuseName(opts LaunchOptions, ctl runtime.Controller) bool {
+	return !opts.Resume || ctl == nil
 }
 
 // Plan resolves what Launch would do for each task. It touches nothing.
@@ -110,7 +122,7 @@ func (r *Runner) Plan(ctx context.Context, spec Spec, opts LaunchOptions) ([]Pla
 		if busy, err := r.runningFor(ctx, t.Branch); err == nil && busy != nil {
 			p.AlreadyRunning = true
 			p.RunningInName = busy.Name
-		} else if stale, err := r.exitedFor(ctx, t.Branch); err == nil && stale != nil {
+		} else if stale, err := r.exitedFor(ctx, t.Branch); err == nil && stale != nil && wouldRefuseName(opts, r.Controller) {
 			p.NameHeldBy = stale.Name
 		}
 		out = append(out, p)
@@ -183,7 +195,12 @@ type CleanResult struct {
 // base, or uncommitted files in its worktree. `fleet land` zeroes both, so the
 // ordinary land-then-clean sequence reaps exactly what it did before.
 func (r *Runner) unlandedWork(branch string, c runtime.ContainerInfo) string {
-	if branch == "" {
+	if branch == "" || r.Repo == "" {
+		// No repository is not the same as a repository that cannot answer, and only
+		// the second is the unanswerable question the fallback below keeps for. With
+		// no repo there is no worktree and no branch to hold anything landable, so
+		// there is nothing here to protect — refusing would make clean unusable
+		// wherever a Runner has containers but no git.
 		return ""
 	}
 	// The recorded base, not the checked-out one: `land` treats the label as the
@@ -191,15 +208,61 @@ func (r *Runner) unlandedWork(branch string, c runtime.ContainerInfo) string {
 	// would call work unlanded on the strength of where their HEAD is.
 	base := c.Labels[sandbox.LabelBase]
 	if base == "" {
-		base = worktree.Branch(r.Repo)
+		// No label means the launch was from a detached HEAD, which Launch
+		// deliberately records nothing for. HeadBranch, not Branch: Branch stands a
+		// short commit id in for a detached HEAD, and "commits not in <sha>" answers
+		// a different question than the one being asked — silently, and against a
+		// ref that moves.
+		//
+		// When there is no branch either, keep the container. This is a data-loss
+		// guard, and an unanswerable question at one of those fails toward keeping:
+		// the cost of being wrong is a container that needed one more `--force`,
+		// against a landable branch whose only record was reaped.
+		if base = worktree.HeadBranch(r.Repo); base == "" {
+			// HeadBranch says "" for two different things, and only one of them is the
+			// unanswerable question worth keeping a container for. Branch separates
+			// them: it stands a short commit id in for a detached HEAD, and answers ""
+			// only when there is no repository to ask at all. No repository means no
+			// branch that could be holding landable work, so there is nothing to
+			// protect and the container is reaped as it always was.
+			if worktree.Branch(r.Repo) == "" {
+				return ""
+			}
+			return "a detached HEAD and no recorded base, so what is left to land cannot be read"
+		}
 	}
 	if n := worktree.Ahead(r.Repo, branch, base); n > 0 {
-		return fmt.Sprintf("%d commit(s) not in %s", n, base)
+		return fmt.Sprintf("%d commit(s) not in %s to land", n, base)
 	}
 	if n := len(worktree.Dirty(r.Repo, branch, dirtyLimit)); n > 0 {
-		return fmt.Sprintf("%d uncommitted file(s)", n)
+		return fmt.Sprintf("%d uncommitted file(s) to land", n)
 	}
 	return ""
+}
+
+// keptMessage says why clean kept a container and what to do about it, following
+// the verify result rather than assuming one.
+//
+// `land` refuses a branch whose verify failed, and equally one whose run never
+// reached its verify — so sending either to `fleet land` sends it to the next
+// refusal, and the two commands point at each other with nothing in between that
+// works. That is precisely the branch the VERIFY column was added to make
+// visible, which makes it the case this guard has to get right rather than the
+// edge it can round off.
+func keptMessage(branch, why string, vs VerifyState) string {
+	switch vs {
+	case VerifyFailed:
+		return fmt.Sprintf("%s: %s, but its verify failed; read it with "+
+			"`sandbox-cli fleet logs %s`, then `fleet run --resume` to retry it, or "+
+			"`fleet clean --force` to reap it", branch, why, branch)
+	case VerifyUnchecked:
+		return fmt.Sprintf("%s: %s, but nothing checked it — the run never reached its verify; "+
+			"read it with `sandbox-cli fleet logs %s`, then `fleet run --resume` to retry it, or "+
+			"`fleet clean --force` to reap it", branch, why, branch)
+	default:
+		return fmt.Sprintf("%s: %s; `sandbox-cli fleet land %s` first, or reap it anyway "+
+			"with `fleet clean --force`", branch, why, branch)
+	}
 }
 
 // Clean removes the exited containers of this repository's fleet, and — only
@@ -239,15 +302,16 @@ func (r *Runner) Clean(ctx context.Context, branch string, worktrees, force bool
 		}
 		b := c.Labels[sandbox.LabelBranch]
 		if !force {
+			// Held once per branch, and checked *before* the guard rather than after
+			// it: unlandedWork asks git two questions per container (rev-list, then
+			// status --porcelain), so a branch with several old containers used to pay
+			// two subprocesses each to reprint a refusal it then suppressed.
+			if held[b] {
+				continue
+			}
 			if why := r.unlandedWork(b, c); why != "" {
-				// Reported once per branch: a branch with several old containers
-				// would otherwise print the same refusal for each of them.
-				if !held[b] {
-					held[b] = true
-					res.Kept = append(res.Kept, fmt.Sprintf(
-						"%s: %s to land; `sandbox-cli fleet land %s` first, or reap it anyway with `fleet clean --force`",
-						b, why, b))
-				}
+				held[b] = true
+				res.Kept = append(res.Kept, keptMessage(b, why, verifyState(&c)))
 				continue
 			}
 		}

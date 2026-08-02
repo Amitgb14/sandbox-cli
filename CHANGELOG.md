@@ -24,12 +24,23 @@ version is tagged.
   how a passing branch becomes mergeable only by hand. A branch with commits not
   in its base, or with uncommitted work, is now kept and reported; `--force`
   reaps it anyway. Running agents and dirty worktrees are protected as before.
+  What it tells you to do next follows the verify result: a branch whose verify
+  *failed* is pointed at `fleet logs`, `fleet run --resume` and `--force`, not at
+  `fleet land` — which refuses that branch, so the two commands used to send you
+  back and forth with nothing in between that worked. A container whose base
+  cannot be read at all (a detached-HEAD launch records none) is kept rather than
+  measured against whatever branch you happen to be standing on.
 
 - **Re-running a branch explains itself.** A finished container still holds its
   branch's container name, and docker answered that with `Conflict. The
   container name "/sandbox-…" is already in use by container "<64 hex chars>"`.
   `fleet run` now names the branch, the exit code, and the two commands that
-  clear it, and `--dry-run` reports it before anything starts.
+  clear it, and `--dry-run` reports it before anything starts. `--resume` does
+  not refuse at all: it reaps the finished container and retries the branch,
+  which is what asking to resume a fleet meant — a task that failed its verify
+  is exactly the one `--resume` selects, and it could not previously be retried
+  without a `fleet clean` first. The logs of the run being retried are discarded,
+  so it says so.
 
 ### Added
 
