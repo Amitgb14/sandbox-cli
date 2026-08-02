@@ -7,92 +7,166 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: write
 
 jobs:
   review:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A pull_request event from a fork gets no secrets, so ANTHROPIC_API_KEY
+    # would be empty and the run would burn ten minutes to fail. Skipping is
+    # also the right security answer: reviewing a fork's code needs
+    # pull_request_target, which hands the fork a token, and that is a
+    # deliberate decision rather than a default.
+    if: github.event.pull_request.head.repo.full_name == github.repository
 
     steps:
-      - name: Checkout
+      - name: Checkout PR head
         uses: actions/checkout@v4
         with:
-          fetch-depth: 50
+          # The head commit, not the merge commit: the review comments are
+          # anchored to it, and GitHub only accepts a commit_id that is
+          # actually in the pull request.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
 
       - name: Install sandbox-cli
         run: |
           curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Run enhanced code review
+      - name: Resolve base image tag
+        id: img
+        run: |
+          # The tag is content-addressed over the Dockerfile and the egress
+          # proxy source, so it is also the right cache key: it changes exactly
+          # when the image would have to be rebuilt anyway.
+          tag=$(sandbox-cli version | sed -n 's/.*base image: \(.*\))$/\1/p')
+          test -n "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "file=$HOME/.cache/sandbox-image/$(echo "$tag" | tr ':/' '__').tar.zst" >> "$GITHUB_OUTPUT"
+          # The Dockerfile installs the agents unpinned, so the tag does not
+          # change when a new Claude Code is published. Without this the cache
+          # would serve the same agent build forever; a week is short enough to
+          # stay current and long enough that the build is rare.
+          echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore base image
+        id: imgcache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sandbox-image
+          key: sandbox-base-${{ steps.img.outputs.tag }}-${{ steps.img.outputs.week }}
+
+      - name: Load or build base image
+        run: |
+          set -euo pipefail
+          if [ -f "${{ steps.img.outputs.file }}" ]; then
+            zstd -dc "${{ steps.img.outputs.file }}" | docker load
+            exit 0
+          fi
+          # Cold cache: let sandbox-cli build its own image (the Dockerfile and
+          # the proxy source are embedded in the binary, so reproducing the
+          # build context here by hand would be a second copy that drifts).
+          # --network none keeps the throwaway container off the network.
+          sandbox-cli run --network none -- true
+          mkdir -p "$(dirname "${{ steps.img.outputs.file }}")"
+          docker save "${{ steps.img.outputs.tag }}" \
+            | zstd -3 -T0 -o "${{ steps.img.outputs.file }}"
+
+      - name: Collect the diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p .sandbox-review
+          # Three-dot: the changes this branch introduced, not the difference
+          # against a base that has moved on.
+          git diff --unified=3 "$BASE_SHA...$HEAD_SHA" > pr.diff
+          # A diff the model cannot fit is worse than a truncated one it can:
+          # the agent still has the whole checkout to read for context.
+          head -c 300000 pr.diff > .sandbox-review/diff.patch
+          wc -c pr.diff .sandbox-review/diff.patch
+
+      - name: Write the review prompt
+        run: |
+          cat > .sandbox-review/prompt.md <<'PROMPT'
+          You are a senior staff engineer reviewing a pull request in this repository.
+
+          The diff under review is at .sandbox-review/diff.patch. Read it first.
+          Read CLAUDE.md, then read the surrounding source of anything the diff
+          touches — enough to judge it, no more. Do not review code the diff
+          does not touch unless the diff breaks it.
+
+          Focus on real defects in this order: correctness bugs, security and
+          isolation-boundary regressions, missing tests for risky paths,
+          concurrency and error handling. Do not report style, formatting, or
+          preferences. A finding you are not confident about is not a finding.
+
+          When you are done, write your review to .sandbox-review/review.json
+          and nothing else to stdout. That file must be exactly this JSON, with
+          no code fence and no prose around it:
+
+          {
+            "risk": "low" | "medium" | "high",
+            "summary": "2-4 sentences of markdown: what this PR does and the overall judgement",
+            "findings": [
+              {
+                "path": "path/relative/to/repo/root.go",
+                "line": 42,
+                "severity": "critical" | "high" | "medium" | "low",
+                "title": "one short line",
+                "body": "markdown: what is wrong, why it matters, how to fix it",
+                "suggestion": "optional: the exact replacement text for that single line"
+              }
+            ]
+          }
+
+          Rules for "line", because they decide whether the comment can be
+          posted at all: it is a line number in the NEW version of the file,
+          and it must be a line that appears in diff.patch as an added or
+          context line. Read the @@ hunk headers to get it right. A finding
+          about code outside the diff is still welcome — give the path and the
+          real line number, and it will be reported in the summary instead.
+
+          If there are no findings, write the file with an empty "findings" array.
+          PROMPT
+
+      - name: Run the review agent
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          PROMPT='You are a senior staff engineer performing a thorough code review of this pull request.
-
-          Output in this exact markdown structure:
-
-          ## 📋 PR Summary
-          - What this PR does (2-4 sentences)
-          - Key changes and intent
-          - Risk level: Low / Medium / High
-
-          ## 🔍 Detailed Findings
-          Group findings by severity (Critical / High / Medium / Low).
-          For each issue include: Location, Issue, Why it matters, Suggested fix.
-
-          ## 📊 Architecture / Flow Diagram
-          Include a Mermaid diagram only if the change involves non-trivial flow or multiple components.
-
-          ## 🧪 Test Coverage Gaps
-          List important missing tests. Write actual test code for the most critical ones.
-
-          ## ✅ Positive Notes
-          Mention well-written parts.
-
-          Be concise. Focus on real bugs, security, and correctness.'
-
+          set -euo pipefail
+          # Only api.anthropic.com. The profile drops the baseline (which
+          # includes github.com, a write endpoint), and this container holds an
+          # API key while reading a diff that may carry a prompt injection, so
+          # every domain not needed is one fewer channel out.
+          #
+          # stdout and stderr both go to the log, never to the data file: the
+          # old workflow merged them into review.md and got docker build
+          # progress where it expected a review.
           sandbox-cli claude \
             --profile prod \
             --no-metrics \
             --allow api.anthropic.com \
-            --allow anthropic.com \
-            --allow github.com \
-            --allow api.github.com \
-            --allow raw.githubusercontent.com \
+            --env DISABLE_TELEMETRY=1 \
+            --env DISABLE_ERROR_REPORTING=1 \
+            --env DISABLE_AUTOUPDATER=1 \
             -- \
-            -p "$PROMPT" > review.md 2>&1 || true
+            -p "$(cat .sandbox-review/prompt.md)" \
+            --dangerously-skip-permissions \
+            2>&1 | tee agent.log || true
 
-          echo "===== Review Output ====="
-          cat review.md || true
-
-      - name: Post inline review comments
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ ! -s review.md ] || grep -q "NO_FINDINGS" review.md; then
-            echo "No findings to post"
-            exit 0
+          if [ ! -s .sandbox-review/review.json ]; then
+            echo "::warning::agent produced no review.json"
           fi
 
-          # Create a formal review with inline comments using GitHub CLI + API
-          # We use a simple approach: post a review summary + individual line comments
-
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
-            -f commit_id="$(git rev-parse HEAD)" \
-            -f event="COMMENT" \
-            -f body="## 🤖 Sandbox Code Review
-
-          Automated review completed. See inline comments for details." \
-            --input - <<EOF
-          {
-            "commit_id": "$(git rev-parse HEAD)",
-            "event": "COMMENT",
-            "body": "## 🤖 Sandbox Code Review\n\nSee inline comments below.",
-            "comments": []
-          }
-          EOF
+      - name: Post the review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_JSON: .sandbox-review/review.json
+          DIFF_FILE: pr.diff
+        run: python3 .github/scripts/post_review.py
