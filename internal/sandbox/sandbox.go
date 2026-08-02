@@ -81,6 +81,15 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	}
 	spec.ForwardedEnv = fwd
 
+	// Collect the egress refusals the container reports, but only when there is an
+	// allowlist to be refused by. In default mode no proxy runs and no denial can
+	// occur, so a counter there would write a confident zero about a question that
+	// was never asked — the same reason EgressEnforcementRequested is empty rather
+	// than "address" for a run with no allowlist at all.
+	if spec.Env["SANDBOX_EGRESS_ALLOW"] != "" {
+		spec.Denials = &runtime.EgressDenials{}
+	}
+
 	// Recorded after the run, not before it: an audit line whose whole purpose is
 	// "what did this do and how did it end" is not worth much written at the
 	// moment nothing has happened yet.
@@ -228,6 +237,11 @@ func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode i
 		EnvNames: spec.EnvNames, // names only — never the values
 		ExitCode: exitCode,
 		Duration: took,
+
+		// Whatever the container reported being refused. Nil on a detached run,
+		// where nothing here held its stderr — see runtime.RunSpec.Denials.
+		EgressDeniedReported:      spec.Denials.Count(),
+		EgressDeniedHostsReported: spec.Denials.Hosts(),
 	}
 	for _, mnt := range spec.Mounts {
 		if mnt.Target == spec.Workdir {

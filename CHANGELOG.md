@@ -176,6 +176,18 @@ version is tagged.
   pass `--user "$(id -u):$(id -g)"` under rootless Podman — your host uid maps
   into the subuid range and the workspace becomes unreadable.
 
+- **The run log records what a run was refused.** Under an egress allowlist,
+  `~/.config/sandbox/audit/sessions.jsonl` now carries
+  `egress_denied_reported` and `egress_denied_hosts_reported` alongside
+  `egress_allow`, so a past run answers "did this try to reach something it was
+  not allowed to?" without scrollback.
+
+  The names are the caveat. These counts come from the lines the egress proxy
+  prints on the container's stderr — a stream the agent can also write to — so
+  they are the container's *report*, not an attested fact. A run with no
+  allowlist records neither field rather than a confident zero, and a detached
+  run records neither because nothing on the host is holding its stderr.
+
 ### Changed
 
 - **Agents installed on first use now install a pinned version**, recorded in one

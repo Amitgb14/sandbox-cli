@@ -94,3 +94,59 @@ func TestJSONLSinkNeverFailsARun(t *testing.T) {
 	var nilSink *JSONLSink
 	nilSink.RecordSession(SessionMeta{Image: "x"})
 }
+
+// TestJSONLSinkRecordsReportedDenials covers the field that answers the question
+// the policy fields cannot: `egress_allow` says what a run was *permitted* to
+// reach, never whether it went looking for anything else.
+//
+// The key names are asserted verbatim on purpose. They carry the caveat — these
+// counts come from lines the container printed on a stream the agent can also
+// write to — and a rename to `egress_denied` would quietly upgrade a report into
+// a claim.
+func TestJSONLSinkRecordsReportedDenials(t *testing.T) {
+	dir := t.TempDir()
+	NewJSONLSink(dir).RecordSession(SessionMeta{
+		Image:                     "sandbox-base:1",
+		Network:                   "allowlist",
+		EgressDeniedReported:      4,
+		EgressDeniedHostsReported: []string{"gist.github.com", "docs.python.org"},
+	})
+
+	raw, err := os.ReadFile(filepath.Join(dir, "sessions.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSpace(string(raw))
+
+	var got record
+	if err := json.Unmarshal([]byte(line), &got); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	if got.EgressDenied != 4 {
+		t.Errorf("denial count = %d, want 4", got.EgressDenied)
+	}
+	if len(got.EgressDeniedHosts) != 2 {
+		t.Errorf("denied hosts = %v, want both", got.EgressDeniedHosts)
+	}
+	for _, key := range []string{`"egress_denied_reported"`, `"egress_denied_hosts_reported"`} {
+		if !strings.Contains(line, key) {
+			t.Errorf("on-disk key %s is missing; the name is what carries the caveat:\n%s", key, line)
+		}
+	}
+}
+
+// TestJSONLSinkOmitsDenialsWhenThereWasNoAllowlist keeps a run that could not be
+// denied anything from carrying a confident zero. In default mode no proxy runs,
+// so "0 denials" would describe a question nobody asked.
+func TestJSONLSinkOmitsDenialsWhenThereWasNoAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	NewJSONLSink(dir).RecordSession(SessionMeta{Image: "sandbox-base:1", Network: "default"})
+
+	raw, err := os.ReadFile(filepath.Join(dir, "sessions.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "egress_denied") {
+		t.Errorf("a run with no allowlist recorded a denial field:\n%s", raw)
+	}
+}

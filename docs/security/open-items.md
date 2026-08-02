@@ -354,7 +354,7 @@ unbounded-but-observed container. Changing that is a real trade, not a bug fix.
 
 ---
 
-## 7. Denial logging is unreadable on macOS — **mostly resolved**
+## 7. Denial logging is unreadable on macOS — **DONE**
 
 Substantially closed by the name-enforcing proxy, which arrived after this item
 was written and changed what the gap actually is.
@@ -388,11 +388,35 @@ connection on, say, tcp/9999 shows the agent a refusal and tells the user nothin
 permitted every host sharing an allowlisted address) from a name-matched one.
 After the fact, that is the difference that matters.
 
-**What is left** is plumbing the proxy's denial lines back into the run log so
-`sessions.jsonl` answers "did this run try to reach something it was refused?"
-without scrollback. That means counting them in the output pipeline the metrics
-footer already uses — real work for a small remainder, and not obviously worth it
-while the lines are already on screen.
+**The remainder is now done.** The proxy's denial lines are counted on their way
+past and recorded in the run log, so `sessions.jsonl` answers "did this run try to
+reach something it was refused?" without scrollback:
+
+```json
+{"network":"allowlist","egress_enforcement_requested":"name",
+ "egress_denied_reported":4,
+ "egress_denied_hosts_reported":["gist.github.com","docs.python.org"], …}
+```
+
+Three things about the shape, all deliberate:
+
+- **Named for a report, not a fact.** The lines arrive on the container's stderr,
+  which the agent writes to as well, so any process in the sandbox can print one —
+  and can bury real ones in noise. `runtime.TestDenialsAreForgeableByTheGuest`
+  asserts that limitation on purpose; when a channel the guest cannot write to
+  exists, the field gets renamed in the same change. That is roadmap
+  [task 4](../roadmap/task-4-run-provenance.md), and it is the first required
+  feature there.
+- **Absent rather than zero** where the question was never asked: a run with no
+  allowlist has no proxy to refuse anything, and a detached run has nothing on the
+  host holding its stderr.
+- **Bounded**, because both inputs are the guest's to choose. The count is exact;
+  the host list is deduped and capped, so a loop over generated names cannot
+  decide how large one JSONL line gets.
+
+What remains genuinely open is the same thing as before, and it is smaller: a
+denial on a port other than 80 or 443 never reaches the proxy, so it is still
+counted by nothing and logged only to the VM's kernel buffer.
 
 <details><summary>Original entry</summary>
 

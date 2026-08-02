@@ -78,6 +78,30 @@ type SessionMeta struct {
 	// EnvNames are the host variables forwarded into the container, by name only.
 	EnvNames []string
 
+	// EgressDeniedReported is how many egress refusals the in-container proxy
+	// printed during the run, and EgressDeniedHostsReported a bounded sample of
+	// the distinct names involved. Together they answer the question the policy
+	// fields cannot: `egress_allow` says what the run was *permitted* to reach,
+	// not whether it went looking for anything else.
+	//
+	// **Reported, not attested**, and the names say so for the same reason
+	// EgressEnforcementRequested is named for a request. These lines arrive on the
+	// container's stderr, which the agent also writes to — so a compromised agent
+	// can print lines that look like denials, and can bury real ones in noise.
+	// What the host honestly knows is "this many lines claiming a denial came back
+	// from the container", and that is what the field is called.
+	//
+	// It is still worth recording: the failure mode it catches is the ordinary one
+	// — an allowlist that was too narrow, or an agent reaching somewhere nobody
+	// expected — and for that a truthful container is the normal case. Making it
+	// authoritative needs the proxy reporting over a channel the guest cannot
+	// write to.
+	//
+	// Zero on a detached run because nothing on the host is holding that
+	// container's stderr, not because nothing was denied.
+	EgressDeniedReported      int
+	EgressDeniedHostsReported []string
+
 	// Outcome, filled in once the run has finished.
 	ExitCode int
 	Duration time.Duration
@@ -113,9 +137,12 @@ type record struct {
 	EnforcedBy  string   `json:"egress_enforcement_requested,omitempty"`
 	EgressAllow []string `json:"egress_allow,omitempty"`
 	EnvNames    []string `json:"env_names,omitempty"`
-	ExitCode    int      `json:"exit_code"`
-	DurationMS  int64    `json:"duration_ms"`
-	Detached    bool     `json:"detached,omitempty"`
+	// Named for what the host knows, not for what happened — see SessionMeta.
+	EgressDenied      int      `json:"egress_denied_reported,omitempty"`
+	EgressDeniedHosts []string `json:"egress_denied_hosts_reported,omitempty"`
+	ExitCode          int      `json:"exit_code"`
+	DurationMS        int64    `json:"duration_ms"`
+	Detached          bool     `json:"detached,omitempty"`
 }
 
 // JSONLSink appends one line per run to a file.
@@ -166,9 +193,13 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 		EnforcedBy:  meta.EgressEnforcementRequested,
 		EgressAllow: meta.EgressAllow,
 		EnvNames:    meta.EnvNames,
-		ExitCode:    meta.ExitCode,
-		DurationMS:  meta.Duration.Milliseconds(),
-		Detached:    meta.Detached,
+
+		EgressDenied:      meta.EgressDeniedReported,
+		EgressDeniedHosts: meta.EgressDeniedHostsReported,
+
+		ExitCode:   meta.ExitCode,
+		DurationMS: meta.Duration.Milliseconds(),
+		Detached:   meta.Detached,
 	})
 	if err != nil {
 		return
