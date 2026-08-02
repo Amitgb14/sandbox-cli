@@ -150,7 +150,7 @@ export function ConsoleView({ run }: { run: Run }) {
       ) : (
         <p className="px-1 text-xs text-muted-foreground">
           {live && run.openStdin && !consoleEnabled
-            ? "This run has a console, but the daemon was started without a token — and typing at a running agent needs one. Restart it with -token (or $SANDBOX_STUDIO_TOKEN)."
+            ? "This run has a console, but the daemon was started without a token — and typing at a running agent needs one. Set SANDBOX_STUDIO_TOKEN in your .env (or pass -token) and restart the daemon, then paste the same value into the bar at the top of Studio."
             : live
             ? "This run has no console — it was launched without one, so the container was created with no stdin and cannot be typed at. Tick “Keep a console I can attach to” when launching."
               : "The run has finished. Its conversation is kept; there is nothing listening to answer."}

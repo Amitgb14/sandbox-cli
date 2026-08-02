@@ -141,12 +141,17 @@ export function TerminalView({ run }: { run: Run }) {
                   console disabled
                 </span>
               </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                This run has a console, but the daemon was started without a
-                token. Typing at a running agent — and sizing its terminal, which
-                is what makes it draw — needs one. Restart with
-                <code className="mx-1">-token</code> (or
-                <code className="mx-1">$SANDBOX_STUDIO_TOKEN</code>) and attach.
+              <TooltipContent className="max-w-xs space-y-1.5">
+                <p>
+                  This run has a console, but the daemon was started without a
+                  token — and typing at a running agent, or sizing its terminal
+                  (which is what makes it draw), needs one.
+                </p>
+                <p>
+                  Set <code>SANDBOX_STUDIO_TOKEN</code> in your{" "}
+                  <code>.env</code> and restart the daemon, then paste the same
+                  value into the bar Studio shows at the top.
+                </p>
               </TooltipContent>
             </Tooltip>
           )}
