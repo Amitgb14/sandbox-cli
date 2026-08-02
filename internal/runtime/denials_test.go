@@ -105,6 +105,15 @@ func TestDenyTapBoundsWhatTheContainerCanMakeUsStore(t *testing.T) {
 	if got := len(d.Hosts()); got != maxDenyHosts {
 		t.Errorf("kept %d hosts, want the cap of %d", got, maxDenyHosts)
 	}
+	// The dedupe map is the other thing the guest could grow, and asserting only
+	// on Hosts() let it grow unbounded while this test still passed — which is the
+	// worst kind of green, because the comment above claims the opposite.
+	d.mu.Lock()
+	seen := len(d.seen)
+	d.mu.Unlock()
+	if seen > maxDenyHosts {
+		t.Errorf("dedupe map holds %d entries, want at most %d — it is unbounded", seen, maxDenyHosts)
+	}
 
 	long := &EgressDenials{}
 	out := writeLines(t, long,
@@ -162,4 +171,43 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestDenyHostIsBoundedAndSanitised covers the other half of "the guest does not
+// decide how much of this we store": the host itself. Without a cap it is
+// whatever precedes the last colon of a line up to maxDenyLineBytes, so one
+// record could carry a quarter of a megabyte of guest-chosen bytes into an audit
+// log that rotates on the assumption a run is a few hundred.
+func TestDenyHostIsBoundedAndSanitised(t *testing.T) {
+	d := &EgressDenials{}
+	huge := strings.Repeat("x", maxDenyLineBytes/2)
+	writeLines(t, d, "sandbox-cli: egress DENY "+huge+".example:443 (nope)\n")
+
+	hosts := d.Hosts()
+	if len(hosts) != 1 {
+		t.Fatalf("hosts = %v, want one", hosts)
+	}
+	if len(hosts[0]) > maxHostBytes {
+		t.Errorf("host is %d bytes, want at most %d", len(hosts[0]), maxHostBytes)
+	}
+}
+
+// TestDenyHostStripsControlCharacters pins the sanitising half. These names are
+// written by the sandboxed process and end up in a JSONL record that other things
+// read and render, so a name may not carry an escape sequence — the same rule the
+// session table applies to branch names, applied to text that is less trusted
+// than a branch name.
+func TestDenyHostStripsControlCharacters(t *testing.T) {
+	d := &EgressDenials{}
+	writeLines(t, d, "sandbox-cli: egress DENY ev\x1b[31mil\x07.example:443 (nope)\n")
+
+	hosts := d.Hosts()
+	if len(hosts) != 1 {
+		t.Fatalf("hosts = %v, want one", hosts)
+	}
+	for _, r := range hosts[0] {
+		if r < 0x20 || r == 0x7f {
+			t.Errorf("recorded host carries control character %q: %q", r, hosts[0])
+		}
+	}
 }

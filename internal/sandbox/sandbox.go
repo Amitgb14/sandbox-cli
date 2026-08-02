@@ -81,12 +81,7 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	}
 	spec.ForwardedEnv = fwd
 
-	// Collect the egress refusals the container reports, but only when there is an
-	// allowlist to be refused by. In default mode no proxy runs and no denial can
-	// occur, so a counter there would write a confident zero about a question that
-	// was never asked — the same reason EgressEnforcementRequested is empty rather
-	// than "address" for a run with no allowlist at all.
-	if spec.Env["SANDBOX_EGRESS_ALLOW"] != "" {
+	if canObserveDenials(spec) {
 		spec.Denials = &runtime.EgressDenials{}
 	}
 
@@ -143,6 +138,30 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	meta.Detached = true
 	s.Audit.RecordSession(meta)
 	return name, startErr
+}
+
+// canObserveDenials reports whether this run's egress refusals can actually be
+// counted. Both conditions have to hold, and when either does not the audit line
+// carries no denial field at all — absent says "not asked", where a zero would
+// say "asked, and nothing was refused".
+//
+//   - There must be an allowlist to be refused by. In default mode no proxy runs
+//     and no denial can occur, so a counter would answer a question nobody put —
+//     the same reason EgressEnforcementRequested is empty rather than "address"
+//     for a run with no allowlist.
+//
+//   - The run must have no pty. With `-t` docker returns one merged stream on its
+//     own stdout, and the only way to read it is to interpose on stdout — which
+//     costs the container its terminal size (measured; see runtime.newDenyTap).
+//     An interactive agent is left unobserved rather than observed at the price of
+//     the thing the user is looking at.
+//
+// The second condition covers most agent sessions, so this field is quieter than
+// it looks. The denials still reach the screen, where an interactive user already
+// is; what is missing is the after-the-fact record, and giving that a channel of
+// its own rather than borrowing the guest's stdio is roadmap task 4.
+func canObserveDenials(spec runtime.RunSpec) bool {
+	return spec.Env["SANDBOX_EGRESS_ALLOW"] != "" && !spec.TTY
 }
 
 // gitIdentityValues, when --git is set, reads the host git user.name/email and

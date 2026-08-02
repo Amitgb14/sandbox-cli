@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"sync"
+
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
 // denyPrefix is the exact text internal/egressproxy/embed.go writes for a refused
@@ -55,6 +57,14 @@ func (e *EgressDenials) Observe(line string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.count++
+	// Stop before touching `seen` once the list is full. It exists only to keep
+	// duplicates out of `hosts`, so past the cap there is nothing left to dedupe
+	// against — and a map that kept growing would be the one unbounded thing here,
+	// which is exactly what the caps above promise it is not. The count still
+	// rises; only the sample is bounded.
+	if len(e.hosts) >= maxDenyHosts {
+		return
+	}
 	host := denyHost(line[len(denyPrefix):])
 	if host == "" || e.seen[host] {
 		return
@@ -63,9 +73,7 @@ func (e *EgressDenials) Observe(line string) {
 		e.seen = map[string]bool{}
 	}
 	e.seen[host] = true
-	if len(e.hosts) < maxDenyHosts {
-		e.hosts = append(e.hosts, host)
-	}
+	e.hosts = append(e.hosts, host)
 }
 
 // Count returns how many denial lines were seen.
@@ -89,21 +97,39 @@ func (e *EgressDenials) Hosts() []string {
 	return append([]string(nil), e.hosts...)
 }
 
+// maxHostBytes is the longest a recorded host may be. 253 is the longest a DNS
+// name can legitimately be, so nothing real is lost — and without it a "host" is
+// whatever the guest put before the last colon of a line up to maxDenyLineBytes
+// long, which is to say 8KB of its choosing, thirty-two times over. A ~256KB
+// record would rotate real history out of an audit log whose size ceiling was
+// written for lines "a few hundred bytes" long, and a guest that can evict the
+// audit trail is a worse outcome than one denial going uncounted.
+const maxHostBytes = 253
+
 // denyHost pulls the hostname out of "host:port (reason)".
 //
 // A connection with no name to check is logged as ":0" by the proxy, which is the
 // interesting case rather than a parse failure — it is what a client dialling a
 // bare address looks like. It has no host, so it contributes to the count and not
 // to the list.
+//
+// The result is truncated and then run through termsafe.Clean, because this
+// string is guest-controlled text that ends up in a JSONL record and, from there,
+// in whatever reads it. That is the same reasoning the session table already
+// applies to branch names, one step further down the trust ladder: a branch name
+// is at least written by someone with commit access, and this is written by the
+// sandboxed process.
 func denyHost(rest string) string {
 	if i := strings.IndexByte(rest, ' '); i >= 0 {
 		rest = rest[:i]
 	}
-	i := strings.LastIndexByte(rest, ':')
-	if i < 0 {
-		return rest
+	if i := strings.LastIndexByte(rest, ':'); i >= 0 {
+		rest = rest[:i]
 	}
-	return rest[:i]
+	if len(rest) > maxHostBytes {
+		rest = rest[:maxHostBytes]
+	}
+	return termsafe.Clean(rest)
 }
 
 // denyTap forwards everything written to it and counts denial lines on the way
@@ -123,6 +149,29 @@ type denyTap struct {
 
 // newDenyTap wraps dst, or returns dst unchanged when there is nothing to count
 // into — so a run that is not recording denials pays nothing at all.
+//
+// **Only stderr is ever wrapped, and only for a run with no pty.** That is a
+// limit rather than an oversight, and it was measured:
+//
+// Which host stream the proxy's lines arrive on depends on `-t`. Without a pty
+// docker demultiplexes and stderr is stderr. *With* one there is a single
+// hijacked stream carrying both, which the client copies to its own **stdout** —
+// so wrapping stderr sees nothing at all on an interactive run.
+//
+// The obvious repair is to wrap stdout too. It works, and it costs more than it
+// buys: an `io.Writer` that is not an *os.File makes os/exec hand docker a pipe,
+// docker then cannot see a terminal on its own stdout, and the container's
+// terminal size collapses. Measured through a real pty, guest `stty size`:
+//
+//	stderr tapped only          44 173   <- the client's real size
+//	stdout tapped as well        0   0   <- every agent TUI renders blind
+//
+// Breaking the size for every interactive agent to record a count is the wrong
+// trade, and it is the same shape as the tmux experiment CLAUDE.md warns against
+// repeating. So an interactive run is left **unobserved** and says so, rather
+// than being observed at the cost of the thing the user is looking at. Making it
+// observable needs a channel that is not the guest's stdio — which is the first
+// required feature of roadmap task 4, and is where this should be fixed.
 func newDenyTap(dst io.Writer, d *EgressDenials) io.Writer {
 	if d == nil {
 		return dst

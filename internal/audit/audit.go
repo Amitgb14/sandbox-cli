@@ -97,8 +97,14 @@ type SessionMeta struct {
 	// authoritative needs the proxy reporting over a channel the guest cannot
 	// write to.
 	//
-	// Zero on a detached run because nothing on the host is holding that
-	// container's stderr, not because nothing was denied.
+	// Three kinds of run record nothing here rather than a zero, because in none
+	// of them was the question asked: one with no allowlist (no proxy runs, so
+	// nothing can be refused), a detached one (nothing on the host holds that
+	// container's stderr), and an **interactive** one — with a pty docker returns a
+	// single merged stream and reading it would cost the container its terminal
+	// size, so sandbox-cli declines to look. See runtime.newDenyTap for the
+	// measurement. That last case covers most agent sessions, which is the honest
+	// shape of this field today and the reason roadmap task 4 exists.
 	EgressDeniedReported      int
 	EgressDeniedHostsReported []string
 
