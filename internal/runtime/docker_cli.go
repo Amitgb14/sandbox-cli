@@ -233,7 +233,7 @@ func (d *DockerCLI) Run(ctx context.Context, spec RunSpec) (int, error) {
 	}
 
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = newDenyTap(os.Stderr, spec.Denials)
 	return exitCodeOf(cmd.Run())
 }
 
@@ -292,7 +292,7 @@ func (d *DockerCLI) runWithLiveGauge(cmd *exec.Cmd, spec RunSpec) (int, error) {
 	outR, outW := io.Pipe()
 	errR, errW := io.Pipe()
 	cmd.Stdout = outW
-	cmd.Stderr = errW
+	cmd.Stderr = newDenyTap(errW, spec.Denials)
 
 	var pumps sync.WaitGroup
 	pumps.Add(2)
@@ -318,7 +318,7 @@ func (d *DockerCLI) runWithLiveGauge(cmd *exec.Cmd, spec RunSpec) (int, error) {
 // resource usage silently, then prints a one-line summary after the run.
 func (d *DockerCLI) runWithSummary(cmd *exec.Cmd, spec RunSpec) (int, error) {
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = newDenyTap(os.Stderr, spec.Denials)
 
 	meter := metrics.NewMeter(d.bin(), spec.Name, spec.Branch, nil) // nil footer => silent
 	meter.Start()

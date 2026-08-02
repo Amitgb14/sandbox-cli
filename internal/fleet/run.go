@@ -176,6 +176,64 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, tas
 		return res
 	}
 
+	// A finished container still holds the branch's container name, and docker
+	// refuses to create a second one with a name in use. Left to the engine that
+	// surfaces as `Conflict. The container name "/sandbox-<repo>-<branch>" is
+	// already in use by container "<64 hex chars>"` — which names neither the
+	// branch nor the fleet nor the command that fixes it, and reads like a bug in
+	// docker rather than a decision this tool made. The name is deliberate: it is
+	// what enforces one agent per branch. So the refusal is worth saying in the
+	// tool's own words, and pointing at the logs first, since reaping is what
+	// discards them.
+	stale, err := r.exitedFor(ctx, task.Branch)
+	if err != nil {
+		res.Err = err
+		return res
+	}
+	if stale != nil {
+		// Except under --resume, where the caller has already said "retry this one"
+		// and unfinished() selected this task *because* its last container exited
+		// non-zero — a failed verify above all, which is the case resume documents
+		// itself as existing for. Refusing here would leave --resume working only
+		// for tasks whose containers had already been reaped, which is the opposite
+		// of retrying the ones that failed. So the name is cleared rather than
+		// reported.
+		//
+		// Only under --resume: an ordinary re-run has asked for nothing to be
+		// discarded, and reaping is what destroys the logs. A backend that cannot
+		// remove containers still refuses, because there is nothing else it can do.
+		if wouldRefuseName(lo, r.Controller) {
+			res.Err = fmt.Errorf("%q already has a finished container (%s, exit %d) holding its name; "+
+				"read it with `sandbox-cli fleet logs %s`, then `sandbox-cli fleet clean %s` to run again",
+				task.Branch, stale.Name, stale.ExitCode, task.Branch, task.Branch)
+			return res
+		}
+		if err := r.Controller.Remove(ctx, stale.ID); err != nil {
+			res.Err = fmt.Errorf("removing the finished container holding %q's name (%s): %w",
+				task.Branch, stale.Name, err)
+			return res
+		}
+		// Said out loud because it is not recoverable: the logs of the run being
+		// retried are gone, and this is the only moment anyone could have read them.
+		r.logf("%s: reaped its finished container (%s, exit %d) to retry; those logs are gone",
+			task.Branch, stale.Name, stale.ExitCode)
+	} else {
+		// Nothing of the fleet's holds the name, which is not the same as the name
+		// being free — see nameHolder. Without this the one case the user is least
+		// able to guess at (their own interactive session, on a branch they also put
+		// in the fleet file) is the one that still surfaces as docker's raw conflict,
+		// which is the hole in the promise the refusal above exists to make.
+		held, err := r.nameHolder(ctx, task.Branch)
+		if err != nil {
+			res.Err = err
+			return res
+		}
+		if held != nil {
+			res.Err = interactiveNameRefusal(task.Branch, held)
+			return res
+		}
+	}
+
 	info, err := worktree.Resolve(r.Repo, task.Branch)
 	if err != nil {
 		res.Err = err
@@ -201,7 +259,15 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, tas
 	}
 	// The agent is named because a fleet may now mix them, and "which agent is on
 	// this branch" is then not something the file answers at a glance.
-	r.logf("started %s: %s on %s (%s worktree %s)", short(id), agent.Name, task.Branch, verb, info.Path)
+	//
+	// No id here, deliberately. This line used to open with one, but Session.Start
+	// returns the container *name* rather than an id, and every fleet container in
+	// a repository is named sandbox-<repo>-<branch> — so truncating it to docker's
+	// 12 characters printed the identical "sandbox-sand" for every task, which
+	// identifies nothing and reads like it should. The branch is the fleet's
+	// handle everywhere else (logs, stop, land all take one), and `fleet status`
+	// prints the real ids from the inspector for the commands that want one.
+	r.logf("started %s on %s (%s worktree %s)", agent.Name, task.Branch, verb, info.Path)
 	return res
 }
 
@@ -268,12 +334,7 @@ func (r *Runner) options(spec Spec, lo LaunchOptions, agent agents.Descriptor, t
 
 // runningFor returns the running container working branch, or nil.
 func (r *Runner) runningFor(ctx context.Context, branch string) (*runtime.ContainerInfo, error) {
-	infos, err := r.Inspector.Containers(ctx, map[string]string{
-		sandbox.LabelCLI:    "1",
-		sandbox.LabelFleet:  "1",
-		sandbox.LabelRepo:   r.RepoID,
-		sandbox.LabelBranch: branch,
-	})
+	infos, err := r.branchContainers(ctx, branch)
 	if err != nil {
 		return nil, err
 	}
@@ -283,6 +344,79 @@ func (r *Runner) runningFor(ctx context.Context, branch string) (*runtime.Contai
 		}
 	}
 	return nil, nil
+}
+
+// exitedFor returns the most recent finished container for branch, or nil.
+//
+// Containers arrive newest first, so the first match is the one whose name is in
+// the way.
+func (r *Runner) exitedFor(ctx context.Context, branch string) (*runtime.ContainerInfo, error) {
+	infos, err := r.branchContainers(ctx, branch)
+	if err != nil {
+		return nil, err
+	}
+	for i := range infos {
+		if !infos[i].Running() {
+			return &infos[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// nameHolder returns a container of this repository that holds branch's
+// container name but is *not* the fleet's, or nil.
+//
+// Docker's name namespace does not know about labels. An interactive
+// `sandbox-cli <agent> --detach` on this branch is named sandbox-<repo>-<branch>
+// exactly as a fleet agent is, so it blocks the launch just the same — while
+// being invisible to every lookup above, all of which filter on sandbox.fleet
+// and must keep doing so, since that label is what stops `fleet stop --all` and
+// `fleet clean` reaching someone's live session.
+//
+// So this is for the refusal message and nothing else. It reports; it never
+// reaps, not even under --resume: a session someone started interactively is not
+// the fleet's to discard, and the whole point of the label is that fleet commands
+// act only on what the fleet started.
+func (r *Runner) nameHolder(ctx context.Context, branch string) (*runtime.ContainerInfo, error) {
+	infos, err := r.Inspector.Containers(ctx, map[string]string{
+		sandbox.LabelCLI:    "1",
+		sandbox.LabelRepo:   r.RepoID,
+		sandbox.LabelBranch: branch,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range infos {
+		if infos[i].Labels[sandbox.LabelFleet] == "" {
+			return &infos[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// interactiveNameRefusal explains a name held by a session the fleet did not
+// start, and names the command that clears it — which is not a fleet command.
+func interactiveNameRefusal(branch string, held *runtime.ContainerInfo) error {
+	if held.Running() {
+		return fmt.Errorf("%q's container name is held by a running interactive session (%s), not a fleet agent; "+
+			"see it with `sandbox-cli list`, then stop it with `sandbox-cli kill %s`",
+			branch, held.Name, held.Name)
+	}
+	return fmt.Errorf("%q's container name is held by a finished interactive session (%s), not a fleet agent; "+
+		"read it with `sandbox-cli logs %s`, then reap it with `sandbox-cli clean`",
+		branch, held.Name, held.Name)
+}
+
+// branchContainers lists this fleet's containers for one branch. Filtered on
+// sandbox.fleet like every other lookup here, so an interactive `--detach`
+// session on the same branch is not mistaken for a fleet agent.
+func (r *Runner) branchContainers(ctx context.Context, branch string) ([]runtime.ContainerInfo, error) {
+	return r.Inspector.Containers(ctx, map[string]string{
+		sandbox.LabelCLI:    "1",
+		sandbox.LabelFleet:  "1",
+		sandbox.LabelRepo:   r.RepoID,
+		sandbox.LabelBranch: branch,
+	})
 }
 
 // waitForSlot blocks until fewer than max of this fleet's containers are
@@ -328,12 +462,4 @@ func (r *Runner) logf(format string, args ...any) {
 		w = os.Stderr
 	}
 	fmt.Fprintf(w, "sandbox-cli: "+format+"\n", args...)
-}
-
-// short truncates a container id to the 12 characters docker itself displays.
-func short(id string) string {
-	if len(id) > 12 {
-		return id[:12]
-	}
-	return id
 }

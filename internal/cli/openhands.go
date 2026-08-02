@@ -29,17 +29,31 @@ var openhandsEnvAllow = []string{
 // the only route that works here without dragging an interpreter in.
 //
 // The vendor install script is not used: it pins a version well behind the
-// current release. This asks the releases API for the latest tag and falls back
-// to a known-good one when that is unreachable, so an offline or allowlisted
-// sandbox still gets a working agent rather than nothing.
-const openhandsInstall = `mkdir -p "$HOME/.local/bin"
+// current release. This fetches the release asset directly, at the version the
+// pin table records (internal/agents/pins.go).
+//
+// It used to ask the releases API for the latest tag and fall back to a hardcoded
+// one. That is now the pin: asking for "latest" meant the version installed was
+// whichever one existed at the moment of the run, which is exactly what the pin
+// table exists to stop. It also removes a second network dependency —
+// api.github.com had to be reachable for the *usual* path to work, and under
+// `--allow` it often is not, so the fallback was doing more of the work than it
+// looked like.
+//
+// The failure mode changed shape and is worth knowing: there is no degradation
+// path any more. If this release asset is ever yanked or 404s, the download fails
+// and the run ends with the bootstrap's generic "installing it just now failed"
+// and exit 127, where previously it would have resolved a different tag and
+// carried on. That is the price of a pin — a deterministic install that can go
+// wrong deterministically — and the fix is to bump the pin, not to restore the
+// lookup.
+var openhandsInstall = `mkdir -p "$HOME/.local/bin"
 case "$(uname -m)" in
   x86_64) oh_arch=x86_64 ;;
   aarch64|arm64) oh_arch=arm64 ;;
   *) echo "sandbox-cli: unsupported architecture for openhands" >&2; exit 1 ;;
 esac
-oh_ver=$(curl -fsSL https://api.github.com/repos/OpenHands/OpenHands-CLI/releases/latest 2>/dev/null | jq -r '.tag_name // empty')
-[ -n "$oh_ver" ] || oh_ver=1.16.0
+oh_ver=` + pinnedSpec("openhands", "") + `
 curl -fsSL "https://github.com/OpenHands/OpenHands-CLI/releases/download/$oh_ver/openhands-linux-$oh_arch" \
   -o "$HOME/.local/bin/openhands" && chmod +x "$HOME/.local/bin/openhands"`
 

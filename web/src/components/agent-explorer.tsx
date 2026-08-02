@@ -4,7 +4,7 @@ import { useState } from "react";
 import { CircleAlert, Download, Info, KeyRound, Package } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/copy-button";
-import { AGENTS } from "@/lib/agents";
+import { AGENTS, FIRST_RUN_NOTE } from "@/lib/agents";
 import { cn } from "@/lib/utils";
 
 export function AgentExplorer({ className }: { className?: string }) {
@@ -130,6 +130,22 @@ export function AgentExplorer({ className }: { className?: string }) {
                 </li>
               ))}
             </ul>
+          </div>
+        ) : null}
+
+        {agent.delivery === "first-run" ? (
+          <div className="flex flex-col gap-1.5">
+            <p className="eyebrow">
+              <Download className="size-3" /> first run
+            </p>
+            <code className="no-scrollbar overflow-x-auto rounded-lg border bg-surface px-3 py-2 font-mono text-[0.7rem] whitespace-nowrap text-muted-foreground">
+              {FIRST_RUN_NOTE.line}
+            </code>
+            <p className="text-[0.8rem] leading-relaxed text-muted-foreground">{FIRST_RUN_NOTE.body}</p>
+            <p className="text-[0.78rem] leading-relaxed text-muted-foreground">
+              <span className="text-contained">Buys:</span> {FIRST_RUN_NOTE.buys}{" "}
+              <span className="text-caution">Does not:</span> {FIRST_RUN_NOTE.doesNotBuy}
+            </p>
           </div>
         ) : null}
 

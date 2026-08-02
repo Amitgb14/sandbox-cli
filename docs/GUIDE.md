@@ -582,13 +582,19 @@ that confidently did nothing and the one that deleted the failing test. A
 is the verdict:
 
 ```
-ID            BRANCH             AGENT   STATE       ELAPSED  DIRTY  AHEAD
-a1b2c3d4e5f6  feature-login      claude  exited 0    4m12s    0      3
-b2c3d4e5f6a7  feature-ratelimit  codex   exited 90   2m03s    7      0
+ID            BRANCH             AGENT   STATE       VERIFY  ELAPSED  DIRTY  AHEAD
+a1b2c3d4e5f6  feature-login      claude  exited 0    passed  4m12s    0      3
+b2c3d4e5f6a7  feature-ratelimit  codex   exited 90   failed  2m03s    7      0
 ```
 
 Exit `90` means the agent finished and its verify said no. `fleet land` refuses
 that branch until you fix it or override with `--force`.
+
+Read the `VERIFY` column rather than the exit code, because `exited 0` answers a
+different question than the one it looks like it answers: a container exits 0
+when its verify passed, and also when the task declared no verify at all. The
+column keeps those apart — `passed`, `failed`, `none` (nothing checked it),
+`unchecked` (the run died before reaching its verify), `pending` (still running).
 
 That `ID` is the same one `sandbox-cli list` prints and the same one `logs`,
 `attach` and `kill` accept — a fleet agent is a [session](#sessions) like any
@@ -1350,7 +1356,7 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli fleet logs BRANCH [-f]` | What one fleet agent said |
 | `sandbox-cli fleet stop [BRANCH\|--all]` | Stop a fleet agent |
 | `sandbox-cli fleet land BRANCH\|--all` | Commit and merge finished work, refusing on any ambiguity |
-| `sandbox-cli fleet clean [--worktrees]` | Reap finished fleet containers (and clean checkouts) |
+| `sandbox-cli fleet clean [--worktrees] [--force]` | Reap finished fleet containers (and clean checkouts); `--force` reaps ones whose branch still has work to land |
 | `sandbox-cli recover` | What a crashed run left behind, and what's broken ([runbook](#after-a-crash-step-by-step)) |
 | `sandbox-cli recover list\|show\|restore` | Find and restore work from a crashed run |
 | `sandbox-cli recover repair` | Fix a repository a crashed sandbox broke |

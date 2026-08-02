@@ -42,8 +42,14 @@ const gooseDisableKeyring = "GOOSE_DISABLE_KEYRING=1"
 //
 // The env assignments belong to bash rather than to curl — `VAR=x curl … | bash`
 // would set them for the wrong process, and the installer would not see them.
-const gooseInstall = `curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh` +
-	` | CONFIGURE=false GOOSE_BIN_DIR="$HOME/.local/bin" bash`
+//
+// GOOSE_VERSION is the installer's own documented way to ask for a release rather
+// than whatever `stable` points at today; the number comes from the pin table
+// (internal/agents/pins.go). The script is still fetched from the `stable` tag,
+// because that is the only URL the vendor publishes it at — so the pin governs
+// which binary is installed, not which installer runs.
+var gooseInstall = `curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh` +
+	` | CONFIGURE=false GOOSE_BIN_DIR="$HOME/.local/bin"` + pinnedSpec("goose", " GOOSE_VERSION=v") + ` bash`
 
 func newGooseCmd() *cobra.Command {
 	rf := &runFlags{}

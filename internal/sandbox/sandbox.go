@@ -81,6 +81,10 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	}
 	spec.ForwardedEnv = fwd
 
+	if canObserveDenials(spec) {
+		spec.Denials = &runtime.EgressDenials{}
+	}
+
 	// Recorded after the run, not before it: an audit line whose whole purpose is
 	// "what did this do and how did it end" is not worth much written at the
 	// moment nothing has happened yet.
@@ -134,6 +138,43 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	meta.Detached = true
 	s.Audit.RecordSession(meta)
 	return name, startErr
+}
+
+// canObserveDenials reports whether this run's egress refusals can actually be
+// counted. Both conditions have to hold, and when either does not the audit line
+// carries no denial field at all.
+//
+// That absence is load-bearing, which is why the audit field is a pointer: a run
+// nobody looked at and a run that was looked at and refused nothing are different
+// facts, and the second is recorded as an explicit 0.
+//
+//   - There must be an allowlist to be refused by. In default mode no proxy runs
+//     and no denial can occur, so a counter would answer a question nobody put —
+//     the same reason EgressEnforcementRequested is empty rather than "address"
+//     for a run with no allowlist.
+//
+//   - The run must have no pty. With `-t` docker returns one merged stream on its
+//     own stdout, and the only way to read it is to interpose on stdout — which
+//     costs the container its terminal size (measured; see runtime.newDenyTap).
+//     An interactive agent is left unobserved rather than observed at the price of
+//     the thing the user is looking at.
+//
+// **There is a third condition this function cannot express: it is only called
+// from Run.** Start — which is every `--detach` session and every fleet task —
+// never wires a collector, because nothing in this process is holding that
+// container's output. That is not the same as the output being lost: `docker
+// logs` has it, and reading it back at `fleet status` or reap time is the
+// obvious way to cover the unattended case, which is where an after-the-fact
+// record is worth most. Recorded in docs/roadmap/task-4-run-provenance.md rather
+// than left implied by this function's absence from Start.
+//
+// Between that and the pty rule, what is actually covered today is a
+// non-interactive `run` under an allowlist — CI, a redirected shell, `--no-tty`.
+// Say that plainly anywhere this field is described; it is much narrower than
+// "runs with an allowlist". The denials still reach the screen in the
+// interactive case, where the user already is; what is missing is the record.
+func canObserveDenials(spec runtime.RunSpec) bool {
+	return spec.Env["SANDBOX_EGRESS_ALLOW"] != "" && !spec.TTY
 }
 
 // gitIdentityValues, when --git is set, reads the host git user.name/email and
@@ -228,6 +269,14 @@ func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode i
 		EnvNames: spec.EnvNames, // names only — never the values
 		ExitCode: exitCode,
 		Duration: took,
+	}
+	// Set only when the run was actually observed, so a nil here and a zero mean
+	// different things in the record — see audit.SessionMeta. A run that was not
+	// looked at must not report "nothing was refused".
+	if spec.Denials != nil {
+		n := spec.Denials.Count()
+		m.EgressDeniedReported = &n
+		m.EgressDeniedHostsReported = spec.Denials.Hosts()
 	}
 	for _, mnt := range spec.Mounts {
 		if mnt.Target == spec.Workdir {

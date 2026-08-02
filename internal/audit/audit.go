@@ -79,6 +79,57 @@ type SessionMeta struct {
 	// EnvNames are the host variables forwarded into the container, by name only.
 	EnvNames []string
 
+	// EgressDeniedReported is how many egress refusals the in-container proxy
+	// printed during the run, and EgressDeniedHostsReported a bounded sample of
+	// the distinct names involved. Together they answer the question the policy
+	// fields cannot: `egress_allow` says what the run was *permitted* to reach,
+	// not whether it went looking for anything else.
+	//
+	// **Reported, not attested**, and the names say so for the same reason
+	// EgressEnforcementRequested is named for a request. These lines arrive on the
+	// container's stderr, which the agent also writes to — so a compromised agent
+	// can print lines that look like denials, and can bury real ones in noise.
+	// What the host honestly knows is "this many lines claiming a denial came back
+	// from the container", and that is what the field is called.
+	//
+	// It is still worth recording: the failure mode it catches is the ordinary one
+	// — an allowlist that was too narrow, or an agent reaching somewhere nobody
+	// expected — and for that a truthful container is the normal case. Making it
+	// authoritative needs the proxy reporting over a channel the guest cannot
+	// write to.
+	//
+	// A **pointer** so that "nobody looked" and "looked, and nothing was refused"
+	// are different answers. They are not the same fact, and the zero one is the
+	// more useful of the two: a recorded 0 is the only positive evidence a run's
+	// allowlist was wide enough for everything it actually wanted.
+	//
+	// nil means the run was not observed, and today that is most runs. Only a
+	// non-interactive `run` under an allowlist is watched. The rest:
+	//
+	//   - **no allowlist** — no proxy runs, so nothing could be refused.
+	//   - **interactive** — with a pty docker returns one merged stream, and
+	//     reading it would cost the container its terminal size, so sandbox-cli
+	//     declines to look (see runtime.newDenyTap for the measurement).
+	//   - **detached, which includes every fleet task** — Session.Start never
+	//     wires a collector. Note the reason is *not* that the output is gone:
+	//     `docker logs` has it, which is the whole supervision story --detach is
+	//     built around. Nothing reads it back yet. That is the wrong way round —
+	//     an unattended fleet is where an after-the-fact record is worth most —
+	//     and it is recorded as follow-up in docs/roadmap/task-4-run-provenance.md.
+	//
+	// `network` separates the first case from the others after the fact: `default`
+	// means there was nothing to refuse, `allowlist` with this field absent means
+	// an allowlist was in force and nobody watched.
+	//
+	// **The host sample is not a random sample, and an adversary picks it.** The
+	// count is exact, but the names are the *first* maxDenyHosts distinct ones
+	// seen, and a guest can forge denial lines — so one that emits 32 invented
+	// names first fills the sample and every real refusal after that is counted
+	// but unnamed. The field is called "reported" for exactly this reason; treat
+	// the list as a hint and the count as the number.
+	EgressDeniedReported      *int
+	EgressDeniedHostsReported []string
+
 	// Outcome, filled in once the run has finished.
 	ExitCode int
 	Duration time.Duration
@@ -114,9 +165,15 @@ type record struct {
 	EnforcedBy  string   `json:"egress_enforcement_requested,omitempty"`
 	EgressAllow []string `json:"egress_allow,omitempty"`
 	EnvNames    []string `json:"env_names,omitempty"`
-	ExitCode    int      `json:"exit_code"`
-	DurationMS  int64    `json:"duration_ms"`
-	Detached    bool     `json:"detached,omitempty"`
+	// Named for what the host knows, not for what happened — see SessionMeta. A
+	// pointer so `omitempty` drops only an unobserved run: a pointer to 0 is
+	// non-nil, so "looked, nothing refused" is written as an explicit 0 instead of
+	// vanishing the way a bare int would.
+	EgressDenied      *int     `json:"egress_denied_reported,omitempty"`
+	EgressDeniedHosts []string `json:"egress_denied_hosts_reported,omitempty"`
+	ExitCode          int      `json:"exit_code"`
+	DurationMS        int64    `json:"duration_ms"`
+	Detached          bool     `json:"detached,omitempty"`
 }
 
 // JSONLSink appends one line per run to a file.
@@ -167,9 +224,13 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 		EnforcedBy:  meta.EgressEnforcementRequested,
 		EgressAllow: meta.EgressAllow,
 		EnvNames:    meta.EnvNames,
-		ExitCode:    meta.ExitCode,
-		DurationMS:  meta.Duration.Milliseconds(),
-		Detached:    meta.Detached,
+
+		EgressDenied:      meta.EgressDeniedReported,
+		EgressDeniedHosts: meta.EgressDeniedHostsReported,
+
+		ExitCode:   meta.ExitCode,
+		DurationMS: meta.Duration.Milliseconds(),
+		Detached:   meta.Detached,
 	})
 	if err != nil {
 		return

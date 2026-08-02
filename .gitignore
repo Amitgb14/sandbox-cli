@@ -8,3 +8,5 @@ docs/proposals/
 # docker compose reads this automatically. It names a config file you have
 # decided to trust and may hold a Studio API token — both are per-machine.
 /.env
+node_modules
+.next/
