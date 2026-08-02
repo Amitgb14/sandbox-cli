@@ -70,6 +70,20 @@ export const FEATURES: Feature[] = [
     state: "default",
   },
   {
+    title: "And what it was refused",
+    group: "observability",
+    body: "Under an allowlist the same line records how many egress refusals the run reported and a sample of the names, so you can answer \"did this go looking for something it was not allowed to?\" without the scrollback. The field is called egress_denied_reported rather than egress_denied on purpose: the proxy prints those lines on the container's stderr, which the agent can write to as well, so this is the container's report and not an attested fact. A run with no allowlist records nothing rather than a confident zero.",
+    code: '"egress_denied_reported": 2, "egress_denied_hosts_reported": ["gist.github.com"]',
+    state: "default",
+  },
+  {
+    title: "Agents install a version somebody chose",
+    group: "boundary",
+    body: "Eleven of the fifteen wrappers download their agent from a vendor host the first time you run it. Each one installs a version recorded in the tool, announced as it installs, rather than whatever the vendor published that morning — so a hijacked or typosquatted release does not reach a sandbox until someone bumps that line. It does not defend against a compromised registry serving different bytes for a version it already published; that needs integrity hashes a global install has no lockfile for. Self-updating agents are unaffected after the first run.",
+    code: "sandbox-cli: installing qwen 0.21.3 into the sandbox agent home (first run only)...",
+    state: "default",
+  },
+  {
     title: "One host path, mounted on purpose",
     group: "boundary",
     body: "The project you chose is bind-mounted at /workspace and nothing else is host-connected. HOME, /etc and / inside the container are ephemeral and destroyed on exit.",
