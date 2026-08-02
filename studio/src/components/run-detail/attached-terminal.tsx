@@ -104,6 +104,58 @@ export function AttachedTerminal({
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
+
+      /**
+       * Refuse the agent's request to own the mouse.
+       *
+       * Claude Code asks for mouse tracking (`?1000h`, `?1002h`, `?1003h`), and
+       * once a terminal grants it the pointer belongs to the application: a
+       * drag is reported to the agent instead of making a selection, so
+       * **text cannot be copied**. Shift-drag is the usual escape hatch, and it
+       * is not something anyone should have to know.
+       *
+       * We already decided mouse events stop at the browser — forwarding them
+       * broke typing outright — so granting the mode buys nothing and costs
+       * selection. Swallowing the request is the coherent version of that
+       * decision: the pointer is the browser's, for selecting and copying, and
+       * the agent is driven from the keyboard.
+       *
+       * Done through the parser rather than by filtering bytes out of the
+       * stream, because these sequences can be split across two reads and a
+       * hand-rolled filter would have to reassemble them. Returning true means
+       * "handled", which is what stops the default from running.
+       */
+      const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
+      const swallowMouseMode = (params: (number | number[])[]) => {
+        const wanted = params.map((p) => (Array.isArray(p) ? p[0] : p));
+        return wanted.some((p) => MOUSE_MODES.has(p));
+      };
+      term.parser.registerCsiHandler({ prefix: "?", final: "h" }, swallowMouseMode);
+      term.parser.registerCsiHandler({ prefix: "?", final: "l" }, swallowMouseMode);
+
+      /**
+       * Ctrl-Shift-C copies, the way a terminal does it.
+       *
+       * Ctrl-C must keep reaching the agent — interrupting it is half the
+       * reason to attach — so it cannot double as copy. On macOS Cmd-C is the
+       * browser's own copy and already works; everywhere else there would
+       * otherwise be no way to get text out at all, which is the terminal
+       * convention this borrows.
+       *
+       * Returning false stops xterm passing the chord through to the container.
+       */
+      term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+        if (e.type !== "keydown") return true;
+        if (e.ctrlKey && e.shiftKey && e.code === "KeyC") {
+          const selected = term.getSelection();
+          if (selected) {
+            void navigator.clipboard.writeText(selected);
+            return false;
+          }
+        }
+        return true;
+      });
+
       term.open(host);
       fit.fit();
       term.focus();
@@ -259,7 +311,8 @@ export function AttachedTerminal({
       <div className="flex items-center gap-2">
         <p className="text-xs text-muted-foreground">
           Attached to {run.name}. Everything you type goes to the agent —
-          including Ctrl-C, which interrupts it rather than closing this.
+          including Ctrl-C, which interrupts it rather than closing this. Select
+          to copy (⌘C, or Ctrl-Shift-C).
         </p>
         <Button
           variant="outline"
