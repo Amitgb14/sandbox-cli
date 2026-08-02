@@ -234,14 +234,14 @@ func renderFleetStatus(w io.Writer, rows []fleet.Status) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tBRANCH\tAGENT\tSTATE\tELAPSED\tDIRTY\tAHEAD")
+	fmt.Fprintln(tw, "ID\tBRANCH\tAGENT\tSTATE\tVERIFY\tELAPSED\tDIRTY\tAHEAD")
 	for _, s := range rows {
 		// Branch and agent are label values, which is text from the repository
 		// arriving in a tab-separated table on a terminal. Cleaned for the same
 		// reason `list` cleans them: a branch name must not be able to forge a row.
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%d\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\n",
 			fleetSessionID(s), termsafe.Clean(s.Branch), dash(termsafe.Clean(s.Agent)),
-			fleetState(s), fleetElapsed(s), s.Dirty, s.Ahead)
+			fleetState(s), dash(string(s.Verify)), fleetElapsed(s), s.Dirty, s.Ahead)
 	}
 	return tw.Flush()
 }
@@ -441,12 +441,16 @@ func printLanded(res fleet.LandResult) {
 }
 
 func newFleetCleanCmd() *cobra.Command {
-	var worktrees bool
+	var worktrees, force bool
 	cmd := &cobra.Command{
 		Use:   "clean [BRANCH]",
 		Short: "Remove exited fleet containers",
 		Long: "Fleet containers outlive their agents so their logs and exit codes survive;\n" +
 			"this removes the ones that have finished. Running agents are never touched.\n\n" +
+			"A branch that still has work to land is also kept: `fleet land` reads the\n" +
+			"branch, its base and its verify result off the container, so reaping one is\n" +
+			"how a finished, passing branch becomes mergeable only by hand. Land first, or\n" +
+			"pass --force to reap it anyway.\n\n" +
 			"With --worktrees it also removes the branches' checkouts — but only the clean\n" +
 			"ones. A worktree with uncommitted work is kept and reported, because that work\n" +
 			"exists nowhere else.",
@@ -460,7 +464,7 @@ func newFleetCleanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := r.Clean(cmd.Context(), branch, worktrees)
+			res, err := r.Clean(cmd.Context(), branch, worktrees, force)
 			if len(res.Containers) > 0 {
 				fmt.Printf("removed containers for: %s\n", strings.Join(res.Containers, ", "))
 			}
@@ -480,6 +484,7 @@ func newFleetCleanCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&worktrees, "worktrees", false, "also remove the branches' worktrees, skipping any with uncommitted work")
+	cmd.Flags().BoolVar(&force, "force", false, "reap containers for branches that still have work to land")
 	return cmd
 }
 
@@ -592,6 +597,10 @@ func printFleetPlan(ctx context.Context, r *fleet.Runner, spec fleet.Spec, opts 
 		}
 		if p.AlreadyRunning {
 			fmt.Printf("SKIPPED:  an agent is already running on this branch (%s)\n", p.RunningInName)
+		}
+		if p.NameHeldBy != "" {
+			fmt.Printf("REFUSED:  a finished container still holds this branch's name (%s);\n"+
+				"          `sandbox-cli fleet clean %s` to run it again\n", p.NameHeldBy, p.Branch)
 		}
 	}
 	// A mixed fleet's login requirement, said once at the end where it can be

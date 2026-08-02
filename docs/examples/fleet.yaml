@@ -9,6 +9,19 @@
 # Try it without launching anything first:
 #
 #   sandbox-cli fleet run -f fleet.yaml --dry-run
+#
+# There is deliberately no `image:` key here. The base image ships node and npm
+# but no other toolchain, so a `verify:` of `go build ./...` or `cargo test`
+# exits 127 in it — and the fix is a config layer, not a fleet one: a task does
+# not choose what it runs in. Put it in your own config, or name one explicitly:
+#
+#   # ~/.config/sandbox/config.yaml
+#   image: my-org/sandbox-go:latest
+#
+#   sandbox-cli fleet run -c ./ci.yaml     # or an explicitly named file
+#
+# Same for `mounts:` and `env_allow:`. A fleet file travels with the repository;
+# the keys that decide what a container reaches stay somewhere you had to type.
 
 # The agent tasks run when they do not name one of their own. Only agents with a
 # verified headless mode may appear — a fleet is unattended, and an agent that

@@ -34,10 +34,26 @@ const VerifyFailedExit = 90
 // verify command is the definition of done — that is the whole point of the field
 // — so it, not the agent, gets the last word. Both codes are printed so `fleet
 // logs` still shows what the agent thought.
+//
+// The verify runs in a subshell, and that is load-bearing rather than tidy. It
+// used to be interpolated into this script directly, which shares one shell with
+// the mapping below — so a verify containing `exit 1`, the obvious way to write
+// `test -d build || { echo …; exit 1; }`, terminated the wrapper before it could
+// turn the result into VerifyFailedExit. The container then exited 1, and 1 is
+// the code for "died before its verify ran": a check that ran and correctly said
+// no was reported as a check that never happened, which `fleet status` shows as
+// `unchecked` and `land` refuses with the wrong reason.
+//
+// `set -e` had the same effect for free, and it is the first line of any careful
+// verify. Parentheses contain both: `exit` leaves the subshell, its status lands
+// in $?, and the mapping below is the only thing that decides the container's
+// exit code.
 const verifyScript = `"$@"
 sandbox_agent_rc=$?
 echo "sandbox-cli: agent exited $sandbox_agent_rc; running verify" >&2
+(
 %s
+)
 sandbox_verify_rc=$?
 if [ "$sandbox_verify_rc" -eq 0 ]; then
   echo "sandbox-cli: verify passed" >&2
