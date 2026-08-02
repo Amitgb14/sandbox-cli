@@ -1,41 +1,41 @@
-      - name: Run enhanced code review
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          PROMPT='You are a senior staff engineer performing a thorough code review of this pull request.
+- name: Run enhanced code review
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  run: |
+    PROMPT='You are a senior staff engineer performing a thorough code review of this pull request.
 
-          Output in this exact markdown structure:
+    Output in this exact markdown structure:
 
-          ## 📋 PR Summary
-          - What this PR does (2-4 sentences)
-          - Key changes and intent
-          - Risk level: Low / Medium / High
+    ## 📋 PR Summary
+    - What this PR does (2-4 sentences)
+    - Key changes and intent
+    - Risk level: Low / Medium / High
 
-          ## 🔍 Detailed Findings
-          Group findings by severity (Critical / High / Medium / Low).
-          For each issue include: Location, Issue, Why it matters, Suggested fix.
+    ## 🔍 Detailed Findings
+    Group findings by severity (Critical / High / Medium / Low).
+    For each issue include: Location, Issue, Why it matters, Suggested fix.
 
-          ## 📊 Architecture / Flow Diagram
-          Include a Mermaid diagram only if the change involves non-trivial flow or multiple components.
+    ## 📊 Architecture / Flow Diagram
+    Include a Mermaid diagram only if the change involves non-trivial flow or multiple components.
 
-          ## 🧪 Test Coverage Gaps
-          List important missing tests. Write actual test code for the most critical ones.
+    ## 🧪 Test Coverage Gaps
+    List important missing tests. Write actual test code for the most critical ones.
 
-          ## ✅ Positive Notes
-          Mention well-written parts.
+    ## ✅ Positive Notes
+    Mention well-written parts.
 
-          Be concise. Focus on real bugs, security, and correctness.'
+    Be concise. Focus on real bugs, security, and correctness.'
 
-          sandbox-cli claude \
-            --profile prod \
-            --no-metrics \
-            --allow api.anthropic.com \
-            --allow anthropic.com \
-            --allow github.com \
-            --allow api.github.com \
-            --allow raw.githubusercontent.com \
-            -- \
-            -p "$PROMPT" > review.md 2>&1 || true
+    sandbox-cli claude \
+      --profile prod \
+      --no-metrics \
+      --allow api.anthropic.com \
+      --allow anthropic.com \
+      --allow github.com \
+      --allow api.github.com \
+      --allow raw.githubusercontent.com \
+      -- \
+      -p "$PROMPT" > review.md 2>&1 || true
 
-          echo "===== Review Output ====="
-          cat review.md || true
+    echo "===== Review Output ====="
+    cat review.md || true
