@@ -104,6 +104,26 @@ services:
       # At /root/.config/sandbox they exist but resolve to nothing, and the
       # worktree listing comes back empty with no error to explain it.
       - ${HOME}/.config/sandbox:${HOME}/.config/sandbox
+
+      # Claude Code's own usage cache, read-only. Uncomment to make the usage
+      # gauge read the same numbers your host Claude Code sees.
+      #
+      # Without it the API can only reach the *sandbox* agent's copy under
+      # ~/.config/sandbox/agents/claude, which is refreshed only when a sandbox
+      # run talks to the server -- so it is routinely days staler than yours.
+      # Measured on one machine: 25 Jul in the container against 28 Jul on the
+      # host, for the same question.
+      #
+      # :ro is not decoration. internal/agentusage never opens this file for
+      # writing, because it belongs to Claude Code; the flag makes that a
+      # property of the deployment rather than a promise in a comment.
+      #
+      # Left commented because of how docker treats a missing source: it creates
+      # a *directory* at that path. On a machine where Claude Code has not run
+      # yet, an uncommented line here would put a directory called .claude.json
+      # in your home, and Claude Code would then fail to read its own config.
+      # Check the file exists before uncommenting.
+      # - ${HOME}/.claude.json:${HOME}/.claude.json:ro
     environment:
       # So config.ConfigRoot and the worktree paths agree with the mount above.
       HOME: ${HOME}

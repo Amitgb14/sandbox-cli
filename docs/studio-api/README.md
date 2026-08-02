@@ -91,6 +91,27 @@ and it costs no new dependency. If a future need turns up for the client to
 push messages over the same connection, that is the point to revisit this
 choice — not before.
 
+### Usage figures are a cache, and in compose they are the wrong cache
+
+`GET /v1/usage` reports what Claude Code last wrote to its own
+`cachedUsageUtilization`, with the `fetchedAt` it came with. Two things follow,
+and both are by design rather than gaps:
+
+- **Always aged.** The cache refreshes only when the agent talks to the server,
+  so a reading can be hours or days old. Every response carries `fetchedAt` and
+  every client must show it; `POST /v1/usage/refresh` is the only way to make it
+  current, and it spends a request from the window being measured.
+- **A window past its reset reports no percentage.** The cached figure then
+  measures the period *before* the reset, which is not a stale amount of the
+  current one — it is a different number entirely.
+
+Running the API from `docker compose` adds a third, and it is the one that looks
+like a bug: `${HOME}/.claude.json` is **not** mounted, so the server can only
+reach the sandbox agent's copy under `~/.config/sandbox/agents/claude`. That one
+is refreshed only when a *sandbox* run talks to the server, so it lags the host's
+by days. Uncomment the read-only mount in `docker-compose.yml`, or run the API on
+the host, where both candidates are visible and the fresher one wins.
+
 ### Runs are always detached — and `console` is what you attach to
 
 `POST /runs` has no foreground mode. An HTTP request/response cycle has
