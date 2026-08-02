@@ -67,15 +67,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -s review.md ]; then
-            gh pr comment ${{ github.event.pull_request.number }} --body "$(cat <<EOF
-## 🤖 Enhanced Sandbox Review
+            {
+              echo "## 🤖 Enhanced Sandbox Review"
+              echo ""
+              cat review.md
+              echo ""
+              echo "---"
+              echo "*Generated with sandbox-cli + Claude*"
+            } > comment_body.md
 
-$(cat review.md)
-
----
-*Generated with sandbox-cli + Claude*
-EOF
-)"
+            gh pr comment ${{ github.event.pull_request.number }} --body-file comment_body.md
           else
             echo "No review content generated"
           fi
