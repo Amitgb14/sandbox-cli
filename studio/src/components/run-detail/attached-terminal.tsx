@@ -36,6 +36,28 @@ import "@xterm/xterm/css/xterm.css";
  *     again gives you what the agent paints next, which is what attaching to a
  *     live pty does everywhere else.
  */
+/**
+ * Whether a chunk from the terminal is a mouse report rather than typing.
+ *
+ * Claude Code turns on any-event tracking (`?1003h`), so with mouse reporting
+ * forwarded, *moving the pointer across the terminal* sends an escape sequence
+ * per motion — one HTTP POST each — and a click lands inside the agent's UI as
+ * a click. That is faithful to what a terminal does, and it was worse than
+ * useless here: a single click to focus the panel left the agent unable to
+ * accept the next Enter, so a typed question sat in its input box forever.
+ * Measured — the same question submitted fine when nothing was clicked.
+ *
+ * So mouse goes no further than the browser. What is lost is clicking inside
+ * the agent's own interface; what is kept is that typing works and idle mouse
+ * movement does not talk to the daemon at all. Both SGR (`ESC[<...M/m`) and the
+ * legacy X10 form (`ESC[M` plus three bytes) are recognised.
+ */
+function isMouseReport(data: string): boolean {
+  const esc = "\u001b[";
+  if (data.startsWith(`${esc}<`) && /[Mm]$/.test(data)) return true;
+  return data.startsWith(`${esc}M`) && data.length === 6;
+}
+
 export function AttachedTerminal({
   run,
   onDetach,
@@ -161,6 +183,7 @@ export function AttachedTerminal({
       // xterm already hands us the bytes a terminal sends, carriage return
       // included, so `enter` stays false — adding one would double it.
       const typing = term.onData((data: string) => {
+        if (isMouseReport(data)) return;
         outbox += data;
         flush();
       });

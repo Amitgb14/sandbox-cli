@@ -47,7 +47,9 @@ test("attach opens a live terminal you can type at", async ({ page, request }) =
   await page.goto(`/runs/${id}`);
   await page.waitForLoadState("networkidle");
   await page.getByRole("tab", { name: "Terminal" }).click();
-  await page.getByRole("button", { name: "Attach" }).click();
+  // Two offer it: the header control and the "this is a screen, not a log"
+  // panel's call to action. Either works; take the first.
+  await page.getByRole("button", { name: "Attach" }).first().click();
 
   // The agent repaints when it is told the terminal size, which is what the
   // attach does on connect. Without that this stays empty over a healthy run.
@@ -57,7 +59,14 @@ test("attach opens a live terminal you can type at", async ({ page, request }) =
   });
 
   await screen.click();
-  const question = "What is 12 times 12? Reply with just the number.";
+  // A sum unique to this run, asserted on the *answer* rather than the echo.
+  // Two earlier versions passed in five seconds and proved nothing: a fixed
+  // question matched an answer already on the container's screen, and a marker
+  // typed into the question matched its own echo in the input box.
+  const a = 100 + (Date.now() % 800);
+  const b = 100 + ((Date.now() >> 3) % 800);
+  const answer = String(a + b);
+  const question = `what is ${a} plus ${b}? reply with just the number.`;
   await page.keyboard.type(question);
   await page.keyboard.press("Enter");
 
@@ -65,10 +74,10 @@ test("attach opens a live terminal you can type at", async ({ page, request }) =
   // one POST per keystroke meant concurrent requests raced, and this arrived
   // as "rtWha is21 t ime1 2s?".
   await expect(screen, "keystrokes arrived out of order").toContainText(
-    "What is 12 times 12?",
+    `what is ${a} plus ${b}?`,
     { timeout: 15000 },
   );
-  await expect(screen, "the agent did not answer").toContainText("144", {
+  await expect(screen, "the agent did not answer").toContainText(answer, {
     timeout: 120000,
   });
   expect(errs).toEqual([]);
