@@ -1,12 +1,17 @@
 BINARY := sandbox-cli
+STUDIO_API_BINARY := sandbox-studio-api
 PKG := github.com/Amitgb14/sandbox-cli
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build install test test-integration lint fmt clean snapshot release docker-build image
+.PHONY: build build-studio-api install test test-integration lint fmt clean snapshot release docker-build image
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
+
+# The local HTTP control plane (internal/studioapi) — see docs/studio-api/.
+build-studio-api:
+	go build -ldflags "$(LDFLAGS)" -o bin/$(STUDIO_API_BINARY) ./cmd/sandbox-studio-api
 
 # --- release engineering (GoReleaser) ----------------------------------------
 # Install once: go install github.com/goreleaser/goreleaser/v2@latest

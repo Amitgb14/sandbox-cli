@@ -4,3 +4,5 @@
 /.claude/
 __pycache__/
 docs/proposals/
+node_modules
+.next/
