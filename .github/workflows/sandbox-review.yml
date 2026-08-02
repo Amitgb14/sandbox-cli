@@ -82,6 +82,13 @@ jobs:
           docker save "${{ steps.img.outputs.tag }}" \
             | zstd -3 -T0 -o "${{ steps.img.outputs.file }}"
 
+      - name: Test the diff parser
+        # It fails quietly rather than loudly: a parse bug does not raise, it
+        # returns fewer anchorable lines, and the review arrives with every
+        # finding pushed into the body as if the agent had picked bad line
+        # numbers. Cheap enough to run every time, and it has caught two.
+        run: python3 .github/scripts/test_post_review.py
+
       - name: Collect the diff
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

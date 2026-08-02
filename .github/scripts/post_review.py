@@ -70,18 +70,25 @@ def commentable_lines(diff_text):
             # mode changes, the `--- a/…` header, binary-file notices.
             continue
 
-        if path is None:
-            continue
         if raw.startswith("\\"):  # "\ No newline at end of file"
             continue
+
+        # The counters advance even when there is no path to record against.
+        # A deleted file has `+++ /dev/null` and so no path, and skipping its
+        # hunk body left old_left pinned above zero — the parser then believed
+        # it was inside that hunk forever, swallowed every following `diff
+        # --git` header as content, and returned nothing for any file after
+        # the deletion. One deleted file silently cost the whole review.
         if raw.startswith("+"):
-            lines[path].add(new_lineno)
+            if path is not None:
+                lines[path].add(new_lineno)
             new_lineno += 1
             new_left -= 1
         elif raw.startswith("-"):
             old_left -= 1
         else:  # a context line, which git writes as " x" and sometimes as ""
-            lines[path].add(new_lineno)
+            if path is not None:
+                lines[path].add(new_lineno)
             new_lineno += 1
             new_left -= 1
             old_left -= 1
@@ -171,7 +178,15 @@ def main():
     with open(diff_path, encoding="utf-8", errors="replace") as fh:
         allowed = commentable_lines(fh.read())
 
-    findings = review.get("findings") or []
+    # Valid JSON is not the same as the right shape. The agent is prompted for
+    # a list of objects, but "findings" has arrived as a dict and as a list of
+    # strings before now, and an AttributeError here loses a review that was
+    # otherwise fine. Anything that is not an object is dropped, not fatal.
+    if not isinstance(review, dict):
+        review = {}
+    raw_findings = review.get("findings")
+    findings = [f for f in raw_findings if isinstance(f, dict)] \
+        if isinstance(raw_findings, list) else []
     findings.sort(key=lambda f: SEVERITY_ORDER.get(severity_of(f), 9))
 
     inline, orphans = [], []
