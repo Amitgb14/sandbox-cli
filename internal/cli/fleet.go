@@ -599,8 +599,17 @@ func printFleetPlan(ctx context.Context, r *fleet.Runner, spec fleet.Spec, opts 
 			fmt.Printf("SKIPPED:  an agent is already running on this branch (%s)\n", p.RunningInName)
 		}
 		if p.NameHeldBy != "" {
-			fmt.Printf("REFUSED:  a finished container still holds this branch's name (%s);\n"+
-				"          `sandbox-cli fleet clean %s` to run it again\n", p.NameHeldBy, p.Branch)
+			// The two holders need different commands, and naming the wrong one turns
+			// a refusal into a dead end: `fleet clean` filters on the fleet label, so
+			// it will never clear an interactive session no matter how often it is run.
+			if p.NameHeldByFleet {
+				fmt.Printf("REFUSED:  a finished container still holds this branch's name (%s);\n"+
+					"          `sandbox-cli fleet clean %s` to run it again\n", p.NameHeldBy, p.Branch)
+			} else {
+				fmt.Printf("REFUSED:  an interactive session holds this branch's name (%s), not a fleet agent;\n"+
+					"          see it with `sandbox-cli list`, then `sandbox-cli kill %s` or `sandbox-cli clean`\n",
+					p.NameHeldBy, p.NameHeldBy)
+			}
 		}
 	}
 	// A mixed fleet's login requirement, said once at the end where it can be
