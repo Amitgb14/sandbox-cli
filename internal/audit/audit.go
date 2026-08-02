@@ -97,15 +97,23 @@ type SessionMeta struct {
 	// authoritative needs the proxy reporting over a channel the guest cannot
 	// write to.
 	//
-	// Three kinds of run record nothing here rather than a zero, because in none
-	// of them was the question asked: one with no allowlist (no proxy runs, so
-	// nothing can be refused), a detached one (nothing on the host holds that
-	// container's stderr), and an **interactive** one — with a pty docker returns a
-	// single merged stream and reading it would cost the container its terminal
-	// size, so sandbox-cli declines to look. See runtime.newDenyTap for the
-	// measurement. That last case covers most agent sessions, which is the honest
-	// shape of this field today and the reason roadmap task 4 exists.
-	EgressDeniedReported      int
+	// A **pointer** so that "nobody looked" and "looked, and nothing was refused"
+	// are different answers. They are not the same fact, and the zero one is the
+	// more useful of the two: a recorded 0 is the only positive evidence a run's
+	// allowlist was wide enough for everything it actually wanted.
+	//
+	// nil means the run was not observed, which happens three ways — no allowlist
+	// (no proxy runs, so nothing could be refused), detached (nothing on the host
+	// holds that container's stderr), or **interactive** (with a pty docker returns
+	// one merged stream, and reading it would cost the container its terminal size,
+	// so sandbox-cli declines to look — see runtime.newDenyTap for the
+	// measurement). `network` tells the three apart after the fact: `default` means
+	// there was nothing to refuse, `allowlist` with this field absent means it was
+	// in force and unobserved.
+	//
+	// That last case covers most agent sessions, which is the honest shape of this
+	// field today and the reason roadmap task 4 exists.
+	EgressDeniedReported      *int
 	EgressDeniedHostsReported []string
 
 	// Outcome, filled in once the run has finished.
@@ -143,8 +151,11 @@ type record struct {
 	EnforcedBy  string   `json:"egress_enforcement_requested,omitempty"`
 	EgressAllow []string `json:"egress_allow,omitempty"`
 	EnvNames    []string `json:"env_names,omitempty"`
-	// Named for what the host knows, not for what happened — see SessionMeta.
-	EgressDenied      int      `json:"egress_denied_reported,omitempty"`
+	// Named for what the host knows, not for what happened — see SessionMeta. A
+	// pointer so `omitempty` drops only an unobserved run: a pointer to 0 is
+	// non-nil, so "looked, nothing refused" is written as an explicit 0 instead of
+	// vanishing the way a bare int would.
+	EgressDenied      *int     `json:"egress_denied_reported,omitempty"`
 	EgressDeniedHosts []string `json:"egress_denied_hosts_reported,omitempty"`
 	ExitCode          int      `json:"exit_code"`
 	DurationMS        int64    `json:"duration_ms"`

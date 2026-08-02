@@ -16,13 +16,33 @@ package agents
 // in this table. First install is the only one sandbox-cli controls, so it is the
 // only place this can be said.
 //
-// **What it does not buy**, and must not be described as buying: anything against
-// a compromised *registry*, which can serve different bytes for a version it has
-// already published. That is the shape of the July 2026 OpenAI incident — the
-// escape came through a package-registry proxy that was itself part of the
-// isolated environment. Closing that needs integrity hashes, which the npm CLI
-// checks only from a lockfile and a `-g` install has none of. Pinning is the half
-// that is cheap.
+// **What it does not buy**, and must not be described as buying:
+//
+//   - Anything against a compromised *registry*, which can serve different bytes
+//     for a version it has already published. That is the shape of the July 2026
+//     OpenAI incident — the escape came through a package-registry proxy that was
+//     itself part of the isolated environment.
+//
+//   - **Anything below the top of the tree.** This pins the named package only.
+//     `npm install -g <pkg>@<v>` still resolves every transitive dependency's
+//     range fresh at install time, with no lockfile — and the attacks that
+//     actually happen are mostly down there rather than at the top
+//     (`event-stream`, `ua-parser-js`, the 2025 chalk/debug compromise). Some of
+//     the agents below ship a bundled single-file build and are genuinely
+//     unaffected; others are not, and this table does not distinguish them, so
+//     assume the weaker case.
+//
+// Both need integrity hashes, which the npm CLI verifies only from a lockfile and
+// a `-g` install has none of. The half a global install *can* do is record
+// `npm view <pkg>@<v> dist.integrity` alongside the version here and check it
+// after download; that is the upgrade path if this is ever worth strengthening.
+// Pinning the top of the tree is the cheap part, and it is all this is.
+//
+// **Bumping.** Twelve hand-maintained versions with no process is its own failure
+// mode — a pin nobody bumps becomes an old agent nobody can explain, which is the
+// staleness named below arriving by neglect rather than by design. There is no
+// automation for this yet; the intent is a sweep at each release, and the amp
+// entry is the canary since it goes stale fastest.
 //
 // **The cost is staleness**, and it is real: an agent that does not update itself
 // stays on the version recorded here until someone bumps it. That is why

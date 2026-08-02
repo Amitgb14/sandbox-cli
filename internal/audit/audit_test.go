@@ -108,7 +108,7 @@ func TestJSONLSinkRecordsReportedDenials(t *testing.T) {
 	NewJSONLSink(dir).RecordSession(SessionMeta{
 		Image:                     "sandbox-base:1",
 		Network:                   "allowlist",
-		EgressDeniedReported:      4,
+		EgressDeniedReported:      intp(4),
 		EgressDeniedHostsReported: []string{"gist.github.com", "docs.python.org"},
 	})
 
@@ -122,8 +122,8 @@ func TestJSONLSinkRecordsReportedDenials(t *testing.T) {
 	if err := json.Unmarshal([]byte(line), &got); err != nil {
 		t.Fatalf("not valid JSON: %v", err)
 	}
-	if got.EgressDenied != 4 {
-		t.Errorf("denial count = %d, want 4", got.EgressDenied)
+	if got.EgressDenied == nil || *got.EgressDenied != 4 {
+		t.Errorf("denial count = %v, want 4", got.EgressDenied)
 	}
 	if len(got.EgressDeniedHosts) != 2 {
 		t.Errorf("denied hosts = %v, want both", got.EgressDeniedHosts)
@@ -135,18 +135,45 @@ func TestJSONLSinkRecordsReportedDenials(t *testing.T) {
 	}
 }
 
-// TestJSONLSinkOmitsDenialsWhenThereWasNoAllowlist keeps a run that could not be
-// denied anything from carrying a confident zero. In default mode no proxy runs,
-// so "0 denials" would describe a question nobody asked.
-func TestJSONLSinkOmitsDenialsWhenThereWasNoAllowlist(t *testing.T) {
-	dir := t.TempDir()
-	NewJSONLSink(dir).RecordSession(SessionMeta{Image: "sandbox-base:1", Network: "default"})
+func intp(n int) *int { return &n }
 
-	raw, err := os.ReadFile(filepath.Join(dir, "sessions.jsonl"))
-	if err != nil {
+// TestJSONLSinkTellsUnobservedFromNothingRefused is the distinction the pointer
+// exists for, and the reason a bare int was wrong: with `omitempty` on an int,
+// "nobody looked" and "looked, and the answer was zero" both vanish, so the
+// earlier version of this test would have passed with the field hardcoded to 0.
+//
+// The zero is the more useful of the two — it is the only positive evidence a
+// run's allowlist was wide enough for everything it actually wanted.
+func TestJSONLSinkTellsUnobservedFromNothingRefused(t *testing.T) {
+	read := func(t *testing.T, meta SessionMeta) string {
+		t.Helper()
+		dir := t.TempDir()
+		NewJSONLSink(dir).RecordSession(meta)
+		raw, err := os.ReadFile(filepath.Join(dir, "sessions.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+
+	// Not observed: no allowlist, or detached, or interactive. No field at all.
+	line := read(t, SessionMeta{Image: "sandbox-base:1", Network: "default"})
+	if strings.Contains(line, "egress_denied") {
+		t.Errorf("an unobserved run recorded a denial field:\n%s", line)
+	}
+
+	// Observed, and nothing was refused. An explicit zero, not an absence.
+	line = read(t, SessionMeta{Image: "sandbox-base:1", Network: "allowlist", EgressDeniedReported: intp(0)})
+	if !strings.Contains(line, `"egress_denied_reported":0`) {
+		t.Errorf("an observed run with no denials must record an explicit 0:\n%s", line)
+	}
+
+	// And it must survive the round trip as zero rather than as nil.
+	var got record
+	if err := json.Unmarshal([]byte(line), &got); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "egress_denied") {
-		t.Errorf("a run with no allowlist recorded a denial field:\n%s", raw)
+	if got.EgressDenied == nil || *got.EgressDenied != 0 {
+		t.Errorf("round-tripped denial count = %v, want a pointer to 0", got.EgressDenied)
 	}
 }

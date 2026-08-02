@@ -77,7 +77,15 @@ func npmAgentBootstrap(bin, pkg string) []string { return agents.NpmBootstrap(bi
 // comes from the table.
 //
 // Returning "" rather than a broken fragment is what keeps an unpinned agent's
-// install string byte-identical to what it was before pins existed.
+// install string byte-identical to what it was before pins existed — for aider
+// and goose, where the version is an optional suffix or an optional assignment.
+//
+// **It is not safe at every call site, and openhands is the exception.** There
+// the result *is* the version (`oh_ver=` + this), so an empty string yields a
+// release URL with a hole in it: a broken install rather than an unpinned one.
+// That agent therefore may not be moved to the unpinned side of the pin table
+// without also giving its installer a fallback. TestSelfRoutedInstallersCarryTheirPin
+// is what catches it, and it names openhands for this reason.
 func pinnedSpec(bin, sep string) string {
 	if p, ok := agents.PinFor(bin); ok && p.Version != "" {
 		return sep + p.Version

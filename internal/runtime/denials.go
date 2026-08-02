@@ -6,16 +6,24 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Amitgb14/sandbox-cli/internal/egressproxy"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
-// denyPrefix is the exact text internal/egressproxy/embed.go writes for a refused
-// connection: "sandbox-cli: egress DENY host:port (reason)".
+// denyPrefix is what the proxy writes for a refused connection:
+// "sandbox-cli: egress DENY host:port (reason)".
 //
-// Matched as a literal prefix rather than parsed. The line is not a protocol and
-// nothing here depends on its shape beyond the host — a format change should cost
-// a count, not a panic.
-const denyPrefix = "sandbox-cli: egress DENY "
+// Taken from the package that owns the format rather than spelled out again here.
+// It used to be a literal, which made this the third hand-written copy of a line
+// assembled in two other places — and a change to either of those would have sent
+// this counter silently to zero with every test still passing. egressproxy binds
+// its constants to the source that actually ships (see format.go), so a break
+// there is now a failing test rather than an audit field that quietly reads 0.
+//
+// Matched as a prefix rather than parsed. The line is not a protocol and nothing
+// here depends on its shape beyond the host — a format change should cost a
+// count, not a panic.
+const denyPrefix = egressproxy.DenyLinePrefix
 
 // maxDenyHosts bounds the distinct hosts kept for the run log. The count is
 // exact; the list is a sample. One JSONL line is meant to stay a line, and a
@@ -148,7 +156,19 @@ type denyTap struct {
 }
 
 // newDenyTap wraps dst, or returns dst unchanged when there is nothing to count
-// into — so a run that is not recording denials pays nothing at all.
+// into.
+//
+// **Wrapping is not free, and it is worth naming what it costs.** `cmd.Stderr =
+// os.Stderr` hands docker the inherited descriptor; anything that is not an
+// *os.File makes os/exec create a pipe and a copying goroutine instead. So on a
+// wrapped run docker's own diagnostics no longer see a terminal on fd 2, and
+// stderr is ordered against a stdout that still goes direct.
+//
+// Both consequences are bounded by *when* this is wrapped at all: only for a run
+// with an allowlist and no pty (sandbox.canObserveDenials). An interactive
+// session — the case where a terminal on fd 2 would have meant something, and
+// where interleaving is most visible — is never wrapped. What is left is a
+// non-interactive run whose stderr was not a terminal to begin with.
 //
 // **Only stderr is ever wrapped, and only for a run with no pty.** That is a
 // limit rather than an oversight, and it was measured:

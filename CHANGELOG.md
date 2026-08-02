@@ -184,11 +184,26 @@ version is tagged.
 
   The names are the caveat. These counts come from the lines the egress proxy
   prints on the container's stderr — a stream the agent can also write to — so
-  they are the container's *report*, not an attested fact. A run with no
-  allowlist records neither field rather than a confident zero, and a detached
-  run records neither because nothing on the host is holding its stderr.
+  they are the container's *report*, not an attested fact.
+
+  **An absent field and a recorded `0` mean different things.** `0` says the run
+  was watched and nothing was refused, which is the only positive evidence its
+  allowlist was wide enough. Absent says nobody watched, which happens three
+  ways: no allowlist (nothing could be refused), a detached run (nothing on the
+  host holds its stderr), and an **interactive** run — with a pty docker returns
+  one merged stream, and reading it would cost the container its terminal size,
+  so sandbox-cli declines to look. `network` tells the three apart. That last
+  case covers most interactive agent sessions, so expect this field mainly on
+  `run`, `fleet` and other non-interactive work.
 
 ### Changed
+
+- **The base image is rebuilt once on your next run.** The egress proxy's two log
+  lines now derive from one exported constant instead of three separate literals
+  — the host side counts refusals by matching that text, so a change to either
+  copy would have sent the new count silently to zero. The proxy's source is
+  hashed into the image tag, so a one-line refactor there means a new tag and one
+  rebuild. Nothing about the proxy's behaviour changed.
 
 - **Agents installed on first use now install a pinned version**, recorded in one
   table (`internal/agents/pins.go`) instead of resolving to whatever the vendor

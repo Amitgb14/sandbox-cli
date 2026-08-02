@@ -142,8 +142,11 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 
 // canObserveDenials reports whether this run's egress refusals can actually be
 // counted. Both conditions have to hold, and when either does not the audit line
-// carries no denial field at all — absent says "not asked", where a zero would
-// say "asked, and nothing was refused".
+// carries no denial field at all.
+//
+// That absence is load-bearing, which is why the audit field is a pointer: a run
+// nobody looked at and a run that was looked at and refused nothing are different
+// facts, and the second is recorded as an explicit 0.
 //
 //   - There must be an allowlist to be refused by. In default mode no proxy runs
 //     and no denial can occur, so a counter would answer a question nobody put —
@@ -256,11 +259,14 @@ func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode i
 		EnvNames: spec.EnvNames, // names only — never the values
 		ExitCode: exitCode,
 		Duration: took,
-
-		// Whatever the container reported being refused. Nil on a detached run,
-		// where nothing here held its stderr — see runtime.RunSpec.Denials.
-		EgressDeniedReported:      spec.Denials.Count(),
-		EgressDeniedHostsReported: spec.Denials.Hosts(),
+	}
+	// Set only when the run was actually observed, so a nil here and a zero mean
+	// different things in the record — see audit.SessionMeta. A run that was not
+	// looked at must not report "nothing was refused".
+	if spec.Denials != nil {
+		n := spec.Denials.Count()
+		m.EgressDeniedReported = &n
+		m.EgressDeniedHostsReported = spec.Denials.Hosts()
 	}
 	for _, mnt := range spec.Mounts {
 		if mnt.Target == spec.Workdir {
