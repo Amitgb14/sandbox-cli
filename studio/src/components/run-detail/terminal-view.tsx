@@ -113,6 +113,21 @@ export function TerminalView({ run }: { run: Run }) {
   // is why this says so rather than showing an empty box.
   const headless = Boolean(run.agent) && !run.openStdin;
 
+  /**
+   * A run with a pty does not have *lines*, it has a screen.
+   *
+   * `docker logs` on a TTY container returns the raw pty stream — cursor moves,
+   * alternate-screen switches, repaints — and this viewer renders lines with an
+   * SGR colour parser. Pointed at that stream it prints the escape sequences
+   * verbatim and collapses the spacing, so a perfectly healthy agent looks like
+   * corruption: words run together and a spinner draws one dot per line.
+   *
+   * There is no fixing that here. Rendering a screen is what a terminal
+   * emulator is for, and this tab has one behind the Attach button — so it says
+   * that instead of showing something wrong.
+   */
+  const isScreen = run.tty;
+
   if (attached) {
     return <AttachedTerminal run={run} onDetach={() => setAttached(false)} />;
   }
@@ -236,6 +251,27 @@ export function TerminalView({ run }: { run: Run }) {
               <Skeleton key={i} className="h-3.5 bg-white/5" style={{ width: `${40 + i * 5}%` }} />
             ))}
           </div>
+        ) : isScreen ? (
+          <EmptyState
+            icon={Terminal}
+            title="This run has a terminal, not a log"
+            description={
+              canAttach
+                ? "Its output is a screen the agent repaints — cursor moves and all — which only a terminal can render. Attach to see it."
+                : consoleLockedOut
+                  ? "Its output is a screen the agent repaints, which only a terminal can render. Attaching needs the daemon to have been started with a token."
+                  : "Its output is a screen the agent repaints, which only a terminal can render. The run has finished, so there is nothing left to attach to."
+            }
+            action={
+              canAttach ? (
+                <Button variant="outline" size="sm" onClick={() => setAttached(true)}>
+                  <Plug className="size-4" />
+                  Attach
+                </Button>
+              ) : undefined
+            }
+            className="border-0 text-white/60"
+          />
         ) : lines.length === 0 ? (
           <EmptyState
             icon={Terminal}
