@@ -178,6 +178,21 @@ version is tagged.
 
 ### Changed
 
+- **Agents installed on first use now install a pinned version**, recorded in one
+  table (`internal/agents/pins.go`) instead of resolving to whatever the vendor
+  published that day. The version is announced as it installs
+  (`installing qwen 0.21.3 …`), and self-updating agents are unaffected after that
+  first run. `cursor` and `claude` are deliberately unpinned and the table says
+  why. See [the agent reference](docs/AGENTS.md#which-version-gets-installed).
+
+  This closes the ordinary supply-chain case — a hijacked or typosquatted
+  release — which reaches you at first install and nowhere else. It does not
+  protect against a compromised registry, which needs integrity hashes a global
+  npm install has no lockfile for.
+- **`openhands` no longer asks GitHub for the latest release at run time.** It
+  installs the pinned version directly, which also removes a dependency on
+  `api.github.com` being reachable — under `--allow` it often is not, so the
+  hardcoded fallback was doing more of the work than it appeared to.
 - `sandbox-cli ps` is now `sandbox-cli list`; `ps` stays as an alias and takes
   the same flags.
 - `sandbox-cli clean --force` asks a running agent to exit and waits for the

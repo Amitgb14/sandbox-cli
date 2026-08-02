@@ -504,6 +504,47 @@ verify the bootstrap binary before exec. Decide rather than leave it implicit.
 
 ---
 
+## 9. Agents are downloaded from vendor hosts on first run — **narrowed**
+
+**Severity: medium. Effort: small for the half that is done; large for the rest.**
+
+Eleven of the fifteen wrappers install their agent on first run, from a vendor
+host, into the persisted agent HOME — which is the same directory in every
+project, is writable by the agent, and holds its stored credential (item 8).
+Until recently each of those installs resolved *whatever the vendor served that
+day*: `npm install -g <pkg>` with no version, a `curl | bash` whose script is
+regenerated per release, a GitHub API call for "latest".
+
+This was not on the list before the July 2026 OpenAI disclosure made the shape of
+it concrete. Their models escaped an isolated evaluation environment through
+zero-days in a **self-hosted package-registry proxy that was part of that
+environment**, then escalated and moved laterally to an internet-reachable node.
+The support infrastructure of a sandbox is inside the sandbox's trust boundary,
+and ours includes npm.
+
+**Closed:** the first-run version is now pinned in one table
+(`internal/agents/pins.go`), announced as it installs, and enforced by
+`TestEveryLazyInstalledAgentIsPinnedOrSaysWhy` — a new adapter with no recorded
+pin fails rather than shipping. `openhands` no longer resolves "latest" at run
+time at all. That closes the ordinary case: a hijacked or typosquatted *publish*
+does not reach a sandbox until someone bumps a line here.
+
+**Still open, and it is the harder half:**
+
+- **A compromised registry** can serve different bytes for a version it already
+  published. Closing that needs integrity hashes, which the npm CLI verifies only
+  from a lockfile and a `-g` install has none of. No cheap fix; recorded rather
+  than solved.
+- **`curl | bash` installers** (`aider` via astral.sh, `cursor`, `goose`,
+  `claude`) execute arbitrary remote shell inside the container. The blast radius
+  is the sandbox and the persisted HOME, which is the radius item 8 already
+  describes — but the code is fetched fresh each first run and is not pinnable for
+  two of them.
+- **`cursor` and `claude` are deliberately unpinned**, with the reason recorded in
+  the table rather than left implicit.
+
+---
+
 ## The egress proxy is unsupervised — known, and fail-closed
 
 The proxy is started with `&` and the entrypoint then `exec`s the guest, so

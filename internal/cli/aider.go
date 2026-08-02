@@ -28,8 +28,14 @@ var aiderEnvAllow = []string{
 // --python pins the interpreter to the image's own python3. Without it uv is
 // free to download a managed CPython, which is another ~87MB for an interpreter
 // already sitting in the image; bookworm ships 3.11 and Aider wants >=3.10,<3.13.
-const aiderInstall = `curl -LsSf https://astral.sh/uv/install.sh | sh && ` +
-	`uv tool install --python "$(command -v python3)" aider-chat`
+//
+// The `==` version comes from the pin table (internal/agents/pins.go). uv itself
+// is still fetched unversioned from astral.sh: it is the installer, so pinning it
+// would mean pinning the thing that decides what a pin means, and astral's script
+// offers no version parameter to pass anyway. That half is recorded rather than
+// solved.
+var aiderInstall = `curl -LsSf https://astral.sh/uv/install.sh | sh && ` +
+	`uv tool install --python "$(command -v python3)" aider-chat` + pinnedSpec("aider", "==")
 
 func newAiderCmd() *cobra.Command {
 	rf := &runFlags{}

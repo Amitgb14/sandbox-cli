@@ -66,6 +66,25 @@ func agentBootstrap(bin, install string) []string { return agents.Bootstrap(bin,
 
 func npmAgentBootstrap(bin, pkg string) []string { return agents.NpmBootstrap(bin, pkg) }
 
+// pinnedSpec renders sep+version for an agent the pin table gives a version to,
+// and "" for one it deliberately leaves unpinned.
+//
+// The npm agents never need this — agents.NpmBootstrap applies their pin itself,
+// because every one of them spells the version the same way. The four installed
+// by their own routes each spell it differently (`==` for a uv tool, a
+// `GOOSE_VERSION` assignment, a path component in a release URL), so their
+// install strings stay next to the wrapper that owns them and only the number
+// comes from the table.
+//
+// Returning "" rather than a broken fragment is what keeps an unpinned agent's
+// install string byte-identical to what it was before pins existed.
+func pinnedSpec(bin, sep string) string {
+	if p, ok := agents.PinFor(bin); ok && p.Version != "" {
+		return sep + p.Version
+	}
+	return ""
+}
+
 // syncEnabled reports whether the resolved configuration permits mounting the
 // host's agent history.
 //
