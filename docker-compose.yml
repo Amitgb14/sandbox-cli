@@ -123,7 +123,7 @@ services:
       # yet, an uncommented line here would put a directory called .claude.json
       # in your home, and Claude Code would then fail to read its own config.
       # Check the file exists before uncommenting.
-      # - ${HOME}/.claude.json:${HOME}/.claude.json:ro
+      - ${HOME}/.claude.json:${HOME}/.claude.json:ro
     environment:
       # So config.ConfigRoot and the worktree paths agree with the mount above.
       HOME: ${HOME}
