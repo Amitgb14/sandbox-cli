@@ -128,6 +128,23 @@ func (s *Server) transcriptFor(c runtime.ContainerInfo) (path, resume string, ok
 		return "", "", false
 	}
 
+	// A run started by resuming names its conversation outright, so there is
+	// nothing to infer. This is not an optimisation: every heuristic below
+	// assumes a session began around the time its container did, and a resumed
+	// one began before — so without this a resumed run reports no conversation
+	// at all, which is what it did the first time it was tried.
+	if id := c.Labels[sandbox.LabelSession]; id != "" {
+		for _, sess := range sessions {
+			if sess.ID != id {
+				continue
+			}
+			return sess.Path, resumeCommand(f, id), true
+		}
+		// Named a session that is not in this store. Reporting nothing beats
+		// falling through to a guess: the run said which conversation it is.
+		return "", "", false
+	}
+
 	from := c.StartedAt.Add(-conversationSlack)
 	// A running container has no finish time; "now" is the right end of its
 	// window, and the slack covers a transcript written a moment after this read.

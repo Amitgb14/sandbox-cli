@@ -106,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+healthPath, s.handleHealth)
 	mux.HandleFunc("GET /v1/agents", s.handleAgents)
+	mux.HandleFunc("GET /v1/agents/{agent}/sessions", s.handleAgentSessions)
 	mux.HandleFunc("GET /v1/runs", s.handleListRuns)
 	mux.HandleFunc("POST /v1/runs", s.handleCreateRun)
 	mux.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)

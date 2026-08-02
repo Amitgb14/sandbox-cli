@@ -104,7 +104,11 @@ var optionsPolicy = map[string]fieldPolicy{
 	// verified headless mode for exactly this reason: an agent that stops to ask
 	// permission does not fail, it hangs — holding a max_parallel slot until
 	// somebody notices. never, so the fleet path leaves it zero.
-	"Console":     never,
+	"Console": never,
+	// The conversation a run reopened. A fleet task starts work rather than
+	// continuing a conversation, and resuming one is interactive by nature —
+	// the same reason the API refuses resume without console. never.
+	"SessionID":   never,
 	"AddHosts":    never,
 	"HostGateway": never, // reaching a host service is the opposite of what a fleet is for
 	"TTY":         never, // nothing is attached; BuildSpec resolves this from Detach

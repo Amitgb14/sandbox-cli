@@ -306,6 +306,13 @@ export interface Agent {
    * permission does not fail — it hangs.
    */
   headlessVerified: boolean;
+  /**
+   * Whether this agent's approval prompts can be turned off with a flag, which
+   * is what an interactive run needs. False where the non-interactive mode is a
+   * subcommand instead, so the control is not offered rather than offered and
+   * silently doing nothing.
+   */
+  canSkipPermissions?: boolean;
   /** The argv a fleet would start it with, for the dry-run preview. */
   autonomousInvocation?: string[];
 
@@ -525,6 +532,14 @@ export interface LaunchRequest {
    * turn rather than being the whole run.
    */
   console: boolean;
+  /**
+   * Add the agent's skip-permissions flag to a console run, so it works without
+   * stopping to ask. Headless runs always have it; an interactive session is
+   * where being asked is the point, so here it is opt-in.
+   */
+  skipPermissions: boolean;
+  /** Carry on an existing conversation by its session id, instead of starting one. */
+  resume: string | null;
   persistAuth: boolean;
   sync: boolean;
   statusline: boolean;
@@ -595,4 +610,18 @@ export interface Conversation {
    * state, how stdin was created) both live there.
    */
   writable: boolean;
+}
+
+/** One conversation that a run can be resumed from. */
+export interface SessionSummary {
+  id: string;
+  title?: string;
+  turns: number;
+  modified: string;
+  /**
+   * Listed from the file alone, because there is no verified reader for this
+   * agent's transcript format: the id and dates are real, the title and turn
+   * count are unknown and shown as unknown rather than as zero.
+   */
+  partial?: boolean;
 }

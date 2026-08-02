@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
@@ -149,6 +150,19 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 		return sandbox.Options{}, errors.New("console and verify cannot be combined: " +
 			"verify decides the run's exit code, and an interactive session's exit code is whenever you quit")
 	}
+	if req.SkipPermissions && req.Agent == "" {
+		return sandbox.Options{}, errors.New("skip_permissions needs an agent: a plain command is already whatever argv you gave it")
+	}
+	if req.Resume != "" && req.Agent == "" {
+		return sandbox.Options{}, errors.New("resume needs an agent: only an agent has conversations")
+	}
+	if req.Resume != "" && !req.Console {
+		// A headless resume would replay one prompt into an old conversation and
+		// exit. That is a real thing to want, but it is not what anyone means by
+		// "carry this on", and the request as written says nothing about what to
+		// say next.
+		return sandbox.Options{}, errors.New("resume needs console: resuming a conversation is something you do interactively")
+	}
 	if req.Console && req.Agent == "" {
 		// A plain command already reaches a console the same way — it is the argv
 		// the caller chose. This field exists to swap an *agent* out of headless
@@ -191,9 +205,21 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 		// and exits, while Command starts the agent's normal UI with the prompt
 		// seeding its first turn — which is the mode that can stop and ask.
 		if req.Console {
-			opts.Command = agent.Command
-			if req.Prompt != "" {
-				opts.Command = append(append([]string{}, agent.Command...), req.Prompt)
+			opts.Command = agent.Console(req.Prompt, req.SkipPermissions)
+			if req.Resume != "" {
+				// Resume replaces the prompt: the conversation already has one.
+				// The flag comes from the verified descriptor rather than being
+				// written here, the same rule cli/recover_resume.go keeps.
+				resumeArgs, ok := resumeArgsFor(agent.Name)
+				if !ok {
+					return sandbox.Options{}, fmt.Errorf("agent %q has no verified resume flag", agent.Name)
+				}
+				opts.Command = concatArgs(agent.Console("", req.SkipPermissions), resumeArgs, []string{req.Resume})
+				// Recorded, so the conversation belonging to this run is known
+				// rather than inferred: a resumed session began before its
+				// container, which every correlation heuristic assumes cannot
+				// happen.
+				opts.SessionID = req.Resume
 			}
 		} else {
 			opts.Command = fleet.WithVerify(agent.Autonomous(req.Prompt, nil), req.Verify)
@@ -373,3 +399,30 @@ const (
 	// pruning as any other snapshot.
 	baselineRetention = 14 * 24 * time.Hour
 )
+
+// concatArgs joins argv fragments into one fresh slice.
+//
+// Fresh on purpose: the fragments include a descriptor's own Command, and
+// appending to that would alias the table every later run reads from.
+func concatArgs(parts ...[]string) []string {
+	var out []string
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
+}
+
+// resumeArgsFor is the flag that makes an agent continue an existing session.
+//
+// Read from internal/agentctx's store table, which already records it per agent
+// and keeps it honest against what has been verified. It lives here rather than
+// on the descriptor because a descriptor says what runs *inside* the container;
+// which flag reopens a transcript is a fact about host-side session storage,
+// which is agentctx's job.
+func resumeArgsFor(agent string) ([]string, bool) {
+	store, ok := agentctx.Lookup(agent)
+	if !ok || len(store.Resume) == 0 {
+		return nil, false
+	}
+	return store.Resume, true
+}

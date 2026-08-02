@@ -84,6 +84,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			EnvAllow:             envAllow,
 			Env:                  env,
 			HeadlessVerified:     true,
+			CanSkipPermissions:   d.CanSkipPermissions(),
 			AutonomousInvocation: invocation,
 			Delivery:             delivery,
 			Auth:                 agentAuth(d.PersistDir),

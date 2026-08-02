@@ -22,6 +22,7 @@ export const qk = {
   runMetrics: (id: string) => ["runs", id, "metrics"] as const,
   runLogs: (id: string) => ["runs", id, "logs"] as const,
   runDiff: (id: string) => ["runs", id, "diff"] as const,
+  agentSessions: (agent: string) => ["agents", agent, "sessions"] as const,
   conversation: (id: string) => ["runs", id, "conversation"] as const,
   runConfig: (id: string) => ["runs", id, "config"] as const,
   agents: ["agents"] as const,
@@ -310,5 +311,14 @@ export function useSendConsoleInput(id: string) {
     mutationFn: ({ data, enter }: { data: string; enter?: boolean }) =>
       api.sendConsoleInput(id, data, enter ?? true),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.conversation(id) }),
+  });
+}
+
+/** Conversations an agent can be resumed from. */
+export function useAgentSessions(agent: string | null) {
+  return useQuery({
+    queryKey: qk.agentSessions(agent ?? ""),
+    queryFn: () => api.agentSessions(agent!),
+    enabled: !!agent,
   });
 }

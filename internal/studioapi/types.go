@@ -78,6 +78,14 @@ type AgentInfo struct {
 	// that would, so the field is sent rather than inferred from membership.
 	HeadlessVerified bool `json:"headlessVerified"`
 
+	// CanSkipPermissions is whether this agent's approval prompts can be turned
+	// off with a *flag*, which is what an interactive run would need. False for
+	// the agents whose non-interactive mode is a subcommand instead (`codex
+	// exec`, `opencode run`, `droid exec`): there is nothing to add to a console
+	// session, and a control that silently did nothing would be worse than one
+	// that is not offered.
+	CanSkipPermissions bool `json:"canSkipPermissions"`
+
 	// AutonomousInvocation is the argv a fleet task or a detached run would start
 	// this agent with, prompt elided — the same string `fleet run --dry-run`
 	// prints, so a launch preview and a dry run cannot disagree about what is
@@ -540,6 +548,25 @@ type RunCreateRequest struct {
 	// and an interactive session's exit code is whenever the person quit.
 	Console bool `json:"console,omitempty"`
 
+	// SkipPermissions turns off the agent's approval prompts on a console run.
+	//
+	// Headless runs always have it — an agent that stops to ask does not fail,
+	// it hangs — but a console run is one somebody is attached to, where being
+	// asked is the point. So it is opt-in here, for the case where you want to
+	// watch a run that does not wait for you. The container is the blast-radius
+	// boundary either way; this changes what the agent asks, not what it can
+	// reach.
+	//
+	// Only meaningful for agents whose non-interactive mode is a flag rather
+	// than a subcommand (claude, gemini).
+	SkipPermissions bool `json:"skipPermissions,omitempty"`
+
+	// Resume carries on an existing conversation instead of starting one, by
+	// the agent's own session id. Requires Console: resuming is something you
+	// do interactively, and a headless resume would replay one prompt into an
+	// old conversation and exit.
+	Resume string `json:"resume,omitempty"`
+
 	// Command is a plain guest argv, for a run with no agent (mutually exclusive
 	// with Agent).
 	Command []string `json:"command,omitempty"`
@@ -731,4 +758,20 @@ type ConsoleInputRequest struct {
 type ConsoleResizeRequest struct {
 	Rows int `json:"rows"`
 	Cols int `json:"cols"`
+}
+
+// SessionSummary is one resumable conversation.
+type SessionSummary struct {
+	ID       string    `json:"id"`
+	Title    string    `json:"title,omitempty"`
+	Turns    int       `json:"turns"`
+	Modified time.Time `json:"modified"`
+	// Partial marks a session listed from its file alone, because there is no
+	// verified reader for this agent's transcript format. Its id and dates are
+	// real; the title and turn count are unknown.
+	Partial bool `json:"partial,omitempty"`
+}
+
+type SessionListResponse struct {
+	Sessions []SessionSummary `json:"sessions"`
 }

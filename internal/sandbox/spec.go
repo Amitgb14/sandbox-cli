@@ -71,6 +71,13 @@ type Options struct {
 	// decided together where the argv is chosen and not here.
 	Console bool
 
+	// SessionID is the agent conversation this run reopens, when it was started
+	// with a resume. Recorded as a label so the transcript belonging to the run
+	// is known rather than guessed — a resumed conversation began before its
+	// container, which is exactly what every correlation heuristic assumes it
+	// cannot have done.
+	SessionID string
+
 	// Identity stamped on the container as sandbox.* labels, and — for detached
 	// runs — folded into its name. Docker is the state store: a fact not recorded
 	// here is one no later command can recover.
@@ -585,6 +592,7 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		LabelFleet:    boolLabel(opts.Fleet),
 		LabelProfile:  cfg.Profile,
 		LabelPrompt:   truncatePrompt(opts.Prompt),
+		LabelSession:  opts.SessionID,
 		LabelBaseline: opts.Baseline,
 	} {
 		if v != "" {

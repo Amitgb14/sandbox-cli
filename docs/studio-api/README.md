@@ -67,6 +67,7 @@ there is no code generation step (yet) tying them together.
 | GET | `/v1/agents` | Agents this API can launch headlessly (a subset of `internal/agents` — only those with a verified non-interactive mode) |
 | GET | `/v1/runs` | List runs (`?all=1`, `?repo=`, `?branch=`, `?agent=`, `?fleet=1`) |
 | GET | `/v1/runs/{id}` | One run, by id/name/branch — same three references `sandbox-cli list`/`kill`/`logs` accept |
+| GET | `/v1/agents/{agent}/sessions` | Conversations a run can be resumed from (sandbox-owned store only) |
 | POST | `/v1/runs` | Launch a run — always detached; `console:true` keeps a terminal to attach to (see below) |
 | GET | `/v1/runs/{id}/conversation` | What the agent said, and whether it can be answered |
 | GET | `/v1/runs/{id}/console` | Raw pty output as SSE (base64 frames), for a terminal view |
@@ -200,6 +201,27 @@ the pooled `-workspace` bucket, and the claude wrapper's default history mount
 puts the *host's* per-project bucket over exactly that path. Without `--no-sync`
 the agent answers `No conversation found with session ID` for an id that is
 perfectly real. Measured both ways.
+
+### Two more things a console run may ask for
+
+`"skipPermissions": true` adds the agent's skip-permissions flag. A *headless*
+run always has it — an agent that stops to ask does not fail, it hangs — but a
+console run is one somebody is attached to, where being asked is the point, so
+here it is opt-in. It changes what the agent asks, never what it can reach; the
+container is the blast-radius boundary either way. Only agents whose
+non-interactive mode is a flag rather than a subcommand have one, which
+`GET /v1/agents` reports as `canSkipPermissions`.
+
+`"resume": "<session-id>"` carries on an existing conversation instead of
+starting one, using the agent's own resume flag from the verified descriptor.
+Refused without `console`: a headless resume would replay one prompt into an old
+conversation and exit, which is not what "carry this on" means.
+
+A resumed run is also the one case where the transcript belonging to a container
+is *known* rather than inferred, so it is stamped as `sandbox.session`. That is
+load-bearing: every correlation filter assumes a session began around the time
+its container did, and a resumed one began before — without the label a resumed
+run reports no conversation at all.
 
 **Resizing is not cosmetic.** A full-screen agent renders *nothing* until it
 knows its terminal size, so `POST /console/resize` is what turns an attached

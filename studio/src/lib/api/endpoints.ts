@@ -31,7 +31,8 @@ import type {
   Run,
   UsageSnapshot,
   Worktree,
-  Conversation,} from "@/lib/types";
+  Conversation,
+  SessionSummary,} from "@/lib/types";
 
 /**
  * The daemon's surface, one function per endpoint.
@@ -173,6 +174,13 @@ export const api = {
       method: "POST",
       body: { rows, cols },
       fixture: () => undefined,
+    }),
+
+  /** Conversations this agent can be resumed from, newest first. */
+  agentSessions: (agent: string) =>
+    request<SessionSummary[]>(`/v1/agents/${agent}/sessions`, {
+      fixture: () => [],
+      unwrap: (b) => (b as { sessions: SessionSummary[] }).sessions ?? [],
     }),
 
   launch: (req: LaunchRequest) =>
@@ -524,6 +532,10 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   // not of the posture. It widens nothing — a pty and an open stdin change what
   // the container listens to, never what it can reach.
   if (req.console && req.agent) body.console = true;
+  // Both are console-only and agent-only, and the daemon refuses them
+  // otherwise — so the form does not send a pair it knows will 400.
+  if (req.console && req.agent && req.skipPermissions) body.skipPermissions = true;
+  if (req.console && req.agent && req.resume) body.resume = req.resume;
   // Refused together by the daemon, so the form does not send a pair it knows
   // will 400. Verify decides the exit code; an interactive session's exit code
   // is whenever you quit.

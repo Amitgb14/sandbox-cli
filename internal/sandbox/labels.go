@@ -80,6 +80,16 @@ const (
 	// is what the credential broker exists to guarantee.
 	LabelPrompt = "sandbox.prompt"
 
+	// LabelSession is the agent conversation this run reopened, when it was
+	// started with a resume rather than a fresh prompt.
+	//
+	// Stamped because it is the one case where the transcript belonging to a run
+	// is *known* rather than inferred. Everything else correlates by agent, time
+	// window and prompt, and a resumed run defeats all three by definition: its
+	// conversation began before the container did. Docker is the state store, so
+	// a fact not recorded here is one no later command can recover.
+	LabelSession = "sandbox.session"
+
 	// LabelBaseline is the crash-snapshot commit taken immediately before this
 	// run started: a before-image of the workspace, including files git does not
 	// track, written by internal/rescue through its private index.

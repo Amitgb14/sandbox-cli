@@ -22,9 +22,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Skeleton } from "@/components/ui/skeleton";
 import { TagInput } from "@/components/common/tag-input";
 import { LaunchPreview } from "@/components/launch/launch-preview";
 import {
+  useAgentSessions,
   useAgents,
   useDaemon,
   useLaunchRun,
@@ -32,6 +34,7 @@ import {
   useWorktrees,
 } from "@/lib/api/queries";
 import { localPreview } from "@/lib/api/endpoints";
+import { formatRelative, pluralize } from "@/lib/format";
 import { BASELINE_EGRESS, PROFILES, RESERVED_ENV } from "@/lib/constants";
 import { REPOS } from "@/lib/mock/data";
 import { useUi } from "@/lib/store";
@@ -40,7 +43,7 @@ import type {
   LaunchRequest,
   NetworkMode,
   Profile,
-} from "@/lib/types";
+  SessionSummary,} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -81,6 +84,8 @@ export function LaunchForm() {
     cpus: "2",
     detach: false,
     console: false,
+    skipPermissions: false,
+    resume: null,
     persistAuth: true,
     sync: true,
     statusline: true,
@@ -616,6 +621,24 @@ export function LaunchForm() {
             hint="Nobody is attached, so `-d` replaces `-i`/`-it` and the container is not removed on exit — the exit code and its logs are the entire supervision story."
           />
 
+          {req.console && req.agent && <ResumePicker req={req} patch={patch} />}
+
+          <Toggle
+            id="skip-permissions"
+            checked={req.skipPermissions}
+            disabled={!req.console || !agentMeta?.canSkipPermissions}
+            onCheckedChange={(skipPermissions) => patch({ skipPermissions })}
+            label="Let it work without asking"
+            tone={req.skipPermissions ? "caution" : undefined}
+            hint={
+              !req.console
+                ? "Only for a console run. A headless run always works without asking — an agent that stops for permission does not fail, it hangs."
+                : agentMeta?.canSkipPermissions === false
+                  ? `${req.agent}'s non-interactive mode is a subcommand rather than a flag, so there is nothing to add to an interactive session.`
+                  : "Adds the agent's skip-permissions flag, so an attached session runs to the end instead of waiting for you. The container is the blast-radius boundary either way — this changes what it asks, not what it can reach."
+            }
+          />
+
           <Toggle
             id="console"
             checked={req.console}
@@ -863,5 +886,70 @@ function Radio({
         <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>
       </div>
     </div>
+  );
+}
+
+/**
+ * Pick a conversation to carry on instead of starting one.
+ *
+ * Console-only, because that is the daemon's rule and the reason for it holds
+ * here too: a headless resume would replay one prompt into an old conversation
+ * and exit, which is not what anyone means by carrying it on.
+ *
+ * Only the sandbox-owned store is offered. Those are the conversations a
+ * container can actually reopen — your own ~/.claude history is a real store
+ * and resuming it here would mean mounting the host's history into a container
+ * that was not asked to have it.
+ */
+function ResumePicker({
+  req,
+  patch,
+}: {
+  req: LaunchRequest;
+  patch: (p: Partial<LaunchRequest>) => void;
+}) {
+  const { data: sessions, isPending } = useAgentSessions(req.agent);
+
+  if (isPending) return <Skeleton className="h-9 w-full rounded-md" />;
+  if (!sessions || sessions.length === 0) {
+    return (
+      <Hint>
+        No conversations to resume yet — {req.agent} has not written one in the
+        sandbox-owned agent HOME. The first console run here creates one.
+      </Hint>
+    );
+  }
+
+  return (
+    <Field label="Resume a conversation" htmlFor="resume">
+      <Select
+        value={req.resume ?? "none"}
+        onValueChange={(v) => patch({ resume: v === "none" ? null : v })}
+      >
+        <SelectTrigger id="resume">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">Start a new conversation</SelectItem>
+          {sessions.map((sess: SessionSummary) => (
+            <SelectItem key={sess.id} value={sess.id}>
+              {/* Text written by an agent, rendered and never interpreted. A
+                  partial session has no readable title, and says so rather
+                  than showing an empty row. */}
+              {sess.title || (sess.partial ? "(unread format)" : "(untitled)")}
+              {" · "}
+              {sess.partial ? "?" : pluralize(sess.turns, "turn")}
+              {" · "}
+              {formatRelative(sess.modified)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Hint>
+        {req.resume
+          ? "The prompt above is ignored: the conversation already has one, and this reopens it where it stopped."
+          : "Reopens an earlier session in a fresh container. Only conversations the sandbox itself wrote are listed."}
+      </Hint>
+    </Field>
   );
 }
