@@ -72,7 +72,7 @@ export const FEATURES: Feature[] = [
   {
     title: "And what it was refused",
     group: "observability",
-    body: "Under an allowlist the same line records how many egress refusals the run reported and a sample of the names, so you can answer \"did this go looking for something it was not allowed to?\" without the scrollback. The field is called egress_denied_reported rather than egress_denied on purpose: the proxy prints those lines on the container's stderr, which the agent can write to as well, so this is the container's report and not an attested fact. A run with no allowlist records nothing rather than a confident zero.",
+    body: "A non-interactive run under an allowlist — CI, a redirected shell, --no-tty — records how many egress refusals it reported and a sample of the names, so you can answer \"did this go looking for something it was not allowed to?\" without the scrollback. Read the coverage before relying on it: an interactive session records nothing, because with a pty docker returns one merged stream and reading it would cost the container its terminal size; and --detach and fleet tasks record nothing yet either, since nothing reads their output back from docker logs. The field is called egress_denied_reported rather than egress_denied on purpose: the proxy prints those lines on the container's stderr, which the agent can write to as well, so this is the container's report and not an attested fact.",
     code: '"egress_denied_reported": 2, "egress_denied_hosts_reported": ["gist.github.com"]',
     state: "default",
   },

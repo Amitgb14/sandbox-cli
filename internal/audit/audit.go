@@ -102,17 +102,30 @@ type SessionMeta struct {
 	// more useful of the two: a recorded 0 is the only positive evidence a run's
 	// allowlist was wide enough for everything it actually wanted.
 	//
-	// nil means the run was not observed, which happens three ways — no allowlist
-	// (no proxy runs, so nothing could be refused), detached (nothing on the host
-	// holds that container's stderr), or **interactive** (with a pty docker returns
-	// one merged stream, and reading it would cost the container its terminal size,
-	// so sandbox-cli declines to look — see runtime.newDenyTap for the
-	// measurement). `network` tells the three apart after the fact: `default` means
-	// there was nothing to refuse, `allowlist` with this field absent means it was
-	// in force and unobserved.
+	// nil means the run was not observed, and today that is most runs. Only a
+	// non-interactive `run` under an allowlist is watched. The rest:
 	//
-	// That last case covers most agent sessions, which is the honest shape of this
-	// field today and the reason roadmap task 4 exists.
+	//   - **no allowlist** — no proxy runs, so nothing could be refused.
+	//   - **interactive** — with a pty docker returns one merged stream, and
+	//     reading it would cost the container its terminal size, so sandbox-cli
+	//     declines to look (see runtime.newDenyTap for the measurement).
+	//   - **detached, which includes every fleet task** — Session.Start never
+	//     wires a collector. Note the reason is *not* that the output is gone:
+	//     `docker logs` has it, which is the whole supervision story --detach is
+	//     built around. Nothing reads it back yet. That is the wrong way round —
+	//     an unattended fleet is where an after-the-fact record is worth most —
+	//     and it is recorded as follow-up in docs/roadmap/task-4-run-provenance.md.
+	//
+	// `network` separates the first case from the others after the fact: `default`
+	// means there was nothing to refuse, `allowlist` with this field absent means
+	// an allowlist was in force and nobody watched.
+	//
+	// **The host sample is not a random sample, and an adversary picks it.** The
+	// count is exact, but the names are the *first* maxDenyHosts distinct ones
+	// seen, and a guest can forge denial lines — so one that emits 32 invented
+	// names first fills the sample and every real refusal after that is counted
+	// but unnamed. The field is called "reported" for exactly this reason; treat
+	// the list as a hint and the count as the number.
 	EgressDeniedReported      *int
 	EgressDeniedHostsReported []string
 

@@ -40,12 +40,20 @@ package agents
 //
 // **Bumping.** Twelve hand-maintained versions with no process is its own failure
 // mode — a pin nobody bumps becomes an old agent nobody can explain, which is the
-// staleness named below arriving by neglect rather than by design. There is no
-// automation for this yet; the intent is a sweep at each release, and the amp
-// entry is the canary since it goes stale fastest.
+// staleness named below arriving by neglect rather than by design. The intent is
+// a sweep at each release, with amp as the canary since it goes stale fastest,
+// and that intent is currently the whole mechanism.
 //
-// **The cost is staleness**, and it is real: an agent that does not update itself
-// stays on the version recorded here until someone bumps it. That is why
+// The mechanism it wants is small and does not exist yet: a CI step diffing each
+// entry against `npm view <pkg> version` (and the three release URLs) and failing,
+// or opening an issue, when they drift. That turns twelve numbers somebody has to
+// remember into a thing that reports on itself, which is the difference between a
+// documented intent and a process.
+//
+// **The cost is staleness**, and how much it costs depends on whether the agent
+// replaces its own binary afterwards — see SelfUpdates, which is recorded only
+// where it has been verified. An agent that does not update itself stays on the
+// version recorded here until someone bumps it. That is why
 // Bootstrap announces the version it is installing rather than installing
 // silently — a stale pin should be readable on screen, not inferred from an agent
 // behaving like an old one.
@@ -57,11 +65,11 @@ package agents
 // InstallPin records how one lazily-installed agent's first-run version is
 // decided.
 //
-// Exactly one of the two fields is set, and that is the point of the type:
+// Exactly one of Version and Unpinned is set, and that is the point of the type:
 // "pinned to X" and "deliberately not pinned, because Y" are both answers, and a
 // third state — nobody decided — is what this exists to make impossible.
 // TestEveryLazyInstalledAgentIsPinnedOrSaysWhy is where that stops being a
-// convention.
+// convention. SelfUpdates is independent of both and may be empty.
 type InstallPin struct {
 	// Version is the exact version installed on first run.
 	Version string
@@ -69,7 +77,26 @@ type InstallPin struct {
 	// empty, and it must be a reason rather than a note — "the installer takes no
 	// version", not "TODO".
 	Unpinned string
+
+	// SelfUpdates records whether the agent replaces its own binary in the
+	// persisted HOME after the first install, because that is what decides how
+	// much a stale pin actually costs: an agent that updates itself is pinned only
+	// for its first minute, and one that does not stays on this exact version
+	// until somebody bumps the line.
+	//
+	// "" means **nobody has checked**, not "no". Only the two below carry evidence,
+	// and guessing the rest from vendor habits would be the sort of confident wrong
+	// value TestEveryAgentHasAVerifiedHeadlessArgv exists to keep out of the
+	// neighbouring table. Verifying one means running it twice across a release,
+	// which is why this is mostly empty rather than mostly filled.
+	SelfUpdates string
 }
+
+// Self-update states for InstallPin.SelfUpdates.
+const (
+	selfUpdateYes = "yes" // verified to replace its own binary
+	selfUpdateNo  = "no"  // verified not to
+)
 
 // installPins is keyed by the *binary* name the bootstrap execs, which is not
 // always the wrapper's name: `cursor` installs `cursor-agent` and `continue`
@@ -77,14 +104,16 @@ type InstallPin struct {
 // has to use.
 var installPins = map[string]InstallPin{
 	// npm-distributed. Versions are the published `latest` as of 2026-08-02.
-	"gemini":   {Version: "0.53.1"},  // @google/gemini-cli
-	"opencode": {Version: "1.18.11"}, // opencode-ai
-	"droid":    {Version: "0.186.0"}, // droid
-	"cline":    {Version: "3.0.49"},  // cline
-	"crush":    {Version: "0.88.0"},  // @charmland/crush
-	"copilot":  {Version: "1.0.77"},  // @github/copilot
-	"cn":       {Version: "1.5.47"},  // @continuedev/cli
-	"qwen":     {Version: "0.21.3"},  // @qwen-code/qwen-code
+	"gemini": {Version: "0.53.1"}, // @google/gemini-cli
+	// opencode ships OPENCODE_DISABLE_AUTOUPDATE (see its EnvAllow), which is only
+	// a knob worth having if the thing updates itself.
+	"opencode": {Version: "1.18.11", SelfUpdates: selfUpdateYes}, // opencode-ai
+	"droid":    {Version: "0.186.0"},                             // droid
+	"cline":    {Version: "3.0.49"},                              // cline
+	"crush":    {Version: "0.88.0"},                              // @charmland/crush
+	"copilot":  {Version: "1.0.77"},                              // @github/copilot
+	"cn":       {Version: "1.5.47"},                              // @continuedev/cli
+	"qwen":     {Version: "0.21.3"},                              // @qwen-code/qwen-code
 	// Amp publishes a continuously-generated version rather than semver, so this
 	// line goes stale faster than the others by design rather than by neglect.
 	"amp": {Version: "0.0.1785646934-g35813b"}, // @ampcode/cli
@@ -99,7 +128,7 @@ var installPins = map[string]InstallPin{
 	"cursor-agent": {Unpinned: "cursor.com/install regenerates the script per release with the " +
 		"version baked into it, and documents no way to ask for a different one; there is " +
 		"nothing to pass"},
-	"claude": {Unpinned: "the installer does take a version, but Claude Code updates itself into " +
+	"claude": {SelfUpdates: selfUpdateYes, Unpinned: "the installer does take a version, but Claude Code updates itself into " +
 		"the persisted HOME — which is the reason that HOME exists — so a pin would govern only " +
 		"a first install the agent replaces on its own, and the base image usually satisfies that " +
 		"install anyway"},

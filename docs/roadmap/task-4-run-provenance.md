@@ -100,12 +100,25 @@ A record nobody can read is a file, not a feature.
   `cli/recover_resume.go`, by agent + project + time window. Reuse it rather than
   inventing a second correlation.
 
-### 4. Say what is missing
+### 4. Cover the unattended runs, which are currently the least covered
 
-- A detached run has no host process holding its stderr, so per-run observation is
-  currently impossible for exactly the runs that go unattended. Either solve it or say so
-  in the output — a gap that prints nothing reads as "nothing happened".
-- Same for a run under a user-supplied `--image` where the proxy may not exist at all.
+The egress-denial count that shipped alongside this task is recorded for a
+**non-interactive `run`** and nothing else. `--detach` and every `fleet` task get
+nothing, because `Session.Start` has no host process holding the container's output —
+which is the wrong way round, since an unattended agent is precisely the one nobody
+watched and therefore the one worth a record.
+
+- **The output is not gone.** `docker logs` has it: that is the supervision story
+  `--detach` is documented around, and `sandbox-cli logs` already reads it. Counting
+  denials from there at `fleet status` or at reap time needs no new channel, and is the
+  cheapest real coverage win available.
+- It inherits the same caveat as the live counter and must keep the same naming: those
+  lines are still the container's report, on a stream the agent can write to.
+- Interactive runs stay uncovered until feature 1 exists, and that is the honest order —
+  reading a pty run's output costs the container its terminal size (measured; see
+  `runtime.newDenyTap`), so it wants a real channel rather than a cleverer tap.
+- Same gap for a run under a user-supplied `--image` where the proxy may not exist at
+  all. A gap that prints nothing reads as "nothing happened"; say which it is.
 
 ---
 

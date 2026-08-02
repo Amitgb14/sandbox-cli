@@ -188,13 +188,25 @@ version is tagged.
 
   **An absent field and a recorded `0` mean different things.** `0` says the run
   was watched and nothing was refused, which is the only positive evidence its
-  allowlist was wide enough. Absent says nobody watched, which happens three
-  ways: no allowlist (nothing could be refused), a detached run (nothing on the
-  host holds its stderr), and an **interactive** run — with a pty docker returns
-  one merged stream, and reading it would cost the container its terminal size,
-  so sandbox-cli declines to look. `network` tells the three apart. That last
-  case covers most interactive agent sessions, so expect this field mainly on
-  `run`, `fleet` and other non-interactive work.
+  allowlist was wide enough. Absent says nobody watched.
+
+  **Read the coverage before relying on it — it is narrower than it sounds.**
+  The field appears on a **non-interactive `run` under an allowlist**, and
+  nowhere else yet:
+
+  | | recorded? | why |
+  |---|---|---|
+  | `run` with output redirected or piped, CI, `--no-tty` | **yes** | stderr comes back demultiplexed and is read |
+  | `run` typed at a terminal | no | with a pty docker returns one merged stream, and reading it would cost the container its terminal size |
+  | any agent wrapper at a terminal | no | same |
+  | `--detach`, and every `fleet` task | no | nothing in this process is holding that container's output — it goes to `docker logs`, which nothing reads back yet |
+  | any run with no allowlist | no | no proxy runs, so nothing could be refused |
+
+  So this is a `run`-and-CI feature today, not a fleet one — which is the wrong
+  way round, since an unattended fleet is where an after-the-fact record is
+  worth most. Reading it back from `docker logs` at `fleet status` or reap time
+  is recorded as follow-up work in
+  [roadmap task 4](docs/roadmap/task-4-run-provenance.md).
 
 ### Changed
 

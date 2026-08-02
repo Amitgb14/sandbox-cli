@@ -159,10 +159,20 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 //     An interactive agent is left unobserved rather than observed at the price of
 //     the thing the user is looking at.
 //
-// The second condition covers most agent sessions, so this field is quieter than
-// it looks. The denials still reach the screen, where an interactive user already
-// is; what is missing is the after-the-fact record, and giving that a channel of
-// its own rather than borrowing the guest's stdio is roadmap task 4.
+// **There is a third condition this function cannot express: it is only called
+// from Run.** Start — which is every `--detach` session and every fleet task —
+// never wires a collector, because nothing in this process is holding that
+// container's output. That is not the same as the output being lost: `docker
+// logs` has it, and reading it back at `fleet status` or reap time is the
+// obvious way to cover the unattended case, which is where an after-the-fact
+// record is worth most. Recorded in docs/roadmap/task-4-run-provenance.md rather
+// than left implied by this function's absence from Start.
+//
+// Between that and the pty rule, what is actually covered today is a
+// non-interactive `run` under an allowlist — CI, a redirected shell, `--no-tty`.
+// Say that plainly anywhere this field is described; it is much narrower than
+// "runs with an allowlist". The denials still reach the screen in the
+// interactive case, where the user already is; what is missing is the record.
 func canObserveDenials(spec runtime.RunSpec) bool {
 	return spec.Env["SANDBOX_EGRESS_ALLOW"] != "" && !spec.TTY
 }

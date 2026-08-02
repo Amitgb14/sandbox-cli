@@ -70,6 +70,14 @@ func (e *EgressDenials) Observe(line string) {
 	// against — and a map that kept growing would be the one unbounded thing here,
 	// which is exactly what the caps above promise it is not. The count still
 	// rises; only the sample is bounded.
+	//
+	// The order has a consequence worth stating: the sample is first-seen, not
+	// representative, and the guest chooses what arrives first. A container that
+	// forges maxDenyHosts invented names before doing anything real fills the list
+	// and every genuine refusal afterwards is counted but never named. There is no
+	// bounded sample without this property — any cap can be filled by whoever
+	// speaks first — so it is documented on the audit field rather than defended
+	// against here. The count remains exact, which is the number to trust.
 	if len(e.hosts) >= maxDenyHosts {
 		return
 	}
@@ -127,6 +135,12 @@ const maxHostBytes = 253
 // applies to branch names, one step further down the trust ladder: a branch name
 // is at least written by someone with commit access, and this is written by the
 // sandboxed process.
+//
+// Truncating by bytes can split a multi-byte rune. That is deliberate rather
+// than overlooked: termsafe.Clean runs strings.Map over the result, which turns
+// the orphaned fragment into U+FFFD, so the recorded name stays valid UTF-8 and
+// the JSON record stays well-formed. Counting runes to avoid a cosmetic
+// replacement character in a truncated hostile hostname is not worth the code.
 func denyHost(rest string) string {
 	if i := strings.IndexByte(rest, ' '); i >= 0 {
 		rest = rest[:i]
@@ -160,9 +174,11 @@ type denyTap struct {
 //
 // **Wrapping is not free, and it is worth naming what it costs.** `cmd.Stderr =
 // os.Stderr` hands docker the inherited descriptor; anything that is not an
-// *os.File makes os/exec create a pipe and a copying goroutine instead. So on a
-// wrapped run docker's own diagnostics no longer see a terminal on fd 2, and
-// stderr is ordered against a stdout that still goes direct.
+// *os.File makes os/exec create a pipe and a copying goroutine instead. Three
+// consequences on a wrapped run: docker's own diagnostics no longer see a
+// terminal on fd 2; stderr is ordered against a stdout that still goes direct;
+// and docker's progress output for an image pull loses its terminal formatting
+// and arrives as plain lines.
 //
 // Both consequences are bounded by *when* this is wrapped at all: only for a run
 // with an allowlist and no pty (sandbox.canObserveDenials). An interactive

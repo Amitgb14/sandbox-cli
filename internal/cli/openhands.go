@@ -39,6 +39,14 @@ var openhandsEnvAllow = []string{
 // api.github.com had to be reachable for the *usual* path to work, and under
 // `--allow` it often is not, so the fallback was doing more of the work than it
 // looked like.
+//
+// The failure mode changed shape and is worth knowing: there is no degradation
+// path any more. If this release asset is ever yanked or 404s, the download fails
+// and the run ends with the bootstrap's generic "installing it just now failed"
+// and exit 127, where previously it would have resolved a different tag and
+// carried on. That is the price of a pin — a deterministic install that can go
+// wrong deterministically — and the fix is to bump the pin, not to restore the
+// lookup.
 var openhandsInstall = `mkdir -p "$HOME/.local/bin"
 case "$(uname -m)" in
   x86_64) oh_arch=x86_64 ;;

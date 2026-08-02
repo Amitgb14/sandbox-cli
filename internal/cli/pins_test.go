@@ -17,6 +17,15 @@ import (
 // own name — `cursor` installs `cursor-agent`, `continue` installs `cn`), and the
 // point of the test is that adding an adapter means adding a line here rather
 // than quietly getting an unpinned install.
+//
+// **What that does and does not guarantee.** It catches the case it was written
+// for — a wrapper added by copying another file and never listed here. It does
+// not verify that the name in this table is the binary the wrapper actually
+// installs: get that wrong and the test happily checks a pin for a binary nobody
+// bootstraps while the real one goes unpinned. Closing that means reaching into
+// each wrapper's rendered argv, which is a bigger test than the risk justifies
+// while these fifteen entries are right; recorded so the guarantee is not read as
+// stronger than it is.
 var wrapperInstalls = map[string]string{
 	"claude":    "claude",
 	"codex":     "", // baked into the base image; Command is the bare binary
