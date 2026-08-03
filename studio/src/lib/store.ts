@@ -33,6 +33,16 @@ interface UiState {
   diffView: "unified" | "split";
   setDiffView: (v: "unified" | "split") => void;
 
+  /**
+   * Whether the sidebar usage panel is collapsed to its header.
+   *
+   * Persisted, because it is a standing preference rather than a per-visit one:
+   * these numbers move on the agent's schedule, not yours, so someone who does
+   * not want a permanent gauge in the corner does not want it again tomorrow.
+   */
+  usageCollapsed: boolean;
+  setUsageCollapsed: (v: boolean) => void;
+
   /** Recently visited runs, for the palette. */
   recentRuns: string[];
   pushRecentRun: (id: string) => void;
@@ -58,6 +68,9 @@ export const useUi = create<UiState>()(
       diffView: "unified",
       setDiffView: (diffView) => set({ diffView }),
 
+      usageCollapsed: false,
+      setUsageCollapsed: (usageCollapsed) => set({ usageCollapsed }),
+
       recentRuns: [],
       pushRecentRun: (id) =>
         set((s) => ({ recentRuns: [id, ...s.recentRuns.filter((r) => r !== id)].slice(0, 8) })),
@@ -71,6 +84,7 @@ export const useUi = create<UiState>()(
         terminalWrap: s.terminalWrap,
         terminalTimestamps: s.terminalTimestamps,
         diffView: s.diffView,
+        usageCollapsed: s.usageCollapsed,
         recentRuns: s.recentRuns,
       }),
     },

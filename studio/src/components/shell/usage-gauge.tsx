@@ -1,10 +1,11 @@
 "use client";
 
-import { RefreshCw } from "lucide-react";
+import { ChevronDown, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRefreshUsage, useUsage } from "@/lib/api/queries";
+import { useUi } from "@/lib/store";
 import { formatDurationTight, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { UsageWindow } from "@/lib/types";
@@ -34,6 +35,8 @@ import type { UsageWindow } from "@/lib/types";
 export function UsageGauge() {
   const { data, isPending } = useUsage();
   const refresh = useRefreshUsage();
+  const collapsed = useUi((s) => s.usageCollapsed);
+  const setCollapsed = useUi((s) => s.setUsageCollapsed);
 
   if (isPending) {
     return (
@@ -48,6 +51,17 @@ export function UsageGauge() {
   // zero — so there is nothing honest to draw.
   if (!data || data.windows.length === 0) return null;
 
+  // And nothing is drawn at all where the agent that owns these numbers is not
+  // installed. The figures can still be *readable* there — the cache travels in
+  // the sandbox-owned agent HOME — but they are then unrefreshable by anything,
+  // so the panel would be a permanent fixture showing a number that can only
+  // get older. Better absent than stale-forever.
+  //
+  // The honest limit: this asks about the machine running the *daemon*. Under
+  // `docker compose --profile api` that is a container, so a host with Claude
+  // Code installed can still see no panel.
+  if (!data.canRefresh) return null;
+
   const now = Date.now();
   const shown = data.windows.filter((w) => showable(w, now));
   // The window in force whose cached reading has already expired: the one the
@@ -60,9 +74,17 @@ export function UsageGauge() {
   return (
     <div className="space-y-2 rounded-md border bg-card/50 p-2.5 group-data-[collapsible=icon]:hidden">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+        <button
+          type="button"
+          onClick={() => setCollapsed(!collapsed)}
+          aria-expanded={!collapsed}
+          className="flex items-center gap-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground"
+        >
+          <ChevronDown
+            className={cn("size-3 transition-transform", collapsed && "-rotate-90")}
+          />
           {data.agent} usage
-        </span>
+        </button>
         {/* Only where a refresh could actually happen. These numbers are readable
             on a machine that never had Claude Code installed — the cache travels
             in the sandbox-owned agent HOME, and the daemon may itself be in a
@@ -90,28 +112,29 @@ export function UsageGauge() {
         ) : null}
       </div>
 
-      {shown.map((w, i) => (
-        <WindowMeter key={`${w.kind}-${w.scope ?? "account"}-${i}`} window={w} />
-      ))}
+      {collapsed ? null : (
+        <>
+          {shown.map((w, i) => (
+            <WindowMeter key={`${w.kind}-${w.scope ?? "account"}-${i}`} window={w} />
+          ))}
 
-      {staleInForce.map((w, i) => (
-        <p
-          key={`stale-${w.kind}-${i}`}
-          className="text-[10px] leading-tight text-muted-foreground"
-        >
-          <span className="text-foreground">{w.label}</span> is the window in force, and its
-          reading expired {w.resetsAt ? formatRelative(w.resetsAt) : "already"}.
-          {data.canRefresh
-            ? " Refresh to see it."
-            : " Only Claude Code can refresh it, and it is not on this machine."}
-        </p>
-      ))}
+          {/* The panel only renders where a refresh is possible, so this can
+              always offer one — see the canRefresh guard above. */}
+          {staleInForce.map((w, i) => (
+            <p key={`stale-${w.kind}-${i}`} className="text-[10px] leading-tight text-muted-foreground">
+              <span className="text-foreground">{w.label}</span> is the window in force, and its
+              reading expired {w.resetsAt ? formatRelative(w.resetsAt) : "already"}. Refresh to see
+              it.
+            </p>
+          ))}
 
-      <p className="text-[10px] leading-tight text-muted-foreground">
-        {ageMs === null
-          ? "Age unknown — the agent did not record when it last refreshed."
-          : `Read ${formatDurationTight(ageMs)} ago from ${sourceLabel(data.path)}.`}
-      </p>
+          <p className="text-[10px] leading-tight text-muted-foreground">
+            {ageMs === null
+              ? "Age unknown — the agent did not record when it last refreshed."
+              : `Read ${formatDurationTight(ageMs)} ago from ${sourceLabel(data.path)}.`}
+          </p>
+        </>
+      )}
     </div>
   );
 }
