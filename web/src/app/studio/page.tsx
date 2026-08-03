@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowLeft, ArrowUpRight, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowUpRight, ShieldCheck } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
@@ -126,6 +126,42 @@ export default function StudioPage() {
             title="Two ways in, and they do not mix"
             lead="Pick one and follow it through. Running half of each is how you end up with a UI that cannot reach a daemon, which is the single most common way this setup fails."
           />
+          {/* Above the tracks rather than inside one: the hazard belongs to the
+              compose route, but it damages a tool that has nothing to do with
+              Studio, and a reader who picked the manual track still needs to
+              recognise it if a colleague ran the other one. */}
+          <div className="mb-6 flex items-start gap-3 rounded-xl border border-caution/40 bg-caution/5 p-4">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-caution" />
+            <div className="flex flex-col gap-2">
+              <p className="text-[0.85rem] leading-relaxed text-foreground">
+                <strong className="font-medium">
+                  If Claude Code has never run on this machine, check{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
+                    ~/.claude.json
+                  </code>{" "}
+                  before enabling the API profile.
+                </strong>{" "}
+                Docker creates a <em>directory</em> at a bind mount&rsquo;s missing source, so the
+                optional usage-cache mount can put a directory at that path — and Claude Code,
+                installed later, then cannot read its own config. It is commented out by default
+                for exactly this reason.
+              </p>
+              <CodeBlock
+                code={[
+                  "# before enabling it",
+                  "test -f ~/.claude.json && echo ok || echo 'leave the mount commented'",
+                  "",
+                  "# already hit it? the directory docker made is empty, so this is the whole fix",
+                  "[ -d ~/.claude.json ] && rmdir ~/.claude.json",
+                ].join("\n")}
+              />
+              <p className="text-[0.78rem] leading-relaxed text-muted-foreground">
+                Nothing is lost: the directory only appears where the file did not exist, so there
+                was never any content in it, and Claude Code writes the real file itself.
+              </p>
+            </div>
+          </div>
+
           <StudioSetup />
         </Section>
 

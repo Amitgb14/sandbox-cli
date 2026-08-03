@@ -182,6 +182,23 @@ export const STUDIO_COMPOSE_STEPS: StudioStep[] = [
       "Mounting the docker socket into a container is root on the host: anything that can reach it can start a container mounting /. That is fine on a laptop you already trust and wrong as a default, which is why it is behind a profile rather than on by default.",
   },
   {
+    title: "Check ~/.claude.json exists before the api profile runs",
+    side: "daemon",
+    code: [
+      "# Before: is there a real file for the usage mount to bind?",
+      "test -f ~/.claude.json && echo ok || echo 'comment the .claude.json mount out first'",
+      "",
+      "# Already hit it? The directory docker made is empty, so this is the whole fix:",
+      "[ -d ~/.claude.json ] && rmdir ~/.claude.json",
+    ].join("\n"),
+    body:
+      "The compose file can mount Claude Code's usage cache so the gauge reads the same numbers your host does. It is commented out by default, and that default is load-bearing rather than cautious — see the warning. If you uncomment it, check the file is there first. Nothing is lost by the recovery above: the directory only ever appears where the file did not exist, so there was never any content to lose, and Claude Code writes the real file itself.",
+    expect:
+      "`ok` before you start, or nothing at all after the rmdir — `ls -la ~/.claude.json` showing a regular file rather than a directory.",
+    warn:
+      "Docker creates a *directory* at a bind mount's missing source. So on a machine where Claude Code has not run yet, uncommenting the ~/.claude.json mount puts a directory at that path — and Claude Code, installed later, cannot read its own config. The failure is silent at compose time and surfaces days afterwards in a different tool, which is what makes it worth checking rather than discovering.",
+  },
+  {
     title: "Point it at a project config it would otherwise refuse",
     side: "daemon",
     code: "SANDBOX_CONFIG=$PWD/.sandbox.yaml docker compose --profile api up",
