@@ -9,7 +9,7 @@ import {
 import { useEffect, useState } from "react";
 import { onTransportChange, reconnect, transportMode, type TransportMode } from "@/lib/api/client";
 import { api } from "@/lib/api/endpoints";
-import type { LaunchRequest, UsageSnapshot } from "@/lib/types";
+import type { LaunchRequest } from "@/lib/types";
 
 /**
  * Query keys, in one place. A key spelled two ways is a cache that never
@@ -234,28 +234,22 @@ export function useLaunchRun() {
 /**
  * Refresh the usage reading by making the agent fetch it.
  *
- * Refuses locally when the snapshot already said the agent is not on the
- * daemon's PATH, rather than sending a request that can only come back 501.
- * The server answers correctly either way — this is about not asking a question
- * whose answer is already in hand, and about the one deployment where it is
- * always no: under `docker compose --profile api` the daemon is a container
- * with no claude binary, so an older tab left open on that setup would
- * otherwise fill the API log with refusals.
+ * No client-side guard on `canRefresh`. There was one, and its justification
+ * did not survive being read back: it claimed to spare the API log from a tab
+ * left open on a deployment that cannot refresh — but such a tab is running
+ * *older JavaScript*, so it has neither the guard nor the hidden button that
+ * ships alongside it. The scenario it named was the one case it could not help.
+ *
+ * What actually prevents the pointless request is the control being absent:
+ * UsageGauge renders the button only when the snapshot says canRefresh. A
+ * second check behind a hidden control is unreachable code whose rejection
+ * nothing surfaces, and the server answers 501 correctly for any caller that
+ * finds another way in.
  */
 export function useRefreshUsage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => {
-      const known = qc.getQueryData<UsageSnapshot>(qk.usage);
-      if (known && !known.canRefresh) {
-        return Promise.reject(
-          new Error(
-            "This server cannot refresh usage: the agent that records these numbers is not on its PATH.",
-          ),
-        );
-      }
-      return api.refreshUsage();
-    },
+    mutationFn: () => api.refreshUsage(),
     onSuccess: (data) => qc.setQueryData(qk.usage, data),
   });
 }
