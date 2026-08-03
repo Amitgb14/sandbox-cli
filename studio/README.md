@@ -53,14 +53,18 @@ needs a served Next app, and is designed dark-first. Sharing one Next config
 between a brochure and a control plane would have meant fighting `output:
 "export"` on every route.
 
-## Why it is a frontend that already works
+## Why it works with or without a daemon
 
-The daemon does not exist yet. Studio is built against its contract and ships a
-fixture for every endpoint, so the whole UI is reviewable today — but the rule
-that keeps that from becoming a lie is that **the UI always knows which one it
-got**. The header carries a live/fixture badge, `/settings` names the endpoint,
-and nothing presents a fixture as a real reading. It is the same bargain the CLI
-makes when it prints the age of a cached usage figure instead of the figure alone.
+The daemon is `cmd/sandbox-studio-api` (`internal/studioapi`), and it ships. The
+fixtures stayed anyway: Studio carries one for every endpoint, so the whole UI
+runs with nothing behind it — useful for working on the frontend, and the reason
+this app was reviewable before the backend existed.
+
+The rule that keeps that from becoming a lie is that **the UI always knows which
+one it got**. The header carries a live/fixture badge, `/settings` names the
+endpoint, and nothing presents a fixture as a real reading. It is the same
+bargain the CLI makes when it prints the age of a cached usage figure instead of
+the figure alone.
 
 `src/lib/api/client.ts` probes `GET /v1/health` once, caches the answer, and
 routes every later call. `reconnect()` is the explicit retry, wired to the header
@@ -84,13 +88,27 @@ Point Studio at a different daemon with `NEXT_PUBLIC_SANDBOX_API`; it defaults t
 | `GET` | `/v1/runs/:id/config` | `ResolvedConfig` |
 | `POST` | `/v1/runs/:id/stop` | `Run` — `{"force":true}` to kill |
 | `POST` | `/v1/runs/:id/recover` | restore this branch's crash snapshot |
+| `GET` | `/v1/runs/:id/conversation` | the agent's transcript for this run |
+| `GET` | `/v1/runs/:id/console` | live console output (WebSocket, or SSE by default) |
+| `POST` | `/v1/runs/:id/console/input` | type at a running agent — **requires `-token`** |
+| `POST` | `/v1/runs/:id/console/resize` | tell the container its terminal size |
 | `GET` | `/v1/agents` | `{ agents }` |
+| `GET` | `/v1/agents/:agent/sessions` | that agent's past conversations, for resume |
 | `GET` · `POST` | `/v1/worktrees` | `{ worktrees }` · create |
 | `GET` · `DELETE` | `/v1/worktrees/:branch` | `Worktree` · `204` (`?force=1`) |
+| `GET` | `/v1/worktrees/:branch/commits` | what the agent committed on that branch |
+| `GET` | `/v1/commits/:sha/diff` | one commit's diff |
 | `GET` | `/v1/stats` | one sample per live run, host-wide |
+| `GET` | `/v1/stats/history` | the same, over time |
 | `GET` · `POST` | `/v1/usage` · `/v1/usage/refresh` | `UsageSnapshot` |
 | `GET` | `/v1/doctor` | `{ profile, checks }` |
 | `GET` | `/v1/audit` | `{ records }` — env by name only |
+
+`:branch` is a trailing wildcard on the two worktree routes, because a branch
+name usually contains a slash (`feat/studio-api`) and a single-segment parameter
+makes exactly those branches unaddressable. `/commits` keeps a single segment: a
+trailing wildcard has to be the last thing in the pattern, and it is the more
+specific route, so the mux prefers it.
 
 Two are deliberately absent. **Kill is not its own route** — it is `stop` with
 `{"force":true}`, because the difference is a flag on one act and a second path
@@ -144,9 +162,19 @@ These are design decisions, not omissions.
   editing, so it has to be chosen by name — and only kill confirms, because
   reading the wrong session costs a second and stopping the wrong agent costs its
   work.
-- **The terminal is read-only and says so.** A detached run has neither `-i` nor
-  `-t`, so it is not listening on stdin. An input that silently went nowhere would
-  be worse than none; interactive sessions get a pointer to `sandbox-cli attach`.
+- **A terminal is read-only unless the run has a console.** An ordinary detached
+  run has neither `-i` nor `-t`, so nothing is listening on stdin and an input
+  that silently went nowhere would be worse than none. A run launched with
+  `console: true` is created `-dit` for exactly this, and then the terminal
+  attaches for real over `console/input`. Which one you have is stated rather
+  than inferred: typing at a run without a console is refused with the reason,
+  since stdin is fixed at create time and nothing later can open it.
+- **Typing always needs a token.** Every other endpoint is read-only or launches
+  a container you could have launched anyway; a keyboard on a session that is
+  *already running* — holding a workspace, and under dev's defaults an OAuth
+  refresh token in the agent's HOME — is not. `console/input` refuses outright
+  when the daemon was started without `-token`, whatever the rest of the server
+  is doing.
 - **Security settings are read-only in `/settings`.** The profile, the egress
   posture and the mount rules come out of the config layers. A UI that wrote into
   the middle of that stack would become a layer nobody could see in the file.

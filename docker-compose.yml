@@ -121,9 +121,13 @@ services:
       # Left commented because of how docker treats a missing source: it creates
       # a *directory* at that path. On a machine where Claude Code has not run
       # yet, an uncommented line here would put a directory called .claude.json
-      # in your home, and Claude Code would then fail to read its own config.
-      # Check the file exists before uncommenting.
-      - ${HOME}/.claude.json:${HOME}/.claude.json:ro
+      # in your home, and Claude Code would then fail to read its own config —
+      # this file breaking the tool it exists to report on. Check the file is
+      # there before uncommenting:
+      #
+      #   test -f ~/.claude.json && echo safe to uncomment
+      #
+      #- ${HOME}/.claude.json:${HOME}/.claude.json:ro
     environment:
       # So config.ConfigRoot and the worktree paths agree with the mount above.
       HOME: ${HOME}
