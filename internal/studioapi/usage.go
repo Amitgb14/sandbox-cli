@@ -34,7 +34,7 @@ var windowKinds = map[string]struct{ kind, label string }{
 // zero. That is why this can honestly answer 200 with an empty list, and why a
 // client must not read that as "nothing used".
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
-	out := UsageSnapshot{Agent: "claude", Windows: []UsageWindow{}}
+	out := UsageSnapshot{Agent: "claude", Windows: []UsageWindow{}, CanRefresh: agentusage.Refreshable()}
 
 	snap, err := agentusage.Find(agentusage.ClaudePaths()...)
 	if err != nil {
@@ -47,7 +47,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	for _, win := range snap.Windows {
-		u := UsageWindow{Kind: win.Kind, Label: win.Kind, Scope: win.Scope}
+		u := UsageWindow{Kind: win.Kind, Label: win.Kind, Scope: win.Scope, Active: win.Active}
 		if k, ok := windowKinds[win.Kind]; ok {
 			u.Kind, u.Label = k.kind, k.label
 		}

@@ -102,6 +102,72 @@ func TestParseScopedLimits(t *testing.T) {
 	}
 }
 
+// is_active is the one fact that says which window is actually metering you,
+// and it exists only on the limits[] entries — the five_hour and seven_day
+// fields carry no such flag. So the unscoped entries have to be read even
+// though they must not become rows of their own, which is the pairing this
+// pins: the account windows take their flag from them, and the scoped windows
+// carry their own.
+//
+// Reported by #47: a panel showed two idle weeklies while the window in force
+// was the one missing from it, because nothing here read the field at all.
+func TestParseReadsIsActiveWithoutDuplicatingWindows(t *testing.T) {
+	const in = `{"cachedUsageUtilization":{"utilization":{
+	  "five_hour":{"utilization":23,"resets_at":"2026-07-25T10:00:00Z"},
+	  "seven_day":{"utilization":6,"resets_at":"2026-07-30T06:00:00Z"},
+	  "limits":[
+	    {"kind":"session","percent":23,"scope":null,"is_active":true},
+	    {"kind":"weekly_all","percent":6,"scope":null,"is_active":false},
+	    {"kind":"weekly_scoped","percent":0,"scope":{"model":{"display_name":"Fable"}},"is_active":false}
+	  ]}}}`
+	s, err := Parse([]byte(in))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	// Still three windows: the unscoped entries enrich the account windows
+	// rather than adding rows.
+	if len(s.Windows) != 3 {
+		t.Fatalf("windows = %d, want 3 (two account + one scoped): %+v", len(s.Windows), s.Windows)
+	}
+	want := []struct {
+		kind, scope string
+		active      *bool
+	}{
+		{KindFiveHour, "", boolp(true)},
+		{KindSevenDay, "", boolp(false)},
+		{KindSevenDay, "Fable", boolp(false)},
+	}
+	for i, w := range want {
+		got := s.Windows[i]
+		if got.Kind != w.kind || got.Scope != w.scope {
+			t.Errorf("window %d = %s/%s, want %s/%s", i, got.Kind, got.Scope, w.kind, w.scope)
+			continue
+		}
+		if got.Active == nil || *got.Active != *w.active {
+			t.Errorf("window %s/%s active = %v, want %v", got.Kind, got.Scope, got.Active, *w.active)
+		}
+	}
+}
+
+// And a window the agent said nothing about reports nil rather than false: the
+// absence of a field is not a claim that the allowance is idle.
+func TestParseLeavesIsActiveNilWhenUnreported(t *testing.T) {
+	const in = `{"cachedUsageUtilization":{"utilization":{
+	  "five_hour":{"utilization":10,"resets_at":"2026-07-25T10:00:00Z"}}}}`
+	s, err := Parse([]byte(in))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(s.Windows) != 1 {
+		t.Fatalf("windows = %+v", s.Windows)
+	}
+	if s.Windows[0].Active != nil {
+		t.Errorf("active = %v, want nil — nothing reported it", *s.Windows[0].Active)
+	}
+}
+
+func boolp(b bool) *bool { return &b }
+
 func TestParseRejectsNonJSON(t *testing.T) {
 	if _, err := Parse([]byte("not json")); err == nil {
 		t.Fatal("want an error for bytes that are not JSON")

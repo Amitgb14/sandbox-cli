@@ -135,6 +135,12 @@ type UsageWindow struct {
 	Utilization *float64 `json:"utilization"`
 	ResetsAt    *string  `json:"resetsAt"`
 	Scope       string   `json:"scope,omitempty"` // the model a per-model allowance covers
+
+	// Active is whether the agent reported this window as the one currently in
+	// force. Null when it said nothing — a window described only by the
+	// five_hour/seven_day fields carries no such flag, and rendering "not in
+	// force" from a missing one would state the absence of a field as a fact.
+	Active *bool `json:"active"`
 }
 
 // UsageSnapshot is one reading of an agent's usage cache.
@@ -144,10 +150,17 @@ type UsageWindow struct {
 // figures refresh only when the agent talks to the server and an unlabelled
 // percentage can be hours stale.
 type UsageSnapshot struct {
-	Agent     string        `json:"agent"`
-	Windows   []UsageWindow `json:"windows"`
-	FetchedAt *string       `json:"fetchedAt"`
-	Path      *string       `json:"path"`
+	Agent   string        `json:"agent"`
+	Windows []UsageWindow `json:"windows"`
+
+	// CanRefresh is whether the agent that owns this cache is on this machine's
+	// PATH. The figures are readable without it — they come from a file, and the
+	// sandbox keeps its own copy — so "there are numbers" and "they can be made
+	// current" are different questions, and a client that offered a refresh it
+	// cannot perform would be answering the second with the first.
+	CanRefresh bool    `json:"canRefresh"`
+	FetchedAt  *string `json:"fetchedAt"`
+	Path       *string `json:"path"`
 }
 
 // DoctorCheck is one host property, as `sandbox-cli doctor` reports it.
