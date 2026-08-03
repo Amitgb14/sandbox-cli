@@ -137,3 +137,58 @@ export const STUDIO_STEPS: StudioStep[] = [
       "A console run cannot also carry a verify. Verify's exit code is the whole point of it — `fleet land` reads it — and an interactive session's exit code only says when somebody closed the window.",
   },
 ];
+
+/* ------------------------------------------------- the docker compose track */
+
+/**
+ * The compose route, from docker-compose.yml at the repository root.
+ *
+ * The order matters and is not the order the file lists services in. `docker
+ * compose up` gives you the **UI only** — the API is behind `--profile api`
+ * deliberately, because running it in a container means mounting the host's
+ * docker socket into that container, and a process holding that socket can
+ * start a container mounting `/`, which is root on the host. So the default
+ * shape is the recommended one: UI containerised, API as an ordinary host
+ * process that already has the access it needs. The socket route is documented
+ * because people will reach for it anyway, and it is better read than guessed.
+ */
+export const STUDIO_COMPOSE_STEPS: StudioStep[] = [
+  {
+    title: "Bring up the UI — and only the UI",
+    side: "ui",
+    code: "docker compose up",
+    body:
+      "The default profile builds the Next app from studio/Dockerfile.dev and publishes it on 127.0.0.1:3100 with your source bind-mounted, so edits are live. It starts no API: the compose file's default is the shape that keeps the docker socket out of a container, which is the whole reason sandbox-cli exists.",
+    expect:
+      "http://localhost:3100 serving Studio, with the header badge reading fixture — there is no daemon yet for it to reach.",
+  },
+  {
+    title: "Run the API on your host, where the access already is",
+    side: "daemon",
+    code:
+      "SANDBOX_STUDIO_TOKEN=$(openssl rand -hex 16) \\\n  go run ./cmd/sandbox-studio-api -cors-origin http://localhost:3100",
+    body:
+      "This is the recommended pairing. The API needs the docker socket and your project on the same absolute paths the daemon sees, and a host process has both without any mounting. -cors-origin is required rather than optional: the UI is served from :3100 and the API listens on :8787, so every browser call is cross-origin and an unlisted Origin is refused outright.",
+    expect: "The header badge flipping from fixture to live within a couple of seconds.",
+  },
+  {
+    title: "Or put the API in a container too — knowing what that costs",
+    side: "daemon",
+    code: "SANDBOX_STUDIO_TOKEN=$(openssl rand -hex 16) docker compose --profile api up -d",
+    body:
+      "The api profile mounts /var/run/docker.sock, ${PWD} at its own path, and ~/.config/sandbox at its own path. The duplicated paths are not redundancy: when the API asks the daemon for -v /a/b:/workspace, the daemon resolves /a/b on the host, so the project must live at the same absolute path in both places or every sandbox it starts mounts a directory that is not there.",
+    expect: "Both services up, with the API published on 127.0.0.1:8787 only.",
+    warn:
+      "Mounting the docker socket into a container is root on the host: anything that can reach it can start a container mounting /. That is fine on a laptop you already trust and wrong as a default, which is why it is behind a profile rather than on by default.",
+  },
+  {
+    title: "Point it at a project config it would otherwise refuse",
+    side: "daemon",
+    code: "SANDBOX_CONFIG=$PWD/.sandbox.yaml docker compose --profile api up",
+    body:
+      "A .sandbox.yaml travels with a repository, so discovery refuses the privilege-relevant keys in it — image, mounts, secrets, env_allow, a weakening network.mode — and the server will not start rather than honour them silently. Naming the path is the deliberate act that makes the file trusted, which is exactly the escape hatch the refusal describes. `cp .env.example .env` keeps it out of every later invocation.",
+    expect: "The server starting instead of refusing, having been told to trust that specific file.",
+    warn:
+      "A secrets: entry with a command: is resolved wherever the API process runs. In a container that is inside the container — `gh auth token` fails with exit status 127, and mounting ~/.config/gh to fix it would hand that container your GitHub credentials. Brokered secrets belong to a host process.",
+  },
+];

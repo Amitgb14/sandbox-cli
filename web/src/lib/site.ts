@@ -18,6 +18,7 @@ export const RAW_INSTALL_URL =
  * redirect on the hosts that do one and a 404 on the hosts that do not.
  */
 export const MULTI_AGENT_PATH = "/multi-agent/";
+export const STUDIO_PATH = "/studio/";
 
 export const DOC_URL = {
   guide: `${REPO_URL}/blob/main/docs/GUIDE.md`,
