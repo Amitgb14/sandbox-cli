@@ -1,210 +1,105 @@
 "use client";
 
 import { useState } from "react";
-import { Circle, ImageOff } from "lucide-react";
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 
 /**
- * What Studio looks like, drawn rather than photographed — and labelled as such.
+ * What Studio actually looks like — real captures, not illustrations.
  *
- * These are **interface illustrations, not screenshots**, and the caption on
- * every frame says so. That is a deliberate choice rather than a shortcut worth
- * apologising for: a screenshot of a control plane is a picture of one machine's
- * data at one moment, it carries whatever container names and branch names
- * happened to be on screen, and it goes stale the first time a column moves. A
- * drawn frame stays in step with the prose around it, renders in both themes,
- * costs no bytes, and cannot quietly show a version of the UI that no longer
- * exists.
+ * These replaced a set of drawn frames, and the reason for the swap is the same
+ * reason the drawings carried an `illustration` label in the first place: a
+ * picture on a docs page is read as evidence, so it either is one or it says it
+ * is not. These are, so the label is gone.
  *
- * What it must never do is pretend. Nothing here is dressed up as a capture —
- * no window chrome, no cursor, no fake timestamps presented as real readings —
- * because a diagram passed off as evidence is worse than no picture at all, and
- * that is the same bargain the CLI makes when it prints the *age* of a cached
- * usage figure instead of the figure alone.
+ * Every caption points at something visible in its own frame rather than
+ * narrating the product in general. A caption that praises a screen the reader
+ * is already looking at adds nothing; one that names the number they would
+ * otherwise skip — the denominator behind a pass rate, the `session` kind that
+ * is *why* a run shows no verify — is the only kind worth writing.
  *
- * To use real captures instead, drop PNGs in web/public/ and give each frame a
- * `src`: the caption switches to a plain figure caption and the illustration is
- * replaced. The layout is the same either way.
+ * next/image rather than <img>: the export sets `images: { unoptimized: true }`,
+ * so this costs no build step, and passing the intrinsic width/height is what
+ * keeps the page from reflowing as each capture loads.
  */
 
 type Frame = {
   id: string;
   title: string;
+  src: string;
   caption: string;
-  /** A real capture in web/public, if one has been added. */
-  src?: string;
 };
+
+/** Intrinsic size of the captures; all three were taken at one window size. */
+const W = 1696;
+const H = 893;
 
 const FRAMES: Frame[] = [
   {
+    id: "dashboard",
+    title: "Dashboard",
+    src: "/studio/dashboard.png",
+    caption:
+      "Every sandbox across your repositories, and what the host is carrying. The pass rate keeps its denominator — 90% is over 841 decided runs rather than over everything that ever started — and memory in flight reads as a dash instead of 0 when nothing is running, because a run that was never measured is not a run that used nothing.",
+  },
+  {
     id: "runs",
-    title: "The runs table",
+    title: "Runs",
+    src: "/studio/runs.png",
     caption:
-      "Every container sandbox-cli started for this project, live. The same rows `sandbox-cli list` prints — one control plane, two front ends.",
+      "Every container carrying the sandbox.cli label, running or finished — a run stays here after it exits, because how it ended is the point. The KIND column is doing real work: this one is a session, which is why it has no verify to have failed.",
   },
   {
-    id: "detail",
-    title: "A run, and the boundary it got",
+    id: "worktrees",
+    title: "Worktrees",
+    src: "/studio/worktrees.png",
     caption:
-      "The resolved posture rather than the requested one: the profile that applied, the egress mode, and what the workspace actually was.",
-  },
-  {
-    id: "console",
-    title: "Answering an agent",
-    caption:
-      "A run launched with a console keeps a terminal open, so an agent that stopped to ask can be answered. Needs a token, always.",
+      "One branch per agent, each in its own directory mounted at its own host path so git cannot prune it away mid-session. Verify reads “never checked” rather than passed for branches nothing judged, and the dirty count next to a branch is one of the two facts land refuses on.",
   },
 ];
-
-/** A window frame that is obviously drawn: no chrome, no cursor, no fake data. */
-function Chrome({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="overflow-hidden rounded-lg border bg-muted/30">
-      <div className="flex items-center gap-1.5 border-b bg-muted/50 px-3 py-2">
-        {["", "", ""].map((_, i) => (
-          <Circle key={i} className="size-2 fill-muted-foreground/25 text-transparent" />
-        ))}
-        <span className="ml-2 font-mono text-[0.6rem] text-muted-foreground">
-          localhost:3100
-        </span>
-      </div>
-      <div className="p-3">{children}</div>
-    </div>
-  );
-}
-
-function Bar({ w, dim }: { w: string; dim?: boolean }) {
-  return (
-    <div
-      className={cn("h-2 rounded-full", dim ? "bg-muted-foreground/15" : "bg-muted-foreground/30")}
-      style={{ width: w }}
-    />
-  );
-}
-
-function RunsIllustration() {
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <Bar w="18%" />
-        <Bar w="26%" dim />
-        <Bar w="14%" dim />
-        <span className="ml-auto rounded-full border border-contained/40 px-1.5 py-0.5 text-[0.55rem] text-contained">
-          live
-        </span>
-      </div>
-      {[
-        { state: "running", w: "22%" },
-        { state: "exited 0", w: "28%" },
-        { state: "exited 90", w: "19%" },
-      ].map((r) => (
-        <div key={r.state} className="flex items-center gap-2 rounded border bg-card px-2 py-1.5">
-          <Bar w={r.w} />
-          <span
-            className={cn(
-              "ml-auto font-mono text-[0.55rem]",
-              r.state === "exited 90" ? "text-caution" : "text-muted-foreground",
-            )}
-          >
-            {r.state}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function DetailIllustration() {
-  return (
-    <div className="flex flex-col gap-2">
-      <Bar w="42%" />
-      <div className="grid grid-cols-2 gap-2">
-        {["profile", "egress", "workspace", "image"].map((k) => (
-          <div key={k} className="rounded border bg-card px-2 py-1.5">
-            <div className="font-mono text-[0.55rem] text-muted-foreground">{k}</div>
-            <div className="mt-1">
-              <Bar w="70%" dim />
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ConsoleIllustration() {
-  return (
-    <div className="rounded border bg-card p-2 font-mono text-[0.58rem] leading-relaxed text-muted-foreground">
-      <div className="flex flex-col gap-1">
-        <Bar w="66%" dim />
-        <Bar w="48%" dim />
-        <div className="mt-1 flex items-center gap-1.5 rounded border border-dashed px-1.5 py-1">
-          <span className="text-muted-foreground/60">›</span>
-          <Bar w="30%" />
-          <span className="ml-auto animate-pulse text-muted-foreground/60">▍</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const ILLUSTRATION: Record<string, () => React.ReactElement> = {
-  runs: RunsIllustration,
-  detail: DetailIllustration,
-  console: ConsoleIllustration,
-};
 
 export function StudioPreview() {
   const [active, setActive] = useState(FRAMES[0].id);
   const frame = FRAMES.find((f) => f.id === active) ?? FRAMES[0];
-  const Illustration = ILLUSTRATION[frame.id];
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-2">
-        {FRAMES.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => setActive(f.id)}
-            aria-pressed={f.id === active}
-            className={cn(
-              "rounded-full border px-2.5 py-1 text-[0.7rem] transition-colors",
-              f.id === active
-                ? "border-foreground/25 bg-muted text-foreground"
-                : "border-border text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {f.title}
-          </button>
-        ))}
+      <div role="tablist" aria-label="Studio screens" className="flex flex-wrap gap-2">
+        {FRAMES.map((f) => {
+          const on = f.id === active;
+          return (
+            <button
+              key={f.id}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              onClick={() => setActive(f.id)}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-[0.7rem] transition-colors",
+                on
+                  ? "border-foreground/25 bg-muted text-foreground"
+                  : "border-border text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {f.title}
+            </button>
+          );
+        })}
       </div>
 
-      <figure className="flex flex-col gap-2">
-        {frame.src ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+      <figure className="flex flex-col gap-2.5">
+        <div className="overflow-hidden rounded-xl border bg-muted/20">
+          <Image
             src={frame.src}
-            alt={frame.title}
-            className="w-full rounded-lg border"
-            loading="lazy"
+            alt={`Sandbox Studio — ${frame.title}`}
+            width={W}
+            height={H}
+            priority={frame.id === FRAMES[0].id}
+            className="h-auto w-full"
           />
-        ) : (
-          <Chrome>
-            <Illustration />
-          </Chrome>
-        )}
-        <figcaption className="flex items-start gap-2 text-[0.75rem] leading-relaxed text-muted-foreground">
-          {frame.src ? null : (
-            <span
-              className="mt-0.5 flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[0.6rem]"
-              title="Drawn from the interface, not a screen capture"
-            >
-              <ImageOff className="size-2.5" />
-              illustration
-            </span>
-          )}
-          <span>{frame.caption}</span>
+        </div>
+        <figcaption className="text-[0.78rem] leading-relaxed text-muted-foreground">
+          {frame.caption}
         </figcaption>
       </figure>
     </div>

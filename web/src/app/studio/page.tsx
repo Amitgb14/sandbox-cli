@@ -170,7 +170,7 @@ export default function StudioPage() {
           <SectionHead
             eyebrow="what it looks like"
             title="Runs, the boundary each one got, and a keyboard"
-            lead="These frames are drawn rather than captured, and labelled as such. A screenshot of a control plane is one machine's data at one moment and goes stale the first time a column moves; a drawn frame stays in step with the words next to it and cannot quietly show a version that no longer exists."
+            lead="Three screens from a real session. The captions point at the numbers that are easy to read past — the denominator behind a pass rate, the run kind that explains a missing verify, the dirty count that decides whether a branch can land."
           />
           <StudioPreview />
 
