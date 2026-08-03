@@ -117,14 +117,12 @@ export function UsageGauge() {
           ))}
 
           {staleInForce.map((w, i) => (
-            <p
+            <WindowMeter
               key={`stale-${w.kind}-${i}`}
-              className="text-[10px] leading-tight text-muted-foreground"
-            >
-              <span className="text-foreground">{w.label}</span> is the window in force, and its
-              reading expired {w.resetsAt ? formatRelative(w.resetsAt) : "already"}.
-              {data.canRefresh ? " Refresh to see it." : ""}
-            </p>
+              window={w}
+              expired
+              canRefresh={data.canRefresh}
+            />
           ))}
 
           <p className="text-[10px] leading-tight text-muted-foreground">
@@ -165,7 +163,25 @@ function showable(w: UsageWindow, now: number): boolean {
   return true;
 }
 
-function WindowMeter({ window: w }: { window: UsageWindow }) {
+/**
+ * One window's row.
+ *
+ * `expired` is the window that is in force but whose cached reading describes a
+ * period that has already ended. It gets a row rather than being dropped,
+ * because the reader came here to see both windows and a panel showing only the
+ * weekly answers a question nobody asked — but it gets a dash rather than a
+ * percentage, because after a reset the true figure is *unknown*, not the old
+ * number and not zero. Printing either would be inventing a reading.
+ */
+function WindowMeter({
+  window: w,
+  expired = false,
+  canRefresh = true,
+}: {
+  window: UsageWindow;
+  expired?: boolean;
+  canRefresh?: boolean;
+}) {
   const pct = w.utilization ?? 0;
   // Explicitly false, not merely falsy: null means the agent said nothing about
   // this window, which is not the same claim as "this allowance is idle".
@@ -182,16 +198,25 @@ function WindowMeter({ window: w }: { window: UsageWindow }) {
           {w.scope && <span className="ml-1 font-mono opacity-70">{w.scope}</span>}
           {idle && <span className="ml-1 opacity-70" title="not the window currently in force">idle</span>}
         </span>
-        <span className="font-medium tabular-nums">{pct}%</span>
+        <span className="font-medium tabular-nums">{expired ? "—" : `${pct}%`}</span>
       </div>
       <div className="h-1 overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn("h-full rounded-full transition-[width]", tone)}
-          style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
-        />
+        {expired ? null : (
+          <div
+            className={cn("h-full rounded-full transition-[width]", tone)}
+            style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
+          />
+        )}
       </div>
-      {w.resetsAt && (
-        <p className="text-[10px] text-muted-foreground">resets {formatRelative(w.resetsAt)}</p>
+      {expired ? (
+        <p className="text-[10px] text-muted-foreground">
+          reading expired {w.resetsAt ? formatRelative(w.resetsAt) : "already"}
+          {canRefresh ? " — refresh to see it" : ""}
+        </p>
+      ) : (
+        w.resetsAt && (
+          <p className="text-[10px] text-muted-foreground">resets {formatRelative(w.resetsAt)}</p>
+        )
       )}
     </div>
   );
