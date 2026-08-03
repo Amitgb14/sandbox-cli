@@ -34,7 +34,7 @@ var windowKinds = map[string]struct{ kind, label string }{
 // zero. That is why this can honestly answer 200 with an empty list, and why a
 // client must not read that as "nothing used".
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
-	out := UsageSnapshot{Agent: "claude", Windows: []UsageWindow{}, CanRefresh: agentusage.Refreshable()}
+	out := UsageSnapshot{Agent: "claude", Windows: []UsageWindow{}, CanRefresh: usageRefreshable()}
 
 	snap, err := agentusage.Find(agentusage.ClaudePaths()...)
 	if err != nil {
@@ -92,11 +92,38 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 // Deliberately a POST and deliberately not automatic. The request is spent from
 // the very window being measured, so asking for it has to be an act rather than
 // a side effect of opening a screen.
+// usageRefreshable answers whether a refresh is possible on this machine. A
+// variable for the same reason agentusage.claudeBin is one: the answer depends
+// on what is installed where the test happens to run, and a status code this
+// load-bearing should be pinned rather than exercised only on machines that
+// happen to lack the agent.
+var usageRefreshable = agentusage.Refreshable
+
 func (s *Server) handleUsageRefresh(w http.ResponseWriter, r *http.Request) {
+	// Asked before attempting, so the impossible case gets an answer about *this
+	// deployment* rather than a failed subprocess. It is the ordinary case under
+	// `docker compose --profile api`: the daemon runs in a container that has no
+	// claude binary, while the cache it serves is perfectly readable through the
+	// mounted agent HOME. Numbers you can read and cannot refresh is a
+	// configuration, not a fault.
+	if !usageRefreshable() {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf(
+			"this server cannot refresh usage: the agent that records these numbers is not on its "+
+				"PATH. Reading them needs only the cache file, which is why they are shown; "+
+				"refreshing them needs the agent itself. Run the API on a machine that has it — "+
+				"under `docker compose --profile api` the API is a container, and the recommended "+
+				"shape is the API on your host"))
+		return
+	}
 	if err := agentusage.Refresh(r.Context()); err != nil {
 		// The stale reading is still the honest one, and returning it with a 200
 		// would say the refresh worked. The client keeps what it had and learns
 		// why it could not be improved.
+		//
+		// 502 is right *here* and wrong above: this is the agent having been run
+		// and failed, which is an upstream fault. "The agent is not installed" is
+		// not — it is this server never having been able to, and answering both
+		// with one status made a permanent condition look like a bad minute.
 		writeError(w, http.StatusBadGateway, fmt.Errorf("refreshing usage: %w", err))
 		return
 	}
