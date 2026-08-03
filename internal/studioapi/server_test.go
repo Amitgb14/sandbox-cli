@@ -178,7 +178,13 @@ func newTestServer(t *testing.T) (*Server, *fakeRuntime) {
 	}, fr
 }
 
-func doRequest(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
+// testHost is what a real client's Host header looks like, and every test
+// request carries it: httptest.NewRequest defaults to "example.com", which the
+// server refuses on purpose (see hostAllowed — that default is exactly the shape
+// of a DNS-rebinding attempt).
+const testHost = "127.0.0.1:4319"
+
+func newTestRequest(t *testing.T, method, path string, body any) *http.Request {
 	t.Helper()
 	var r io.Reader
 	if body != nil {
@@ -189,11 +195,17 @@ func doRequest(t *testing.T, h http.Handler, method, path string, body any) *htt
 		r = bytes.NewReader(b)
 	}
 	req := httptest.NewRequest(method, path, r)
+	req.Host = testHost
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	return req
+}
+
+func doRequest(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, newTestRequest(t, method, path, body))
 	return rec
 }
 
@@ -379,7 +391,7 @@ func TestCORSOnlyReflectsConfiguredOrigins(t *testing.T) {
 	s.CORSOrigins = []string{"http://localhost:3000"}
 	h := s.Handler()
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
+	req := newTestRequest(t, http.MethodGet, "/v1/health", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -387,12 +399,110 @@ func TestCORSOnlyReflectsConfiguredOrigins(t *testing.T) {
 		t.Errorf("allowed origin got no CORS header, got %q", got)
 	}
 
-	req2 := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
+	req2 := newTestRequest(t, http.MethodGet, "/v1/health", nil)
 	req2.Header.Set("Origin", "http://evil.example")
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
 	if got := rec2.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("unconfigured origin got a CORS header: %q", got)
+	}
+}
+
+// TestUnlistedOriginCannotLaunchARun is the CSRF case, and the reason refusing to
+// *reflect* an origin is not enough on its own: a cross-origin POST carrying a
+// text/plain body is a CORS "simple request", so no preflight ever happens and
+// the container starts whether or not the page can read the response. The origin
+// check is what stops it.
+func TestUnlistedOriginCannotLaunchARun(t *testing.T) {
+	s, fr := newTestServer(t)
+	h := s.Handler()
+
+	body := `{"command":["echo","pwned"],"branch":"csrf"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
+	req.Host = testHost
+	req.Header.Set("Origin", "http://evil.example")
+	req.Header.Set("Content-Type", "text/plain;charset=UTF-8") // what fetch() sends without asking for a preflight
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("cross-origin POST /runs = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	if len(fr.started) != 0 {
+		t.Errorf("a page on another origin started %d containers; it must start none", len(fr.started))
+	}
+}
+
+// TestRebindableHostIsRefused pins the other half: a page whose own hostname
+// resolves to 127.0.0.1 satisfies the browser's same-origin policy, so its
+// Origin looks legitimate to itself. The Host header is what gives it away.
+func TestRebindableHostIsRefused(t *testing.T) {
+	s, fr := newTestServer(t)
+	h := s.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(`{"command":["echo","hi"]}`))
+	req.Host = "attacker.example"
+	req.Header.Set("Origin", "http://attacker.example") // same-origin, as far as the browser knows
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("rebound-host POST /runs = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	if len(fr.started) != 0 {
+		t.Errorf("a rebound host started %d containers; it must start none", len(fr.started))
+	}
+
+	// The escape hatch works, for the user who really is reaching this by name.
+	s.AllowedHosts = []string{"studio.internal"}
+	req2 := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
+	req2.Host = "studio.internal:4319"
+	rec2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Errorf("explicitly allowed host = %d, want 200: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// TestLoopbackHostsAreAlwaysAllowed pins that AllowedHosts adds to loopback
+// rather than replacing it: a configuration that could switch off the way this
+// server is reached by design would be a footgun with no use case.
+func TestLoopbackHostsAreAlwaysAllowed(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.AllowedHosts = []string{"studio.internal"}
+	for _, host := range []string{"127.0.0.1:4319", "localhost:4319", "[::1]:4319", "127.0.0.1", "LOCALHOST"} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("Host %q = %d, want 200", host, rec.Code)
+		}
+	}
+}
+
+// TestNonJSONBodyIsRefused covers the defense-in-depth check behind the origin
+// one: a body this server parses as JSON has to be labelled as JSON.
+func TestNonJSONBodyIsRefused(t *testing.T) {
+	s, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(`{"command":["echo"]}`))
+	req.Host = testHost
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("text/plain body = %d, want 415: %s", rec.Code, rec.Body.String())
+	}
+
+	// A bodiless POST needs no content type — `curl -X POST .../stop` must keep
+	// working, and the origin check is what governs that case.
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/runs", nil)
+	req2.Host = testHost
+	rec2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code == http.StatusUnsupportedMediaType {
+		t.Error("a POST with no body was refused for its content type")
 	}
 }
 
@@ -408,7 +518,7 @@ func TestTokenRequiredExceptHealth(t *testing.T) {
 		t.Errorf("/runs without token = %d, want 401", rec.Code)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
+	req := newTestRequest(t, http.MethodGet, "/v1/runs", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -452,6 +562,73 @@ func TestWorktreeLifecycle(t *testing.T) {
 	getAfter := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees/feature-a", nil)
 	if getAfter.Code != http.StatusNotFound {
 		t.Fatalf("get-after-delete status = %d, want 404", getAfter.Code)
+	}
+}
+
+// TestWorktreeRoutesAcceptASlashedBranch pins the routing wildcard. Branch names
+// contain slashes as a matter of course (feat/studio-api is the branch this API
+// was written on), and a single-segment {branch} pattern makes exactly those
+// branches unaddressable — a 404 from the mux, before any handler runs.
+func TestWorktreeRoutesAcceptASlashedBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	s, _ := newTestServer(t)
+	initGitRepo(t, s.Project)
+	const branch = "feat/studio-api"
+
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/worktrees", WorktreeCreateRequest{Branch: branch})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", create.Code, create.Body.String())
+	}
+	if got := decodeBody[Worktree](t, create); got.Branch != branch {
+		t.Errorf("branch = %q, want %q", got.Branch, branch)
+	}
+
+	get := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees/"+branch, nil)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET /worktrees/%s = %d: %s", branch, get.Code, get.Body.String())
+	}
+	if got := decodeBody[Worktree](t, get); got.Branch != branch {
+		t.Errorf("round-tripped branch = %q, want %q", got.Branch, branch)
+	}
+
+	del := doRequest(t, s.Handler(), http.MethodDelete, "/v1/worktrees/"+branch, nil)
+	if del.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /worktrees/%s = %d: %s", branch, del.Code, del.Body.String())
+	}
+}
+
+// TestRunInAnotherProjectIsLabelledWithThatProjectsRepo pins that the repo id is
+// recomputed for a run mounting a different checkout rather than inherited from
+// the server. The labels are the state store: every later command reads
+// sandbox.repo as fact, and two repositories' `main` sharing one id would collide
+// on a container name — which is what enforces one agent per branch.
+func TestRunInAnotherProjectIsLabelledWithThatProjectsRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	s, fr := newTestServer(t)
+	other := t.TempDir()
+	initGitRepo(t, other)
+
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Project: other,
+		Command: []string{"echo", "hi"},
+		Branch:  "main",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	if len(fr.started) != 1 {
+		t.Fatalf("started %d containers, want 1", len(fr.started))
+	}
+	got := fr.started[0].Labels[sandbox.LabelRepo]
+	if got == "" {
+		t.Error("a run in another git repository was stamped with no repo label")
+	}
+	if got == s.RepoID {
+		t.Errorf("repo label = %q, the server's own id, for a run mounting %s", got, other)
 	}
 }
 
@@ -947,6 +1124,11 @@ func doRequestAuthed(t *testing.T, h http.Handler, method, path, token string, b
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	// Host, not just the header set above: httptest defaults to example.com and
+	// the host guard refuses anything that is not a loopback name (guard.go). One
+	// helper knowing that rule and the other not is how these tests started
+	// failing on a check neither of them is about.
+	req.Host = testHost
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec

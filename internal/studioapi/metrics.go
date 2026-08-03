@@ -35,11 +35,7 @@ func (s *Server) handleRunMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming not supported by this connection"))
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	writeSSEHeaders(w, flusher)
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -60,7 +56,7 @@ func (s *Server) handleRunMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sampleOne(ctx context.Context, id string) (RunMetrics, error) {
-	rows, err := s.sampleMetrics(ctx, []string{id})
+	rows, err := s.collectMetrics(ctx, []string{id})
 	if err != nil {
 		return RunMetrics{}, err
 	}
@@ -84,12 +80,27 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			ids = append(ids, c.ID)
 		}
 	}
-	rows, err := s.sampleMetrics(r.Context(), ids)
+	rows, err := s.collectMetrics(r.Context(), ids)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, StatsResponse{Runs: rows, SampledAt: time.Now()})
+}
+
+// collectMetrics samples with one retry, the same allowance internal/cli's
+// collectSandboxStats makes and for the same measured reason: listing the
+// containers and sampling them cannot be made atomic, and a run that exits in
+// between makes `docker stats` fail for the *whole batch* — taking every other
+// container's reading with it. Watching runs that come and go is the entire job
+// of this endpoint, so that race is the normal case, and one fresh attempt
+// settles it.
+func (s *Server) collectMetrics(ctx context.Context, ids []string) ([]RunMetrics, error) {
+	rows, err := s.sampleMetrics(ctx, ids)
+	if err != nil && ctx.Err() == nil {
+		rows, err = s.sampleMetrics(ctx, ids)
+	}
+	return rows, err
 }
 
 // sampleMetrics shells out to `docker stats --no-stream`, the same command

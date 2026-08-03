@@ -261,6 +261,31 @@ rather than merely passing. This is the single choke point for the isolation inv
   `RunSpec.ForwardedEnv`, which the docker child gets and `BuildArgs` never renders. Keep it that
   way: they used to travel through sandbox-cli's own environment, where a secret named `PATH`
   redirected the subprocesses spawned next.
+- **`internal/studioapi`** — the local HTTP control plane (`cmd/sandbox-studio-api`) a frontend
+  talks to instead of shelling out to the CLI. It owns **no container logic**: `POST /runs` builds
+  the same `sandbox.Options` a `--worktree --detach` run does and hands them to `sandbox.Session`,
+  which is what makes every isolation invariant above hold here unchanged — and which means it
+  inherits `internal/fleet`'s rule with teeth, that **every gate on the run path must be repeated
+  by every caller that builds `Options`** (`persist_auth` is re-checked in `buildRunOptions` for
+  exactly that reason). Runs are always detached: an HTTP request/response cycle has nowhere to
+  hold a pty.
+
+  What is genuinely new here is a question the CLI never had to answer, because a terminal
+  answered it: **who may ask this process to start a container?** CORS alone answers it wrong —
+  refusing to *reflect* an origin only stops a page reading the response, while a cross-origin
+  `POST` with a `text/plain` body is a "simple request" that skips preflight entirely and starts
+  the container anyway. So `guard.go` refuses an unlisted `Origin` outright, and requires the
+  `Host` header to name a loopback address (a page whose own hostname resolves to `127.0.0.1`
+  satisfies the browser's same-origin policy, so its `Origin` looks legitimate — the name it
+  dialled is what gives it away). Order matters and `withMiddleware` says why. The bearer token,
+  constant-time compared, is the answer for non-browser callers, who send no `Origin` at all.
+
+  `websocket.go` is a hand-rolled RFC 6455 subset rather than a dependency (handshake, unmasked
+  server text frames, ping/close handling — no deflate, no subprotocols, no fragment reassembly).
+  Two things it exists for: `EventSource` cannot carry an `Authorization` header, and a hijacked
+  connection is no longer watched by `net/http`, so its read loop is the only thing that notices a
+  closed tab and stops `docker logs --follow`. SSE remains the default for a plain `GET`, carrying
+  the identical `LogEvent` payload. Contract and trust model: `docs/studio-api/`.
 
 ### Container labels, and the two `land` invariants
 

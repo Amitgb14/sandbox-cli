@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,13 +23,32 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/studioapi"
 )
 
-// corsOrigins collects one or more repeated -cors-origin flags.
-type corsOrigins []string
+// repeatedFlag collects one or more repetitions of the same string flag
+// (-cors-origin, -allow-host).
+type repeatedFlag []string
 
-func (c *corsOrigins) String() string { return strings.Join(*c, ",") }
-func (c *corsOrigins) Set(v string) error {
+func (c *repeatedFlag) String() string { return strings.Join(*c, ",") }
+func (c *repeatedFlag) Set(v string) error {
 	*c = append(*c, v)
 	return nil
+}
+
+// loopbackAddr reports whether a listen address keeps this server reachable only
+// from this machine. An empty or wildcard host ("", "0.0.0.0", "::") does not.
+func loopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func main() {
@@ -45,7 +65,8 @@ func run() error {
 		cfgPath       string
 		profile       string
 		token         string
-		origins       corsOrigins
+		origins       repeatedFlag
+		hosts         repeatedFlag
 		historyDB     string
 		historyRetain time.Duration
 	)
@@ -62,7 +83,9 @@ func run() error {
 	flag.DurationVar(&historyRetain, "history-retain", 0,
 		"drop indexed runs older than this on start (e.g. 2160h for 90 days); 0 keeps everything the log holds")
 	flag.Var(&origins, "cors-origin",
-		"origin allowed to read cross-origin responses (repeatable); default: none, so only same-origin callers can read a response")
+		"origin allowed to drive this control plane cross-origin (repeatable); default: none, so a web page cannot reach it at all")
+	flag.Var(&hosts, "allow-host",
+		"additional Host header value to answer to, beyond the loopback names always accepted (repeatable); needed when reaching a rebound -addr by name")
 	flag.Parse()
 
 	if project == "" {
@@ -90,6 +113,7 @@ func run() error {
 	}
 	srv.CORSOrigins = origins
 	srv.Token = token
+	srv.AllowedHosts = hosts
 
 	// The index is optional and stays optional. Everything it answers, the log
 	// answers too — more slowly, and always correctly — so a database that
@@ -120,6 +144,12 @@ func run() error {
 			addr, project, srv.Engine, cfg.Profile)
 		if token == "" {
 			log.Printf("sandbox-studio-api: no -token set — every request but /health is unauthenticated")
+		}
+		if !loopbackAddr(addr) {
+			// Said once, at the moment it becomes true, because the whole trust model
+			// below this line assumes only this machine can open a connection.
+			log.Printf("sandbox-studio-api: %s is not a loopback address — anything that can route to this "+
+				"host can now ask it to start containers; set -token, and -allow-host for the name you reach it by", addr)
 		}
 		errCh <- httpSrv.ListenAndServe()
 	}()

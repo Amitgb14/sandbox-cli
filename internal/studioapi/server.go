@@ -65,6 +65,11 @@ type Server struct {
 	// loopback binding and CORS: neither stops another local process (or
 	// malicious browser extension) that can already reach 127.0.0.1.
 	Token string
+
+	// AllowedHosts are additional Host header values this server answers to,
+	// beyond the loopback names it always accepts. Anything else is refused —
+	// see hostAllowed for the DNS-rebinding attack that check exists to stop.
+	AllowedHosts []string
 }
 
 // New builds a Server for the given resolved config and project directory.
@@ -129,32 +134,65 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/stats/history", s.handleHistoryStats)
 	mux.HandleFunc("GET /v1/worktrees", s.handleListWorktrees)
 	mux.HandleFunc("POST /v1/worktrees", s.handleCreateWorktree)
-	mux.HandleFunc("GET /v1/worktrees/{branch}", s.handleGetWorktree)
+	// {branch...}, not {branch}: a branch name may contain slashes and usually
+	// does (feat/studio-api), and a single-segment wildcard makes exactly those
+	// branches unaddressable. Taken from feat/studio-api. The /commits route below
+	// keeps {branch} because a trailing wildcard must be the final segment; it is
+	// the more specific pattern, so the mux prefers it.
+	mux.HandleFunc("GET /v1/worktrees/{branch...}", s.handleGetWorktree)
 	mux.HandleFunc("GET /v1/worktrees/{branch}/commits", s.handleWorktreeCommits)
 	mux.HandleFunc("GET /v1/commits/{sha}/diff", s.handleCommitDiff)
-	mux.HandleFunc("DELETE /v1/worktrees/{branch}", s.handleDeleteWorktree)
+	mux.HandleFunc("DELETE /v1/worktrees/{branch...}", s.handleDeleteWorktree)
 	return s.withMiddleware(mux)
 }
 
-// withMiddleware applies CORS, the optional bearer token, and panic recovery —
-// in that order, so a preflight OPTIONS never has to carry a token and a panic
-// in any handler still returns JSON rather than closing the connection.
+// withMiddleware applies panic recovery, the two request-origin checks
+// (internal/studioapi/guard.go), CORS, the optional bearer token, and the body
+// limit — in that order, and the order carries the reasoning:
+//
+//   - recovery outermost, so a panic anywhere below still answers with JSON
+//     instead of a closed connection;
+//   - Host before anything that trusts r.Host, since the same-origin escape in
+//     originAllowed is only sound once Host is known to be one of ours;
+//   - CORS headers before the OPTIONS short-circuit, so a preflight gets its
+//     answer without needing a token — but *after* the Host check, so a rebound
+//     name cannot preflight its way in either;
+//   - Origin before the token, because an unlisted origin is refused whether or
+//     not it guessed a token.
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Errorf("internal error: %v", rec))
+			}
+		}()
+		if !s.hostAllowed(r) {
+			writeError(w, http.StatusForbidden, fmt.Errorf(
+				"refusing a request for host %q: this control plane answers to loopback names only, "+
+					"which is what stops a web page from reaching it by rebinding its own hostname to 127.0.0.1 "+
+					"(pass -allow-host %s if you meant to reach it by that name)", r.Host, r.Host))
+			return
+		}
 		s.applyCORS(w, r)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if !s.originAllowed(r) {
+			writeError(w, http.StatusForbidden, fmt.Errorf(
+				"origin %q is not allowed to drive this control plane (pass -cors-origin %s if it is yours)",
+				r.Header.Get("Origin"), r.Header.Get("Origin")))
 			return
 		}
 		if !s.authorized(r) {
 			writeError(w, http.StatusUnauthorized, fmt.Errorf("missing or invalid bearer token"))
 			return
 		}
-		defer func() {
-			if rec := recover(); rec != nil {
-				writeError(w, http.StatusInternalServerError, fmt.Errorf("internal error: %v", rec))
-			}
-		}()
+		if err := checkContentType(r); err != nil {
+			writeError(w, http.StatusUnsupportedMediaType, err)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -171,17 +209,10 @@ func (s *Server) applyCORS(w http.ResponseWriter, r *http.Request) {
 }
 
 // healthPath is the one route exempt from the bearer token, named once because
-// two places must agree on it: the route registered above and the exemption
-// below. They were two literals, so prefixing the routes would have moved one
-// and not the other.
+// two places must agree on it: the route registered above and the exemption in
+// authorized() (guard.go). They were two literals, so prefixing the routes moved
+// one and not the other.
 const healthPath = "/v1/health"
-
-func (s *Server) authorized(r *http.Request) bool {
-	if s.Token == "" || r.URL.Path == healthPath {
-		return true
-	}
-	return r.Header.Get("Authorization") == "Bearer "+s.Token
-}
 
 func containsString(list []string, v string) bool {
 	for _, s := range list {

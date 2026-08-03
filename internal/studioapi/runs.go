@@ -121,6 +121,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // is a property of every path that builds Options, not of the config alone.
 func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) {
 	project := s.Project
+	repoID := s.RepoID
 	branch := req.Branch
 	var extraMounts []string
 
@@ -135,8 +136,19 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 			branch = req.Worktree
 		}
 		extraMounts = sandbox.LinkedWorktreeMounts(info.Path)
+		// repoID stays the server's: a linked worktree belongs to the same
+		// repository, which is the whole point of addressing it by branch.
 	case req.Project != "":
 		project = req.Project
+		// Recomputed, not inherited. The repo id is part of the container's
+		// identity — it becomes the sandbox.repo label and, through
+		// containerName, half the container's name — and every later command
+		// reads those labels as fact: `list --repo`, `fleet land`, the
+		// one-agent-per-branch guarantee docker's duplicate-name refusal
+		// provides. Stamping this server's repo on a run mounting a different
+		// checkout files it under a repository it never touched, and two
+		// different repos' `main` would then collide on one container name.
+		repoID, _ = worktree.RepoID(project)
 	}
 	if branch == "" {
 		branch = worktree.Branch(project)
@@ -174,7 +186,7 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 		Project:     project,
 		Detach:      true,
 		Console:     req.Console,
-		RepoID:      s.RepoID,
+		RepoID:      repoID,
 		Branch:      branch,
 		Base:        req.Base,
 		Verify:      req.Verify,
