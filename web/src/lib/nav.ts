@@ -25,7 +25,7 @@
  * the menu tell you something you did not already know from the label.
  */
 
-import { MULTI_AGENT_PATH } from "@/lib/site";
+import { MULTI_AGENT_PATH, STUDIO_PATH } from "@/lib/site";
 
 export type NavLink = {
   href: string;
@@ -40,6 +40,7 @@ export type NavEntry =
 
 export const NAV: NavEntry[] = [
   { kind: "link", href: "#threat", label: "Why" },
+  { kind: "link", href: STUDIO_PATH, label: "Studio" },
   {
     kind: "group",
     label: "How it works",
@@ -79,11 +80,7 @@ export const NAV: NavEntry[] = [
         label: "Agents",
         hint: "fifteen adapters, one prefix, your flags forwarded verbatim",
       },
-      {
-        href: "#studio",
-        label: "Sandbox Studio",
-        hint: "the browser control plane: a daemon, a UI, and the three refusals between them",
-      },
+
     ],
   },
   {

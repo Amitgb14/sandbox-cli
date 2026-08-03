@@ -28,7 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { AGENTS, BAKED_COUNT } from "@/lib/agents";
 import { HISTORY_NOTE } from "@/lib/features";
-import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, VERSION } from "@/lib/site";
+import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, STUDIO_PATH, VERSION } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const EXPOSED = [
@@ -414,8 +414,9 @@ export default function Home() {
                   changed. Setting it up is unlike everything above because it is{" "}
                   <em>two processes that have to agree</em> — a daemon holding the docker socket and a
                   Next app in your browser — so each step below says which side it belongs to.
-                  Nothing about the sandbox changes: a run launched here takes the same path as one
-                  launched from your shell.
+                  The <Link href={STUDIO_PATH} className="underline underline-offset-4">full
+                  walkthrough</Link> covers docker compose as well, and the three refusals that
+                  stand between a web page and your containers.
                 </>
               }
             />
