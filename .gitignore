@@ -8,5 +8,17 @@ docs/proposals/
 # docker compose reads this automatically. It names a config file you have
 # decided to trust and may hold a Studio API token — both are per-machine.
 /.env
+
+# Both are per-machine too, and a .sandbox.yaml committed by accident is worse
+# than most: it is the file config/trust.go treats as untrusted input, so one
+# arriving in the repository is a setting every later clone silently inherits.
+# Unanchored, because the pattern has to catch the dotfile at the root and
+# studio.sandbox.yaml beside it.
+*.sandbox.yaml
+
+# node_modules anywhere; the app build outputs are left to studio/.gitignore
+# and web/.gitignore, which anchor them per app (/.next/, /out/, /build). A
+# second unanchored copy here would only be reached if an app ever lost its
+# own file, and would then also ignore any source directory that happened to
+# be called dist or build.
 node_modules
-.next/
