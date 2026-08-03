@@ -79,6 +79,11 @@ export const NAV: NavEntry[] = [
         label: "Agents",
         hint: "fifteen adapters, one prefix, your flags forwarded verbatim",
       },
+      {
+        href: "#studio",
+        label: "Sandbox Studio",
+        hint: "the browser control plane: a daemon, a UI, and the three refusals between them",
+      },
     ],
   },
   {

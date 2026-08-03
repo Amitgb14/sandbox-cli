@@ -18,6 +18,7 @@ import { CapabilityChart } from "@/components/capability-chart";
 import { PlatformTable } from "@/components/platform-table";
 import { SetupGuide } from "@/components/setup-guide";
 import { DeployGuide } from "@/components/deploy-guide";
+import { StudioTutorial } from "@/components/studio-tutorial";
 import { TutorialSteps } from "@/components/tutorial-steps";
 import { OptionCatalog } from "@/components/option-catalog";
 import { ChallengeTable } from "@/components/challenge-table";
@@ -401,6 +402,24 @@ export default function Home() {
               lead="Nearly everything below is a deliberate default doing its job in a way that reads like a failure the first time. Knowing which decision produced the symptom is what tells you whether to work around it or change it."
             />
             <ChallengeTable />
+          </div>
+
+          <div id="studio" className="mt-14 scroll-mt-20">
+            <SectionHead
+              eyebrow="sandbox studio"
+              title="The same boundary, driven from a browser"
+              lead={
+                <>
+                  Studio is a local control plane: every run, the boundary it ran inside, and what it
+                  changed. Setting it up is unlike everything above because it is{" "}
+                  <em>two processes that have to agree</em> — a daemon holding the docker socket and a
+                  Next app in your browser — so each step below says which side it belongs to.
+                  Nothing about the sandbox changes: a run launched here takes the same path as one
+                  launched from your shell.
+                </>
+              }
+            />
+            <StudioTutorial />
           </div>
         </Section>
 
