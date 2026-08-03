@@ -51,16 +51,14 @@ export function UsageGauge() {
   // zero — so there is nothing honest to draw.
   if (!data || data.windows.length === 0) return null;
 
-  // And nothing is drawn at all where the agent that owns these numbers is not
-  // installed. The figures can still be *readable* there — the cache travels in
-  // the sandbox-owned agent HOME — but they are then unrefreshable by anything,
-  // so the panel would be a permanent fixture showing a number that can only
-  // get older. Better absent than stale-forever.
-  //
-  // The honest limit: this asks about the machine running the *daemon*. Under
-  // `docker compose --profile api` that is a container, so a host with Claude
-  // Code installed can still see no panel.
-  if (!data.canRefresh) return null;
+  // Note what is deliberately NOT a condition here: whether the agent is
+  // installed. Being able to *read* these numbers and being able to *refresh*
+  // them are different questions, and an earlier version of this panel gated
+  // the whole thing on the second — which hid it entirely under
+  // `docker compose --profile api`, where the daemon is a container with no
+  // claude binary while the cache it serves is mounted, real and current.
+  // Refusing to show a true number because this process cannot improve it is
+  // the wrong trade; saying so underneath it is the right one.
 
   const now = Date.now();
   const shown = data.windows.filter((w) => showable(w, now));
@@ -118,13 +116,14 @@ export function UsageGauge() {
             <WindowMeter key={`${w.kind}-${w.scope ?? "account"}-${i}`} window={w} />
           ))}
 
-          {/* The panel only renders where a refresh is possible, so this can
-              always offer one — see the canRefresh guard above. */}
           {staleInForce.map((w, i) => (
-            <p key={`stale-${w.kind}-${i}`} className="text-[10px] leading-tight text-muted-foreground">
+            <p
+              key={`stale-${w.kind}-${i}`}
+              className="text-[10px] leading-tight text-muted-foreground"
+            >
               <span className="text-foreground">{w.label}</span> is the window in force, and its
-              reading expired {w.resetsAt ? formatRelative(w.resetsAt) : "already"}. Refresh to see
-              it.
+              reading expired {w.resetsAt ? formatRelative(w.resetsAt) : "already"}.
+              {data.canRefresh ? " Refresh to see it." : ""}
             </p>
           ))}
 
@@ -132,6 +131,13 @@ export function UsageGauge() {
             {ageMs === null
               ? "Age unknown — the agent did not record when it last refreshed."
               : `Read ${formatDurationTight(ageMs)} ago from ${sourceLabel(data.path)}.`}
+            {data.canRefresh ? null : (
+              <>
+                {" "}
+                Only Claude Code can advance it, and this server has none on its PATH — so this
+                figure will not change here.
+              </>
+            )}
           </p>
         </>
       )}
