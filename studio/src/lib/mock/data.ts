@@ -484,12 +484,16 @@ function autonomousArgv(name: AgentName): string[] {
  */
 export const MOCK_USAGE: UsageSnapshot = {
   agent: "claude",
+  canRefresh: true,
   windows: [
-    { kind: "five_hour", label: "5-hour", utilization: 23, resetsAt: ahead(2 * HOUR + 14 * MINUTE) },
-    { kind: "seven_day", label: "Weekly", utilization: 49, resetsAt: ahead(3 * DAY + 6 * HOUR) },
+    // active mirrors the real payload: the agent marks exactly one window as the
+    // one in force, and it is the short one — which is also the first to expire.
+    { kind: "five_hour", label: "5-hour", utilization: 23, resetsAt: ahead(2 * HOUR + 14 * MINUTE), active: true },
+    { kind: "seven_day", label: "Weekly", utilization: 49, resetsAt: ahead(3 * DAY + 6 * HOUR), active: false },
     {
       kind: "seven_day",
       label: "Weekly",
+      active: false,
       utilization: null,
       resetsAt: ago(40 * MINUTE),
       scope: "opus",

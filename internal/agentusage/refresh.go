@@ -37,6 +37,21 @@ const refreshPrompt = "ok"
 //     difference between minutes and the hours an idle machine accumulates,
 //     not a reading stamped now. Callers print the age either way, so a refresh
 //     that changed nothing stays visible rather than implied.
+//
+// Refreshable reports whether a refresh could even be attempted here — that is,
+// whether the agent that owns this cache is on PATH.
+//
+// Asked *before* the offer rather than discovered by making it. These numbers
+// are readable on a machine that has never had Claude Code installed, because
+// the cache travels in the sandbox-owned agent HOME, and the daemon itself may
+// be running in a container that has no claude binary at all. In both cases the
+// figures are real and the refresh is impossible, so a UI that offers one
+// anyway is promising something it cannot do.
+func Refreshable() bool {
+	_, err := exec.LookPath(claudeBin)
+	return err == nil
+}
+
 func Refresh(ctx context.Context) error {
 	if _, err := exec.LookPath(claudeBin); err != nil {
 		return fmt.Errorf("refresh usage: %s is not on PATH — these numbers can only be "+

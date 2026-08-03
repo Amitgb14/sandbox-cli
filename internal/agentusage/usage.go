@@ -57,6 +57,16 @@ type Window struct {
 	// model separately (e.g. a weekly Opus allowance alongside the weekly
 	// account one). Empty means the window covers the whole account.
 	Scope string `json:"scope,omitempty"`
+
+	// Active is whether this window is the one currently in force, as the agent
+	// reported it (`limits[].is_active`).
+	//
+	// A pointer for the same reason the utilization figures are: the flag lives
+	// only on the limits[] entries, so a window described purely by the
+	// five_hour/seven_day fields has no answer, and nil says that rather than
+	// asserting false. A caller that renders "not in force" from a missing flag
+	// would be reporting the absence of a field as a fact about an allowance.
+	Active *bool `json:"active,omitempty"`
 }
 
 // Snapshot is one reading of one agent's usage cache.
@@ -109,6 +119,11 @@ type limit struct {
 	Kind     string    `json:"kind"`
 	Percent  *float64  `json:"percent"`
 	ResetsAt timestamp `json:"resets_at"`
+	// IsActive marks the window currently in force. Read because without it a
+	// listing gives an allowance that is not running the same weight as the one
+	// that is — which is how a panel comes to show two idle weeklies while the
+	// window actually metering you is the one missing from it.
+	IsActive *bool `json:"is_active"`
 	Scope    *struct {
 		Model *struct {
 			DisplayName string `json:"display_name"`
@@ -201,14 +216,31 @@ func Parse(data []byte) (Snapshot, error) {
 	// above, and a listing that shows the same allowance twice under two names
 	// reads as two allowances.
 	for _, l := range c.Cached.Utilization.Limits {
-		name := l.model()
-		if name == "" || l.Percent == nil {
-			continue
-		}
 		kind := limitKind(l.Kind)
 		if kind == "" {
 			// A grouping this package has not seen. Reporting it under a guessed
 			// window would misstate how long it lasts.
+			continue
+		}
+		name := l.model()
+		if name == "" {
+			// Unscoped: this entry restates one of the two windows above rather
+			// than describing another allowance, so it must not become a second
+			// row — a listing showing the same cap twice under two names reads as
+			// two caps.
+			//
+			// It is no longer skipped outright, though, because it is the only
+			// place is_active appears: the five_hour and seven_day fields carry
+			// no such flag, so dropping these entries threw away the one fact
+			// that says which window is actually metering you.
+			for i := range s.Windows {
+				if s.Windows[i].Kind == kind && s.Windows[i].Scope == "" {
+					s.Windows[i].Active = l.IsActive
+				}
+			}
+			continue
+		}
+		if l.Percent == nil {
 			continue
 		}
 		s.Windows = append(s.Windows, Window{
@@ -216,6 +248,7 @@ func Parse(data []byte) (Snapshot, error) {
 			Percent:  *l.Percent,
 			ResetsAt: l.ResetsAt.Time,
 			Scope:    name,
+			Active:   l.IsActive,
 		})
 	}
 	return s, nil

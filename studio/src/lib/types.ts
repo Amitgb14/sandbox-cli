@@ -388,6 +388,13 @@ export interface UsageWindow {
   resetsAt: string | null;
   /** The model a per-model allowance applies to. Empty covers the account. */
   scope?: string;
+  /**
+   * Whether the agent reported this as the window currently in force
+   * (`limits[].is_active`). `null` when it said nothing — the five_hour and
+   * seven_day fields carry no such flag, and rendering "not in force" from a
+   * missing one would state the absence of a field as a fact.
+   */
+  active: boolean | null;
 }
 
 /**
@@ -402,6 +409,13 @@ export interface UsageSnapshot {
   /** When the *agent* last refreshed from the server, not when we read it. */
   fetchedAt: string | null;
   path: string | null;
+  /**
+   * Whether the agent that owns this cache is on the daemon's PATH. The numbers
+   * are readable without it — the sandbox keeps its own copy of the cache, and
+   * the daemon may be running in a container with no claude binary — so having
+   * figures and being able to make them current are different questions.
+   */
+  canRefresh: boolean;
 }
 
 // ---------------------------------------------------------------------------
