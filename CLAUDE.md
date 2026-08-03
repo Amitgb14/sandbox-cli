@@ -261,6 +261,31 @@ rather than merely passing. This is the single choke point for the isolation inv
   `RunSpec.ForwardedEnv`, which the docker child gets and `BuildArgs` never renders. Keep it that
   way: they used to travel through sandbox-cli's own environment, where a secret named `PATH`
   redirected the subprocesses spawned next.
+- **`internal/studioapi`** — the local HTTP control plane (`cmd/sandbox-studio-api`) a frontend
+  talks to instead of shelling out to the CLI. It owns **no container logic**: `POST /runs` builds
+  the same `sandbox.Options` a `--worktree --detach` run does and hands them to `sandbox.Session`,
+  which is what makes every isolation invariant above hold here unchanged — and which means it
+  inherits `internal/fleet`'s rule with teeth, that **every gate on the run path must be repeated
+  by every caller that builds `Options`** (`persist_auth` is re-checked in `buildRunOptions` for
+  exactly that reason). Runs are always detached: an HTTP request/response cycle has nowhere to
+  hold a pty.
+
+  What is genuinely new here is a question the CLI never had to answer, because a terminal
+  answered it: **who may ask this process to start a container?** CORS alone answers it wrong —
+  refusing to *reflect* an origin only stops a page reading the response, while a cross-origin
+  `POST` with a `text/plain` body is a "simple request" that skips preflight entirely and starts
+  the container anyway. So `guard.go` refuses an unlisted `Origin` outright, and requires the
+  `Host` header to name a loopback address (a page whose own hostname resolves to `127.0.0.1`
+  satisfies the browser's same-origin policy, so its `Origin` looks legitimate — the name it
+  dialled is what gives it away). Order matters and `withMiddleware` says why. The bearer token,
+  constant-time compared, is the answer for non-browser callers, who send no `Origin` at all.
+
+  `websocket.go` is a hand-rolled RFC 6455 subset rather than a dependency (handshake, unmasked
+  server text frames, ping/close handling — no deflate, no subprotocols, no fragment reassembly).
+  Two things it exists for: `EventSource` cannot carry an `Authorization` header, and a hijacked
+  connection is no longer watched by `net/http`, so its read loop is the only thing that notices a
+  closed tab and stops `docker logs --follow`. SSE remains the default for a plain `GET`, carrying
+  the identical `LogEvent` payload. Contract and trust model: `docs/studio-api/`.
 
 ### Container labels, and the two `land` invariants
 
@@ -453,6 +478,50 @@ interesting. Those two are resolved in `sandbox.BuildSpec`; `BuildArgs` only ren
 handed. Docker is the state store: a detached container is named `sandbox-<repo>-<branch>` (so
 docker's own duplicate-name refusal enforces one agent per branch) and labelled with its repo,
 branch, agent and base branch — a fact not stamped as a label is one no later command can recover.
+
+`sandbox.Options.Console` is the **one** exception to the pty rule, and it is a different claim
+rather than a weaker one: not "give this run the terminal that launched it" — there isn't one — but
+"create a console on the container so a later `attach` has somewhere to type", which renders `-dit`.
+It exists because Studio launches every run detached, so an agent could be watched and never
+answered. The half that is easy to miss is that a console is useless alone: an agent started in its
+**headless** argv (`claude -p`) produces one final answer and never asks anything, so `Console` also
+selects the descriptor's interactive `Command`, and the two are decided together where the argv is
+built (`studioapi/buildRunOptions`) rather than separately. It is refused with `verify` — verify's
+exit code is the answer it exists to give, and an interactive session's exit code is whenever
+somebody quit — and `fleet` may never set it (`gates_test.go` classifies it `never`): a fleet is
+unattended, which is the same reason `internal/agents` only admits agents with a verified headless
+mode. An agent that stops to ask does not fail, it hangs, holding a `max_parallel` slot.
+
+Reading and answering a console run over HTTP is `internal/studioapi/console.go`.
+Two halves, two mechanisms, and the split is the point: **reading** comes from the
+agent's transcript (`agentctx.Transcript`) because a TUI's stdout is repaints and
+scraping it yields plausible nonsense, while **answering** goes to the container's
+stdin over the engine's API socket (`internal/runtime/console.go`) because
+`docker attach` refuses a client with no tty and a web server has none. That file
+is the only place sandbox-cli talks to the socket instead of the binary, and it
+keeps one rule: read output, write stdin, nothing else. Two correlation filters
+decide which transcript belongs to a run, and both were learned the hard way —
+only the **sandbox-owned** store is searched (the claude wrapper has two, and the
+other is the user's own `~/.claude`), and the window matches when a session
+*started*, not when it was last modified. Without either, the developer's own live
+Claude Code session — by definition the most recently modified transcript on the
+machine — showed up as a three-minute-old sandbox run's conversation. `pickSession`
+and `sandboxStore` exist as separate functions so that stays pinned by test.
+Studio can also **attach a real terminal** in the browser (`attached-terminal.tsx`,
+xterm.js, loaded on demand) over the same transport. Two things there were learned
+by measurement and are easy to get wrong again. A full-screen agent renders
+**nothing** until it is told its terminal size — a console container that had
+written zero bytes in ten minutes painted its whole UI within a second of the
+first `console/resize`, which is why attaching from a real terminal always worked
+(`docker attach` sends one) and the first browser version showed a blank
+rectangle; and since SIGWINCH only fires on a *change*, re-attaching at the same
+size needs a nudge (one column narrower and back). Keystrokes must also be
+**serialized** — one request per keypress races, and `What is 12 times 12?`
+arrived as `rtWha is21 t ime1 2s?`.
+
+Typing at a running agent is also the one endpoint that **requires `-token` even
+when the rest of the server does not**: launching is a capability the API already
+had, a keyboard on a live session is not.
 
 ### Agent wrappers
 

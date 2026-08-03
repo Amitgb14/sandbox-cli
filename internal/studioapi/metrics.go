@@ -26,7 +26,7 @@ func (s *Server) handleRunMetrics(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, m)
+		writeJSON(w, http.StatusOK, toSeries(c.ID, m))
 		return
 	}
 
@@ -35,11 +35,7 @@ func (s *Server) handleRunMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming not supported by this connection"))
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	writeSSEHeaders(w, flusher)
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -60,7 +56,7 @@ func (s *Server) handleRunMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sampleOne(ctx context.Context, id string) (RunMetrics, error) {
-	rows, err := s.sampleMetrics(ctx, []string{id})
+	rows, err := s.collectMetrics(ctx, []string{id})
 	if err != nil {
 		return RunMetrics{}, err
 	}
@@ -84,12 +80,27 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			ids = append(ids, c.ID)
 		}
 	}
-	rows, err := s.sampleMetrics(r.Context(), ids)
+	rows, err := s.collectMetrics(r.Context(), ids)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, StatsResponse{Runs: rows, SampledAt: time.Now()})
+}
+
+// collectMetrics samples with one retry, the same allowance internal/cli's
+// collectSandboxStats makes and for the same measured reason: listing the
+// containers and sampling them cannot be made atomic, and a run that exits in
+// between makes `docker stats` fail for the *whole batch* — taking every other
+// container's reading with it. Watching runs that come and go is the entire job
+// of this endpoint, so that race is the normal case, and one fresh attempt
+// settles it.
+func (s *Server) collectMetrics(ctx context.Context, ids []string) ([]RunMetrics, error) {
+	rows, err := s.sampleMetrics(ctx, ids)
+	if err != nil && ctx.Err() == nil {
+		rows, err = s.sampleMetrics(ctx, ids)
+	}
+	return rows, err
 }
 
 // sampleMetrics shells out to `docker stats --no-stream`, the same command
@@ -107,7 +118,10 @@ func (s *Server) sampleMetrics(ctx context.Context, ids []string) ([]RunMetrics,
 	if err != nil {
 		return nil, fmt.Errorf("reading %s stats: %w", s.Engine, err)
 	}
-	var rows []RunMetrics
+	// Non-nil so an idle host marshals `[]` rather than `null`: a list-valued
+	// field that becomes null when empty makes "nothing is running" the case
+	// clients crash on, which is the case they see most.
+	rows := make([]RunMetrics, 0)
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
@@ -192,4 +206,29 @@ func parseIntOr(s string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// toSeries turns one reading into the series a chart consumes.
+//
+// A series of one is not a placeholder for something better: docker reports
+// what a container is using *now* and keeps no history, so a longer series can
+// only be accumulated by a client that stays on ?stream=1. Shaping the single
+// reading as a series anyway means that client never changes type when the
+// second point arrives.
+//
+// Peak equals the sample for the same reason — over a window of one, the
+// high-water mark is the reading.
+func toSeries(id string, m RunMetrics) MetricSeries {
+	sample := MetricSample{
+		T:             m.SampledAt.UTC().Format(time.RFC3339),
+		CPUPct:        m.CPUPercent,
+		MemBytes:      m.MemUsageBytes,
+		MemLimitBytes: m.MemLimitBytes,
+		PIDs:          m.PIDs,
+	}
+	return MetricSeries{
+		RunID:   shortID(id),
+		Samples: []MetricSample{sample},
+		Peak:    MetricPeak{CPUPct: sample.CPUPct, MemBytes: sample.MemBytes},
+	}
 }

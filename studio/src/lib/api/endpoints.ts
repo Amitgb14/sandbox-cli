@@ -1,9 +1,10 @@
-import { request } from "@/lib/api/client";
+import { ApiError, request } from "@/lib/api/client";
 import {
   MOCK_AGENTS,
   MOCK_AUDIT,
   MOCK_DAEMON,
   MOCK_DOCTOR,
+  MOCK_CONVERSATION,
   MOCK_RUNS,
   MOCK_USAGE,
   MOCK_WORKTREES,
@@ -16,6 +17,8 @@ import {
 import { BASELINE_EGRESS, RESERVED_ENV } from "@/lib/constants";
 import type {
   Agent,
+  Commit,
+  HistoryStats,
   AuditRecord,
   DaemonInfo,
   DiffFile,
@@ -28,7 +31,8 @@ import type {
   Run,
   UsageSnapshot,
   Worktree,
-} from "@/lib/types";
+  Conversation,
+  SessionSummary,} from "@/lib/types";
 
 /**
  * The daemon's surface, one function per endpoint.
@@ -39,9 +43,28 @@ import type {
 
 export const api = {
   daemon: () =>
-    request<DaemonInfo>("/v1/health", { fixture: () => MOCK_DAEMON, latencyMs: 120 }),
+    request<DaemonInfo>("/v1/health", {
+      fixture: () => MOCK_DAEMON,
+      latencyMs: 120,
+    }),
 
-  runs: () => request<Run[]>("/v1/runs", { fixture: () => MOCK_RUNS, latencyMs: 260 }),
+  /**
+   * Every run, finished ones included — `?all=1`.
+   *
+   * The daemon defaults to live-only, matching `sandbox-cli list`, which is the
+   * right default for a terminal: you ask what is running now. It is the wrong
+   * one for this UI. The Runs screen exists to say how runs *ended*, the
+   * dashboard buckets fourteen days of them, and both were empty on any machine
+   * where nothing happened to be running at that moment — which is most of them,
+   * most of the time. Callers that want only the live ones filter, and the
+   * dashboard already does.
+   */
+  runs: () =>
+    request<Run[]>("/v1/runs?all=1", {
+      fixture: () => MOCK_RUNS,
+      latencyMs: 260,
+      unwrap: (b) => (b as { runs: Run[] }).runs,
+    }),
 
   run: (id: string) =>
     request<Run>(`/v1/runs/${id}`, {
@@ -83,15 +106,87 @@ export const api = {
    * one by name rather than offering a single "end run".
    */
   stopRun: (id: string) =>
-    request<void>(`/v1/runs/${id}/stop`, { method: "POST", fixture: () => undefined }),
+    request<void>(`/v1/runs/${id}/stop`, {
+      method: "POST",
+      fixture: () => undefined,
+    }),
 
+  // Kill is stop with force, not a separate endpoint: the daemon exposes one
+  // route because the difference is a flag on the same act, and a second path to
+  // "end this run" is a second place for the two to disagree about what they
+  // reach.
   killRun: (id: string) =>
-    request<void>(`/v1/runs/${id}/kill`, { method: "POST", fixture: () => undefined }),
+    request<void>(`/v1/runs/${id}/stop`, {
+      method: "POST",
+      body: { force: true },
+      fixture: () => undefined,
+    }),
+
+  /**
+   * Reap a finished run's container. The work is untouched — that lives in the
+   * workspace, which outlives every container that wrote to it; what goes is the
+   * container's logs and exit code, which for a detached run are the whole
+   * record that it happened.
+   */
+  removeRun: (id: string) =>
+    request<void>(`/v1/runs/${id}`, {
+      method: "DELETE",
+      fixture: () => undefined,
+    }),
+
+  /**
+   * What a run has said, and whether it can be answered.
+   *
+   * Read from the agent's transcript rather than its terminal output: a console
+   * run draws a full-screen TUI, and text scraped out of a repaint looks like an
+   * answer without being one.
+   */
+  conversation: (id: string) =>
+    request<Conversation>(`/v1/runs/${id}/conversation`, {
+      fixture: () => ({ messages: MOCK_CONVERSATION, writable: true }),
+    }),
+
+  /**
+   * Send keystrokes to a running agent's stdin.
+   *
+   * `enter` appends the carriage return that submits — \r rather than \n,
+   * because the container's stdin is a pty in raw mode where a line feed is not
+   * a submit and the text would simply sit in the agent's input box.
+   */
+  sendConsoleInput: (id: string, data: string, enter = true) =>
+    request<void>(`/v1/runs/${id}/console/input`, {
+      method: "POST",
+      body: { data, enter },
+      fixture: () => undefined,
+    }),
+
+  /**
+   * Tell a container how big the attached terminal is.
+   *
+   * Looks cosmetic and is not: a full-screen agent renders nothing until it
+   * knows the size, so without this an attached console is a blank rectangle
+   * over a perfectly healthy run. `docker attach` sends one from the client
+   * terminal's dimensions, which is why attaching from a real terminal always
+   * worked and the first version of this did not.
+   */
+  resizeConsole: (id: string, rows: number, cols: number) =>
+    request<void>(`/v1/runs/${id}/console/resize`, {
+      method: "POST",
+      body: { rows, cols },
+      fixture: () => undefined,
+    }),
+
+  /** Conversations this agent can be resumed from, newest first. */
+  agentSessions: (agent: string) =>
+    request<SessionSummary[]>(`/v1/agents/${agent}/sessions`, {
+      fixture: () => [],
+      unwrap: (b) => (b as { sessions: SessionSummary[] }).sessions ?? [],
+    }),
 
   launch: (req: LaunchRequest) =>
     request<{ id: string }>("/v1/runs", {
       method: "POST",
-      body: req,
+      body: toRunCreate(req),
       fixture: () => ({ id: MOCK_RUNS[0].id }),
       latencyMs: 700,
     }),
@@ -110,10 +205,72 @@ export const api = {
     }),
 
   agents: () =>
-    request<Agent[]>("/v1/agents", { fixture: () => MOCK_AGENTS, latencyMs: 200 }),
+    request<Agent[]>("/v1/agents", {
+      fixture: () => MOCK_AGENTS,
+      latencyMs: 200,
+      unwrap: (b) => (b as { agents: Agent[] }).agents,
+    }),
 
   worktrees: () =>
-    request<Worktree[]>("/v1/worktrees", { fixture: () => MOCK_WORKTREES, latencyMs: 240 }),
+    request<Worktree[]>("/v1/worktrees", {
+      fixture: () => MOCK_WORKTREES,
+      latencyMs: 240,
+      unwrap: (b) => (b as { worktrees: Worktree[] }).worktrees,
+    }),
+
+  worktree: (branch: string) =>
+    request<Worktree>(`/v1/worktrees/${encodeURIComponent(branch)}`, {
+      fixture: () => {
+        const w = MOCK_WORKTREES.find((x) => x.branch === branch);
+        if (!w) throw new Error(`no worktree ${branch}`);
+        return w;
+      },
+      latencyMs: 140,
+    }),
+
+  worktreeCommits: (branch: string) =>
+    request<Commit[]>(`/v1/worktrees/${encodeURIComponent(branch)}/commits`, {
+      fixture: () => [],
+      latencyMs: 200,
+      unwrap: (b) => (b as { commits: Commit[] }).commits,
+    }),
+
+  /** Every run that worked this branch, finished ones included. */
+  branchRuns: (branch: string) =>
+    request<Run[]>(`/v1/runs?all=1&branch=${encodeURIComponent(branch)}`, {
+      fixture: () => MOCK_RUNS.filter((r) => r.branch === branch),
+      latencyMs: 200,
+      unwrap: (b) => (b as { runs: Run[] }).runs,
+    }),
+
+  /**
+   * The run log aggregated by the daemon, when it has an index to aggregate in.
+   *
+   * Returns null on 501, which is the daemon saying "no index configured" — not
+   * a failure. The caller then computes the same numbers from /v1/audit as it
+   * always did. That fallback is the point: the index is a faster path to the
+   * same answer, never a requirement.
+   */
+  historyStats: async (days = 14): Promise<HistoryStats | null> => {
+    try {
+      return await request<HistoryStats>(`/v1/stats/history?days=${days}`, {
+        // In fixture mode there is no daemon to aggregate anything; the caller
+        // falls back to computing from the fixture records.
+        fixture: () => null as unknown as HistoryStats,
+        latencyMs: 120,
+      });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 501) return null;
+      throw e;
+    }
+  },
+
+  /** What one commit changed. Scoped to this daemon's project. */
+  commitDiff: (sha: string) =>
+    request<DiffFile[]>(`/v1/commits/${encodeURIComponent(sha)}/diff`, {
+      fixture: () => [],
+      latencyMs: 200,
+    }),
 
   removeWorktree: (branch: string) =>
     request<void>(`/v1/worktrees/${encodeURIComponent(branch)}`, {
@@ -136,7 +293,10 @@ export const api = {
     ),
 
   usage: () =>
-    request<UsageSnapshot>("/v1/usage", { fixture: () => MOCK_USAGE, latencyMs: 200 }),
+    request<UsageSnapshot>("/v1/usage", {
+      fixture: () => MOCK_USAGE,
+      latencyMs: 200,
+    }),
 
   refreshUsage: () =>
     request<UsageSnapshot>("/v1/usage/refresh", {
@@ -146,10 +306,30 @@ export const api = {
     }),
 
   doctor: () =>
-    request<DoctorCheck[]>("/v1/doctor", { fixture: () => MOCK_DOCTOR, latencyMs: 900 }),
+    request<DoctorCheck[]>("/v1/doctor", {
+      fixture: () => MOCK_DOCTOR,
+      latencyMs: 900,
+      // `{profile, checks}` on the wire: the profile the checks were run against
+      // is part of the answer, since the same host passes dev and fails prod.
+      unwrap: (b) => (b as { checks: DoctorCheck[] }).checks,
+    }),
 
-  audit: () =>
-    request<AuditRecord[]>("/v1/audit", { fixture: () => MOCK_AUDIT, latencyMs: 300 }),
+  /**
+   * The run log. Durable in a way the runs list is not: a container carries its
+   * own history until it is reaped, and then that history is gone — docker is
+   * the state store. This survives, which makes it the only answer to "what has
+   * run here" once the containers are cleaned up.
+   */
+  audit: (branch?: string, limit?: number) =>
+    request<AuditRecord[]>(
+      `/v1/audit?limit=${limit ?? 200}${branch ? `&branch=${encodeURIComponent(branch)}` : ""}`,
+      {
+        fixture: () =>
+          branch ? MOCK_AUDIT.filter((a) => a.branch === branch) : MOCK_AUDIT,
+        latencyMs: 300,
+        unwrap: (b) => (b as { records: AuditRecord[] }).records,
+      },
+    ),
 };
 
 /**
@@ -234,8 +414,12 @@ export function localPreview(req: LaunchRequest): LaunchPreview {
 
   const hostPathsInReach = [
     req.worktree ? `${req.workspace} (worktree)` : req.workspace,
-    ...(req.persistAuth && req.agent ? [`~/.config/sandbox/agents/${req.agent}`] : []),
-    ...(req.sync && req.agent === "claude" ? ["~/.claude/projects/<this project>"] : []),
+    ...(req.persistAuth && req.agent
+      ? [`~/.config/sandbox/agents/${req.agent}`]
+      : []),
+    ...(req.sync && req.agent === "claude"
+      ? ["~/.claude/projects/<this project>"]
+      : []),
     ...req.share,
   ];
 
@@ -275,16 +459,21 @@ function previewArgv(req: LaunchRequest, allow: string[]): string[] {
       cpus: req.cpus,
     },
     mounts: [
-      { host: req.workspace, container: "/workspace", mode: "rw", origin: "workspace" },
+      {
+        host: req.workspace,
+        container: "/workspace",
+        mode: "rw",
+        origin: "workspace",
+      },
       ...(req.persistAuth && req.agent
-        ? ([
+        ? [
             {
               host: `~/.config/sandbox/agents/${req.agent}`,
               container: "/sandbox/home",
               mode: "rw" as const,
               origin: "persisted-home" as const,
             },
-          ])
+          ]
         : []),
       ...req.share.map((s) => ({
         host: s,
@@ -294,4 +483,68 @@ function previewArgv(req: LaunchRequest, allow: string[]): string[] {
       })),
     ],
   });
+}
+
+/**
+ * The launch form's state is not the daemon's request body, and the difference
+ * is deliberate rather than an oversight to paper over.
+ *
+ * `RunCreateRequest` rejects unknown fields, so posting the form verbatim was a
+ * 400 — and it was right to be. Most of what the form holds is a *display* of
+ * the posture a run will have, not a choice the request gets to make:
+ *
+ *   profile           the server's, fixed by whoever started it. A request that
+ *                     could pick its own profile would drop a run out of prod.
+ *   network.mode      tighten-only, and not expressible per-request at all.
+ *   envAllow          decides which host variables cross into the container.
+ *   share / publish   a mount and an inbound port — the two widest things a
+ *                     launch option can add.
+ *   persistAuth       whether an OAuth refresh token is mounted.
+ *
+ * Those are shown so you can see what you are about to get, and they come from
+ * the daemon's own config; sending them back as instructions is what the
+ * refused-key rule in internal/config/trust.go exists to prevent, one layer up.
+ *
+ * What does travel is the task: which agent, what to do, where, and the limits
+ * that only ever narrow it.
+ */
+function toRunCreate(req: LaunchRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+
+  if (req.agent) {
+    body.agent = req.agent;
+    if (req.prompt.trim()) body.prompt = req.prompt;
+  } else if (req.command.trim()) {
+    // The form is one text field and the API takes an argv. `sh -c` is the
+    // honest reading of a command line someone typed: it is what makes quotes
+    // and pipes behave the way they look, and splitting on whitespace here
+    // would silently mangle any argument containing a space.
+    body.command = ["sh", "-c", req.command];
+  }
+
+  // A worktree is addressed by branch and replaces the workspace; only one of
+  // the two ever reaches the daemon, which refuses both together.
+  if (req.worktree) body.worktree = req.worktree;
+  else if (req.workspace) body.project = req.workspace;
+
+  if (req.base) body.base = req.base;
+  // Console travels: it is a property of the task ("I intend to talk to this"),
+  // not of the posture. It widens nothing — a pty and an open stdin change what
+  // the container listens to, never what it can reach.
+  if (req.console && req.agent) body.console = true;
+  // Both are console-only and agent-only, and the daemon refuses them
+  // otherwise — so the form does not send a pair it knows will 400.
+  if (req.console && req.agent && req.skipPermissions) body.skipPermissions = true;
+  if (req.console && req.agent && req.resume) body.resume = req.resume;
+  // Refused together by the daemon, so the form does not send a pair it knows
+  // will 400. Verify decides the exit code; an interactive session's exit code
+  // is whenever you quit.
+  if (req.verify.trim() && !req.console) body.verify = req.verify;
+  if (req.memory) body.memory = req.memory;
+  if (req.cpus) body.cpus = req.cpus;
+  // Domains add to the baseline and cannot subtract from it, so this narrows or
+  // does nothing — the one network field a request may carry.
+  if (req.network.allow.length > 0) body.allow = req.network.allow;
+
+  return body;
 }

@@ -60,10 +60,19 @@ const (
 
 var optionsPolicy = map[string]fieldPolicy{
 	// What the task is.
-	"Project":     fromSpec,
-	"Command":     fromSpec,
-	"Branch":      fromSpec,
-	"Verify":      fromSpec,
+	"Project": fromSpec,
+	"Command": fromSpec,
+	"Branch":  fromSpec,
+	"Verify":  fromSpec,
+	// The task's own prompt, recorded as a label. fromSpec for the same reason
+	// Verify is: it is the task talking, it widens nothing, and the run path has
+	// the equivalent in the argv it builds.
+	"Prompt": fromSpec,
+	// A before-image of the workspace, recorded so this run's changes can be
+	// told from what was already uncommitted. fromSpec: it widens nothing — a
+	// commit id in a label grants no reach — and the run path records the same
+	// thing for the same reason.
+	"Baseline":    fromSpec,
 	"Detach":      fromSpec,
 	"RepoID":      fromSpec,
 	"Agent":       fromSpec,
@@ -90,6 +99,16 @@ var optionsPolicy = map[string]fieldPolicy{
 	"NoHardening": never, // an unattended run is the last place to drop cap-drop
 	"Secrets":     never, // brokered values never travel through a file in the repository
 	"Publish":     never, // publishing a port is asking for ingress; a fleet task has no reason to
+	// A console is a keyboard for somebody who is going to attach. A fleet is
+	// unattended by definition, and internal/agents only admits agents with a
+	// verified headless mode for exactly this reason: an agent that stops to ask
+	// permission does not fail, it hangs — holding a max_parallel slot until
+	// somebody notices. never, so the fleet path leaves it zero.
+	"Console": never,
+	// The conversation a run reopened. A fleet task starts work rather than
+	// continuing a conversation, and resuming one is interactive by nature —
+	// the same reason the API refuses resume without console. never.
+	"SessionID":   never,
 	"AddHosts":    never,
 	"HostGateway": never, // reaching a host service is the opposite of what a fleet is for
 	"TTY":         never, // nothing is attached; BuildSpec resolves this from Detach

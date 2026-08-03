@@ -19,7 +19,7 @@ import type {
   SecurityPosture,
   UsageSnapshot,
   Worktree,
-} from "@/lib/types";
+  ConversationMessage,} from "@/lib/types";
 import { VERIFY_FAILED_EXIT } from "@/lib/types";
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, rngFor } from "@/lib/mock/rng";
 
@@ -890,3 +890,31 @@ export const MOCK_AUDIT: AuditRecord[] = MOCK_RUNS.filter((r) => r.state === "ex
 );
 
 export { REPOS, HOME, WORKTREE_ROOT };
+
+/**
+ * A short conversation for the fixture path, so the console screen can be seen
+ * without a daemon. Written as the thing the feature exists for: an agent that
+ * stopped to ask something rather than one that guessed.
+ */
+export const MOCK_CONVERSATION: ConversationMessage[] = [
+  {
+    role: "user",
+    text: "Wire the metrics tab to the sample stream, and keep the peak summary honest when a container was never sampled.",
+    at: "2026-07-31T14:02:11Z",
+  },
+  {
+    role: "assistant",
+    text: "Read the stream and the tab. One thing to decide before I write it: a run that exited before its first sample has no peak, and the summary currently renders 0 there — which reads as 'it used nothing' rather than 'nobody looked'.\n\nShow a dash for that case, or omit the peak row entirely?",
+    at: "2026-07-31T14:03:40Z",
+  },
+  {
+    role: "user",
+    text: "A dash. Omitting the row makes the table shift between runs.",
+    at: "2026-07-31T14:05:02Z",
+  },
+  {
+    role: "assistant",
+    text: "Done — a dash, and the tooltip says the run was never sampled so the two are not confused.",
+    at: "2026-07-31T14:07:18Z",
+  },
+];

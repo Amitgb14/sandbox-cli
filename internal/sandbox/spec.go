@@ -56,6 +56,28 @@ type Options struct {
 	// logs are the whole point of launching it).
 	Detach bool
 
+	// Console keeps a pty and stdin on a detached container so somebody can
+	// attach to it *later* and type. It is meaningless without Detach.
+	//
+	// Detach's usual reasoning — nobody is attached, so allocating a terminal
+	// hands an agent a pty it will draw its UI into for an audience of none — is
+	// right for an unattended run and wrong for a session launched from one
+	// window to be picked up from another. Docker separates the two: -d says
+	// nothing is attached *now*, -it says a console exists to attach *to*.
+	//
+	// The caller owes one more thing than the flag: an agent started in its
+	// headless mode has nothing to say to a keyboard. Console only means
+	// something alongside the agent's interactive argv, which is why the two are
+	// decided together where the argv is chosen and not here.
+	Console bool
+
+	// SessionID is the agent conversation this run reopens, when it was started
+	// with a resume. Recorded as a label so the transcript belonging to the run
+	// is known rather than guessed — a resumed conversation began before its
+	// container, which is exactly what every correlation heuristic assumes it
+	// cannot have done.
+	SessionID string
+
 	// Identity stamped on the container as sandbox.* labels, and — for detached
 	// runs — folded into its name. Docker is the state store: a fact not recorded
 	// here is one no later command can recover.
@@ -74,6 +96,25 @@ type Options struct {
 	// check; the command itself travels in Command, wrapped around the agent's
 	// argv (internal/fleet.withVerify).
 	Verify string
+
+	// Prompt is what the agent was asked to do, for the record only — exactly
+	// like Verify. The prompt that actually runs travels inside Command, built
+	// by the agent descriptor; this is the same text handed over separately so
+	// it can be stamped as a label and read back without parsing an
+	// agent-specific argv to find which position holds it.
+	//
+	// Callers that build Command themselves (a plain `run -- cmd`) leave it
+	// empty, and the label is then omitted rather than stamped blank: a label
+	// that is present always carries a fact.
+	Prompt string
+
+	// Baseline is a crash-snapshot commit taken just before this run starts, so
+	// its changes can later be told apart from whatever was already uncommitted
+	// in the workspace. Empty when no snapshot could be taken — not a git
+	// repository, snapshots switched off — and the label is then omitted, which
+	// is what makes "we cannot attribute this precisely" a state a client can
+	// see rather than one it has to infer.
+	Baseline string
 
 	// AuthPersistDir, when non-empty, is a host directory bind-mounted read-write
 	// as the agent's whole HOME so its login/config survives the ephemeral
@@ -514,8 +555,13 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// container — so without this an agent launched from a terminal is handed a
 	// pty, starts its full-screen UI, and waits forever for a keystroke from
 	// nobody. An explicit --tty does not override it: there is no terminal to give.
+	//
+	// Console is the exception, and it is a different claim rather than a louder
+	// one: not "give this run the terminal that launched it" — there isn't one —
+	// but "create a console on the container so a later attach has somewhere to
+	// type". That is what makes an agent able to ask a question and be answered.
 	if opts.Detach {
-		tty = false
+		tty = opts.Console
 	}
 
 	// Metrics require a terminal to report to. The live gauge is drawn only for
@@ -538,12 +584,16 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// container running with the workspace still mounted.
 	labels := map[string]string{LabelCLI: "1"}
 	for k, v := range map[string]string{
-		LabelRepo:   opts.RepoID,
-		LabelBranch: opts.Branch,
-		LabelAgent:  opts.Agent,
-		LabelBase:   opts.Base,
-		LabelVerify: opts.Verify,
-		LabelFleet:  boolLabel(opts.Fleet),
+		LabelRepo:     opts.RepoID,
+		LabelBranch:   opts.Branch,
+		LabelAgent:    opts.Agent,
+		LabelBase:     opts.Base,
+		LabelVerify:   opts.Verify,
+		LabelFleet:    boolLabel(opts.Fleet),
+		LabelProfile:  cfg.Profile,
+		LabelPrompt:   truncatePrompt(opts.Prompt),
+		LabelSession:  opts.SessionID,
+		LabelBaseline: opts.Baseline,
 	} {
 		if v != "" {
 			labels[k] = v

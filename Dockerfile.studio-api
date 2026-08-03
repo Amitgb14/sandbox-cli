@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1.7
+#
+# The Studio API server, for the optional `api` profile in docker-compose.yml.
+#
+# Read the compose file's comments before using this. The API launches
+# containers, so running it in one means handing it the host's docker socket —
+# which is root on the host. That is the opposite of what sandbox-cli is for,
+# and it is why this service is opt-in rather than the default.
+#
+# The image carries a docker *client*, not a daemon: it talks to the host's
+# daemon through the mounted socket, so every container it starts is a sibling
+# on the host rather than a child here.
+
+FROM golang:1.25-bookworm AS build
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+      -o /out/sandbox-studio-api ./cmd/sandbox-studio-api
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      docker.io \
+      git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /out/sandbox-studio-api /usr/local/bin/sandbox-studio-api
+
+# Bound to every interface *inside this container* on purpose: compose publishes
+# it to 127.0.0.1 on the host, so the loopback-only default would make it
+# unreachable through the port mapping while adding nothing — the container's
+# own loopback is not a boundary anyone else is on the far side of.
+EXPOSE 8787
+ENTRYPOINT ["sandbox-studio-api"]
+CMD ["-addr", "0.0.0.0:8787"]

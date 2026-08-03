@@ -58,14 +58,51 @@ type Descriptor struct {
 	// for most agents means opting out of their approval prompts. Detached and
 	// autonomous are the same decision; see docs/GUIDE.md.
 	AutonomousArgs func(prompt string) []string
+
+	// SkipPermissionArgs turns off the agent's approval prompts.
+	//
+	// Held apart from AutonomousArgs, and appended by Autonomous, so the flag
+	// has exactly one definition. It is needed in two places — a headless run,
+	// which hangs forever on a question nobody can answer, and an interactive
+	// run somebody deliberately wants to leave alone — and writing it twice is
+	// how a security-relevant argv drifts.
+	//
+	// Empty for the agents whose non-interactive mode is a *subcommand* rather
+	// than a flag (`codex exec`, `opencode run`, `droid exec`): there is nothing
+	// to add to an interactive session, so those simply cannot be launched this
+	// way, which is the honest answer rather than a flag that does nothing.
+	SkipPermissionArgs []string
 }
 
 // Autonomous returns the full container argv for a headless run of prompt.
 // extra is appended last so a caller can override the agent's own defaults
 // (e.g. a fleet task's `args:`).
 func (d Descriptor) Autonomous(prompt string, extra []string) []string {
-	return concat(d.Command, d.AutonomousArgs(prompt), extra)
+	return concat(d.Command, d.AutonomousArgs(prompt), d.SkipPermissionArgs, extra)
 }
+
+// Console returns the container argv for an *interactive* run: the agent's
+// normal UI, with prompt seeding the first turn when there is one.
+//
+// skipPermissions is a deliberate choice rather than a default. An interactive
+// session is where being asked is the point — somebody is attached and can
+// answer — so the caller opts in when it wants the agent to keep going instead.
+// Requesting it from an agent that has no such flag returns the argv unchanged;
+// the caller is expected to have refused already, and quietly doing something
+// other than what was asked is worse than doing nothing.
+func (d Descriptor) Console(prompt string, skipPermissions bool) []string {
+	argv := d.Command
+	if skipPermissions {
+		argv = concat(argv, d.SkipPermissionArgs)
+	}
+	if prompt != "" {
+		argv = concat(argv, []string{prompt})
+	}
+	return argv
+}
+
+// CanSkipPermissions reports whether this agent has a flag for it.
+func (d Descriptor) CanSkipPermissions() bool { return len(d.SkipPermissionArgs) > 0 }
 
 // Invocation is the same run written the way a person would type it: the agent's
 // name and its arguments, without the shell bootstrap that finds the binary.
@@ -116,11 +153,13 @@ var registry = map[string]Descriptor{
 		Command: []string{"sh", "-c", ClaudeBootstrap, "claude"},
 		AutonomousArgs: func(prompt string) []string {
 			// -p is Claude Code's headless "print" mode: run the prompt and exit.
-			// Skipping permissions is what keeps it from blocking on a prompt no
-			// one can answer — safe here precisely because the container is the
-			// blast-radius boundary.
-			return []string{"-p", prompt, "--dangerously-skip-permissions"}
+			// The permission flag is SkipPermissionArgs below, appended by
+			// Autonomous — one definition, because an interactive run needs the
+			// same flag and a second copy is how the two drift.
+			return []string{"-p", prompt}
 		},
+		// Safe here precisely because the container is the blast-radius boundary.
+		SkipPermissionArgs: []string{"--dangerously-skip-permissions"},
 	},
 	"codex": {
 		Name:       "codex",
@@ -157,8 +196,9 @@ var registry = map[string]Descriptor{
 			// -p is Gemini CLI's non-interactive prompt mode, and --yolo is its
 			// auto-approve. Both are needed: -p alone runs to completion but still
 			// stops at a tool it wants confirmed, which detached means it hangs.
-			return []string{"--yolo", "-p", prompt}
+			return []string{"-p", prompt}
 		},
+		SkipPermissionArgs: []string{"--yolo"},
 	},
 	"opencode": {
 		Name:       "opencode",

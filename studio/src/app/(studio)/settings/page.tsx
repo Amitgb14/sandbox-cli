@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useTheme } from "next-themes";
 import {
@@ -36,6 +37,21 @@ import { formatBytes } from "@/lib/format";
  */
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
+
+  // The resolved theme is not knowable until the browser has read where it was
+  // stored, so the server has to guess and guesses "dark" — while a user who
+  // chose light hydrates with "light". That difference lands on `data-state` and
+  // `aria-checked` of the two toggle buttons, which React reports as a mismatch
+  // it will not patch up.
+  //
+  // Rendering no selection until mounted is what makes both first passes agree.
+  // The buttons are still drawn, so nothing shifts; only the highlight arrives a
+  // frame late. Every other theme consumer in the app is safe already, because
+  // they read `theme` inside a click handler or express the state as a `dark:`
+  // class, and neither is an attribute in the server's HTML.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const { data: daemon } = useDaemon();
   const { mode, retry } = useTransportMode();
 
@@ -78,7 +94,7 @@ export default function SettingsPage() {
                 type="single"
                 variant="outline"
                 size="sm"
-                value={theme ?? "dark"}
+                value={mounted ? (theme ?? "dark") : ""}
                 onValueChange={(v) => v && setTheme(v)}
               >
                 <ToggleGroupItem value="dark" className="px-3 text-xs">

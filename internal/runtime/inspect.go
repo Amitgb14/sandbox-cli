@@ -30,6 +30,78 @@ type ContainerInfo struct {
 	// leaving someone typing into a container that is not listening.
 	OpenStdin bool
 	TTY       bool
+
+	// What the container actually is, as docker recorded it at launch. These
+	// come from the same `docker inspect` call the fields above do — it returns
+	// the whole object either way, so surfacing them costs nothing.
+	//
+	// They exist because a supervision layer eventually has to answer "what was
+	// this run allowed to reach", and the honest source is the container itself
+	// rather than a config file that may have been edited since. A label says
+	// what the launcher intended; these say what it got.
+	Image    string   // the image reference it was started from
+	User     string   // the user the guest runs as, as docker recorded it
+	Command  []string // entrypoint + cmd, as executed
+	Workdir  string
+	Env      []string // NAME=VALUE, as docker holds them — see EnvNames
+	Mounts   []MountInfo
+	Security SecurityInfo
+
+	// NetworkMode is docker's own word for it ("bridge", "none", a named
+	// network), not this tool's posture. Whether an egress allowlist is in force
+	// is a different question, answered by EgressAllowlisted.
+	NetworkMode string
+}
+
+// MountInfo is one host path the container can reach.
+type MountInfo struct {
+	Source      string
+	Destination string
+	ReadWrite   bool
+}
+
+// SecurityInfo is the confinement docker applied, read back rather than assumed.
+type SecurityInfo struct {
+	CapDrop     []string
+	CapAdd      []string
+	SecurityOpt []string
+	PidsLimit   int64 // 0 means unset
+	MemoryBytes int64 // 0 means unlimited
+	NanoCPUs    int64 // 0 means unlimited; 1e9 per CPU
+}
+
+// EnvNames returns the variable names in the container's environment, never
+// their values.
+//
+// The whole point of the credential broker is that secret values stay off the
+// argv and out of config files, and a supervision API is one more place a value
+// must not surface — internal/audit records environment variables by name for
+// exactly this reason, and has nowhere to put a value on purpose. Callers that
+// want to show "what was forwarded" get the names; nothing here hands back what
+// they were set to.
+func (c ContainerInfo) EnvNames() []string {
+	out := make([]string, 0, len(c.Env))
+	for _, kv := range c.Env {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			out = append(out, kv[:i])
+			continue
+		}
+		if kv != "" {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// EgressAllowlisted reports whether this container was started with the egress
+// allowlist in force, read from the control variable the entrypoint acts on.
+func (c ContainerInfo) EgressAllowlisted() bool {
+	for _, kv := range c.Env {
+		if strings.HasPrefix(kv, "SANDBOX_EGRESS_ALLOW=") && len(kv) > len("SANDBOX_EGRESS_ALLOW=") {
+			return true
+		}
+	}
+	return false
 }
 
 // Running reports whether the container is still executing its guest command.
@@ -203,10 +275,30 @@ type dockerInspect struct {
 		FinishedAt string `json:"FinishedAt"`
 	} `json:"State"`
 	Config struct {
-		Labels    map[string]string `json:"Labels"`
-		OpenStdin bool              `json:"OpenStdin"`
-		Tty       bool              `json:"Tty"`
+		Labels     map[string]string `json:"Labels"`
+		OpenStdin  bool              `json:"OpenStdin"`
+		Tty        bool              `json:"Tty"`
+		Image      string            `json:"Image"`
+		User       string            `json:"User"`
+		Cmd        []string          `json:"Cmd"`
+		Entrypoint []string          `json:"Entrypoint"`
+		Env        []string          `json:"Env"`
+		WorkingDir string            `json:"WorkingDir"`
 	} `json:"Config"`
+	HostConfig struct {
+		NetworkMode string   `json:"NetworkMode"`
+		CapDrop     []string `json:"CapDrop"`
+		CapAdd      []string `json:"CapAdd"`
+		SecurityOpt []string `json:"SecurityOpt"`
+		PidsLimit   *int64   `json:"PidsLimit"`
+		Memory      int64    `json:"Memory"`
+		NanoCpus    int64    `json:"NanoCpus"`
+	} `json:"HostConfig"`
+	Mounts []struct {
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+		RW          bool   `json:"RW"`
+	} `json:"Mounts"`
 }
 
 func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo, error) {
@@ -220,17 +312,40 @@ func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo,
 	}
 	infos := make([]ContainerInfo, 0, len(raw))
 	for _, r := range raw {
+		mounts := make([]MountInfo, 0, len(r.Mounts))
+		for _, m := range r.Mounts {
+			mounts = append(mounts, MountInfo{Source: m.Source, Destination: m.Destination, ReadWrite: m.RW})
+		}
+		var pids int64
+		if r.HostConfig.PidsLimit != nil {
+			pids = *r.HostConfig.PidsLimit
+		}
 		infos = append(infos, ContainerInfo{
-			ID:         r.ID,
-			CreatedAt:  parseDockerTime(r.Created),
-			Name:       strings.TrimPrefix(r.Name, "/"),
-			Labels:     r.Config.Labels,
-			State:      r.State.Status,
-			ExitCode:   r.State.ExitCode,
-			StartedAt:  parseDockerTime(r.State.StartedAt),
-			FinishedAt: parseDockerTime(r.State.FinishedAt),
-			OpenStdin:  r.Config.OpenStdin,
-			TTY:        r.Config.Tty,
+			ID:          r.ID,
+			CreatedAt:   parseDockerTime(r.Created),
+			Name:        strings.TrimPrefix(r.Name, "/"),
+			Labels:      r.Config.Labels,
+			State:       r.State.Status,
+			ExitCode:    r.State.ExitCode,
+			StartedAt:   parseDockerTime(r.State.StartedAt),
+			FinishedAt:  parseDockerTime(r.State.FinishedAt),
+			OpenStdin:   r.Config.OpenStdin,
+			TTY:         r.Config.Tty,
+			Image:       r.Config.Image,
+			User:        r.Config.User,
+			Command:     append(append([]string(nil), r.Config.Entrypoint...), r.Config.Cmd...),
+			Workdir:     r.Config.WorkingDir,
+			Env:         r.Config.Env,
+			Mounts:      mounts,
+			NetworkMode: r.HostConfig.NetworkMode,
+			Security: SecurityInfo{
+				CapDrop:     r.HostConfig.CapDrop,
+				CapAdd:      r.HostConfig.CapAdd,
+				SecurityOpt: r.HostConfig.SecurityOpt,
+				PidsLimit:   pids,
+				MemoryBytes: r.HostConfig.Memory,
+				NanoCPUs:    r.HostConfig.NanoCpus,
+			},
 		})
 	}
 	return infos, nil

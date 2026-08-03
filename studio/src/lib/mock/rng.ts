@@ -36,12 +36,20 @@ export function rngFor(seed: number): Rng {
 }
 
 /**
- * The clock the fixtures are anchored to, read once. Everything derived from it
- * is rendered client-side only (the pages fetch through TanStack Query, so the
- * first paint is a skeleton) — a timestamp formatted on the server and again in
- * the browser is a hydration mismatch waiting to happen.
+ * The clock the fixtures are anchored to: a fixed epoch, not `Date.now()`.
+ *
+ * This was read once at module load, which is once on the server and again in
+ * the browser — two different values, so every timestamp derived from it
+ * differed between the server-rendered HTML and the client's first render. That
+ * is a hydration mismatch by construction, and it does not depend on the pages
+ * fetching through TanStack Query: a "use client" component is still rendered on
+ * the server in the App Router.
+ *
+ * Fixtures should be deterministic anyway — the point of a seeded RNG is that
+ * two runs agree, and anchoring it to wall-clock time gave that up for nothing.
+ * 2026-01-01T00:00:00Z.
  */
-export const NOW = Date.now();
+export const NOW = 1767225600000;
 
 export function ago(ms: number): string {
   return new Date(NOW - ms).toISOString();

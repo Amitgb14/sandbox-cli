@@ -285,6 +285,7 @@ func (r *Runner) options(spec Spec, lo LaunchOptions, agent agents.Descriptor, t
 		Base:    base,
 		Fleet:   true,
 		Verify:  task.Verify,
+		Prompt:  task.Prompt,
 		Command: withVerify(agent.Autonomous(task.Prompt, task.Args), task.Verify),
 
 		EnvAllow: agent.EnvAllow,

@@ -306,6 +306,13 @@ export interface Agent {
    * permission does not fail — it hangs.
    */
   headlessVerified: boolean;
+  /**
+   * Whether this agent's approval prompts can be turned off with a flag, which
+   * is what an interactive run needs. False where the non-interactive mode is a
+   * subcommand instead, so the control is not offered rather than offered and
+   * silently doing nothing.
+   */
+  canSkipPermissions?: boolean;
   /** The argv a fleet would start it with, for the dry-run preview. */
   autonomousInvocation?: string[];
 
@@ -332,6 +339,18 @@ export interface Agent {
  * name derived from one — an agent that runs `git checkout -b` inside its
  * worktree puts the two out of sync.
  */
+/** One commit on a branch. Subject and author are text from the repository. */
+export interface Commit {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  date: string;
+  files: number;
+  insertions: number;
+  deletions: number;
+}
+
 export interface Worktree {
   branch: string;
   /** Symlink-resolved, so the string here is the one git reports. */
@@ -442,6 +461,32 @@ export interface ResolvedConfig {
 }
 
 /** One line of `~/.config/sandbox/audit/sessions.jsonl`. */
+/** `history.Stats` — the run log aggregated by the daemon. */
+export interface HistorySummary {
+  total: number;
+  decided: number;
+  passed: number;
+  /** Percent, or null when nothing has been decided. */
+  passRate: number | null;
+  medianDurationMs: number | null;
+  finishedToday: number;
+}
+
+/** `history.DayBucket`. */
+export interface HistoryDay {
+  date: string;
+  total: number;
+  passed: number;
+  failed: number;
+  verifyFailed: number;
+  stopped: number;
+}
+
+export interface HistoryStats {
+  stats: HistorySummary;
+  days: HistoryDay[];
+}
+
 export interface AuditRecord {
   time: string;
   image: string;
@@ -481,6 +526,20 @@ export interface LaunchRequest {
   memory: string;
   cpus: string;
   detach: boolean;
+  /**
+   * Start the agent in its interactive mode on a container that keeps a
+   * terminal, so `sandbox-cli attach` can answer it. The prompt seeds the first
+   * turn rather than being the whole run.
+   */
+  console: boolean;
+  /**
+   * Add the agent's skip-permissions flag to a console run, so it works without
+   * stopping to ask. Headless runs always have it; an interactive session is
+   * where being asked is the point, so here it is opt-in.
+   */
+  skipPermissions: boolean;
+  /** Carry on an existing conversation by its session id, instead of starting one. */
+  resume: string | null;
   persistAuth: boolean;
   sync: boolean;
   statusline: boolean;
@@ -505,11 +564,64 @@ export interface LaunchPreview {
 
 export interface DaemonInfo {
   version: string;
+  /**
+   * The host directory this daemon manages — one server, one project, the same
+   * "which project" question every sandbox-cli invocation answers. The Launch
+   * form defaults to it, because the alternative is defaulting to a fixture.
+   */
+  project?: string;
   engine: Engine;
   engineVersion: string;
   /** The daemon's own view of the host, as `doctor` asks it. */
   host: { os: string; arch: string; cpus: number; memBytes: number };
   profile: Profile;
+  /**
+   * Whether this daemon requires a bearer token. Reported by /v1/health, which
+   * is the one endpoint that answers without one — so it is the only thing a
+   * client lacking a token can still ask, and the only way the UI can explain a
+   * 401 instead of just showing one on every panel.
+   */
+  authRequired?: boolean;
   /** True when Studio is reading fixtures because no daemon answered. */
   mock?: boolean;
+}
+
+/** One turn of a run's conversation, from the agent's transcript. */
+export interface ConversationMessage {
+  role: "user" | "assistant";
+  text: string;
+  at?: string;
+}
+
+export interface Conversation {
+  messages: ConversationMessage[];
+  /** The agent's own id for this conversation, whole rather than abbreviated. */
+  sessionId?: string;
+  /**
+   * The exact line to type on the host to carry this conversation on after the
+   * container is gone. Built by the daemon, because the flags that make it work
+   * are not guessable from the id — a Studio session lives in the sandbox-owned
+   * agent HOME, which the claude wrapper's default history mount hides.
+   */
+  resume?: string;
+  /**
+   * Whether this run can be typed at right now: running *and* launched with a
+   * console. The daemon decides it, because the two facts behind it (container
+   * state, how stdin was created) both live there.
+   */
+  writable: boolean;
+}
+
+/** One conversation that a run can be resumed from. */
+export interface SessionSummary {
+  id: string;
+  title?: string;
+  turns: number;
+  modified: string;
+  /**
+   * Listed from the file alone, because there is no verified reader for this
+   * agent's transcript format: the id and dates are real, the title and turn
+   * count are unknown and shown as unknown rather than as zero.
+   */
+  partial?: boolean;
 }

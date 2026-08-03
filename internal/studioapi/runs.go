@@ -1,14 +1,19 @@
 package studioapi
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
+	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
@@ -38,7 +43,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	runs := make([]Run, 0, len(infos))
 	for _, c := range infos {
-		runs = append(runs, toRun(c))
+		runs = append(runs, toRun(c, s.Engine))
 	}
 	writeJSON(w, http.StatusOK, RunsResponse{Runs: runs})
 }
@@ -50,7 +55,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toRun(c))
+	writeJSON(w, http.StatusOK, toRun(c, s.Engine))
 }
 
 // handleCreateRun is POST /runs. It always launches detached — see
@@ -81,8 +86,20 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A before-image, taken immediately before the container starts, so this
+	// run's changes can later be told apart from whatever was already
+	// uncommitted in the workspace. Best-effort by design: no snapshot means the
+	// diff falls back to "what is uncommitted here" and says so, which is the
+	// behaviour that existed before — a run must never fail because its safety
+	// net could not be strung.
+	opts.Baseline = baselineFor(opts.Project, opts.Agent)
+
 	name, err := s.Session.Start(r.Context(), opts, false)
 	if err != nil {
+		if msg, held := s.nameHeldBy(r.Context(), opts); held {
+			writeError(w, http.StatusConflict, fmt.Errorf("%s", msg))
+			return
+		}
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -94,7 +111,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, Run{Name: name})
 		return
 	}
-	writeJSON(w, http.StatusCreated, toRun(run))
+	writeJSON(w, http.StatusCreated, toRun(run, s.Engine))
 }
 
 // buildRunOptions turns a request into sandbox.Options, following the same
@@ -104,6 +121,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // is a property of every path that builds Options, not of the config alone.
 func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) {
 	project := s.Project
+	repoID := s.RepoID
 	branch := req.Branch
 	var extraMounts []string
 
@@ -118,17 +136,57 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 			branch = req.Worktree
 		}
 		extraMounts = sandbox.LinkedWorktreeMounts(info.Path)
+		// repoID stays the server's: a linked worktree belongs to the same
+		// repository, which is the whole point of addressing it by branch.
 	case req.Project != "":
 		project = req.Project
+		// Recomputed, not inherited. The repo id is part of the container's
+		// identity — it becomes the sandbox.repo label and, through
+		// containerName, half the container's name — and every later command
+		// reads those labels as fact: `list --repo`, `fleet land`, the
+		// one-agent-per-branch guarantee docker's duplicate-name refusal
+		// provides. Stamping this server's repo on a run mounting a different
+		// checkout files it under a repository it never touched, and two
+		// different repos' `main` would then collide on one container name.
+		repoID, _ = worktree.RepoID(project)
 	}
 	if branch == "" {
 		branch = worktree.Branch(project)
 	}
 
+	if req.Console && req.Verify != "" {
+		// Verify's exit code is the container's, and that is the whole point of
+		// it: `land` reads it to decide whether the work is done. An interactive
+		// session's exit code says when somebody closed the window, which is not
+		// an answer to that question. Refusing beats quietly picking one.
+		return sandbox.Options{}, errors.New("console and verify cannot be combined: " +
+			"verify decides the run's exit code, and an interactive session's exit code is whenever you quit")
+	}
+	if req.SkipPermissions && req.Agent == "" {
+		return sandbox.Options{}, errors.New("skip_permissions needs an agent: a plain command is already whatever argv you gave it")
+	}
+	if req.Resume != "" && req.Agent == "" {
+		return sandbox.Options{}, errors.New("resume needs an agent: only an agent has conversations")
+	}
+	if req.Resume != "" && !req.Console {
+		// A headless resume would replay one prompt into an old conversation and
+		// exit. That is a real thing to want, but it is not what anyone means by
+		// "carry this on", and the request as written says nothing about what to
+		// say next.
+		return sandbox.Options{}, errors.New("resume needs console: resuming a conversation is something you do interactively")
+	}
+	if req.Console && req.Agent == "" {
+		// A plain command already reaches a console the same way — it is the argv
+		// the caller chose. This field exists to swap an *agent* out of headless
+		// mode, and there is nothing to swap without one.
+		return sandbox.Options{}, errors.New("console needs an agent: a plain command is already whatever argv you gave it")
+	}
+
 	opts := sandbox.Options{
 		Project:     project,
 		Detach:      true,
-		RepoID:      s.RepoID,
+		Console:     req.Console,
+		RepoID:      repoID,
 		Branch:      branch,
 		Base:        req.Base,
 		Verify:      req.Verify,
@@ -153,7 +211,31 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 		opts.Agent = agent.Name
 		opts.EnvAllow = agent.EnvAllow
 		opts.Env = append(opts.Env, agent.Env...)
-		opts.Command = fleet.WithVerify(agent.Autonomous(req.Prompt, nil), req.Verify)
+		opts.Prompt = req.Prompt
+		// Headless or interactive, decided here because this is where the argv is
+		// built and the two must agree: Autonomous runs the prompt to completion
+		// and exits, while Command starts the agent's normal UI with the prompt
+		// seeding its first turn — which is the mode that can stop and ask.
+		if req.Console {
+			opts.Command = agent.Console(req.Prompt, req.SkipPermissions)
+			if req.Resume != "" {
+				// Resume replaces the prompt: the conversation already has one.
+				// The flag comes from the verified descriptor rather than being
+				// written here, the same rule cli/recover_resume.go keeps.
+				resumeArgs, ok := resumeArgsFor(agent.Name)
+				if !ok {
+					return sandbox.Options{}, fmt.Errorf("agent %q has no verified resume flag", agent.Name)
+				}
+				opts.Command = concatArgs(agent.Console("", req.SkipPermissions), resumeArgs, []string{req.Resume})
+				// Recorded, so the conversation belonging to this run is known
+				// rather than inferred: a resumed session began before its
+				// container, which every correlation heuristic assumes cannot
+				// happen.
+				opts.SessionID = req.Resume
+			}
+		} else {
+			opts.Command = fleet.WithVerify(agent.Autonomous(req.Prompt, nil), req.Verify)
+		}
 
 		// Same gate fleet.Runner.options applies, and for the same reason: the
 		// default auth path is an OAuth refresh token sitting in this directory,
@@ -189,7 +271,7 @@ func (s *Server) handleStopRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !c.Running() {
-		writeJSON(w, http.StatusOK, toRun(c))
+		writeJSON(w, http.StatusOK, toRun(c, s.Engine))
 		return
 	}
 	act := s.RT.Stop
@@ -201,8 +283,158 @@ func (s *Server) handleStopRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if updated, err := s.resolveRun(r.Context(), c.ID); err == nil {
-		writeJSON(w, http.StatusOK, toRun(updated))
+		writeJSON(w, http.StatusOK, toRun(updated, s.Engine))
 		return
 	}
-	writeJSON(w, http.StatusOK, toRun(c))
+	writeJSON(w, http.StatusOK, toRun(c, s.Engine))
+}
+
+// nameHeldBy explains a failed launch when the branch's container name is
+// already taken, and reports whether that is what happened.
+//
+// Called *after* Start fails, never before it. The name is the enforcement:
+// docker refuses a duplicate atomically, and sandbox.containerName documents why
+// that matters — a check-then-launch has a window in which a second launch
+// passes the same check, and two agents in one checkout is silent data loss. So
+// this listing only ever explains a refusal that already happened; it never
+// decides whether to launch.
+//
+// Without it the caller got docker's own words, forwarded as a 502: `Conflict.
+// The container name "/sandbox-<repo>-<branch>" is already in use by container
+// "<64 hex chars>"`. That names neither the branch nor the run nor anything a
+// client can act on, and 502 says the daemon misbehaved when in fact it did
+// exactly its job.
+func (s *Server) nameHeldBy(ctx context.Context, opts sandbox.Options) (string, bool) {
+	if opts.Branch == "" || opts.RepoID == "" {
+		// A run with no branch gets a timestamped name, which cannot collide.
+		return "", false
+	}
+	infos, err := s.RT.Containers(ctx, map[string]string{
+		sandbox.LabelCLI:    "1",
+		sandbox.LabelRepo:   opts.RepoID,
+		sandbox.LabelBranch: opts.Branch,
+	})
+	if err != nil || len(infos) == 0 {
+		return "", false
+	}
+	// Newest first, and a live agent outranks a finished one: if both exist, the
+	// one the caller needs to know about is the one still writing.
+	c := infos[0]
+	for i := range infos {
+		if infos[i].Running() {
+			c = infos[i]
+			break
+		}
+	}
+	if c.Running() {
+		return fmt.Sprintf(
+			"an agent is already running on %q (run %s); stop it before starting another — "+
+				"two agents in one checkout overwrite each other's work",
+			opts.Branch, shortID(c.ID)), true
+	}
+	// Names this API's own operation, not the CLI's. The caller is an HTTP
+	// client that has just been refused; telling it to go and run a terminal
+	// command is an instruction it cannot follow.
+	return fmt.Sprintf(
+		"a finished run (%s, exit %d) still holds %q's container name; "+
+			"read it with GET /v1/runs/%s/logs, then DELETE /v1/runs/%s to run again",
+		shortID(c.ID), c.ExitCode, opts.Branch, shortID(c.ID), shortID(c.ID)), true
+}
+
+// handleDeleteRun is DELETE /v1/runs/{id}: reap a finished run's container.
+//
+// The API could create runs and not remove them, which left a client stuck the
+// moment a branch's container name was taken — the launch refusal could only be
+// acted on by leaving Studio for a terminal. A control plane that can start
+// something it cannot clean up is a control plane you have to work around.
+//
+// A running container is refused rather than reaped. `stop` and `remove` are
+// different acts and the difference is an agent's unsaved work, so this makes
+// you say which you meant — the same reason `kill` is a separate word from
+// `stop` in the CLI.
+//
+// What this discards is the container: its logs and its exit code, which for a
+// detached run are the whole record that it happened. The *work* is untouched —
+// it is in the workspace, which is a bind mount and outlives every container
+// that ever wrote to it.
+func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
+	c, err := s.resolveRun(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if c.Running() {
+		writeError(w, http.StatusConflict, fmt.Errorf(
+			"run %s is still running; stop it first (POST /v1/runs/%s/stop) — "+
+				"removing a live container discards whatever its agent had not written yet",
+			shortID(c.ID), shortID(c.ID)))
+		return
+	}
+	if err := s.RT.Remove(r.Context(), c.ID); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// baselineFor records the workspace as it stands, and returns the commit.
+//
+// Through rescue's own Begin/Start/Stop rather than a second snapshot
+// implementation: that path takes one snapshot before its ticker ever fires,
+// writes through a private GIT_INDEX_FILE so the user's index, HEAD, branches
+// and working tree are untouched, and reads content through a scratch git
+// directory so the repository's own config cannot define a filter driver. None
+// of that is worth reproducing approximately.
+//
+// Stop is immediate and deliberate. This wants a before-image, not a running
+// safety net — the API server is not the process supervising this container, and
+// leaving a session open would report every run as crashed to `sandbox-cli
+// recover`, which reads an unclosed manifest as exactly that.
+func baselineFor(workspace, agent string) string {
+	if workspace == "" {
+		return ""
+	}
+	snap := rescue.Begin(workspace, agent, baselineInterval, baselineRetention)
+	if snap == nil {
+		return "" // not a repository, or snapshots switched off
+	}
+	snap.Start()
+	snap.Stop("baseline", nil)
+	return snap.LastCommit()
+}
+
+const (
+	// Long enough that the ticker never fires: this run wants the one snapshot
+	// loop() takes before it starts waiting, and nothing after it.
+	baselineInterval = time.Hour
+	// The retention rescue itself uses, since these age out through the same
+	// pruning as any other snapshot.
+	baselineRetention = 14 * 24 * time.Hour
+)
+
+// concatArgs joins argv fragments into one fresh slice.
+//
+// Fresh on purpose: the fragments include a descriptor's own Command, and
+// appending to that would alias the table every later run reads from.
+func concatArgs(parts ...[]string) []string {
+	var out []string
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
+}
+
+// resumeArgsFor is the flag that makes an agent continue an existing session.
+//
+// Read from internal/agentctx's store table, which already records it per agent
+// and keeps it honest against what has been verified. It lives here rather than
+// on the descriptor because a descriptor says what runs *inside* the container;
+// which flag reopens a transcript is a fact about host-side session storage,
+// which is agentctx's job.
+func resumeArgsFor(agent string) ([]string, bool) {
+	store, ok := agentctx.Lookup(agent)
+	if !ok || len(store.Resume) == 0 {
+		return nil, false
+	}
+	return store.Resume, true
 }

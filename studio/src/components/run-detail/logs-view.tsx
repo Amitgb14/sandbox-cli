@@ -24,7 +24,7 @@ import type { Run } from "@/lib/types";
  * in the middle of it.
  */
 export function LogsView({ run }: { run: Run }) {
-  const { data, isPending } = useRunLogs(run.id);
+  const { data, isPending } = useRunLogs(run.id, run.state === "running");
   const [query, setQuery] = useState("");
   const [errorsOnly, setErrorsOnly] = useState(false);
 

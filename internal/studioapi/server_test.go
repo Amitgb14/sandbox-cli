@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -29,9 +31,40 @@ type fakeRuntime struct {
 	containers []runtime.ContainerInfo
 	started    []runtime.RunSpec
 	stopped    []string
+	removed    []string
 	killed     []string
 	availErr   error
 	startErr   error
+
+	// consoleWrites records what was delivered to a container's stdin, so a test
+	// can assert the bytes rather than only that no error came back — the
+	// carriage return that submits a reply is the whole difference between a
+	// message sent and a message sitting in the agent's input box.
+	consoleWrites  []string
+	consoleErr     error
+	consoleResizes [][2]int
+}
+
+func (f *fakeRuntime) ConsoleWrite(ctx context.Context, id string, data []byte) error {
+	if f.consoleErr != nil {
+		return f.consoleErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.consoleWrites = append(f.consoleWrites, string(data))
+	return nil
+}
+
+func (f *fakeRuntime) ConsoleResize(ctx context.Context, id string, rows, cols int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.consoleResizes = append(f.consoleResizes, [2]int{rows, cols})
+	return nil
+}
+
+func (f *fakeRuntime) ConsoleStream(ctx context.Context, id string, w io.Writer) error {
+	<-ctx.Done()
+	return nil
 }
 
 func (f *fakeRuntime) Available(ctx context.Context) error { return f.availErr }
@@ -58,6 +91,11 @@ func (f *fakeRuntime) Start(ctx context.Context, spec runtime.RunSpec) (string, 
 		State:     "running",
 		CreatedAt: time.Now(),
 		StartedAt: time.Now(),
+		// What docker records for the flags BuildArgs rendered. -dit gives both,
+		// -d neither, and the console path depends on the difference — a fake
+		// that dropped it could not tell a console run from an unattended one.
+		OpenStdin: spec.TTY || !spec.Detach,
+		TTY:       spec.TTY,
 	})
 	return spec.Name, nil
 }
@@ -112,7 +150,12 @@ func (f *fakeRuntime) Kill(ctx context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeRuntime) Remove(ctx context.Context, id string) error { return nil }
+func (f *fakeRuntime) Remove(ctx context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, id)
+	return nil
+}
 
 // newTestServer builds a Server backed by fakeRuntime, with the persisted-auth
 // and rescue/audit directories redirected into a scratch dir so tests never
@@ -135,7 +178,13 @@ func newTestServer(t *testing.T) (*Server, *fakeRuntime) {
 	}, fr
 }
 
-func doRequest(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
+// testHost is what a real client's Host header looks like, and every test
+// request carries it: httptest.NewRequest defaults to "example.com", which the
+// server refuses on purpose (see hostAllowed — that default is exactly the shape
+// of a DNS-rebinding attempt).
+const testHost = "127.0.0.1:4319"
+
+func newTestRequest(t *testing.T, method, path string, body any) *http.Request {
 	t.Helper()
 	var r io.Reader
 	if body != nil {
@@ -146,11 +195,17 @@ func doRequest(t *testing.T, h http.Handler, method, path string, body any) *htt
 		r = bytes.NewReader(b)
 	}
 	req := httptest.NewRequest(method, path, r)
+	req.Host = testHost
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	return req
+}
+
+func doRequest(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, newTestRequest(t, method, path, body))
 	return rec
 }
 
@@ -165,7 +220,7 @@ func decodeBody[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 
 func TestHandleHealth(t *testing.T) {
 	s, _ := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/health", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/health", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -177,7 +232,7 @@ func TestHandleHealth(t *testing.T) {
 
 func TestHandleAgentsOnlyListsHeadlessCapable(t *testing.T) {
 	s, _ := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/agents", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/agents", nil)
 	got := decodeBody[AgentsResponse](t, rec)
 	if len(got.Agents) == 0 {
 		t.Fatal("expected at least one agent")
@@ -191,7 +246,7 @@ func TestHandleAgentsOnlyListsHeadlessCapable(t *testing.T) {
 
 func TestCreateRunWithPlainCommand(t *testing.T) {
 	s, fr := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
 		Command: []string{"echo", "hi"},
 		Branch:  "feature-x",
 	})
@@ -212,7 +267,7 @@ func TestCreateRunWithPlainCommand(t *testing.T) {
 
 func TestCreateRunRequiresAgentOrCommand(t *testing.T) {
 	s, _ := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{Branch: "x"})
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{Branch: "x"})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
@@ -220,7 +275,7 @@ func TestCreateRunRequiresAgentOrCommand(t *testing.T) {
 
 func TestCreateRunWithAgentBuildsAutonomousArgv(t *testing.T) {
 	s, fr := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
 		Agent:  "claude",
 		Prompt: "fix the bug",
 		Branch: "feature-y",
@@ -243,24 +298,24 @@ func TestCreateRunWithAgentBuildsAutonomousArgv(t *testing.T) {
 
 func TestListGetAndStopRun(t *testing.T) {
 	s, fr := newTestServer(t)
-	create := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
 		Command: []string{"sleep", "100"},
 		Branch:  "feature-z",
 	})
 	run := decodeBody[Run](t, create)
 
-	list := doRequest(t, s.Handler(), http.MethodGet, "/runs", nil)
+	list := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs", nil)
 	runs := decodeBody[RunsResponse](t, list)
 	if len(runs.Runs) != 1 {
 		t.Fatalf("listed %d runs, want 1", len(runs.Runs))
 	}
 
-	get := doRequest(t, s.Handler(), http.MethodGet, "/runs/"+run.ID, nil)
+	get := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID, nil)
 	if get.Code != http.StatusOK {
 		t.Fatalf("GET /runs/%s status = %d: %s", run.ID, get.Code, get.Body.String())
 	}
 
-	stop := doRequest(t, s.Handler(), http.MethodPost, "/runs/"+run.ID+"/stop", RunStopRequest{})
+	stop := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs/"+run.ID+"/stop", RunStopRequest{})
 	stopped := decodeBody[Run](t, stop)
 	if stopped.State != RunStateExited {
 		t.Errorf("state after stop = %q, want exited", stopped.State)
@@ -270,12 +325,12 @@ func TestListGetAndStopRun(t *testing.T) {
 	}
 
 	// Finished runs drop out of the default (live-only) listing.
-	list2 := doRequest(t, s.Handler(), http.MethodGet, "/runs", nil)
+	list2 := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs", nil)
 	runs2 := decodeBody[RunsResponse](t, list2)
 	if len(runs2.Runs) != 0 {
 		t.Errorf("listed %d live runs after stop, want 0", len(runs2.Runs))
 	}
-	listAll := doRequest(t, s.Handler(), http.MethodGet, "/runs?all=1", nil)
+	listAll := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs?all=1", nil)
 	runsAll := decodeBody[RunsResponse](t, listAll)
 	if len(runsAll.Runs) != 1 {
 		t.Errorf("listed %d runs with all=1, want 1", len(runsAll.Runs))
@@ -284,7 +339,7 @@ func TestListGetAndStopRun(t *testing.T) {
 
 func TestGetRunNotFound(t *testing.T) {
 	s, _ := newTestServer(t)
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/runs/doesnotexist", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/doesnotexist", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
@@ -292,22 +347,42 @@ func TestGetRunNotFound(t *testing.T) {
 
 func TestRunLogsStreamsBothChannels(t *testing.T) {
 	s, _ := newTestServer(t)
-	create := doRequest(t, s.Handler(), http.MethodPost, "/runs", RunCreateRequest{
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
 		Command: []string{"true"},
 		Branch:  "feature-logs",
 	})
 	run := decodeBody[Run](t, create)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/runs/"+run.ID+"/logs", nil)
+	// Without follow the log is a document, and comes back as JSON. Framing a
+	// finished container's output as an event stream forced every client to
+	// implement a parser to read something that had already stopped changing.
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/logs", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "hello from stdout") || !strings.Contains(body, "hello from stderr") {
-		t.Errorf("log stream missing expected lines: %s", body)
+	lines := decodeBody[[]LogLine](t, rec)
+	if len(lines) != 2 {
+		t.Fatalf("want two lines, got %+v", lines)
 	}
-	if !strings.Contains(body, "event: log") {
-		t.Errorf("log stream missing SSE event framing: %s", body)
+	var sawOut, sawErr bool
+	for _, l := range lines {
+		if l.Stream == "stdout" && l.Text == "hello from stdout" {
+			sawOut = true
+		}
+		// Which stream a line came from is kept, because that is how a reader
+		// separates the agent's output from the proxy's DENY lines beside it.
+		if l.Stream == "stderr" && l.Text == "hello from stderr" {
+			sawErr = true
+		}
+	}
+	if !sawOut || !sawErr {
+		t.Errorf("both streams must survive, got %+v", lines)
+	}
+
+	// follow=1 is still SSE: there the connection is the point.
+	stream := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/logs?follow=1", nil)
+	if !strings.Contains(stream.Body.String(), "event: log") {
+		t.Errorf("follow=1 must stay an event stream: %s", stream.Body.String())
 	}
 }
 
@@ -316,7 +391,7 @@ func TestCORSOnlyReflectsConfiguredOrigins(t *testing.T) {
 	s.CORSOrigins = []string{"http://localhost:3000"}
 	h := s.Handler()
 
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := newTestRequest(t, http.MethodGet, "/v1/health", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -324,7 +399,7 @@ func TestCORSOnlyReflectsConfiguredOrigins(t *testing.T) {
 		t.Errorf("allowed origin got no CORS header, got %q", got)
 	}
 
-	req2 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req2 := newTestRequest(t, http.MethodGet, "/v1/health", nil)
 	req2.Header.Set("Origin", "http://evil.example")
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
@@ -333,19 +408,117 @@ func TestCORSOnlyReflectsConfiguredOrigins(t *testing.T) {
 	}
 }
 
+// TestUnlistedOriginCannotLaunchARun is the CSRF case, and the reason refusing to
+// *reflect* an origin is not enough on its own: a cross-origin POST carrying a
+// text/plain body is a CORS "simple request", so no preflight ever happens and
+// the container starts whether or not the page can read the response. The origin
+// check is what stops it.
+func TestUnlistedOriginCannotLaunchARun(t *testing.T) {
+	s, fr := newTestServer(t)
+	h := s.Handler()
+
+	body := `{"command":["echo","pwned"],"branch":"csrf"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
+	req.Host = testHost
+	req.Header.Set("Origin", "http://evil.example")
+	req.Header.Set("Content-Type", "text/plain;charset=UTF-8") // what fetch() sends without asking for a preflight
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("cross-origin POST /runs = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	if len(fr.started) != 0 {
+		t.Errorf("a page on another origin started %d containers; it must start none", len(fr.started))
+	}
+}
+
+// TestRebindableHostIsRefused pins the other half: a page whose own hostname
+// resolves to 127.0.0.1 satisfies the browser's same-origin policy, so its
+// Origin looks legitimate to itself. The Host header is what gives it away.
+func TestRebindableHostIsRefused(t *testing.T) {
+	s, fr := newTestServer(t)
+	h := s.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(`{"command":["echo","hi"]}`))
+	req.Host = "attacker.example"
+	req.Header.Set("Origin", "http://attacker.example") // same-origin, as far as the browser knows
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("rebound-host POST /runs = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	if len(fr.started) != 0 {
+		t.Errorf("a rebound host started %d containers; it must start none", len(fr.started))
+	}
+
+	// The escape hatch works, for the user who really is reaching this by name.
+	s.AllowedHosts = []string{"studio.internal"}
+	req2 := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
+	req2.Host = "studio.internal:4319"
+	rec2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Errorf("explicitly allowed host = %d, want 200: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// TestLoopbackHostsAreAlwaysAllowed pins that AllowedHosts adds to loopback
+// rather than replacing it: a configuration that could switch off the way this
+// server is reached by design would be a footgun with no use case.
+func TestLoopbackHostsAreAlwaysAllowed(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.AllowedHosts = []string{"studio.internal"}
+	for _, host := range []string{"127.0.0.1:4319", "localhost:4319", "[::1]:4319", "127.0.0.1", "LOCALHOST"} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("Host %q = %d, want 200", host, rec.Code)
+		}
+	}
+}
+
+// TestNonJSONBodyIsRefused covers the defense-in-depth check behind the origin
+// one: a body this server parses as JSON has to be labelled as JSON.
+func TestNonJSONBodyIsRefused(t *testing.T) {
+	s, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(`{"command":["echo"]}`))
+	req.Host = testHost
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("text/plain body = %d, want 415: %s", rec.Code, rec.Body.String())
+	}
+
+	// A bodiless POST needs no content type — `curl -X POST .../stop` must keep
+	// working, and the origin check is what governs that case.
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/runs", nil)
+	req2.Host = testHost
+	rec2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code == http.StatusUnsupportedMediaType {
+		t.Error("a POST with no body was refused for its content type")
+	}
+}
+
 func TestTokenRequiredExceptHealth(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.Token = "secret"
 	h := s.Handler()
 
-	if rec := doRequest(t, h, http.MethodGet, "/health", nil); rec.Code != http.StatusOK {
+	if rec := doRequest(t, h, http.MethodGet, "/v1/health", nil); rec.Code != http.StatusOK {
 		t.Errorf("/health without token = %d, want 200", rec.Code)
 	}
-	if rec := doRequest(t, h, http.MethodGet, "/runs", nil); rec.Code != http.StatusUnauthorized {
+	if rec := doRequest(t, h, http.MethodGet, "/v1/runs", nil); rec.Code != http.StatusUnauthorized {
 		t.Errorf("/runs without token = %d, want 401", rec.Code)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
+	req := newTestRequest(t, http.MethodGet, "/v1/runs", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -361,7 +534,7 @@ func TestWorktreeLifecycle(t *testing.T) {
 	s, _ := newTestServer(t)
 	initGitRepo(t, s.Project)
 
-	create := doRequest(t, s.Handler(), http.MethodPost, "/worktrees", WorktreeCreateRequest{Branch: "feature-a"})
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/worktrees", WorktreeCreateRequest{Branch: "feature-a"})
 	if create.Code != http.StatusCreated {
 		t.Fatalf("create status = %d: %s", create.Code, create.Body.String())
 	}
@@ -370,25 +543,92 @@ func TestWorktreeLifecycle(t *testing.T) {
 		t.Errorf("unexpected worktree: %+v", wt)
 	}
 
-	list := doRequest(t, s.Handler(), http.MethodGet, "/worktrees", nil)
+	list := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees", nil)
 	wts := decodeBody[WorktreesResponse](t, list)
 	if len(wts.Worktrees) != 1 {
 		t.Fatalf("listed %d worktrees, want 1", len(wts.Worktrees))
 	}
 
-	get := doRequest(t, s.Handler(), http.MethodGet, "/worktrees/feature-a", nil)
+	get := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees/feature-a", nil)
 	if get.Code != http.StatusOK {
 		t.Fatalf("get status = %d: %s", get.Code, get.Body.String())
 	}
 
-	del := doRequest(t, s.Handler(), http.MethodDelete, "/worktrees/feature-a", nil)
+	del := doRequest(t, s.Handler(), http.MethodDelete, "/v1/worktrees/feature-a", nil)
 	if del.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d: %s", del.Code, del.Body.String())
 	}
 
-	getAfter := doRequest(t, s.Handler(), http.MethodGet, "/worktrees/feature-a", nil)
+	getAfter := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees/feature-a", nil)
 	if getAfter.Code != http.StatusNotFound {
 		t.Fatalf("get-after-delete status = %d, want 404", getAfter.Code)
+	}
+}
+
+// TestWorktreeRoutesAcceptASlashedBranch pins the routing wildcard. Branch names
+// contain slashes as a matter of course (feat/studio-api is the branch this API
+// was written on), and a single-segment {branch} pattern makes exactly those
+// branches unaddressable — a 404 from the mux, before any handler runs.
+func TestWorktreeRoutesAcceptASlashedBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	s, _ := newTestServer(t)
+	initGitRepo(t, s.Project)
+	const branch = "feat/studio-api"
+
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/worktrees", WorktreeCreateRequest{Branch: branch})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", create.Code, create.Body.String())
+	}
+	if got := decodeBody[Worktree](t, create); got.Branch != branch {
+		t.Errorf("branch = %q, want %q", got.Branch, branch)
+	}
+
+	get := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees/"+branch, nil)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET /worktrees/%s = %d: %s", branch, get.Code, get.Body.String())
+	}
+	if got := decodeBody[Worktree](t, get); got.Branch != branch {
+		t.Errorf("round-tripped branch = %q, want %q", got.Branch, branch)
+	}
+
+	del := doRequest(t, s.Handler(), http.MethodDelete, "/v1/worktrees/"+branch, nil)
+	if del.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /worktrees/%s = %d: %s", branch, del.Code, del.Body.String())
+	}
+}
+
+// TestRunInAnotherProjectIsLabelledWithThatProjectsRepo pins that the repo id is
+// recomputed for a run mounting a different checkout rather than inherited from
+// the server. The labels are the state store: every later command reads
+// sandbox.repo as fact, and two repositories' `main` sharing one id would collide
+// on a container name — which is what enforces one agent per branch.
+func TestRunInAnotherProjectIsLabelledWithThatProjectsRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	s, fr := newTestServer(t)
+	other := t.TempDir()
+	initGitRepo(t, other)
+
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Project: other,
+		Command: []string{"echo", "hi"},
+		Branch:  "main",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	if len(fr.started) != 1 {
+		t.Fatalf("started %d containers, want 1", len(fr.started))
+	}
+	got := fr.started[0].Labels[sandbox.LabelRepo]
+	if got == "" {
+		t.Error("a run in another git repository was stamped with no repo label")
+	}
+	if got == s.RepoID {
+		t.Errorf("repo label = %q, the server's own id, for a run mounting %s", got, other)
 	}
 }
 
@@ -405,4 +645,491 @@ func initGitRepo(t *testing.T, dir string) {
 	}
 	run("init", "-q", "-b", "main")
 	run("commit", "--allow-empty", "-q", "-m", "init")
+}
+
+// The prefix is a contract with a separate codebase — studio/src/lib/api builds
+// every request as `${API_BASE}/v1/...`, and its daemon probe decides between
+// live and fixture data on the strength of one call to /v1/health. A 404 there
+// does not surface as an error: the UI silently renders mock data that looks
+// entirely plausible. That is how the two halves shipped unable to talk to each
+// other, so the prefix is pinned rather than left to the route list.
+func TestRoutesAreServedUnderTheV1Prefix(t *testing.T) {
+	s, _ := newTestServer(t)
+	h := s.Handler()
+
+	if rec := doRequest(t, h, http.MethodGet, "/v1/health", nil); rec.Code != http.StatusOK {
+		t.Errorf("GET /v1/health = %d, want 200 — the UI's probe path", rec.Code)
+	}
+	// Unprefixed must not answer, or a UI pointed at the wrong base would work
+	// in development and fail wherever the prefix is enforced.
+	for _, p := range []string{"/health", "/agents", "/runs", "/stats", "/worktrees"} {
+		if rec := doRequest(t, h, http.MethodGet, p, nil); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404 — routes live under /v1 only", p, rec.Code)
+		}
+	}
+}
+
+// Empty lists must marshal as `[]`, never `null` or absent.
+//
+// Worktree.Dirty carried `omitempty`, so a *clean* worktree — the common case —
+// sent no `dirty` key at all, and the UI's `w.dirty.length` threw on it. A
+// list-valued field that disappears when empty makes the ordinary case the one
+// every client has to guard, and the crash arrives in production rather than in
+// the fixture that was used to build the screen.
+func TestEmptyListsMarshalAsArraysNotNull(t *testing.T) {
+	body, err := json.Marshal(WorktreesResponse{Worktrees: []Worktree{{
+		Branch: "feature-a",
+		Path:   "/tmp/feature-a",
+		Dirty:  []string{},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body); !strings.Contains(got, `"dirty":[]`) {
+		t.Errorf("a clean worktree must send an empty dirty list, got %s", got)
+	}
+
+	// And the enclosing envelopes, for the same reason.
+	for _, tc := range []struct {
+		name, want string
+		v          any
+	}{
+		{"worktrees", `"worktrees":[]`, WorktreesResponse{Worktrees: []Worktree{}}},
+		{"runs", `"runs":[]`, RunsResponse{Runs: []Run{}}},
+		{"agents", `"agents":[]`, AgentsResponse{Agents: []AgentInfo{}}},
+	} {
+		b, err := json.Marshal(tc.v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), tc.want) {
+			t.Errorf("%s: want %s in %s", tc.name, tc.want, b)
+		}
+	}
+}
+
+// A launch refused because the branch's container name is taken must say so in
+// this tool's words, and as 409 rather than 502.
+//
+// Docker's own message is `Conflict. The container name "/sandbox-<repo>-<branch>"
+// is already in use by container "<64 hex chars>"` — which names neither the
+// branch nor a run id, and forwarded as 502 claims the daemon misbehaved when it
+// did exactly its job. The name *is* the enforcement: it refuses duplicates
+// atomically, which is what stops two agents landing in one checkout.
+func TestCreateRunExplainsAContainerNameConflict(t *testing.T) {
+	s, fr := newTestServer(t)
+
+	// First launch succeeds and leaves a container holding the branch's name.
+	first := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"echo", "hi"},
+		Branch:  "feature-x",
+	})
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first launch = %d, want 201: %s", first.Code, first.Body.String())
+	}
+
+	// The engine refuses the second, exactly as docker does.
+	fr.mu.Lock()
+	fr.startErr = fmt.Errorf(`Conflict. The container name "/sandbox-repo-feature-x" is already in use`)
+	fr.mu.Unlock()
+
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"echo", "hi"},
+		Branch:  "feature-x",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("second launch = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"feature-x", "already running"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the refusal must mention %q, got %s", want, body)
+		}
+	}
+	// And it must not be docker's raw text.
+	if strings.Contains(body, "Conflict. The container name") {
+		t.Errorf("docker's own message was forwarded verbatim: %s", body)
+	}
+}
+
+// An engine failure that is *not* a name conflict must still surface as one.
+func TestCreateRunStillReportsOtherEngineFailures(t *testing.T) {
+	s, fr := newTestServer(t)
+	fr.mu.Lock()
+	fr.startErr = fmt.Errorf("no space left on device")
+	fr.mu.Unlock()
+
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"echo", "hi"},
+		Branch:  "feature-y",
+	})
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no space left") {
+		t.Errorf("the engine's error must survive: %s", rec.Body.String())
+	}
+}
+
+// `land` refuses a branch that never passed its verify, so "nothing checked
+// this" and "this failed" are different answers and the wire has to keep them
+// apart. Null is not false.
+func TestWorktreeVerifiedDistinguishesUncheckedFromFailed(t *testing.T) {
+	withVerify := func(state string, code int) runtime.ContainerInfo {
+		return runtime.ContainerInfo{
+			State:    state,
+			ExitCode: code,
+			Labels:   map[string]string{sandbox.LabelVerify: "go test ./..."},
+		}
+	}
+	noVerify := runtime.ContainerInfo{State: "exited", Labels: map[string]string{}}
+
+	cases := []struct {
+		name string
+		in   []runtime.ContainerInfo
+		want *bool
+	}{
+		{"no container to ask", nil, nil},
+		{"ran, declared no verify", []runtime.ContainerInfo{noVerify}, nil},
+		{"passed", []runtime.ContainerInfo{withVerify("exited", 0)}, boolPtr(true)},
+		{"failed its verify", []runtime.ContainerInfo{withVerify("exited", 90)}, boolPtr(false)},
+		{"died before its verify", []runtime.ContainerInfo{withVerify("exited", 137)}, boolPtr(false)},
+		{"still running", []runtime.ContainerInfo{withVerify("running", 0)}, nil},
+		// Newest first: an older passing run must not speak for a newer failure.
+		{"newest wins", []runtime.ContainerInfo{withVerify("exited", 90), withVerify("exited", 0)}, boolPtr(false)},
+	}
+	for _, tc := range cases {
+		got := verifiedByLastRun(tc.in)
+		switch {
+		case tc.want == nil && got != nil:
+			t.Errorf("%s: got %v, want null", tc.name, *got)
+		case tc.want != nil && got == nil:
+			t.Errorf("%s: got null, want %v", tc.name, *tc.want)
+		case tc.want != nil && got != nil && *tc.want != *got:
+			t.Errorf("%s: got %v, want %v", tc.name, *got, *tc.want)
+		}
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// The run detail screen reads run.network.allow.length and run.security.*, so
+// these shapes are a contract rather than an implementation detail — the UI's
+// NetworkPosture and SecurityPosture, filled from the container itself.
+//
+// The posture is read back rather than taken from config on purpose: config says
+// what was asked for, and a run reviewed later was confined by what it actually
+// got.
+func TestRunPostureIsReadBackFromTheContainer(t *testing.T) {
+	c := runtime.ContainerInfo{
+		ID:          "abcdef0123456789",
+		State:       "exited",
+		NetworkMode: "sandbox-cli",
+		User:        "1001:1001",
+		Env: []string{
+			"SANDBOX_EGRESS_ALLOW=api.anthropic.com,registry.npmjs.org,internal.example.com",
+			"SANDBOX_INGRESS_PORTS=3000,8787",
+			"HOME=/sandbox/home",
+		},
+		Mounts: []runtime.MountInfo{
+			{Source: "/host/proj", Destination: "/workspace", ReadWrite: true},
+			{Source: "/host/agents/claude", Destination: "/sandbox/home", ReadWrite: true},
+		},
+		Security: runtime.SecurityInfo{
+			CapDrop:     []string{"ALL"},
+			SecurityOpt: []string{"no-new-privileges"},
+			PidsLimit:   1024,
+			MemoryBytes: 4 * 1024 * 1024 * 1024,
+			NanoCPUs:    2e9,
+		},
+	}
+	got := toRun(c, "docker")
+
+	if got.Network.Mode != "allowlist" {
+		t.Errorf("network.mode = %q, want allowlist — the control variable is set", got.Network.Mode)
+	}
+	if len(got.Network.Allow) != 3 {
+		t.Errorf("network.allow = %v, want the three resolved domains", got.Network.Allow)
+	}
+	if !got.Network.Baseline {
+		t.Error("network.baseline: api.anthropic.com is in the list, so the baseline is part of it")
+	}
+	if got.Network.Enforcement == nil || *got.Network.Enforcement != "name" {
+		t.Errorf("network.enforcement = %v, want name — the proxy decides on the hostname", got.Network.Enforcement)
+	}
+	if len(got.Network.IngressPorts) != 2 {
+		t.Errorf("ingressPorts = %v, want two", got.Network.IngressPorts)
+	}
+
+	if !got.Security.NoNewPrivileges || !got.Security.Hardening {
+		t.Errorf("security: cap-drop ALL plus no-new-privileges is hardened, got %+v", got.Security)
+	}
+	if got.Security.Memory != "4096m" || got.Security.CPUs != "2" {
+		t.Errorf("security limits = %q/%q, want 4096m/2", got.Security.Memory, got.Security.CPUs)
+	}
+	if got.Security.User != "1001:1001" {
+		t.Errorf("security.user = %q", got.Security.User)
+	}
+
+	if len(got.Mounts) != 2 || got.Mounts[0].Host != "/host/proj" || got.Mounts[0].Mode != "rw" {
+		t.Fatalf("mounts = %+v", got.Mounts)
+	}
+	if got.Mounts[0].Origin != "workspace" || got.Mounts[1].Origin != "persisted-home" {
+		t.Errorf("mount origins = %q/%q", got.Mounts[0].Origin, got.Mounts[1].Origin)
+	}
+}
+
+// No allowlist means no enforcement, and null is the honest answer rather than
+// a string naming a mechanism that is not running.
+func TestRunWithNoAllowlistReportsNoEnforcement(t *testing.T) {
+	got := toRun(runtime.ContainerInfo{NetworkMode: "bridge"}, "docker")
+	if got.Network.Mode != "default" || got.Network.Enforcement != nil {
+		t.Errorf("network = %+v, want mode default and no enforcement", got.Network)
+	}
+	if got.Network.Allow == nil {
+		t.Error("allow must be an empty list, not null: clients iterate it")
+	}
+}
+
+// The API could create runs and not remove them, which left a client stuck the
+// moment a branch's container name was taken: the launch refusal could only be
+// acted on by leaving Studio for a terminal.
+func TestDeleteRunReapsAFinishedContainer(t *testing.T) {
+	s, fr := newTestServer(t)
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"true"},
+		Branch:  "feature-reap",
+	})
+	run := decodeBody[Run](t, create)
+
+	// A running container is refused. stop and remove are different acts and the
+	// difference is an agent's unsaved work, so the caller has to say which.
+	rec := doRequest(t, s.Handler(), http.MethodDelete, "/v1/runs/"+run.ID, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("deleting a running run = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "stop it first") {
+		t.Errorf("the refusal must say what to do instead: %s", rec.Body.String())
+	}
+	if len(fr.removed) != 0 {
+		t.Fatalf("a running container was removed: %v", fr.removed)
+	}
+
+	fr.mu.Lock()
+	for i := range fr.containers {
+		fr.containers[i].State = "exited"
+	}
+	fr.mu.Unlock()
+
+	rec = doRequest(t, s.Handler(), http.MethodDelete, "/v1/runs/"+run.ID, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("deleting a finished run = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	if len(fr.removed) != 1 {
+		t.Errorf("expected the container reaped, removed %v", fr.removed)
+	}
+}
+
+// Line numbers are the one thing the diff text does not carry, and getting them
+// wrong is not cosmetic — it is a viewer pointing at the wrong line of somebody's
+// file. A `-` line has an old number and no new one, an added line the reverse,
+// context has both, and "\ No newline at end of file" advances neither.
+func TestParseUnifiedDiffTracksBothSides(t *testing.T) {
+	text := strings.Join([]string{
+		"diff --git a/x.go b/x.go",
+		"index 111..222 100644",
+		"--- a/x.go",
+		"+++ b/x.go",
+		"@@ -10,4 +10,5 @@ func x() {",
+		" keep one",
+		"-gone",
+		"+added one",
+		"+added two",
+		" keep two",
+		"\\ No newline at end of file",
+	}, "\n")
+
+	hunks := parseUnifiedDiff(text)
+	if len(hunks) != 1 {
+		t.Fatalf("want one hunk, got %d", len(hunks))
+	}
+	if !strings.HasPrefix(hunks[0].Header, "@@ -10,4 +10,5 @@") {
+		t.Errorf("header lost: %q", hunks[0].Header)
+	}
+
+	type want struct {
+		kind  string
+		oldNo int // 0 means nil
+		newNo int
+		text  string
+	}
+	wants := []want{
+		{"ctx", 10, 10, "keep one"},
+		{"del", 11, 0, "gone"},
+		{"add", 0, 11, "added one"},
+		{"add", 0, 12, "added two"},
+		{"ctx", 12, 13, "keep two"},
+		{"meta", 0, 0, "\\ No newline at end of file"},
+	}
+	if len(hunks[0].Lines) != len(wants) {
+		t.Fatalf("want %d lines, got %d: %+v", len(wants), len(hunks[0].Lines), hunks[0].Lines)
+	}
+	for i, w := range wants {
+		got := hunks[0].Lines[i]
+		if got.Kind != w.kind || got.Content != w.text {
+			t.Errorf("line %d = %s %q, want %s %q", i, got.Kind, got.Content, w.kind, w.text)
+		}
+		if (w.oldNo == 0) != (got.OldNo == nil) || (w.oldNo != 0 && *got.OldNo != w.oldNo) {
+			t.Errorf("line %d oldNo = %v, want %d", i, got.OldNo, w.oldNo)
+		}
+		if (w.newNo == 0) != (got.NewNo == nil) || (w.newNo != 0 && *got.NewNo != w.newNo) {
+			t.Errorf("line %d newNo = %v, want %d", i, got.NewNo, w.newNo)
+		}
+	}
+}
+
+// A file git has never seen is shown as one addition, because "nothing to
+// compare against" must not become "nothing to show" — for an agent that
+// scaffolds a project, untracked files are most of the work.
+func TestAddedFileHunkNumbersFromOne(t *testing.T) {
+	hunks := addedFileHunk("alpha\nbeta\n")
+	if len(hunks) != 1 || len(hunks[0].Lines) != 2 {
+		t.Fatalf("want one hunk of two lines, got %+v", hunks)
+	}
+	for i, l := range hunks[0].Lines {
+		if l.Kind != "add" || l.OldNo != nil || l.NewNo == nil || *l.NewNo != i+1 {
+			t.Errorf("line %d = %+v", i, l)
+		}
+	}
+	if len(addedFileHunk("")) != 0 {
+		t.Error("an empty file has no hunk to show")
+	}
+}
+
+// A run's diff must answer "what did this run change", not "what is uncommitted
+// here". The two differ in a checkout the user also works in, and getting it
+// wrong credits an agent with edits it never made.
+//
+// The mechanism is a before-image: a crash snapshot taken at launch, stamped on
+// the container, compared later against a tree of the workspace built the same
+// way. Comparing the snapshot to the *working tree* instead does not work, and
+// the reason is the trap this test exists to hold shut — a snapshot is written
+// with `add -A` so it holds untracked files, while `git diff <commit>` considers
+// only what git tracks, so every untracked file in the snapshot reads as a
+// deletion.
+func TestRunDiffPrefersTheBaselineWhenOneWasRecorded(t *testing.T) {
+	s, fr := newTestServer(t)
+	create := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Command: []string{"true"},
+		Branch:  "feature-diff",
+	})
+	run := decodeBody[Run](t, create)
+
+	// No baseline stamped: the endpoint still answers, with the broader question.
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/diff", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeBody[[]DiffFile](t, rec); got == nil {
+		t.Error("a run with no baseline must still return a list, not null")
+	}
+
+	// With one, it is carried on the container where any later command can find
+	// it — docker is the state store, and a fact not stamped is one nothing can
+	// recover.
+	fr.mu.Lock()
+	for i := range fr.containers {
+		fr.containers[i].Labels[sandbox.LabelBaseline] = "0000000000000000000000000000000000000000"
+	}
+	fr.mu.Unlock()
+
+	rec = doRequest(t, s.Handler(), http.MethodGet, "/v1/runs/"+run.ID+"/diff", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status with a baseline = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The audit log is several files: it rotates at 8 MiB and keeps generations
+// beside the live one. A reader that opened only sessions.jsonl would report
+// everything older than the last rotation as though it had never happened, and
+// would do it silently — the same class of bug as keeping one generation.
+func TestAuditReadsEveryGeneration(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	dir := config.AuditDir()
+	if dir == "" {
+		t.Skip("no config root in this environment")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(dir, "sessions.jsonl")
+
+	// Oldest generation first, so the expected order is the reverse of this.
+	write := func(path string, branches ...string) {
+		var b strings.Builder
+		for _, br := range branches {
+			b.WriteString(`{"time":"2026-07-01T00:00:00Z","branch":"` + br + `","exit_code":0}` + "\n")
+		}
+		if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(base+".2", "oldest")
+	write(base+".1", "middle")
+	write(base, "newest")
+
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/audit", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeBody[AuditResponse](t, rec).Records
+	if len(got) != 3 {
+		t.Fatalf("want three records across three generations, got %d: %+v", len(got), got)
+	}
+	for i, want := range []string{"newest", "middle", "oldest"} {
+		if got[i].Branch == nil || *got[i].Branch != want {
+			t.Errorf("record %d = %v, want %q — generations must read newest first", i, got[i].Branch, want)
+		}
+	}
+
+	// A bounded request stops once it has what it asked for, rather than reading
+	// every generation to discard most of it.
+	rec = doRequest(t, s.Handler(), http.MethodGet, "/v1/audit?limit=1", nil)
+	if one := decodeBody[AuditResponse](t, rec).Records; len(one) != 1 || *one[0].Branch != "newest" {
+		t.Errorf("limit=1 must return the newest record only, got %+v", one)
+	}
+
+	// And the branch filter reaches across generations, not just the live file.
+	rec = doRequest(t, s.Handler(), http.MethodGet, "/v1/audit?branch=oldest", nil)
+	if f := decodeBody[AuditResponse](t, rec).Records; len(f) != 1 {
+		t.Errorf("a branch only in a rotated generation must still be found, got %+v", f)
+	}
+}
+
+// doRequestAuthed is doRequest with a bearer token, for the endpoints that
+// require one even when the rest of the server does not.
+func doRequestAuthed(t *testing.T, h http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var r io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal request body: %v", err)
+		}
+		r = bytes.NewReader(b)
+	}
+	req := httptest.NewRequest(method, path, r)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	// Host, not just the header set above: httptest defaults to example.com and
+	// the host guard refuses anything that is not a loopback name (guard.go). One
+	// helper knowing that rule and the other not is how these tests started
+	// failing on a check neither of them is about.
+	req.Host = testHost
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
 }

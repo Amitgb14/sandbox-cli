@@ -9,6 +9,23 @@
 
 export const DASH = "—";
 
+/**
+ * The locale every `toLocale*` call here pins, rather than passing `[]`.
+ *
+ * `[]` means "whatever this runtime's default is", and the two runtimes
+ * disagree: the server renders in the container's locale, the browser in the
+ * user's. Same instant, different string, hydration mismatch — and it appears
+ * only for users whose machine is not configured the way the server is, which
+ * is the worst way to find a bug.
+ *
+ * The time *zone* is deliberately left alone. Pinning it to UTC would make these
+ * agree by showing everyone the wrong wall clock; a dashboard should say when
+ * something happened where the reader is. Anything formatting an absolute time
+ * must therefore still be rendered on the client, which is what the `mounted`
+ * gate in terminal-view.tsx does for the one case that was not.
+ */
+export const LOCALE = "en-US";
+
 export function formatBytes(bytes: number | null | undefined, digits = 1): string {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return DASH;
   if (bytes === 0) return "0 B";
@@ -85,14 +102,14 @@ export function formatClock(iso: string | null | undefined): string {
   if (!iso) return DASH;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return DASH;
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return DASH;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return DASH;
-  return d.toLocaleString([], {
+  return d.toLocaleString(LOCALE, {
     month: "short",
     day: "numeric",
     hour: "2-digit",

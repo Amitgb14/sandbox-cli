@@ -22,14 +22,28 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Skeleton } from "@/components/ui/skeleton";
 import { TagInput } from "@/components/common/tag-input";
 import { LaunchPreview } from "@/components/launch/launch-preview";
-import { useAgents, useLaunchRun, useWorktrees } from "@/lib/api/queries";
+import {
+  useAgentSessions,
+  useAgents,
+  useDaemon,
+  useLaunchRun,
+  useRemoveRun,
+  useWorktrees,
+} from "@/lib/api/queries";
 import { localPreview } from "@/lib/api/endpoints";
+import { formatRelative, pluralize } from "@/lib/format";
 import { BASELINE_EGRESS, PROFILES, RESERVED_ENV } from "@/lib/constants";
 import { REPOS } from "@/lib/mock/data";
 import { useUi } from "@/lib/store";
-import type { AgentName, LaunchRequest, NetworkMode, Profile } from "@/lib/types";
+import type {
+  AgentName,
+  LaunchRequest,
+  NetworkMode,
+  Profile,
+  SessionSummary,} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -49,8 +63,10 @@ export function LaunchForm() {
   const search = useSearchParams();
   const repoFilter = useUi((s) => s.repoFilter);
   const { data: agents } = useAgents();
+  const { data: daemon } = useDaemon();
   const { data: worktrees } = useWorktrees();
   const launch = useLaunchRun();
+  const removeRun = useRemoveRun();
 
   const initialAgent = (search.get("agent") as AgentName | null) ?? "claude";
   const initialRepo = REPOS.find((r) => r.id === repoFilter) ?? REPOS[0];
@@ -67,6 +83,9 @@ export function LaunchForm() {
     memory: "4g",
     cpus: "2",
     detach: false,
+    console: false,
+    skipPermissions: false,
+    resume: null,
     persistAuth: true,
     sync: true,
     statusline: true,
@@ -75,7 +94,22 @@ export function LaunchForm() {
     share: [],
     publish: [],
   });
-  const [worktreeMode, setWorktreeMode] = useState<"main" | "new" | "existing">("main");
+
+  // The daemon manages exactly one project, and it says which on /v1/health.
+  // Adopt it as soon as it answers, unless you have already picked something
+  // else: the initial value can only come from the fixture repos, and posting a
+  // fixture path to a live daemon fails with "project path does not exist".
+  useEffect(() => {
+    if (!daemon?.project) return;
+    setReq((prev) =>
+      prev.workspace === initialRepo.root && !prev.worktree
+        ? { ...prev, workspace: daemon.project as string }
+        : prev,
+    );
+  }, [daemon?.project, initialRepo.root]);
+  const [worktreeMode, setWorktreeMode] = useState<"main" | "new" | "existing">(
+    "main",
+  );
   const [newBranch, setNewBranch] = useState("");
 
   /**
@@ -93,13 +127,22 @@ export function LaunchForm() {
 
   useEffect(() => {
     if (deepLinkApplied.current || !deepLinkBranch || !worktrees) return;
-    const match = worktrees.find((w) => !w.primary && w.branch === deepLinkBranch);
+    const match = worktrees.find(
+      (w) => !w.primary && w.branch === deepLinkBranch,
+    );
     if (!match) return;
     deepLinkApplied.current = true;
-    const repo = REPOS.find((r) => r.id === match.repoId);
+    // Deliberately does not touch `workspace`. It used to set it from REPOS,
+    // which is fixture data — and the fixture's id matches the real repo id, so
+    // the lookup *succeeded* and quietly replaced the daemon's project with a
+    // path that exists on nobody's disk. The launch then failed with "project
+    // path does not exist".
+    //
+    // A deep link carries a branch, and a branch is all it should apply. The
+    // workspace already holds the daemon's own project, which is the only
+    // project this server has.
     setReq((prev) => ({
       ...prev,
-      workspace: repo?.root ?? prev.workspace,
       worktree: match.branch,
       base: match.base ?? prev.base,
     }));
@@ -114,7 +157,11 @@ export function LaunchForm() {
     () => ({
       ...req,
       worktree:
-        worktreeMode === "main" ? null : worktreeMode === "new" ? newBranch || null : req.worktree,
+        worktreeMode === "main"
+          ? null
+          : worktreeMode === "new"
+            ? newBranch || null
+            : req.worktree,
     }),
     [req, worktreeMode, newBranch],
   );
@@ -128,9 +175,25 @@ export function LaunchForm() {
   // name-derived version was already wrong here, because a worktree path
   // carries the id (`intrupt-web-1f3ab902`) while the workspace directory
   // carries the name (`intrupt_web`), so it matched nothing for those repos.
-  const selectedRepoId = REPOS.find((r) => r.root === req.workspace)?.id ?? null;
+  // One daemon manages one project. When it has answered, that project *is* the
+  // repository list — and every worktree it reports belongs to it, so there is
+  // nothing to filter by. REPOS is fixture data and only stands in before the
+  // daemon replies; offering it against a live daemon is what put a path from
+  // somebody's imagination into a launch request.
+  const liveProject = daemon?.project ?? null;
+  const repoOptions = liveProject
+    ? [
+        {
+          id: "live",
+          name: liveProject.split("/").filter(Boolean).pop() ?? liveProject,
+          root: liveProject,
+        },
+      ]
+    : REPOS;
+  const selectedRepoId =
+    repoOptions.find((r) => r.root === req.workspace)?.id ?? null;
   const repoWorktrees = (worktrees ?? []).filter(
-    (w) => !w.primary && w.repoId === selectedRepoId,
+    (w) => !w.primary && (liveProject !== null || w.repoId === selectedRepoId),
   );
 
   function submit() {
@@ -143,10 +206,35 @@ export function LaunchForm() {
         });
         router.push(`/runs/${id}`);
       },
-      onError: (err) =>
+      onError: (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        // A container name held by a *finished* run is the one failure here with
+        // an obvious next step, and it used to end at a message telling you to
+        // open a terminal. The daemon names the run in its refusal; offer to
+        // reap it and try again from where you already are.
+        //
+        // Only for a finished one. "An agent is already running" carries a
+        // similar message and must not get a button, because the fix there is a
+        // decision about somebody's work in progress.
+        const blocking = /a finished run \(([0-9a-f]+),/.exec(message)?.[1];
         toast.error("Could not start the run", {
-          description: err instanceof Error ? err.message : String(err),
-        }),
+          description: message,
+          duration: blocking ? 15_000 : undefined,
+          action: blocking
+            ? {
+                label: "Remove it and retry",
+                onClick: () =>
+                  removeRun.mutate(blocking, {
+                    onSuccess: () => submit(),
+                    onError: (e: unknown) =>
+                      toast.error("Could not remove that run", {
+                        description: e instanceof Error ? e.message : String(e),
+                      }),
+                  }),
+              }
+            : undefined,
+        });
+      },
     });
   }
 
@@ -159,14 +247,18 @@ export function LaunchForm() {
             <Field label="Agent" htmlFor="agent">
               <Select
                 value={req.agent ?? "__none"}
-                onValueChange={(v) => patch({ agent: v === "__none" ? null : (v as AgentName) })}
+                onValueChange={(v) =>
+                  patch({ agent: v === "__none" ? null : (v as AgentName) })
+                }
               >
                 <SelectTrigger id="agent">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectLabel>Verified headless — eligible for a fleet</SelectLabel>
+                    <SelectLabel>
+                      Verified headless — eligible for a fleet
+                    </SelectLabel>
                     {agents
                       ?.filter((a) => a.headlessVerified)
                       .map((a) => (
@@ -193,14 +285,14 @@ export function LaunchForm() {
               </Select>
               {agentMeta && !agentMeta.headlessVerified && req.detach && (
                 <Hint tone="caution">
-                  {agentMeta.label} has no verified headless argv. Detached, an agent that stops to
-                  ask permission does not fail — it hangs.
+                  {agentMeta.label} has no verified headless argv. Detached, an
+                  agent that stops to ask permission does not fail — it hangs.
                 </Hint>
               )}
               {agentMeta && agentMeta.delivery !== "baked" && (
                 <Hint>
-                  Installed on first run into the persisted HOME ({agentMeta.delivery}), so the
-                  image carries nothing for it.
+                  Installed on first run into the persisted HOME (
+                  {agentMeta.delivery}), so the image carries nothing for it.
                 </Hint>
               )}
             </Field>
@@ -215,9 +307,9 @@ export function LaunchForm() {
                   className="font-mono"
                 />
                 <Hint>
-                  Recorded verbatim in the run log — which is the known soft edge in &ldquo;no
-                  secret values&rdquo;, and kept because a log that cannot say what ran answers
-                  nothing.
+                  Recorded verbatim in the run log — which is the known soft
+                  edge in &ldquo;no secret values&rdquo;, and kept because a log
+                  that cannot say what ran answers nothing.
                 </Hint>
               </Field>
             ) : (
@@ -240,8 +332,9 @@ export function LaunchForm() {
                   />
                 </div>
                 <Hint>
-                  Memory and CPUs. Empty means uncapped — and a fleet refuses to start if its
-                  concurrent agents cannot fit in the host&apos;s memory.
+                  Memory and CPUs. Empty means uncapped — and a fleet refuses to
+                  start if its concurrent agents cannot fit in the host&apos;s
+                  memory.
                 </Hint>
               </Field>
             )}
@@ -257,8 +350,9 @@ export function LaunchForm() {
                 rows={3}
               />
               <Hint>
-                For a detached run this is the whole instruction — nobody is there to answer a
-                follow-up question.
+                {req.console
+                  ? "This seeds the first turn rather than being the whole run — the session stays open, so a follow-up question can be answered by whoever attaches."
+                  : "For a detached run this is the whole instruction — nobody is there to answer a follow-up question."}
               </Hint>
             </Field>
           )}
@@ -275,7 +369,7 @@ export function LaunchForm() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {REPOS.map((r) => (
+                {repoOptions.map((r) => (
                   <SelectItem key={r.id} value={r.root}>
                     {r.name}
                   </SelectItem>
@@ -330,7 +424,9 @@ export function LaunchForm() {
                     <SelectItem key={w.branch} value={w.branch}>
                       <span className="font-mono">{w.branch}</span>
                       {w.runId && (
-                        <span className="ml-2 text-xs text-caution">an agent is on it</span>
+                        <span className="ml-2 text-xs text-caution">
+                          an agent is on it
+                        </span>
                       )}
                     </SelectItem>
                   ))}
@@ -348,9 +444,10 @@ export function LaunchForm() {
               className="font-mono"
             />
             <Hint>
-              Stamped as a label at launch, because by landing time the checkout may be on a
-              different branch — and &ldquo;the branch checked out now&rdquo; is a different
-              question from &ldquo;the branch this agent was sent to work towards&rdquo;.
+              Stamped as a label at launch, because by landing time the checkout
+              may be on a different branch — and &ldquo;the branch checked out
+              now&rdquo; is a different question from &ldquo;the branch this
+              agent was sent to work towards&rdquo;.
             </Hint>
           </Field>
         </Section>
@@ -389,17 +486,22 @@ export function LaunchForm() {
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-sm font-medium">{p}</span>
                     <Badge variant="outline" className="text-[10px]">
-                      {PROFILES[p].unsatisfied === "refuses" ? "refuses" : "warns"}
+                      {PROFILES[p].unsatisfied === "refuses"
+                        ? "refuses"
+                        : "warns"}
                     </Badge>
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">{PROFILES[p].blurb}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {PROFILES[p].blurb}
+                  </p>
                 </button>
               ))}
             </div>
             <Hint>
-              Both are secure — neither relaxes the host boundary. They differ in what they
-              optimise, and in one thing of kind: dev warns when a control cannot be satisfied,
-              prod refuses, because nobody is watching a production run.
+              Both are secure — neither relaxes the host boundary. They differ
+              in what they optimise, and in one thing of kind: dev warns when a
+              control cannot be satisfied, prod refuses, because nobody is
+              watching a production run.
             </Hint>
           </Field>
 
@@ -408,13 +510,17 @@ export function LaunchForm() {
           <Field label="Egress">
             <Select
               value={req.network.mode}
-              onValueChange={(v) => patch({ network: { ...req.network, mode: v as NetworkMode } })}
+              onValueChange={(v) =>
+                patch({ network: { ...req.network, mode: v as NetworkMode } })
+              }
             >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="allowlist">Allowlist — default-deny, named domains</SelectItem>
+                <SelectItem value="allowlist">
+                  Allowlist — default-deny, named domains
+                </SelectItem>
                 <SelectItem value="none">None — reach nothing</SelectItem>
                 <SelectItem value="default">Unrestricted — anything</SelectItem>
               </SelectContent>
@@ -422,8 +528,8 @@ export function LaunchForm() {
 
             {req.network.mode === "default" && (
               <Hint tone="exposed">
-                Open egress. Any credential this agent holds can leave, and the audit line will
-                record that nothing was enforced.
+                Open egress. Any credential this agent holds can leave, and the
+                audit line will record that nothing was enforced.
               </Hint>
             )}
 
@@ -447,13 +553,16 @@ export function LaunchForm() {
                   <TagInput
                     id="allow"
                     value={req.network.allow}
-                    onChange={(allow) => patch({ network: { ...req.network, allow } })}
+                    onChange={(allow) =>
+                      patch({ network: { ...req.network, allow } })
+                    }
                     placeholder="internal.example.com, then Enter"
                   />
                   <Hint>
-                    Resolved fresh per connection by the in-container proxy, which decides on the
-                    hostname read from the TLS SNI, a CONNECT, or a Host header — so a host sharing
-                    an allowlisted address does not ride in on it.
+                    Resolved fresh per connection by the in-container proxy,
+                    which decides on the hostname read from the TLS SNI, a
+                    CONNECT, or a Host header — so a host sharing an allowlisted
+                    address does not ride in on it.
                   </Hint>
                 </div>
               </div>
@@ -469,8 +578,9 @@ export function LaunchForm() {
               placeholder="/Users/you/shared, then Enter"
             />
             <Hint tone={req.share.length > 0 ? "caution" : undefined}>
-              <code className="font-mono">--share</code> widens the boundary on purpose. It stays
-              something you type rather than something a file in the repository can turn on.
+              <code className="font-mono">--share</code> widens the boundary on
+              purpose. It stays something you type rather than something a file
+              in the repository can turn on.
             </Hint>
           </Field>
 
@@ -491,7 +601,10 @@ export function LaunchForm() {
                 <>
                   {" "}
                   {agentMeta.label} suggests{" "}
-                  <span className="font-mono">{agentMeta.envAllow.join(", ")}</span>.
+                  <span className="font-mono">
+                    {agentMeta.envAllow.join(", ")}
+                  </span>
+                  .
                 </>
               )}
             </Hint>
@@ -508,6 +621,37 @@ export function LaunchForm() {
             hint="Nobody is attached, so `-d` replaces `-i`/`-it` and the container is not removed on exit — the exit code and its logs are the entire supervision story."
           />
 
+          {req.console && req.agent && <ResumePicker req={req} patch={patch} />}
+
+          <Toggle
+            id="skip-permissions"
+            checked={req.skipPermissions}
+            disabled={!req.console || !agentMeta?.canSkipPermissions}
+            onCheckedChange={(skipPermissions) => patch({ skipPermissions })}
+            label="Let it work without asking"
+            tone={req.skipPermissions ? "caution" : undefined}
+            hint={
+              !req.console
+                ? "Only for a console run. A headless run always works without asking — an agent that stops for permission does not fail, it hangs."
+                : agentMeta?.canSkipPermissions === false
+                  ? `${req.agent}'s non-interactive mode is a subcommand rather than a flag, so there is nothing to add to an interactive session.`
+                  : "Adds the agent's skip-permissions flag, so an attached session runs to the end instead of waiting for you. The container is the blast-radius boundary either way — this changes what it asks, not what it can reach."
+            }
+          />
+
+          <Toggle
+            id="console"
+            checked={req.console}
+            disabled={!req.agent}
+            onCheckedChange={(console) => patch({ console })}
+            label="Keep a console I can attach to"
+            hint={
+              req.agent
+                ? "Starts the agent's interactive mode on a container that keeps a terminal (`-dit`), so `sandbox-cli attach` from any window can answer it. Without this the agent runs headless: it produces one final answer and can never stop to ask."
+                : "Needs an agent. A plain command is already whatever argv you typed — there is no headless mode to swap out of."
+            }
+          />
+
           <Field label="Verify command" htmlFor="verify">
             <Input
               id="verify"
@@ -515,11 +659,24 @@ export function LaunchForm() {
               onChange={(e) => patch({ verify: e.target.value })}
               placeholder="make test"
               className="font-mono"
+              disabled={req.console}
             />
             <Hint>
-              Wrapped around the agent&apos;s argv <em>inside</em> the container, and its exit code
-              becomes the container&apos;s. In the container because a verify running on the host
-              would be host code selected by a file the agent can write.
+              {req.console ? (
+                <>
+                  Not available with a console. Verify decides the run&apos;s
+                  exit code, which is how <code>land</code> knows the work is
+                  done — and an interactive session&apos;s exit code is whenever
+                  you quit. Run it yourself in the session instead.
+                </>
+              ) : (
+                <>
+                  Wrapped around the agent&apos;s argv <em>inside</em> the
+                  container, and its exit code becomes the container&apos;s. In
+                  the container because a verify running on the host would be
+                  host code selected by a file the agent can write.
+                </>
+              )}
             </Hint>
           </Field>
 
@@ -560,7 +717,11 @@ export function LaunchForm() {
         </Section>
 
         <div className="flex flex-wrap items-center gap-3">
-          <Button size="lg" onClick={submit} disabled={blocked || launch.isPending}>
+          <Button
+            size="lg"
+            onClick={submit}
+            disabled={blocked || launch.isPending}
+          >
             <Play className="size-4" />
             {launch.isPending ? "Starting…" : "Launch sandbox"}
           </Button>
@@ -684,7 +845,11 @@ function Toggle({
           )}
         >
           {label}
-          {disabled && <span className="ml-1.5 font-normal opacity-70">(prod decides this)</span>}
+          {disabled && (
+            <span className="ml-1.5 font-normal opacity-70">
+              (prod decides this)
+            </span>
+          )}
         </Label>
         <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>
       </div>
@@ -705,13 +870,86 @@ function Radio({
 }) {
   return (
     <div className="flex items-start gap-3">
-      <RadioGroupItem value={value} id={`wt-${value}`} disabled={disabled} className="mt-0.5" />
+      <RadioGroupItem
+        value={value}
+        id={`wt-${value}`}
+        disabled={disabled}
+        className="mt-0.5"
+      />
       <div className="min-w-0 space-y-0.5">
-        <Label htmlFor={`wt-${value}`} className={cn("text-xs font-medium", disabled && "opacity-60")}>
+        <Label
+          htmlFor={`wt-${value}`}
+          className={cn("text-xs font-medium", disabled && "opacity-60")}
+        >
           {label}
         </Label>
         <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>
       </div>
     </div>
+  );
+}
+
+/**
+ * Pick a conversation to carry on instead of starting one.
+ *
+ * Console-only, because that is the daemon's rule and the reason for it holds
+ * here too: a headless resume would replay one prompt into an old conversation
+ * and exit, which is not what anyone means by carrying it on.
+ *
+ * Only the sandbox-owned store is offered. Those are the conversations a
+ * container can actually reopen — your own ~/.claude history is a real store
+ * and resuming it here would mean mounting the host's history into a container
+ * that was not asked to have it.
+ */
+function ResumePicker({
+  req,
+  patch,
+}: {
+  req: LaunchRequest;
+  patch: (p: Partial<LaunchRequest>) => void;
+}) {
+  const { data: sessions, isPending } = useAgentSessions(req.agent);
+
+  if (isPending) return <Skeleton className="h-9 w-full rounded-md" />;
+  if (!sessions || sessions.length === 0) {
+    return (
+      <Hint>
+        No conversations to resume yet — {req.agent} has not written one in the
+        sandbox-owned agent HOME. The first console run here creates one.
+      </Hint>
+    );
+  }
+
+  return (
+    <Field label="Resume a conversation" htmlFor="resume">
+      <Select
+        value={req.resume ?? "none"}
+        onValueChange={(v) => patch({ resume: v === "none" ? null : v })}
+      >
+        <SelectTrigger id="resume">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">Start a new conversation</SelectItem>
+          {sessions.map((sess: SessionSummary) => (
+            <SelectItem key={sess.id} value={sess.id}>
+              {/* Text written by an agent, rendered and never interpreted. A
+                  partial session has no readable title, and says so rather
+                  than showing an empty row. */}
+              {sess.title || (sess.partial ? "(unread format)" : "(untitled)")}
+              {" · "}
+              {sess.partial ? "?" : pluralize(sess.turns, "turn")}
+              {" · "}
+              {formatRelative(sess.modified)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Hint>
+        {req.resume
+          ? "The prompt above is ignored: the conversation already has one, and this reopens it where it stopped."
+          : "Reopens an earlier session in a fresh container. Only conversations the sandbox itself wrote are listed."}
+      </Hint>
+    </Field>
   );
 }

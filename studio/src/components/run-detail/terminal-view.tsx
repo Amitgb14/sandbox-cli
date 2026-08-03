@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
-import { ArrowDownToLine, Terminal, WrapText } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { ArrowDownToLine, MessageSquare, Plug, Terminal, WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CopyButton } from "@/components/common/copy-button";
 import { EmptyState } from "@/components/common/empty-state";
-import { useRunLogs } from "@/lib/api/queries";
+import { AttachedTerminal } from "@/components/run-detail/attached-terminal";
+import { useDaemon, useRunLogs } from "@/lib/api/queries";
 import { useLogStream } from "@/hooks/use-log-stream";
 import { useUi } from "@/lib/store";
 import { parseAnsi, stripAnsi } from "@/lib/ansi";
@@ -19,15 +21,20 @@ import type { LogLine, Run } from "@/lib/types";
 /**
  * The terminal.
  *
- * Read-only, and it says so. Typing at a detached run is not possible — `-d`
- * replaces `-i`/`-it`, so the container is not listening on stdin — and offering
- * an input that silently went nowhere would be worse than offering none. An
- * attached interactive session gets a note pointing at `sandbox-cli attach`,
- * which is a real terminal.
+ * Read-only by default, and it says so: a run launched without a console has no
+ * stdin — `-d` replaces `-i`/`-it` — so offering an input that silently went
+ * nowhere would be worse than offering none.
+ *
+ * A run launched *with* a console does have stdin, and then this offers to
+ * attach: the same live pty `sandbox-cli attach` connects to, rendered by a
+ * real terminal emulator. That is a deliberate click rather than the default
+ * view, for two reasons. It loads the largest dependency in the app, and it
+ * takes the keyboard — every keystroke after it goes to the agent, Ctrl-C
+ * included.
  */
 export function TerminalView({ run }: { run: Run }) {
   const live = run.state === "running";
-  const { data, isPending } = useRunLogs(run.id);
+  const { data, isPending } = useRunLogs(run.id, run.state === "running");
   const { lines, streaming } = useLogStream(data, live);
 
   const follow = useUi((s) => s.terminalFollow);
@@ -38,7 +45,34 @@ export function TerminalView({ run }: { run: Run }) {
   const setTimestamps = useUi((s) => s.setTerminalTimestamps);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [attached, setAttached] = useState(false);
+  const { data: daemon } = useDaemon();
+
+  /**
+   * Whether this daemon will let anything drive a console.
+   *
+   * Typing at a running agent — and sizing its terminal, which is what makes it
+   * paint — requires the daemon to have been started with `-token`, whatever
+   * the rest of the server allows. `authRequired` is how /v1/health reports
+   * that it has one.
+   *
+   * Read here so the Attach button is simply not offered when it cannot work.
+   * Without this it opened a terminal that 403'd on resize and sat blank, which
+   * is the worst of both: an action that looks available and an empty screen
+   * with the reason three network requests away.
+   */
+  const consoleEnabled = daemon?.authRequired === true;
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // The timestamps toggle is labelled with the current clock, which cannot be
+  // rendered during the first pass: "use client" does not mean "not rendered on
+  // the server", so the server wrote one minute into the HTML and the browser
+  // hydrated with another. Filled in after mount; the placeholder keeps the
+  // button the same width so nothing shifts when it arrives.
+  const [clockLabel, setClockLabel] = useState("--:--");
+  useEffect(() => {
+    setClockLabel(formatClock(new Date().toISOString()).slice(0, 5));
+  }, []);
 
   useEffect(() => {
     if (!follow) return;
@@ -63,6 +97,41 @@ export function TerminalView({ run }: { run: Run }) {
     [lines],
   );
 
+  // Both halves have to be true: the container was created with stdin, and it
+  // is still running. A finished console run has a terminal to read and nothing
+  // listening, which is what the log view above already shows.
+  const canAttach = live && run.openStdin && consoleEnabled;
+
+  // A run that *could* be attached to, on a daemon that will not allow it.
+  // Worth telling apart from "this run has no console": the fix is a daemon
+  // flag rather than relaunching the run.
+  const consoleLockedOut = live && run.openStdin && !consoleEnabled;
+
+  // An agent run with no stdin was started headless — `claude -p` and its
+  // equivalents — so there is no Attach button *and* nothing will appear here
+  // until it exits. Both are correct and both look like a broken screen, which
+  // is why this says so rather than showing an empty box.
+  const headless = Boolean(run.agent) && !run.openStdin;
+
+  /**
+   * A run with a pty does not have *lines*, it has a screen.
+   *
+   * `docker logs` on a TTY container returns the raw pty stream — cursor moves,
+   * alternate-screen switches, repaints — and this viewer renders lines with an
+   * SGR colour parser. Pointed at that stream it prints the escape sequences
+   * verbatim and collapses the spacing, so a perfectly healthy agent looks like
+   * corruption: words run together and a spinner draws one dot per line.
+   *
+   * There is no fixing that here. Rendering a screen is what a terminal
+   * emulator is for, and this tab has one behind the Attach button — so it says
+   * that instead of showing something wrong.
+   */
+  const isScreen = run.tty;
+
+  if (attached) {
+    return <AttachedTerminal run={run} onDetach={() => setAttached(false)} />;
+  }
+
   return (
     // `relative` anchors "Jump to latest" below. Without a positioned ancestor
     // an absolute child walks up to the sticky header and lands off-screen.
@@ -80,6 +149,46 @@ export function TerminalView({ run }: { run: Run }) {
         )}
 
         <div className="ml-auto flex items-center gap-1">
+          {consoleLockedOut && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="cursor-default px-2 text-[11px] text-white/40">
+                  console disabled
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs space-y-1.5">
+                <p>
+                  This run has a console, but the daemon was started without a
+                  token — and typing at a running agent, or sizing its terminal
+                  (which is what makes it draw), needs one.
+                </p>
+                <p>
+                  Set <code>SANDBOX_STUDIO_TOKEN</code> in your{" "}
+                  <code>.env</code> and restart the daemon, then paste the same
+                  value into the bar Studio shows at the top.
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {canAttach && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setAttached(true)}
+                  className="h-7 gap-1.5 px-2 text-[11px] text-white/70 hover:bg-white/10 hover:text-white"
+                >
+                  <Plug className="size-3.5" />
+                  Attach
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                Open the agent&apos;s live terminal. Everything you type goes to
+                it — this is the same session `sandbox-cli attach` connects to.
+              </TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Toggle
@@ -89,7 +198,7 @@ export function TerminalView({ run }: { run: Run }) {
                 aria-label="Show timestamps"
                 className="h-7 px-2 text-[11px] text-white/50 hover:bg-white/10 hover:text-white data-[state=on]:bg-white/10 data-[state=on]:text-white"
               >
-                {formatClock(new Date().toISOString()).slice(0, 5)}
+                {clockLabel}
               </Toggle>
             </TooltipTrigger>
             <TooltipContent>Timestamps</TooltipContent>
@@ -142,11 +251,46 @@ export function TerminalView({ run }: { run: Run }) {
               <Skeleton key={i} className="h-3.5 bg-white/5" style={{ width: `${40 + i * 5}%` }} />
             ))}
           </div>
+        ) : isScreen ? (
+          <EmptyState
+            icon={Terminal}
+            title="This run has a terminal, not a log"
+            description={
+              canAttach
+                ? "Its output is a screen the agent repaints — cursor moves and all — which only a terminal can render. Attach to see it."
+                : consoleLockedOut
+                  ? "Its output is a screen the agent repaints, which only a terminal can render. Attaching needs the daemon to have been started with a token."
+                  : "Its output is a screen the agent repaints, which only a terminal can render. The run has finished, so there is nothing left to attach to."
+            }
+            action={
+              canAttach ? (
+                <Button variant="outline" size="sm" onClick={() => setAttached(true)}>
+                  <Plug className="size-4" />
+                  Attach
+                </Button>
+              ) : undefined
+            }
+            className="border-0 text-white/60"
+          />
         ) : lines.length === 0 ? (
           <EmptyState
             icon={Terminal}
-            title="No output"
-            description="The container has not written anything yet, or its output was never captured."
+            title={headless ? "A headless run writes nothing until it ends" : "No output"}
+            description={
+              headless
+                ? `${run.agent} was started in its headless mode, which produces one final answer and prints it on exit — so this stays empty while it works, however long that is. What it is saying right now is in the Console tab, read from its transcript.`
+                : "The container has not written anything yet, or its output was never captured."
+            }
+            action={
+              headless ? (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/runs/${run.id}?tab=console`}>
+                    <MessageSquare className="size-4" />
+                    Read the conversation
+                  </Link>
+                </Button>
+              ) : undefined
+            }
             className="border-0 text-white/60"
           />
         ) : (

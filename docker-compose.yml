@@ -1,0 +1,177 @@
+# Sandbox Studio, locally.
+#
+#   docker compose up                      # UI only — run the API on your host
+#   docker compose --profile api up        # UI + API in containers (see below)
+#
+# `cp .env.example .env` first if this project has a .sandbox.yaml the API has
+# to be told to trust — compose reads .env automatically, so the setting stops
+# being something you remember on every invocation. See the note on brokered
+# secrets below before you point it at a config carrying a `secrets:` block.
+#
+# The default gives you the UI and nothing else, and that is deliberate.
+#
+# ── Why the API is opt-in ────────────────────────────────────────────────────
+#
+# The API's job is to launch containers, so running it inside one means mounting
+# the host's docker socket into it. A process that can reach that socket can
+# start a container with any mount it likes — including `/` — which is root on
+# the host. sandbox-cli exists to keep an agent's blast radius inside a
+# container; handing that same container the socket undoes it in one line.
+#
+# That is fine for a laptop you already trust, and it is not fine as a default,
+# so it lives behind `--profile api`. The recommended shape is the default one:
+# the UI in a container, the API as an ordinary host process that already has
+# the access it needs.
+#
+#   go run ./cmd/sandbox-studio-api -cors-origin http://localhost:3100
+#
+# ── Brokered secrets do not survive the move ─────────────────────────────────
+#
+# A `secrets:` entry with a `command:` is resolved by running that command
+# wherever the API process is — so in a container it runs there, not on your
+# machine. A config carrying
+#
+#   secrets:
+#     GITHUB_TOKEN:
+#       command: gh auth token
+#
+# fails every launch with `exit status 127`: `gh` is not in the API image, and
+# installing it would not help, because your GitHub login is not in there
+# either. Mounting ~/.config/gh would work and would hand this container your
+# credentials, which is a poor trade for a convenience.
+#
+# The point of a brokered secret is to pull a short-lived token from *your*
+# tooling, so it belongs to a host process. Either drop `secrets:` from the
+# config you pass as SANDBOX_CONFIG, or run the API on the host.
+#
+# ── Why the paths look redundant ─────────────────────────────────────────────
+#
+# When the API asks the daemon for a container with `-v /a/b:/workspace`, the
+# daemon resolves `/a/b` on the *host*, not inside the API container. So the
+# project has to live at the same absolute path in both places, or every
+# sandbox the API starts mounts a directory that does not exist. That is what
+# the `${PWD}:${PWD}` mounts are for, and why the API runs with `-project
+# ${PWD}` rather than a path of its own choosing.
+
+name: sandbox-studio
+
+services:
+  ui:
+    build:
+      context: ./studio
+      dockerfile: Dockerfile.dev
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      # Source from the host so edits are live. node_modules stays the image's
+      # copy: the host's may be built for another platform, and on macOS a bind
+      # mount of it is slow enough to notice.
+      - ./studio:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      # Read by the *browser*, not by the container — NEXT_PUBLIC_* values are
+      # inlined into the client bundle. So it has to be the URL you would type,
+      # not a compose service name: `http://api:8787` resolves inside the
+      # network and nowhere in your browser.
+      NEXT_PUBLIC_SANDBOX_API: http://localhost:8787
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Bind-mounted source on macOS and Windows does not deliver inotify
+      # events; without this the dev server never notices your edits.
+      WATCHPACK_POLLING: "true"
+
+  api:
+    profiles: [api]
+    build:
+      context: .
+      dockerfile: Dockerfile.studio-api
+    ports:
+      # Published to loopback only. The API has no authentication unless you set
+      # SANDBOX_STUDIO_TOKEN, and it can start containers.
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # Root on the host. See the note at the top of this file.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and out, so the bind mounts this server asks the daemon
+      # for resolve to the same directory the daemon sees.
+      - ${PWD}:${PWD}
+      # Agent logins, worktrees, the run audit log, the rescue snapshots — the
+      # same state the CLI reads and writes.
+      #
+      # Mounted at its host path for the same reason ${PWD} is, and it is not
+      # cosmetic: git records a linked worktree by absolute path, so the
+      # worktrees under here are registered as `${HOME}/.config/sandbox/...`.
+      # At /root/.config/sandbox they exist but resolve to nothing, and the
+      # worktree listing comes back empty with no error to explain it.
+      - ${HOME}/.config/sandbox:${HOME}/.config/sandbox
+
+      # Claude Code's own usage cache, read-only. Uncomment to make the usage
+      # gauge read the same numbers your host Claude Code sees.
+      #
+      # Without it the API can only reach the *sandbox* agent's copy under
+      # ~/.config/sandbox/agents/claude, which is refreshed only when a sandbox
+      # run talks to the server -- so it is routinely days staler than yours.
+      # Measured on one machine: 25 Jul in the container against 28 Jul on the
+      # host, for the same question.
+      #
+      # :ro is not decoration. internal/agentusage never opens this file for
+      # writing, because it belongs to Claude Code; the flag makes that a
+      # property of the deployment rather than a promise in a comment.
+      #
+      # Left commented because of how docker treats a missing source: it creates
+      # a *directory* at that path. On a machine where Claude Code has not run
+      # yet, an uncommented line here would put a directory called .claude.json
+      # in your home, and Claude Code would then fail to read its own config.
+      # Check the file exists before uncommenting.
+      - ${HOME}/.claude.json:${HOME}/.claude.json:ro
+    environment:
+      # So config.ConfigRoot and the worktree paths agree with the mount above.
+      HOME: ${HOME}
+
+      # This container is root and the bind-mounted repository is owned by your
+      # host user, so git refuses every command with "detected dubious ownership"
+      # and the worktrees endpoint 502s.
+      #
+      # What safe.directory protects against is a repository owned by someone
+      # else running *its* config as you — hooks, filters, textconv. Every git
+      # call sandbox-cli makes on its own behalf already goes through
+      # internal/githard, which neutralises exactly those keys with -c overrides
+      # that outrank repo config. So this is not trading that protection away;
+      # it is telling git what the mount already establishes — that this
+      # repository is yours and you asked for it to be here.
+      #
+      # Set here rather than in the image so it travels with the deployment that
+      # needs it, and so the image stays usable without it.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: "*"
+      # Recommended in general, and *required* for the console: with no token,
+      # every request but /v1/health is unauthenticated and anything that can
+      # reach the port can launch a run. Typing at an already-running agent
+      # refuses outright without one — launching is a capability this API
+      # already has, a keyboard on a live session holding your workspace is not.
+      #
+      #   SANDBOX_STUDIO_TOKEN=$(openssl rand -hex 16) docker compose --profile api up -d
+      #
+      # Paste the same value into the bar Studio shows when it sees a daemon
+      # that wants one.
+      SANDBOX_STUDIO_TOKEN: ${SANDBOX_STUDIO_TOKEN:-}
+    command:
+      - -addr
+      - 0.0.0.0:8787
+      - -project
+      - ${PWD}
+      - -cors-origin
+      - http://localhost:3100
+      # Empty means "discover normally", which is the same as not passing it.
+      #
+      # Set it when your project has a `.sandbox.yaml` carrying keys a *project*
+      # config may not (image, mounts, secrets, env_allow, a weakening
+      # network.mode). Discovery refuses those and the server will not start —
+      # correctly, because that file travels with the repository. Naming the
+      # path is the deliberate act that makes it trusted, which is exactly the
+      # escape hatch the refusal describes:
+      #
+      #   SANDBOX_CONFIG=$PWD/.sandbox.yaml docker compose --profile api up
+      - -config
+      - ${SANDBOX_CONFIG:-}

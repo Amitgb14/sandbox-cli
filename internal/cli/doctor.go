@@ -4,15 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
-	"github.com/Amitgb14/sandbox-cli/internal/image"
+	"github.com/Amitgb14/sandbox-cli/internal/doctor"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 )
 
@@ -33,35 +31,14 @@ import (
 // exists to prevent. So the same host can pass dev and fail prod, and that is
 // the answer rather than an inconsistency.
 
-// checkStatus is how one check came out.
-type checkStatus int
+// The check logic lives in internal/doctor so Studio's GET /v1/doctor asks the
+// same questions of the same host. What stayed here is the rendering and the
+// exit code — the terminal half, which an API has no use for.
+type check = doctor.Check
 
-const (
-	statusOK checkStatus = iota
-	// statusWeak is a control the host cannot provide. Whether that is fatal is
-	// the profile's decision, not the check's — which is why the check reports a
-	// fact and the verdict is computed separately.
-	statusWeak
-	// statusUnknown is a question that could not be asked. Deliberately distinct
-	// from statusWeak: prod treats it as a failure, because it does not get to
-	// assume the answer it would prefer, while dev stays quiet rather than
-	// warning about something it could not determine.
-	statusUnknown
-)
+const doctorTimeout = doctor.Timeout
 
-// check is one host property and what to do when it is not satisfied.
-type check struct {
-	name   string
-	status checkStatus
-	detail string
-	remedy string
-}
-
-// doctorTimeout bounds the whole preflight. A wedged daemon must not hang the
-// one command you run *because* you are unsure about the host — and the checks
-// classify a timeout as "could not be asked" rather than "not satisfied", so a
-// slow machine does not read as a broken one.
-const doctorTimeout = 90 * time.Second
+var runDoctorChecks = doctor.RunChecks
 
 func newDoctorCmd() *cobra.Command {
 	var profile, cfgPath, engineFlag string
@@ -125,155 +102,6 @@ func resolveDoctorTarget(cfgPath, flag string) (profile, engine string, err erro
 	return cfg.Profile, cfg.Engine, nil
 }
 
-// doctorRuntime is the slice of the docker backend doctor needs. An interface so
-// the checks can be exercised without a daemon.
-type doctorRuntime interface {
-	Available(context.Context) error
-	SeccompUnavailable(context.Context) (bool, bool)
-	Runtimes(context.Context) ([]string, error)
-	FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string)
-	ImagePresent(context.Context, string) (bool, bool)
-}
-
-// newDoctorRuntime is a var so tests can substitute a host.
-var newDoctorRuntime = func(engine string) doctorRuntime { return runtime.NewEngine(engine) }
-
-func runDoctorChecks(ctx context.Context, profile, engine string) []check {
-	d := newDoctorRuntime(engine)
-	if engine == "" {
-		engine = "docker"
-	}
-
-	if err := d.Available(ctx); err != nil {
-		// Nothing below can be answered without a daemon, and reporting six
-		// unknowns would bury the one fact that matters.
-		return []check{{
-			name:   engine + " daemon",
-			status: statusWeak,
-			detail: err.Error(),
-			remedy: "start " + engine + " and run this again",
-		}}
-	}
-	out := []check{{name: engine + " daemon", status: statusOK, detail: "reachable"}}
-	out = append(out, checkBaseImage(ctx, d))
-	out = append(out, checkSeccomp(ctx, d))
-	out = append(out, checkFirewall(ctx, d))
-	out = append(out, checkRuntimes(ctx, d, profile))
-	return out
-}
-
-// checkBaseImage is the everyday question the other checks do not answer: not
-// "is this host safe enough", but "is my first run going to take three minutes".
-//
-// A missing image is reported as **ok**, deliberately, and it is worth saying
-// why rather than leaving it looking like a mistake. Nothing is wrong with a
-// machine that has not built the image yet — the first run builds it, which is
-// the design. What the reader needs is not a warning but a heads-up, and the
-// runtime check below already establishes that an "ok" here may still have
-// something to tell you.
-func checkBaseImage(ctx context.Context, d doctorRuntime) check {
-	c := check{name: "base image"}
-	ref := image.Ref()
-	present, known := d.ImagePresent(ctx, ref)
-	switch {
-	case !known:
-		c.status = statusUnknown
-		c.detail = "the daemon could not be asked which images it has"
-	case present:
-		c.status = statusOK
-		c.detail = "built and ready (" + ref + ")"
-	default:
-		c.status = statusOK
-		c.detail = "not built yet — the first run builds it, which takes a few minutes"
-		c.remedy = "build it now with `sandbox-cli run --build -- true` if you would rather wait for it here"
-	}
-	return c
-}
-
-func checkSeccomp(ctx context.Context, d doctorRuntime) check {
-	c := check{name: "seccomp"}
-	unavailable, answered := d.SeccompUnavailable(ctx)
-	switch {
-	case !answered:
-		c.status = statusUnknown
-		c.detail = "the daemon could not be asked"
-	case unavailable:
-		c.status = statusWeak
-		c.detail = "no syscall filter is applied; the container gets the full syscall table"
-		c.remedy = "on Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\""
-	default:
-		c.status = statusOK
-		c.detail = "the daemon applies a profile"
-	}
-	return c
-}
-
-// checkFirewall is the check most worth having on an unfamiliar host, and the
-// one that changed meaning when the egress allowlist became the default: every
-// run now takes the root-entrypoint path with NET_ADMIN, so a daemon that cannot
-// grant it now affects everybody rather than only those who passed --allow.
-func checkFirewall(ctx context.Context, d doctorRuntime) check {
-	c := check{name: "egress firewall"}
-	switch probe, reason := d.FirewallProgrammable(ctx, image.Ref()); probe {
-	case runtime.FirewallOK:
-		c.status = statusOK
-		c.detail = "a container here can program the nat, redirect, owner and conntrack rules the firewall needs"
-	case runtime.FirewallUnknown:
-		// Not the host's fault, and not an answer either.
-		c.status = statusUnknown
-		c.detail = reason
-		c.remedy = "run any sandbox command once to build the image, then try again"
-	default:
-		c.status = statusWeak
-		c.detail = "a container here cannot program the firewall: " + reason
-		c.remedy = "rootless or userns-remapped daemons often cannot; use --network default, " +
-			"or run on a daemon that can grant NET_ADMIN"
-	}
-	return c
-}
-
-// checkRuntimes reports whether a stronger-isolation runtime is registered.
-//
-// This is a warning even under prod, and the reasoning is worth stating rather
-// than quietly deciding: prod covers untrusted agents, for which a shared kernel
-// is not a boundary, so gVisor or a microVM is the honest answer. But sandbox-cli
-// does not yet *select* one — the prod profile deliberately leaves Runtime at
-// the host default rather than guessing a name — and failing a check for
-// something the tool does not yet do would be theatre. It reports the gap
-// truthfully and says what it means.
-func checkRuntimes(ctx context.Context, d doctorRuntime, profile string) check {
-	c := check{name: "isolation runtime"}
-	names, err := d.Runtimes(ctx)
-	if err != nil {
-		c.status = statusUnknown
-		c.detail = "the daemon could not be asked which runtimes are registered"
-		return c
-	}
-	var strong []string
-	for _, n := range names {
-		switch n {
-		case "runsc", "runsc-kvm", "kata", "kata-runtime", "kata-qemu", "crun-vm":
-			strong = append(strong, n)
-		}
-	}
-	sort.Strings(strong)
-	if len(strong) > 0 {
-		c.status = statusOK
-		c.detail = "stronger isolation available: " + strings.Join(strong, ", ") +
-			" (select with `runtime:` in your config)"
-		return c
-	}
-	c.status = statusOK // reported, not failed — see the doc comment
-	c.detail = "only the default runtime is registered: " + strings.Join(names, ", ")
-	if profile == config.ProfileProd {
-		// Kept out of detail: a newline inside a tabwriter cell ends the column
-		// block, so a check added after this one would silently misalign.
-		c.remedy = "prod may carry untrusted agents, and a shared kernel is not a boundary for those — " +
-			"install gVisor (runsc) or Kata and set `runtime:`"
-	}
-	return c
-}
-
 // reportDoctor prints the findings and returns a non-zero-exit error when the
 // profile cannot be satisfied.
 func reportDoctor(profile string, checks []check) error {
@@ -284,19 +112,19 @@ func reportDoctor(profile string, checks []check) error {
 	weaker := 0
 
 	for _, c := range checks {
-		if c.status != statusOK {
+		if c.Status != doctor.StatusOK {
 			weaker++
 		}
-		mark, fatal := verdict(c.status, strict)
-		fmt.Fprintf(tw, "  %s\t%s\t%s\n", mark, c.name, c.detail)
+		mark, fatal := doctor.Verdict(c.Status, strict)
+		fmt.Fprintf(tw, "  %s\t%s\t%s\n", mark, c.Name, c.Detail)
 		// Printed whatever the status: the runtime check is deliberately an "ok"
 		// that still has something to tell you, and dropping its remedy silently
 		// left the actionable half off the screen.
-		if c.remedy != "" {
-			fmt.Fprintf(tw, "\t\t%s\n", c.remedy)
+		if c.Remedy != "" {
+			fmt.Fprintf(tw, "\t\t%s\n", c.Remedy)
 		}
 		if fatal {
-			blocking = append(blocking, c.name)
+			blocking = append(blocking, c.Name)
 		}
 	}
 	if err := tw.Flush(); err != nil {
@@ -340,23 +168,4 @@ func isAre(n int) string {
 		return "is"
 	}
 	return "are"
-}
-
-// verdict turns a status into a mark and whether it blocks, which is the one
-// place the dev/prod asymmetry is expressed.
-func verdict(s checkStatus, strict bool) (mark string, fatal bool) {
-	switch s {
-	case statusOK:
-		return "ok  ", false
-	case statusUnknown:
-		if strict {
-			return "FAIL", true
-		}
-		return "?   ", false
-	default:
-		if strict {
-			return "FAIL", true
-		}
-		return "warn", false
-	}
 }

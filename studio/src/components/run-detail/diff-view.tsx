@@ -36,7 +36,7 @@ const STATUS_TONE: Record<DiffFileStatus, string> = {
  * whether that is good news.
  */
 export function DiffView({ run }: { run: Run }) {
-  const { data, isPending } = useRunDiff(run.id);
+  const { data, isPending } = useRunDiff(run.id, run.state === "running");
   const view = useUi((s) => s.diffView);
   const setView = useUi((s) => s.setDiffView);
   const [selected, setSelected] = useState<string | null>(null);
@@ -133,7 +133,12 @@ export function DiffView({ run }: { run: Run }) {
   );
 }
 
-function FilePanel({ file, view }: { file: DiffFile; view: "unified" | "split" }) {
+/**
+ * One file's changes. Exported so a commit's diff renders through the same
+ * component a run's does — two renderers would drift, and the one thing a diff
+ * viewer must not do is show the same change two different ways.
+ */
+export function FilePanel({ file, view }: { file: DiffFile; view: "unified" | "split" }) {
   const Icon = STATUS_ICON[file.status];
   const text = file.hunks
     .flatMap((h) => [
