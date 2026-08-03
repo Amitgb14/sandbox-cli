@@ -55,6 +55,13 @@ type Planned struct {
 	// the field says what the *run* would do, so reporting a refusal the run will
 	// not make would reopen that same inconsistency from the other side.
 	NameHeldBy string
+
+	// NameHeldByFleet distinguishes the two holders, because the way out of them
+	// is different and naming the wrong one is how a refusal becomes a dead end.
+	// A fleet container is cleared by `fleet clean`; an interactive session is not
+	// — it is filtered out of every fleet command by the sandbox.fleet label — and
+	// needs `sandbox-cli kill`/`clean` instead.
+	NameHeldByFleet bool
 }
 
 // wouldRefuseName reports whether launchOne would refuse a branch whose name is
@@ -140,6 +147,7 @@ func (r *Runner) Plan(ctx context.Context, spec Spec, opts LaunchOptions) ([]Pla
 			case stale != nil:
 				if wouldRefuseName(opts, r.Controller) {
 					p.NameHeldBy = stale.Name
+					p.NameHeldByFleet = true
 				}
 			default:
 				// The name is not the fleet's namespace, so the run also refuses on an

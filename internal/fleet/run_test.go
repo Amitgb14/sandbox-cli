@@ -8,6 +8,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
 
@@ -196,6 +197,42 @@ func TestPlanDoesNotReportANameRefusalResumeWillNotMake(t *testing.T) {
 	}
 	if plans[0].NameHeldBy != "" {
 		t.Errorf("plan reports a name conflict --resume will reap, got %q", plans[0].NameHeldBy)
+	}
+}
+
+// The plan must also say *which* holder it found, because the way out differs and
+// naming the wrong command turns the refusal into a dead end: `fleet clean`
+// filters on the fleet label, so it will never clear an interactive session.
+// Caught by running it — the dry-run called a running interactive container "a
+// finished container" and sent the user to `fleet clean`, twice wrong.
+func TestPlanSeparatesAFleetNameHolderFromAnInteractiveOne(t *testing.T) {
+	now := time.Now()
+	repo := newTestRepo(t)
+	gitIn(t, repo, "branch", "feature-a")
+	spec := Spec{Agent: "claude", Tasks: []Task{{Branch: "feature-a", Prompt: "do it"}}}
+
+	for _, tc := range []struct {
+		name      string
+		c         runtime.ContainerInfo
+		wantFleet bool
+	}{
+		{"fleet's own stale container", container("feature-a", "exited", now.Add(-time.Hour), now), true},
+		{"interactive session", interactiveContainer("feature-a", "running", now, time.Time{}), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := testRunner(tc.c)
+			r.Repo = repo
+			plans, err := r.Plan(context.Background(), spec, LaunchOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plans[0].NameHeldBy != tc.c.Name {
+				t.Fatalf("NameHeldBy = %q, want %q", plans[0].NameHeldBy, tc.c.Name)
+			}
+			if plans[0].NameHeldByFleet != tc.wantFleet {
+				t.Errorf("NameHeldByFleet = %v, want %v", plans[0].NameHeldByFleet, tc.wantFleet)
+			}
+		})
 	}
 }
 
