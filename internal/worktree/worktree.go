@@ -100,24 +100,33 @@ func Resolve(dir, branch string) (Info, error) {
 				path, at, branch, at, checkout, at)
 		}
 	}
+	// Every refusal comes before the first side effect. Asking whether the branch
+	// can exist is a pure question with a definite answer, and MkdirAll below is
+	// where this function starts changing the machine — so a call that is going
+	// to decline leaves nothing behind. It used to leave three directories.
+	//
+	// Asked here rather than left to git, because git's own answer is unusable:
+	// it arrives after "Preparing worktree (new branch 'x')" has already been
+	// printed, reads `fatal: cannot lock ref …: 'refs/heads/bugfix' exists` with
+	// our exit status glued on the end, and names neither the branch in the way
+	// nor anything to do about it. The same objection this project already made
+	// of docker's duplicate-name refusal.
+	creating := !branchExists(root, branch)
+	if creating {
+		if other := refConflict(root, branch); other != "" {
+			return Info{}, dfConflict(branch, other)
+		}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return Info{}, fmt.Errorf("worktree: preparing directory: %w", err)
 	}
 
 	args := []string{"worktree", "add"}
-	if branchExists(root, branch) {
-		args = append(args, path, branch)
-	} else {
-		// Asked before creating, because git's own answer is unusable here. It
-		// arrives after "Preparing worktree (new branch 'x')" has already been
-		// printed, reads `fatal: cannot lock ref …: 'refs/heads/bugfix' exists`
-		// with our exit status glued on the end, and names neither the branch in
-		// the way nor anything to do about it. The same objection this project
-		// already made of docker's duplicate-name refusal.
-		if other := refConflict(root, branch); other != "" {
-			return Info{}, dfConflict(branch, other)
-		}
+	if creating {
 		args = append(args, "-b", branch, path)
+	} else {
+		args = append(args, path, branch)
 	}
 	if _, err := runGit(root, args...); err != nil {
 		return Info{}, fmt.Errorf("creating worktree for branch %q: %w", branch, err)

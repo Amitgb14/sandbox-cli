@@ -1005,3 +1005,49 @@ func TestRefConflictIgnoresMerePrefixes(t *testing.T) {
 		t.Errorf("refConflict = %q; siblings under one namespace do not collide", got)
 	}
 }
+
+// A refusal must leave the machine as it found it.
+//
+// The ref-conflict check used to sit after MkdirAll, so declining to create a
+// worktree still created three directories on the way to saying no. Harmless in
+// effect, wrong in principle, and the comment above it claimed otherwise.
+//
+// Asserted by walking the whole config tree rather than stat-ing the path this
+// test computes: worktreePath here yields /var/... while Resolve works from a
+// symlink-resolved /private/var/... root, so both of the obvious probes report
+// "clean" whether or not anything was created. That is the same /var vs
+// /private/var trap this package documents for git worktree list.
+func TestARefusalCreatesNothing(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+	runOrSkip(t, git, repo, "branch", "bugfix")
+
+	if _, err := Resolve(repo, "bugfix/observability"); err == nil {
+		t.Fatal("expected a refusal")
+	}
+
+	var created []string
+	_ = filepath.Walk(cfg, func(p string, fi os.FileInfo, e error) error {
+		if e == nil && p != cfg {
+			created = append(created, p[len(cfg):])
+		}
+		return nil
+	})
+	if len(created) != 0 {
+		t.Errorf("a refused Resolve created %v", created)
+	}
+}
