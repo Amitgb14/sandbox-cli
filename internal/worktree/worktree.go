@@ -61,10 +61,34 @@ func Resolve(dir, branch string) (Info, error) {
 	path := worktreePath(root, branch)
 	info := Info{Branch: branch, Path: path}
 
-	// Reuse an existing worktree directory (git tracks it; re-adding would error).
+	// A directory already sits at the name-derived path. Reuse it only if it
+	// actually holds this branch — asked of git, not inferred from the name.
+	//
+	// The name is not evidence. `lookup` above is the real question and it has
+	// already said that no worktree holds this branch, so a directory here is
+	// one of two things: a worktree checked out to something else (an agent ran
+	// `git checkout -b` inside it, which is the documented way these two drift
+	// apart), or a leftover git no longer tracks. Returning either mounted it
+	// anyway and stamped the container with the branch that was *asked for* —
+	// and every later command reads that label as fact, so `land` merges it and
+	// `worktree commit` commits to it. That is the same wrong-branch write the
+	// land invariants refuse from the other direction.
 	if isDir(path) {
-		info.Path = resolveSymlinks(path)
-		return info, nil
+		switch at := HeadBranch(path); at {
+		case branch:
+			info.Path = resolveSymlinks(path)
+			return info, nil
+		case "":
+			return Info{}, fmt.Errorf("worktree: %s exists but git cannot say which branch it holds; "+
+				"it is a detached HEAD or a directory this repository no longer tracks. Remove it, or run "+
+				"`sandbox-cli recover repair` if a crash left it behind", path)
+		default:
+			return Info{}, fmt.Errorf("worktree: %s holds branch %q, not %q — refusing to run against it. "+
+				"An agent that runs `git checkout -b` inside its worktree leaves the directory name and the "+
+				"branch out of step. Work where that branch actually is with `--worktree %s`, switch it back "+
+				"with `git -C %s checkout %s`, or remove it with `sandbox-cli worktree rm %s`",
+				path, at, branch, at, path, branch, at)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return Info{}, fmt.Errorf("worktree: preparing directory: %w", err)

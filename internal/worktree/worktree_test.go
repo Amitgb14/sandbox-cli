@@ -662,3 +662,85 @@ func TestDirtyStripsTerminalControlSequences(t *testing.T) {
 		}
 	}
 }
+
+// The directory name is not evidence of what is in it.
+//
+// Reported as #54, from a real repository: a worktree created for one branch,
+// an agent that ran `git checkout -b` inside it, and the original branch then
+// deleted. `lookup` correctly finds nothing, and the old fallback reused the
+// name-derived directory without asking what it held — so a run launched for
+// feature/enable-team-plan got a workspace sitting on feature/metering-hardening
+// and a container labelled with the branch that was asked for. Every later
+// command reads that label as fact.
+func TestResolveRefusesADirectoryHoldingAnotherBranch(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	// The worktree is made for one branch, then moved to another from inside —
+	// exactly what an agent does — and the original branch is deleted, so
+	// lookup can no longer find it.
+	info, err := Resolve(repo, "feature/enable-team-plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, info.Path, "checkout", "-q", "-b", "feature/metering-hardening")
+	runOrSkip(t, git, repo, "branch", "-D", "feature/enable-team-plan")
+
+	_, err = Resolve(repo, "feature/enable-team-plan")
+	if err == nil {
+		t.Fatal("Resolve reused a directory holding a different branch; the run would have " +
+			"edited feature/metering-hardening while labelled feature/enable-team-plan")
+	}
+	// The refusal has to name both branches: which one is there decides whether
+	// you switch it back or go work where your branch actually is.
+	for _, want := range []string{"feature/metering-hardening", "feature/enable-team-plan"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal must name %q, got: %v", want, err)
+		}
+	}
+}
+
+// And the reuse it exists for still works: same branch, same directory, no
+// second worktree added for something git already has checked out.
+func TestResolveStillReusesTheSameBranchsDirectory(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	first, err := Resolve(repo, "feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Resolve(repo, "feature/x")
+	if err != nil {
+		t.Fatalf("Resolve refused to reuse its own worktree: %v", err)
+	}
+	if second.Path != first.Path || second.Created {
+		t.Errorf("Resolve = %+v, want reuse of %s", second, first.Path)
+	}
+}
