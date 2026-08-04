@@ -16,6 +16,11 @@ docs/proposals/
 # studio.sandbox.yaml beside it.
 *.sandbox.yaml
 
+# A local semantic-search index (codemem). Machine-specific and large -- ~90MB
+# for this repository -- and rebuilt from the source it indexes, so committing
+# it would put a stale copy of the tree inside the tree.
+/.codemem/
+
 # node_modules anywhere; the app build outputs are left to studio/.gitignore
 # and web/.gitignore, which anchor them per app (/.next/, /out/, /build). A
 # second unanchored copy here would only be reached if an app ever lost its
