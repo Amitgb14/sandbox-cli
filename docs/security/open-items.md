@@ -119,6 +119,46 @@ value attached. That is a real gain; it should not be described as more.
 
 ---
 
+### Two mitigations that are not the fix, and should not be mistaken for it
+
+The decision above is framed as do-nothing or terminate-TLS, and that is a false
+binary. Neither of these closes the item — under both, the agent still reads the
+value with `printenv` — but both reduce what a leak is worth, which is the same
+bargain the container boundary itself makes.
+
+**C. Short-lived, narrowly-scoped credentials.** This needs *no code*: a
+`secrets:` entry already takes a `Command` run via `sh -c`, so a broker that
+mints a ten-minute token is a configuration choice today. What changes is the
+value of what leaks — minutes and one scope, rather than a login that lasts
+months.
+
+It is a practice rather than a feature, and that is its weakness: nothing
+enforces it, and a user who writes `gh auth token` gets a long-lived credential
+while believing they brokered one. If this is the direction, the honest version
+is documentation plus, perhaps, a warning when a brokered value looks
+long-lived — not a claim in this file that the item is handled.
+
+Note the interaction with the compose deployment: a `Command` runs wherever the
+API process runs, so under `docker compose --profile api` it runs in a container
+with neither `gh` nor your login. Brokered secrets belong to a host process.
+
+**D. Scope the credential to an egress destination.** `internal/egressproxy`
+already terminates nothing and decides per connection on the hostname, so a
+secret could be marked attachable only to named hosts — the agent holds the
+value, and it is refused anywhere else. That is closer to a real control than C,
+because it does not depend on the user choosing well, and it needs no CA: the
+proxy is already in the path and already knows the destination by name.
+
+What it does not stop is exfiltration through a *permitted* host, which for
+`GITHUB_TOKEN` means github.com — a write endpoint. So it narrows the channel
+rather than closing it, and it is worth measuring against B before choosing:
+B stops the bytes leaving and lets the agent use the credential; D lets the
+bytes leave to one place and stops them going anywhere else.
+
+**None of A–D make the agent stop holding a credential.** B comes closest and
+only for the bytes. Recorded so the next person reading this does not conclude
+that a cheap option was overlooked, or that an expensive one is a solution.
+
 ## 3. The agent writes `.git/config` and `.git/hooks` — **DONE**
 
 **Closed**, with the split the design call chose: prevent what has no legitimate
