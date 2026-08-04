@@ -142,18 +142,38 @@ Note the interaction with the compose deployment: a `Command` runs wherever the
 API process runs, so under `docker compose --profile api` it runs in a container
 with neither `gh` nor your login. Brokered secrets belong to a host process.
 
-**D. Scope the credential to an egress destination.** `internal/egressproxy`
-already terminates nothing and decides per connection on the hostname, so a
-secret could be marked attachable only to named hosts — the agent holds the
-value, and it is refused anywhere else. That is closer to a real control than C,
-because it does not depend on the user choosing well, and it needs no CA: the
-proxy is already in the path and already knows the destination by name.
+**D. Let a declared secret constrain that container's egress.** Note what this
+is *not*: the proxy cannot attach anything to a request. `sni.go` peeks at the
+ClientHello to read the server name and then tunnels — `server.go` says why, a
+byte written into that stream reaches the client as garbage inside its TLS
+session. Injection is B's mechanism and needs B's CA. What this proxy can do is
+decide **whether the connection opens at all**, by name, before any bytes move.
 
-What it does not stop is exfiltration through a *permitted* host, which for
-`GITHUB_TOKEN` means github.com — a write endpoint. So it narrows the channel
-rather than closing it, and it is worth measuring against B before choosing:
-B stops the bytes leaving and lets the agent use the credential; D lets the
-bytes leave to one place and stops them going anywhere else.
+So D is: declaring `GITHUB_TOKEN` says something about where this container may
+reach. The agent still reads the value with `printenv`; it simply cannot open a
+socket to somewhere the credential has no business going, and exfiltration fails
+at connect time.
+
+The obvious form of that does not work. A run also needs `registry.npmjs.org`,
+`api.anthropic.com`, `pypi.org` — narrowing egress to github.com alone breaks
+it. So the useful shape is a **declared conflict** rather than a narrowing: a
+container holding a credential *and* permitted to reach two hundred hosts is an
+exfiltration channel, and the tool should say so rather than allow it silently.
+That is a smaller claim than "the credential is scoped", and it is the one the
+existing machinery can actually keep.
+
+What it does not stop, either way, is exfiltration through a *permitted* host —
+for `GITHUB_TOKEN` that means github.com, a write endpoint. Worth setting
+against B directly: **B stops the key material leaving and still lets the agent
+use the credential; D leaves the material in reach and stops the destination
+being reachable.** They close different halves, and neither stops a compromised
+agent pushing a poisoned commit through the host it is *supposed* to talk to —
+which is the realistic attack once prompt injection is assumed.
+
+The difference that decides it is cost. B creates the highest-value target in
+the system: one process holding every prompt in plaintext, the real
+credentials, and the CA private key. D adds a check to a component already in
+the path, and introduces no new secret material anywhere.
 
 **None of A–D make the agent stop holding a credential.** B comes closest and
 only for the bytes. Recorded so the next person reading this does not conclude
