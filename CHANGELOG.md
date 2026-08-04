@@ -13,6 +13,35 @@ version is tagged.
 
 ### Fixed
 
+- **Studio's usage panel showed the windows that were idle and hid the one in
+  force.** Claude marks exactly one window as currently metering you
+  (`limits[].is_active`) and nothing read the field, so the panel gave a weekly
+  allowance and a per-model one at 0% the same weight as the 5-hour window that
+  was actually counting — while the 5-hour window itself was missing.
+
+  It was missing for a *correct* reason, which is what hid the problem: a cached
+  figure for a window that has already reset describes the period before the
+  reset, so it is suppressed rather than shown as current. But the window in
+  force is the short one, so it is also the first to expire — and the two
+  behaviours together produced a panel that quietly dropped the number you came
+  for. An expired window now keeps its row and shows a dash: after a reset the
+  true figure is unknown, which is neither the old number nor zero.
+
+- **The usage panel no longer disappears where the daemon cannot refresh it.**
+  Reading these numbers needs only the cache file; refreshing them needs Claude
+  Code itself. Under `docker compose --profile api` the daemon runs in a
+  container that has the first and not the second, and the panel is now shown
+  with a line saying the figure will not change there. The refresh control is
+  hidden rather than offered and then failed.
+
+- **`POST /v1/usage/refresh` answers `501`, not `502`, when the agent is not
+  installed.** 502 says an upstream server failed, which invites a retry; this
+  is a permanent property of the deployment. Relatedly, `501` is no longer
+  written to the server log at all — it is how this API says "not configured
+  here", and `GET /v1/stats/history` returns it on every request when no
+  `-history-db` is set, which filled the log with what read as errors while the
+  client was already falling back to `/v1/audit` exactly as designed.
+
 - **`fleet status` says whether anything actually checked the work.** A new
   `VERIFY` column reports `passed`, `failed`, `unchecked`, `none` or `pending`.
   `exited 0` was the same code for "its verify passed" and "it declared no
