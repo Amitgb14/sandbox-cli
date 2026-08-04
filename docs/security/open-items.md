@@ -569,6 +569,60 @@ does not reach a sandbox until someone bumps a line here.
 
 ---
 
+## 10. The prompt is stored in a container label
+
+**Severity: low-to-medium. Effort: small. Not yet reproduced as a leak — recorded
+because it inverts a rule the rest of the system keeps.**
+
+`sandbox.prompt` carries what the agent was asked to do, truncated to 512 bytes
+(`internal/sandbox/labels.go`), and is stamped on every container that was given
+one. It arrived with the Studio work, where the run list needs a line that says
+which run is which.
+
+Docker labels are not a private channel. They live in the container config, are
+returned by `docker inspect` to anything that can reach the socket, and persist
+for the life of the container — which for `--detach` and fleet runs is until
+someone reaps it, deliberately, because the exit code and logs are the whole
+supervision story.
+
+**Why it is on this list at all:** `internal/audit` was built around the opposite
+rule, and says so —
+
+> environment variables are recorded **by name only**. The credential broker
+> exists to keep secret values off the argv and out of config files, and a log is
+> a file — so `SessionMeta` has nowhere to put a value, deliberately.
+
+A prompt is not a credential, but it routinely contains one: a token pasted in to
+"try this API", a connection string, an internal hostname. So the system takes
+care to keep secrets out of one file and then writes them into container metadata
+that outlives the run, and nothing in the design says that was weighed.
+
+**What is not wrong today:**
+
+- The label is read in two places (`studioapi/resolve.go` into JSON,
+  `studioapi/console.go` for transcript correlation) and printed to a terminal by
+  none, so it needs no `termsafe.Clean` yet. Every *other* label the session
+  listing prints does go through it, precisely because label values are
+  attacker-influenced text — so a future `PROMPT` column in `sandbox-cli list`
+  arms that trap. `truncatePrompt` bounds length and strips nothing.
+- Anything that can read these labels can already reach the docker socket, which
+  is root on the host. This is not a privilege boundary being crossed; it is a
+  secret being written somewhere nobody expected it and left there.
+
+**What a fix looks like** — pick one, they are alternatives, not steps:
+
+- Stop stamping it and have Studio read the prompt from the run's transcript,
+  which it already correlates for the console.
+- Keep it, and say plainly in `docs/AGENTS.md` that prompts persist in container
+  metadata until reaped, so a reader can decide what to paste.
+- Keep it behind a flag, off by default, on the same reasoning `--share` is a
+  flag rather than a `fleet.yaml` key: the wider reach stays something you type.
+
+Not obviously worth doing before item 2, which is the same question with real
+credentials rather than incidental ones.
+
+---
+
 ## The egress proxy is unsupervised — known, and fail-closed
 
 The proxy is started with `&` and the entrypoint then `exec`s the guest, so
