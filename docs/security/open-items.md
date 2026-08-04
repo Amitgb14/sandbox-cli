@@ -119,6 +119,136 @@ value attached. That is a real gain; it should not be described as more.
 
 ---
 
+### Two mitigations that are not the fix, and should not be mistaken for it
+
+The decision above is framed as do-nothing or terminate-TLS, and that is a false
+binary. Neither of these closes the item — under both, the agent still reads the
+value with `printenv` — but both reduce what a leak is worth, which is the same
+bargain the container boundary itself makes.
+
+**C. Short-lived, narrowly-scoped credentials.** This needs *no code*: a
+`secrets:` entry already takes a `Command` run via `sh -c`, so a broker that
+mints a ten-minute token is a configuration choice today. What changes is the
+value of what leaks — minutes and one scope, rather than a login that lasts
+months.
+
+It is a practice rather than a feature, and that is its weakness: nothing
+enforces it, and a user who writes `gh auth token` gets a long-lived credential
+while believing they brokered one. If this is the direction, the honest version
+is documentation plus, perhaps, a warning when a brokered value looks
+long-lived — not a claim in this file that the item is handled.
+
+Note the interaction with the compose deployment: a `Command` runs wherever the
+API process runs, so under `docker compose --profile api` it runs in a container
+with neither `gh` nor your login. Brokered secrets belong to a host process.
+
+**D. Let a declared secret constrain that container's egress.** Note what this
+is *not*: the proxy cannot attach anything to a request. `sni.go` peeks at the
+ClientHello to read the server name and then tunnels — `server.go` says why, a
+byte written into that stream reaches the client as garbage inside its TLS
+session. Injection is B's mechanism and needs B's CA. What this proxy can do is
+decide **whether the connection opens at all**, by name, before any bytes move.
+
+So D is: declaring `GITHUB_TOKEN` says something about where this container may
+reach. The agent still reads the value with `printenv`; it simply cannot open a
+socket to somewhere the credential has no business going, and exfiltration fails
+at connect time.
+
+The obvious form of that does not work. A run also needs `registry.npmjs.org`,
+`api.anthropic.com`, `pypi.org` — narrowing egress to github.com alone breaks
+it. So the useful shape is a **declared conflict** rather than a narrowing: a
+container holding a credential *and* permitted to reach two hundred hosts is an
+exfiltration channel, and the tool should say so rather than allow it silently.
+That is a smaller claim than "the credential is scoped", and it is the one the
+existing machinery can actually keep.
+
+What it does not stop, either way, is exfiltration through a *permitted* host —
+for `GITHUB_TOKEN` that means github.com, a write endpoint. Worth setting
+against B directly: **B stops the key material leaving and still lets the agent
+use the credential; D leaves the material in reach and stops the destination
+being reachable.** They close different halves, and neither stops a compromised
+agent pushing a poisoned commit through the host it is *supposed* to talk to —
+which is the realistic attack once prompt injection is assumed.
+
+The difference that decides it is cost. B creates the highest-value target in
+the system: one process holding every prompt in plaintext, the real
+credentials, and the CA private key. D adds a check to a component already in
+the path, and introduces no new secret material anywhere.
+
+**None of A–D make the agent stop holding a credential.** B comes closest and
+only for the bytes. Recorded so the next person reading this does not conclude
+that a cheap option was overlooked, or that an expensive one is a solution.
+
+### Rank them by what a leak costs, not by how well it is prevented
+
+The options above were first weighed on how well each keeps a secret *in*. That
+is the wrong axis. Prompt injection is the threat model, so a leak is assumed
+rather than avoided, and the question that decides the design is: **when a
+secret leaves the container, how much damage is possible, for how long, and
+across how many things?**
+
+Four factors: **scope**, **lifetime**, **breadth**, **recoverability**.
+
+Today's default credential is the worst possible shape on all four. It is an
+OAuth refresh token, so its scope is the whole account; it has no natural
+expiry; the persisted HOME holding it is *the same directory in every project*
+(item 8), so one repository's compromise is every repository's; and recovery
+needs a human to notice and revoke.
+
+| option | scope | lifetime | breadth | worst case |
+|---|---|---|---|---|
+| today | whole account | until revoked | every project | account taken over, silently |
+| B | none in container | — | — | **the proxy**: every token, every prompt in plaintext, the CA key |
+| D | unchanged | unchanged | unchanged | same as today; D reduces opportunity, not consequence |
+| prod | what you forwarded | yours to choose | one run | bounded by your own decision |
+| C | one action | minutes | one run | a token that has already expired |
+
+Two conclusions that reverse the earlier reading:
+
+**B is the worst option on this axis, not the best.** It makes the usual case
+harmless and the tail catastrophic: one process holding every token, the CA
+private key, and every prompt in plaintext. Compromise it and the loss is not
+one credential but all of them, plus the ability to impersonate any TLS server
+to the container. Trading a frequent small loss for a rare total one is a real
+strategy, but it should be chosen deliberately and not because B sounded
+strongest per-token.
+
+**C is the best**, because it is the only one that attacks consequence
+directly. The leak still happens; the thing that leaks is worth almost nothing
+by the time anybody uses it.
+
+### The combination worth building, and in what order
+
+Nothing here needs a CA, a plaintext chokepoint, or a new place for secrets to
+accumulate. In order of what it buys per unit of work:
+
+1. **`--profile prod`.** Removes the account-wide, never-expiring,
+   cross-project credential from the container entirely — `PersistAuth=false`,
+   enforced by `ValidateProfile`. It also empties the egress baseline, so the
+   permitted set is exactly what you typed rather than a list that includes
+   github.com by default. Cost is convenience: authenticate per run, no history
+   sync, name every domain.
+2. **Short-lived brokered secrets (C).** `secrets:` already runs a `Command`, so
+   this is configuration today. What is missing is anything that *encourages*
+   it — someone writing `gh auth token` gets a months-long credential believing
+   they brokered one. The smallest useful change is a warning when a brokered
+   value looks long-lived, not a new mechanism.
+3. **A distinct credential per project.** The breadth multiplier is item 8's
+   shared HOME; under prod that HOME is gone, but a hand-forwarded token shared
+   between projects reintroduces it. Fine-grained per-repository tokens make one
+   leak reach one repository.
+4. **A minimal `--allow` list.** Free under prod, since the baseline is already
+   empty. Fewer permitted hosts is fewer places a leaked secret can be posted —
+   the useful half of D, without building D.
+
+The realistic worst case that leaves: *a ten-minute token, scoped to one
+repository, leaked from one run.* Rotate it, or wait.
+
+What it does not address, and neither does B: **DNS exfiltration** (see the
+bottom of this file) and **misuse of a credential the agent legitimately
+holds**. Those are the two that survive every option here, and they are the
+argument for keeping the authority small rather than the secret hidden.
+
 ## 3. The agent writes `.git/config` and `.git/hooks` — **DONE**
 
 **Closed**, with the split the design call chose: prevent what has no legitimate
