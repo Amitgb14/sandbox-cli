@@ -11,6 +11,8 @@ version is tagged.
 
 ## Unreleased
 
+## 0.0.1beta.9 — 2026-08-04
+
 ### Fixed
 
 - **Studio's usage panel showed the windows that were idle and hid the one in
@@ -73,6 +75,29 @@ version is tagged.
   branch is explained too, and pointed at `sandbox-cli kill`/`clean` rather than
   a fleet command — the fleet never reaps a session it did not start, `--resume`
   included.
+
+- **`max_parallel` counted containers that were not the fleet's.** One open
+  `sandbox-cli claude --detach` session in the same repository occupied a slot it
+  never freed, so a `max_parallel: 1` fleet waited behind it indefinitely. The
+  documented behaviour — fleet commands reach only what the fleet started — was
+  true everywhere except the slot count.
+
+- **A `--share` namespace could be pointed at another namespace, or at the whole shared
+  directory, by a symlink planted inside it.** The shared directory is
+  read-write to any sandbox using a bare `--share`, so its contents are
+  attacker-controlled; a relative symlink such as `ln -s . NAME` stayed inside
+  the directory and so passed the containment check, and the namespace then
+  resolved to the shared root. A namespace must now be a real directory, and its
+  resolved path must be exactly the namespace directory rather than merely
+  somewhere beneath the root.
+
+- **The seeded `README.md` followed a symlink out of the shared directory.** The
+  "is one already there?" check used `os.Stat`, which follows symlinks, so a
+  *dangling* link failed it and the subsequent write followed the same link and
+  created its target — letting a container cause a host file to be created at a
+  path it chose, outside the shared directory. Both seeders now create the file
+  with `O_EXCL`, which never follows an existing path. Affects bare `--share`
+  in earlier releases, not only the new namespaces.
 
 ### Added
 
@@ -212,33 +237,6 @@ version is tagged.
   still has the whole shared directory read-write and can read every namespace
   in it. It is not an isolation boundary — don't put anything secret in one.
 
-- **Podman is supported** (`--engine podman`, or `engine: podman` in your own
-  config). Docker stays the default; the engine is a user-config key rather than
-  a project one, since a repository choosing which binary runs on your machine
-  would be choosing what executes.
-
-  Rootless Podman can program the egress firewall from inside the container —
-  measured, not assumed — so the allowlist works there exactly as it does under
-  Docker, with no weaker mode.
-
-  Inter-container isolation needed a different mechanism rather than a different
-  spelling. netavark rejects `enable_icc` outright, and its `isolate=true` blocks
-  traffic between *different* networks while leaving same-network peers
-  reachable. So under Podman each sandbox gets its own isolated network: no peers
-  by construction. `sandbox-cli clean` reaps any left behind by a killed run.
-
-  `doctor` speaks both dialects and reports the engine it actually checked.
-
-  On **native Linux** rootless Podman the workspace needed two more things, and
-  neither has a Docker equivalent: the host user is mapped onto the container's
-  (`--userns=keep-id`), because rootless Podman otherwise maps you to container
-  uid 0 and the sandbox user cannot write to its own workspace; and bind mounts
-  are relabelled for SELinux, without which Fedora/RHEL deny the mount outright
-  so the agent cannot even read it. Files written by the agent come back owned by
-  your own uid:gid. Note this **inverts the README's Docker advice**: do *not*
-  pass `--user "$(id -u):$(id -g)"` under rootless Podman — your host uid maps
-  into the subuid range and the workspace becomes unreadable.
-
 - **The run log records what a run was refused.** Under an egress allowlist,
   `~/.config/sandbox/audit/sessions.jsonl` now carries
   `egress_denied_reported` and `egress_denied_hosts_reported` alongside
@@ -309,30 +307,45 @@ version is tagged.
 - `sandbox-cli fleet land` now takes `--all` and so accepts no branch name with
   it; naming a branch remains required otherwise.
 
-### Fixed
+## 0.0.1beta.8 — 2026-07-28
 
-- **`max_parallel` counted containers that were not the fleet's.** One open
-  `sandbox-cli claude --detach` session in the same repository occupied a slot it
-  never freed, so a `max_parallel: 1` fleet waited behind it indefinitely. The
-  documented behaviour — fleet commands reach only what the fleet started — was
-  true everywhere except the slot count.
+### Added
 
-- **A `--share` namespace could be pointed at another namespace, or at the whole shared
-  directory, by a symlink planted inside it.** The shared directory is
-  read-write to any sandbox using a bare `--share`, so its contents are
-  attacker-controlled; a relative symlink such as `ln -s . NAME` stayed inside
-  the directory and so passed the containment check, and the namespace then
-  resolved to the shared root. A namespace must now be a real directory, and its
-  resolved path must be exactly the namespace directory rather than merely
-  somewhere beneath the root.
+- **Podman is supported** (`--engine podman`, or `engine: podman` in your own
+  config). Docker stays the default; the engine is a user-config key rather than
+  a project one, since a repository choosing which binary runs on your machine
+  would be choosing what executes.
 
-- **The seeded `README.md` followed a symlink out of the shared directory.** The
-  "is one already there?" check used `os.Stat`, which follows symlinks, so a
-  *dangling* link failed it and the subsequent write followed the same link and
-  created its target — letting a container cause a host file to be created at a
-  path it chose, outside the shared directory. Both seeders now create the file
-  with `O_EXCL`, which never follows an existing path. Affects bare `--share`
-  in earlier releases, not only the new namespaces.
+  Rootless Podman can program the egress firewall from inside the container —
+  measured, not assumed — so the allowlist works there exactly as it does under
+  Docker, with no weaker mode.
+
+  Inter-container isolation needed a different mechanism rather than a different
+  spelling. netavark rejects `enable_icc` outright, and its `isolate=true` blocks
+  traffic between *different* networks while leaving same-network peers
+  reachable. So under Podman each sandbox gets its own isolated network: no peers
+  by construction. `sandbox-cli clean` reaps any left behind by a killed run.
+
+  `doctor` speaks both dialects and reports the engine it actually checked, and
+  `ps`, `clean` and `stats` take `--engine` so a detached Podman run is visible
+  to the commands that supervise it.
+
+  On **native Linux** rootless Podman the workspace needed two more things, and
+  neither has a Docker equivalent: the host user is mapped onto the container's
+  (`--userns=keep-id`), because rootless Podman otherwise maps you to container
+  uid 0 and the sandbox user cannot write to its own workspace; and bind mounts
+  are relabelled for SELinux, without which Fedora/RHEL deny the mount outright
+  so the agent cannot even read it. Files the agent writes come back owned by
+  your own uid:gid.
+
+  Note this **inverts the README's Docker advice**: do *not* pass
+  `--user "$(id -u):$(id -g)"` under rootless Podman — your host uid maps into
+  the subuid range and the workspace becomes unreadable. sandbox-cli handles the
+  mapping; pass nothing.
+
+  Verified on macOS (Podman machine) and on Fedora with SELinux enforcing; other
+  rootless Linux setups should behave the same but have not been measured. See
+  [Using Podman](README.md#using-podman).
 
 ## 0.0.1beta.7 — 2026-07-27
 
