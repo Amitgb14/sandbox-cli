@@ -195,8 +195,15 @@ func TestBuildSpec_EgressAllowlistFromFlag(t *testing.T) {
 	if !strings.Contains(allow, "api.anthropic.com") {
 		t.Errorf("SANDBOX_EGRESS_ALLOW missing a baseline domain: %q", allow)
 	}
-	if !contains(spec.CapAdd, "NET_ADMIN") {
-		t.Errorf("CapAdd missing NET_ADMIN: %v", spec.CapAdd)
+	// Every capability the sandbox-firewall entrypoint needs: NET_ADMIN/NET_RAW to
+	// program iptables, SETUID/SETGID for the setpriv drop, and KILL so tini (PID 1
+	// as root under --init) can forward signals to the dropped-privilege agent.
+	// Missing KILL aborts the container on the first signal with
+	// "[FATAL tini] Unexpected error when forwarding signal: Operation not permitted".
+	for _, c := range []string{"NET_ADMIN", "NET_RAW", "SETUID", "SETGID", "KILL"} {
+		if !contains(spec.CapAdd, c) {
+			t.Errorf("CapAdd missing %s: %v", c, spec.CapAdd)
+		}
 	}
 	// Allowlist implies bridge networking, never "none".
 	if spec.Network == "none" {
@@ -521,8 +528,12 @@ func TestBuildSpec_NoEgressWhenNetworkIsDefault(t *testing.T) {
 	if spec.User != "sandbox" {
 		t.Errorf("User = %q, want sandbox (unchanged) without egress", spec.User)
 	}
-	if contains(spec.CapAdd, "NET_ADMIN") {
-		t.Errorf("unexpected NET_ADMIN without egress: %v", spec.CapAdd)
+	// None of the entrypoint's capabilities are granted back when there is no
+	// allowlist: the default posture stays cap-drop ALL with nothing added.
+	for _, c := range []string{"NET_ADMIN", "NET_RAW", "SETUID", "SETGID", "KILL"} {
+		if contains(spec.CapAdd, c) {
+			t.Errorf("unexpected %s without egress: %v", c, spec.CapAdd)
+		}
 	}
 }
 
