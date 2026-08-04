@@ -179,6 +179,76 @@ the path, and introduces no new secret material anywhere.
 only for the bytes. Recorded so the next person reading this does not conclude
 that a cheap option was overlooked, or that an expensive one is a solution.
 
+### Rank them by what a leak costs, not by how well it is prevented
+
+The options above were first weighed on how well each keeps a secret *in*. That
+is the wrong axis. Prompt injection is the threat model, so a leak is assumed
+rather than avoided, and the question that decides the design is: **when a
+secret leaves the container, how much damage is possible, for how long, and
+across how many things?**
+
+Four factors: **scope**, **lifetime**, **breadth**, **recoverability**.
+
+Today's default credential is the worst possible shape on all four. It is an
+OAuth refresh token, so its scope is the whole account; it has no natural
+expiry; the persisted HOME holding it is *the same directory in every project*
+(item 8), so one repository's compromise is every repository's; and recovery
+needs a human to notice and revoke.
+
+| option | scope | lifetime | breadth | worst case |
+|---|---|---|---|---|
+| today | whole account | until revoked | every project | account taken over, silently |
+| B | none in container | — | — | **the proxy**: every token, every prompt in plaintext, the CA key |
+| D | unchanged | unchanged | unchanged | same as today; D reduces opportunity, not consequence |
+| prod | what you forwarded | yours to choose | one run | bounded by your own decision |
+| C | one action | minutes | one run | a token that has already expired |
+
+Two conclusions that reverse the earlier reading:
+
+**B is the worst option on this axis, not the best.** It makes the usual case
+harmless and the tail catastrophic: one process holding every token, the CA
+private key, and every prompt in plaintext. Compromise it and the loss is not
+one credential but all of them, plus the ability to impersonate any TLS server
+to the container. Trading a frequent small loss for a rare total one is a real
+strategy, but it should be chosen deliberately and not because B sounded
+strongest per-token.
+
+**C is the best**, because it is the only one that attacks consequence
+directly. The leak still happens; the thing that leaks is worth almost nothing
+by the time anybody uses it.
+
+### The combination worth building, and in what order
+
+Nothing here needs a CA, a plaintext chokepoint, or a new place for secrets to
+accumulate. In order of what it buys per unit of work:
+
+1. **`--profile prod`.** Removes the account-wide, never-expiring,
+   cross-project credential from the container entirely — `PersistAuth=false`,
+   enforced by `ValidateProfile`. It also empties the egress baseline, so the
+   permitted set is exactly what you typed rather than a list that includes
+   github.com by default. Cost is convenience: authenticate per run, no history
+   sync, name every domain.
+2. **Short-lived brokered secrets (C).** `secrets:` already runs a `Command`, so
+   this is configuration today. What is missing is anything that *encourages*
+   it — someone writing `gh auth token` gets a months-long credential believing
+   they brokered one. The smallest useful change is a warning when a brokered
+   value looks long-lived, not a new mechanism.
+3. **A distinct credential per project.** The breadth multiplier is item 8's
+   shared HOME; under prod that HOME is gone, but a hand-forwarded token shared
+   between projects reintroduces it. Fine-grained per-repository tokens make one
+   leak reach one repository.
+4. **A minimal `--allow` list.** Free under prod, since the baseline is already
+   empty. Fewer permitted hosts is fewer places a leaked secret can be posted —
+   the useful half of D, without building D.
+
+The realistic worst case that leaves: *a ten-minute token, scoped to one
+repository, leaked from one run.* Rotate it, or wait.
+
+What it does not address, and neither does B: **DNS exfiltration** (see the
+bottom of this file) and **misuse of a credential the agent legitimately
+holds**. Those are the two that survive every option here, and they are the
+argument for keeping the authority small rather than the secret hidden.
+
 ## 3. The agent writes `.git/config` and `.git/hooks` — **DONE**
 
 **Closed**, with the split the design call chose: prevent what has no legitimate
