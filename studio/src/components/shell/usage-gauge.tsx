@@ -61,11 +61,14 @@ export function UsageGauge() {
   // the wrong trade; saying so underneath it is the right one.
 
   const now = Date.now();
-  const shown = data.windows.filter((w) => showable(w, now));
-  // The window in force whose cached reading has already expired: the one the
-  // reader actually came for, and the one that used to vanish without trace.
-  const staleInForce = data.windows.filter((w) => w.active === true && !showable(w, now));
-  if (shown.length === 0 && staleInForce.length === 0) return null;
+  // One ordered list, not two concatenated. The previous version rendered the
+  // readable windows and then the expired ones, which is a partition by
+  // implementation detail leaking into visual priority: it put the 5-hour
+  // window — the one in force, and the first to expire because it is the short
+  // one — *below* an idle weekly sitting at 0%. Reading is_active to stop idle
+  // allowances getting equal weight, and then giving them better placement, is
+  // the same bug wearing a different hat.
+  const rows = [...data.windows].sort(byPriority);
 
   const ageMs = data.fetchedAt ? now - new Date(data.fetchedAt).getTime() : null;
 
@@ -112,15 +115,11 @@ export function UsageGauge() {
 
       {collapsed ? null : (
         <>
-          {shown.map((w, i) => (
-            <WindowMeter key={`${w.kind}-${w.scope ?? "account"}-${i}`} window={w} />
-          ))}
-
-          {staleInForce.map((w, i) => (
+          {rows.map((w, i) => (
             <WindowMeter
-              key={`stale-${w.kind}-${i}`}
+              key={`${w.kind}-${w.scope ?? "account"}-${i}`}
               window={w}
-              expired
+              expired={!showable(w, now)}
               canRefresh={data.canRefresh}
             />
           ))}
@@ -156,11 +155,33 @@ function sourceLabel(path: string | null): string {
   return path.includes("/.config/sandbox/agents/") ? "the sandbox agent's cache" : "your own cache";
 }
 
-/** A window with no percentage, or one past its reset, has nothing to show. */
+/**
+ * Whether this window has a percentage that describes *now*.
+ *
+ * False for a window past its reset: the cached figure then measures the period
+ * before it, so showing it as current would be a number that is wrong rather
+ * than one that is missing. The caller renders those as expired rows — it no
+ * longer drops them, which is the half this predicate used to be blamed for.
+ */
 function showable(w: UsageWindow, now: number): boolean {
   if (w.utilization === null) return false;
   if (w.resetsAt && new Date(w.resetsAt).getTime() < now) return false;
   return true;
+}
+
+/**
+ * Shortest period first, account before per-model.
+ *
+ * Deliberately *not* sorted by whether a window is in force. is_active decides
+ * emphasis — dimming, the idle marker — and letting it decide position too
+ * would make the list reorder itself as windows roll over, so the row you were
+ * reading moves while you read it. A fixed order that matches the CLI status
+ * line (`5h … · wk …`) is the one a reader can learn once.
+ */
+function byPriority(a: UsageWindow, b: UsageWindow): number {
+  const period = (w: UsageWindow) => (w.kind === "five_hour" ? 0 : 1);
+  if (period(a) !== period(b)) return period(a) - period(b);
+  return (a.scope ? 1 : 0) - (b.scope ? 1 : 0);
 }
 
 /**
