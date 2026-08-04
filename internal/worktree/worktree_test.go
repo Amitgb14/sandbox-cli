@@ -835,3 +835,88 @@ func TestRefusalSuggestsACheckoutThatWorks(t *testing.T) {
 		t.Errorf("with the branch deleted the advice must create it, got: %v", err)
 	}
 }
+
+// Path and Resolve must give the same answer about a drifted directory.
+//
+// Resolve refuses it; Path used to report it as an existing worktree, and Path
+// is the *plan* side — fleet's dry run reads WorktreeExists from it and land
+// checks there is something to land from. A rehearsal that promises what the
+// run declines is the one thing a rehearsal must never do, which is the same
+// inconsistency NameHeldBy was added to close for container names.
+func TestPathAndResolveAgreeAboutADriftedDirectory(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	info, err := Resolve(repo, "feature/planned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, info.Path, "checkout", "-q", "-b", "moved-on")
+	runOrSkip(t, git, repo, "branch", "-D", "feature/planned")
+
+	_, exists, perr := Path(repo, "feature/planned")
+	_, rerr := Resolve(repo, "feature/planned")
+
+	if rerr == nil {
+		t.Fatal("Resolve should refuse a drifted directory")
+	}
+	if perr == nil || exists {
+		t.Fatalf("Path reported exists=%v err=%v; the dry run would promise a worktree the run refuses",
+			exists, perr)
+	}
+	if !strings.Contains(perr.Error(), "moved-on") {
+		t.Errorf("Path's error must name the branch actually there, got: %v", perr)
+	}
+}
+
+// And CommitAll still refuses to commit into it — that is where getting this
+// wrong costs the most, since `add -A` would put the work on the wrong branch.
+func TestCommitAllRefusesADriftedWorktree(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	info, err := Resolve(repo, "feature/tocommit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, info.Path, "checkout", "-q", "-b", "elsewhere")
+	runOrSkip(t, git, repo, "branch", "-D", "feature/tocommit")
+	if err := os.WriteFile(filepath.Join(info.Path, "new.txt"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	committed, err := CommitAll(repo, "feature/tocommit", "msg")
+	if err == nil || committed {
+		t.Fatalf("CommitAll committed=%v err=%v; it must not commit onto the branch the agent moved to",
+			committed, err)
+	}
+	if !strings.Contains(err.Error(), "elsewhere") {
+		t.Errorf("the refusal must name the branch actually there, got: %v", err)
+	}
+}

@@ -241,9 +241,34 @@ func Path(dir, branch string) (path string, exists bool, err error) {
 	// there is nothing to resolve, and the caller is printing a "would be" path.
 	path = worktreePath(root, branch)
 	if isDir(path) {
+		// The same question Resolve asks, and it has to be asked here too: this is
+		// the *plan* side — `fleet run --dry-run` reports WorktreeExists from it,
+		// and `land` checks there is something to land from. Answering "yes, reuse
+		// it" for a directory Resolve then refuses is a dry run that promises what
+		// the run declines, which is the one thing a rehearsal must never do.
+		if at := HeadBranch(path); at != branch {
+			return path, false, notTheBranch(path, branch, at)
+		}
 		return resolveSymlinks(path), true, nil
 	}
 	return path, false, nil
+}
+
+// notTheBranch explains a worktree directory that holds something other than the
+// branch asked for — the state an agent leaves by running `git checkout -b`
+// inside its own worktree.
+//
+// One function because three callers need the same sentence and the facts are
+// what matter: which branch is actually there, and where. Advice is left to the
+// caller, whose context decides whether the answer is to switch it back, work
+// where the branch went, or commit by hand.
+func notTheBranch(path, want, at string) error {
+	where := "a detached HEAD"
+	if at != "" {
+		where = fmt.Sprintf("branch %q", at)
+	}
+	return fmt.Errorf("the worktree directory for %q (%s) holds %s; the agent moved it, "+
+		"so its name and its branch no longer agree", want, path, where)
 }
 
 // Dirty reports the paths of modified or untracked files in the worktree for

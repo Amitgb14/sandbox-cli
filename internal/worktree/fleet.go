@@ -116,15 +116,11 @@ func CommitAll(dir, branch, message string) (committed bool, err error) {
 	if !exists {
 		return false, fmt.Errorf("no worktree for branch %q", branch)
 	}
-	if on := HeadBranch(path); on != branch {
-		where := "a detached HEAD"
-		if on != "" {
-			where = fmt.Sprintf("%q", on)
-		}
-		return false, fmt.Errorf("the worktree for %q is on %s; "+
-			"the agent moved it, so committing here would put the work on the wrong branch. "+
-			"Check %s and commit it yourself", branch, where, path)
-	}
+	// The drift check that used to live here now lives in Path, which is called
+	// above and refuses first — one question asked in one place, so Resolve, the
+	// dry run and this cannot disagree about whether a directory is usable.
+	// Committing is where getting it wrong costs the most: `add -A` here would
+	// put the agent's work on whatever branch it moved to.
 	out, err := runGit(path, "status", "--porcelain")
 	if err != nil {
 		return false, &ErrGitFailed{Err: err}
