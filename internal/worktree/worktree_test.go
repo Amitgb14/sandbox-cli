@@ -920,3 +920,134 @@ func TestCommitAllRefusesADriftedWorktree(t *testing.T) {
 		t.Errorf("the refusal must name the branch actually there, got: %v", err)
 	}
 }
+
+// Git cannot hold `bugfix` and `bugfix/observability` at once — refs are paths,
+// so one name is either a branch or a directory of branches. That is not ours to
+// fix, but the message was: git's arrives after "Preparing worktree" has already
+// printed, says `cannot lock ref … 'refs/heads/bugfix' exists`, and names
+// neither the branch in the way nor anything to do about it (#55).
+func TestResolveExplainsARefConflict(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	t.Run("a branch above the requested name", func(t *testing.T) {
+		runOrSkip(t, git, repo, "branch", "bugfix")
+		defer func() { _ = exec.Command(git, "-C", repo, "branch", "-D", "bugfix").Run() }()
+
+		_, err := Resolve(repo, "bugfix/observability")
+		if err == nil {
+			t.Fatal("expected a refusal")
+		}
+		for _, want := range []string{`"bugfix"`, "cannot hold both", "git branch -m", "bugfix-observability"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal must mention %q, got: %v", want, err)
+			}
+		}
+		// git's own wording must not be what the user reads.
+		if strings.Contains(err.Error(), "cannot lock ref") || strings.Contains(err.Error(), "exit status") {
+			t.Errorf("git's raw error leaked through: %v", err)
+		}
+	})
+
+	t.Run("a branch below the requested name", func(t *testing.T) {
+		runOrSkip(t, git, repo, "branch", "feature/a")
+		defer func() { _ = exec.Command(git, "-C", repo, "branch", "-D", "feature/a").Run() }()
+
+		_, err := Resolve(repo, "feature")
+		if err == nil {
+			t.Fatal("expected a refusal")
+		}
+		// The other direction: the name is already a namespace, so renaming the
+		// other branch is not the move — the advice has to differ.
+		if !strings.Contains(err.Error(), "already a namespace") {
+			t.Errorf("refusal should say the name is a namespace, got: %v", err)
+		}
+	})
+}
+
+// And a name that merely shares a prefix is not a conflict: refs collide on path
+// segments, so "feature-x" and "feature/y" coexist happily.
+func TestRefConflictIgnoresMerePrefixes(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+	runOrSkip(t, git, repo, "branch", "feature/y")
+
+	if got := refConflict(repo, "feature-x"); got != "" {
+		t.Errorf("refConflict = %q; a shared prefix is not a path collision", got)
+	}
+	if got := refConflict(repo, "feature/z"); got != "" {
+		t.Errorf("refConflict = %q; siblings under one namespace do not collide", got)
+	}
+}
+
+// A refusal must leave the machine as it found it.
+//
+// The ref-conflict check used to sit after MkdirAll, so declining to create a
+// worktree still created three directories on the way to saying no. Harmless in
+// effect, wrong in principle, and the comment above it claimed otherwise.
+//
+// Asserted by walking the whole config tree rather than stat-ing the path this
+// test computes: worktreePath here yields /var/... while Resolve works from a
+// symlink-resolved /private/var/... root, so both of the obvious probes report
+// "clean" whether or not anything was created. That is the same /var vs
+// /private/var trap this package documents for git worktree list.
+func TestARefusalCreatesNothing(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+	runOrSkip(t, git, repo, "branch", "bugfix")
+
+	if _, err := Resolve(repo, "bugfix/observability"); err == nil {
+		t.Fatal("expected a refusal")
+	}
+
+	var created []string
+	_ = filepath.Walk(cfg, func(p string, fi os.FileInfo, e error) error {
+		if e == nil && p != cfg {
+			created = append(created, p[len(cfg):])
+		}
+		return nil
+	})
+	if len(created) != 0 {
+		t.Errorf("a refused Resolve created %v", created)
+	}
+}
