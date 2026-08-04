@@ -108,6 +108,15 @@ func Resolve(dir, branch string) (Info, error) {
 	if branchExists(root, branch) {
 		args = append(args, path, branch)
 	} else {
+		// Asked before creating, because git's own answer is unusable here. It
+		// arrives after "Preparing worktree (new branch 'x')" has already been
+		// printed, reads `fatal: cannot lock ref …: 'refs/heads/bugfix' exists`
+		// with our exit status glued on the end, and names neither the branch in
+		// the way nor anything to do about it. The same objection this project
+		// already made of docker's duplicate-name refusal.
+		if other := refConflict(root, branch); other != "" {
+			return Info{}, dfConflict(branch, other)
+		}
 		args = append(args, "-b", branch, path)
 	}
 	if _, err := runGit(root, args...); err != nil {
@@ -252,6 +261,56 @@ func Path(dir, branch string) (path string, exists bool, err error) {
 		return resolveSymlinks(path), true, nil
 	}
 	return path, false, nil
+}
+
+// refConflict returns the existing branch that makes `branch` uncreatable, or "".
+//
+// Git stores refs as filesystem paths, so `refs/heads/bugfix` is a *file* while
+// `bugfix/observability` needs `refs/heads/bugfix` to be a *directory*. One path
+// cannot be both — git calls this a D/F conflict, it is symmetric, and packing
+// refs does not lift it because any ref must remain representable as a loose
+// one. Nothing here can support the pair; the only thing worth doing is saying
+// which existing branch is in the way.
+//
+// One `for-each-ref` rather than a probe per prefix: the answer needs both
+// directions, and a repository's branch list is small next to the `worktree add`
+// this replaces.
+func refConflict(root, branch string) string {
+	out, err := runGit(root, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		// Unanswerable. Fall through to git, whose message is poor but real —
+		// refusing on a question we could not ask would be worse.
+		return ""
+	}
+	for _, existing := range strings.Split(out, "\n") {
+		existing = strings.TrimSpace(existing)
+		if existing == "" || existing == branch {
+			continue
+		}
+		// "bugfix" blocks "bugfix/observability", and "bugfix/observability"
+		// blocks "bugfix". Both are the same collision seen from either end.
+		if strings.HasPrefix(branch, existing+"/") || strings.HasPrefix(existing, branch+"/") {
+			return existing
+		}
+	}
+	return ""
+}
+
+// dfConflict explains the collision and what to do about it. The advice differs
+// by direction: a branch that is in the way *above* the requested name can be
+// renamed out of it, while one *below* means the name is already a namespace.
+func dfConflict(branch, other string) error {
+	base := fmt.Sprintf("cannot create branch %q: %q already exists, and git cannot hold both — "+
+		"refs are paths, so %q is either a branch or a directory of branches, never both", branch, other, other)
+	if strings.HasPrefix(branch, other+"/") {
+		return fmt.Errorf("%s.\n  rename it:  git branch -m %s %s-old\n"+
+			"  delete it:  git branch -d %s\n"+
+			"  or pick a name that does not nest under it, e.g. %s",
+			base, other, other, other, strings.ReplaceAll(branch, "/", "-"))
+	}
+	return fmt.Errorf("%s.\n  %q is already a namespace holding %q, so nothing can be created at that name\n"+
+		"  pick a different one, e.g. %s-base",
+		base, branch, other, branch)
 }
 
 // notTheBranch explains a worktree directory that holds something other than the
