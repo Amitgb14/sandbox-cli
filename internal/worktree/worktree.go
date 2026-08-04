@@ -83,11 +83,21 @@ func Resolve(dir, branch string) (Info, error) {
 				"it is a detached HEAD or a directory this repository no longer tracks. Remove it, or run "+
 				"`sandbox-cli recover repair` if a crash left it behind", path)
 		default:
+			// `checkout` or `checkout -b` depending on whether the branch is still
+			// there. In the case this refusal was written for it is *not*: the
+			// branch having been deleted is why lookup found nothing, so advising a
+			// plain checkout would hand the reader a command that answers
+			// "pathspec ... did not match any file(s) known to git". A refusal
+			// whose remedy fails is barely better than the raw error it replaces.
+			checkout := fmt.Sprintf("git -C %s checkout %s", path, branch)
+			if !branchExists(root, branch) {
+				checkout = fmt.Sprintf("git -C %s checkout -b %s", path, branch)
+			}
 			return Info{}, fmt.Errorf("worktree: %s holds branch %q, not %q — refusing to run against it. "+
 				"An agent that runs `git checkout -b` inside its worktree leaves the directory name and the "+
-				"branch out of step. Work where that branch actually is with `--worktree %s`, switch it back "+
-				"with `git -C %s checkout %s`, or remove it with `sandbox-cli worktree rm %s`",
-				path, at, branch, at, path, branch, at)
+				"branch out of step. Work where that branch actually is with `--worktree %s`, put it back "+
+				"with `%s`, or remove it with `sandbox-cli worktree rm %s`",
+				path, at, branch, at, checkout, at)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
