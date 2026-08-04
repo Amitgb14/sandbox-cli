@@ -662,3 +662,261 @@ func TestDirtyStripsTerminalControlSequences(t *testing.T) {
 		}
 	}
 }
+
+// The directory name is not evidence of what is in it.
+//
+// Reported as #54, from a real repository: a worktree created for one branch,
+// an agent that ran `git checkout -b` inside it, and the original branch then
+// deleted. `lookup` correctly finds nothing, and the old fallback reused the
+// name-derived directory without asking what it held — so a run launched for
+// feature/enable-team-plan got a workspace sitting on feature/metering-hardening
+// and a container labelled with the branch that was asked for. Every later
+// command reads that label as fact.
+func TestResolveRefusesADirectoryHoldingAnotherBranch(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	// The worktree is made for one branch, then moved to another from inside —
+	// exactly what an agent does — and the original branch is deleted, so
+	// lookup can no longer find it.
+	info, err := Resolve(repo, "feature/enable-team-plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, info.Path, "checkout", "-q", "-b", "feature/metering-hardening")
+	runOrSkip(t, git, repo, "branch", "-D", "feature/enable-team-plan")
+
+	_, err = Resolve(repo, "feature/enable-team-plan")
+	if err == nil {
+		t.Fatal("Resolve reused a directory holding a different branch; the run would have " +
+			"edited feature/metering-hardening while labelled feature/enable-team-plan")
+	}
+	// The refusal has to name both branches: which one is there decides whether
+	// you switch it back or go work where your branch actually is.
+	for _, want := range []string{"feature/metering-hardening", "feature/enable-team-plan"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal must name %q, got: %v", want, err)
+		}
+	}
+}
+
+// And the reuse it exists for still works: same branch, same directory, no
+// second worktree added for something git already has checked out.
+func TestResolveStillReusesTheSameBranchsDirectory(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	first, err := Resolve(repo, "feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Resolve(repo, "feature/x")
+	if err != nil {
+		t.Fatalf("Resolve refused to reuse its own worktree: %v", err)
+	}
+	if second.Path != first.Path || second.Created {
+		t.Errorf("Resolve = %+v, want reuse of %s", second, first.Path)
+	}
+}
+
+// The third outcome: a directory git cannot read a branch out of. This is the
+// shape a pruned admin dir leaves — `.git` points at a worktrees/<name> entry
+// that no longer exists — and it is the arm most likely to fire in the wild,
+// so it gets the same pinning as the other two.
+func TestResolveRefusesADirectoryGitCannotRead(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	info, err := Resolve(repo, "feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Break it the way a prune does: the directory and its .git pointer survive,
+	// the administrative entry in the parent repository does not.
+	admin := filepath.Join(repo, ".git", "worktrees")
+	if err := os.RemoveAll(admin); err != nil {
+		t.Fatal(err)
+	}
+	if !isDir(info.Path) {
+		t.Fatal("the worktree directory should still be there")
+	}
+
+	_, err = Resolve(repo, "feature/x")
+	if err == nil {
+		t.Fatal("Resolve reused a directory git can no longer read; the run would have got a broken .git")
+	}
+	for _, want := range []string{"cannot say which branch", "recover repair"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal must mention %q, got: %v", want, err)
+		}
+	}
+}
+
+// The remedy a refusal offers has to be one you can actually run. In the case
+// this was written for the requested branch has been *deleted* — that is why
+// lookup found nothing — so a plain `git checkout <branch>` answers "pathspec
+// did not match any file(s) known to git". The suggestion switches to -b when
+// the branch is gone.
+func TestRefusalSuggestsACheckoutThatWorks(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	info, err := Resolve(repo, "feature/gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, info.Path, "checkout", "-q", "-b", "moved-on")
+
+	// Branch still present: an ordinary checkout is the right advice.
+	if _, err := Resolve(repo, "feature/gone"); err == nil {
+		t.Fatal("expected a refusal")
+	} else if !strings.Contains(err.Error(), "checkout feature/gone") ||
+		strings.Contains(err.Error(), "checkout -b feature/gone") {
+		t.Errorf("with the branch present the advice should be a plain checkout, got: %v", err)
+	}
+
+	// Branch deleted — the case from the report. Now it has to be -b.
+	runOrSkip(t, git, repo, "branch", "-D", "feature/gone")
+	if _, err := Resolve(repo, "feature/gone"); err == nil {
+		t.Fatal("expected a refusal")
+	} else if !strings.Contains(err.Error(), "checkout -b feature/gone") {
+		t.Errorf("with the branch deleted the advice must create it, got: %v", err)
+	}
+}
+
+// Path and Resolve must give the same answer about a drifted directory.
+//
+// Resolve refuses it; Path used to report it as an existing worktree, and Path
+// is the *plan* side — fleet's dry run reads WorktreeExists from it and land
+// checks there is something to land from. A rehearsal that promises what the
+// run declines is the one thing a rehearsal must never do, which is the same
+// inconsistency NameHeldBy was added to close for container names.
+func TestPathAndResolveAgreeAboutADriftedDirectory(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	info, err := Resolve(repo, "feature/planned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, info.Path, "checkout", "-q", "-b", "moved-on")
+	runOrSkip(t, git, repo, "branch", "-D", "feature/planned")
+
+	_, exists, perr := Path(repo, "feature/planned")
+	_, rerr := Resolve(repo, "feature/planned")
+
+	if rerr == nil {
+		t.Fatal("Resolve should refuse a drifted directory")
+	}
+	if perr == nil || exists {
+		t.Fatalf("Path reported exists=%v err=%v; the dry run would promise a worktree the run refuses",
+			exists, perr)
+	}
+	if !strings.Contains(perr.Error(), "moved-on") {
+		t.Errorf("Path's error must name the branch actually there, got: %v", perr)
+	}
+}
+
+// And CommitAll still refuses to commit into it — that is where getting this
+// wrong costs the most, since `add -A` would put the work on the wrong branch.
+func TestCommitAllRefusesADriftedWorktree(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	repo := t.TempDir()
+	runOrSkip(t, git, repo, "init", "-q", ".")
+	runOrSkip(t, git, repo, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, repo, "add", "-A")
+	runOrSkip(t, git, repo, "commit", "-qm", "init")
+
+	info, err := Resolve(repo, "feature/tocommit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runOrSkip(t, git, info.Path, "checkout", "-q", "-b", "elsewhere")
+	runOrSkip(t, git, repo, "branch", "-D", "feature/tocommit")
+	if err := os.WriteFile(filepath.Join(info.Path, "new.txt"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	committed, err := CommitAll(repo, "feature/tocommit", "msg")
+	if err == nil || committed {
+		t.Fatalf("CommitAll committed=%v err=%v; it must not commit onto the branch the agent moved to",
+			committed, err)
+	}
+	if !strings.Contains(err.Error(), "elsewhere") {
+		t.Errorf("the refusal must name the branch actually there, got: %v", err)
+	}
+}
