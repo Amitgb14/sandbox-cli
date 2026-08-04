@@ -54,7 +54,10 @@ will hand over the wrong credential.
 
 - **The agent can read every forwarded secret.** `printenv` is enough. It needs
   the value to authenticate, and nothing between it and the value can hide it
-  without terminating TLS — which is item 2's open decision, with its own costs.
+  without terminating TLS — which sandbox-cli has decided **not** to do, because
+  the proxy that hid every secret would also hold every secret, every prompt in
+  plaintext and a CA private key. So this one is permanent, not pending: the
+  answer is to make a leak cheap, which is what the next section is about.
 - **A leaked secret can leave over DNS.** The container uses a real resolver, and
   data encoded into query names is not something a connection-level firewall
   sees. Recorded at the bottom of `open-items.md` as knowingly open.
@@ -96,6 +99,24 @@ secrets:
 
 The agent still reads the value either way. The difference is whether what
 leaked is worth anything ten minutes later.
+
+**sandbox-cli says something when it can tell.** A brokered value whose shape
+identifies it as long-lived — a JWT carrying a distant `exp` or none at all, or a
+format its issuer defines as lasting (a GitHub PAT, an Anthropic or OpenAI key, a
+long-lived AWS access key) — produces one line naming the secret:
+
+```
+sandbox-cli: secret GITHUB_TOKEN looks like a GitHub personal access token, which
+outlives this run — a leaked value stays usable until you revoke it. …
+```
+
+Read what that does **not** say. It never refuses: for some credentials the
+long-lived form is the only form there is, and `ANTHROPIC_API_KEY` has no
+ten-minute variant. And **no warning is not a pass** — most credentials are
+opaque strings with no lifetime encoded in them, so silence means nothing was
+recognized, not that what you brokered is short-lived. Only you know that. The
+check reads the value's shape on the host and reports the format, never any part
+of the value.
 
 **3. Use a different credential per project.** A token shared across projects
 reintroduces the breadth that `prod` just removed: one repository's compromise

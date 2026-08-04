@@ -11,6 +11,33 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **A brokered secret that looks long-lived now says so.** `secrets:` resolves a
+  reference per run, which makes it possible to hand the container a credential
+  that expires in minutes — but nothing distinguished that from `gh auth token`,
+  which returns one lasting months. A value whose shape identifies it (a JWT with
+  a distant `exp` or none, a GitHub PAT, an Anthropic/OpenAI key, a long-lived AWS
+  key) now produces one line naming the secret and what it appears to be.
+
+  Two things it deliberately does not do. It **never refuses**: for some
+  credentials the long-lived form is the only form, so refusing would refuse the
+  ordinary case. And **no warning is not a pass** — most credentials are opaque
+  strings carrying no lifetime, so silence means nothing was recognized. The
+  check runs on the host, reads only the value's shape, and never prints any part
+  of it.
+
+### Changed
+
+- **The TLS-terminating credential proxy will not be built.** Recorded because it
+  was the open question in `docs/security/open-items.md` item 2 and the answer
+  changes what to expect from this tool: hiding a secret from the agent requires
+  terminating TLS, and the process doing that would hold every token, every prompt
+  in plaintext and a CA private key — a worse thing to lose than what it protects.
+  The posture instead is to make a leak cheap: `--profile prod` for a
+  credential-free container, short-lived brokered values, one credential per
+  project, a short `--allow`. See [secrets.md](docs/security/secrets.md).
+
 ## 0.0.1beta.9 — 2026-08-04
 
 ### Fixed

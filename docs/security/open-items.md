@@ -93,13 +93,58 @@ What is true *today*, written for someone deciding what to hand an agent, is
 [`secrets.md`](secrets.md). This entry is the backlog for what is still open.
 
 
-**Severity: high. Effort: large. Blocked on: a decision that is yours.**
+**Severity: high. Effort: large. Decided 2026-08-04 — see below. Stays open.**
 
 This is the original request that began the review. `internal/creds` resolves
 secret *references* on the host and forwards the values into the container, so
 the agent process can read them with `printenv`.
 
-### The decision to make first
+### The decision — B is rejected; minimise the loss instead
+
+**Decided 2026-08-04.** The TLS-terminating proxy (option B) will not be built.
+The combination below is adopted in its place, and this item stays **open**
+rather than closing, because none of it stops the agent holding a value it can
+read: what changes is what that value is worth.
+
+The reasoning is the blast-radius ranking further down, and it is the whole
+argument in one line: **a leak is assumed, not prevented**, so the question is
+what it costs — and B answers that question worst, by concentrating every token,
+every prompt in plaintext and the CA private key into a single process. What is
+adopted, in the order value arrives per unit of work:
+
+1. **`--profile prod` when the credentials matter.** Removes the account-wide,
+   never-expiring, cross-project refresh token from the container and empties
+   the egress baseline. No code: `PersistAuth=false`, held by `ValidateProfile`.
+2. **Short-lived brokered secrets.** `secrets:` already runs a `Command`, so this
+   is configuration today.
+3. **A distinct credential per project**, so one leak reaches one repository.
+4. **A minimal `--allow` list**, free under prod since the baseline is empty.
+
+Residual worst case: *a ten-minute token, scoped to one repository, leaked from
+one run.* Rotate it, or wait.
+
+**The one piece of code this decision required** — because 2 is a practice with
+nothing behind it, and someone writing `gh auth token` gets a credential lasting
+months while believing they brokered one — is a **warning when a brokered secret
+resolves to something long-lived**. Built: `creds.Classify` reads what a
+credential's own shape says (a JWT's `exp`, or a small table of formats their
+issuers define as long-lived) and `sandbox.warnLongLivedSecrets` names it once
+per run. It **warns and never refuses**: for some credentials the long-lived form
+is the only form there is — `ANTHROPIC_API_KEY` has no ten-minute variant — so
+refusing would refuse the ordinary case. And **silence is not approval**: most
+credentials are opaque strings carrying no lifetime, so an unrecognized value
+prints nothing, which means "nothing was recognized" rather than "this one is
+fine".
+
+What still survives all of it, and is the reason the item stays open: **DNS
+exfiltration** (bottom of this file) and **misuse of a credential the agent
+legitimately holds**. Those are the argument for keeping the *authority* small
+rather than the secret hidden.
+
+The analysis that produced this decision follows, kept in full so the next reader
+can check it rather than take it.
+
+### The decision as it was originally framed
 
 Injecting a header into HTTPS **requires terminating TLS**. A `CONNECT` proxy
 sees an opaque tunnel: it cannot inject `Authorization`, cannot read a `302`,
@@ -236,7 +281,8 @@ accumulate. In order of what it buys per unit of work:
    this is configuration today. What is missing is anything that *encourages*
    it — someone writing `gh auth token` gets a months-long credential believing
    they brokered one. The smallest useful change is a warning when a brokered
-   value looks long-lived, not a new mechanism.
+   value looks long-lived, not a new mechanism. **Built** (`creds.Classify`); see
+   the decision at the top of this item for what it does and does not claim.
 3. **A distinct credential per project.** The breadth multiplier is item 8's
    shared HOME; under prod that HOME is gone, but a hand-forwarded token shared
    between projects reintroduces it. Fine-grained per-repository tokens make one

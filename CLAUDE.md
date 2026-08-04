@@ -256,11 +256,33 @@ rather than merely passing. This is the single choke point for the isolation inv
 - **`internal/githard`** — neutralises the parts of a repository's git config that make git *run
   commands*, for every git call sandbox-cli makes on its own behalf. See the trust-boundary
   section below.
-- **`internal/creds`** — a deliberate **stub seam** for a future credential broker. Today it
-  resolves secret *references* on the host; the values reach the container via
-  `RunSpec.ForwardedEnv`, which the docker child gets and `BuildArgs` never renders. Keep it that
-  way: they used to travel through sandbox-cli's own environment, where a secret named `PATH`
-  redirected the subprocesses spawned next.
+- **`internal/creds`** — the credential broker. It resolves secret *references* on the host; the
+  values reach the container via `RunSpec.ForwardedEnv`, which the docker child gets and
+  `BuildArgs` never renders. Keep it that way: they used to travel through sandbox-cli's own
+  environment, where a secret named `PATH` redirected the subprocesses spawned next.
+
+  It is **not** a seam for a future header-injecting proxy — that option was
+  weighed and **rejected** (open-items.md item 2, decided 2026-08-04). Injection
+  needs terminating TLS, which needs a CA in the container, which makes one
+  process hold every token, every prompt in plaintext and the CA private key: on
+  a threat model where a leak is assumed rather than avoided, that trades a
+  frequent small loss for a rare total one. The posture is instead to make a leak
+  **cheap** — prod's credential-free container, short-lived brokered values, one
+  credential per project, a short allowlist.
+
+  `lifetime.go` is the only code that decision needed, and it exists because the
+  practice was otherwise unenforced: someone writing `gh auth token` gets a
+  months-long credential believing they brokered one. `Classify` reads what a
+  value's own shape says — a JWT's `exp`, or a small auditable table of formats
+  their issuers define as long-lived — and `sandbox.warnLongLivedSecrets` names it
+  once per run, from the last point where a secret's name and value are both in
+  hand. Two rules make it honest, and both are pinned by test: it **warns and
+  never refuses** (`ANTHROPIC_API_KEY` has no ten-minute form, so refusing would
+  refuse the ordinary case — the one place prod's asymmetry deliberately does not
+  apply), and **`Unknown` is not `ShortLived`** — an opaque value prints nothing,
+  which means "nothing was recognized", never "this one is fine". A warning also
+  never carries any part of a value, for the reason `audit.SessionMeta` has
+  nowhere to put one.
 - **`internal/studioapi`** — the local HTTP control plane (`cmd/sandbox-studio-api`) a frontend
   talks to instead of shelling out to the CLI. It owns **no container logic**: `POST /runs` builds
   the same `sandbox.Options` a `--worktree --detach` run does and hands them to `sandbox.Session`,

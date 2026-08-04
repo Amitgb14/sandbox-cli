@@ -7,10 +7,20 @@
 // `vault read`) can be short-lived and fetched fresh each run.
 //
 // Scope note: the agent process inside the container still receives the value as
-// an environment variable (it needs it to authenticate). Hiding the value from
-// the agent entirely would require a header-injecting egress proxy (as in Docker
-// `sbx`), which is future work; this broker closes the "secret on the host
-// command line / in config" gap, not the "agent never sees the key" one.
+// an environment variable (it needs it to authenticate). This broker closes the
+// "secret on the host command line / in config" gap, not the "agent never sees
+// the key" one — and the second gap is now one the tool has decided **not** to
+// close that way. Hiding the value from the agent entirely needs a
+// header-injecting egress proxy (as in Docker `sbx`), which requires terminating
+// TLS, which requires a CA in the container: one process would then hold every
+// token, every prompt in plaintext and the CA private key. Rejected 2026-08-04
+// on blast radius; see open-items.md item 2.
+//
+// What was adopted instead is to make a leak cheap rather than impossible —
+// prod's credential-free container, short-lived brokered values, one credential
+// per project, a short allowlist. lifetime.go is the only part of that needing
+// code: it is what stops "brokered" being assumed of a credential that lasts
+// months.
 package creds
 
 import (

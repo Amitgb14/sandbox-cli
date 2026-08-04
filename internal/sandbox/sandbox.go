@@ -248,11 +248,41 @@ func forwardedValues(cfg config.Config, opts Options) (map[string]string, error)
 		for _, v := range vars {
 			out[v.Name] = v.Value
 		}
+		warnLongLivedSecrets(vars, time.Now())
 	}
 	if len(out) == 0 {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// warnLongLivedSecrets reports brokered credentials whose own shape says they
+// outlive the run. It is here rather than in `creds` because this is the last
+// point at which a secret's name and its value are both in hand, and the value
+// must go no further than the container — and it warns rather than refuses for
+// the reason `creds.Classify` gives: for some credentials the long-lived form is
+// the only form there is.
+//
+// The message carries the name and the format, never any part of the value, for
+// the same reason `audit.SessionMeta` has nowhere to put one: a warning is
+// written to a stream somebody may well be logging.
+//
+// warnedSecret is a var so the tests can read what was printed. Everything else
+// about this is deliberately dumb: it prints, and the run proceeds.
+var warnedSecret = func(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format, args...)
+}
+
+func warnLongLivedSecrets(vars []creds.EnvVar, now time.Time) {
+	for _, v := range vars {
+		a := creds.Classify(v.Value, now)
+		if a.Lifetime != creds.LongLived {
+			continue
+		}
+		warnedSecret("sandbox-cli: secret %s looks like %s, which outlives this run — "+
+			"a leaked value stays usable until you revoke it. Brokering a short-lived one "+
+			"bounds what a leak is worth; see docs/security/secrets.md.\n", v.Name, a.Detail)
+	}
 }
 
 // auditMeta assembles the record for one run. Everything here is already
