@@ -51,16 +51,14 @@ export function UsageGauge() {
   // zero — so there is nothing honest to draw.
   if (!data || data.windows.length === 0) return null;
 
-  // And nothing is drawn at all where the agent that owns these numbers is not
-  // installed. The figures can still be *readable* there — the cache travels in
-  // the sandbox-owned agent HOME — but they are then unrefreshable by anything,
-  // so the panel would be a permanent fixture showing a number that can only
-  // get older. Better absent than stale-forever.
-  //
-  // The honest limit: this asks about the machine running the *daemon*. Under
-  // `docker compose --profile api` that is a container, so a host with Claude
-  // Code installed can still see no panel.
-  if (!data.canRefresh) return null;
+  // Note what is deliberately NOT a condition here: whether the agent is
+  // installed. Being able to *read* these numbers and being able to *refresh*
+  // them are different questions, and an earlier version of this panel gated
+  // the whole thing on the second — which hid it entirely under
+  // `docker compose --profile api`, where the daemon is a container with no
+  // claude binary while the cache it serves is mounted, real and current.
+  // Refusing to show a true number because this process cannot improve it is
+  // the wrong trade; saying so underneath it is the right one.
 
   const now = Date.now();
   const shown = data.windows.filter((w) => showable(w, now));
@@ -118,20 +116,26 @@ export function UsageGauge() {
             <WindowMeter key={`${w.kind}-${w.scope ?? "account"}-${i}`} window={w} />
           ))}
 
-          {/* The panel only renders where a refresh is possible, so this can
-              always offer one — see the canRefresh guard above. */}
           {staleInForce.map((w, i) => (
-            <p key={`stale-${w.kind}-${i}`} className="text-[10px] leading-tight text-muted-foreground">
-              <span className="text-foreground">{w.label}</span> is the window in force, and its
-              reading expired {w.resetsAt ? formatRelative(w.resetsAt) : "already"}. Refresh to see
-              it.
-            </p>
+            <WindowMeter
+              key={`stale-${w.kind}-${i}`}
+              window={w}
+              expired
+              canRefresh={data.canRefresh}
+            />
           ))}
 
           <p className="text-[10px] leading-tight text-muted-foreground">
             {ageMs === null
               ? "Age unknown — the agent did not record when it last refreshed."
               : `Read ${formatDurationTight(ageMs)} ago from ${sourceLabel(data.path)}.`}
+            {data.canRefresh ? null : (
+              <>
+                {" "}
+                Only Claude Code can advance it, and this server has none on its PATH — so this
+                figure will not change here.
+              </>
+            )}
           </p>
         </>
       )}
@@ -159,7 +163,25 @@ function showable(w: UsageWindow, now: number): boolean {
   return true;
 }
 
-function WindowMeter({ window: w }: { window: UsageWindow }) {
+/**
+ * One window's row.
+ *
+ * `expired` is the window that is in force but whose cached reading describes a
+ * period that has already ended. It gets a row rather than being dropped,
+ * because the reader came here to see both windows and a panel showing only the
+ * weekly answers a question nobody asked — but it gets a dash rather than a
+ * percentage, because after a reset the true figure is *unknown*, not the old
+ * number and not zero. Printing either would be inventing a reading.
+ */
+function WindowMeter({
+  window: w,
+  expired = false,
+  canRefresh = true,
+}: {
+  window: UsageWindow;
+  expired?: boolean;
+  canRefresh?: boolean;
+}) {
   const pct = w.utilization ?? 0;
   // Explicitly false, not merely falsy: null means the agent said nothing about
   // this window, which is not the same claim as "this allowance is idle".
@@ -176,16 +198,25 @@ function WindowMeter({ window: w }: { window: UsageWindow }) {
           {w.scope && <span className="ml-1 font-mono opacity-70">{w.scope}</span>}
           {idle && <span className="ml-1 opacity-70" title="not the window currently in force">idle</span>}
         </span>
-        <span className="font-medium tabular-nums">{pct}%</span>
+        <span className="font-medium tabular-nums">{expired ? "—" : `${pct}%`}</span>
       </div>
       <div className="h-1 overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn("h-full rounded-full transition-[width]", tone)}
-          style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
-        />
+        {expired ? null : (
+          <div
+            className={cn("h-full rounded-full transition-[width]", tone)}
+            style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
+          />
+        )}
       </div>
-      {w.resetsAt && (
-        <p className="text-[10px] text-muted-foreground">resets {formatRelative(w.resetsAt)}</p>
+      {expired ? (
+        <p className="text-[10px] text-muted-foreground">
+          reading expired {w.resetsAt ? formatRelative(w.resetsAt) : "already"}
+          {canRefresh ? " — refresh to see it" : ""}
+        </p>
+      ) : (
+        w.resetsAt && (
+          <p className="text-[10px] text-muted-foreground">resets {formatRelative(w.resetsAt)}</p>
+        )
       )}
     </div>
   );

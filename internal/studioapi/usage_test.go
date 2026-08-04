@@ -64,3 +64,33 @@ func TestUsageWindowActiveIsNullable(t *testing.T) {
 }
 
 func boolp(b bool) *bool { return &b }
+
+// The two failures are different kinds and must not share a status. "The agent
+// is not installed here" is a permanent property of this deployment — the
+// ordinary case under `docker compose --profile api`, where the daemon is a
+// container with no claude binary while the cache it serves is perfectly
+// readable. Answering that with 502 made it look like a bad minute upstream,
+// and filled the API log with what read as errors on a setup that was working
+// as designed.
+func TestRefreshSeparatesCannotFromFailed(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	orig := usageRefreshable
+	t.Cleanup(func() { usageRefreshable = orig })
+	usageRefreshable = func() bool { return false }
+
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/usage/refresh", nil)
+	if rec.Code != http.StatusNotImplemented {
+		t.Errorf("status = %d, want 501 — a deployment that can never refresh is not a bad gateway", rec.Code)
+	}
+	for _, want := range []string{"cannot refresh", "PATH"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("refusal must mention %q, got: %s", want, rec.Body.String())
+		}
+	}
+	// And it must not have tried: the point is to answer from what is known
+	// rather than by failing a subprocess.
+	if strings.Contains(rec.Body.String(), "exit status") {
+		t.Errorf("it attempted the refresh anyway: %s", rec.Body.String())
+	}
+}

@@ -108,6 +108,12 @@ services:
       # Claude Code's own usage cache, read-only. Uncomment to make the usage
       # gauge read the same numbers your host Claude Code sees.
       #
+      # Note what this does *not* buy: refreshing them. That runs the agent, and
+      # this image has no claude binary — so the API answers 501 and Studio hides
+      # the refresh control. Reading needs the file; refreshing needs the agent.
+      # Run the API on your host if you want both, which is the recommended shape
+      # anyway.
+      #
       # Without it the API can only reach the *sandbox* agent's copy under
       # ~/.config/sandbox/agents/claude, which is refreshed only when a sandbox
       # run talks to the server -- so it is routinely days staler than yours.

@@ -231,6 +231,21 @@ export function useLaunchRun() {
   });
 }
 
+/**
+ * Refresh the usage reading by making the agent fetch it.
+ *
+ * No client-side guard on `canRefresh`. There was one, and its justification
+ * did not survive being read back: it claimed to spare the API log from a tab
+ * left open on a deployment that cannot refresh — but such a tab is running
+ * *older JavaScript*, so it has neither the guard nor the hidden button that
+ * ships alongside it. The scenario it named was the one case it could not help.
+ *
+ * What actually prevents the pointless request is the control being absent:
+ * UsageGauge renders the button only when the snapshot says canRefresh. A
+ * second check behind a hidden control is unreachable code whose rejection
+ * nothing surfaces, and the server answers 501 correctly for any caller that
+ * finds another way in.
+ */
 export function useRefreshUsage() {
   const qc = useQueryClient();
   return useMutation({
