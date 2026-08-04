@@ -89,6 +89,10 @@ none of the risk.
 
 ## 2. The agent still holds raw credentials
 
+What is true *today*, written for someone deciding what to hand an agent, is
+[`secrets.md`](secrets.md). This entry is the backlog for what is still open.
+
+
 **Severity: high. Effort: large. Blocked on: a decision that is yours.**
 
 This is the original request that began the review. `internal/creds` resolves
