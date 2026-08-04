@@ -254,6 +254,56 @@ func TestProjectBucket(t *testing.T) {
 	}
 }
 
+// The bucket name has to be the one Claude Code uses, character for character —
+// it is a directory both sides open, not a label we choose. Reported as #57: an
+// underscore in the project path put sandboxed sessions in `…-intrupt_api`
+// while the host read `…-intrupt-api`, so nothing written in the sandbox could
+// be resumed outside it.
+//
+// The expectations are real bucket names observed under ~/.claude/projects on
+// the reporting machine, all created by Claude Code itself, not derived from
+// this implementation.
+func TestProjectBucketMatchesClaudeCode(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		// The case from the report: '_' collapses like '/' and '.'.
+		{
+			"/Users/amitghadge/project/llm/human-in-loop/intrupt_api",
+			"-Users-amitghadge-project-llm-human-in-loop-intrupt-api",
+		},
+		// A dotted directory gives a double hyphen, which is what confirmed the
+		// rule is replacement rather than removal.
+		{
+			"/Users/amitghadge/.config/sandbox/worktrees/intrupt_api-fdce81c9/feature-enable-team-plan",
+			"-Users-amitghadge--config-sandbox-worktrees-intrupt-api-fdce81c9-feature-enable-team-plan",
+		},
+		// The container's own path, which the history mount targets.
+		{"/workspace", "-workspace"},
+		{"/workspace/web", "-workspace-web"},
+		// Ordinary paths keep working exactly as before.
+		{"/Users/x/proj", "-Users-x-proj"},
+	} {
+		if got := ProjectBucket(tc.path); got != tc.want {
+			t.Errorf("ProjectBucket(%q)\n got  %q\n want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+// Nothing but letters, digits and '-' may survive, whatever the path contains.
+// Guessing a specific set of characters would fix the reported path and leave
+// the next one broken.
+func TestProjectBucketEmitsOnlySafeCharacters(t *testing.T) {
+	got := ProjectBucket("/a b/c@d/e+f/g_h/i.j/k~l")
+	for _, r := range got {
+		ok := r == '-' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if !ok {
+			t.Fatalf("ProjectBucket kept %q in %q", r, got)
+		}
+	}
+	if want := "-a-b-c-d-e-f-g-h-i-j-k-l"; got != want {
+		t.Errorf("ProjectBucket = %q, want %q", got, want)
+	}
+}
+
 func TestLookupUnknownAgent(t *testing.T) {
 	if _, ok := Lookup("aider"); ok {
 		t.Error("aider has no verified store descriptor; Lookup must say so")

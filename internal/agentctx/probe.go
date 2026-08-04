@@ -283,11 +283,34 @@ func dropZeroTimes(v any, keys ...string) ([]byte, error) {
 }
 
 // ProjectBucket mirrors how Claude Code names a project's session directory
-// under ~/.claude/projects: the absolute path with every '/' and '.' replaced by
-// '-' (e.g. /Users/x/proj -> -Users-x-proj, /workspace -> -workspace). It lives
-// here, next to the store descriptors, because it is the one piece of a store
-// layout that a caller has to reproduce rather than merely read.
+// under ~/.claude/projects: the absolute path with every character that is not
+// a letter or digit replaced by '-' (e.g. /Users/x/proj -> -Users-x-proj,
+// /workspace -> -workspace). It lives here, next to the store descriptors,
+// because it is the one piece of a store layout that a caller has to reproduce
+// rather than merely read.
+//
+// It used to replace only '/' and '.', and that was wrong for any path carrying
+// an underscore — the two sides then disagree about where a project's sessions
+// live, so sandbox-cli writes (and creates) a directory the host's Claude Code
+// never reads. Reported as #57: one project had two buckets, `…-intrupt_api`
+// with four sandboxed sessions and `…-intrupt-api` with fifteen host ones.
+//
+// Every non-alphanumeric rather than a longer list of characters, because that
+// is what the evidence supports: of every bucket Claude Code created on the
+// reporting machine, none contained anything but letters, digits and '-', and
+// its own bucket for `~/.config/sandbox/worktrees/intrupt_api-…` collapsed the
+// '.' and the '_' alike. Guessing a specific set would fix this path and leave
+// the next one broken.
 func ProjectBucket(absPath string) string {
-	b := strings.ReplaceAll(absPath, "/", "-")
-	return strings.ReplaceAll(b, ".", "-")
+	var b strings.Builder
+	b.Grow(len(absPath))
+	for _, r := range absPath {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
