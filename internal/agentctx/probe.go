@@ -301,6 +301,30 @@ func dropZeroTimes(v any, keys ...string) ([]byte, error) {
 // its own bucket for `~/.config/sandbox/worktrees/intrupt_api-…` collapsed the
 // '.' and the '_' alike. Guessing a specific set would fix this path and leave
 // the next one broken.
+// legacyProjectBucket is ProjectBucket as it behaved before #57: only '/' and
+// '.' were replaced. Kept because sessions recorded under the old name are
+// still on disk and still the user's — a corrected name must not make history
+// disappear, which is a worse failure than the one it fixes.
+//
+// Sandbox-written only. Claude Code never used this spelling, so a directory
+// bearing it exists solely because sandbox-cli created it.
+func legacyProjectBucket(absPath string) string {
+	b := strings.ReplaceAll(absPath, "/", "-")
+	return strings.ReplaceAll(b, ".", "-")
+}
+
+// ProjectBuckets names every directory a project's sessions may live in, most
+// current first: the name Claude Code uses, and the one we used to write.
+// Identical for any path without an underscore or other special character, and
+// then only one is returned.
+func ProjectBuckets(absPath string) []string {
+	cur := ProjectBucket(absPath)
+	if old := legacyProjectBucket(absPath); old != cur {
+		return []string{cur, old}
+	}
+	return []string{cur}
+}
+
 func ProjectBucket(absPath string) string {
 	var b strings.Builder
 	b.Grow(len(absPath))

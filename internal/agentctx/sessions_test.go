@@ -413,3 +413,66 @@ func TestReadClaudeSessionRefusesNonRegularFiles(t *testing.T) {
 		t.Error("a regular transcript must still be read")
 	}
 }
+
+// Correcting the bucket name must not lose the sessions written under the old
+// one. They are on disk and they are the user's; a listing that dropped them
+// would turn a naming fix into vanished history, which is worse than the bug.
+//
+// Reproduced from the real case in #57: a project path with an underscore, so
+// the two spellings differ, with sessions under each.
+func TestListFindsSessionsUnderBothBucketSpellings(t *testing.T) {
+	dir := t.TempDir()
+	project := "/Users/x/intrupt_api"
+
+	current := ProjectBucket(project)      // -Users-x-intrupt-api
+	legacy := legacyProjectBucket(project) // -Users-x-intrupt_api
+	if current == legacy {
+		t.Fatalf("the fixture path must produce two spellings, got %q for both", current)
+	}
+
+	host := "11111111-1111-1111-1111-111111111111"
+	sandboxed := "22222222-2222-2222-2222-222222222222"
+	writeTranscript(t, filepath.Join(dir, current, host+".jsonl"), claudeTranscript)
+	writeTranscript(t, filepath.Join(dir, legacy, sandboxed+".jsonl"), claudeTranscript)
+
+	got, scoped, err := List(Finding{Agent: "claude", Dir: dir, Format: FormatClaudeJSONL},
+		ListOpts{Project: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scoped {
+		t.Error("a listing for one project should report itself scoped")
+	}
+	ids := map[string]bool{}
+	for _, s := range got {
+		ids[s.ID] = true
+	}
+	if !ids[host] {
+		t.Error("the session under the current bucket name is missing")
+	}
+	if !ids[sandboxed] {
+		t.Error("the session under the legacy bucket name is missing — a rename lost history")
+	}
+}
+
+// And a path with no special characters yields one spelling, so nothing is
+// walked twice and no duplicate rows appear.
+func TestListDoesNotDoubleCountWhenBothSpellingsAgree(t *testing.T) {
+	dir := t.TempDir()
+	project := "/Users/x/plain"
+	if ProjectBucket(project) != legacyProjectBucket(project) {
+		t.Skip("fixture path is not spelling-stable")
+	}
+
+	id := "33333333-3333-3333-3333-333333333333"
+	writeTranscript(t, filepath.Join(dir, ProjectBucket(project), id+".jsonl"), claudeTranscript)
+
+	got, _, err := List(Finding{Agent: "claude", Dir: dir, Format: FormatClaudeJSONL},
+		ListOpts{Project: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Errorf("listed %d sessions, want 1 — the same directory was walked twice", len(got))
+	}
+}

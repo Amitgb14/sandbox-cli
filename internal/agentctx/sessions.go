@@ -45,24 +45,41 @@ type ListOpts struct {
 // can be derived. empty reports a project the store has simply never seen, which
 // is not an error — no agent has worked there yet.
 func scopeOf(f Finding, o ListOpts) (dir string, depth int, scoped, empty bool) {
-	return scopeDir(f, o, f.Dir)
+	dirs, depth, scoped, empty := scopeDir(f, o, f.Dir)
+	if len(dirs) > 0 {
+		// The most current name. This reports *where* a listing is scoped, and a
+		// legacy bucket is somewhere sessions may also be found rather than the
+		// place this project belongs.
+		dir = dirs[0]
+	}
+	return dir, depth, scoped, empty
 }
 
 // scopeDir is scopeOf against one particular root, so the same arithmetic can be
 // applied to each of a Finding's locations rather than only the winning one.
-func scopeDir(f Finding, o ListOpts, root string) (dir string, depth int, scoped, empty bool) {
+func scopeDir(f Finding, o ListOpts, root string) (dirs []string, depth int, scoped, empty bool) {
 	store, _ := Lookup(f.Agent)
-	dir, depth = root, storeDepth(store)
+	depth = storeDepth(store)
 	if o.All || o.Project == "" || store.BucketStyle != BucketDashedPath {
-		return dir, depth, false, false
+		return []string{root}, depth, false, false
 	}
 	// The per-project directory is one level of the store, so scoping to it
 	// removes exactly one level of the search.
-	cand := filepath.Join(root, ProjectBucket(o.Project))
-	if !isDir(cand) {
-		return dir, depth, true, true
+	//
+	// Every name this project's sessions may be under, not just the current one.
+	// The bucket name was corrected in #57, and the sessions written under the
+	// old spelling are still on disk and still the user's — a listing that
+	// dropped them would turn a naming fix into lost history, which is the worse
+	// failure of the two.
+	for _, b := range ProjectBuckets(o.Project) {
+		if cand := filepath.Join(root, b); isDir(cand) {
+			dirs = append(dirs, cand)
+		}
 	}
-	return cand, depth - 1, true, false
+	if len(dirs) == 0 {
+		return nil, depth, true, true
+	}
+	return dirs, depth - 1, true, false
 }
 
 // List returns the sessions in a verified store, newest first.
@@ -79,31 +96,33 @@ func List(f Finding, o ListOpts) (sessions []Session, scoped bool, err error) {
 	// and everything recorded before the per-project history mount was fixed,
 	// invisible to a command whose whole job is finding conversations.
 	for _, root := range listRoots(f) {
-		dir, depth, sc, empty := scopeDir(f, o, root)
+		dirs, depth, sc, empty := scopeDir(f, o, root)
 		scoped = sc
 		if empty {
 			continue
 		}
-		werr := walkSessionFiles(dir, store.Glob, store.SubDir, depth, func(path string, info fs.FileInfo) {
-			if seen[path] {
-				return
+		for _, dir := range dirs {
+			werr := walkSessionFiles(dir, store.Glob, store.SubDir, depth, func(path string, info fs.FileInfo) {
+				if seen[path] {
+					return
+				}
+				seen[path] = true
+				s := Session{
+					Agent:    f.Agent,
+					ID:       sessionID(path),
+					Path:     path,
+					Modified: info.ModTime(),
+					Size:     info.Size(),
+					Partial:  true,
+				}
+				if f.Format == FormatClaudeJSONL {
+					readClaudeSession(path, &s)
+				}
+				sessions = append(sessions, s)
+			})
+			if werr != nil && err == nil {
+				err = werr
 			}
-			seen[path] = true
-			s := Session{
-				Agent:    f.Agent,
-				ID:       sessionID(path),
-				Path:     path,
-				Modified: info.ModTime(),
-				Size:     info.Size(),
-				Partial:  true,
-			}
-			if f.Format == FormatClaudeJSONL {
-				readClaudeSession(path, &s)
-			}
-			sessions = append(sessions, s)
-		})
-		if werr != nil && err == nil {
-			err = werr
 		}
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].Modified.After(sessions[j].Modified) })
