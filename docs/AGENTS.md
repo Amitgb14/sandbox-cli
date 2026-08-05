@@ -515,8 +515,44 @@ baseline alone. These need more:
 |---|---|---|
 | `cursor` | `cursor.com`, `downloads.cursor.com` | vendor installer + payload |
 | `aider` | `astral.sh` | fetches uv before installing Aider |
-| `openhands` | `api.github.com` | asks for the latest release tag; falls back to a pinned version without it |
 | `continue` | `api.continue.dev` | fetches its default config |
+| `claude` | `claude.ai`, `downloads.claude.ai` | installer script + release payload, for the self-updating install — see below |
+
+`claude` is the one row that is about **staying current** rather than installing.
+It normally runs either way, because the image carries an npm-installed copy —
+but that bake is best-effort (`|| true`, so an upstream npm outage cannot break
+the image build), and on an image where it did not land there is no fallback left
+to reach: the run ends at exit 127 rather than running something older.
+
+The copy that *keeps itself current* is a different one. It lives in the
+persisted HOME, installed on first run from `claude.ai/install.sh` and updated
+from `downloads.claude.ai` thereafter — neither of which is in the baseline.
+Without them the run silently falls back to the image's copy and stays on
+whatever version that image was built with. Since the allowlist is now the
+*default*, this applies to a plain `sandbox-cli claude`, not only to runs that
+pass `--allow`:
+
+```sh
+sandbox-cli claude --allow claude.ai --allow downloads.claude.ai
+```
+
+Or put them in your own config (`~/.config/sandbox/config.yaml`) so every run has
+them:
+
+```yaml
+network:
+  allow: [claude.ai, downloads.claude.ai]
+```
+
+**What you are permitting, stated plainly:** `claude.ai/install.sh` redirects to
+`downloads.claude.ai`, which serves both the shell script the container pipes
+straight into `bash` and the binary that script then installs — which is why both
+names are needed and neither alone is enough. That is the same trust you already
+extend by running Claude Code at all — but it is the reason these two are not
+simply added to the baseline. Two vendor hosts in the set that *every* run trusts
+by default is a different decision from two you typed for a run you were thinking
+about, and the config form above is closer to the first: it applies to every run,
+in every project, until you remove it.
 
 **You will also need your model provider's API host**, which the baseline only
 covers for Anthropic and OpenAI. Add e.g. `generativelanguage.googleapis.com`
