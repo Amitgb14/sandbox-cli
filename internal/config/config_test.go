@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -497,6 +499,47 @@ func TestLoad_ProjectOverridesDefault(t *testing.T) {
 	// Unset field falls back to default.
 	if cfg.Workdir != "/workspace" {
 		t.Errorf("Workdir = %q, want default /workspace", cfg.Workdir)
+	}
+}
+
+// TestLoad_ExplicitConfigMustExist is the failure this test file exists to
+// prevent repeating: `--config .sandbox.yml` against a `.sandbox.yaml` used to
+// load nothing and say nothing. Discovery is skipped precisely because the flag
+// was given, so the run kept the profile's own settings — an egress allowlist
+// the named file had turned off — and looked exactly like a run that had read it.
+func TestLoad_ExplicitConfigMustExist(t *testing.T) {
+	dir := t.TempDir()
+	real := writeProjectConfig(t, dir, "network:\n  mode: none\n")
+	typo := filepath.Join(dir, ".sandbox.yml")
+
+	_, err := Load(dir, typo)
+	if err == nil {
+		t.Fatal("a --config path that does not exist must be an error, not a silent fallback")
+	}
+	var notFound *ErrConfigNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("error = %v (%T), want *ErrConfigNotFound", err, err)
+	}
+	// The neighbouring file is the whole answer, so the message hands it over.
+	if !strings.Contains(err.Error(), real) {
+		t.Errorf("error does not point at the file that does exist:\n%s", err)
+	}
+
+	// The same name, spelled correctly, still loads.
+	cfg, err := Load(dir, real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NetworkArg() != "none" {
+		t.Errorf("NetworkArg = %q, want none — the explicit file was not applied", cfg.NetworkArg())
+	}
+}
+
+// TestLoad_NoExplicitConfigIsStillFine keeps the refusal narrow: only a path the
+// user typed has to be there. Every other layer is optional and stays that way.
+func TestLoad_NoExplicitConfigIsStillFine(t *testing.T) {
+	if _, err := Load(t.TempDir(), ""); err != nil {
+		t.Fatalf("no config anywhere must load the defaults: %v", err)
 	}
 }
 
