@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
@@ -267,16 +268,43 @@ func forwardedValues(cfg config.Config, opts Options) (map[string]string, error)
 // the same reason `audit.SessionMeta` has nowhere to put one: a warning is
 // written to a stream somebody may well be logging.
 //
+// **Once per secret name, per process.** A fleet resolves the same `secrets:`
+// block for every task it launches, so without this a twenty-task fleet said the
+// same sentence twenty times — which is how a warning stops being read, the very
+// failure the rest of this design argues against. One process is the right scope
+// because it is one command: `fleet run` says it once, an interactive run says it
+// once, and a later run in a new process says it again rather than going quiet
+// forever.
+//
+// The lock is not for the fleet, whose launches are sequential. It is for
+// `studioapi`, which calls Session.Start from an HTTP handler, so two POSTs to
+// /runs share this map concurrently.
+//
 // warnedSecret is a var so the tests can read what was printed. Everything else
 // about this is deliberately dumb: it prints, and the run proceeds.
 var warnedSecret = func(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format, args...)
 }
 
+var (
+	warnedMu    sync.Mutex
+	warnedNames = map[string]bool{}
+)
+
 func warnLongLivedSecrets(vars []creds.EnvVar, now time.Time) {
 	for _, v := range vars {
 		a := creds.Classify(v.Value, now)
 		if a.Lifetime != creds.LongLived {
+			continue
+		}
+		// Keyed by name, not by value: a broker that mints a fresh long-lived
+		// token per task would otherwise defeat the dedupe entirely, and the
+		// advice is the same every time regardless of which token came back.
+		warnedMu.Lock()
+		seen := warnedNames[v.Name]
+		warnedNames[v.Name] = true
+		warnedMu.Unlock()
+		if seen {
 			continue
 		}
 		warnedSecret("sandbox-cli: secret %s %s. A leaked value stays usable until you "+
