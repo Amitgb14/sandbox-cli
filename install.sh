@@ -8,9 +8,15 @@
 #   --version VER   install a specific release        (default: latest)
 #   --dest DIR      install directory                 (default: ~/.local/bin)
 #   --token TOK     GitHub token for a private repo   (or set GITHUB_TOKEN)
+#   --no-config     do not write ~/.config/sandbox/config.yaml
 #   --uninstall     remove the binary, then report what else is left behind
 #   --purge         with --uninstall: also delete ~/.config/sandbox (agent
 #                   logins!) and the sandbox Docker images and cache volumes
+#
+# A first install also writes ~/.config/sandbox/config.yaml — the trusted user
+# layer — carrying the defaults with `profile: dev` and unrestricted egress, so
+# a fresh machine runs any agent without a domain list to maintain. An existing
+# file is never touched, so upgrading cannot reset your settings.
 #
 # POSIX sh; needs curl or wget, plus tar.
 
@@ -23,6 +29,7 @@ DEST="${HOME}/.local/bin"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 UNINSTALL=0
 PURGE=0
+NO_CONFIG=0
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
@@ -32,9 +39,10 @@ while [ $# -gt 0 ]; do
     --version)   VERSION="${2:-}"; shift 2 ;;
     --dest)      DEST="${2:-}"; shift 2 ;;
     --token)     TOKEN="${2:-}"; shift 2 ;;
+    --no-config) NO_CONFIG=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge)     PURGE=1; shift ;;
-    -h|--help)   sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
@@ -207,6 +215,181 @@ mv "$TMP/$BINARY" "$DEST/.${BINARY}.new"
 mv "$DEST/.${BINARY}.new" "$DEST/$BINARY"
 
 info "installed ${DEST}/${BINARY}"
+
+# ---- default user config ----------------------------------------------------
+# Written once, on a machine that has none. Two rules make this safe to run from
+# a pipe on every upgrade:
+#
+#   1. An existing file is never touched. This directory also holds your agent
+#      logins, and an installer that rewrote your configuration on upgrade would
+#      undo whatever you had tightened, silently and at the worst moment.
+#   2. The file is the *user* layer, which is the trusted one. Everything it sets
+#      you could have typed yourself; nothing here is reachable by a repository.
+#
+# It carries the defaults with `profile: dev` and `network.mode: default`, so a
+# fresh install reaches the whole internet and works with any agent, model
+# provider or private registry without a domain list to maintain. That is a
+# deliberate relaxation of the built-in dev default (`allowlist`, default-deny
+# with a baseline of agent APIs and registries) — one line in the file, written
+# where you can see it and edit it, rather than a default you cannot find.
+CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/sandbox"
+CONFIG_FILE="${CONFIG_DIR}/config.yaml"
+
+write_default_config() {
+  # Before the mkdir, so the directory is created private too: `secrets:` below
+  # resolves credentials, and this is where the agent logins land.
+  umask 077
+  mkdir -p "$CONFIG_DIR"
+  cat > "$CONFIG_FILE" <<'SANDBOX_CONFIG_EOF'
+# sandbox-cli — your own configuration.
+#
+# Written by install.sh on a machine that had none; a later upgrade leaves it
+# alone. This is the TRUSTED layer: everything here is something you could type
+# on the command line. Precedence, later wins:
+#
+#   profile base  ->  THIS FILE  ->  a project .sandbox.yaml  ->  flags
+#
+# A project's .sandbox.yaml travels with the repository, so it is untrusted: it
+# may tighten what is below and never loosen it, and the privilege-relevant keys
+# (image, user, mounts, secrets, env, security, ...) are refused from it outright.
+#
+#   sandbox-cli config show    # the fully resolved configuration
+#   sandbox-cli config path    # which files were consulted
+#   sandbox-cli doctor         # whether this host can deliver it
+
+# Security profile. dev = a developer is watching, so a control that cannot be
+# satisfied warns; prod = unattended, so it refuses. A project may raise this to
+# prod, never lower it.
+profile: dev
+
+# ---------------------------------------------------------------------------
+# Egress
+# ---------------------------------------------------------------------------
+# mode: default  — the container gets an ordinary bridge network and reaches
+#                  anything, exactly like any other process on your machine.
+#                  This is what the installer writes: agents differ in which
+#                  hosts they need, and a list you have to maintain is a list
+#                  that eventually blocks the thing you are trying to do.
+#
+# What you give up by leaving it here: the container still cannot touch your
+# host, your other repositories or your keys — that boundary does not depend on
+# the network — but a prompt-injected agent inside it can post what it *can*
+# read (this project, and any credential you handed it) anywhere it likes.
+#
+# To bound that, change one word:
+#   mode: allowlist   # default-deny, with a baseline of the agent APIs and the
+#                     # package registries, plus anything under `allow:` below
+#   mode: none        # no network at all
+# Ad hoc, for a single run: --allow DOMAIN (implies allowlist), or --network none
+#
+# NOTE: --profile prod requires an allowlist, so it refuses to run while this
+# block says `default` — and a flag cannot lift it, because the profile is
+# checked as the configuration resolves. On a machine that runs unattended,
+# comment these two lines out (prod then supplies its own default-deny with the
+# baseline off) or set `mode: allowlist` here. The refusal is the point of prod:
+# nobody is watching, so it will not quietly run wider than it was asked to.
+network:
+  mode: default
+  # allow:                          # extra domains, allowlist mode only
+  #   - internal.registry.example.com
+  # baseline: false                 # drop the built-in domains so `allow` is
+  #                                 # the whole list — the only setting that
+  #                                 # also excludes github.com, a write endpoint
+
+# ---------------------------------------------------------------------------
+# Everything below is a built-in default, written out so it can be changed.
+# Uncomment only what you want to differ.
+# ---------------------------------------------------------------------------
+
+# The container image. Unset means the built-in base image, whose tag is a hash
+# of its definition, so it rebuilds itself when that changes. Pinning here opts
+# out of that.
+# image: my-org/my-dev-image:latest
+
+# workdir: /workspace       # where the project is mounted
+# user: sandbox             # sandbox (non-root default) | root — agents refuse
+#                           # --dangerously-skip-permissions as root
+# home: /sandbox/home       # the fake, ephemeral HOME
+# hostname: sandbox
+# engine: docker            # docker | podman
+# runtime: ""               # OCI runtime; "" = the daemon's default (runc).
+#                           # runsc (gVisor) or kata-runtime for a stronger
+#                           # boundary, if registered with the daemon.
+
+# persist_auth: true        # keep each agent's login in ~/.config/sandbox/agents/<agent>,
+#                           # mounted as that agent's whole HOME. --no-persist-auth
+#                           # opts out for one run; prod turns it off entirely.
+# sync: true                # claude only: mount this project's host history so
+#                           # sessions resolve on both sides. --no-sync opts out.
+
+# Container hardening. Pointer fields are tri-state: omit to keep the default.
+# security:
+#   no_new_privileges: true # block setuid privilege escalation
+#   cap_drop: [ALL]         # drop all Linux capabilities (cap_add: [] to add back)
+#   pids_limit: 1024        # fork-bomb guard; 0 disables
+#   memory: ""              # e.g. 2g — opt-in, empty = unlimited
+#   cpus: ""                # e.g. 1.5 — opt-in, empty = unlimited
+#   seccomp: ""             # "" = the daemon's default profile
+#                           # "required" = refuse to run unless one is applied
+#                           # /path/to/profile.json = use that profile
+
+# Crash safety net: the workspace is snapshotted into refs/sandbox while a run
+# is in flight, and `sandbox-cli recover` restores it. Your index, HEAD, branches
+# and working tree are never written.
+# snapshot:
+#   enabled: true
+#   interval: 2m
+#   retention: 336h         # 14 days
+
+# Package-manager caches in named volumes, so they survive the --rm container.
+# Opt-in; also available ad hoc via --cache.
+# cache:
+#   enabled: true
+#   paths:                  # added to the built-in npm/pip/cargo/go/yarn set
+#     - /sandbox/home/.cache/pnpm
+
+# Ports published to the host. A bare spec binds 127.0.0.1; write 0.0.0.0:3000:3000
+# to expose one deliberately.
+# ports:
+#   - 3000:3000
+
+# Extra mounts beyond the automatic /workspace bind. Host paths may use ~ and may
+# be relative to this file. mode defaults to ro. Never /, your home, or an
+# ancestor of it — those are refused.
+# mounts:
+#   - { host: ~/datasets, container: /workspace/data, mode: ro }
+
+# Values injected into every container.
+# env:
+#   NODE_ENV: development
+
+# Host variables forwarded ONLY if they are set (default-deny allowlist). The
+# agent wrappers already forward their own API key this way.
+# env_allow:
+#   - ANTHROPIC_API_KEY
+#   - OPENAI_API_KEY
+
+# Brokered credentials: resolved on the host at run time and passed to the
+# container by name, so the value never lands on the docker command line, in
+# --dry-run output, or in this file. One source each: file, command, or env.
+# secrets:
+#   GITHUB_TOKEN:
+#     command: gh auth token
+SANDBOX_CONFIG_EOF
+}
+
+if [ "$NO_CONFIG" = 1 ]; then
+  :
+elif [ -f "$CONFIG_FILE" ]; then
+  info "kept ${CONFIG_FILE}  (existing config, untouched)"
+elif write_default_config 2>/dev/null; then
+  info "wrote ${CONFIG_FILE}  (profile: dev, unrestricted egress — edit to tighten)"
+else
+  # A config is a convenience, not a prerequisite: the built-in defaults are a
+  # complete configuration on their own, so a read-only or unwritable home must
+  # not fail an install that otherwise worked.
+  info "! could not write ${CONFIG_FILE}; continuing with the built-in defaults"
+fi
 
 # ---- PATH hint --------------------------------------------------------------
 case ":${PATH}:" in

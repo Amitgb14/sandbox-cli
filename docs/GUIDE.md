@@ -193,6 +193,12 @@ This default-denies outbound traffic and permits only a built-in baseline
 domains you add — so `npm install` / `pip install` / `git` keep working. *(Needs
 a Linux Docker host; resolves domains at startup.)*
 
+"Normal network access" is a line in your own config rather than something baked
+in: the installer writes `~/.config/sandbox/config.yaml` with `network.mode:
+default`. Change that word to `allowlist` (or `none`) to make the lockdown the
+standing rule instead of a per-run flag — sandbox-cli's own built-in default is
+`allowlist`, and a machine with no config file at all runs that way.
+
 ### Persistent caches
 `--rm` containers normally re-download dependencies every run. Turn on shared,
 persistent caches for npm/pip/cargo/go:
