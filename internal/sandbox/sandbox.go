@@ -280,6 +280,15 @@ func forwardedValues(cfg config.Config, opts Options) (map[string]string, error)
 // `studioapi`, which calls Session.Start from an HTTP handler, so two POSTs to
 // /runs share this map concurrently.
 //
+// **Per-process is right for a command and wrong for a daemon**, and the
+// distinction is invisible from here: a fleet and a Studio server are both one
+// Session calling Start N times, and only the caller knows whether that is one
+// command or N of them. `sandbox-studio-api` outlives every run it starts, so
+// this silences the warning for every launch after the first. Harmless today
+// only because Studio never shows the line at all (issue #68) — whoever fixes
+// that must give the dedupe a per-run scope here, or they will surface a warning
+// that appears once and then never again.
+//
 // warnedSecret is a var so the tests can read what was printed. Everything else
 // about this is deliberately dumb: it prints, and the run proceeds.
 var warnedSecret = func(format string, args ...any) {
