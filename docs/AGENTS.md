@@ -571,6 +571,17 @@ You're either passing `--no-persist-auth`, or forwarding a path-valued variable
 that moved the agent's state directory (see the list at the top). For Goose and
 Droid, check you haven't overridden the keyring switch the sandbox sets.
 
+On **native Linux** this also had a cause of its own, fixed in the version that
+carries this note: bind mounts there carry real uids, the container user is uid
+1001, and the persisted HOME is a directory you own at mode 0700 — so the agent
+could not read the stored credentials, and could not write the ones it had just
+obtained either. The login worked and then evaporated with the container. The
+container now takes your primary group and the directory is shared with it, so
+nothing needs doing. If you are on an older binary, the one-line workaround is
+`chmod g+rwx,g+s ~/.config/sandbox/agents/<agent>` plus
+`sandbox-cli <agent> --user "1001:$(id -g)"`. macOS was never affected: Docker
+Desktop virtualizes bind ownership.
+
 **First run of an agent takes ages.**
 Expected — that's the one-time install into the agent home. The table above has
 rough sizes. Later runs start immediately.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
 
 // claudeStatuslineSettings is the managed-settings.json (highest precedence, does
@@ -136,6 +137,14 @@ func claudeHistoryMount(rf *runFlags) (src, target string, ok bool) {
 			return "", "", false
 		}
 	}
+	// The bucket is shared with the host's own Claude Code, so on Linux it needs
+	// the group treatment the persisted HOME gets: 0700 and a host uid means the
+	// container cannot read a session it is being asked to resume, nor write the
+	// one it is having. Done on every run rather than at creation because the
+	// host writes new session files here between runs, and a file the sandbox
+	// cannot append to is a conversation it cannot continue. See
+	// sandbox/hostgroup.go.
+	sandbox.ShareWithSandboxGroup(src)
 	wd := rf.workdir
 	if wd == "" {
 		wd = "/workspace"

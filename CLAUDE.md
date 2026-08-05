@@ -65,7 +65,22 @@ user cannot write to it — and SELinux denies the bind outright, so it cannot r
 `RunSpec.HostUserMapping` renders `--userns=keep-id:uid=1001,gid=1001` plus `relabel=shared`, and the
 container user goes numeric so the *group* maps too (`--user sandbox` left files owned by
 host-uid:subgid). Docker gets none of it, which is what keeps the golden `--dry-run` test meaningful
-rather than merely passing. This is the single choke point for the isolation invariants (only
+rather than merely passing.
+
+  Docker on native Linux has the *same* problem from the other end, and it surfaced as a bug about
+  logins rather than about ownership: bind mounts there carry real uids, the container user is 1001,
+  and sandbox-cli's own state dirs are created by the host user at 0700 — so the persisted agent HOME
+  was unreadable **and** unwritable, the agent found no credentials, and the login it then completed
+  died with the container. `sandbox/hostgroup.go` answers it with a shared **group** rather than a
+  chown or a uid remap, and the rejected alternatives are why: chowning to 1001 breaks the host side
+  (`context list`, `usage`, and the host's own Claude Code writing the history bucket), while running
+  as the host uid leaves an unwritable HOME on every run that does not mount a persisted one.
+  `sharedGroupUser` renders `--user 1001:<host gid>` — applied to `SANDBOX_RUN_AS` too, since in
+  allowlist mode the entrypoint is what the drop lands on — and `ShareWithSandboxGroup` opens the
+  group bits with setgid, non-recursively (the tree inside is the container's own, and this runs on
+  every launch). `hostPrimaryGID` is a var for the same reason `hostTimezone` is.
+
+  This is the single choke point for the isolation invariants (only
   declared mounts are host-connected; `HOME` is always the fake path; host home is never mounted)
   and is exhaustively unit-tested. `docker_cli.go` is the only backend today, hidden behind the
   `Runtime` interface.

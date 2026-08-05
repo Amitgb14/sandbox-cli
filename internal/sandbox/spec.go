@@ -167,6 +167,12 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	if opts.User != "" {
 		user = opts.User
 	}
+	// On Linux the container user also takes the host's primary group, so the
+	// state dirs sandbox-cli bind-mounts as HOME are reachable from both sides.
+	// Resolved here, before the allowlist branch splits `user` into the docker
+	// --user and SANDBOX_RUN_AS: the drop has to land on the same user the
+	// container would otherwise have started as. See hostgroup.go.
+	user = sharedGroupUser(cfg.Engine, user)
 	// OCI runtime (docker --runtime): "" => docker default (runc). Named
 	// runtimeName to avoid shadowing the imported runtime package.
 	runtimeName := cfg.Runtime
@@ -468,7 +474,7 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	if allowlist {
 		runAs := user
 		if runAs == "" {
-			runAs = "sandbox"
+			runAs = sharedGroupUser(cfg.Engine, defaultRunAsUser)
 		}
 		env["SANDBOX_EGRESS_ALLOW"] = strings.Join(egress, ",")
 		env["SANDBOX_RUN_AS"] = runAs
