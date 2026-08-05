@@ -45,12 +45,52 @@ against the release `checksums.txt`, and installs the binary to
 `~/.local/bin/sandbox-cli` — no root, no package manager. It prints a PATH hint if
 that directory isn't on your `PATH`.
 
+On a machine that doesn't have one yet it also writes your config,
+`~/.config/sandbox/config.yaml`, with every default spelled out and commented so
+there's one obvious place to change them:
+
+```yaml
+profile: dev            # dev warns when a control can't be satisfied; prod refuses
+network:
+  mode: default         # the container reaches the internet unrestricted
+```
+
+`network.mode: default` is a deliberate relaxation of the built-in dev default
+(`allowlist` — default-deny with a baseline of agent APIs and package
+registries). Agents differ in which hosts they need, and a fresh install that
+has to be taught them first is a fresh install that looks broken. What it costs
+is worth knowing: the container still can't touch your host, your other
+repositories or your keys — that boundary doesn't depend on the network — but an
+agent inside it can post what it *can* read anywhere it likes. One word in that
+file bounds it again:
+
+```sh
+sandbox-cli config path            # which files were consulted
+$EDITOR ~/.config/sandbox/config.yaml
+#   mode: allowlist                # default-deny + the baseline + your `allow:` list
+#   mode: none                     # no network at all
+sandbox-cli run --allow example.com -- npm test   # or ad hoc, for one run
+```
+
+Two things the installer will not do: it never touches a `config.yaml` that
+already exists (upgrading can't reset what you tightened), and `--no-config`
+skips writing one at all. The built-in defaults are a complete configuration on
+their own, so the file is a starting point, not a prerequisite.
+
+> **Running unattended?** `--profile prod` requires an allowlist and refuses
+> while that `network:` block says `default` — comment the two lines out and prod
+> supplies its own default-deny with the baseline off. The refusal is deliberate:
+> nobody is watching a prod run, so it won't quietly run wider than it was asked to.
+
 <details>
 <summary>Other ways to install</summary>
 
 ```sh
 # a specific release, or a different directory
 sh install.sh --version 0.0.1beta.6 --dest ~/bin
+
+# leave ~/.config/sandbox/config.yaml alone
+sh install.sh --no-config
 
 # while the repo is private, authenticate with a token
 GITHUB_TOKEN=ghp_... sh install.sh
@@ -62,6 +102,12 @@ go install github.com/Amitgb14/sandbox-cli/cmd/sandbox-cli@latest
 make install        # go install ./cmd/sandbox-cli
 make build          # -> bin/sandbox-cli
 ```
+
+Only the shell installer writes `~/.config/sandbox/config.yaml`; `go install`
+and a build from source give you the binary and nothing else. That's not a
+missing step — the built-in defaults are complete, and they're the *stricter*
+ones (egress allowlist on). Write the file yourself if you want the same
+starting point.
 
 Windows: download the `.zip` from the
 [releases page](https://github.com/Amitgb14/sandbox-cli/releases) — the shell
@@ -470,8 +516,8 @@ A few things worth knowing:
 | `--memory` | Container memory limit, e.g. `2g` (default: unlimited) |
 | `--cpus` | Container CPU limit, e.g. `1.5` (default: unlimited) |
 | `--no-hardening` | Disable the default cap-drop / no-new-privileges / pids-limit (debug) |
-| `--allow` | Permit a domain on the egress allowlist, e.g. `--allow example.com` (repeatable; the allowlist is on by default and the baseline registries are always permitted) |
-| `--network` | `allowlist` (default), `default` to run unrestricted for one run, or `none` to reach nothing |
+| `--allow` | Permit a domain on the egress allowlist, e.g. `--allow example.com` (repeatable; implies allowlist mode, and the baseline registries are always permitted) |
+| `--network` | `allowlist`, `default` (unrestricted), or `none` to reach nothing. Built-in default: `allowlist`; the config the installer writes sets `default` — see [Install](#install) |
 | `--profile` | `dev` (default, warns when a control is unavailable) or `prod` (refuses) |
 | `--engine` | `docker` (default) or `podman`. Also `engine:` in your own config — not in a project file, since it chooses which binary runs |
 | `--cache` | Persist package-manager caches (npm/pip/cargo/go) in named volumes across runs |
@@ -898,6 +944,15 @@ unchanged on top of it.
   user automatically; on native Linux, run as your own uid with
   `--user "$(id -u):$(id -g)"` if ownership matters (note: the agent's ephemeral
   HOME is owned by the image's `sandbox` user, so prefer this for non-agent runs).
+- **Persisted logins on Linux** — the same arithmetic used to break the thing you
+  notice first: the container user is uid 1001, the persisted agent HOME is a
+  host directory you own at mode 0700, so the agent could neither read the
+  credentials nor write the ones it had just obtained — you logged in, and the
+  next run asked again. sandbox-cli now runs the container as `1001:<your gid>`
+  on Linux and gives its own state dirs (the persisted HOME, and claude's history
+  bucket) group access, so both sides reach the same files. Nothing is
+  chowned and nothing else about the container changes; on macOS and under
+  Podman it renders nothing, because bind ownership is already handled there.
 
 ## Using Podman
 
@@ -940,7 +995,7 @@ sandbox-cli doctor --engine podman
 
 ### What differs from Docker
 
-Nothing you have to do, but four things worth knowing:
+Nothing you have to do, but five things worth knowing:
 
 - **The first run rebuilds the base image.** Podman keeps its own image store, so
   it will not reuse Docker's. One wait, not a recurring cost.
@@ -958,6 +1013,12 @@ Nothing you have to do, but four things worth knowing:
   subuid range instead, which makes `/workspace` unreadable. sandbox-cli handles
   the mapping (`--userns=keep-id`) and relabels bind mounts for SELinux, so files
   the agent writes come back owned by your own uid:gid.
+- **The Docker-on-Linux group fix does not apply here, and does not need to.**
+  Under Docker the container joins your primary group so the persisted agent
+  login is reachable from both sides; `keep-id` already makes container uid 1001
+  *you*, so Podman gets none of it. One consequence if you switch a machine
+  between the two engines: expect to log the agent in once per engine, since each
+  writes those credentials as a different id.
 
 ### Known limits
 
@@ -988,7 +1049,9 @@ boundary the host can provide.
 2. `host.docker.internal` resolves automatically on Docker Desktop, so the flag is
    optional there; it's required on native Linux.
 3. On native Linux **with Docker**, `/workspace` files are owned by the container
-   user's uid — use `--user "$(id -u):$(id -g)"` if that matters. Docker Desktop
+   user's uid — use `--user "$(id -u):$(id -g)"` if that matters. (The container
+   does take *your group* there, so sandbox-cli's own state dirs — the persisted
+   agent login above all — are reachable from both sides.) Docker Desktop
    virtualizes this. Under **rootless Podman that advice inverts**: your host uid
    maps into the subuid range, so passing it makes the workspace unreadable.
    sandbox-cli maps the container user onto you automatically there
@@ -1155,7 +1218,9 @@ about. Under `dev` the same host passes with warnings.
   bombs. Tune these under `security:` in config; add memory/CPU limits with
   `--memory` / `--cpus`; or use `--no-hardening` to fall back to the unhardened
   behavior while debugging.
-- **Egress allowlist, on by default.** Outbound traffic is default-deny;
+- **Egress allowlist, one word away.** It is the built-in default, and the
+  config the installer writes starts you at `mode: default` (unrestricted)
+  instead — change that one word, or pass `--allow DOMAIN` for a single run, and
   outbound traffic is default-denied by an in-container firewall that permits only
   DNS, established flows, a baseline of agent APIs + package registries
   (`api.anthropic.com`, `registry.npmjs.org`, `pypi.org`, `github.com`, …), and any
