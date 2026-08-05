@@ -11,13 +11,17 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/creds"
 )
 
+// captureSecretWarnings redirects the warning and clears the dedupe.
+//
+// **Every test that calls warnLongLivedSecrets must go through this**, and not
+// only to read the output: the dedupe is process-wide, so a test that skipped it
+// would pass or fail depending on which test ran first — the worst kind, since it
+// is green until somebody adds a test above it.
 func captureSecretWarnings(t *testing.T) *[]string {
 	t.Helper()
 	var got []string
 	var mu sync.Mutex
 	prev := warnedSecret
-	// The dedupe is process-wide, so a test that did not clear it would pass or
-	// fail depending on which test ran first.
 	warnedMu.Lock()
 	warnedNames = map[string]bool{}
 	warnedMu.Unlock()
@@ -183,5 +187,29 @@ func TestConcurrentRunsDoNotRaceOnTheDedupe(t *testing.T) {
 
 	if len(*got) != 1 {
 		t.Errorf("warnings = %d, want 1 under concurrency", len(*got))
+	}
+}
+
+// A secret that did not warn must not be recorded as warned. The lifetime check
+// runs before the dedupe, so this holds today by the order of two statements —
+// pinned because a refactor that moved the claim above the check would silence
+// the *real* warning that arrives later, and would do it silently.
+func TestAShortLivedSecretDoesNotConsumeItsName(t *testing.T) {
+	got := captureSecretWarnings(t)
+
+	// First launch: the broker returns something short-lived. Nothing is said.
+	warnLongLivedSecrets([]creds.EnvVar{
+		{Name: "GITHUB_TOKEN", Value: "ghs_" + strings.Repeat("a", 36)},
+	}, time.Unix(1_700_000_000, 0))
+	if len(*got) != 0 {
+		t.Fatalf("warnings = %v, want none for a short-lived value", *got)
+	}
+
+	// Second launch: the same name, now long-lived. This is the one that matters.
+	warnLongLivedSecrets([]creds.EnvVar{
+		{Name: "GITHUB_TOKEN", Value: "ghp_" + strings.Repeat("b", 36)},
+	}, time.Unix(1_700_000_000, 0))
+	if len(*got) != 1 {
+		t.Errorf("warnings = %d, want 1 — a short-lived value must not claim the name", len(*got))
 	}
 }
