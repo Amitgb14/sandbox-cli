@@ -127,14 +127,30 @@ one run.* Rotate it, or wait.
 nothing behind it, and someone writing `gh auth token` gets a credential lasting
 months while believing they brokered one — is a **warning when a brokered secret
 resolves to something long-lived**. Built: `creds.Classify` reads what a
-credential's own shape says (a JWT's `exp`, or a small table of formats their
-issuers define as long-lived) and `sandbox.warnLongLivedSecrets` names it once
-per run. It **warns and never refuses**: for some credentials the long-lived form
+credential's own shape says and `sandbox.warnLongLivedSecrets` names it once per
+run.
+
+The two signals it reads are not equally sound, and the design turns on saying
+so. A **JWT's `exp`** is a measurement — issuer-agnostic, valid for issuers that
+do not exist yet, and it cannot go stale; it is also the direction credentials
+are moving, since STS, OIDC and workload-identity tokens are JWTs. A **prefix**
+is a lookup against a list of claims about other vendors' formats, which can be
+neither completed nor kept current — a user may hold a credential from an issuer
+nobody here has heard of. Rather than pretend otherwise, the list stays short and
+admits a prefix only if it is long, distinctive and documented as non-expiring,
+and the warning **reports the evidence rather than an identification** ("begins
+with `ghp_` — GitHub personal access tokens…"). A prefix reused by another issuer
+then still yields a sentence that is literally true and dismissible, instead of
+sending someone to the wrong vendor's dashboard. `sk-` was rejected on this rule
+and AWS `AKIA`/`ASIA` on a second one: they match the access key *id*, not the
+secret, so they would warn about the wrong value.
+
+It **warns and never refuses**: for some credentials the long-lived form
 is the only form there is — `ANTHROPIC_API_KEY` has no ten-minute variant — so
 refusing would refuse the ordinary case. And **silence is not approval**: most
-credentials are opaque strings carrying no lifetime, so an unrecognized value
-prints nothing, which means "nothing was recognized" rather than "this one is
-fine".
+credentials are opaque strings carrying no lifetime and the prefix list will
+never be complete, so an unrecognized value prints nothing, which means "nothing
+was recognized" rather than "this one is fine".
 
 What still survives all of it, and is the reason the item stays open: **DNS
 exfiltration** (bottom of this file) and **misuse of a credential the agent

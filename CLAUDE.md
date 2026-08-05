@@ -273,16 +273,32 @@ rather than merely passing. This is the single choke point for the isolation inv
   `lifetime.go` is the only code that decision needed, and it exists because the
   practice was otherwise unenforced: someone writing `gh auth token` gets a
   months-long credential believing they brokered one. `Classify` reads what a
-  value's own shape says — a JWT's `exp`, or a small auditable table of formats
-  their issuers define as long-lived — and `sandbox.warnLongLivedSecrets` names it
-  once per run, from the last point where a secret's name and value are both in
-  hand. Two rules make it honest, and both are pinned by test: it **warns and
-  never refuses** (`ANTHROPIC_API_KEY` has no ten-minute form, so refusing would
-  refuse the ordinary case — the one place prod's asymmetry deliberately does not
-  apply), and **`Unknown` is not `ShortLived`** — an opaque value prints nothing,
-  which means "nothing was recognized", never "this one is fine". A warning also
-  never carries any part of a value, for the reason `audit.SessionMeta` has
-  nowhere to put one.
+  value's own shape says and `sandbox.warnLongLivedSecrets` names it once per run,
+  from the last point where a secret's name and value are both in hand.
+
+  The two signals are **not** equally trustworthy and the code is arranged around
+  that. A **JWT's `exp`** is a measurement — issuer-agnostic, correct for issuers
+  that do not exist yet, and it never rots; it is also where the world is going,
+  since STS/OIDC/workload-identity tokens are JWTs. A **prefix** is a lookup
+  against a list of claims about other people's products, which can be neither
+  completed nor kept current. So the list stays short, admits a prefix only if it
+  is long, distinctive and documented as non-expiring, and — the rule that makes
+  the rot harmless — the warning **reports the evidence, never an
+  identification**: "begins with `ghp_` — GitHub personal access tokens…", so a
+  prefix reused by another issuer later still yields a true sentence. `sk-` was
+  dropped for failing this (three characters, and it named a vendor while
+  matching anything); AWS `AKIA`/`ASIA` were never added, because they match the
+  key *id* rather than the secret and would point the warning at the wrong value.
+
+  Three rules make it honest, all pinned by test: it **warns and never refuses**
+  (`ANTHROPIC_API_KEY` has no ten-minute form, so refusing would refuse the
+  ordinary case — the one place prod's asymmetry deliberately does not apply);
+  **`Unknown` is not `ShortLived`** — an opaque value prints nothing, which means
+  "nothing was recognized", never "this one is fine"; and a warning **carries no
+  part of a value** beyond the public format marker, for the reason
+  `audit.SessionMeta` has nowhere to put one. It covers `secrets:` only —
+  `--env`/`EnvAllow` values are deliberately unexamined, since warning on every
+  `ANTHROPIC_API_KEY` is how a warning becomes wallpaper.
 - **`internal/studioapi`** — the local HTTP control plane (`cmd/sandbox-studio-api`) a frontend
   talks to instead of shelling out to the CLI. It owns **no container logic**: `POST /runs` builds
   the same `sandbox.Options` a `--worktree --detach` run does and hands them to `sandbox.Session`,

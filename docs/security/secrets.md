@@ -100,23 +100,36 @@ secrets:
 The agent still reads the value either way. The difference is whether what
 leaked is worth anything ten minutes later.
 
-**sandbox-cli says something when it can tell.** A brokered value whose shape
-identifies it as long-lived — a JWT carrying a distant `exp` or none at all, or a
-format its issuer defines as lasting (a GitHub PAT, an Anthropic or OpenAI key, a
-long-lived AWS access key) — produces one line naming the secret:
+**sandbox-cli says something when it can tell.** A brokered value that looks
+long-lived produces one line naming the secret and **what was observed about it**:
 
 ```
-sandbox-cli: secret GITHUB_TOKEN looks like a GitHub personal access token, which
-outlives this run — a leaked value stays usable until you revoke it. …
+sandbox-cli: secret GITHUB_TOKEN begins with "gho_" — GitHub OAuth tokens, which
+is what `gh auth token` returns. A leaked value stays usable until you revoke it;
+brokering a short-lived credential bounds what that is worth. …
 ```
+
+Two things are checked, and they are not equally good. The **expiry a JWT carries
+in its own payload** is a measurement: it works for any issuer, including ones
+that do not exist yet, and it cannot go out of date. A **prefix** — `ghp_`,
+`glpat-`, `xoxb-` and a few more — is a lookup against a short list, and lists
+about the outside world are wrong at the edges forever. That is why the message
+reports the prefix it saw rather than announcing whose credential you hold: if a
+prefix is later reused by someone else, the sentence stays true and you can
+dismiss it.
 
 Read what that does **not** say. It never refuses: for some credentials the
 long-lived form is the only form there is, and `ANTHROPIC_API_KEY` has no
 ten-minute variant. And **no warning is not a pass** — most credentials are
-opaque strings with no lifetime encoded in them, so silence means nothing was
-recognized, not that what you brokered is short-lived. Only you know that. The
-check reads the value's shape on the host and reports the format, never any part
-of the value.
+opaque strings with no lifetime encoded in them, and the prefix list will never
+be complete, so silence means nothing was recognized, not that what you brokered
+is short-lived. Only you know that.
+
+The check reads the value on the host, reports the format marker and nothing
+else of it, and covers `secrets:` only. A credential forwarded with `--env` or a
+wrapper's `EnvAllow` is not examined — those are mostly API keys with no
+short-lived form, so warning on them would fire on nearly every run and become a
+line nobody reads.
 
 **3. Use a different credential per project.** A token shared across projects
 reintroduces the breadth that `prod` just removed: one repository's compromise

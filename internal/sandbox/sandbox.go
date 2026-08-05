@@ -279,9 +279,9 @@ func warnLongLivedSecrets(vars []creds.EnvVar, now time.Time) {
 		if a.Lifetime != creds.LongLived {
 			continue
 		}
-		warnedSecret("sandbox-cli: secret %s looks like %s, which outlives this run — "+
-			"a leaked value stays usable until you revoke it. Brokering a short-lived one "+
-			"bounds what a leak is worth; see docs/security/secrets.md.\n", v.Name, a.Detail)
+		warnedSecret("sandbox-cli: secret %s %s. A leaked value stays usable until you "+
+			"revoke it; brokering a short-lived credential bounds what that is worth. "+
+			"See docs/security/secrets.md.\n", v.Name, a.Detail)
 	}
 }
 

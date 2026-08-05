@@ -47,8 +47,17 @@ const (
 	ShortLived
 )
 
-// Assessment is one credential's reading. Detail is written for a person and
-// never contains any part of the value.
+// Assessment is one credential's reading.
+//
+// Detail is a clause that reads directly after "secret NAME " — "begins with
+// \"ghp_\" — GitHub personal access tokens, …" or "is a JWT valid for another 30
+// days". It states the **evidence**, not a conclusion about whose credential this
+// is, so a prefix that later belongs to something else still produces a true
+// sentence the reader can dismiss.
+//
+// It carries no secret material. A matched prefix is a public format marker
+// shared by every credential of that kind, which is why echoing it is safe and
+// useful; nothing else from the value ever appears.
 type Assessment struct {
 	Lifetime Lifetime
 	Detail   string
@@ -60,10 +69,34 @@ type Assessment struct {
 // actually mint, so a genuine short-lived mint never trips the warning.
 const longLivedThreshold = 24 * time.Hour
 
-// knownLongLived maps a credential prefix to what it is. Kept small and
-// auditable for the same reason baselineEgress is: a table nobody can read is a
-// table nobody can check. Every entry is a format whose issuer defines it as
-// outliving a single run.
+// A prefix table is a claim about the outside world, and this one can be neither
+// completed nor kept current: vendors change formats, and a user's credential may
+// come from an issuer nobody here has heard of. Three rules follow, and they are
+// what keep a table that is *permanently wrong at the edges* from being harmful:
+//
+//   - **The JWT reading is the primary signal, not this.** It is a measurement of
+//     what the credential says about itself, works for any issuer including ones
+//     that do not exist yet, and never rots. It also covers the direction the
+//     world is moving — STS, OIDC and workload-identity tokens are JWTs, so the
+//     short-lived credentials this feature wants to encourage increasingly state
+//     their own expiry. This table only has to cover legacy opaque tokens, which
+//     is why it can stay small and rarely change.
+//   - **Report the evidence, never an identification.** The warning says the value
+//     *begins with* `ghp_` and what that prefix is used for. If the prefix ever
+//     means something else, the sentence is still literally true and the reader
+//     can dismiss it. Asserting "this is a GitHub token" would be a claim we
+//     cannot keep, and being wrong about *which* credential someone holds sends
+//     them to the wrong dashboard.
+//   - **A prefix earns a row only if it is long, distinctive, and its issuer
+//     documents that the credential does not expire on its own.** A short or
+//     generic prefix is rejected however common it is: `sk-` was dropped for
+//     exactly this, since it matched anything a user prefixed that way and named
+//     a vendor while doing it.
+//
+// What is deliberately *not* here: AWS `AKIA`/`ASIA`, because those identify the
+// access key **id**, which is not the secret. Matching them would warn about the
+// public half and stay silent on `AWS_SECRET_ACCESS_KEY`, which is the one that
+// matters — a warning pointing at the wrong value is worse than none.
 //
 // Order matters — the first match wins, so a more specific prefix must come
 // before the prefix it extends.
@@ -71,27 +104,24 @@ var knownLongLived = []struct {
 	prefix string
 	what   string
 }{
-	{"github_pat_", "a GitHub fine-grained personal access token"},
-	{"ghp_", "a GitHub personal access token"},
-	{"gho_", "a GitHub OAuth token"},
-	{"glpat-", "a GitLab personal access token"},
-	{"sk-ant-", "an Anthropic API key"},
-	{"sk-", "an OpenAI API key"},
-	{"xoxb-", "a Slack bot token"},
-	{"xoxp-", "a Slack user token"},
-	{"AKIA", "a long-lived AWS access key id"},
+	{"github_pat_", "GitHub fine-grained personal access tokens"},
+	{"ghp_", "GitHub personal access tokens, which do not expire unless you set an expiry"},
+	{"gho_", "GitHub OAuth tokens, which is what `gh auth token` returns"},
+	{"glpat-", "GitLab personal access tokens"},
+	{"sk-ant-", "Anthropic API keys, which do not expire on their own"},
+	{"xoxb-", "Slack bot tokens, which do not expire on their own"},
+	{"xoxp-", "Slack user tokens"},
 }
 
-// knownShortLived are the formats that are *defined* as short-lived by whoever
-// issues them. They exist so the table can stay honest about the difference
-// between "this is fine" and "nothing was recognized": these are the only values
-// the first phrase is ever true of.
+// knownShortLived are the prefixes whose issuer *defines* the credential as
+// short-lived. They exist so silence can keep meaning one thing: without them a
+// recognized-and-fine value and an unrecognized value would both simply fall
+// through, and a later reader could not tell which had happened.
 var knownShortLived = []struct {
 	prefix string
 	what   string
 }{
-	{"ghs_", "a GitHub App installation token"},
-	{"ASIA", "a temporary AWS STS access key id"},
+	{"ghs_", "GitHub App installation tokens, which expire in an hour"},
 }
 
 // Classify reads what a credential's own shape says about its lifetime. It is
@@ -115,15 +145,24 @@ func Classify(value string, now time.Time) Assessment {
 
 	for _, k := range knownShortLived {
 		if strings.HasPrefix(v, k.prefix) {
-			return Assessment{Lifetime: ShortLived, Detail: k.what}
+			return Assessment{Lifetime: ShortLived, Detail: evidence(k.prefix, k.what)}
 		}
 	}
 	for _, k := range knownLongLived {
 		if strings.HasPrefix(v, k.prefix) {
-			return Assessment{Lifetime: LongLived, Detail: k.what}
+			return Assessment{Lifetime: LongLived, Detail: evidence(k.prefix, k.what)}
 		}
 	}
 	return Assessment{}
+}
+
+// evidence phrases a prefix match as the observation it actually is. Leading with
+// the matched prefix is the whole point: the reader sees what was seen, not a
+// verdict about whose credential they hold, and a table entry that goes out of
+// date produces a sentence that is still true rather than one that is confidently
+// wrong.
+func evidence(prefix, what string) string {
+	return "begins with " + strconv.Quote(prefix) + " — " + what
 }
 
 // classifyJWT reads the `exp` claim out of a JWT payload. The second return is
@@ -149,7 +188,7 @@ func classifyJWT(v string, now time.Time) (Assessment, bool) {
 		// A JWT is only recognized as one once its payload parses, so this is a
 		// token that genuinely declares no expiry rather than one we failed to
 		// read — which is the strongest form of long-lived there is.
-		return Assessment{Lifetime: LongLived, Detail: "a JWT with no expiry"}, true
+		return Assessment{Lifetime: LongLived, Detail: "is a JWT that declares no expiry"}, true
 	}
 
 	exp := time.Unix(int64(*claims.Exp), 0)
@@ -158,14 +197,14 @@ func classifyJWT(v string, now time.Time) (Assessment, bool) {
 	case left <= 0:
 		// Already expired. Not a leak worth warning about — it is a run about to
 		// fail, which the failure itself explains better than we can.
-		return Assessment{Lifetime: ShortLived, Detail: "a JWT that has already expired"}, true
+		return Assessment{Lifetime: ShortLived, Detail: "is a JWT that has already expired"}, true
 	case left > longLivedThreshold:
 		return Assessment{
 			Lifetime: LongLived,
-			Detail:   "a JWT valid for another " + roundedDuration(left),
+			Detail:   "is a JWT valid for another " + roundedDuration(left),
 		}, true
 	default:
-		return Assessment{Lifetime: ShortLived, Detail: "a JWT valid for another " + roundedDuration(left)}, true
+		return Assessment{Lifetime: ShortLived, Detail: "is a JWT valid for another " + roundedDuration(left)}, true
 	}
 }
 

@@ -16,16 +16,25 @@ version is tagged.
 - **A brokered secret that looks long-lived now says so.** `secrets:` resolves a
   reference per run, which makes it possible to hand the container a credential
   that expires in minutes — but nothing distinguished that from `gh auth token`,
-  which returns one lasting months. A value whose shape identifies it (a JWT with
-  a distant `exp` or none, a GitHub PAT, an Anthropic/OpenAI key, a long-lived AWS
-  key) now produces one line naming the secret and what it appears to be.
+  which returns one lasting months. Two things are now read: the **expiry a JWT
+  carries in its own payload**, which works for any issuer and cannot go stale,
+  and a short list of **prefixes** documented as non-expiring (`ghp_`, `gho_`,
+  `github_pat_`, `glpat-`, `sk-ant-`, `xoxb-`, `xoxp-`).
 
-  Two things it deliberately does not do. It **never refuses**: for some
+  The message reports **what was observed**, not whose credential you hold —
+  `secret GITHUB_TOKEN begins with "gho_" — GitHub OAuth tokens, which is what
+  `gh auth token` returns` — because a list of other people's formats is wrong at
+  the edges forever, and a prefix reused by another issuer should still produce a
+  true sentence rather than a confident misattribution.
+
+  Three things it deliberately does not do. It **never refuses**: for some
   credentials the long-lived form is the only form, so refusing would refuse the
-  ordinary case. And **no warning is not a pass** — most credentials are opaque
-  strings carrying no lifetime, so silence means nothing was recognized. The
-  check runs on the host, reads only the value's shape, and never prints any part
-  of it.
+  ordinary case. **No warning is not a pass** — most credentials are opaque
+  strings carrying no lifetime and the list will never be complete, so silence
+  means nothing was recognized. And it examines `secrets:` only: a value forwarded
+  by `--env` or a wrapper's `EnvAllow` is left alone, since warning on every
+  `ANTHROPIC_API_KEY` is how a warning becomes wallpaper. Nothing of the value is
+  printed beyond the format marker.
 
 ### Changed
 
