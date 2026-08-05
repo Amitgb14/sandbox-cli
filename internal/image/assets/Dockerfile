@@ -41,8 +41,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Pre-install the agents so `sandbox-cli codex` / `gemini` / `opencode` and an
 # offline `sandbox-cli claude` work out of the box. Kept best-effort so an
 # upstream hiccup doesn't break the build. The claude wrapper prefers a
-# self-updating install in the persisted HOME (~/.local/bin, ahead on PATH); this
-# baked copy is the offline fallback. The other wrappers fall the other way: if a
+# self-updating install in the persisted HOME (~/.local/bin), which it reaches by
+# absolute path — that HOME is agent-writable and shared by every session using
+# the adapter, so it is deliberately *appended* to PATH and never prepended, or a
+# planted ~/.local/bin/git would shadow this image's for every later run
+# (internal/agents/agents.go states the rule at ClaudeBootstrap). Do not "fix"
+# that ordering here. This baked copy is the offline fallback, and the only claude
+# there is when the install above did not land — it is best-effort, so an image
+# built during an npm outage has none, and the run ends at exit 127 rather than
+# falling back to something older. The other wrappers fall the other way: if a
 # package is missing here they install it into the persisted HOME on first run.
 # Installed one package per layer so a single unavailable agent doesn't take the
 # rest down with it — `npm install -g a b c` is all-or-nothing.
