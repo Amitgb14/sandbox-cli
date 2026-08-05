@@ -515,7 +515,6 @@ baseline alone. These need more:
 |---|---|---|
 | `cursor` | `cursor.com`, `downloads.cursor.com` | vendor installer + payload |
 | `aider` | `astral.sh` | fetches uv before installing Aider |
-| `openhands` | `api.github.com` | asks for the latest release tag; falls back to a pinned version without it |
 | `continue` | `api.continue.dev` | fetches its default config |
 | `claude` | `claude.ai`, `downloads.claude.ai` | installer script + release payload, for the self-updating install — see below |
 
