@@ -11,7 +11,41 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **A brokered secret that looks long-lived now says so.** `secrets:` resolves a
+  reference per run, which makes it possible to hand the container a credential
+  that expires in minutes — but nothing distinguished that from `gh auth token`,
+  which returns one lasting months. Two things are now read: the **expiry a JWT
+  carries in its own payload**, which works for any issuer and cannot go stale,
+  and a short list of **prefixes** documented as non-expiring (`ghp_`, `gho_`,
+  `github_pat_`, `glpat-`, `sk-ant-`, `xoxb-`, `xoxp-`).
+
+  The message reports **what was observed**, not whose credential you hold —
+  `secret GITHUB_TOKEN begins with "gho_" — GitHub OAuth tokens, which is what
+  `gh auth token` returns` — because a list of other people's formats is wrong at
+  the edges forever, and a prefix reused by another issuer should still produce a
+  true sentence rather than a confident misattribution.
+
+  Three things it deliberately does not do. It **never refuses**: for some
+  credentials the long-lived form is the only form, so refusing would refuse the
+  ordinary case. **No warning is not a pass** — most credentials are opaque
+  strings carrying no lifetime and the list will never be complete, so silence
+  means nothing was recognized. And it examines `secrets:` only: a value forwarded
+  by `--env` or a wrapper's `EnvAllow` is left alone, since warning on every
+  `ANTHROPIC_API_KEY` is how a warning becomes wallpaper. Nothing of the value is
+  printed beyond the format marker.
+
 ### Changed
+
+- **The TLS-terminating credential proxy will not be built.** Recorded because it
+  was the open question in `docs/security/open-items.md` item 2 and the answer
+  changes what to expect from this tool: hiding a secret from the agent requires
+  terminating TLS, and the process doing that would hold every token, every prompt
+  in plaintext and a CA private key — a worse thing to lose than what it protects.
+  The posture instead is to make a leak cheap: `--profile prod` for a
+  credential-free container, short-lived brokered values, one credential per
+  project, a short `--allow`. See [secrets.md](docs/security/secrets.md).
 
 - **The base image is rebuilt once on your next run.** A comment in the
   Dockerfile said the self-updating `claude` in the persisted HOME sits *ahead*

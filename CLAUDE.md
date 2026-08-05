@@ -256,11 +256,49 @@ rather than merely passing. This is the single choke point for the isolation inv
 - **`internal/githard`** — neutralises the parts of a repository's git config that make git *run
   commands*, for every git call sandbox-cli makes on its own behalf. See the trust-boundary
   section below.
-- **`internal/creds`** — a deliberate **stub seam** for a future credential broker. Today it
-  resolves secret *references* on the host; the values reach the container via
-  `RunSpec.ForwardedEnv`, which the docker child gets and `BuildArgs` never renders. Keep it that
-  way: they used to travel through sandbox-cli's own environment, where a secret named `PATH`
-  redirected the subprocesses spawned next.
+- **`internal/creds`** — the credential broker. It resolves secret *references* on the host; the
+  values reach the container via `RunSpec.ForwardedEnv`, which the docker child gets and
+  `BuildArgs` never renders. Keep it that way: they used to travel through sandbox-cli's own
+  environment, where a secret named `PATH` redirected the subprocesses spawned next.
+
+  It is **not** a seam for a future header-injecting proxy — that option was
+  weighed and **rejected** (open-items.md item 2, decided 2026-08-04). Injection
+  needs terminating TLS, which needs a CA in the container, which makes one
+  process hold every token, every prompt in plaintext and the CA private key: on
+  a threat model where a leak is assumed rather than avoided, that trades a
+  frequent small loss for a rare total one. The posture is instead to make a leak
+  **cheap** — prod's credential-free container, short-lived brokered values, one
+  credential per project, a short allowlist.
+
+  `lifetime.go` is the only code that decision needed, and it exists because the
+  practice was otherwise unenforced: someone writing `gh auth token` gets a
+  months-long credential believing they brokered one. `Classify` reads what a
+  value's own shape says and `sandbox.warnLongLivedSecrets` names it once per run,
+  from the last point where a secret's name and value are both in hand.
+
+  The two signals are **not** equally trustworthy and the code is arranged around
+  that. A **JWT's `exp`** is a measurement — issuer-agnostic, correct for issuers
+  that do not exist yet, and it never rots; it is also where the world is going,
+  since STS/OIDC/workload-identity tokens are JWTs. A **prefix** is a lookup
+  against a list of claims about other people's products, which can be neither
+  completed nor kept current. So the list stays short, admits a prefix only if it
+  is long, distinctive and documented as non-expiring, and — the rule that makes
+  the rot harmless — the warning **reports the evidence, never an
+  identification**: "begins with `ghp_` — GitHub personal access tokens…", so a
+  prefix reused by another issuer later still yields a true sentence. `sk-` was
+  dropped for failing this (three characters, and it named a vendor while
+  matching anything); AWS `AKIA`/`ASIA` were never added, because they match the
+  key *id* rather than the secret and would point the warning at the wrong value.
+
+  Three rules make it honest, all pinned by test: it **warns and never refuses**
+  (`ANTHROPIC_API_KEY` has no ten-minute form, so refusing would refuse the
+  ordinary case — the one place prod's asymmetry deliberately does not apply);
+  **`Unknown` is not `ShortLived`** — an opaque value prints nothing, which means
+  "nothing was recognized", never "this one is fine"; and a warning **carries no
+  part of a value** beyond the public format marker, for the reason
+  `audit.SessionMeta` has nowhere to put one. It covers `secrets:` only —
+  `--env`/`EnvAllow` values are deliberately unexamined, since warning on every
+  `ANTHROPIC_API_KEY` is how a warning becomes wallpaper.
 - **`internal/studioapi`** — the local HTTP control plane (`cmd/sandbox-studio-api`) a frontend
   talks to instead of shelling out to the CLI. It owns **no container logic**: `POST /runs` builds
   the same `sandbox.Options` a `--worktree --detach` run does and hands them to `sandbox.Session`,

@@ -54,7 +54,10 @@ will hand over the wrong credential.
 
 - **The agent can read every forwarded secret.** `printenv` is enough. It needs
   the value to authenticate, and nothing between it and the value can hide it
-  without terminating TLS — which is item 2's open decision, with its own costs.
+  without terminating TLS — which sandbox-cli has decided **not** to do, because
+  the proxy that hid every secret would also hold every secret, every prompt in
+  plaintext and a CA private key. So this one is permanent, not pending: the
+  answer is to make a leak cheap, which is what the next section is about.
 - **A leaked secret can leave over DNS.** The container uses a real resolver, and
   data encoded into query names is not something a connection-level firewall
   sees. Recorded at the bottom of `open-items.md` as knowingly open.
@@ -96,6 +99,37 @@ secrets:
 
 The agent still reads the value either way. The difference is whether what
 leaked is worth anything ten minutes later.
+
+**sandbox-cli says something when it can tell.** A brokered value that looks
+long-lived produces one line naming the secret and **what was observed about it**:
+
+```
+sandbox-cli: secret GITHUB_TOKEN begins with "gho_" — GitHub OAuth tokens, which
+is what `gh auth token` returns. A leaked value stays usable until you revoke it;
+brokering a short-lived credential bounds what that is worth. …
+```
+
+Two things are checked, and they are not equally good. The **expiry a JWT carries
+in its own payload** is a measurement: it works for any issuer, including ones
+that do not exist yet, and it cannot go out of date. A **prefix** — `ghp_`,
+`glpat-`, `xoxb-` and a few more — is a lookup against a short list, and lists
+about the outside world are wrong at the edges forever. That is why the message
+reports the prefix it saw rather than announcing whose credential you hold: if a
+prefix is later reused by someone else, the sentence stays true and you can
+dismiss it.
+
+Read what that does **not** say. It never refuses: for some credentials the
+long-lived form is the only form there is, and `ANTHROPIC_API_KEY` has no
+ten-minute variant. And **no warning is not a pass** — most credentials are
+opaque strings with no lifetime encoded in them, and the prefix list will never
+be complete, so silence means nothing was recognized, not that what you brokered
+is short-lived. Only you know that.
+
+The check reads the value on the host, reports the format marker and nothing
+else of it, and covers `secrets:` only. A credential forwarded with `--env` or a
+wrapper's `EnvAllow` is not examined — those are mostly API keys with no
+short-lived form, so warning on them would fire on nearly every run and become a
+line nobody reads.
 
 **3. Use a different credential per project.** A token shared across projects
 reintroduces the breadth that `prod` just removed: one repository's compromise
