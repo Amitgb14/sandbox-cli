@@ -47,6 +47,16 @@ version is tagged.
   credential-free container, short-lived brokered values, one credential per
   project, a short `--allow`. See [secrets.md](docs/security/secrets.md).
 
+- **The base image is rebuilt once on your next run.** A comment in the
+  Dockerfile said the self-updating `claude` in the persisted HOME sits *ahead*
+  on `PATH`. It does not, and deliberately so: that HOME is agent-writable, so
+  the bootstrap appends to `PATH` and reaches the binary by absolute path —
+  prepending would let a planted `~/.local/bin/git` shadow the image's for every
+  later run. The comment described the one thing the code refuses to do, which is
+  how it gets "fixed" into a real bug later. Nothing about the image's contents
+  changed, but the tag is a hash of the Dockerfile, so a comment is enough to
+  earn a new one.
+
 ## 0.0.1beta.9 — 2026-08-04
 
 ### Fixed
