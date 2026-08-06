@@ -182,6 +182,19 @@ func TestShareMountOpensTheSharedDirToTheContainerGroup(t *testing.T) {
 	if fi.Mode()&os.ModeSetgid == 0 {
 		t.Errorf("mode = %v, want the setgid bit", fi.Mode())
 	}
+
+	// The seeded README has to be readable too, and this is the assertion that
+	// matters most: an earlier version of this fix shared the directory *before*
+	// writing the README, leaving it 0600 — unreadable by the agent it exists to
+	// inform, on the one run that creates it. A directory-only check passed that
+	// happily. The file is what proves the ordering.
+	rfi, err := os.Stat(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatalf("stat seeded README: %v", err)
+	}
+	if perm := rfi.Mode().Perm(); perm&0o040 == 0 {
+		t.Errorf("README mode = %v, want group read — the agent cannot read the file explaining the mount", perm)
+	}
 }
 
 // A namespace gets the same treatment, and needs it separately: the root's pass
