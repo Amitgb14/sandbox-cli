@@ -11,6 +11,31 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **Under podman on Linux, Claude asked you to log in on every run — still.**
+  0.0.1beta.10 fixed this for Docker and left podman broken, and the reason is
+  worth knowing because it affects any mount into the agent's HOME.
+
+  A bind mount whose **target** does not exist is created by the container
+  runtime, as root. Under rootless podman that root is a *subordinate* uid on the
+  host — `keep-id` maps container uid 0 into your subuid range — so the directory
+  came back owned by something like `524288`, mode 0755. The claude history mount
+  targets `/sandbox/home/.claude/projects/<bucket>`, so podman created `.claude`
+  as root; Claude Code stores its token at `~/.claude/.credentials.json`, directly
+  inside it, and as uid 1001 could not write the file. Nothing persisted, so the
+  login was asked for again every time.
+
+  The group-sharing added in beta.10 could not repair it either: its `chown`/
+  `chmod` run as you, and you do not own a subuid-owned path, so both failed with
+  `EPERM` — best-effort, and therefore silently. The guest side of the mount is
+  now created on the host first, so the runtime never has to.
+
+  **If you already have the broken directory**, sandbox-cli now says so by name
+  and prints the command that clears it — `podman unshare rm -rf` is required,
+  because a plain `rm` cannot unlink inside a directory you neither own nor can
+  write.
+
 ## 0.0.1beta.10 — 2026-08-05
 
 ### Added

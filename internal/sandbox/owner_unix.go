@@ -28,3 +28,15 @@ func ownerGID(fi fs.FileInfo) (int, bool) {
 	}
 	return int(st.Gid), true
 }
+
+// ownerUID is the same read for the owning user, and exists for a different
+// question: not "should I re-group this?" but "did something else create this?"
+// A path under a sandbox-owned directory that belongs to another uid was made by
+// the container runtime, not by us — see EnsureGuestDir.
+func ownerUID(fi fs.FileInfo) (int, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return int(st.Uid), true
+}
