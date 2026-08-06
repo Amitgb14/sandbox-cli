@@ -19,7 +19,7 @@ cd sandbox-cli
 ```
 
 To *use* the tool rather than work on it, the one-line installer in
-[README.md](../README.md#install) is quicker — it needs no Go toolchain.
+[the install page](install.md) is quicker — it needs no Go toolchain.
 
 ## Everyday workflow
 

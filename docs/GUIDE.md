@@ -16,6 +16,10 @@ blast radius to one project.
 - [Command reference](#command-reference)
 - [Troubleshooting](#troubleshooting)
 
+> This guide reads front to back. For one topic on its own — sessions,
+> worktrees, a fleet, the egress allowlist, the security model — the
+> [documentation index](README.md) has a page per subject.
+
 ---
 
 ## Why use it
@@ -51,7 +55,7 @@ Windows wherever Docker runs. The one exception is selecting a microVM/gVisor
 runtime (`--runtime kata-runtime` / `runsc`), which needs **native Linux** —
 Docker Desktop on macOS/Windows doesn't allow custom runtimes (it already runs
 containers in its own Linux VM). See the
-[Platform support table](../README.md#platform-support) for the full breakdown.
+[Platform support table](platforms/README.md) for the full breakdown.
 
 ---
 
