@@ -11,6 +11,31 @@ version is tagged.
 
 ## Unreleased
 
+### Changed
+
+- **The documentation is a set of pages rather than one 1,400-line README.** The
+  README is now a landing page — what it is, install, quick start, and a map —
+  and every long section moved to a page of its own under `docs/`, indexed by
+  [`docs/README.md`](docs/README.md): install, sessions, worktrees, fleet,
+  sharing, crash recovery, monitoring, agent login and history, configuration,
+  security, and per-platform setup for Linux and Podman. Links that used to point
+  at README anchors now point at those pages.
+
+### Fixed
+
+- **The documented `.sandbox.yaml` example listed three keys a project file is no
+  longer allowed to set.** `network.allow`, `ports:` and `snapshot:` were each
+  permitted at first and later refused — `allow` only ever widens and *replaces*
+  rather than appends, publishing punches a hole in the default-deny INPUT chain,
+  and `snapshot` can disable crash protection or turn the host into a sustained
+  `git add -A` loop. The example now shows the keys a project may actually set,
+  and [Configuration](docs/configuration.md) carries the full refusal table with
+  the reason for each key.
+- **The detached-worktree walkthrough still told you to reach for `docker`.** It
+  now uses `sandbox-cli list`, `logs`, `kill` and `clean`, which have existed
+  since the session commands shipped and, unlike the raw docker equivalents,
+  cannot reach a container sandbox-cli did not start.
+
 ## 0.0.1beta.11 — 2026-08-05
 
 ### Fixed
@@ -477,7 +502,7 @@ version is tagged.
 
   Verified on macOS (Podman machine) and on Fedora with SELinux enforcing; other
   rootless Linux setups should behave the same but have not been measured. See
-  [Using Podman](README.md#using-podman).
+  [Using Podman](docs/platforms/podman.md).
 
 ## 0.0.1beta.7 — 2026-07-27
 

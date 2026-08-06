@@ -48,7 +48,7 @@ export const NAV: NavEntry[] = [
       {
         href: "#features",
         label: "Features",
-        hint: "thirty-one capabilities, filtered by the question you came with",
+        hint: "thirty-two capabilities, filtered by the question you came with",
       },
       {
         href: "#command",
@@ -74,6 +74,11 @@ export const NAV: NavEntry[] = [
         href: MULTI_AGENT_PATH,
         label: "Running a fleet",
         hint: "several agents from one file, mixed across tasks, with the work checked before it lands",
+      },
+      {
+        href: "#sessions",
+        label: "Sessions",
+        hint: "list, attach, follow and stop a run the terminal no longer holds",
       },
       {
         href: "#agents",

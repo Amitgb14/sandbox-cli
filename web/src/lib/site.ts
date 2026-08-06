@@ -21,12 +21,14 @@ export const MULTI_AGENT_PATH = "/multi-agent/";
 export const STUDIO_PATH = "/studio/";
 
 export const DOC_URL = {
+  docs: `${REPO_URL}/blob/main/docs/README.md`,
   guide: `${REPO_URL}/blob/main/docs/GUIDE.md`,
   agents: `${REPO_URL}/blob/main/docs/AGENTS.md`,
   development: `${REPO_URL}/blob/main/docs/DEVELOPMENT.md`,
   changelog: `${REPO_URL}/blob/main/CHANGELOG.md`,
   readme: `${REPO_URL}#readme`,
-  security: `${REPO_URL}#security-model`,
+  // A page of its own since the README was slimmed; it used to be a README anchor.
+  security: `${REPO_URL}/blob/main/docs/security/README.md`,
   license: `${REPO_URL}/blob/main/LICENSE`,
 } as const;
 

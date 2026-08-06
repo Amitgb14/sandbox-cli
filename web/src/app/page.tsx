@@ -11,6 +11,7 @@ import { DryRunBuilder } from "@/components/dry-run-builder";
 import { ConfigReference } from "@/components/config-reference";
 import { EgressVisualizer } from "@/components/egress-visualizer";
 import { ParallelAgents } from "@/components/parallel-agents";
+import { SessionCommands } from "@/components/session-commands";
 import { LiveGauge } from "@/components/live-gauge";
 import { AgentExplorer } from "@/components/agent-explorer";
 import { ComparisonTable } from "@/components/comparison-table";
@@ -135,7 +136,7 @@ export default function Home() {
         <Section id="features" tinted>
           <SectionHead
             eyebrow="what you actually get"
-            title="Twenty-three capabilities, one prefix"
+            title="Thirty-two capabilities, one prefix"
             lead={
               <>
                 Everything below ships today and is reachable from a flag or a{" "}
@@ -237,6 +238,27 @@ export default function Home() {
               running agents in parallel
               <ArrowUpRight className="size-3.5" />
             </Link>
+          </div>
+
+          <div id="sessions" className="mt-14 scroll-mt-20">
+            <SectionHead
+              eyebrow="supervision"
+              title="A container outlives the terminal that started it"
+              lead={
+                <>
+                  The daemon owns the container, not the client — so a{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                    kill -9
+                  </code>{" "}
+                  on sandbox-cli leaves the agent working in your project, and{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                    --detach
+                  </code>{" "}
+                  does it on purpose. Four commands address one by id, name or branch.
+                </>
+              }
+            />
+            <SessionCommands />
           </div>
 
           <div className="mt-14">
