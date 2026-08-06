@@ -28,6 +28,29 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Compile every target before GoReleaser starts, so a target that cannot
+      # build fails in seconds with the offending file named, rather than part
+      # way through a release that has already begun.
+      #
+      # This is the second line of defence, not the first: ci.yml runs the same
+      # sweep on every pull request, which is where a Windows break should be
+      # caught. It is repeated here because 0.0.1beta.10 proved the cost of
+      # learning it at tag time — the tag existed, nothing published, and it had
+      # to be re-pointed at a fix. A tag is the one thing in this process that is
+      # awkward to take back.
+      #
+      # Mirrors .goreleaser.yaml's builds block. Keep the two lists in step.
+      - name: Build every release target
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for goos in linux darwin windows; do
+            for goarch in amd64 arm64; do
+              echo "==> $goos/$goarch"
+              GOOS=$goos GOARCH=$goarch go build ./... || exit 1
+            done
+          done
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
