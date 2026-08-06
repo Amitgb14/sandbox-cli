@@ -80,6 +80,24 @@ rather than merely passing.
   group bits with setgid, non-recursively (the tree inside is the container's own, and this runs on
   every launch). `hostPrimaryGID` is a var for the same reason `hostTimezone` is.
 
+  The group is only half of it, and the other half is the **umask**. A container inherits 0022 from
+  whatever started it, which strips group-write off everything it creates — the one bit the shared
+  group exists to grant — so the host could not edit what the agent wrote, and it surfaced as
+  `git commit` failing to open `COMMIT_EDITMSG` (git writes it on every commit, `-m` included) in a
+  worktree a container had committed in. `sharedGroupUmask` renders `SANDBOX_UMASK=0002` on exactly
+  the runs `sharedGroupUser` fires on, and the pairing is the point: in the group at 0022 writes
+  files the host cannot edit, at 0002 outside the group opens the mode for a group nobody is in.
+  It is not a new trust decision — `share()` already sets `g+rw` on these paths, so this applies
+  the same mask to files created *during* the run. A umask is a property of a process, so no
+  Dockerfile directive and no docker flag can set it (podman has `--umask`; docker does not): it is
+  applied by **`sandbox-init`**, the image's default `ENTRYPOINT`, which `sandbox-firewall` also
+  hands off to after its drop so the setting survives both paths. Declared on the image rather than
+  rendered as `--entrypoint` on every run, which is what keeps a user-supplied `image:` — with no
+  `sandbox-init` in it — from being handed an entrypoint it cannot run. `SANDBOX_UMASK` is the one
+  reserved env name read *after* the privilege drop; it is reserved for reach rather than
+  privilege, since `SANDBOX_UMASK=0000` from a project `env:` would make every file the agent
+  writes to a host path world-writable.
+
   This is the single choke point for the isolation invariants (only
   declared mounts are host-connected; `HOME` is always the fake path; host home is never mounted)
   and is exhaustively unit-tested. `docker_cli.go` is the only backend today, hidden behind the

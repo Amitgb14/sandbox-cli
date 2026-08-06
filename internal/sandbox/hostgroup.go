@@ -45,6 +45,26 @@ import (
 // same files, and nothing else about the container moves — the image is
 // untouched, /workspace ownership is what it always was, and podman is left
 // alone because HostUserMapping already answers this for it.
+//
+// The group is only half of it, and the missing half showed up as a git error
+// rather than a permissions one:
+//
+//	$ git commit -s -m …
+//	fatal: could not open '…/.git/worktrees/docs/COMMIT_EDITMSG': Permission denied
+//
+// A container had committed in that worktree first, and git opens
+// COMMIT_EDITMSG for writing on every commit — including `-m`. Membership in the
+// group decides who *may* write; the umask decides whether the bits are there to
+// write with, and a container inherits 0022 from whatever started it, which
+// strips exactly the bit this whole mechanism exists to grant. So every file the
+// container created came back g-w and the host could not touch it, while
+// share() below was carefully setting g+rw on the directories around it.
+//
+// sharedGroupUmask is the answer, and it is deliberately not a new trust
+// decision: share() already opens g+rw on these paths, so applying the same mask
+// to files created during the run makes one existing decision consistent instead
+// of adding a second. It is scoped to exactly the runs sharedGroupUser fires on,
+// where the group is known to be the host user's own primary group.
 
 // hostPrimaryGID is a var so tests can pin it. BuildSpec must be deterministic,
 // and this is the one input that differs per machine — the same reason
@@ -92,6 +112,32 @@ func sharedGroupUser(engine, user string) string {
 	}
 	return sandboxUID + ":" + gid
 }
+
+// sharedGroupUmask is the umask the container must run with for sharedGroupUser
+// to still mean anything after the first file is written, or "" when the shared
+// group is not in play.
+//
+// Defined as "whatever sharedGroupUser just did", rather than by re-deriving the
+// engine/user/platform conditions: the two must fire together or the pair is
+// worse than neither — a container in the group but at 0022 writes files the
+// host cannot edit, which is the reported bug, and a container at 0002 without
+// the group writes files group-writable to a group the host is not in, which
+// widens the mode for no one's benefit.
+//
+// 0002 rather than 0007: group-write is the point, and the world bits are left
+// exactly where the default put them. This never touches the owner bits, so
+// nothing the container writes becomes less private to it.
+func sharedGroupUmask(engine, user string) string {
+	if sharedGroupUser(engine, user) == user {
+		return ""
+	}
+	return sharedGroupUmaskValue
+}
+
+// sharedGroupUmaskValue is octal and stays a string: it is passed to the
+// container's `umask`, which reads octal, and rendering a Go int would invite
+// somebody to write it as a decimal literal.
+const sharedGroupUmaskValue = "0002"
 
 // ShareWithSandboxGroup makes one sandbox-owned host directory reachable by the
 // container user, by moving it to the group that user will run with and opening

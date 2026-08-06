@@ -172,6 +172,11 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// Resolved here, before the allowlist branch splits `user` into the docker
 	// --user and SANDBOX_RUN_AS: the drop has to land on the same user the
 	// container would otherwise have started as. See hostgroup.go.
+	//
+	// The umask travels with the group for the reason recorded there: the group
+	// says who may write, the umask says whether the bits are there to write
+	// with, and either one alone leaves files the host cannot edit.
+	umask := sharedGroupUmask(cfg.Engine, user)
 	user = sharedGroupUser(cfg.Engine, user)
 	// OCI runtime (docker --runtime): "" => docker default (runc). Named
 	// runtimeName to avoid shadowing the imported runtime package.
@@ -474,7 +479,12 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	if allowlist {
 		runAs := user
 		if runAs == "" {
+			// A config that blanked `user` leaves docker to the image default while
+			// the entrypoint still has to drop to somebody, so the shared group is
+			// decided here for the second time — and the umask with it, since the
+			// user the drop lands on is the one that writes the files.
 			runAs = sharedGroupUser(cfg.Engine, defaultRunAsUser)
+			umask = sharedGroupUmask(cfg.Engine, defaultRunAsUser)
 		}
 		env["SANDBOX_EGRESS_ALLOW"] = strings.Join(egress, ",")
 		env["SANDBOX_RUN_AS"] = runAs
@@ -508,6 +518,14 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		dockerUser = "root"
 		entrypoint = "/usr/local/bin/sandbox-firewall"
 		network = runtime.SandboxNetwork // allowlist needs networking, not "none"
+	}
+	// Read by sandbox-init, which is the image's default entrypoint and also what
+	// sandbox-firewall hands off to after its drop — so this lands on the guest in
+	// both modes. Set only when there is something to say: an absent variable
+	// leaves the container's inherited 0022 alone, which is the right answer
+	// everywhere the ids do not meet.
+	if umask != "" {
+		env["SANDBOX_UMASK"] = umask
 	}
 
 	// --add-host passthrough and the --host-gateway convenience, which maps
