@@ -11,7 +11,7 @@ version is tagged.
 
 ## Unreleased
 
-## 0.0.1beta.10 — 2026-08-04
+## 0.0.1beta.10 — 2026-08-05
 
 ### Added
 
@@ -72,13 +72,25 @@ version is tagged.
   image is unchanged, `/workspace` ownership is what it always was, and macOS and
   Podman render exactly what they rendered before. Claude Code's history sync
   works on Linux for the first time as a side effect: the container can now
-  actually read the bucket it was being handed. It was silently
-  ignored, and the failure it produced was invisible: naming the file *turns
-  discovery off*, so `--config .sandbox.yml` against a `.sandbox.yaml` ran with
-  the profile's own settings — including the egress allowlist the named file had
-  turned off — and looked exactly like a run that had read it. A missing config is
-  fine at every other layer; a path you typed is not. The message names the
-  neighbouring file when a `.yml`/`.yaml` slip is what happened.
+  actually read the bucket it was being handed.
+
+- **`--config` refuses a path that is not there.** It was silently ignored, and
+  the failure it produced was invisible: naming the file *turns discovery off*, so
+  `--config .sandbox.yml` against a `.sandbox.yaml` ran with the profile's own
+  settings — including the egress allowlist the named file had switched off — and
+  looked exactly like a run that had read it. A missing config is ordinary at
+  every other layer; a path you typed is not. The message names the neighbouring
+  file when a `.yml`/`.yaml` slip is what happened, and only when that file
+  actually exists — a guess that does not resolve is noise.
+
+- **The long-lived-secret warning is said once, not once per fleet task.** A
+  fleet resolves the same `secrets:` block for every task it launches, so a
+  twenty-task fleet repeated the identical sentence twenty times — which is
+  exactly how a warning stops being read, the failure the warning's own design
+  argues against. It is now said once per secret name per process: `fleet run`
+  says it once, an interactive run says it once, and a later command says it
+  again rather than going quiet forever. Keyed by name rather than value, so a
+  broker minting a fresh long-lived token per task cannot defeat it.
 
 ### Changed
 

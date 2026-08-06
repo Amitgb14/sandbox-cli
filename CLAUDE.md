@@ -305,6 +305,12 @@ rather than merely passing.
   matching anything); AWS `AKIA`/`ASIA` were never added, because they match the
   key *id* rather than the secret and would point the warning at the wrong value.
 
+  It is said **once per secret name, per process** — a fleet resolves the same
+  `secrets:` block per task and repeated itself twenty times for a twenty-task
+  fleet, which is how a warning becomes wallpaper. The mutex guarding that state
+  is not for the fleet, whose launches are sequential; it is for `studioapi`,
+  which calls `Session.Start` from an HTTP handler.
+
   Three rules make it honest, all pinned by test: it **warns and never refuses**
   (`ANTHROPIC_API_KEY` has no ten-minute form, so refusing would refuse the
   ordinary case — the one place prod's asymmetry deliberately does not apply);
