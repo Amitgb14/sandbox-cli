@@ -11,6 +11,40 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **On Linux, files a sandbox wrote were read-only to you afterwards.** It
+  surfaced as a git failure rather than a permissions one, which is why it took a
+  while to place:
+
+  ```
+  $ git commit -s -m "…"
+  fatal: could not open '…/.git/worktrees/docs/COMMIT_EDITMSG': Permission denied
+  ```
+
+  An agent had committed in that worktree first. git opens `COMMIT_EDITMSG` for
+  writing on **every** commit — `-m` included — and the container had left it
+  owned by uid 1001, mode 0644.
+
+  On Linux the container runs as uid 1001 with *your* primary group, so you can
+  reach the files it writes; that is what 0.0.1beta.10 added. What was missing is
+  that a container inherits umask 0022 from the daemon, which strips the
+  group-write bit off everything it creates — the exact bit the shared group
+  exists to grant. The container now runs at 0002 whenever that shared group is
+  in play, so files it creates in your repo, your persisted agent HOME and your
+  Claude history bucket stay writable from the host.
+
+  Scoped to that case: nothing changes under podman (which maps your uid
+  directly), on macOS (where bind ownership is virtualized), or when you pass an
+  explicit `--user`. Group-write only — the world bits are untouched.
+
+  Files already left behind by an earlier version keep their old mode. To fix a
+  repository in that state:
+
+  ```sh
+  find .git -uid 1001 \! -perm -g+w -exec chmod g+w {} +
+  ```
+
 ## 0.0.1beta.11 — 2026-08-05
 
 ### Fixed
