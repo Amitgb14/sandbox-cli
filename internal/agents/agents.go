@@ -143,9 +143,13 @@ func (d Descriptor) Invocation(prompt string, extra []string) []string {
 //   - The installer's own output is kept, on **stderr**. Never stdout: `claude -p`
 //     writes the answer there and a fleet's verify reads it, so a chatty install
 //     would corrupt the one thing the run exists to produce.
-//   - `timeout` bounds the whole install and `--connect-timeout` bounds reaching
-//     the host at all, so an unreachable claude.ai costs seconds rather than
-//     forever. The bound is generous because a slow link is not an error.
+//   - It is bounded, and the two bounds answer different questions. A host that
+//     does not answer at all is caught by `--connect-timeout` in seconds. A host
+//     that accepts and then stalls is caught by curl's `--max-time` (120s, for a
+//     small script) and by `timeout` (900s, for the install itself) — so that
+//     worst case is minutes, not seconds. Deliberately generous: a slow link is
+//     not an error, and killing a download that would have finished leaves the
+//     user worse off than waiting for it.
 //
 // Failure is still not fatal — `|| true` in spirit — because the baked copy works.
 // But it now says so, and says what to allow under an egress allowlist, since
