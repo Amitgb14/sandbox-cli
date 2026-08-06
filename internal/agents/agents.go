@@ -127,9 +127,47 @@ func (d Descriptor) Invocation(prompt string, extra []string) []string {
 // shape as the root-phase hazard in CLAUDE.md, one privilege drop later. The
 // wanted binary is reached by absolute path instead, which needs no PATH
 // precedence at all.
+//
+// **It says what it is doing, and it is bounded.** This used to run the installer
+// with both streams sent to /dev/null and no timeout, which made the first run of
+// the flagship agent a multi-minute silence — the download is a whole Claude Code
+// binary. Reported as a hang, and reasonably: it is indistinguishable from one.
+// Worse, interrupting it leaves nothing behind, so the next run started over and
+// the "first run only" cost became permanent.
+//
+// Three things follow, and the middle one is the reason the other bootstraps
+// (bootstrap.go) could stay quiet while this one cannot: they install in seconds
+// from a registry, this fetches a large release binary.
+//
+//   - It announces itself in the same words as every other agent's install.
+//   - The installer's own output is kept, on **stderr**. Never stdout: `claude -p`
+//     writes the answer there and a fleet's verify reads it, so a chatty install
+//     would corrupt the one thing the run exists to produce.
+//   - `timeout` bounds the whole install and `--connect-timeout` bounds reaching
+//     the host at all, so an unreachable claude.ai costs seconds rather than
+//     forever. The bound is generous because a slow link is not an error.
+//
+// Failure is still not fatal — `|| true` in spirit — because the baked copy works.
+// But it now says so, and says what to allow under an egress allowlist, since
+// `claude.ai` and `downloads.claude.ai` are not in the baseline and so this
+// install fails silently on every run for anyone using the built-in default.
 const ClaudeBootstrap = `export PATH="$PATH:$HOME/.local/bin"
-if [ ! -x "$HOME/.local/bin/claude" ]; then
-  command -v curl >/dev/null 2>&1 && curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1 || true
+if [ ! -x "$HOME/.local/bin/claude" ] && command -v curl >/dev/null 2>&1; then
+  echo "sandbox-cli: installing the self-updating claude into the sandbox agent home (first run only; this downloads a release binary)..." >&2
+  bound=""
+  command -v timeout >/dev/null 2>&1 && bound="timeout 900"
+  installer="$(mktemp)"
+  if curl -fsSL --connect-timeout 15 --max-time 120 -o "$installer" https://claude.ai/install.sh; then
+    $bound bash "$installer" >&2 || true
+  fi
+  rm -f "$installer"
+  # Judged on the outcome, not on exit codes. A vendor script that returns 0
+  # without leaving a binary behind would otherwise pass silently — and "it said
+  # nothing and nothing happened" is the failure this whole block exists to end.
+  if [ ! -x "$HOME/.local/bin/claude" ]; then
+    echo "sandbox-cli: that install did not finish — continuing with the copy baked into the image, which cannot update itself." >&2
+    echo "sandbox-cli: re-run to retry; with an egress allowlist it needs --allow claude.ai --allow downloads.claude.ai." >&2
+  fi
 fi
 if [ -x "$HOME/.local/bin/claude" ]; then
   exec "$HOME/.local/bin/claude" "$@"
