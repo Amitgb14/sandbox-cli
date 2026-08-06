@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strconv"
-	"syscall"
 
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 )
@@ -154,8 +153,7 @@ func share(path string, gid int, isDir bool) {
 		mode |= os.ModeSetgid
 	}
 
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok || int(st.Gid) != gid {
+	if cur, ok := ownerGID(fi); !ok || cur != gid {
 		// -1 leaves the owner alone: the point is to share the directory, not to
 		// hand it over. Permitted for the owner as long as they are a member of
 		// the target group, which they are — it is their own primary group.
