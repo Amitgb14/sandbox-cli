@@ -57,7 +57,7 @@ const VERIFY_STEP: SetupStep = {
 const FIRST_RUN_STEP: SetupStep = {
   title: "Run an agent",
   code: "cd ~/your-project\nsandbox-cli claude",
-  body: "The first run builds the base image, which takes a few minutes once. Only this directory is mounted; HOME inside the container is fake and dies with it. Egress follows the config from two steps ago — unrestricted as written, default-deny the moment you set `mode: allowlist` or pass --allow.",
+  body: "The first run is slow twice over and mostly silent: it builds the base image (a few minutes), and the claude wrapper then downloads a self-updating copy of Claude Code into the persisted agent home — a large binary, with no progress shown. Interrupting either throws that work away and the next run starts from scratch, so let the first one finish; later runs start immediately. To watch it instead of guessing, run the install with its output visible: `sandbox-cli run -- sh -c 'curl -fsSL https://claude.ai/install.sh | bash'`. Only this directory is mounted; HOME inside the container is fake and dies with it. Egress follows the config from two steps ago — unrestricted as written, default-deny the moment you set `mode: allowlist` or pass --allow.",
 };
 
 /**
@@ -119,8 +119,8 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       {
         title: "Let your user talk to the daemon",
-        code: "sudo usermod -aG docker $USER   # then log out and back in",
-        body: "Without this every command needs sudo. Note that membership of the docker group is root-equivalent on the host — that is Docker's model, not sandbox-cli's, and it is worth knowing before you grant it.",
+        code: "sudo usermod -aG docker $USER\n\n# groups only apply to a NEW session. Either log out and back in, or:\nnewgrp docker\nid -nG | tr ' ' '\\n' | grep -qx docker && echo ok",
+        body: "Without this every command needs sudo. The trap is the second half: usermod changes the account, but your current shell keeps the old group set, so sandbox-cli goes on reporting `permission denied ... /var/run/docker.sock` however many times you restart the daemon — the missing piece is on the client side, not the daemon's. `newgrp docker` gives you a shell that has it now. And note that membership of the docker group is root-equivalent on the host: anyone in it can start a privileged container mounting /. That is Docker's model rather than sandbox-cli's, and rootless Docker avoids it.",
       },
       INSTALL_STEP,
       CONFIG_STEP,
