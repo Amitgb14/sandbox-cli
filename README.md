@@ -938,6 +938,15 @@ projects — the directory is the same for all of them. On the host it lives at
 `~/.config/sandbox/shared`, so you can open it in an editor, diff it, or drop
 files in yourself. It's created on first use with a README explaining what it is.
 
+**On native Linux it is also group-accessible, and that is worth one look.** A
+bind mount there carries real uids, so a directory owned by you at `0700` cannot
+be opened by the container at all — `/shared` was simply `EACCES`. It is now
+`0770` with your **primary** group, which the container already runs with. If
+your primary group is personal (`you:you`, the usual case) nothing else changes.
+If it's a shared one — `docker`, `users`, a team group — its other members can
+read and write `/shared` too, and the setgid bit propagates that group to what
+the agent writes. `id -gn` tells you which you have.
+
 ### Namespacing concurrent runs
 
 Because `/shared` is one well-known path, two sandboxes racing to write the

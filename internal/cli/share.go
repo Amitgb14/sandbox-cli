@@ -44,6 +44,12 @@ Files written here persist on the host after the containers exit, and are shared
 read-write by every sandbox using --share, so treat it as scratch space with one
 owner per file rather than a database. For versioned handover, keep a git repo
 in here and push to it from both sides.
+
+On native Linux this directory is also group-accessible, because a bind mount
+there carries real uids and the container would otherwise be unable to open it
+at all. The group is your primary group -- so if that group is a shared one
+(docker, users, a team group), its other members can read and write here too.
+Run ` + "`id -gn`" + ` if that matters to you.
 `
 
 // shareMount resolves --share (with an optional namespace) into the bind-mount
@@ -81,6 +87,38 @@ func shareMount(name string) (string, error) {
 		}
 		seedShareNamespaceReadme(dir, name, target)
 	}
+
+	// 0700 and a host uid make this directory unopenable by the container on the
+	// one platform where bind-mount ownership is real. macOS virtualizes it and
+	// rootless podman maps the host user onto the container user, which is why
+	// this went unnoticed: both of those cases work. Native Linux under docker has
+	// neither, so the agent faced a directory it was not the owner of, with no
+	// group bits — `ls /shared` was EACCES, let alone writing a handoff file.
+	// Reported as #31.
+	//
+	// Same treatment, and the same machinery, as the persisted agent HOME: the
+	// container already runs with the host's primary group there, so opening the
+	// group bits is all that was missing. A no-op off Linux, so the two working
+	// cases render exactly what they rendered before.
+	//
+	// **Last, and that is three separate decisions.** After the seeds, because the
+	// pass reaches a directory's direct entries and a README written afterwards
+	// would stay 0600 — unreadable by the agent it exists to inform, on the one run
+	// that creates it. After RefuseUnsafeHostPath, because chmod-ing a path and
+	// then asking whether it was safe to touch is the same erosion that refusal
+	// exists to prevent. And on `dir` rather than only `root`, since a namespace is
+	// what actually gets mounted.
+	//
+	// One caveat this cannot decide for the user: the group is the host user's
+	// *primary* group, so where that group is shared (`docker`, `users`, a team
+	// group) this makes /shared readable and writable by its other members, and
+	// setgid propagates it to what the agent writes. Said out loud in the seeded
+	// README and in README.md, because it is a property of the host's group layout
+	// rather than something sandbox-cli can narrow.
+	if err := sandbox.RefuseUnsafeHostPath(dir); err != nil {
+		return "", fmt.Errorf("--share: %w", err)
+	}
+	sandbox.ShareWithSandboxGroup(dir)
 	fmt.Fprintf(os.Stderr, "sandbox-cli: sharing %s at %s\n", dir, target)
 	return dir + ":" + target + ":rw", nil
 }
