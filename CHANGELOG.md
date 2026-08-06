@@ -11,6 +11,17 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **The long-lived-secret warning is said once, not once per fleet task.** A
+  fleet resolves the same `secrets:` block for every task it launches, so a
+  twenty-task fleet repeated the identical sentence twenty times — which is
+  exactly how a warning stops being read, the failure the warning's own design
+  argues against. It is now said once per secret name per process: `fleet run`
+  says it once, an interactive run says it once, and a later command says it
+  again rather than going quiet forever. Keyed by name rather than value, so a
+  broker minting a fresh long-lived token per task cannot defeat it.
+
 ### Added
 
 - **A brokered secret that looks long-lived now says so.** `secrets:` resolves a
