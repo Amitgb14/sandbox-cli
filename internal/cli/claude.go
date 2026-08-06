@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -149,8 +150,42 @@ func claudeHistoryMount(rf *runFlags) (src, target string, ok bool) {
 	if wd == "" {
 		wd = "/workspace"
 	}
-	target = "/sandbox/home/.claude/projects/" + claudeProjectBucket(wd)
+	target = claudeGuestHome + "/.claude/projects/" + claudeProjectBucket(wd)
+
+	// Create the guest side of the mount, on the host, before the container can.
+	// A bind mount whose target is missing is created by the runtime as root, and
+	// under rootless podman that is a subordinate uid — which left `.claude`
+	// unwritable by the agent and cost a login on every run. Only when a persisted
+	// HOME is actually mounted, since that is what makes this guest path a host
+	// path at all. See sandbox.EnsureGuestDir.
+	if dir := persistedHome(rf); dir != "" {
+		sandbox.EnsureGuestDir(dir, strings.TrimPrefix(target, claudeGuestHome+"/"))
+	}
 	return src, target, true
+}
+
+// claudeGuestHome is the container HOME the persisted directory is mounted at, and
+// the prefix that turns a guest path back into a host one. A constant because the
+// mount target and the pre-creation below must not be able to disagree about it.
+const claudeGuestHome = "/sandbox/home"
+
+// persistedHome returns the host directory that will be mounted as the agent HOME,
+// or "" when this run mounts none — `--no-persist-auth`, or a profile that turns it
+// off, in which case there is no host path to prepare and creating one would leave
+// state behind for a run that asked for none.
+func persistedHome(rf *runFlags) string {
+	if rf.persistName == "" || rf.noPersistAuth {
+		return ""
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	cfg, err := config.LoadProfile(wd, rf.config, rf.profile)
+	if err != nil || !cfg.PersistAuthEnabled() {
+		return ""
+	}
+	return config.AgentStateDir(rf.persistName)
 }
 
 // ensureClaudeStatuslineSettings writes the managed-settings.json to a sandbox-

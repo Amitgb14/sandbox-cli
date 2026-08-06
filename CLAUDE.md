@@ -628,6 +628,21 @@ first, then the model, so a terminal that fit the line before this feature still
 exactly what it did. `SANDBOX_STATUSLINE_NO_USAGE=1` / `_NO_MODEL=1` opt out individually.
 Design and rejected alternatives: `docs/proposals/usage-stats.md`.
 
+**A mount into the agent's HOME needs its target created first.** A bind mount
+whose target does not exist is created by the container *runtime*, as root — and
+under rootless podman that root is a subordinate uid on the host (`keep-id` maps
+container 0 into your subuid range), so the directory comes back owned by e.g.
+`524288` at mode 0755. Inside the container that reads as root-owned and not
+group-writable, so the agent (uid 1001) cannot write beside it. That is how the
+claude history mount left `~/.claude` unwritable and cost a login on **every**
+run under podman, after beta.10 had fixed the same symptom for Docker.
+`sandbox.EnsureGuestDir` creates the chain on the host first, and each level, since
+the container must *traverse* every component. `ShareWithSandboxGroup` cannot fix
+it afterwards — its `chown`/`chmod` run as the invoking user, who does not own a
+subuid-owned path, so they fail with `EPERM` and do it silently. A level that is
+already foreign-owned is therefore reported by name, with the `podman unshare rm
+-rf` that clears it, because that state can be detected and not repaired.
+
 `claude` additionally read-write mounts the host's Claude history for the current project
 (`~/.claude/projects/<bucket>`) into the persisted HOME by default, so host sessions resolve
 inside the sandbox and vice versa. `--no-sync` opts out. This is the one default that reaches a
