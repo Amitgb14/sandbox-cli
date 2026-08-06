@@ -14,12 +14,31 @@ task 2 branch, which included every commit here — so the corrected
 `internal/cli/stats_integration_test.go` is verified against a real daemon rather than
 merely compiled.
 
-**The gap that remains is coverage, not correctness:** no integration test exercises
-`list`, `logs`, `attach` or `kill`. The suite covers `stats`, isolation, egress and
-worktrees; the four session commands are proved only by unit tests against a fake
-backend. `attach`'s Ctrl-C-detaches behaviour and `kill --force` in particular have
-never run against a container. The manual pass in #35's description is still the only
-thing that would exercise them, and an integration test for them is the obvious follow-up.
+**The coverage gap this document used to record is closed.**
+`internal/cli/session_integration_test.go` now exercises all four session commands
+against a real daemon, and it covers the three claims a fake backend cannot make
+because they are claims about docker rather than about this package:
+
+- **`attach` cannot kill.** Ending the client — a cancelled context, which is what
+  Ctrl-C does through `--sig-proxy=false` — leaves the guest running, asserted by
+  inspecting the container afterwards.
+- **`--force` is a different signal, not a louder word.** The polite guest catches
+  SIGTERM, prints, and exits with its own code inside the grace period; the stubborn
+  one ignores SIGTERM and only SIGKILL (137) ends it.
+- **The listing's fields are parsed from `docker inspect`** — `OpenStdin`, the exit
+  code, the timestamps and the state strings, all of which a fake supplies by
+  construction.
+
+Writing it turned up one thing worth keeping: **PID 1 does not get default signal
+dispositions**, so a container running plain `sleep 300` ignores SIGTERM and
+`docker stop` falls through its 10-second grace period to SIGKILL. A graceful-stop
+test written the obvious way therefore passes while proving the opposite of its
+claim, which is why both guests install a trap deliberately.
+
+What is still manual, and small: nobody has typed at an interactive attached
+session from a real tty. The test attaches to a container started without stdin —
+the detached shape — so the *keyboard* half of `attach` is covered by the note it
+prints rather than by a keystroke.
 
 This is the task that decides whether the tool gets used. Everything in it is about the
 minutes between "I want an agent to do this" and "I have read what it did".
