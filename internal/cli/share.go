@@ -61,6 +61,18 @@ func shareMount(name string) (string, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", fmt.Errorf("creating shared dir %s: %w", root, err)
 	}
+	// 0700 and a host uid make this directory unopenable by the container on the
+	// one platform where bind-mount ownership is real. macOS virtualizes it and
+	// rootless podman maps the host user onto the container user, which is why
+	// this went unnoticed: both of those cases work. Native Linux under docker has
+	// neither, so the agent faced a directory it was not the owner of, with no
+	// group bits — `ls /shared` was EACCES, let alone writing a handoff file.
+	//
+	// Same treatment, and the same machinery, as the persisted agent HOME: the
+	// container already runs with the host's primary group there, so opening the
+	// group bits is all that was missing. A no-op off Linux, so the two working
+	// cases render exactly what they rendered before. Reported as #31.
+	sandbox.ShareWithSandboxGroup(root)
 	seedSharedReadme(root)
 
 	// The root is a derived path rather than user input, so this can essentially
@@ -211,6 +223,13 @@ func shareNamespaceDir(root, name string) (hostDir, target string, err error) {
 	}
 
 	hostDir = filepath.Join(root, name)
+
+	// The namespace needs the same group treatment as the root above, and needs it
+	// separately: ShareWithSandboxGroup reaches a directory's direct entries, so a
+	// namespace created by *this* call is covered by the root's pass only if that
+	// pass runs afterwards — and it does not. Applied here, where the directory is
+	// known to exist and to be a real directory rather than a symlink.
+	sandbox.ShareWithSandboxGroup(hostDir)
 
 	// Second, independent check on the path string we are about to hand
 	// docker: docker resolves the mount source on the host, not through
