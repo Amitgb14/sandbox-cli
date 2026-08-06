@@ -1,0 +1,86 @@
+name: ci
+
+# What runs before a change lands, and why it exists.
+#
+# Until now the Go suite ran in exactly one place: the release workflow, on tag
+# push. So `main` was only ever compiled for the runner's own platform, and the
+# first build for Windows happened *after* a version tag had been created. That
+# is not hypothetical — 0.0.1beta.10 was tagged with a `syscall.Stat_t`
+# reference in internal/sandbox, the Windows targets failed to compile, nothing
+# published, and the tag had to be re-pointed at a fix.
+#
+# The lesson is not "add Windows"; it is that a release builds six targets and a
+# PR built none of them. This runs the same six.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Cheapest first: a formatting or vet failure should not wait behind the
+      # suite. `gofmt -l` prints offending files and exits 0, so the file list
+      # is what has to fail the step.
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      # Unit tests only. The integration suite is behind the docker_integration
+      # build tag and needs a daemon, which is deliberately not this job.
+      - name: test
+        run: go test ./...
+
+      # The race detector, on the packages whose correctness depends on
+      # concurrency. Not the whole tree: -race is slow, and a package with no
+      # goroutines gains nothing from it.
+      - name: test -race
+        run: go test -race ./internal/sandbox/ ./internal/egressproxy/ ./internal/studioapi/ ./internal/fleet/
+
+  # Compile every target the release actually ships. Kept a separate job so its
+  # verdict is legible on its own: "the release would not build" is a different
+  # sentence from "a test failed".
+  #
+  # Mirrors .goreleaser.yaml's builds block — {linux,darwin,windows} ×
+  # {amd64,arm64}, CGO_ENABLED=0. If that list changes, change this one; a sweep
+  # that has drifted from what ships is worse than none, because it reassures.
+  build-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every broken target in one run, rather than stopping at the first
+      # and hiding the rest.
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ./... rather than ./cmd/sandbox-cli, which is all GoReleaser builds:
+      # the break that motivated this was in internal/sandbox, and compiling
+      # every package catches one in code the binary does not import yet.
+      - name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./...
