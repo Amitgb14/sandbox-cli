@@ -47,6 +47,11 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	if err != nil {
 		return 1, err
 	}
+	// Here rather than at each caller: every path that mounts a persisted HOME
+	// — run, the wrappers, fleet, Studio — needs it, and a host-side fix the
+	// callers have to remember is one a new caller will not. Never in Prepare,
+	// which --dry-run uses: printing a command must not touch the filesystem.
+	ShareWithSandboxGroup(opts.AuthPersistDir)
 	if err := s.Runtime.Available(ctx); err != nil {
 		return 1, err
 	}
@@ -105,6 +110,7 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	if err != nil {
 		return "", err
 	}
+	ShareWithSandboxGroup(opts.AuthPersistDir) // same reason as Run's
 	if err := s.Runtime.Available(ctx); err != nil {
 		return "", err
 	}

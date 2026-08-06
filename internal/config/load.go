@@ -53,6 +53,14 @@ func LoadProfile(startDir, explicitPath, flagProfile string) (Config, error) {
 		// An explicitly named file is trusted: typing the path is the deliberate
 		// act that a discovered .sandbox.yaml never involves. This is the supported
 		// way to use a checked-in config you have actually read.
+		//
+		// Which is also why it has to be there: see ErrConfigNotFound.
+		if _, err := os.Stat(explicitPath); err != nil {
+			if os.IsNotExist(err) {
+				return cfg, &ErrConfigNotFound{Path: explicitPath}
+			}
+			return cfg, fmt.Errorf("reading config %s: %w", explicitPath, err)
+		}
 		if err := mergeFile(&cfg, explicitPath); err != nil {
 			return cfg, err
 		}
@@ -94,6 +102,46 @@ func discoverProfile(startDir, explicitPath, flagProfile string) (string, error)
 		}
 	}
 	return ResolveProfile(flagProfile, user, project)
+}
+
+// ErrConfigNotFound is returned when --config names a file that is not there.
+//
+// A missing config is ordinary at every other layer — a user may have none, and
+// a project may not carry one — but an explicit path is a string somebody typed,
+// so ignoring it silently is the worst of both: discovery is skipped *because*
+// the flag was given, the profile's defaults are all that remain, and nothing on
+// screen says the file was never read. The report was `--config .sandbox.yml`
+// against a file named `.sandbox.yaml`, which ran under the dev profile's egress
+// allowlist that the file being pointed at had turned off.
+type ErrConfigNotFound struct{ Path string }
+
+func (e *ErrConfigNotFound) Error() string {
+	msg := fmt.Sprintf("config file not found: %s", e.Path)
+	if alt := siblingConfigPath(e.Path); alt != "" {
+		msg += fmt.Sprintf("\n  Did you mean %s?", alt)
+	}
+	return msg + "\n" +
+		"  --config names a file explicitly, so a missing one is a typo rather than a\n" +
+		"  default: continuing would run with none of its settings and say nothing."
+}
+
+// siblingConfigPath returns the same path under the other YAML extension when
+// that file does exist, so a .yml/.yaml slip answers itself. Returns "" when
+// there is nothing to suggest — a guess that does not exist is noise.
+func siblingConfigPath(path string) string {
+	var alt string
+	switch filepath.Ext(path) {
+	case ".yml":
+		alt = strings.TrimSuffix(path, ".yml") + ".yaml"
+	case ".yaml":
+		alt = strings.TrimSuffix(path, ".yaml") + ".yml"
+	default:
+		return ""
+	}
+	if fi, err := os.Stat(alt); err != nil || fi.IsDir() {
+		return ""
+	}
+	return alt
 }
 
 // mergeProjectFile is mergeFile for a *discovered* .sandbox.yaml — the one config

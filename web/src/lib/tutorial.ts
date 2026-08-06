@@ -50,9 +50,9 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
       "docker info >/dev/null && echo 'docker ok'",
     ].join("\n"),
     body:
-      "The installer detects your OS and CPU, verifies the archive against the release checksums.txt, and drops a single binary in ~/.local/bin. No root, no package manager, nothing to add to your shell profile beyond having that directory on PATH. Docker is the one real prerequisite — Docker Desktop on macOS and Windows.",
+      "The installer detects your OS and CPU, verifies the archive against the release checksums.txt, and drops a single binary in ~/.local/bin. No root, no package manager, nothing to add to your shell profile beyond having that directory on PATH. Docker is the one real prerequisite — Docker Desktop on macOS and Windows. On a machine that has none, it also writes ~/.config/sandbox/config.yaml: every default spelled out and commented, with `profile: dev` and `network.mode: default` — unrestricted egress, so the first run works with any agent and provider. An upgrade never overwrites it, and --no-config skips it.",
     expect:
-      "A version line and the base image tag, then `docker ok`. If docker is not reachable, everything below fails at the same place with the same message.",
+      "A version line and the base image tag, then `docker ok`. If docker is not reachable, everything below fails at the same place with the same message. `sandbox-cli config show` prints what that file resolved to.",
   },
   {
     title: "Ask this host what it can actually deliver",
@@ -98,13 +98,13 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
       "You authenticate on the first run and never again. --no-persist-auth means an ephemeral HOME and logging in every time.",
   },
   {
-    title: "When something cannot reach the network, widen it deliberately",
+    title: "Bound what it can reach, then widen deliberately",
     code:
       "sandbox-cli claude --allow deb.debian.org --allow proxy.golang.org",
     warn:
-      "Egress is default-deny. A build that reaches an unlisted host fails, and the refusal is printed with the hostname.",
+      "In allowlist mode a build that reaches an unlisted host fails, and the refusal is printed with the hostname.",
     body:
-      "Runs start with an allowlist covering the agent APIs, npm, PyPI and GitHub, so most projects need nothing added. When one does, --allow names a domain for that run. Enforcement is by name, not address: a proxy inside the container reads the hostname from the TLS SNI or the HTTP Host header and resolves it fresh per connection, so allowing one domain does not quietly admit every other host sharing its IP.",
+      "The config the installer wrote says `network.mode: default`, so egress starts unrestricted. Passing --allow switches that run to default-deny — an allowlist covering the agent APIs, npm, PyPI and GitHub, plus the domains you name — and setting `mode: allowlist` in ~/.config/sandbox/config.yaml makes it the standing rule. Enforcement is by name, not address: a proxy inside the container reads the hostname from the TLS SNI or the HTTP Host header and resolves it fresh per connection, so allowing one domain does not quietly admit every other host sharing its IP.",
     expect:
       "`sandbox-cli: egress DENY <host>:443 (not on the egress allowlist)` is the line to look for. It names exactly what to pass to --allow.",
   },
@@ -222,8 +222,9 @@ export const OPTION_GROUPS: OptionGroup[] = [
       {
         flag: "--network MODE",
         key: "network.mode",
-        what: "allowlist (default), default (unrestricted), or none.",
-        fallback: "allowlist, with the built-in baseline on.",
+        what: "allowlist, default (unrestricted), or none.",
+        fallback:
+          "default, from the config the installer wrote. sandbox-cli's own built-in default is allowlist with the baseline on — a machine with no config file runs that way.",
         dir: "neutral",
       },
       {
@@ -480,7 +481,7 @@ export const CHALLENGES: Challenge[] = [
   {
     symptom: "Claude Code silently stops updating itself",
     cause:
-      "The self-updating install lives in the persisted HOME and fetches from claude.ai and downloads.claude.ai. Neither is in the baseline, so with the allowlist on by default the download is refused, and the run falls back to the copy baked into the image — which is root-owned and can never update.",
+      "The self-updating install lives in the persisted HOME and fetches from claude.ai and downloads.claude.ai. Neither is in the baseline, so as soon as you are in allowlist mode the download is refused and the run falls back to the copy baked into the image — which is root-owned and can never update.",
     fix: "Allow both hosts, or put them in your own config so every run has them.",
     fixCode: "sandbox-cli claude --allow claude.ai --allow downloads.claude.ai",
     scope: "both",

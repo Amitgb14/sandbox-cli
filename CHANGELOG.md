@@ -11,16 +11,7 @@ version is tagged.
 
 ## Unreleased
 
-### Fixed
-
-- **The long-lived-secret warning is said once, not once per fleet task.** A
-  fleet resolves the same `secrets:` block for every task it launches, so a
-  twenty-task fleet repeated the identical sentence twenty times — which is
-  exactly how a warning stops being read, the failure the warning's own design
-  argues against. It is now said once per secret name per process: `fleet run`
-  says it once, an interactive run says it once, and a later command says it
-  again rather than going quiet forever. Keyed by name rather than value, so a
-  broker minting a fresh long-lived token per task cannot defeat it.
+## 0.0.1beta.10 — 2026-08-05
 
 ### Added
 
@@ -46,6 +37,60 @@ version is tagged.
   by `--env` or a wrapper's `EnvAllow` is left alone, since warning on every
   `ANTHROPIC_API_KEY` is how a warning becomes wallpaper. Nothing of the value is
   printed beyond the format marker.
+
+- **The installer now writes your config.** A first install (the `curl … | sh`
+  one-liner) creates `~/.config/sandbox/config.yaml` with every default spelled
+  out and commented, `profile: dev`, and `network.mode: default` — unrestricted
+  egress, so a fresh machine runs any agent, model provider or private registry
+  without a domain list to maintain first. sandbox-cli's *built-in* default is
+  unchanged and still `allowlist`; the relaxation is one visible line in a file
+  you own, and changing that word back is how you bound it again. An existing
+  file is never overwritten, so upgrading cannot undo what you tightened, and
+  `--no-config` skips writing one. `go install` writes nothing and keeps the
+  stricter built-in defaults.
+
+  Two things to know. Nothing about the *host* boundary depends on this — your
+  home, your keys and your other repositories are as unreachable as ever — but an
+  agent can post what it can read anywhere, which is what the allowlist was for.
+  And `--profile prod` requires an allowlist, so it refuses while that block says
+  `default`: comment the two lines out on a machine that runs unattended.
+
+### Fixed
+
+- **On Linux, an agent login no longer evaporates when the container exits.**
+  You logged in, it said you were logged in, and the next run asked again. Bind
+  mounts on native Linux carry real uids: the container user is uid 1001, and the
+  persisted agent HOME is a directory *you* own at mode 0700 — so the agent could
+  not read the stored credentials, and could not write the ones it had just
+  obtained either. The token lived in memory and died with the container. macOS
+  never showed it, because Docker Desktop virtualizes bind ownership.
+
+  The fix is a shared group, not a change of owner: on Linux the container runs
+  as `1001:<your gid>`, and sandbox-cli's own state dirs — the persisted HOME and
+  claude's per-project history bucket — get group access with the setgid bit, so
+  what the agent writes stays readable from the host. Nothing is chowned, the
+  image is unchanged, `/workspace` ownership is what it always was, and macOS and
+  Podman render exactly what they rendered before. Claude Code's history sync
+  works on Linux for the first time as a side effect: the container can now
+  actually read the bucket it was being handed.
+
+- **`--config` refuses a path that is not there.** It was silently ignored, and
+  the failure it produced was invisible: naming the file *turns discovery off*, so
+  `--config .sandbox.yml` against a `.sandbox.yaml` ran with the profile's own
+  settings — including the egress allowlist the named file had switched off — and
+  looked exactly like a run that had read it. A missing config is ordinary at
+  every other layer; a path you typed is not. The message names the neighbouring
+  file when a `.yml`/`.yaml` slip is what happened, and only when that file
+  actually exists — a guess that does not resolve is noise.
+
+- **The long-lived-secret warning is said once, not once per fleet task.** A
+  fleet resolves the same `secrets:` block for every task it launches, so a
+  twenty-task fleet repeated the identical sentence twenty times — which is
+  exactly how a warning stops being read, the failure the warning's own design
+  argues against. It is now said once per secret name per process: `fleet run`
+  says it once, an interactive run says it once, and a later command says it
+  again rather than going quiet forever. Keyed by name rather than value, so a
+  broker minting a fresh long-lived token per task cannot defeat it.
 
 ### Changed
 

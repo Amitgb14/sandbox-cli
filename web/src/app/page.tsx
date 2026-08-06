@@ -24,6 +24,7 @@ import { OptionCatalog } from "@/components/option-catalog";
 import { ChallengeTable } from "@/components/challenge-table";
 import { ProfileDiff } from "@/components/profile-diff";
 import { InstallCard } from "@/components/install-card";
+import { UninstallSteps } from "@/components/uninstall-steps";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { AGENTS, BAKED_COUNT } from "@/lib/agents";
@@ -468,6 +469,7 @@ export default function Home() {
                 logins, and silently deleting it would sign you out of everything with no warning.
                 Add <code className="font-mono text-[0.9em]">--purge</code> when you mean it.
               </p>
+              <UninstallSteps className="mt-5 max-w-xl" />
             </div>
 
             <div className="flex flex-col gap-3">
