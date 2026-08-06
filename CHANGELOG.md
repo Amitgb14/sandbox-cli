@@ -11,6 +11,8 @@ version is tagged.
 
 ## Unreleased
 
+## 0.0.1beta.11 — 2026-08-05
+
 ### Fixed
 
 - **Under podman on Linux, Claude asked you to log in on every run — still.**
@@ -83,6 +85,9 @@ version is tagged.
 ### Fixed
 
 - **On Linux, an agent login no longer evaporates when the container exits.**
+  *Correction: this held for Docker only. Under podman the same symptom survived
+  for a different reason, fixed in 0.0.1beta.11 above.*
+
   You logged in, it said you were logged in, and the next run asked again. Bind
   mounts on native Linux carry real uids: the container user is uid 1001, and the
   persisted agent HOME is a directory *you* own at mode 0700 — so the agent could
