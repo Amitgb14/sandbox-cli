@@ -18,6 +18,7 @@ the one before it is good enough to use daily.
 | 4 | [Run provenance](task-4-run-provenance.md) | Make a finished run readable: what the agent actually did, from a channel the sandbox cannot forge. Today the log is one line per run. | Not started |
 | 5 | [Checkpoint and fork](task-5-checkpoint-and-fork.md) | Stop paying cold start per worktree, and let three attempts at one fix branch from a single prepared state. | Not started |
 | 6 | [macOS microVM](task-6-macos-microvm.md) | A libkrun backend, so the stronger boundary is reachable on the platform most users are on. | Not started |
+| 7 | [Bring your own agent](task-7-bring-your-own-agent.md) | Make pointing sandbox-cli at your own Python/Node agent as cheap as pointing it at Claude Code: templates, a workload file, `pip` in the base image, and an SDK over the API that already takes `command[]`. | Not started |
 
 ## Why this order
 
@@ -139,6 +140,27 @@ traffic still meets the firewall and the name-matching proxy.
 
 The rest become relevant *after* the basic CLI experience feels good and people start
 asking for stronger isolation or multi-agent orchestration.
+
+## How task 7 got here
+
+A second landscape pass in August 2026 read Vercel Sandbox's SDK documentation,
+agent-infra's AIO Sandbox, and Mastra's comparison of six agent-sandbox platforms. The
+gap it exposed is not a boundary gap — `run -- <anything>` already gets the full
+boundary — it is that every ergonomic affordance here is agent-wrapper-shaped, so a user
+arriving with their own agent pays a day of reading before their first run. Three
+specifics moved it from an irritation onto the list:
+
+- **`POST /v1/runs` has accepted `command[]` since Studio shipped** and nothing says so.
+  Most of an SDK's surface already exists and is undocumented, which makes this the
+  cheapest parity item on this roadmap rather than a new subsystem.
+- **The base image has `python3` and no `pip`.** Every Python user must build a custom
+  image before their first run, which puts the hardest step first.
+- **The base image tag is content-addressed and no command prints it**, so a `FROM` line
+  cannot be written without reading a README that goes stale.
+
+It sits behind tasks 3–6 rather than displacing them: none of it is a boundary control,
+and task 3 is the boundary this tool advertises. The argument for pulling its two
+one-line fixes forward independently of the task is recorded in the document itself.
 
 ## How to read these documents
 
