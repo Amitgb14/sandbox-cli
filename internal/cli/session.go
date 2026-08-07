@@ -242,8 +242,28 @@ func renderSessions(w io.Writer, rows []runtime.ContainerInfo, all bool, now tim
 		}
 		return nil
 	}
+	// The RUNTIME column appears only when at least one session is on a runtime
+	// that is not the host default, and then it appears for every row.
+	//
+	// Both halves are deliberate. A column reading `runc` on every line teaches
+	// nobody anything and costs the width the branch needs, so on the ordinary
+	// machine it is not there. But the moment one run has a kernel of its own,
+	// the *other* rows become the interesting ones — "which of these did not get
+	// the boundary I thought I asked for" is the question, and it cannot be
+	// answered by a column that only marks the strong ones.
+	showRuntime := false
+	for _, c := range rows {
+		if c.StrongerIsolation() {
+			showRuntime = true
+			break
+		}
+	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tKIND\tAGENT\tBRANCH\tSTATUS\tELAPSED")
+	header := "ID\tNAME\tKIND\tAGENT\tBRANCH\tSTATUS\tELAPSED"
+	if showRuntime {
+		header = "ID\tNAME\tKIND\tRUNTIME\tAGENT\tBRANCH\tSTATUS\tELAPSED"
+	}
+	fmt.Fprintln(tw, header)
 	anyRunning := false
 	for _, c := range rows {
 		anyRunning = anyRunning || c.Running()
@@ -255,11 +275,19 @@ func renderSessions(w io.Writer, rows []runtime.ContainerInfo, all bool, now tim
 		//
 		// KIND is not cleaned because it is not repository text: sessionKind maps a
 		// label to one of two words this file owns.
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			shortID(c.ID), termsafe.Clean(c.Name), sessionKind(c),
+		row := []string{shortID(c.ID), termsafe.Clean(c.Name), sessionKind(c)}
+		if showRuntime {
+			// Not cleaned, for the reason KIND is not: this is the engine's own
+			// word for its own registered runtime, not text from the repository.
+			// dash() so an engine that reports nothing reads as unknown rather
+			// than as an empty cell.
+			row = append(row, dash(c.Runtime))
+		}
+		row = append(row,
 			dash(termsafe.Clean(c.Labels[sandbox.LabelAgent])),
 			dash(termsafe.Clean(c.Labels[sandbox.LabelBranch])),
 			sessionStatus(c), sessionElapsed(c, now))
+		fmt.Fprintln(tw, strings.Join(row, "\t"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err

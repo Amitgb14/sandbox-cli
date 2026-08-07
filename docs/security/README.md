@@ -157,6 +157,12 @@ with nested virtualization; it is not available on stock macOS Docker Desktop �
 see [Platform support](../platforms/README.md)). Everything else — mounts,
 hardening, egress allowlist, caches, secrets — works unchanged on top of it.
 
+A run does not have to be taken on trust afterwards: the runtime it asked for is
+recorded in the audit log (`"runtime": "kata-runtime"`, omitted when the run took
+the host default), and `sandbox-cli list` grows a `RUNTIME` column as soon as any
+session is on something other than the default — read back from the engine rather
+than remembered from the launch.
+
 Making this a first-class, tested path, and letting `prod` *demand* it, is
 [roadmap task 3](../roadmap/task-3-stronger-isolation.md).
 

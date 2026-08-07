@@ -249,3 +249,43 @@ func TestJSONLSinkTellsUnobservedFromNothingRefused(t *testing.T) {
 		t.Errorf("round-tripped denial count = %v, want a pointer to 0", got.EgressDenied)
 	}
 }
+
+// TestJSONLSinkRecordsTheRuntimeAndOmitsTheDefault covers the field task 3 adds:
+// which OCI runtime a finished run was on.
+//
+// Omitted when empty, and that is the honest spelling rather than a saving of
+// bytes: empty means the run took the host default, and writing `"runtime":
+// "runc"` would be this tool asserting a name it never asked for and never read
+// back. A reader who needs to know what the default was on that host has the
+// engine to ask; a reader who sees a name knows it was chosen.
+func TestJSONLSinkRecordsTheRuntimeAndOmitsTheDefault(t *testing.T) {
+	dir := t.TempDir()
+	s := NewJSONLSink(dir)
+
+	s.RecordSession(SessionMeta{Image: "sandbox-base:1", Runtime: "kata-runtime", ExitCode: 0})
+	s.RecordSession(SessionMeta{Image: "sandbox-base:1", ExitCode: 0})
+
+	raw, err := os.ReadFile(filepath.Join(dir, "sessions.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("log has %d lines, want 2", len(lines))
+	}
+
+	var chosen record
+	if err := json.Unmarshal([]byte(lines[0]), &chosen); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	if chosen.Runtime != "kata-runtime" {
+		t.Errorf("runtime = %q, want %q — the boundary a run got is the point of recording it",
+			chosen.Runtime, "kata-runtime")
+	}
+	if !strings.Contains(lines[1], `"image"`) {
+		t.Fatalf("second line is not a record: %q", lines[1])
+	}
+	if strings.Contains(lines[1], "runtime") {
+		t.Errorf("a host-default run named a runtime nobody chose: %q", lines[1])
+	}
+}

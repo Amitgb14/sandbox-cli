@@ -199,8 +199,11 @@ func checkRuntimes(ctx context.Context, d Runtime, profile string) Check {
 	}
 	var strong []string
 	for _, n := range names {
-		switch n {
-		case "runsc", "runsc-kvm", "kata", "kata-runtime", "kata-qemu", "crun-vm":
+		// One list, in internal/runtime: the listing has to make the same
+		// judgement about a running container that this makes about a registered
+		// runtime, and two copies of "which runtimes are stronger" would drift the
+		// way two copies of a security-relevant list always do.
+		if runtime.StrongerRuntime(n) {
 			strong = append(strong, n)
 		}
 	}

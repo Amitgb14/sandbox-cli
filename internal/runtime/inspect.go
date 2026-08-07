@@ -47,6 +47,13 @@ type ContainerInfo struct {
 	Mounts   []MountInfo
 	Security SecurityInfo
 
+	// Runtime is the OCI runtime the engine recorded for this container
+	// ("runc", "runsc", "kata-runtime", …), which is the one setting that
+	// changes the *kind* of boundary rather than its degree. Read back rather
+	// than remembered: a label says what the launcher asked for, this says what
+	// it got. See StrongerIsolation.
+	Runtime string
+
 	// NetworkMode is docker's own word for it ("bridge", "none", a named
 	// network), not this tool's posture. Whether an egress allowlist is in force
 	// is a different question, answered by EgressAllowlisted.
@@ -286,6 +293,7 @@ type dockerInspect struct {
 		WorkingDir string            `json:"WorkingDir"`
 	} `json:"Config"`
 	HostConfig struct {
+		Runtime     string   `json:"Runtime"`
 		NetworkMode string   `json:"NetworkMode"`
 		CapDrop     []string `json:"CapDrop"`
 		CapAdd      []string `json:"CapAdd"`
@@ -337,6 +345,7 @@ func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo,
 			Workdir:     r.Config.WorkingDir,
 			Env:         r.Config.Env,
 			Mounts:      mounts,
+			Runtime:     r.HostConfig.Runtime,
 			NetworkMode: r.HostConfig.NetworkMode,
 			Security: SecurityInfo{
 				CapDrop:     r.HostConfig.CapDrop,

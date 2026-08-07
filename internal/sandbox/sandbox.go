@@ -347,6 +347,7 @@ func alreadyWarned(name string) bool {
 func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode int, took time.Duration) audit.SessionMeta {
 	m := audit.SessionMeta{
 		Image:    spec.Image,
+		Runtime:  spec.Runtime,
 		Workdir:  spec.Workdir,
 		Command:  spec.Command,
 		Agent:    opts.Agent,
