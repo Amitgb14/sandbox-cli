@@ -182,16 +182,19 @@ func checkFirewall(ctx context.Context, d Runtime) Check {
 
 // checkRuntimes reports whether a stronger-isolation runtime is registered.
 //
-// Under prod this now has teeth, and what decides is the *daemon's* answer
-// rather than the platform: a host with a stronger runtime registered and none
-// selected fails, because it can deliver the boundary prod promises and is not
-// being asked to. A host with none registered fails too where one could be
-// installed, and reports rather than fails where one could not — Docker Desktop
-// runs every container inside its own VM and does not allow registering a
-// custom runtime, so demanding one there is a refusal to run in exchange for a
-// boundary that is already present.
+// Under prod this has teeth, and every input comes from the daemon rather than
+// from the machine the client happens to be on: which stronger runtimes are
+// registered, and whether this engine could be given one at all. A client on
+// macOS may be driving a Linux daemon that can do both.
 //
-// Under dev, unchanged: a laptop is allowed not to have Kata.
+// The verdict itself is runtime.ClassifyRuntimeGap, shared with the run path
+// (sandbox.enforceKernelBoundary), so the preflight and the launch cannot reach
+// different conclusions from the same evidence. What is local to this function
+// is only how a verdict is *worded* and whether it is fatal, which is the
+// profile's business rather than the daemon's.
+//
+// Under dev, unchanged: a laptop is allowed not to have Kata, and allowed not to
+// use the Kata it has.
 func checkRuntimes(ctx context.Context, d Runtime, profile, selected string) Check {
 	c := Check{Name: "isolation runtime"}
 	names, err := d.Runtimes(ctx)
@@ -200,73 +203,70 @@ func checkRuntimes(ctx context.Context, d Runtime, profile, selected string) Che
 		c.Detail = "the daemon could not be asked which runtimes are registered"
 		return c
 	}
+	support := runtimeSupport(ctx, d, names)
+	prod := profile == config.ProfileProd
+
+	switch runtime.ClassifyRuntimeGap(selected, support) {
+	case runtime.GapNone:
+		c.Status = StatusOK
+		c.Detail = "runs get a kernel of their own: " + selected
+	case runtime.GapMissing:
+		// The launch would fail with docker's own message; this is the earlier,
+		// cheaper place to find out — and it is a gap on any profile, since it
+		// is a configuration that cannot work rather than a weaker one.
+		c.Status = StatusWeak
+		c.Detail = "runtime is set to " + selected + ", which this engine has not registered"
+		c.Remedy = "register it, or name one this host has: " + strings.Join(names, ", ")
+	case runtime.GapNotSelected:
+		c.Detail = "stronger isolation available: " + strings.Join(support.Registered, ", ") +
+			" (select with `runtime:` in your config)"
+		if prod {
+			c.Status = StatusWeak
+			c.Detail = "this host can give a run its own kernel and nothing selected one: " +
+				strings.Join(support.Registered, ", ")
+			c.Remedy = "set `runtime: " + support.Registered[0] + "` in your own config — prod refuses a shared kernel where one can be avoided"
+		}
+	case runtime.GapNotInstalled:
+		c.Detail = "only the default runtime is registered: " + strings.Join(names, ", ")
+		if prod {
+			c.Status = StatusWeak
+			// Kept out of Detail: a newline inside a tabwriter cell ends the column
+			// block, so a check added after this one would silently misalign.
+			c.Remedy = "prod may carry untrusted agents, and a shared kernel is not a boundary for those — " +
+				"install gVisor (runsc) or Kata and set `runtime:`"
+		}
+	case runtime.GapNotRegistrable:
+		// Nothing to install and nothing to select: this engine keeps its
+		// containers in a VM of its own. Reported, not failed, on every profile.
+		c.Detail = "this engine runs containers inside its own VM; a per-run microVM runtime cannot be selected here"
+	default: // GapUnknown
+		c.Status = StatusUnknown
+		c.Detail = "this engine could not be asked whether a runtime with its own kernel is possible here"
+	}
+	return c
+}
+
+// runtimeSupport asks the engine the second half of the question — whether one
+// could be registered — when it has an answer to give.
+//
+// Kept behind an interface upgrade rather than added to the Runtime interface:
+// a backend that cannot answer leaves the daemon's registered runtimes as the
+// only evidence, which is the conservative reading rather than a permissive one.
+func runtimeSupport(ctx context.Context, d Runtime, names []string) runtime.RuntimeSupport {
+	if r, ok := d.(interface {
+		StrongerRuntimeSupport(context.Context) runtime.RuntimeSupport
+	}); ok {
+		return r.StrongerRuntimeSupport(ctx)
+	}
 	var strong []string
 	for _, n := range names {
-		// One list, in internal/runtime: the listing has to make the same
-		// judgement about a running container that this makes about a registered
-		// runtime, and two copies of "which runtimes are stronger" would drift the
-		// way two copies of a security-relevant list always do.
 		if runtime.StrongerRuntime(n) {
 			strong = append(strong, n)
 		}
 	}
 	sort.Strings(strong)
-	prod := profile == config.ProfileProd
-
-	// Selected and stronger: the question is answered, on any profile.
-	if runtime.StrongerRuntime(selected) {
-		c.Status = StatusOK
-		c.Detail = "runs get a kernel of their own: " + selected
-		if len(strong) == 0 {
-			// Configured but not registered here. The run will fail at launch and
-			// say so; this is the earlier, cheaper place to find out.
-			c.Status = StatusWeak
-			c.Detail = "runtime is set to " + selected + ", which this daemon has not registered"
-			c.Remedy = "install it and register it with the daemon, or set a runtime this host has: " +
-				strings.Join(names, ", ")
-		}
-		return c
-	}
-
-	if len(strong) > 0 {
-		c.Detail = "stronger isolation available: " + strings.Join(strong, ", ") +
-			" (select with `runtime:` in your config)"
-		if prod {
-			// The sharpest case: the host can do it, and nothing asked it to.
-			c.Status = StatusWeak
-			c.Detail = "this host can give a run its own kernel and nothing selected one: " +
-				strings.Join(strong, ", ")
-			c.Remedy = "set `runtime: " + strong[0] + "` in your own config — prod refuses a shared kernel where one can be avoided"
-			return c
-		}
-		c.Status = StatusOK
-		return c
-	}
-
-	c.Detail = "only the default runtime is registered: " + strings.Join(names, ", ")
-	if !prod {
-		c.Status = StatusOK
-		return c
-	}
-	if hostCanRegisterStrongerRuntime() {
-		// Kept out of Detail: a newline inside a tabwriter cell ends the column
-		// block, so a check added after this one would silently misalign.
-		c.Status = StatusWeak
-		c.Remedy = "prod may carry untrusted agents, and a shared kernel is not a boundary for those — " +
-			"install gVisor (runsc) or Kata and set `runtime:`"
-		return c
-	}
-	// Nothing to install and nothing to select: this engine keeps its containers
-	// in a VM of its own. Reported, not failed — see the doc comment.
-	c.Status = StatusOK
-	c.Detail = "this engine runs containers inside its own VM; a per-run microVM runtime cannot be selected here"
-	return c
+	return runtime.RuntimeSupport{Registered: strong, Registrable: len(strong) > 0, Known: true}
 }
-
-// hostCanRegisterStrongerRuntime is config's answer, asked here so the preflight
-// and the profile cannot disagree about which hosts are being held to which
-// rule. A var for the reason the one it wraps is: tests pin it.
-var hostCanRegisterStrongerRuntime = config.HostCanRegisterStrongerRuntime
 
 // Verdict turns a status into a mark and whether it blocks, which is the one
 // place the dev/prod asymmetry is expressed.

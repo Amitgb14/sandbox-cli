@@ -22,10 +22,13 @@ version is tagged.
   and a profile that wrote either name into itself would refuse every machine
   that has the other. And it does not demand one where none can exist — Docker
   Desktop runs every container in its own VM and cannot register a custom
-  runtime, so prod accepts that boundary on macOS and Windows and says so. The
-  rule reads the daemon before the platform: a host with a stronger runtime
-  *registered* and nothing selecting it fails under prod wherever it is. `dev` is
-  untouched.
+  runtime, so prod accepts that boundary and says so.
+
+  Every input comes from the **engine**, not from the machine you typed on: a
+  macOS client pointed at a Linux daemon is held to what that daemon can do. And
+  the demand is enforced on the runtime a run actually gets rather than on the
+  one its config names, since `--runtime` would otherwise put a prod run back on
+  a shared kernel. `dev` is untouched.
 
 ### Added
 

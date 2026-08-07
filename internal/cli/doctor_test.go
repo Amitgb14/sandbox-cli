@@ -143,11 +143,9 @@ func TestDoctorReportsAnUnbuiltImageAsUnknown(t *testing.T) {
 func TestDoctorReportsAMissingBaseImageWithoutFailingAnything(t *testing.T) {
 	h := healthy()
 	h.imageThere = false
-	// A host that both has a stronger runtime and selected one, so the only gap
-	// left is the image. Without this the test would assert the platform rather
-	// than the image: under prod, a Linux host with nothing but runc now fails
-	// the isolation-runtime check, and this test would pass on macOS and fail on
-	// Linux while both answers were correct.
+	// A host that has a stronger runtime and selected it, so the only gap left is
+	// the image — the subject of this test. The isolation-runtime verdict has its
+	// own tests in internal/doctor, where the daemon's answer can be varied.
 	h.runtimes = []string{"runc", "runsc"}
 	withHost(t, h)
 
@@ -187,70 +185,6 @@ func TestDoctorCannotTellWhetherTheImageIsThere(t *testing.T) {
 	if err := reportDoctor(config.ProfileDev, checks); err != nil {
 		t.Errorf("dev should stay quiet about a question it could not ask: %v", err)
 	}
-}
-
-// Under prod the runtime check now has teeth, and what decides is the daemon's
-// own answer rather than the platform: a host that *can* give a run its own
-// kernel and was not asked to is the sharpest failure of the three, because the
-// boundary prod promises was available and unused.
-func TestDoctorFailsProdWhenAStrongerRuntimeIsRegisteredButNotSelected(t *testing.T) {
-	h := healthy()
-	h.runtimes = []string{"runc", "runsc"}
-	withHost(t, h)
-
-	c := runtimeCheck(t, config.ProfileProd, "")
-	if c.Status == doctor.StatusOK {
-		t.Errorf("prod accepted a shared kernel on a host that has runsc registered: %+v", c)
-	}
-	if !strings.Contains(c.Remedy, "runsc") {
-		t.Errorf("the remedy does not name what this host actually has: %+v", c)
-	}
-	err := reportDoctor(config.ProfileProd, runDoctorChecks(context.Background(), config.ProfileProd, "docker", ""))
-	if err == nil {
-		t.Fatal("prod exited zero on a host whose stronger runtime nothing selected")
-	}
-
-	// Selected: the question is answered, and the check says which boundary the
-	// runs are getting rather than merely passing.
-	c = runtimeCheck(t, config.ProfileProd, "runsc")
-	if c.Status != doctor.StatusOK || !strings.Contains(c.Detail, "runsc") {
-		t.Errorf("prod refused a host that selected runsc: %+v", c)
-	}
-
-	// dev is untouched: a laptop is allowed not to have Kata, and allowed not to
-	// use the Kata it has.
-	if err := reportDoctor(config.ProfileDev, runDoctorChecks(context.Background(), config.ProfileDev, "docker", "")); err != nil {
-		t.Errorf("dev failed over a runtime it only ever reported: %v", err)
-	}
-}
-
-// A runtime named in config that the daemon has never heard of fails early
-// here, rather than at the launch that would have refused anyway. Same
-// asymmetry: dev warns, prod fails.
-func TestDoctorFlagsARuntimeTheDaemonDoesNotHave(t *testing.T) {
-	h := healthy()
-	h.runtimes = []string{"runc"}
-	withHost(t, h)
-
-	c := runtimeCheck(t, config.ProfileProd, "kata-runtime")
-	if c.Status == doctor.StatusOK {
-		t.Errorf("a runtime this daemon has not registered was accepted: %+v", c)
-	}
-	if !strings.Contains(c.Detail, "kata-runtime") {
-		t.Errorf("the finding does not name the runtime that is missing: %+v", c)
-	}
-}
-
-// runtimeCheck runs the checks and returns the isolation-runtime one.
-func runtimeCheck(t *testing.T, profile, selected string) check {
-	t.Helper()
-	for _, c := range runDoctorChecks(context.Background(), profile, "docker", selected) {
-		if c.Name == "isolation runtime" {
-			return c
-		}
-	}
-	t.Fatal("no isolation runtime check ran")
-	return check{}
 }
 
 // With no daemon there is one fact worth printing, not six unknowns.

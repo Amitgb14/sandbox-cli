@@ -98,3 +98,72 @@ func containerRuntime(ociRuntime, hostConfigRuntime string) string {
 
 // podmanRuntimePlaceholder is what podman puts in the docker-compatible field.
 const podmanRuntimePlaceholder = "oci"
+
+// RuntimeGap says why a run does not have a kernel of its own, or that it does.
+//
+// The classification is here, and pure, because two callers have to reach the
+// same verdict from the same evidence: `doctor` explains it before a run, and
+// the prod profile enforces it at launch. When those two disagree, the preflight
+// is worse than useless — it tells an operator a machine is fine that then
+// refuses, or clears one that should not have run.
+type RuntimeGap int
+
+const (
+	// GapNone: the run has a kernel of its own, or there is nothing to ask for.
+	GapNone RuntimeGap = iota
+	// GapNotSelected: this daemon has a stronger runtime registered and nothing
+	// selected it. The sharpest case — the boundary was available and unused.
+	GapNotSelected
+	// GapMissing: the runtime the config names is not registered with this
+	// daemon. The launch would fail; this is the earlier place to find out.
+	GapMissing
+	// GapNotInstalled: no stronger runtime is registered, but this daemon could
+	// have one.
+	GapNotInstalled
+	// GapNotRegistrable: this engine cannot be given a runtime of its own at
+	// all. Docker Desktop keeps every container in its own VM instead, which is
+	// a boundary — just not a per-run, selectable one.
+	GapNotRegistrable
+	// GapUnknown: the daemon could not be asked. Distinct from every answer
+	// above, because prod does not get to assume the one it would prefer.
+	GapUnknown
+)
+
+// RuntimeSupport is what a daemon says about kernels of their own: which
+// stronger runtimes it has registered, whether it could be given one, and
+// whether it could be asked at all.
+type RuntimeSupport struct {
+	Registered  []string
+	Registrable bool
+	Known       bool
+}
+
+// ClassifyRuntimeGap turns the selected runtime and the daemon's answer into the
+// one verdict both callers use.
+//
+// Order matters and is the point: the daemon's own evidence is read before any
+// assumption about the platform. A host with a stronger runtime registered is
+// asked to use it wherever it is, and only a host with none registered gets the
+// "could you install one" question — which is the question a client's own
+// operating system cannot answer, since the daemon may be somewhere else
+// entirely.
+func ClassifyRuntimeGap(selected string, s RuntimeSupport) RuntimeGap {
+	if !s.Known {
+		return GapUnknown
+	}
+	if StrongerRuntime(selected) {
+		for _, n := range s.Registered {
+			if n == selected {
+				return GapNone
+			}
+		}
+		return GapMissing
+	}
+	if len(s.Registered) > 0 {
+		return GapNotSelected
+	}
+	if s.Registrable {
+		return GapNotInstalled
+	}
+	return GapNotRegistrable
+}

@@ -32,9 +32,11 @@ the host can provide.
 5. Requires the runtime registered with the daemon; Kata additionally needs KVM /
    nested virtualization.
 
-`--profile prod` follows that last row: on Linux it **requires** a runtime with a
-kernel of its own and refuses without one; on Docker Desktop it accepts the VM
-the engine already puts every container in. See
+`--profile prod` follows that last row, and asks the **engine** rather than your
+client: where a runtime with its own kernel can be registered it requires one and
+refuses without it, and on Docker Desktop it accepts the VM the engine already
+puts every container in. A macOS client driving a remote Linux daemon is held to
+what that daemon can do. See
 [prod demands a kernel of its own](../security/README.md#prod-demands-a-kernel-of-its-own-where-one-can-exist).
 
 **In short:** on macOS/Windows everything works except *selecting* a microVM

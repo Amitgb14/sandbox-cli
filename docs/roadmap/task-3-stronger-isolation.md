@@ -17,12 +17,20 @@ enforced by `ValidateProfile` and reported early by `doctor`; the choice stays
 the user's, in a config only they can write.
 
 **And one rule the scope did not anticipate.** The demand applies where a
-stronger runtime *can* exist. Docker Desktop cannot register a custom OCI runtime
-at all, so demanding one on macOS or Windows would be a refusal to run on the
-platform most developers use, in exchange for a boundary Docker Desktop already
-provides with its own VM. The decision follows the daemon before the platform: a
-host with a stronger runtime registered and none selected fails under prod
-wherever it is.
+stronger runtime *can* exist, and that question is put to the **engine** rather
+than to the client's own operating system — the daemon may be on another machine,
+and a macOS client driving a Linux build box should be held to what that box can
+do. Docker Desktop reports itself and cannot register a custom OCI runtime, so
+prod accepts the VM it already puts every container in.
+
+**Where the demand is enforced matters as much as what it demands.** Not in
+`ValidateProfile`: `--runtime` reaches a run through `sandbox.Options`, which
+wins over the config, so a check against the resolved `Config` would pass while
+the container launched on runc — the `persist_auth` class of leak CLAUDE.md
+already records. It lives in `sandbox.enforceKernelBoundary`, beside
+`enforceSeccomp`, and reads the resolved `spec.Runtime`. The verdict itself is
+`runtime.ClassifyRuntimeGap`, shared with `doctor`, so the preflight and the
+launch cannot disagree about the same host.
 
 ```
 Runtime interface

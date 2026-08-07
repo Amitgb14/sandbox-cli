@@ -15,84 +15,9 @@ import (
 // prod are asserted against a resolved configuration — and asserting them
 // against the base is the floor of that.
 func TestProdProfileSatisfiesItsOwnInvariants(t *testing.T) {
-	// Pinned rather than left to whichever machine runs the test, because the
-	// answer legitimately differs: on a host that can register a stronger
-	// runtime, prod demands one and the base deliberately does not name it —
-	// which runtime a host has is the user's to say. See the next test.
-	pinStrongerRuntimeHost(t, false)
 	if err := ValidateProfile(ProfileProd, profileBase(ProfileProd)); err != nil {
 		t.Fatalf("the built-in prod profile does not satisfy prod's invariants: %v", err)
 	}
-}
-
-// pinStrongerRuntimeHost fixes the one input that differs per machine.
-func pinStrongerRuntimeHost(t *testing.T, can bool) {
-	t.Helper()
-	old := hostCanRegisterStrongerRuntime
-	hostCanRegisterStrongerRuntime = func() bool { return can }
-	t.Cleanup(func() { hostCanRegisterStrongerRuntime = old })
-}
-
-// TestProdDemandsAKernelOfItsOwnWhereOneCanExist is the §3 rule, in both worlds.
-//
-// The demand is deliberately for *a* stronger runtime rather than for a named
-// one: which of Kata or gVisor a machine has is a property of the machine, and a
-// profile that wrote either name into itself would refuse every host that has
-// the other. So the profile refuses, and the message says where to look.
-func TestProdDemandsAKernelOfItsOwnWhereOneCanExist(t *testing.T) {
-	t.Run("a host that can register one must have selected one", func(t *testing.T) {
-		pinStrongerRuntimeHost(t, true)
-
-		err := ValidateProfile(ProfileProd, profileBase(ProfileProd))
-		if err == nil {
-			t.Fatal("prod accepted the host default on a machine that can register a stronger runtime")
-		}
-		if !strings.Contains(err.Error(), "runtime") {
-			t.Errorf("the refusal does not name the setting at fault: %v", err)
-		}
-		if !strings.Contains(err.Error(), "doctor") {
-			t.Errorf("the refusal does not say how to find out what this host has: %v", err)
-		}
-
-		// A shared-kernel runtime named explicitly is still a shared kernel, and
-		// the message should say so rather than repeating the generic advice.
-		cfg := profileBase(ProfileProd)
-		cfg.Runtime = "crun"
-		err = ValidateProfile(ProfileProd, cfg)
-		if err == nil {
-			t.Fatal("prod accepted crun, which shares the host kernel")
-		}
-		if !strings.Contains(err.Error(), "crun") {
-			t.Errorf("the refusal does not name what was configured: %v", err)
-		}
-
-		// And the two that satisfy it.
-		for _, name := range []string{"kata-runtime", "runsc"} {
-			cfg := profileBase(ProfileProd)
-			cfg.Runtime = name
-			if err := ValidateProfile(ProfileProd, cfg); err != nil {
-				t.Errorf("prod refused %q, which gives the container its own kernel: %v", name, err)
-			}
-		}
-	})
-
-	t.Run("a host that cannot is not asked to", func(t *testing.T) {
-		// Docker Desktop runs every container in its own VM and cannot register a
-		// custom runtime. Demanding one there would not be a boundary control; it
-		// would be a refusal to run on the platform most developers are on, in
-		// exchange for a boundary they already have.
-		pinStrongerRuntimeHost(t, false)
-		if err := ValidateProfile(ProfileProd, profileBase(ProfileProd)); err != nil {
-			t.Errorf("prod refused a host that cannot register a stronger runtime: %v", err)
-		}
-	})
-
-	t.Run("dev is untouched on every host", func(t *testing.T) {
-		pinStrongerRuntimeHost(t, true)
-		if err := ValidateProfile(ProfileDev, profileBase(ProfileDev)); err != nil {
-			t.Errorf("dev now demands a stronger runtime: %v", err)
-		}
-	})
 }
 
 // And the invariants have to bite: a prod profile whose settings were undone by
@@ -181,9 +106,6 @@ func TestResolveProfileRefusesAnUnknownFlag(t *testing.T) {
 // base, so a user's own config can still tune it — but not past the invariants.
 func TestLoadAppliesTheProfileAsABaseLayer(t *testing.T) {
 	t.Run("prod base applies", func(t *testing.T) {
-		// This is about the order the layers are applied in, not about the
-		// runtime demand, which has its own test above.
-		pinStrongerRuntimeHost(t, false)
 		dir := t.TempDir()
 		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 		cfg, err := LoadProfile(dir, "", ProfileProd)

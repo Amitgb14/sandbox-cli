@@ -55,24 +55,39 @@ that **can** give a run its own kernel, prod requires one: the run refuses unles
 `runtime:` names a microVM or gVisor runtime, and `doctor --profile prod` fails
 before you schedule anything on that machine.
 
+**The engine is asked, not your laptop.** Which boundary is possible is a fact
+about the daemon, which may not be on the machine you typed the command on — a
+macOS client pointed at a Linux build box is held to what that box can do. So
+prod reads the engine's own answer:
+
+| The engine says | prod |
+|---|---|
+| the run selected a runtime it has registered | runs |
+| a stronger runtime is registered, nothing selected it | **refuses** — the boundary was there and unused |
+| the selected runtime is not registered here | **refuses** — the launch would fail anyway |
+| nothing registered, but one could be installed | **refuses** — install gVisor or Kata |
+| nothing registrable (Docker Desktop's own VM) | runs, and says which boundary you have |
+| it could not be asked | **refuses** — prod does not assume the answer it would prefer |
+
 Two things it deliberately does not do.
 
 It **does not name the runtime for you.** Which of Kata or gVisor a machine has
 is a property of the machine — writing `runsc` into the profile would refuse
 every host that has Kata, and `kata-runtime` every host that has gVisor. So prod
 refuses and says where to look (`sandbox-cli doctor --profile prod` lists what
-this host has registered); choosing is yours, in your own config.
+this host has registered); choosing is yours, in your own config or with
+`--runtime`.
 
 And it **does not demand one where none can exist.** Docker Desktop runs every
-container inside its own managed Linux VM and does not allow registering a custom
-OCI runtime, so on macOS and Windows prod accepts that boundary and says so.
-Demanding the impossible there would not be a boundary control; it would be a
-refusal to run on the platform most developers use, in exchange for a boundary
-that is already present.
+container inside its own managed VM and does not allow registering a custom OCI
+runtime, so prod accepts that boundary and says so. Demanding the impossible
+there would not be a boundary control; it would be a refusal to run in exchange
+for a boundary that is already present.
 
-The rule follows the daemon's own answer before the platform: a host with a
-stronger runtime **registered** and none selected fails under prod wherever it
-is, because the boundary was available and nothing asked for it.
+The demand is enforced on the runtime a run **actually gets**, not on the one its
+config names — `--runtime` reaches a run through a different path, and a check
+made against the configuration alone would pass while the container launched on
+a shared kernel.
 
 prod turning persisted auth off is the substantive answer to the credential
 problem: the default auth path is not an API key but an **OAuth refresh token**

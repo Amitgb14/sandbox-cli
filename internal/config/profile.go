@@ -1,10 +1,7 @@
 package config
 
 import (
-	"runtime"
-
 	"fmt"
-	runtimepkg "github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"sort"
 	"strings"
 )
@@ -108,9 +105,9 @@ func profileBase(name string) Config {
 		// would refuse every host that has gVisor. A profile that guesses a name
 		// fails on the machine it was supposed to protect.
 		//
-		// So the name stays the user's to choose and ValidateProfile refuses prod
-		// without one, on the hosts where one can exist. See
-		// hostCanRegisterStrongerRuntime for why that is not everywhere.
+		// So the name stays the user's to choose, and the demand is made where
+		// the resolved runtime and the daemon are both in hand:
+		// sandbox.enforceKernelBoundary.
 	case ProfileDev:
 		// Today's defaults. Dev's own hardening is expressed in Default() so that
 		// running without a profile and running `--profile dev` cannot drift
@@ -177,46 +174,17 @@ func ResolveProfile(flag, user, project string) (string, error) {
 // Only prod has invariants. Dev's guarantees are the ones in Default() and the
 // non-negotiable host-boundary rules that hold in every profile — none of which
 // is expressible as "this config field must have this value".
-// hostCanRegisterStrongerRuntime reports whether this host can be given an OCI
-// runtime that does not share the host kernel.
-//
-// Linux can: Kata and gVisor are installed and registered with the daemon
-// there. Docker Desktop on macOS and Windows cannot — it runs every container
-// inside its own managed Linux VM and does not allow registering a custom
-// runtime — and podman's machine is the same shape. So prod demanding one there
-// would be demanding something the platform cannot supply, which is not a
-// boundary control but a refusal to run.
-//
-// That is not a hole: a Desktop container already sits inside a VM the host
-// does not share. The boundary is real, it is simply not per-run and not
-// selectable. `doctor` says so in as many words rather than staying quiet.
-//
-// A var so tests can pin the one input that differs per machine — the same
-// reason hostTimezone and hostPrimaryGID are vars.
-var hostCanRegisterStrongerRuntime = func() bool { return runtime.GOOS == "linux" }
-
-// HostCanRegisterStrongerRuntime is the same question, for callers outside this
-// package. `doctor` asks it so the preflight and the profile cannot disagree
-// about which hosts are held to which rule — the preflight exists to tell you
-// what a run would do before it does it.
-func HostCanRegisterStrongerRuntime() bool { return hostCanRegisterStrongerRuntime() }
-
 func ValidateProfile(name string, cfg Config) error {
 	if name != ProfileProd {
 		return nil
 	}
 	var bad []string
-	// The one control whose absence is a property of the machine rather than of
-	// the configuration, which is why it is asked this way round: not "is the
-	// name valid" but "can this host give a run its own kernel, and did anyone
-	// ask for one".
-	if hostCanRegisterStrongerRuntime() && !runtimepkg.StrongerRuntime(cfg.Runtime) {
-		detail := "runtime must name a runtime with a kernel of its own (e.g. kata-runtime, or runsc for gVisor)"
-		if cfg.Runtime != "" {
-			detail = fmt.Sprintf("runtime is %q, which shares the host kernel — prod needs one of its own (e.g. kata-runtime, or runsc for gVisor)", cfg.Runtime)
-		}
-		bad = append(bad, detail+"; `sandbox-cli doctor --profile prod` lists what this host has registered")
-	}
+	// Not here: prod's demand for a kernel of its own. It cannot be asserted
+	// against a Config at all — `--runtime` reaches the run through
+	// sandbox.Options and would defeat any check made here, the way persist_auth
+	// once did for the fleet — and it needs the *daemon's* answer, which this
+	// function has no way to ask for. It lives in sandbox.enforceKernelBoundary,
+	// beside enforceSeccomp, where both are true.
 	if cfg.Network.Mode != "allowlist" {
 		bad = append(bad, fmt.Sprintf("network.mode is %q, must be \"allowlist\"", cfg.Network.Mode))
 	}
