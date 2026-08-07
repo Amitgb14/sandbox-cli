@@ -55,6 +55,8 @@ func TestShareNamespaceDirCreatesLeaf(t *testing.T) {
 	if err != nil || !fi.IsDir() {
 		t.Fatalf("namespace dir %s not created: %v", hostDir, err)
 	}
+	// 0700 on every platform: this calls shareNamespaceDir directly, and the
+	// group-opening pass belongs to shareMount (see wantSharedPerm).
 	if got := fi.Mode().Perm(); got != 0o700 {
 		t.Errorf("namespace dir mode = %o, want 700", got)
 	}
@@ -160,9 +162,10 @@ func TestShareNamespaceMountsLeafOnly(t *testing.T) {
 	if err != nil || !fi.IsDir() {
 		t.Fatalf("namespace dir %s not created: %v", dir, err)
 	}
-	if got := fi.Mode().Perm(); got != 0o700 {
-		t.Errorf("namespace dir mode = %o, want 700", got)
+	if want := wantSharedPerm(); fi.Mode().Perm() != want {
+		t.Errorf("namespace dir mode = %o, want %o", fi.Mode().Perm(), want)
 	}
+	assertNotWorldAccessible(t, fi, "the namespace dir")
 }
 
 // TestShareNamespaceSeedsItsOwnReadme covers discoverability for a namespace:
