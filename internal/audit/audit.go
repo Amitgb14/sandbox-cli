@@ -55,11 +55,18 @@ type SessionMeta struct {
 	// actually get" is otherwise unanswerable afterwards — and it is the one
 	// setting that changes the *kind* of boundary rather than its degree.
 	//
-	// Asked for, and that is not a hedge here: the engine refuses to start a
-	// container on a runtime it has not registered, so a run that produced this
-	// line got what it named. The listing reads the runtime back from the engine
-	// instead (runtime.ContainerInfo.Runtime), because a container that still
-	// exists can be asked.
+	// Asked for, and the line is only written once the engine accepted the
+	// launch — a refused one is not recorded at all, since the record carries
+	// exit code 0 and would otherwise read as a run that completed inside a
+	// boundary nothing ever ran in. What that does *not* prove is that the
+	// runtime behaved: sandbox-cli's pre-flight check fails open when the daemon
+	// cannot be asked, so this is "the engine took this name", not "this name
+	// was verified".
+	//
+	// The listing reads the runtime back from the engine instead
+	// (runtime.ContainerInfo.Runtime), because a container that still exists can
+	// be asked. This field exists for the ones that cannot: a --rm run is gone
+	// by the time anybody reads the log.
 	Runtime string
 	// Network is the resolved posture: "default", "none" or "allowlist".
 	Network string

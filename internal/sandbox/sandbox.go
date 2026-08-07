@@ -139,11 +139,21 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 
 	started := time.Now()
 	name, startErr := s.Runtime.Start(ctx, spec)
-	// A detached run has no exit code to wait for — the record says it was
-	// launched, and `sandbox-cli ps` is where its fate lives.
-	meta := auditMeta(s.Cfg, spec, opts, 0, time.Since(started))
-	meta.Detached = true
-	s.Audit.RecordSession(meta)
+	// Only a launch that happened is recorded, and the exit code is why: a
+	// detached run has none to wait for, so the line carries 0 — which for a
+	// container the engine *refused* would read as a run that completed
+	// successfully. An unregistered `--runtime` is exactly that case, and the
+	// runtime field would then name a boundary nothing ever ran inside.
+	//
+	// The failure is not lost: Start returns it to a caller that reports it. What
+	// this file will not do is write it down as a run.
+	if startErr == nil {
+		// A detached run has no exit code to wait for — the record says it was
+		// launched, and `sandbox-cli list` is where its fate lives.
+		meta := auditMeta(s.Cfg, spec, opts, 0, time.Since(started))
+		meta.Detached = true
+		s.Audit.RecordSession(meta)
+	}
 	return name, startErr
 }
 

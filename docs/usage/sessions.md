@@ -21,10 +21,12 @@ a1b2c3d4e5f6  sandbox-myapp-feature-a  interactive  claude  feature-a  running  
 9f8e7d6c5b4a  sandbox-myapp-feature-b  fleet        codex   feature-b  exited (0)  11m3s
 ```
 
-A `RUNTIME` column appears — for every row — as soon as one session is on a
-runtime that is not the host default, so you can see at a glance which runs got a
-kernel of their own and, more usefully, which did not. On an ordinary machine
-where everything is `runc` it stays out of the way. See
+A `RUNTIME` column appears — for every row, and in `fleet status` too — as soon
+as one session is on a runtime that is not one of the ordinary shared-kernel ones
+(`runc`, `crun`, `youki`). So you can see at a glance which runs got a kernel of
+their own and, more usefully, which did not. On a machine where everything is
+`runc` it stays out of the way, and a runtime sandbox-cli does not recognise is
+shown by name rather than judged. See
 [Stronger isolation](../security/README.md#stronger-isolation-microvm--gvisor).
 
 `KIND` separates a fleet container from an interactive `--detach` session,

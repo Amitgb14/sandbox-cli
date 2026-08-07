@@ -34,6 +34,8 @@ var strongerRuntimes = map[string]bool{
 	"kata":         true, // Kata Containers
 	"kata-runtime": true,
 	"kata-qemu":    true,
+	"kata-fc":      true, // Firecracker shim
+	"kata-clh":     true, // Cloud Hypervisor shim
 	"crun-vm":      true, // crun's microVM mode
 }
 
@@ -47,3 +49,52 @@ func StrongerRuntime(name string) bool { return strongerRuntimes[name] }
 // StrongerIsolation reports whether this container is running on such a runtime,
 // as read back from the engine rather than as requested.
 func (c ContainerInfo) StrongerIsolation() bool { return StrongerRuntime(c.Runtime) }
+
+// sharedKernelRuntimes are the names that mean "the ordinary, shared-kernel
+// default". Several, because the default is not one name: docker ships runc,
+// Fedora and podman default to crun, and youki is a drop-in for both.
+var sharedKernelRuntimes = map[string]bool{
+	"":            true, // the engine's default, unnamed
+	"runc":        true,
+	"crun":        true,
+	"youki":       true,
+	"docker-runc": true, // the old vendored fork
+}
+
+// NotTheHostDefault reports whether a container is on a runtime worth naming in
+// a listing — anything that is not one of the ordinary shared-kernel ones.
+//
+// Deliberately the complement of a *short* list rather than membership of
+// strongerRuntimes, and the two lists fail in opposite directions on purpose.
+// strongerRuntimes answers "may I call this a kernel of its own", so an
+// unrecognised name must not qualify. This answers "is this worth showing the
+// reader", so an unrecognised name must — gVisor's own daemon.json registers
+// runsc-hostnet and runsc-debug, an admin may register a runtime under any name
+// at all, and a run on one of those rendering byte-for-byte like a runc run is
+// precisely the confusion the column exists to remove.
+//
+// So a name nobody here has heard of is shown and not characterised, which is
+// the honest pair of answers.
+func (c ContainerInfo) NotTheHostDefault() bool { return !sharedKernelRuntimes[c.Runtime] }
+
+// containerRuntime picks the runtime name out of an engine's inspect output.
+//
+// Two fields because the two engines answer differently, and podman's answer to
+// the docker-shaped question is a placeholder rather than a name: it fills
+// HostConfig.Runtime with the literal "oci" for compatibility and reports the
+// real runtime in OCIRuntime, which docker does not emit at all. Preferring the
+// podman-only field when it is present needs no engine flag to be threaded
+// here, and an engine that reports neither yields "" — unknown, which the
+// listing renders as a dash rather than as a claim.
+func containerRuntime(ociRuntime, hostConfigRuntime string) string {
+	if ociRuntime != "" {
+		return ociRuntime
+	}
+	if hostConfigRuntime == podmanRuntimePlaceholder {
+		return ""
+	}
+	return hostConfigRuntime
+}
+
+// podmanRuntimePlaceholder is what podman puts in the docker-compatible field.
+const podmanRuntimePlaceholder = "oci"

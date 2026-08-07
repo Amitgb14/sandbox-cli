@@ -292,6 +292,11 @@ type dockerInspect struct {
 		Env        []string          `json:"Env"`
 		WorkingDir string            `json:"WorkingDir"`
 	} `json:"Config"`
+	// OCIRuntime is podman's own field and docker does not emit it. Podman fills
+	// HostConfig.Runtime with the literal "oci" for docker compatibility — a
+	// placeholder, not an answer — so on that engine the real name is only here.
+	OCIRuntime string `json:"OCIRuntime"`
+
 	HostConfig struct {
 		Runtime     string   `json:"Runtime"`
 		NetworkMode string   `json:"NetworkMode"`
@@ -345,7 +350,7 @@ func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo,
 			Workdir:     r.Config.WorkingDir,
 			Env:         r.Config.Env,
 			Mounts:      mounts,
-			Runtime:     r.HostConfig.Runtime,
+			Runtime:     containerRuntime(r.OCIRuntime, r.HostConfig.Runtime),
 			NetworkMode: r.HostConfig.NetworkMode,
 			Security: SecurityInfo{
 				CapDrop:     r.HostConfig.CapDrop,

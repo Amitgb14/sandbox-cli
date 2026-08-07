@@ -251,13 +251,7 @@ func renderSessions(w io.Writer, rows []runtime.ContainerInfo, all bool, now tim
 	// the *other* rows become the interesting ones — "which of these did not get
 	// the boundary I thought I asked for" is the question, and it cannot be
 	// answered by a column that only marks the strong ones.
-	showRuntime := false
-	for _, c := range rows {
-		if c.StrongerIsolation() {
-			showRuntime = true
-			break
-		}
-	}
+	showRuntime := showRuntimeColumn(rows)
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	header := "ID\tNAME\tKIND\tAGENT\tBRANCH\tSTATUS\tELAPSED"
 	if showRuntime {
@@ -277,11 +271,13 @@ func renderSessions(w io.Writer, rows []runtime.ContainerInfo, all bool, now tim
 		// label to one of two words this file owns.
 		row := []string{shortID(c.ID), termsafe.Clean(c.Name), sessionKind(c)}
 		if showRuntime {
-			// Not cleaned, for the reason KIND is not: this is the engine's own
-			// word for its own registered runtime, not text from the repository.
-			// dash() so an engine that reports nothing reads as unknown rather
-			// than as an empty cell.
-			row = append(row, dash(c.Runtime))
+			// Cleaned like every other cell that did not come from this file.
+			// KIND is exempt because sessionKind maps a label to one of two words
+			// this package owns; a runtime name is not that — it is a key from a
+			// daemon.json, echoed back by the engine, and a tab or an ESC in one
+			// would forge a row in a tab-separated table. dash() so an engine that
+			// reports nothing reads as unknown rather than as an empty cell.
+			row = append(row, dash(termsafe.Clean(c.Runtime)))
 		}
 		row = append(row,
 			dash(termsafe.Clean(c.Labels[sandbox.LabelAgent])),
@@ -599,4 +595,25 @@ func humanDuration(d time.Duration) string {
 func addSessionFlags(cmd *cobra.Command, engineFlag, cfgPath *string) {
 	cmd.Flags().StringVar(engineFlag, "engine", "", "container engine: docker (default) or podman")
 	cmd.Flags().StringVarP(cfgPath, "config", "c", "", "explicit config file path")
+}
+
+// showRuntimeColumn decides whether a session table names each session's OCI
+// runtime, and the rule is shared rather than local because two tables answer
+// the same question about the same containers: `list` and `fleet status`. A
+// container whose boundary is described in one table and not the other is the
+// same drift the KIND column exists to prevent.
+//
+// The rule: nothing on an ordinary machine, where every session is on the
+// host's default runtime and a column repeating its name would only cost the
+// width the branch needs — and then, the moment one session is on something
+// else, the column for *every* row. The weaker rows are the interesting ones
+// once a stronger one exists: "which of these did not get the boundary I
+// thought I asked for" cannot be answered by marking only the strong ones.
+func showRuntimeColumn(rows []runtime.ContainerInfo) bool {
+	for _, c := range rows {
+		if c.NotTheHostDefault() {
+			return true
+		}
+	}
+	return false
 }

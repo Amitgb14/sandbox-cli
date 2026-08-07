@@ -331,6 +331,15 @@ type RunSecurity struct {
 	// actually in force, so a client can say "this run was hardened" without
 	// re-deriving the rule from four fields.
 	Hardening bool `json:"hardening"`
+
+	// Runtime is the OCI runtime the engine reported for this container
+	// ("runc", "runsc", "kata-runtime", …), empty when the engine named none.
+	// StrongerIsolation says whether that runtime gives the container a kernel
+	// of its own — a separate field because an unrecognised name is shown and
+	// deliberately not characterised, and a client should not have to keep its
+	// own copy of that list to find out.
+	Runtime           string `json:"runtime,omitempty"`
+	StrongerIsolation bool   `json:"stronger_isolation"`
 }
 
 // LogLine is one line of a run's output, as GET /runs/{id}/logs returns it

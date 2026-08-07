@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/fleet"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
@@ -54,7 +56,9 @@ func TestListingShowsTheRuntimeColumnForEveryRowOnceOneIsStronger(t *testing.T) 
 	rows := []runtime.ContainerInfo{
 		runtimeRow("aaaaaaaaaaaa1111", "sandbox-app-a", "kata-runtime", true),
 		runtimeRow("bbbbbbbbbbbb2222", "sandbox-app-b", "runc", true),
-		runtimeRow("cccccccccccc3333", "sandbox-app-c", "", true),
+		// Exited, because `list --all` is mostly finished sessions and the
+		// alignment guard below is exactly what a header/row mismatch breaks.
+		runtimeRow("cccccccccccc3333", "sandbox-app-c", "", false),
 	}
 	var out bytes.Buffer
 	if err := renderSessions(&out, rows, true, time.Now()); err != nil {
@@ -79,25 +83,59 @@ func TestListingShowsTheRuntimeColumnForEveryRowOnceOneIsStronger(t *testing.T) 
 	}
 	// Every row keeps its columns: a header of 8 and a row of 7 is a table that
 	// has quietly stopped lining up.
-	head := len(strings.Fields(lines[0]))
+	//
+	// Split on runs of two or more spaces, not on whitespace: the tabwriter has
+	// already turned the tabs into padding (minimum two), and a cell's own value
+	// can contain a single space — `sessionStatus` renders a finished session as
+	// "exited (0)". Counting with strings.Fields would score that row one cell
+	// too many and make the exited case untestable, which is the case this guard
+	// most needs to cover.
+	cellSplit := regexp.MustCompile(`\s{2,}`)
+	head := len(cellSplit.Split(strings.TrimSpace(lines[0]), -1))
 	for _, l := range lines[1:] {
-		if n := len(strings.Fields(l)); n != head {
+		if n := len(cellSplit.Split(strings.TrimSpace(l), -1)); n != head {
 			t.Errorf("row has %d cells, header has %d: %q", n, head, l)
 		}
 	}
 }
 
-func TestStrongerRuntimeNamesOnlyWhatItKnows(t *testing.T) {
-	for _, name := range []string{"runsc", "runsc-kvm", "kata", "kata-runtime", "kata-qemu", "crun-vm"} {
-		if !runtime.StrongerRuntime(name) {
-			t.Errorf("StrongerRuntime(%q) = false, want true", name)
+// TestFleetStatusShowsTheRuntimeOnTheSameRuleAsList pins the parity CLAUDE.md
+// asks for: a fleet agent is a session, and the two tables must not describe one
+// container's boundary differently. Both read showRuntimeColumn.
+func TestFleetStatusShowsTheRuntimeOnTheSameRuleAsList(t *testing.T) {
+	ordinary := runtimeRow("aaaaaaaaaaaa1111", "sandbox-app-a", "runc", true)
+	strong := runtimeRow("bbbbbbbbbbbb2222", "sandbox-app-b", "kata-runtime", true)
+
+	var plain bytes.Buffer
+	if err := renderFleetStatus(&plain, []fleet.Status{{Branch: "a", Container: &ordinary}}); err != nil {
+		t.Fatalf("renderFleetStatus: %v", err)
+	}
+	if strings.Contains(plain.String(), "RUNTIME") {
+		t.Errorf("fleet status names the default runtime on an ordinary host:\n%s", plain.String())
+	}
+
+	var mixed bytes.Buffer
+	rows := []fleet.Status{
+		{Branch: "a", Container: &strong},
+		{Branch: "b", Container: &ordinary},
+		// A branch whose container has been reaped: unknown, not "the default".
+		{Branch: "c"},
+	}
+	if err := renderFleetStatus(&mixed, rows); err != nil {
+		t.Fatalf("renderFleetStatus: %v", err)
+	}
+	got := mixed.String()
+	for _, want := range []string{"RUNTIME", "kata-runtime", "runc"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("fleet status does not mention %q:\n%s", want, got)
 		}
 	}
-	// "" is the host default (runc), and an unknown name is reported by its name
-	// rather than promoted: nothing here may claim a boundary a run did not get.
-	for _, name := range []string{"", "runc", "crun", "youki", "docker-runc", "RUNSC"} {
-		if runtime.StrongerRuntime(name) {
-			t.Errorf("StrongerRuntime(%q) = true, want false", name)
+	cellSplit := regexp.MustCompile(`\s{2,}`)
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	head := len(cellSplit.Split(strings.TrimSpace(lines[0]), -1))
+	for _, l := range lines[1:] {
+		if n := len(cellSplit.Split(strings.TrimSpace(l), -1)); n != head {
+			t.Errorf("row has %d cells, header has %d: %q", n, head, l)
 		}
 	}
 }
