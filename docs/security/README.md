@@ -3,6 +3,7 @@
 What the boundary is, what it is not, and the two profiles you choose between.
 
 - [Security profiles](#security-profiles)
+  - [prod demands a kernel of its own](#prod-demands-a-kernel-of-its-own-where-one-can-exist)
 - [Check the host first (`doctor`)](#check-the-host-first)
 - [Security model](#security-model)
 - [Stronger isolation (microVM / gVisor)](#stronger-isolation-microvm--gvisor)
@@ -35,6 +36,7 @@ worse than one that stopped.
 | Host history mount | on | off |
 | seccomp missing on the daemon | warns | **refuses** |
 | memory / cpus / pids | as configured | bounded |
+| a kernel of its own | reports what is available | **required, where one can exist** |
 
 ```sh
 sandbox-cli claude --profile prod
@@ -44,6 +46,33 @@ A profile is the **base** config layer — under your own config rather than ove
 it — so a trusted config can still tune a setup. A project `.sandbox.yaml` may
 **demand** the stricter profile and may never ask for the weaker one, the same
 direction-of-travel rule the network keys follow.
+
+### prod demands a kernel of its own, where one can exist
+
+A container shares the host kernel, and no amount of capability-dropping changes
+what a kernel vulnerability means. prod may carry untrusted agents, so on a host
+that **can** give a run its own kernel, prod requires one: the run refuses unless
+`runtime:` names a microVM or gVisor runtime, and `doctor --profile prod` fails
+before you schedule anything on that machine.
+
+Two things it deliberately does not do.
+
+It **does not name the runtime for you.** Which of Kata or gVisor a machine has
+is a property of the machine — writing `runsc` into the profile would refuse
+every host that has Kata, and `kata-runtime` every host that has gVisor. So prod
+refuses and says where to look (`sandbox-cli doctor --profile prod` lists what
+this host has registered); choosing is yours, in your own config.
+
+And it **does not demand one where none can exist.** Docker Desktop runs every
+container inside its own managed Linux VM and does not allow registering a custom
+OCI runtime, so on macOS and Windows prod accepts that boundary and says so.
+Demanding the impossible there would not be a boundary control; it would be a
+refusal to run on the platform most developers use, in exchange for a boundary
+that is already present.
+
+The rule follows the daemon's own answer before the platform: a host with a
+stronger runtime **registered** and none selected fails under prod wherever it
+is, because the boundary was available and nothing asked for it.
 
 prod turning persisted auth off is the substantive answer to the credential
 problem: the default auth path is not an API key but an **OAuth refresh token**
@@ -62,9 +91,9 @@ profile: prod
   ok    docker daemon      reachable
   FAIL  seccomp            no syscall filter is applied; the container gets the full syscall table
   ok    egress firewall    a container here can program the nat, redirect, owner and conntrack rules
-  ok    isolation runtime  only the default runtime is registered: runc
+  FAIL  isolation runtime  this host can give a run its own kernel and nothing selected one: kata-runtime
 
-sandbox-cli: this host cannot satisfy the prod profile: seccomp
+sandbox-cli: this host cannot satisfy the prod profile: seccomp, isolation runtime
 ```
 
 Non-zero exit under `prod`, so a scheduler notices. The firewall check is

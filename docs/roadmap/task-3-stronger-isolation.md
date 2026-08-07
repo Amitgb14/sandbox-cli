@@ -3,7 +3,26 @@
 **Goal.** When you need real isolation for untrusted code, give each sandbox its own
 lightweight VM — Kata Containers on Linux — instead of a shared kernel.
 
-**Branch.** Not started.
+**Status.** §4 (honest reporting) and §2/§3 (doctor's teeth, prod's demand) are
+built. §1 — a tested Kata path and its setup documentation — is what remains, and
+it needs a Linux host with hardware virtualization to verify.
+
+**One deviation from §3 as written, and the reason.** The scope said "prod sets a
+runtime rather than inheriting the host default". It does not: prod **demands**
+one and refuses to **name** one. Which of Kata or gVisor a machine has is a
+property of the machine, so a profile that wrote `runsc` into itself would refuse
+every host that has Kata, and `kata-runtime` every host that has gVisor — a
+profile that guesses fails on the machine it was meant to protect. The demand is
+enforced by `ValidateProfile` and reported early by `doctor`; the choice stays
+the user's, in a config only they can write.
+
+**And one rule the scope did not anticipate.** The demand applies where a
+stronger runtime *can* exist. Docker Desktop cannot register a custom OCI runtime
+at all, so demanding one on macOS or Windows would be a refusal to run on the
+platform most developers use, in exchange for a boundary Docker Desktop already
+provides with its own VM. The decision follows the daemon before the platform: a
+host with a stronger runtime registered and none selected fails under prod
+wherever it is.
 
 ```
 Runtime interface
@@ -63,7 +82,7 @@ carry a microVM, and make prod able to demand one".
 - Setup instructions per distribution, in `docs/`, in the same register as the existing
   Podman page: what to install, how to register the runtime, how to check it took.
 
-### 2. `doctor` gains teeth for prod
+### 2. `doctor` gains teeth for prod — ✅
 
 Once the tool can *select* a stronger runtime, the runtime check stops being advisory:
 
@@ -73,7 +92,7 @@ Once the tool can *select* a stronger runtime, the runtime check stops being adv
   change.
 - Under `dev`, unchanged: a warning, because a laptop is allowed not to have Kata.
 
-### 3. The prod profile selects it
+### 3. The prod profile demands it — ✅
 
 - `prod` sets a runtime rather than inheriting the host default, and `ValidateProfile`
   asserts it against the configuration that will actually run — the same mechanism that
@@ -83,7 +102,7 @@ Once the tool can *select* a stronger runtime, the runtime check stops being adv
   `internal/config/trust.go`, and it stays there — a hostile repository must not be able to
   select a *weaker* runtime any more than it can select a weaker profile.
 
-### 4. Honest reporting of what you got
+### 4. Honest reporting of what you got — ✅
 
 A run under a microVM and a run under runc must not look identical after the fact:
 

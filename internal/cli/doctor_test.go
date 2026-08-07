@@ -65,10 +65,10 @@ func TestDoctorVerdictFollowsTheProfile(t *testing.T) {
 	h.seccompOff = true // the condition this machine is actually in
 	withHost(t, h)
 
-	if err := reportDoctor(config.ProfileDev, runDoctorChecks(context.Background(), config.ProfileDev, "docker")); err != nil {
+	if err := reportDoctor(config.ProfileDev, runDoctorChecks(context.Background(), config.ProfileDev, "docker", "")); err != nil {
 		t.Errorf("dev failed on a host it should merely warn about: %v", err)
 	}
-	err := reportDoctor(config.ProfileProd, runDoctorChecks(context.Background(), config.ProfileProd, "docker"))
+	err := reportDoctor(config.ProfileProd, runDoctorChecks(context.Background(), config.ProfileProd, "docker", ""))
 	if err == nil {
 		t.Fatal("prod accepted a host that applies no syscall filter")
 	}
@@ -84,10 +84,10 @@ func TestDoctorTreatsAnUnansweredQuestionAsFailureUnderProdOnly(t *testing.T) {
 	h.seccompKnow = false // the daemon could not be asked
 	withHost(t, h)
 
-	if err := reportDoctor(config.ProfileDev, runDoctorChecks(context.Background(), config.ProfileDev, "docker")); err != nil {
+	if err := reportDoctor(config.ProfileDev, runDoctorChecks(context.Background(), config.ProfileDev, "docker", "")); err != nil {
 		t.Errorf("dev failed on a question it merely could not ask: %v", err)
 	}
-	if err := reportDoctor(config.ProfileProd, runDoctorChecks(context.Background(), config.ProfileProd, "docker")); err == nil {
+	if err := reportDoctor(config.ProfileProd, runDoctorChecks(context.Background(), config.ProfileProd, "docker", "")); err == nil {
 		t.Error("prod assumed seccomp was fine when the daemon could not be asked")
 	}
 }
@@ -100,7 +100,7 @@ func TestDoctorFailsProdWhenTheFirewallCannotBeProgrammed(t *testing.T) {
 	h.firewallWhy = "operation not permitted"
 	withHost(t, h)
 
-	checks := runDoctorChecks(context.Background(), config.ProfileProd, "docker")
+	checks := runDoctorChecks(context.Background(), config.ProfileProd, "docker", "")
 	if err := reportDoctor(config.ProfileProd, checks); err == nil {
 		t.Fatal("prod accepted a host where the egress firewall cannot be programmed")
 	}
@@ -127,7 +127,7 @@ func TestDoctorReportsAnUnbuiltImageAsUnknown(t *testing.T) {
 	h.firewallWhy = "the base image is not built yet"
 	withHost(t, h)
 
-	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev, "docker") {
+	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev, "docker", "") {
 		if c.Name == "egress firewall" && c.Status != doctor.StatusUnknown {
 			t.Errorf("an unbuilt image was reported as status %v, want unknown", c.Status)
 		}
@@ -143,9 +143,15 @@ func TestDoctorReportsAnUnbuiltImageAsUnknown(t *testing.T) {
 func TestDoctorReportsAMissingBaseImageWithoutFailingAnything(t *testing.T) {
 	h := healthy()
 	h.imageThere = false
+	// A host that both has a stronger runtime and selected one, so the only gap
+	// left is the image. Without this the test would assert the platform rather
+	// than the image: under prod, a Linux host with nothing but runc now fails
+	// the isolation-runtime check, and this test would pass on macOS and fail on
+	// Linux while both answers were correct.
+	h.runtimes = []string{"runc", "runsc"}
 	withHost(t, h)
 
-	checks := runDoctorChecks(context.Background(), config.ProfileProd, "docker")
+	checks := runDoctorChecks(context.Background(), config.ProfileProd, "docker", "runsc")
 	var saw bool
 	for _, c := range checks {
 		if c.Name != "base image" {
@@ -174,7 +180,7 @@ func TestDoctorCannotTellWhetherTheImageIsThere(t *testing.T) {
 	h.imageThere, h.imageKnown = false, false
 	withHost(t, h)
 
-	checks := runDoctorChecks(context.Background(), config.ProfileProd, "docker")
+	checks := runDoctorChecks(context.Background(), config.ProfileProd, "docker", "")
 	if err := reportDoctor(config.ProfileProd, checks); err == nil {
 		t.Error("prod should refuse a question that could not be asked")
 	}
@@ -183,37 +189,74 @@ func TestDoctorCannotTellWhetherTheImageIsThere(t *testing.T) {
 	}
 }
 
-// A stronger runtime is reported when present, and its absence is *not* a
-// failure even under prod — sandbox-cli does not yet select one, and failing a
-// check for something the tool does not do would be theatre.
-func TestDoctorReportsStrongerRuntimesWithoutRequiringThem(t *testing.T) {
+// Under prod the runtime check now has teeth, and what decides is the daemon's
+// own answer rather than the platform: a host that *can* give a run its own
+// kernel and was not asked to is the sharpest failure of the three, because the
+// boundary prod promises was available and unused.
+func TestDoctorFailsProdWhenAStrongerRuntimeIsRegisteredButNotSelected(t *testing.T) {
 	h := healthy()
 	h.runtimes = []string{"runc", "runsc"}
 	withHost(t, h)
-	var saw bool
-	for _, c := range runDoctorChecks(context.Background(), config.ProfileProd, "docker") {
-		if c.Name == "isolation runtime" {
-			saw = true
-			if c.Status != doctor.StatusOK || !strings.Contains(c.Detail, "runsc") {
-				t.Errorf("runsc present but not reported: %+v", c)
-			}
-		}
+
+	c := runtimeCheck(t, config.ProfileProd, "")
+	if c.Status == doctor.StatusOK {
+		t.Errorf("prod accepted a shared kernel on a host that has runsc registered: %+v", c)
 	}
-	if !saw {
-		t.Fatal("no isolation runtime check ran")
+	if !strings.Contains(c.Remedy, "runsc") {
+		t.Errorf("the remedy does not name what this host actually has: %+v", c)
+	}
+	err := reportDoctor(config.ProfileProd, runDoctorChecks(context.Background(), config.ProfileProd, "docker", ""))
+	if err == nil {
+		t.Fatal("prod exited zero on a host whose stronger runtime nothing selected")
 	}
 
+	// Selected: the question is answered, and the check says which boundary the
+	// runs are getting rather than merely passing.
+	c = runtimeCheck(t, config.ProfileProd, "runsc")
+	if c.Status != doctor.StatusOK || !strings.Contains(c.Detail, "runsc") {
+		t.Errorf("prod refused a host that selected runsc: %+v", c)
+	}
+
+	// dev is untouched: a laptop is allowed not to have Kata, and allowed not to
+	// use the Kata it has.
+	if err := reportDoctor(config.ProfileDev, runDoctorChecks(context.Background(), config.ProfileDev, "docker", "")); err != nil {
+		t.Errorf("dev failed over a runtime it only ever reported: %v", err)
+	}
+}
+
+// A runtime named in config that the daemon has never heard of fails early
+// here, rather than at the launch that would have refused anyway. Same
+// asymmetry: dev warns, prod fails.
+func TestDoctorFlagsARuntimeTheDaemonDoesNotHave(t *testing.T) {
+	h := healthy()
 	h.runtimes = []string{"runc"}
 	withHost(t, h)
-	if err := reportDoctor(config.ProfileProd, runDoctorChecks(context.Background(), config.ProfileProd, "docker")); err != nil {
-		t.Errorf("prod failed for a runtime sandbox-cli does not yet select: %v", err)
+
+	c := runtimeCheck(t, config.ProfileProd, "kata-runtime")
+	if c.Status == doctor.StatusOK {
+		t.Errorf("a runtime this daemon has not registered was accepted: %+v", c)
 	}
+	if !strings.Contains(c.Detail, "kata-runtime") {
+		t.Errorf("the finding does not name the runtime that is missing: %+v", c)
+	}
+}
+
+// runtimeCheck runs the checks and returns the isolation-runtime one.
+func runtimeCheck(t *testing.T, profile, selected string) check {
+	t.Helper()
+	for _, c := range runDoctorChecks(context.Background(), profile, "docker", selected) {
+		if c.Name == "isolation runtime" {
+			return c
+		}
+	}
+	t.Fatal("no isolation runtime check ran")
+	return check{}
 }
 
 // With no daemon there is one fact worth printing, not six unknowns.
 func TestDoctorSaysOneThingWhenDockerIsAbsent(t *testing.T) {
 	withHost(t, fakeHost{unavailable: errors.New("cannot reach the docker daemon")})
-	checks := runDoctorChecks(context.Background(), config.ProfileDev, "docker")
+	checks := runDoctorChecks(context.Background(), config.ProfileDev, "docker", "")
 	if len(checks) != 1 || checks[0].Name != "docker daemon" {
 		t.Errorf("expected a single docker-daemon finding, got %d checks", len(checks))
 	}
@@ -382,33 +425,6 @@ func uncomment(doc string, lines ...string) string {
 	return out
 }
 
-// The runtime check is an "ok" that still has something to say under prod, and
-// its remedy used to be dropped because remedies only printed for non-OK checks
-// — so the actionable half never reached the screen.
-func TestDoctorPrintsTheRuntimeRemedyEvenThoughTheCheckPasses(t *testing.T) {
-	h := healthy()
-	h.runtimes = []string{"runc"}
-	withHost(t, h)
-
-	var c check
-	for _, got := range runDoctorChecks(context.Background(), config.ProfileProd, "docker") {
-		if got.Name == "isolation runtime" {
-			c = got
-		}
-	}
-	if c.Remedy == "" {
-		t.Fatal("prod says nothing about the missing stronger runtime")
-	}
-	if c.Status != doctor.StatusOK {
-		t.Errorf("status = %v; the runtime gap is reported, not failed", c.Status)
-	}
-	// A newline inside the detail would end the tabwriter column block, so a
-	// check added after this one would silently misalign.
-	if strings.Contains(c.Detail, "\n") {
-		t.Error("detail contains a newline, which breaks the tabwriter column block")
-	}
-}
-
 // A probe that timed out answered nothing, so it must not read as "this host
 // cannot program the firewall" — that would fail prod for a question never
 // asked, against the command's own rule.
@@ -418,7 +434,7 @@ func TestDoctorTreatsATimedOutProbeAsUnknown(t *testing.T) {
 	h.firewallWhy = "the probe timed out"
 	withHost(t, h)
 
-	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev, "docker") {
+	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev, "docker", "") {
 		if c.Name == "egress firewall" && c.Status != doctor.StatusUnknown {
 			t.Errorf("a timed-out probe was reported as %v, want unknown", c.Status)
 		}

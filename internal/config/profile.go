@@ -1,7 +1,10 @@
 package config
 
 import (
+	"runtime"
+
 	"fmt"
+	runtimepkg "github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"sort"
 	"strings"
 )
@@ -97,12 +100,17 @@ func profileBase(name string) Config {
 		// port is the one thing that opens the boundary the other way.
 		cfg.Ports = []string{}
 
-		// Runtime is deliberately left as the host default rather than set to
-		// runsc or kata here: prod may carry untrusted agents, for which a
-		// container namespace is not the boundary, but which stronger runtime is
-		// registered is a property of the machine. `doctor --profile prod` is
-		// where that gets checked, and until it exists this profile does not
-		// pretend to provide it.
+		// Runtime is **demanded but not named**, and the difference is the whole
+		// design. prod may carry untrusted agents, for which a container
+		// namespace is not a boundary — but *which* stronger runtime a host has
+		// is a property of the machine, and writing `runsc` here would refuse
+		// every prod run on a host that has Kata, while writing `kata-runtime`
+		// would refuse every host that has gVisor. A profile that guesses a name
+		// fails on the machine it was supposed to protect.
+		//
+		// So the name stays the user's to choose and ValidateProfile refuses prod
+		// without one, on the hosts where one can exist. See
+		// hostCanRegisterStrongerRuntime for why that is not everywhere.
 	case ProfileDev:
 		// Today's defaults. Dev's own hardening is expressed in Default() so that
 		// running without a profile and running `--profile dev` cannot drift
@@ -169,11 +177,46 @@ func ResolveProfile(flag, user, project string) (string, error) {
 // Only prod has invariants. Dev's guarantees are the ones in Default() and the
 // non-negotiable host-boundary rules that hold in every profile — none of which
 // is expressible as "this config field must have this value".
+// hostCanRegisterStrongerRuntime reports whether this host can be given an OCI
+// runtime that does not share the host kernel.
+//
+// Linux can: Kata and gVisor are installed and registered with the daemon
+// there. Docker Desktop on macOS and Windows cannot — it runs every container
+// inside its own managed Linux VM and does not allow registering a custom
+// runtime — and podman's machine is the same shape. So prod demanding one there
+// would be demanding something the platform cannot supply, which is not a
+// boundary control but a refusal to run.
+//
+// That is not a hole: a Desktop container already sits inside a VM the host
+// does not share. The boundary is real, it is simply not per-run and not
+// selectable. `doctor` says so in as many words rather than staying quiet.
+//
+// A var so tests can pin the one input that differs per machine — the same
+// reason hostTimezone and hostPrimaryGID are vars.
+var hostCanRegisterStrongerRuntime = func() bool { return runtime.GOOS == "linux" }
+
+// HostCanRegisterStrongerRuntime is the same question, for callers outside this
+// package. `doctor` asks it so the preflight and the profile cannot disagree
+// about which hosts are held to which rule — the preflight exists to tell you
+// what a run would do before it does it.
+func HostCanRegisterStrongerRuntime() bool { return hostCanRegisterStrongerRuntime() }
+
 func ValidateProfile(name string, cfg Config) error {
 	if name != ProfileProd {
 		return nil
 	}
 	var bad []string
+	// The one control whose absence is a property of the machine rather than of
+	// the configuration, which is why it is asked this way round: not "is the
+	// name valid" but "can this host give a run its own kernel, and did anyone
+	// ask for one".
+	if hostCanRegisterStrongerRuntime() && !runtimepkg.StrongerRuntime(cfg.Runtime) {
+		detail := "runtime must name a runtime with a kernel of its own (e.g. kata-runtime, or runsc for gVisor)"
+		if cfg.Runtime != "" {
+			detail = fmt.Sprintf("runtime is %q, which shares the host kernel — prod needs one of its own (e.g. kata-runtime, or runsc for gVisor)", cfg.Runtime)
+		}
+		bad = append(bad, detail+"; `sandbox-cli doctor --profile prod` lists what this host has registered")
+	}
 	if cfg.Network.Mode != "allowlist" {
 		bad = append(bad, fmt.Sprintf("network.mode is %q, must be \"allowlist\"", cfg.Network.Mode))
 	}

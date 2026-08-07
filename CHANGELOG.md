@@ -11,6 +11,22 @@ version is tagged.
 
 ## Unreleased
 
+### Changed
+
+- **`--profile prod` now requires a kernel of its own, on hosts that can give it
+  one.** A container shares the host kernel, and prod may carry untrusted agents
+  — so on Linux a prod run refuses unless `runtime:` names a microVM or gVisor
+  runtime, and `sandbox-cli doctor --profile prod` fails before you schedule
+  anything on that machine. Two limits are deliberate. prod does **not** name the
+  runtime for you: which of Kata or gVisor a host has is a property of the host,
+  and a profile that wrote either name into itself would refuse every machine
+  that has the other. And it does not demand one where none can exist — Docker
+  Desktop runs every container in its own VM and cannot register a custom
+  runtime, so prod accepts that boundary on macOS and Windows and says so. The
+  rule reads the daemon before the platform: a host with a stronger runtime
+  *registered* and nothing selecting it fails under prod wherever it is. `dev` is
+  untouched.
+
 ### Added
 
 - **A run now says which boundary it actually got.** The OCI runtime is the one

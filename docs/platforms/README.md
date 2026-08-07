@@ -32,6 +32,11 @@ the host can provide.
 5. Requires the runtime registered with the daemon; Kata additionally needs KVM /
    nested virtualization.
 
+`--profile prod` follows that last row: on Linux it **requires** a runtime with a
+kernel of its own and refuses without one; on Docker Desktop it accepts the VM
+the engine already puts every container in. See
+[prod demands a kernel of its own](../security/README.md#prod-demands-a-kernel-of-its-own-where-one-can-exist).
+
 **In short:** on macOS/Windows everything works except *selecting* a microVM
 runtime — and Docker Desktop already sandboxes containers in a Linux VM. For a
 hardware microVM boundary you choose per run, use native Linux with Kata or

@@ -30,7 +30,7 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		profile = config.ProfileDev
 	}
 
-	checks := doctor.RunChecks(ctx, profile, s.Engine)
+	checks := doctor.RunChecks(ctx, profile, s.Engine, s.Session.Cfg.Runtime)
 	out := make([]DoctorCheck, 0, len(checks))
 	for _, c := range checks {
 		_, failsDev := doctor.Verdict(c.Status, false)
