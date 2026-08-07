@@ -252,6 +252,15 @@ func runSecurity(c runtime.ContainerInfo) RunSecurity {
 		PidsLimit: c.Security.PidsLimit,
 		User:      c.User,
 		Seccomp:   "default",
+		// The OCI runtime belongs here rather than beside the image: it is the one
+		// setting that changes the *kind* of boundary rather than its degree, and
+		// a security block that lists capabilities and seccomp while staying silent
+		// about the kernel the container is on describes the smaller half. The CLI
+		// listing grew the same fact at the same time; two front ends disagreeing
+		// about what is knowable about one container is the drift internal/doctor
+		// was extracted to prevent for seccomp.
+		Runtime:           c.Runtime,
+		StrongerIsolation: c.StrongerIsolation(),
 	}
 	if s.CapDrop == nil {
 		s.CapDrop = []string{}

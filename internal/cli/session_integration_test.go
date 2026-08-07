@@ -224,6 +224,18 @@ func TestSessionListingAndResolutionAgainstDocker(t *testing.T) {
 			done.StartedAt, done.FinishedAt)
 	}
 
+	// The runtime is read back from the engine rather than remembered from the
+	// launch, so it needs a daemon to be tested at all. On any host these tests
+	// can run on it is the shared-kernel default — which is the assertion worth
+	// making twice over: the field decodes, and it does not overclaim.
+	live0 := find(t, all, runningID, "the running session")
+	if live0.Runtime == "" {
+		t.Errorf("no runtime reported for a live container — HostConfig.Runtime did not decode")
+	}
+	if live0.StrongerIsolation() {
+		t.Errorf("a plain docker container claims a kernel of its own: runtime %q", live0.Runtime)
+	}
+
 	// The four ways somebody has a session in front of them, all resolving to the
 	// same container: the id from the listing, the whole id, the container name,
 	// and the branch — which is how a detached or fleet run is addressed.

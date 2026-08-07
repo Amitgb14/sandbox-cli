@@ -11,6 +11,24 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **A run now says which boundary it actually got.** The OCI runtime is the one
+  setting that changes the *kind* of isolation rather than its degree, and
+  nothing recorded it: `--runtime kata-runtime` and a plain shared-kernel run
+  looked identical after the fact. The audit log now carries `runtime` (omitted
+  when the run took the host default, because naming a runtime nobody chose
+  would be this tool asserting something it never asked for), and
+  `sandbox-cli list` and `sandbox-cli fleet status` grow a `RUNTIME` column as
+  soon as **any** listed session is on something other than the ordinary
+  shared-kernel runtimes — for every row, since the interesting question is then
+  which runs *did not* get the boundary you thought you asked for, and a runtime
+  we do not recognise is named rather than judged. The listing reads it back
+  from the engine rather than from the launch, and under podman that means
+  podman's own field: it fills the docker-compatible one with the placeholder
+  `"oci"`. A launch the engine refused is no longer written to the audit log at
+  all. First piece of [roadmap task 3](docs/roadmap/task-3-stronger-isolation.md).
+
 ### Changed
 
 - **The documentation is a set of pages rather than one 1,400-line README.** The

@@ -47,6 +47,13 @@ type ContainerInfo struct {
 	Mounts   []MountInfo
 	Security SecurityInfo
 
+	// Runtime is the OCI runtime the engine recorded for this container
+	// ("runc", "runsc", "kata-runtime", …), which is the one setting that
+	// changes the *kind* of boundary rather than its degree. Read back rather
+	// than remembered: a label says what the launcher asked for, this says what
+	// it got. See StrongerIsolation.
+	Runtime string
+
 	// NetworkMode is docker's own word for it ("bridge", "none", a named
 	// network), not this tool's posture. Whether an egress allowlist is in force
 	// is a different question, answered by EgressAllowlisted.
@@ -285,7 +292,13 @@ type dockerInspect struct {
 		Env        []string          `json:"Env"`
 		WorkingDir string            `json:"WorkingDir"`
 	} `json:"Config"`
+	// OCIRuntime is podman's own field and docker does not emit it. Podman fills
+	// HostConfig.Runtime with the literal "oci" for docker compatibility — a
+	// placeholder, not an answer — so on that engine the real name is only here.
+	OCIRuntime string `json:"OCIRuntime"`
+
 	HostConfig struct {
+		Runtime     string   `json:"Runtime"`
 		NetworkMode string   `json:"NetworkMode"`
 		CapDrop     []string `json:"CapDrop"`
 		CapAdd      []string `json:"CapAdd"`
@@ -337,6 +350,7 @@ func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo,
 			Workdir:     r.Config.WorkingDir,
 			Env:         r.Config.Env,
 			Mounts:      mounts,
+			Runtime:     containerRuntime(r.OCIRuntime, r.HostConfig.Runtime),
 			NetworkMode: r.HostConfig.NetworkMode,
 			Security: SecurityInfo{
 				CapDrop:     r.HostConfig.CapDrop,
