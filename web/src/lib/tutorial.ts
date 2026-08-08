@@ -376,7 +376,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
       {
         flag: "--runtime NAME",
         key: "runtime",
-        what: "A stronger-isolation OCI runtime: runsc (gVisor) or kata-runtime (microVM). Must already be registered with the engine.",
+        what: "A stronger-isolation OCI runtime: runsc (gVisor) or kata-runtime (microVM). Must already be registered with the engine — and under prod one is required wherever the engine can register it.",
         fallback: "The engine default (runc) — a boundary against a mistaken agent, not a determined one.",
         dir: "tighten",
         userConfigOnly: true,

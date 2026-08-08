@@ -136,7 +136,7 @@ export default function Home() {
         <Section id="features" tinted>
           <SectionHead
             eyebrow="what you actually get"
-            title="Thirty-two capabilities, one prefix"
+            title="Thirty-three capabilities, one prefix"
             lead={
               <>
                 Everything below ships today and is reachable from a flag or a{" "}
