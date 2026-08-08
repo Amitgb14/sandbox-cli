@@ -306,6 +306,6 @@ export const PLATFORMS = [
     linux: "yes",
     windows: "no",
     footnote:
-      "Docker Desktop runs containers in its own managed Linux VM and won't let you register custom OCI runtimes — you already get a VM boundary from Docker Desktop itself.",
+      "Docker Desktop runs containers in its own managed Linux VM and won't let you register custom OCI runtimes — you already get a VM boundary from Docker Desktop itself, and --profile prod accepts it rather than demanding one it cannot have. On Linux prod requires one.",
   },
 ] as const;

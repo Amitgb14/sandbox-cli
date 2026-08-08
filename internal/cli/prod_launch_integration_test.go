@@ -38,6 +38,12 @@ func TestProdActuallyLaunchesAContainer(t *testing.T) {
 	sess := newTestSession(t, cfg)
 	sess.Runtime = seccompOK{sess.Runtime}
 
+	// The config is built here rather than loaded, so ValidateProfile does not
+	// run: on Linux a real prod run additionally has to name a runtime with a
+	// kernel of its own, and this machine may have none registered. That rule is
+	// covered where it lives, in internal/config — what this test is for is the
+	// launch itself, which no config test can reach.
+
 	name, err := sess.Start(context.Background(), sandbox.Options{
 		Project: proj,
 		Command: []string{"sleep", "10"},

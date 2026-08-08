@@ -51,7 +51,7 @@ export const SESSION_COMMANDS: SessionCommand[] = [
         ],
       },
     ],
-    note: "KIND is doing real work rather than decorating the row: fleet stop --all does not reach an interactive session, fleet clean does not reap one, and max_parallel does not count one — and the listing was the one place that distinction was invisible, which is exactly where somebody decides what to kill. The ID is the same one stats prints, so a row from either can be pasted into any of the other three.",
+    note: "A RUNTIME column joins these the moment one session is on something other than an ordinary shared-kernel runtime — for every row, because the interesting question is then which runs did not get the boundary you expected. KIND is doing real work rather than decorating the row: fleet stop --all does not reach an interactive session, fleet clean does not reap one, and max_parallel does not count one — and the listing was the one place that distinction was invisible, which is exactly where somebody decides what to kill. The ID is the same one stats prints, so a row from either can be pasted into any of the other three.",
   },
   {
     id: "logs",

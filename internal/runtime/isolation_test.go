@@ -98,3 +98,40 @@ func TestContainerRuntimePrefersPodmansOwnField(t *testing.T) {
 		})
 	}
 }
+
+// ClassifyRuntimeGap is the verdict `doctor` explains and the prod profile
+// enforces, so it is pinned here rather than twice in two callers' terms.
+//
+// The order the evidence is read in is the property under test: the daemon's own
+// answer first, and only a host with nothing registered gets the "could one be
+// installed" question. That is what lets a macOS client driving a Linux daemon
+// be held to the Linux answer.
+func TestClassifyRuntimeGap(t *testing.T) {
+	kata := RuntimeSupport{Registered: []string{"kata-runtime"}, Registrable: true, Known: true}
+	bare := RuntimeSupport{Registrable: true, Known: true}
+	desktop := RuntimeSupport{Known: true}
+	unasked := RuntimeSupport{}
+
+	cases := []struct {
+		name     string
+		selected string
+		support  RuntimeSupport
+		want     RuntimeGap
+	}{
+		{"selected and registered", "kata-runtime", kata, GapNone},
+		{"selected, registered elsewhere", "runsc", kata, GapMissing},
+		{"selected, nothing registered", "runsc", bare, GapMissing},
+		{"registered, unused", "", kata, GapNotSelected},
+		{"a shared-kernel name is not a selection", "runc", kata, GapNotSelected},
+		{"nothing registered, installable", "", bare, GapNotInstalled},
+		{"nothing registrable", "", desktop, GapNotRegistrable},
+		{"unasked beats every other answer", "kata-runtime", unasked, GapUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClassifyRuntimeGap(tc.selected, tc.support); got != tc.want {
+				t.Errorf("ClassifyRuntimeGap(%q, %+v) = %v, want %v", tc.selected, tc.support, got, tc.want)
+			}
+		})
+	}
+}

@@ -48,7 +48,7 @@ export const NAV: NavEntry[] = [
       {
         href: "#features",
         label: "Features",
-        hint: "thirty-two capabilities, filtered by the question you came with",
+        hint: "thirty-three capabilities, filtered by the question you came with",
       },
       {
         href: "#command",

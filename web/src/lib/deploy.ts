@@ -58,6 +58,12 @@ export const PROFILE_MATRIX: {
     prod: "not mounted",
   },
   {
+    setting: "A kernel of its own",
+    dev: "reported, never required",
+    prod: "required where the engine can give one",
+    note: "A container shares the host kernel, and prod may carry untrusted agents. Where a microVM or gVisor runtime can be registered, prod refuses without one — but it never names which: whether a host has Kata or gVisor is the host's business, and a profile that wrote either name into itself would refuse every machine with the other. The engine is asked, not your laptop, so a Mac driving a Linux daemon is held to what that daemon can do. Docker Desktop cannot register one at all and already runs every container in its own VM, so prod accepts that and says so.",
+  },
+  {
     setting: "Seccomp missing on the daemon",
     dev: "warns",
     prod: "refuses, non-zero exit",
@@ -182,9 +188,9 @@ const PROD_STEPS: DeployStep[] = [
     body: "One JSON line per run, written after it ends because how it ended is the point: image, workspace, branch, agent, command, network posture, the resolved egress allowlist, exit code and duration. Environment variables appear by name only — there is nowhere in the record to put a value, deliberately.",
   },
   {
-    title: "If the agent itself is untrusted, change the runtime",
+    title: "Give the run a kernel of its own",
     code: "# ~/.config/sandbox/config.yaml\nruntime: runsc        # gVisor; or kata-runtime for a microVM",
-    body: "A container namespace is a boundary against a mistaken agent, not against a determined one with a kernel exploit. The profile deliberately does not select a stronger runtime for you — which ones are registered is a property of the machine, and doctor reports what it found rather than pretending. This is a user-config key, never a project one: a repository choosing which binary runs on your host would be choosing what executes.",
+    body: "A container namespace is a boundary against a mistaken agent, not against a determined one with a kernel exploit — so under prod this is not advice, it is required wherever the engine can register such a runtime, and the run refuses without it. What prod will not do is choose for you: which of Kata or gVisor a machine has is the machine's business, and a profile naming either would refuse every host that has the other. `sandbox-cli doctor --profile prod` lists what this engine has registered and fails before you schedule anything. This is a user-config key, never a project one: a repository choosing which binary runs on your host would be choosing what executes.",
   },
 ];
 

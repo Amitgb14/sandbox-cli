@@ -60,6 +60,9 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	if err := s.enforceSeccomp(ctx); err != nil {
 		return 1, err
 	}
+	if err := s.enforceKernelBoundary(ctx, spec.Runtime); err != nil {
+		return 1, err
+	}
 	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
 		return 1, fmt.Errorf("preparing image %q: %w", spec.Image, err)
 	}
@@ -120,6 +123,9 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	// Before the image build, not after: a policy check that needs no image at
 	// all should not cost minutes of `docker build` before it refuses.
 	if err := s.enforceSeccomp(ctx); err != nil {
+		return "", err
+	}
+	if err := s.enforceKernelBoundary(ctx, spec.Runtime); err != nil {
 		return "", err
 	}
 	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
@@ -421,6 +427,58 @@ func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode i
 //
 // A daemon that cannot be queried refuses too, under the same reasoning: prod
 // does not get to assume the answer it would prefer.
+// enforceKernelBoundary is prod's demand that a run get a kernel of its own,
+// made where both halves of the question are answerable.
+//
+// It is not in ValidateProfile, and the reason is the rule CLAUDE.md records
+// from persist_auth: a check against the resolved *Config* is not a check on
+// the run. `--runtime` arrives through sandbox.Options and wins over cfg in
+// BuildSpec, so a config-level assertion would pass while the container
+// launched on runc. What is enforced here is spec.Runtime — the value that
+// reaches docker.
+//
+// The other half is the daemon. Whether a kernel of its own is even possible
+// belongs to the engine, which may be on another machine entirely, so it is
+// asked rather than inferred from the client's own operating system. A daemon
+// that cannot be asked refuses under prod, for the reason enforceSeccomp
+// refuses: prod does not get to assume the answer it would prefer.
+//
+// The classification is shared with `doctor` (runtime.ClassifyRuntimeGap) so
+// the preflight and the run cannot reach different verdicts from the same
+// evidence — a preflight that clears a host which then refuses is worse than no
+// preflight.
+func (s *Session) enforceKernelBoundary(ctx context.Context, selected string) error {
+	if s.Cfg.Profile != config.ProfileProd {
+		return nil
+	}
+	r, ok := s.Runtime.(interface {
+		StrongerRuntimeSupport(context.Context) runtime.RuntimeSupport
+	})
+	if !ok {
+		return nil // a runtime that cannot be asked; nothing to enforce against
+	}
+	switch runtime.ClassifyRuntimeGap(selected, r.StrongerRuntimeSupport(ctx)) {
+	case runtime.GapNone, runtime.GapNotRegistrable:
+		// Either the run has its own kernel, or this engine keeps every
+		// container in a VM of its own and cannot be given a per-run runtime.
+		return nil
+	case runtime.GapMissing:
+		return fmt.Errorf("--profile prod: runtime %q is not registered with this engine, so the run would fail at launch\n"+
+			"  `sandbox-cli doctor --profile prod` lists what this host has", selected)
+	case runtime.GapNotSelected:
+		return fmt.Errorf("--profile prod: this host can give a run a kernel of its own and nothing selected one\n" +
+			"  set `runtime:` in your own config, or pass --runtime\n" +
+			"  `sandbox-cli doctor --profile prod` lists what this host has registered")
+	case runtime.GapNotInstalled:
+		return fmt.Errorf("--profile prod: a container here shares the host kernel, which is not a boundary for an untrusted agent\n" +
+			"  install gVisor (runsc) or Kata, register it with the engine, and name it with `runtime:`\n" +
+			"  or run with --profile dev, which warns instead of refusing")
+	default: // GapUnknown
+		return fmt.Errorf("--profile prod: this engine could not be asked which OCI runtimes it has, " +
+			"so whether the run would get a kernel of its own is unknown; refusing rather than assuming it would")
+	}
+}
+
 func (s *Session) enforceSeccomp(ctx context.Context) error {
 	if s.Cfg.Security.Seccomp != config.SeccompRequired {
 		return nil
