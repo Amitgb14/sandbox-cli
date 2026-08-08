@@ -41,7 +41,7 @@ const doctorTimeout = doctor.Timeout
 var runDoctorChecks = doctor.RunChecks
 
 func newDoctorCmd() *cobra.Command {
-	var profile, cfgPath, engineFlag string
+	var profile, cfgPath, engineFlag, runtimeFlag string
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check whether this host can deliver what a profile promises",
@@ -60,6 +60,9 @@ func newDoctorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if runtimeFlag != "" {
+				runtimeName = runtimeFlag
+			}
 			if engineFlag != "" {
 				// Validated rather than executed: an unvalidated flag turned
 				// `--engine dokcer` into "dokcer not found on PATH" instead of the
@@ -75,6 +78,11 @@ func newDoctorCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&profile, "profile", "", "profile to check against: dev (default) or prod")
+	// The run path enforces the runtime it *resolves*, and --runtime on the run
+	// wins over the config — so without this the preflight could pass on a
+	// configuration the launch would refuse, and refuse one the launch would
+	// accept. It answers about the command you are about to type.
+	cmd.Flags().StringVar(&runtimeFlag, "runtime", "", "check as though the run selected this OCI runtime (default: whatever the config resolves to)")
 	// The setups most worth preflighting are the checked-in ones loaded
 	// deliberately, so the command that diagnoses a configuration has to be able
 	// to read the same configuration a run would.

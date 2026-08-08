@@ -109,10 +109,10 @@ security:
   cpus: "2"
   pids_limit: 512
 
-runtime: runsc          # gVisor — required under prod wherever the engine
-                        # can register one, because a shared kernel is not a
-                        # boundary for an untrusted agent. doctor lists what
-                        # this host has; prod refuses without one.
+runtime: runsc          # gVisor — under prod this is how a warning becomes a
+                        # guarantee: a shared kernel is not a boundary for an
+                        # untrusted agent, and prod refuses outright if the
+                        # engine has one registered and you did not select it.
 `,
     note: "Run sandbox-cli doctor --profile prod on a machine before scheduling anything on it: it checks whether the host can actually deliver this — seccomp applied, a container able to program the egress firewall — and exits non-zero if not, rather than letting an unattended run proceed in a weaker configuration than it asked for.",
   },

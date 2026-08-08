@@ -16,12 +16,18 @@ profile that guesses fails on the machine it was meant to protect. The demand is
 enforced by `ValidateProfile` and reported early by `doctor`; the choice stays
 the user's, in a config only they can write.
 
-**And one rule the scope did not anticipate.** The demand applies where a
-stronger runtime *can* exist, and that question is put to the **engine** rather
-than to the client's own operating system — the daemon may be on another machine,
-and a macOS client driving a Linux build box should be held to what that box can
-do. Docker Desktop reports itself and cannot register a custom OCI runtime, so
-prod accepts the VM it already puts every container in.
+**And one rule the scope did not anticipate: prod refuses only what it can
+prove.** The demand is real where the engine reports a stronger runtime and
+nothing selected it. Where it reports none, prod warns and runs — because an
+engine's silence is not evidence. Podman answers the question with its *active*
+runtime rather than its registered set, and nothing distinguishes a Linux host
+that could install Kata from a VM image its user does not compose. The first
+attempt inferred that from the daemon's product name and podman's
+`serviceIsRemote` and was wrong in both directions, refusing colima and OrbStack
+users who could not comply and waiving the demand for a podman client talking to
+bare metal. Closing that gap properly is §1's job: once a Kata path is tested and
+documented, "install this" becomes advice a user can follow, and the warning can
+become a refusal for hosts that ignored it.
 
 **Where the demand is enforced matters as much as what it demands.** Not in
 `ValidateProfile`: `--runtime` reaches a run through `sandbox.Options`, which

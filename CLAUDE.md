@@ -435,9 +435,24 @@ explicitly requested allowlist still refuses.
 program iptables (tried, not queried, since rootless and userns-remapped daemons cannot), which
 runtimes are registered — and applies the same asymmetry, warning under dev and failing with a
 non-zero exit under prod. A question that could not be *asked* counts as a failure under prod
-too: it does not get to assume the answer it would prefer. The runtime check reports rather than
-refuses, because prod does not yet *select* a stronger runtime and failing for something the tool
-does not do would be theatre.
+too: it does not get to assume the answer it would prefer.
+
+The **runtime check now refuses under prod, but only what it can prove**, and the shape of that is
+worth keeping. prod demands a kernel of its own; a run that names any non-default runtime satisfies
+it, and an engine that *reports* a stronger runtime while nothing selected it is refused — the
+boundary was there and unused. Everything else warns: an engine that reported none has not shown
+there are none (podman answers with its **active** runtime, not its registered set), and no signal
+distinguishes a Linux host that could install Kata from a VM image its user does not compose. The
+first version tried to infer that from the daemon's product name and podman's `serviceIsRemote`, and
+was wrong in both directions — refusing colima and OrbStack users who could not comply, waiving the
+demand for a podman client talking to bare metal. The verdict is one shared function,
+`runtime.ClassifyRuntimeGap`, called by `doctor` and by `sandbox.enforceKernelBoundary`, so the
+preflight and the launch cannot disagree; `doctor --runtime` exists so the preflight can be asked
+about the run you are about to make, since `--runtime` on the run outranks the config.
+
+The demand is enforced on `spec.Runtime` in `internal/sandbox`, **not** in `ValidateProfile`: a check
+against the resolved `Config` is not a check on the run, because `--runtime` arrives through
+`sandbox.Options` and wins. That is the `persist_auth` class of leak, one layer up.
 
 ### The trust boundary (read before touching config, mounts, or the entrypoint)
 

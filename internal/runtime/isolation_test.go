@@ -102,14 +102,13 @@ func TestContainerRuntimePrefersPodmansOwnField(t *testing.T) {
 // ClassifyRuntimeGap is the verdict `doctor` explains and the prod profile
 // enforces, so it is pinned here rather than twice in two callers' terms.
 //
-// The order the evidence is read in is the property under test: the daemon's own
-// answer first, and only a host with nothing registered gets the "could one be
-// installed" question. That is what lets a macOS client driving a Linux daemon
-// be held to the Linux answer.
+// The property under test is which answers are *provable*. Only a stronger
+// runtime reported-but-unselected refuses; everything else is an absence of
+// evidence and must classify as unverified, because the earlier version that
+// tried to infer more than the engine said got it wrong in both directions.
 func TestClassifyRuntimeGap(t *testing.T) {
-	kata := RuntimeSupport{Registered: []string{"kata-runtime"}, Registrable: true, Known: true}
-	bare := RuntimeSupport{Registrable: true, Known: true}
-	desktop := RuntimeSupport{Known: true}
+	kata := RuntimeSupport{Registered: []string{"kata-runtime"}, Known: true}
+	bare := RuntimeSupport{Known: true}
 	unasked := RuntimeSupport{}
 
 	cases := []struct {
@@ -118,14 +117,20 @@ func TestClassifyRuntimeGap(t *testing.T) {
 		support  RuntimeSupport
 		want     RuntimeGap
 	}{
-		{"selected and registered", "kata-runtime", kata, GapNone},
-		{"selected, registered elsewhere", "runsc", kata, GapMissing},
-		{"selected, nothing registered", "runsc", bare, GapMissing},
-		{"registered, unused", "", kata, GapNotSelected},
+		{"selected and reported", "kata-runtime", kata, GapNone},
+		{"selected, reported elsewhere", "runsc", kata, GapNone},
+		// The name nobody recognises is the case that mattered: gVisor's own
+		// installer produces runsc-hostnet, and refusing it would be a wrong
+		// refusal the operator cannot clear.
+		{"an unrecognised non-default name still counts", "runsc-hostnet", bare, GapNone},
+		{"selected on an engine that said nothing", "kata-runtime", unasked, GapNone},
+		{"reported and unused", "", kata, GapNotSelected},
 		{"a shared-kernel name is not a selection", "runc", kata, GapNotSelected},
-		{"nothing registered, installable", "", bare, GapNotInstalled},
-		{"nothing registrable", "", desktop, GapNotRegistrable},
-		{"unasked beats every other answer", "kata-runtime", unasked, GapUnknown},
+		// An engine that reported nothing is not an engine that has nothing:
+		// podman answers with its active runtime only.
+		{"nothing reported", "", bare, GapUnverified},
+		{"engine could not be asked", "", unasked, GapUnverified},
+		{"engine could not be asked, default named", "crun", unasked, GapUnverified},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

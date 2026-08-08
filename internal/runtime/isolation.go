@@ -75,7 +75,19 @@ var sharedKernelRuntimes = map[string]bool{
 //
 // So a name nobody here has heard of is shown and not characterised, which is
 // the honest pair of answers.
-func (c ContainerInfo) NotTheHostDefault() bool { return !sharedKernelRuntimes[c.Runtime] }
+func (c ContainerInfo) NotTheHostDefault() bool { return notHostDefault(c.Runtime) }
+
+// notHostDefault is the same question about a name on its own.
+//
+// It is the complement of a short list rather than membership of
+// strongerRuntimes, and that direction is load-bearing in both callers. The
+// listing shows a name it does not recognise rather than hiding it; the prod
+// gate *accepts* a name it does not recognise rather than refusing a run whose
+// operator deliberately selected something — gVisor registers itself as
+// runsc-hostnet and runsc-debug, and an admin may use any name at all. A short
+// list of names we are sure are shared-kernel can be kept honest; a list of
+// every strong runtime anyone will ever register cannot.
+func notHostDefault(name string) bool { return !sharedKernelRuntimes[name] }
 
 // containerRuntime picks the runtime name out of an engine's inspect output.
 //
@@ -99,71 +111,60 @@ func containerRuntime(ociRuntime, hostConfigRuntime string) string {
 // podmanRuntimePlaceholder is what podman puts in the docker-compatible field.
 const podmanRuntimePlaceholder = "oci"
 
-// RuntimeGap says why a run does not have a kernel of its own, or that it does.
+// RuntimeGap says whether a run got a kernel of its own, or why it might not
+// have.
 //
-// The classification is here, and pure, because two callers have to reach the
-// same verdict from the same evidence: `doctor` explains it before a run, and
-// the prod profile enforces it at launch. When those two disagree, the preflight
-// is worse than useless — it tells an operator a machine is fine that then
-// refuses, or clears one that should not have run.
+// Three outcomes, and the shape of them is the lesson from getting this wrong
+// once: **only one of them is provable, so only one of them refuses.** The first
+// design tried to decide whether a host *could* have been given a stronger
+// runtime, and every signal available for that turned out to be wrong somewhere
+// — a product name that colima and OrbStack do not report, a "remote" flag that
+// is true for a podman client talking to bare metal, and a registered-runtime
+// list that podman answers with one name. Guessing wrong refused hosts that were
+// fine and waived the demand on hosts that were not.
+//
+// So the classification now rests on evidence the engine gives directly, and
+// where there is none it says so instead of assuming.
 type RuntimeGap int
 
 const (
-	// GapNone: the run has a kernel of its own, or there is nothing to ask for.
+	// GapNone: the run named a runtime that is not one of the ordinary
+	// shared-kernel ones. Whether the engine really has it is settled at launch,
+	// which refuses an unregistered runtime — so a container that starts got
+	// what it named.
 	GapNone RuntimeGap = iota
-	// GapNotSelected: this daemon has a stronger runtime registered and nothing
-	// selected it. The sharpest case — the boundary was available and unused.
+	// GapNotSelected: the engine reports a stronger runtime and nothing selected
+	// it. The one provable gap, and the only one that refuses: the boundary was
+	// there and unused.
 	GapNotSelected
-	// GapMissing: the runtime the config names is not registered with this
-	// daemon. The launch would fail; this is the earlier place to find out.
-	GapMissing
-	// GapNotInstalled: no stronger runtime is registered, but this daemon could
-	// have one.
-	GapNotInstalled
-	// GapNotRegistrable: this engine cannot be given a runtime of its own at
-	// all. Docker Desktop keeps every container in its own VM instead, which is
-	// a boundary — just not a per-run, selectable one.
-	GapNotRegistrable
-	// GapUnknown: the daemon could not be asked. Distinct from every answer
-	// above, because prod does not get to assume the one it would prefer.
-	GapUnknown
+	// GapUnverified: nothing stronger was reported, or the engine could not be
+	// asked. This is not "there is no boundary" and not "there is one" — it is
+	// the absence of evidence either way, which is worth saying out loud and not
+	// worth refusing over, since the tool cannot tell a Linux host that could
+	// install Kata from a VM image the user does not compose.
+	GapUnverified
 )
 
-// RuntimeSupport is what a daemon says about kernels of their own: which
-// stronger runtimes it has registered, whether it could be given one, and
-// whether it could be asked at all.
+// RuntimeSupport is what an engine said about kernels of their own.
+//
+// Registered is the stronger runtimes it reported. It is evidence when
+// non-empty and nothing when empty: docker lists every registered runtime,
+// podman answers with the *active* one only, so an empty list means "none
+// reported", never "none exist". That asymmetry is why an empty list warns
+// rather than refuses.
 type RuntimeSupport struct {
-	Registered  []string
-	Registrable bool
-	Known       bool
+	Registered []string
+	Known      bool
 }
 
-// ClassifyRuntimeGap turns the selected runtime and the daemon's answer into the
-// one verdict both callers use.
-//
-// Order matters and is the point: the daemon's own evidence is read before any
-// assumption about the platform. A host with a stronger runtime registered is
-// asked to use it wherever it is, and only a host with none registered gets the
-// "could you install one" question — which is the question a client's own
-// operating system cannot answer, since the daemon may be somewhere else
-// entirely.
+// ClassifyRuntimeGap is the verdict `doctor` explains and the prod profile
+// enforces, computed once so the preflight and the launch cannot disagree.
 func ClassifyRuntimeGap(selected string, s RuntimeSupport) RuntimeGap {
-	if !s.Known {
-		return GapUnknown
+	if notHostDefault(selected) {
+		return GapNone
 	}
-	if StrongerRuntime(selected) {
-		for _, n := range s.Registered {
-			if n == selected {
-				return GapNone
-			}
-		}
-		return GapMissing
-	}
-	if len(s.Registered) > 0 {
+	if s.Known && len(s.Registered) > 0 {
 		return GapNotSelected
 	}
-	if s.Registrable {
-		return GapNotInstalled
-	}
-	return GapNotRegistrable
+	return GapUnverified
 }

@@ -43,11 +43,11 @@ func (r runtimeStub) StrongerRuntimeSupport(context.Context) runtime.RuntimeSupp
 			strong = append(strong, n)
 		}
 	}
-	return runtime.RuntimeSupport{Registered: strong, Registrable: true, Known: r.err == nil}
+	return runtime.RuntimeSupport{Registered: strong, Known: r.err == nil}
 }
 
-func support(registered []string, registrable, known bool) *runtime.RuntimeSupport {
-	return &runtime.RuntimeSupport{Registered: registered, Registrable: registrable, Known: known}
+func support(registered []string, known bool) *runtime.RuntimeSupport {
+	return &runtime.RuntimeSupport{Registered: registered, Known: known}
 }
 
 func TestRuntimeCheckUnderProd(t *testing.T) {
@@ -61,45 +61,47 @@ func TestRuntimeCheckUnderProd(t *testing.T) {
 	}{
 		{
 			name:     "registered and selected",
-			stub:     runtimeStub{names: []string{"runc", "runsc"}, support: support([]string{"runsc"}, true, true)},
+			stub:     runtimeStub{names: []string{"runc", "runsc"}, support: support([]string{"runsc"}, true)},
 			selected: "runsc",
 			wants:    []string{"runsc"},
 		},
 		{
 			// The sharpest case: the boundary was available and unused.
 			name:  "registered, nothing selected",
-			stub:  runtimeStub{names: []string{"runc", "kata-runtime"}, support: support([]string{"kata-runtime"}, true, true)},
+			stub:  runtimeStub{names: []string{"runc", "kata-runtime"}, support: support([]string{"kata-runtime"}, true)},
 			fatal: true,
 			wants: []string{"kata-runtime"},
 		},
 		{
-			// The membership bug this replaced: a *different* stronger runtime
-			// being registered used to make an unregistered one report ok, and
-			// every prod run then died at launch on docker's own error.
-			name:     "a different stronger runtime is registered",
-			stub:     runtimeStub{names: []string{"runc", "kata-runtime"}, support: support([]string{"kata-runtime"}, true, true)},
+			// Selected but not among what the engine reported. Not a refusal:
+			// podman reports only its active runtime, so an absent name is not
+			// proof of absence — and the launch settles it either way. The check
+			// says what the engine did report.
+			name:     "a different stronger runtime is reported",
+			stub:     runtimeStub{names: []string{"runc", "kata-runtime"}, support: support([]string{"kata-runtime"}, true)},
 			selected: "runsc",
-			fatal:    true,
-			wants:    []string{"runsc", "not registered"},
+			wants:    []string{"runsc", "kata-runtime"},
 		},
 		{
-			name:  "nothing registered, but one could be",
-			stub:  runtimeStub{names: []string{"runc"}, support: support(nil, true, true)},
-			fatal: true,
-			wants: []string{"only the default runtime"},
+			// The name no list knows. gVisor's installer produces it, and
+			// refusing it would be a refusal its operator cannot clear.
+			name:     "an unrecognised non-default name",
+			stub:     runtimeStub{names: []string{"runc"}, support: support(nil, true)},
+			selected: "runsc-hostnet",
+			wants:    []string{"runsc-hostnet"},
 		},
 		{
-			// Docker Desktop: every container is already inside the engine's own
-			// VM and no per-run runtime can be selected. Reported, not failed.
-			name:  "nothing registrable",
-			stub:  runtimeStub{names: []string{"runc"}, support: support(nil, false, true)},
-			wants: []string{"VM"},
+			// Nothing reported. Said plainly and not failed: the tool cannot tell
+			// a host that could install Kata from a VM image its user does not
+			// compose, and refusing on that guess broke the second kind.
+			name:  "nothing reported",
+			stub:  runtimeStub{names: []string{"runc"}, support: support(nil, true)},
+			wants: []string{"share the host kernel"},
 		},
 		{
-			// prod does not get to assume the answer it would prefer.
 			name:  "the engine could not be asked",
-			stub:  runtimeStub{names: []string{"runc"}, support: support(nil, false, false)},
-			fatal: true,
+			stub:  runtimeStub{names: []string{"runc"}, support: support(nil, false)},
+			wants: []string{"share the host kernel"},
 		},
 	}
 
@@ -135,13 +137,12 @@ func TestRuntimeCheckUnderDevWarnsAndNeverFails(t *testing.T) {
 		selected string
 		warns    bool
 	}{
-		{name: "nothing registered", stub: runtimeStub{names: []string{"runc"}, support: support(nil, true, true)}},
-		{name: "registered, unused", stub: runtimeStub{names: []string{"runc", "runsc"}, support: support([]string{"runsc"}, true, true)}},
+		{name: "nothing registered", stub: runtimeStub{names: []string{"runc"}, support: support(nil, true)}},
+		{name: "registered, unused", stub: runtimeStub{names: []string{"runc", "runsc"}, support: support([]string{"runsc"}, true)}},
 		{
-			name:     "selected but absent",
-			stub:     runtimeStub{names: []string{"runc"}, support: support(nil, true, true)},
+			name:     "selected but not reported",
+			stub:     runtimeStub{names: []string{"runc"}, support: support(nil, true)},
 			selected: "runsc",
-			warns:    true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

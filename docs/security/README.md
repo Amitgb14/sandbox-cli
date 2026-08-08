@@ -36,7 +36,7 @@ worse than one that stopped.
 | Host history mount | on | off |
 | seccomp missing on the daemon | warns | **refuses** |
 | memory / cpus / pids | as configured | bounded |
-| a kernel of its own | reports what is available | **required, where one can exist** |
+| a kernel of its own | reports what is available | **required where the engine proves it can** |
 
 ```sh
 sandbox-cli claude --profile prod
@@ -55,34 +55,36 @@ that **can** give a run its own kernel, prod requires one: the run refuses unles
 `runtime:` names a microVM or gVisor runtime, and `doctor --profile prod` fails
 before you schedule anything on that machine.
 
-**The engine is asked, not your laptop.** Which boundary is possible is a fact
-about the daemon, which may not be on the machine you typed the command on — a
-macOS client pointed at a Linux build box is held to what that box can do. So
-prod reads the engine's own answer:
+**The engine is asked, and only what it answers is acted on.** Which boundary is
+possible is a fact about the daemon, which may not be on the machine you typed
+the command on — so prod reads what the engine reports, and refuses only what
+that proves:
 
 | The engine says | prod |
 |---|---|
-| the run selected a runtime it has registered | runs |
+| the run selected a runtime that is not an ordinary shared-kernel one | runs — the launch settles whether it exists |
 | a stronger runtime is registered, nothing selected it | **refuses** — the boundary was there and unused |
-| the selected runtime is not registered here | **refuses** — the launch would fail anyway |
-| nothing registered, but one could be installed | **refuses** — install gVisor or Kata |
-| nothing registrable (Docker Desktop's own VM) | runs, and says which boundary you have |
-| it could not be asked | **refuses** — prod does not assume the answer it would prefer |
+| no stronger runtime reported, or it could not be asked | runs, and **warns on every run** that it shares the host kernel |
 
-Two things it deliberately does not do.
+The last row is a deliberate limit rather than an oversight. An engine that names
+no stronger runtime has not shown there are none — podman answers this question
+with its *active* runtime rather than its registered set — and no signal
+distinguishes a Linux host that could install Kata from a VM image its user does
+not compose. An earlier version tried to infer that from the daemon's product
+name and from podman's `serviceIsRemote`, and was wrong in both directions:
+colima and OrbStack users were refused with a remedy they could not act on, while
+a podman client talking to bare metal had the demand waived silently. A boundary
+control that guesses is worse than one that says what it does not know.
 
-It **does not name the runtime for you.** Which of Kata or gVisor a machine has
-is a property of the machine — writing `runsc` into the profile would refuse
-every host that has Kata, and `kata-runtime` every host that has gVisor. So prod
-refuses and says where to look (`sandbox-cli doctor --profile prod` lists what
-this host has registered); choosing is yours, in your own config or with
-`--runtime`.
+So the way to *have* the guarantee is to name the runtime: `runtime: kata-runtime`
+in your own config, or `--runtime` on the run. What prod will not do is choose
+for you — which of Kata or gVisor a machine has is the machine's business, and a
+profile naming either would refuse every host that has the other.
 
-And it **does not demand one where none can exist.** Docker Desktop runs every
-container inside its own managed VM and does not allow registering a custom OCI
-runtime, so prod accepts that boundary and says so. Demanding the impossible
-there would not be a boundary control; it would be a refusal to run in exchange
-for a boundary that is already present.
+`sandbox-cli doctor --profile prod` reports the same verdict from the same shared
+classification, so the preflight and the launch cannot disagree, and
+`doctor --runtime NAME` asks it about the run you are about to make rather than
+about the config alone.
 
 The demand is enforced on the runtime a run **actually gets**, not on the one its
 config names — `--runtime` reaches a run through a different path, and a check
@@ -106,7 +108,7 @@ profile: prod
   ok    docker daemon      reachable
   FAIL  seccomp            no syscall filter is applied; the container gets the full syscall table
   ok    egress firewall    a container here can program the nat, redirect, owner and conntrack rules
-  FAIL  isolation runtime  this host can give a run its own kernel and nothing selected one: kata-runtime
+  FAIL  isolation runtime  this engine can give a run its own kernel and nothing selected one: kata-runtime
 
 sandbox-cli: this host cannot satisfy the prod profile: seccomp, isolation runtime
 ```

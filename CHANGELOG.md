@@ -13,22 +13,25 @@ version is tagged.
 
 ### Changed
 
-- **`--profile prod` now requires a kernel of its own, on hosts that can give it
-  one.** A container shares the host kernel, and prod may carry untrusted agents
-  — so on Linux a prod run refuses unless `runtime:` names a microVM or gVisor
-  runtime, and `sandbox-cli doctor --profile prod` fails before you schedule
-  anything on that machine. Two limits are deliberate. prod does **not** name the
-  runtime for you: which of Kata or gVisor a host has is a property of the host,
-  and a profile that wrote either name into itself would refuse every machine
-  that has the other. And it does not demand one where none can exist — Docker
-  Desktop runs every container in its own VM and cannot register a custom
-  runtime, so prod accepts that boundary and says so.
+- **`--profile prod` now demands a kernel of its own where the engine proves it
+  can give one.** A container shares the host kernel, and prod may carry
+  untrusted agents — so a prod run that names a microVM or gVisor runtime is
+  fine, and one that does not, on an engine that *reports* having such a runtime
+  registered, now refuses: the boundary was there and unused.
 
-  Every input comes from the **engine**, not from the machine you typed on: a
-  macOS client pointed at a Linux daemon is held to what that daemon can do. And
-  the demand is enforced on the runtime a run actually gets rather than on the
-  one its config names, since `--runtime` would otherwise put a prod run back on
-  a shared kernel. `dev` is untouched.
+  Where the engine reports none, prod runs and warns on every run that the
+  container shares the host kernel. That limit is deliberate: an engine's silence
+  is not evidence, since podman answers with its *active* runtime rather than its
+  registered set, and nothing distinguishes a Linux host that could install Kata
+  from a VM image its user does not compose. Naming the runtime is how you turn
+  the warning into a guarantee; prod will not choose one for you, because which
+  of Kata or gVisor a host has is the host's business.
+
+  `sandbox-cli doctor --profile prod` reaches the same verdict from the same
+  shared classification, and the new **`doctor --runtime NAME`** asks it about
+  the run you are about to make rather than about the config alone — `--runtime`
+  on a run outranks the config, so the preflight has to be able to see it.
+  `dev` is untouched.
 
 ### Added
 

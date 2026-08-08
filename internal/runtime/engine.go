@@ -231,25 +231,24 @@ func (d *DockerCLI) RemoveNetwork(ctx context.Context, name string) {
 	_ = exec.CommandContext(ctx, d.bin(), "network", "rm", name).Run()
 }
 
-// StrongerRuntimeSupport asks the daemon what it can offer in the way of a
-// kernel of its own: which stronger runtimes it has registered, and whether it
-// could be given one at all.
+// StrongerRuntimeSupport asks the engine which runtimes with a kernel of their
+// own it has registered.
 //
-// **The daemon is asked, not the client.** The obvious version of this reads
-// runtime.GOOS and calls Linux registrable — and it is wrong in the direction
-// that matters, because the engine is not always where the client is. A macOS
-// developer with DOCKER_HOST pointed at a Linux build box would have the demand
-// waived on a host that could perfectly well satisfy it, silently, which is the
-// opposite of what a boundary control should do when it is unsure.
+// **Only what the engine reports, and nothing inferred from it.** An earlier
+// version also tried to answer "could this host be given one" — from the
+// daemon's product name, and from podman's serviceIsRemote. Both were wrong in
+// ways that mattered: colima and OrbStack report a Linux distro rather than
+// "Docker Desktop" and were held to a demand their users cannot satisfy inside a
+// VM image they do not compose, while a podman client talking to bare metal
+// reports serviceIsRemote and had the demand waived on a host that could have
+// satisfied it. A boundary control that guesses is worse than one that admits
+// what it does not know, so that inference is gone.
 //
-// The registrability answer comes from what the engine says it *is*. Docker
-// Desktop keeps every container in its own managed VM and does not allow
-// registering a custom OCI runtime; it reports "Docker Desktop" as its
-// operating system, which is the documented, stable way to recognise it.
-// Anything else that answers is a daemon where a runtime can be installed.
-//
-// Known is false when the daemon could not be asked. Callers under prod refuse
-// on that rather than assuming, for the reason enforceSeccomp does.
+// Known is false when the engine could not be asked. An empty Registered on a
+// Known engine means "none reported" — which is not the same as "none exist",
+// since podman answers this question with its *active* runtime rather than with
+// its registered set. runtime.ClassifyRuntimeGap treats both as unverified for
+// that reason.
 func (d *DockerCLI) StrongerRuntimeSupport(ctx context.Context) RuntimeSupport {
 	names, err := d.Runtimes(ctx)
 	if err != nil {
@@ -262,51 +261,5 @@ func (d *DockerCLI) StrongerRuntimeSupport(ctx context.Context) RuntimeSupport {
 		}
 	}
 	sort.Strings(strong)
-	if len(strong) > 0 {
-		// Registrable is not asked when one is already registered: the evidence
-		// answers the question, and an unanswerable follow-up would turn a host
-		// that demonstrably supports it into an unknown.
-		return RuntimeSupport{Registered: strong, Registrable: true, Known: true}
-	}
-	registrable, ok := d.runtimeRegistrable(ctx)
-	if !ok {
-		return RuntimeSupport{}
-	}
-	return RuntimeSupport{Registrable: registrable, Known: true}
-}
-
-// runtimeRegistrable reports whether this engine can be given an OCI runtime of
-// its own, and whether it could be asked.
-func (d *DockerCLI) runtimeRegistrable(ctx context.Context) (registrable, ok bool) {
-	if d.engine() == EnginePodman {
-		// Podman answers by JSON key rather than by template field name, as it
-		// does for memory. A machine VM is remote from the client's point of
-		// view, and that is the same situation Docker Desktop is in: the engine
-		// lives in a VM whose image the user does not compose.
-		//
-		// Written from podman's documented `host.serviceIsRemote` and, unlike
-		// the docker branch, not yet exercised against a live podman machine —
-		// so an absent field reads as "could not be asked", which prod refuses,
-		// rather than as a permissive default.
-		out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .Host}}").Output()
-		if err != nil {
-			return false, false
-		}
-		var host struct {
-			ServiceIsRemote *bool `json:"serviceIsRemote"`
-		}
-		if json.Unmarshal(bytes.TrimSpace(out), &host) != nil || host.ServiceIsRemote == nil {
-			return false, false
-		}
-		return !*host.ServiceIsRemote, true
-	}
-	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{.OperatingSystem}}").Output()
-	if err != nil {
-		return false, false
-	}
-	os := strings.TrimSpace(string(out))
-	if os == "" {
-		return false, false
-	}
-	return !strings.Contains(os, "Docker Desktop"), true
+	return RuntimeSupport{Registered: strong, Known: true}
 }

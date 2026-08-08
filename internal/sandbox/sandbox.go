@@ -427,26 +427,34 @@ func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode i
 //
 // A daemon that cannot be queried refuses too, under the same reasoning: prod
 // does not get to assume the answer it would prefer.
-// enforceKernelBoundary is prod's demand that a run get a kernel of its own,
-// made where both halves of the question are answerable.
+// enforceKernelBoundary is prod's demand that a run get a kernel of its own.
 //
 // It is not in ValidateProfile, and the reason is the rule CLAUDE.md records
 // from persist_auth: a check against the resolved *Config* is not a check on
 // the run. `--runtime` arrives through sandbox.Options and wins over cfg in
 // BuildSpec, so a config-level assertion would pass while the container
 // launched on runc. What is enforced here is spec.Runtime — the value that
-// reaches docker.
+// reaches the engine.
 //
-// The other half is the daemon. Whether a kernel of its own is even possible
-// belongs to the engine, which may be on another machine entirely, so it is
-// asked rather than inferred from the client's own operating system. A daemon
-// that cannot be asked refuses under prod, for the reason enforceSeccomp
-// refuses: prod does not get to assume the answer it would prefer.
+// **It refuses only what it can prove.** One case is evidence: the engine
+// reports a runtime with its own kernel and the run did not select it, so the
+// boundary was available and unused. Everything else — no stronger runtime
+// reported, an engine that could not be asked — is an *absence* of evidence,
+// and the tool cannot tell a Linux host that could install Kata from a VM image
+// its user does not compose. Those warn, loudly, and the audit line records
+// which runtime the run actually got. The first version of this guessed instead,
+// from a daemon product name and a podman "remote" flag, and got both
+// directions wrong: it refused colima and OrbStack users who had no way to
+// comply, and waived the demand for a podman client talking to bare metal.
 //
-// The classification is shared with `doctor` (runtime.ClassifyRuntimeGap) so
-// the preflight and the run cannot reach different verdicts from the same
-// evidence — a preflight that clears a host which then refuses is worse than no
-// preflight.
+// A run that names any non-default runtime satisfies it, recognised or not. The
+// engine settles that at launch by refusing a runtime it does not have, and
+// second-guessing a name the operator chose deliberately — gVisor's own
+// installer produces runsc-hostnet — is how a short list turns into a wrong
+// refusal.
+//
+// The classification is shared with `doctor` (runtime.ClassifyRuntimeGap) so the
+// preflight and the run cannot reach different verdicts from the same evidence.
 func (s *Session) enforceKernelBoundary(ctx context.Context, selected string) error {
 	if s.Cfg.Profile != config.ProfileProd {
 		return nil
@@ -457,25 +465,22 @@ func (s *Session) enforceKernelBoundary(ctx context.Context, selected string) er
 	if !ok {
 		return nil // a runtime that cannot be asked; nothing to enforce against
 	}
-	switch runtime.ClassifyRuntimeGap(selected, r.StrongerRuntimeSupport(ctx)) {
-	case runtime.GapNone, runtime.GapNotRegistrable:
-		// Either the run has its own kernel, or this engine keeps every
-		// container in a VM of its own and cannot be given a per-run runtime.
+	support := r.StrongerRuntimeSupport(ctx)
+	switch runtime.ClassifyRuntimeGap(selected, support) {
+	case runtime.GapNone:
 		return nil
-	case runtime.GapMissing:
-		return fmt.Errorf("--profile prod: runtime %q is not registered with this engine, so the run would fail at launch\n"+
-			"  `sandbox-cli doctor --profile prod` lists what this host has", selected)
 	case runtime.GapNotSelected:
-		return fmt.Errorf("--profile prod: this host can give a run a kernel of its own and nothing selected one\n" +
-			"  set `runtime:` in your own config, or pass --runtime\n" +
-			"  `sandbox-cli doctor --profile prod` lists what this host has registered")
-	case runtime.GapNotInstalled:
-		return fmt.Errorf("--profile prod: a container here shares the host kernel, which is not a boundary for an untrusted agent\n" +
-			"  install gVisor (runsc) or Kata, register it with the engine, and name it with `runtime:`\n" +
-			"  or run with --profile dev, which warns instead of refusing")
-	default: // GapUnknown
-		return fmt.Errorf("--profile prod: this engine could not be asked which OCI runtimes it has, " +
-			"so whether the run would get a kernel of its own is unknown; refusing rather than assuming it would")
+		return fmt.Errorf("--profile prod: this engine can give a run a kernel of its own (%s) and nothing selected one\n"+
+			"  set `runtime:` in your own config, or pass --runtime\n"+
+			"  a container namespace is not a boundary against an agent with a kernel exploit",
+			strings.Join(support.Registered, ", "))
+	default: // GapUnverified
+		// Said rather than refused, and said every time: prod runs unattended,
+		// so the line is for the log and for the audit record beside it.
+		fmt.Fprintf(os.Stderr, "sandbox-cli: --profile prod: this run shares the host kernel — no runtime with one of "+
+			"its own is registered with this engine, or it could not be asked\n"+
+			"  `sandbox-cli doctor --profile prod` says what this host reported; `runtime:` selects one where it exists\n")
+		return nil
 	}
 }
 

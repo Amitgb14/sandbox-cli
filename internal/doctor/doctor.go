@@ -182,25 +182,26 @@ func checkFirewall(ctx context.Context, d Runtime) Check {
 
 // checkRuntimes reports whether a stronger-isolation runtime is registered.
 //
-// Under prod this has teeth, and every input comes from the daemon rather than
-// from the machine the client happens to be on: which stronger runtimes are
-// registered, and whether this engine could be given one at all. A client on
-// macOS may be driving a Linux daemon that can do both.
+// Under prod this has teeth, and they close on the one thing that can be proved:
+// an engine that reports a runtime with its own kernel while nothing selected
+// it. Where there is no such evidence the check says so and does not fail —
+// see runtime.ClassifyRuntimeGap for why an engine's silence is not proof that a
+// stronger runtime was unavailable.
 //
-// The verdict itself is runtime.ClassifyRuntimeGap, shared with the run path
-// (sandbox.enforceKernelBoundary), so the preflight and the launch cannot reach
-// different conclusions from the same evidence. What is local to this function
-// is only how a verdict is *worded* and whether it is fatal, which is the
-// profile's business rather than the daemon's.
+// The verdict itself is shared with the run path (sandbox.enforceKernelBoundary)
+// so the preflight and the launch cannot reach different conclusions from the
+// same evidence. What is local here is only how a verdict is *worded* and
+// whether it is fatal, which is the profile's business rather than the engine's.
 //
-// Under dev, unchanged: a laptop is allowed not to have Kata, and allowed not to
-// use the Kata it has.
+// selected is the runtime the run would actually use, not merely the configured
+// one: `doctor --runtime X` preflights the command you are about to type, since
+// --runtime on the run would otherwise change the answer after the check passed.
 func checkRuntimes(ctx context.Context, d Runtime, profile, selected string) Check {
 	c := Check{Name: "isolation runtime"}
 	names, err := d.Runtimes(ctx)
 	if err != nil {
 		c.Status = StatusUnknown
-		c.Detail = "the daemon could not be asked which runtimes are registered"
+		c.Detail = "the engine could not be asked which runtimes are registered"
 		return c
 	}
 	support := runtimeSupport(ctx, d, names)
@@ -210,48 +211,54 @@ func checkRuntimes(ctx context.Context, d Runtime, profile, selected string) Che
 	case runtime.GapNone:
 		c.Status = StatusOK
 		c.Detail = "runs get a kernel of their own: " + selected
-	case runtime.GapMissing:
-		// The launch would fail with docker's own message; this is the earlier,
-		// cheaper place to find out — and it is a gap on any profile, since it
-		// is a configuration that cannot work rather than a weaker one.
-		c.Status = StatusWeak
-		c.Detail = "runtime is set to " + selected + ", which this engine has not registered"
-		c.Remedy = "register it, or name one this host has: " + strings.Join(names, ", ")
+		if len(support.Registered) > 0 && !containsStr(support.Registered, selected) {
+			// Worth saying, not worth failing: docker lists what it has and this
+			// name is not on it, so the launch may refuse — but podman reports
+			// only its active runtime, so an absent name is not proof either.
+			c.Detail += " (this engine reported " + strings.Join(support.Registered, ", ") + ")"
+		}
 	case runtime.GapNotSelected:
 		c.Detail = "stronger isolation available: " + strings.Join(support.Registered, ", ") +
 			" (select with `runtime:` in your config)"
 		if prod {
 			c.Status = StatusWeak
-			c.Detail = "this host can give a run its own kernel and nothing selected one: " +
+			c.Detail = "this engine can give a run its own kernel and nothing selected one: " +
 				strings.Join(support.Registered, ", ")
-			c.Remedy = "set `runtime: " + support.Registered[0] + "` in your own config — prod refuses a shared kernel where one can be avoided"
+			// Only the stronger names: suggesting runc here would send an operator
+			// to a second refusal.
+			c.Remedy = "set `runtime: " + support.Registered[0] + "` in your own config — prod refuses a shared kernel it did not have to accept"
 		}
-	case runtime.GapNotInstalled:
-		c.Detail = "only the default runtime is registered: " + strings.Join(names, ", ")
+	default: // GapUnverified
+		// Reported on every profile and fatal on none. This engine named no
+		// runtime with a kernel of its own, which is not the same as there being
+		// none to install — and prod cannot tell a host that could have one from
+		// a VM image its user does not compose.
+		c.Status = StatusOK
+		c.Detail = "runs share the host kernel: this engine reported no runtime with one of its own"
 		if prod {
-			c.Status = StatusWeak
-			// Kept out of Detail: a newline inside a tabwriter cell ends the column
-			// block, so a check added after this one would silently misalign.
-			c.Remedy = "prod may carry untrusted agents, and a shared kernel is not a boundary for those — " +
-				"install gVisor (runsc) or Kata and set `runtime:`"
+			c.Remedy = "a container namespace is not a boundary against a kernel exploit — " +
+				"install gVisor (runsc) or Kata where you can, and name it with `runtime:`"
 		}
-	case runtime.GapNotRegistrable:
-		// Nothing to install and nothing to select: this engine keeps its
-		// containers in a VM of its own. Reported, not failed, on every profile.
-		c.Detail = "this engine runs containers inside its own VM; a per-run microVM runtime cannot be selected here"
-	default: // GapUnknown
-		c.Status = StatusUnknown
-		c.Detail = "this engine could not be asked whether a runtime with its own kernel is possible here"
 	}
 	return c
 }
 
-// runtimeSupport asks the engine the second half of the question — whether one
-// could be registered — when it has an answer to give.
+func containsStr(hay []string, needle string) bool {
+	for _, h := range hay {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimeSupport asks the engine for its own answer when it has one.
 //
-// Kept behind an interface upgrade rather than added to the Runtime interface:
-// a backend that cannot answer leaves the daemon's registered runtimes as the
-// only evidence, which is the conservative reading rather than a permissive one.
+// The fallback is for a backend that predates the interface upgrade, and it
+// reports **Known: false** rather than assembling a verdict from the names it
+// happens to have: an engine that cannot be asked is unverified, and a fallback
+// that quietly produced a passing verdict would be the permissive reading of an
+// absence.
 func runtimeSupport(ctx context.Context, d Runtime, names []string) runtime.RuntimeSupport {
 	if r, ok := d.(interface {
 		StrongerRuntimeSupport(context.Context) runtime.RuntimeSupport
@@ -265,7 +272,7 @@ func runtimeSupport(ctx context.Context, d Runtime, names []string) runtime.Runt
 		}
 	}
 	sort.Strings(strong)
-	return runtime.RuntimeSupport{Registered: strong, Registrable: len(strong) > 0, Known: true}
+	return runtime.RuntimeSupport{Registered: strong, Known: len(strong) > 0}
 }
 
 // Verdict turns a status into a mark and whether it blocks, which is the one
