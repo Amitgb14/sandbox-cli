@@ -13,8 +13,9 @@ one and refuses to **name** one. Which of Kata or gVisor a machine has is a
 property of the machine, so a profile that wrote `runsc` into itself would refuse
 every host that has Kata, and `kata-runtime` every host that has gVisor — a
 profile that guesses fails on the machine it was meant to protect. The demand is
-enforced by `ValidateProfile` and reported early by `doctor`; the choice stays
-the user's, in a config only they can write.
+enforced in `sandbox.enforceKernelBoundary` — **not** in `ValidateProfile`, which
+sees a resolved `Config` and would be defeated by `--runtime` — and reported
+early by `doctor`; the choice stays the user's, in a config only they can write.
 
 **And one rule the scope did not anticipate: prod refuses only what it can
 prove.** The demand is real where the engine reports a stronger runtime and

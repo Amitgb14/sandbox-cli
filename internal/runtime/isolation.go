@@ -111,60 +111,101 @@ func containerRuntime(ociRuntime, hostConfigRuntime string) string {
 // podmanRuntimePlaceholder is what podman puts in the docker-compatible field.
 const podmanRuntimePlaceholder = "oci"
 
-// RuntimeGap says whether a run got a kernel of its own, or why it might not
-// have.
+// RuntimeGap says whether a run gets a kernel of its own, or why it might not.
 //
-// Three outcomes, and the shape of them is the lesson from getting this wrong
-// once: **only one of them is provable, so only one of them refuses.** The first
-// design tried to decide whether a host *could* have been given a stronger
-// runtime, and every signal available for that turned out to be wrong somewhere
-// — a product name that colima and OrbStack do not report, a "remote" flag that
-// is true for a podman client talking to bare metal, and a registered-runtime
-// list that podman answers with one name. Guessing wrong refused hosts that were
-// fine and waived the demand on hosts that were not.
-//
-// So the classification now rests on evidence the engine gives directly, and
-// where there is none it says so instead of assuming.
+// Six outcomes, because the evidence really does come in six shapes, and the
+// history of this function is a list of what happens when they are collapsed.
+// It has been wrong by inferring a host's capabilities from a product name, by
+// treating a short list of known-strong names as a gate on refusal, and by
+// reading "nothing selected" without first asking what the engine runs by
+// *default* — which refused the hosts that had already done the right thing.
 type RuntimeGap int
 
 const (
-	// GapNone: the run named a runtime that is not one of the ordinary
-	// shared-kernel ones. Whether the engine really has it is settled at launch,
-	// which refuses an unregistered runtime — so a container that starts got
-	// what it named.
+	// GapNone: the run gets a runtime this tool recognises as having a kernel of
+	// its own — named by the run, or the engine's own default.
 	GapNone RuntimeGap = iota
-	// GapNotSelected: the engine reports a stronger runtime and nothing selected
-	// it. The one provable gap, and the only one that refuses: the boundary was
-	// there and unused.
+	// GapUnrecognised: the run gets a non-default runtime nobody here has heard
+	// of. Permitted, because an operator who names one has chosen deliberately
+	// and gVisor's own installer produces names this list will never hold — but
+	// **not called a kernel of its own**, because sysbox-runc is also a
+	// non-default name and it shares the host kernel.
+	GapUnrecognised
+	// GapMissing: the run names a runtime and the engine's *complete* list does
+	// not have it. The launch would fail; this is the cheaper place to learn it.
+	GapMissing
+	// GapNotSelected: the engine reports a runtime with its own kernel, and
+	// neither the run nor the engine's default uses it. The boundary was there
+	// and unused.
 	GapNotSelected
-	// GapUnverified: nothing stronger was reported, or the engine could not be
-	// asked. This is not "there is no boundary" and not "there is one" — it is
-	// the absence of evidence either way, which is worth saying out loud and not
-	// worth refusing over, since the tool cannot tell a Linux host that could
-	// install Kata from a VM image the user does not compose.
+	// GapUnverified: no stronger runtime was reported. Not proof there is none —
+	// podman names only its active runtime — and nothing distinguishes a host
+	// that could install one from a VM image its user does not compose.
 	GapUnverified
+	// GapUnknown: the engine could not be asked. Prod does not get to assume the
+	// answer it would prefer, so this refuses rather than warns; the run path and
+	// the preflight agree on that, which they did not when this was folded into
+	// GapUnverified.
+	GapUnknown
 )
 
-// RuntimeSupport is what an engine said about kernels of their own.
+// RuntimeSupport is what an engine said about the runtimes it has.
 //
-// Registered is the stronger runtimes it reported. It is evidence when
-// non-empty and nothing when empty: docker lists every registered runtime,
-// podman answers with the *active* one only, so an empty list means "none
-// reported", never "none exist". That asymmetry is why an empty list warns
-// rather than refuses.
+// Complete is the field that keeps the two engines honest about different
+// answers to the same question: docker lists every registered runtime, podman
+// names only the one it is using. Membership of All is therefore evidence on
+// docker and nothing on podman, and a check that forgot the difference refused
+// every prod run on a podman host that had Kata configured.
 type RuntimeSupport struct {
-	Registered []string
-	Known      bool
+	All        []string // every runtime name the engine reported
+	Registered []string // those of them with a kernel of their own
+	Default    string   // what the engine runs when nothing selects a runtime
+	Complete   bool     // All is the full registered set, not just the active one
+	Known      bool     // the engine answered at all
+}
+
+// EffectiveRuntime is what a run will actually be given: what it selected, or
+// the engine's default when it selected nothing.
+//
+// Reading the default is the difference between "you did not ask for a kernel of
+// its own" and "you did not have to" — a host whose daemon.json sets
+// default-runtime: runsc gives every container one without a word in any config
+// of ours, and refusing it for "nothing selected one" punished the setup that
+// had already done the work.
+func (s RuntimeSupport) EffectiveRuntime(selected string) string {
+	if selected != "" {
+		return selected
+	}
+	return s.Default
 }
 
 // ClassifyRuntimeGap is the verdict `doctor` explains and the prod profile
 // enforces, computed once so the preflight and the launch cannot disagree.
 func ClassifyRuntimeGap(selected string, s RuntimeSupport) RuntimeGap {
-	if notHostDefault(selected) {
-		return GapNone
+	if !s.Known {
+		return GapUnknown
 	}
-	if s.Known && len(s.Registered) > 0 {
+	effective := s.EffectiveRuntime(selected)
+	if notHostDefault(effective) {
+		if s.Complete && !containsRuntime(s.All, effective) {
+			return GapMissing
+		}
+		if StrongerRuntime(effective) {
+			return GapNone
+		}
+		return GapUnrecognised
+	}
+	if len(s.Registered) > 0 {
 		return GapNotSelected
 	}
 	return GapUnverified
+}
+
+func containsRuntime(names []string, want string) bool {
+	for _, n := range names {
+		if n == want {
+			return true
+		}
+	}
+	return false
 }

@@ -416,17 +416,6 @@ func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode i
 	return m
 }
 
-// enforceSeccomp turns the seccomp warning into a refusal when the configuration
-// asked for one.
-//
-// The difference between profiles in one function: dev prints the warning and
-// carries on, because a developer is watching and can act on it. prod refuses,
-// because nobody is, and an unattended run that quietly proceeded with the full
-// syscall table available is exactly the "degraded silently" failure the profile
-// exists to prevent.
-//
-// A daemon that cannot be queried refuses too, under the same reasoning: prod
-// does not get to assume the answer it would prefer.
 // enforceKernelBoundary is prod's demand that a run get a kernel of its own.
 //
 // It is not in ValidateProfile, and the reason is the rule CLAUDE.md records
@@ -466,24 +455,77 @@ func (s *Session) enforceKernelBoundary(ctx context.Context, selected string) er
 		return nil // a runtime that cannot be asked; nothing to enforce against
 	}
 	support := r.StrongerRuntimeSupport(ctx)
+	effective := support.EffectiveRuntime(selected)
 	switch runtime.ClassifyRuntimeGap(selected, support) {
 	case runtime.GapNone:
 		return nil
+	case runtime.GapUnrecognised:
+		// Permitted: the operator named it deliberately, and no list here can
+		// hold every strong runtime anyone will register. Said out loud, because
+		// sysbox-runc is also a non-default name and it shares the host kernel —
+		// permitting a choice is not the same as vouching for it.
+		warnf("--profile prod: running on %q, which is not a runtime this tool recognises as having a kernel of its own\n"+
+			"  it is permitted because you selected it; `sandbox-cli doctor --profile prod` says what this engine reported", effective)
+		return nil
+	case runtime.GapMissing:
+		return fmt.Errorf("--profile prod: this engine has not registered %q, so the run would fail at launch\n"+
+			"  it reported: %s", effective, strings.Join(support.All, ", "))
 	case runtime.GapNotSelected:
-		return fmt.Errorf("--profile prod: this engine can give a run a kernel of its own (%s) and nothing selected one\n"+
-			"  set `runtime:` in your own config, or pass --runtime\n"+
+		return fmt.Errorf("--profile prod: this engine can give a run a kernel of its own (%s) and neither the run nor the engine's default uses one\n"+
+			"  set `runtime:` in your own config — a fleet reads the same key — or pass --runtime\n"+
 			"  a container namespace is not a boundary against an agent with a kernel exploit",
 			strings.Join(support.Registered, ", "))
+	case runtime.GapUnknown:
+		// The same bargain enforceSeccomp makes, and the same one `doctor` makes
+		// on this question: an unanswerable question is a failure under prod.
+		return fmt.Errorf("--profile prod: this engine could not be asked which OCI runtimes it has, " +
+			"so whether the run would get a kernel of its own is unknown; refusing rather than assuming it would")
 	default: // GapUnverified
-		// Said rather than refused, and said every time: prod runs unattended,
-		// so the line is for the log and for the audit record beside it.
-		fmt.Fprintf(os.Stderr, "sandbox-cli: --profile prod: this run shares the host kernel — no runtime with one of "+
-			"its own is registered with this engine, or it could not be asked\n"+
-			"  `sandbox-cli doctor --profile prod` says what this host reported; `runtime:` selects one where it exists\n")
+		// Said rather than refused, and said every time: prod runs unattended, so
+		// the line is for the log and for the audit record beside it.
+		reported := strings.Join(support.All, ", ")
+		if reported == "" {
+			reported = "none"
+		}
+		warnf("--profile prod: this run shares the host kernel — this engine reported no runtime with one of its own (%s)\n"+
+			"  `sandbox-cli doctor --profile prod` says what it reported; `runtime:` selects one where it exists", reported)
 		return nil
 	}
 }
 
+// CheckKernelBoundary answers the gate's question without starting anything.
+//
+// For callers that create expensive things before launching — a fleet makes a
+// branch and a worktree per task — so a refusal that was true before the first
+// one arrives before the first one, rather than N times afterwards with N
+// worktrees left on disk.
+func (s *Session) CheckKernelBoundary(ctx context.Context, opts Options) error {
+	spec, err := s.Prepare(opts)
+	if err != nil {
+		// Not this check's error to report: the launch will raise it with the
+		// context that belongs to it.
+		return nil
+	}
+	return s.enforceKernelBoundary(ctx, spec.Runtime)
+}
+
+// warnf is the one-line-to-stderr the profiles use when a control is worth
+// saying and not worth refusing over.
+func warnf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "sandbox-cli: "+format+"\n", args...)
+}
+
+// enforceSeccomp turns the seccomp warning into a refusal when the configuration
+// asked for one.
+//
+// The difference between profiles in one function: dev prints the warning and
+// carries on, because a developer is watching and can act on it. prod refuses,
+// because nobody is, and an unattended run that quietly proceeded with the full
+// syscall table available is exactly the "degraded silently" failure the profile
+// exists to prevent.
+//
+// A daemon that cannot be queried refuses too, under the same reasoning: prod
+// does not get to assume the answer it would prefer.
 func (s *Session) enforceSeccomp(ctx context.Context) error {
 	if s.Cfg.Security.Seccomp != config.SeccompRequired {
 		return nil

@@ -62,15 +62,24 @@ that proves:
 
 | The engine says | prod |
 |---|---|
-| the run selected a runtime that is not an ordinary shared-kernel one | runs — the launch settles whether it exists |
-| a stronger runtime is registered, nothing selected it | **refuses** — the boundary was there and unused |
-| no stronger runtime reported, or it could not be asked | runs, and **warns on every run** that it shares the host kernel |
+| the run gets a runtime with a kernel of its own — named by you **or by the engine's own default** | runs |
+| the run names something else non-default (`sysbox-runc`, an unrecognised name) | runs, and says it is **not** vouching for it |
+| the run names a runtime this engine has not registered | **refuses** — the launch would fail anyway |
+| a stronger runtime is registered and neither the run nor the default uses it | **refuses** — the boundary was there and unused |
+| no stronger runtime reported | runs, and **warns on every run**, naming what the engine did report |
+| the engine could not be asked | **refuses** — prod does not assume the answer it would prefer |
 
-The last row is a deliberate limit rather than an oversight. An engine that names
-no stronger runtime has not shown there are none — podman answers this question
-with its *active* runtime rather than its registered set — and no signal
+The warning row is a deliberate limit rather than an oversight. An engine that
+names no stronger runtime has not shown there are none — podman answers this
+question with its *active* runtime rather than its registered set, which is also
+why a name it does not list is only a refusal on docker — and no signal
 distinguishes a Linux host that could install Kata from a VM image its user does
-not compose. An earlier version tried to infer that from the daemon's product
+not compose.
+
+The **engine's default runtime counts**: a host whose `daemon.json` sets
+`default-runtime: runsc` gives every container a kernel of its own without a word
+in any sandbox-cli config, and prod reads that rather than refusing the setup
+that had already done the work. An earlier version tried to infer that from the daemon's product
 name and from podman's `serviceIsRemote`, and was wrong in both directions:
 colima and OrbStack users were refused with a remedy they could not act on, while
 a podman client talking to bare metal had the demand waived silently. A boundary

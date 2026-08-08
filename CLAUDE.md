@@ -438,9 +438,15 @@ non-zero exit under prod. A question that could not be *asked* counts as a failu
 too: it does not get to assume the answer it would prefer.
 
 The **runtime check now refuses under prod, but only what it can prove**, and the shape of that is
-worth keeping. prod demands a kernel of its own; a run that names any non-default runtime satisfies
-it, and an engine that *reports* a stronger runtime while nothing selected it is refused — the
-boundary was there and unused. Everything else warns: an engine that reported none has not shown
+worth keeping. prod demands a kernel of its own, and the evidence is read in a fixed order: the
+run's own selection, then **the engine's default** (a host with `default-runtime: runsc` has already
+done the work and must not be refused for "nothing selected"), then whether the engine has the name
+at all — on docker, whose list is complete, never on podman, which names only the runtime it is
+using. A non-default name nobody recognises is permitted and explicitly *not* vouched for, since
+`sysbox-runc` is also non-default and shares the host kernel. An engine reporting a stronger runtime
+that nothing uses is refused, and one that could not be asked is refused too — the run path and
+`doctor` agree on that, which they did not when "could not ask" was folded in with "reported none".
+Everything else warns: an engine that reported none has not shown
 there are none (podman answers with its **active** runtime, not its registered set), and no signal
 distinguishes a Linux host that could install Kata from a VM image its user does not compose. The
 first version tried to infer that from the daemon's product name and podman's `serviceIsRemote`, and

@@ -19,8 +19,18 @@ version is tagged.
   fine, and one that does not, on an engine that *reports* having such a runtime
   registered, now refuses: the boundary was there and unused.
 
+  The engine's own **default runtime** counts as a selection: a host whose
+  `daemon.json` says `default-runtime: runsc` already gives every container a
+  kernel of its own, and prod reads that rather than refusing it for "nothing
+  selected one". A runtime the engine has not registered is refused before the
+  launch that would have failed on it, and a non-default runtime this tool does
+  not recognise is permitted — an operator naming one has chosen deliberately —
+  but explicitly not vouched for, since `sysbox-runc` is also a non-default name
+  and shares the host kernel.
+
   Where the engine reports none, prod runs and warns on every run that the
-  container shares the host kernel. That limit is deliberate: an engine's silence
+  container shares the host kernel, naming what the engine did report. Where it
+  could not be asked at all, prod refuses. That limit is deliberate: an engine's silence
   is not evidence, since podman answers with its *active* runtime rather than its
   registered set, and nothing distinguishes a Linux host that could install Kata
   from a VM image its user does not compose. Naming the runtime is how you turn

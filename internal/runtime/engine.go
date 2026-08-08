@@ -231,29 +231,70 @@ func (d *DockerCLI) RemoveNetwork(ctx context.Context, name string) {
 	_ = exec.CommandContext(ctx, d.bin(), "network", "rm", name).Run()
 }
 
-// StrongerRuntimeSupport asks the engine which runtimes with a kernel of their
-// own it has registered.
+// StrongerRuntimeSupport asks the engine what runtimes it has and which one it
+// uses by default.
+//
+// One `info` call, not two: the caller used to ask Runtimes() and then this,
+// running the same query twice per doctor run and per prod launch — and leaving
+// the two snapshots free to disagree.
 //
 // **Only what the engine reports, and nothing inferred from it.** An earlier
-// version also tried to answer "could this host be given one" — from the
-// daemon's product name, and from podman's serviceIsRemote. Both were wrong in
-// ways that mattered: colima and OrbStack report a Linux distro rather than
-// "Docker Desktop" and were held to a demand their users cannot satisfy inside a
-// VM image they do not compose, while a podman client talking to bare metal
+// version also tried to answer "could this host be given one", from the daemon's
+// product name and from podman's serviceIsRemote. Both were wrong in ways that
+// mattered: colima and OrbStack report a Linux distro rather than "Docker
+// Desktop" and were held to a demand their users cannot satisfy inside a VM
+// image they do not compose, while a podman client talking to bare metal
 // reports serviceIsRemote and had the demand waived on a host that could have
-// satisfied it. A boundary control that guesses is worse than one that admits
-// what it does not know, so that inference is gone.
+// satisfied it.
 //
-// Known is false when the engine could not be asked. An empty Registered on a
-// Known engine means "none reported" — which is not the same as "none exist",
-// since podman answers this question with its *active* runtime rather than with
-// its registered set. runtime.ClassifyRuntimeGap treats both as unverified for
-// that reason.
+// Complete says whether All is the whole registered set. Docker's is; podman
+// answers with the runtime it is *using*, so on podman an absent name is not
+// evidence of absence and ClassifyRuntimeGap must not treat it as such.
 func (d *DockerCLI) StrongerRuntimeSupport(ctx context.Context) RuntimeSupport {
-	names, err := d.Runtimes(ctx)
+	if d.engine() == EnginePodman {
+		// podman's active runtime is also its default, which is the only thing it
+		// will tell us — and it is exactly the value EffectiveRuntime needs.
+		out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{.Host.OCIRuntime.Name}}").Output()
+		if err != nil {
+			return RuntimeSupport{}
+		}
+		name := strings.TrimSpace(string(out))
+		if name == "" {
+			return RuntimeSupport{}
+		}
+		return RuntimeSupport{
+			All:        []string{name},
+			Registered: strongerOnly([]string{name}),
+			Default:    name,
+			Complete:   false,
+			Known:      true,
+		}
+	}
+	// `{{json .Runtimes}}` and `{{.DefaultRuntime}}` in one call, separated by a
+	// character neither can contain.
+	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format",
+		"{{.DefaultRuntime}}\t{{json .Runtimes}}").Output()
 	if err != nil {
 		return RuntimeSupport{}
 	}
+	def, rawRuntimes, found := strings.Cut(strings.TrimSpace(string(out)), "\t")
+	if !found {
+		return RuntimeSupport{}
+	}
+	names, err := parseRuntimeNames([]byte(rawRuntimes))
+	if err != nil {
+		return RuntimeSupport{}
+	}
+	return RuntimeSupport{
+		All:        names,
+		Registered: strongerOnly(names),
+		Default:    strings.TrimSpace(def),
+		Complete:   true,
+		Known:      true,
+	}
+}
+
+func strongerOnly(names []string) []string {
 	var strong []string
 	for _, n := range names {
 		if StrongerRuntime(n) {
@@ -261,5 +302,5 @@ func (d *DockerCLI) StrongerRuntimeSupport(ctx context.Context) RuntimeSupport {
 		}
 	}
 	sort.Strings(strong)
-	return RuntimeSupport{Registered: strong, Known: true}
+	return strong
 }

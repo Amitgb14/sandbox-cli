@@ -116,6 +116,16 @@ func (r *Runner) Launch(ctx context.Context, spec Spec, opts LaunchOptions) ([]L
 	if err := r.checkCapacity(ctx, spec, len(tasks)); err != nil {
 		return nil, err
 	}
+	// Asked once, here, before anything is created. Session.Start enforces prod's
+	// kernel demand per task — a fleet inherits every gate the run path has, by
+	// design — and without this the refusal arrives after N branches and N
+	// worktrees are already on disk, once per task, for a condition that was true
+	// before the first one. The remedy is `runtime:` in the user's own config,
+	// which a fleet reads like any other run; there is no per-task flag to reach
+	// for, and the message says so.
+	if err := r.checkKernelBoundary(ctx); err != nil {
+		return nil, err
+	}
 
 	// The branch the fleet is expected to land on, resolved once and stamped on
 	// every container. Read here rather than at land time because this is the
@@ -462,4 +472,22 @@ func (r *Runner) logf(format string, args ...any) {
 		w = os.Stderr
 	}
 	fmt.Fprintf(w, "sandbox-cli: "+format+"\n", args...)
+}
+
+// checkKernelBoundary asks the same question Session.Start will ask, before the
+// fleet creates anything.
+//
+// It uses the session the tasks will run through, so the answer is the one they
+// will get — and it is deliberately a dry probe rather than a duplicate rule:
+// the verdict comes from the same sandbox.Session, so a fleet cannot end up held
+// to a different standard than the runs it is made of.
+func (r *Runner) checkKernelBoundary(ctx context.Context) error {
+	type boundaryChecker interface {
+		CheckKernelBoundary(context.Context, sandbox.Options) error
+	}
+	c, ok := any(r.Session).(boundaryChecker)
+	if !ok {
+		return nil
+	}
+	return c.CheckKernelBoundary(ctx, sandbox.Options{Project: r.Repo})
 }

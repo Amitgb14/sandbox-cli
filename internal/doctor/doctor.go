@@ -198,43 +198,54 @@ func checkFirewall(ctx context.Context, d Runtime) Check {
 // --runtime on the run would otherwise change the answer after the check passed.
 func checkRuntimes(ctx context.Context, d Runtime, profile, selected string) Check {
 	c := Check{Name: "isolation runtime"}
-	names, err := d.Runtimes(ctx)
-	if err != nil {
-		c.Status = StatusUnknown
-		c.Detail = "the engine could not be asked which runtimes are registered"
-		return c
-	}
-	support := runtimeSupport(ctx, d, names)
+	support := runtimeSupport(ctx, d)
 	prod := profile == config.ProfileProd
+	effective := support.EffectiveRuntime(selected)
+	reported := strings.Join(support.All, ", ")
 
 	switch runtime.ClassifyRuntimeGap(selected, support) {
 	case runtime.GapNone:
 		c.Status = StatusOK
-		c.Detail = "runs get a kernel of their own: " + selected
-		if len(support.Registered) > 0 && !containsStr(support.Registered, selected) {
-			// Worth saying, not worth failing: docker lists what it has and this
-			// name is not on it, so the launch may refuse — but podman reports
-			// only its active runtime, so an absent name is not proof either.
-			c.Detail += " (this engine reported " + strings.Join(support.Registered, ", ") + ")"
+		c.Detail = "runs get a kernel of their own: " + effective
+		if selected == "" {
+			c.Detail += " (this engine's default)"
 		}
+	case runtime.GapUnrecognised:
+		// Not failed — the operator chose it — and not vouched for either.
+		c.Status = StatusOK
+		c.Detail = "runs on " + effective + ", which is not a runtime this tool recognises as having a kernel of its own"
+	case runtime.GapMissing:
+		// The launch would fail on this, so it is a finding on every profile:
+		// a configuration that cannot work is not a matter of degree.
+		c.Status = StatusWeak
+		c.Detail = "runtime is set to " + effective + ", which this engine has not registered"
+		c.Remedy = "register it, or name one of the runtimes with a kernel of their own that this engine has" +
+			registeredSuffix(support)
 	case runtime.GapNotSelected:
 		c.Detail = "stronger isolation available: " + strings.Join(support.Registered, ", ") +
 			" (select with `runtime:` in your config)"
 		if prod {
 			c.Status = StatusWeak
-			c.Detail = "this engine can give a run its own kernel and nothing selected one: " +
+			c.Detail = "this engine can give a run its own kernel and neither the run nor its default uses one: " +
 				strings.Join(support.Registered, ", ")
-			// Only the stronger names: suggesting runc here would send an operator
-			// to a second refusal.
+			// Only the stronger names: suggesting runc here would send an
+			// operator to a second refusal.
 			c.Remedy = "set `runtime: " + support.Registered[0] + "` in your own config — prod refuses a shared kernel it did not have to accept"
 		}
+	case runtime.GapUnknown:
+		// Same verdict the run path reaches, so a preflight that passes is a run
+		// that starts and one that fails is a run that would have been refused.
+		c.Status = StatusUnknown
+		c.Detail = "the engine could not be asked which runtimes it has"
 	default: // GapUnverified
-		// Reported on every profile and fatal on none. This engine named no
-		// runtime with a kernel of its own, which is not the same as there being
-		// none to install — and prod cannot tell a host that could have one from
-		// a VM image its user does not compose.
 		c.Status = StatusOK
 		c.Detail = "runs share the host kernel: this engine reported no runtime with one of its own"
+		if reported != "" {
+			// The names matter: gVisor installs itself as runsc-hostnet on some
+			// setups, and an operator told only "install gVisor" would be
+			// installing what they already have instead of naming what they have.
+			c.Detail += " (it reported " + reported + ")"
+		}
 		if prod {
 			c.Remedy = "a container namespace is not a boundary against a kernel exploit — " +
 				"install gVisor (runsc) or Kata where you can, and name it with `runtime:`"
@@ -243,27 +254,31 @@ func checkRuntimes(ctx context.Context, d Runtime, profile, selected string) Che
 	return c
 }
 
-func containsStr(hay []string, needle string) bool {
-	for _, h := range hay {
-		if h == needle {
-			return true
-		}
+func registeredSuffix(s runtime.RuntimeSupport) string {
+	if len(s.Registered) > 0 {
+		return ": " + strings.Join(s.Registered, ", ")
 	}
-	return false
+	if len(s.All) > 0 {
+		return " (this engine reported only " + strings.Join(s.All, ", ") + ")"
+	}
+	return ""
 }
 
-// runtimeSupport asks the engine for its own answer when it has one.
+// runtimeSupport asks the engine, once.
 //
-// The fallback is for a backend that predates the interface upgrade, and it
-// reports **Known: false** rather than assembling a verdict from the names it
-// happens to have: an engine that cannot be asked is unverified, and a fallback
-// that quietly produced a passing verdict would be the permissive reading of an
-// absence.
-func runtimeSupport(ctx context.Context, d Runtime, names []string) runtime.RuntimeSupport {
+// The fallback is for a backend predating the interface upgrade, and it reports
+// **Known: false** rather than assembling a verdict from whatever it can see:
+// an engine that cannot be asked is unverified, and a fallback that quietly
+// produced a passing verdict would be the permissive reading of an absence.
+func runtimeSupport(ctx context.Context, d Runtime) runtime.RuntimeSupport {
 	if r, ok := d.(interface {
 		StrongerRuntimeSupport(context.Context) runtime.RuntimeSupport
 	}); ok {
 		return r.StrongerRuntimeSupport(ctx)
+	}
+	names, err := d.Runtimes(ctx)
+	if err != nil || len(names) == 0 {
+		return runtime.RuntimeSupport{}
 	}
 	var strong []string
 	for _, n := range names {
@@ -272,7 +287,10 @@ func runtimeSupport(ctx context.Context, d Runtime, names []string) runtime.Runt
 		}
 	}
 	sort.Strings(strong)
-	return runtime.RuntimeSupport{Registered: strong, Known: len(strong) > 0}
+	// No default and no completeness claim: this backend cannot say which
+	// runtime it would pick, and guessing "the first one" is how a listing
+	// becomes an assertion.
+	return runtime.RuntimeSupport{All: names, Registered: strong, Known: true}
 }
 
 // Verdict turns a status into a mark and whether it blocks, which is the one

@@ -40,9 +40,7 @@ func prodSession(t *testing.T, rt runtime.Runtime) *Session {
 func TestProdRefusesAWeakRuntimeArrivingByFlag(t *testing.T) {
 	// The host has kata registered, and the *config* names it — so any check made
 	// against the resolved Config passes.
-	rt := &boundaryStub{support: runtime.RuntimeSupport{
-		Registered: []string{"kata-runtime"}, Known: true,
-	}}
+	rt := &boundaryStub{support: dockerHost("runc", "runc", "kata-runtime")}
 	s := prodSession(t, rt)
 	s.Cfg.Runtime = "kata-runtime"
 
@@ -55,7 +53,7 @@ func TestProdRefusesAWeakRuntimeArrivingByFlag(t *testing.T) {
 	if err == nil {
 		t.Fatal("--runtime runc defeated prod's demand for a kernel of its own")
 	}
-	if !strings.Contains(err.Error(), "nothing selected one") {
+	if !strings.Contains(err.Error(), "neither the run nor the engine's default") {
 		t.Errorf("the refusal does not explain what was wrong: %v", err)
 	}
 	if rt.started {
@@ -64,7 +62,7 @@ func TestProdRefusesAWeakRuntimeArrivingByFlag(t *testing.T) {
 }
 
 func TestProdOnTheResolvedRuntime(t *testing.T) {
-	kataHost := runtime.RuntimeSupport{Registered: []string{"kata-runtime"}, Known: true}
+	kataHost := dockerHost("runc", "runc", "kata-runtime")
 
 	t.Run("the flag can also satisfy it", func(t *testing.T) {
 		// The mirror of the test above, and the reason the check reads the
@@ -86,6 +84,9 @@ func TestProdOnTheResolvedRuntime(t *testing.T) {
 	})
 
 	t.Run("a name no list recognises still satisfies it", func(t *testing.T) {
+		// Registered with this engine, just not known to us — which is the case
+		// gVisor's own installer produces.
+		kataHost := dockerHost("runc", "runc", "kata-runtime", "runsc-hostnet")
 		// gVisor's own installer produces runsc-hostnet, and an admin may
 		// register a runtime under any name at all. The engine settles whether it
 		// exists by refusing the launch; refusing here on a short allowlist would
@@ -113,16 +114,26 @@ func TestProdAndTheDaemonsAnswer(t *testing.T) {
 		says    string
 	}{
 		{
-			// Nothing reported is not proof that nothing exists: podman answers
-			// with its active runtime only, and no signal distinguishes a Linux
-			// host that could install Kata from a VM image its user does not
-			// compose. Warned, not refused.
-			name:    "nothing reported",
-			support: runtime.RuntimeSupport{Known: true},
+			// Nothing stronger reported is not proof that nothing exists: podman
+			// answers with its active runtime only, and no signal distinguishes a
+			// Linux host that could install Kata from a VM image its user does
+			// not compose. Warned, not refused.
+			name:    "nothing stronger reported",
+			support: dockerHost("runc", "runc"),
 		},
 		{
+			// The host that had already done the work: its default is strong, so
+			// there is nothing to ask for.
+			name:    "the engine's default is strong",
+			support: dockerHost("runsc", "runc", "runsc"),
+		},
+		{
+			// prod does not get to assume the answer it would prefer — and
+			// `doctor` reaches the same verdict, which it did not before.
 			name:    "the engine could not be asked",
 			support: runtime.RuntimeSupport{},
+			refuses: true,
+			says:    "could not be asked",
 		},
 	}
 	for _, tc := range cases {
@@ -149,8 +160,8 @@ func TestProdAndTheDaemonsAnswer(t *testing.T) {
 // dev is untouched by all of it: the same hosts, the same runs, no refusals.
 func TestDevNeverDemandsAKernelOfItsOwn(t *testing.T) {
 	for _, support := range []runtime.RuntimeSupport{
-		{Known: true},
-		{Registered: []string{"kata-runtime"}, Known: true},
+		dockerHost("runc", "runc"),
+		dockerHost("runc", "runc", "kata-runtime"),
 		{},
 	} {
 		rt := &boundaryStub{support: support}
@@ -194,4 +205,72 @@ func TestProdArgvCarriesTheRuntimeItDemands(t *testing.T) {
 			t.Errorf("prod argv does not contain %q:\n%s", want, argv)
 		}
 	}
+}
+
+// dockerHost is a complete registered set with a named default, the shape docker
+// reports.
+func dockerHost(def string, all ...string) runtime.RuntimeSupport {
+	var strong []string
+	for _, n := range all {
+		if runtime.StrongerRuntime(n) {
+			strong = append(strong, n)
+		}
+	}
+	return runtime.RuntimeSupport{All: all, Registered: strong, Default: def, Complete: true, Known: true}
+}
+
+// TestProdPermitsAnUnrecognisedRuntimeWithoutVouchingForIt is the pair of claims
+// that has to hold together: an operator who names something this tool does not
+// know is not refused — gVisor's own installer produces runsc-hostnet — and the
+// tool does not thereby assert they got a kernel of their own, because
+// sysbox-runc is also a non-default name and shares the host kernel.
+func TestProdPermitsAnUnrecognisedRuntimeWithoutVouchingForIt(t *testing.T) {
+	rt := &boundaryStub{support: dockerHost("runc", "runc", "sysbox-runc")}
+	s := prodSession(t, rt)
+	if _, err := s.Start(context.Background(), Options{
+		Project: t.TempDir(),
+		Runtime: "sysbox-runc",
+		Command: []string{"true"},
+	}, false); err != nil {
+		t.Fatalf("prod refused a deliberately selected runtime: %v", err)
+	}
+	if !rt.started {
+		t.Error("the run was accepted but no container was started")
+	}
+	// And the tool's own answer about that container says it is not stronger.
+	if (runtime.ContainerInfo{Runtime: "sysbox-runc"}).StrongerIsolation() {
+		t.Error("sysbox-runc is reported as a kernel of its own")
+	}
+}
+
+// A runtime this engine has not registered fails before the launch that would
+// have failed anyway — but only where the engine's list is complete.
+func TestProdOnARuntimeTheEngineDoesNotHave(t *testing.T) {
+	t.Run("docker with a complete list", func(t *testing.T) {
+		rt := &boundaryStub{support: dockerHost("runc", "runc")}
+		s := prodSession(t, rt)
+		_, err := s.Start(context.Background(), Options{
+			Project: t.TempDir(), Runtime: "kata-runtime", Command: []string{"true"},
+		}, false)
+		if err == nil {
+			t.Fatal("prod accepted a runtime this engine has not registered")
+		}
+		if !strings.Contains(err.Error(), "kata-runtime") {
+			t.Errorf("the refusal does not name it: %v", err)
+		}
+	})
+
+	t.Run("podman which names only its active runtime", func(t *testing.T) {
+		// The same shape must not refuse here: podman reports what it is using,
+		// so an absent name is not evidence of absence.
+		rt := &boundaryStub{support: runtime.RuntimeSupport{
+			All: []string{"crun"}, Default: "crun", Known: true,
+		}}
+		s := prodSession(t, rt)
+		if _, err := s.Start(context.Background(), Options{
+			Project: t.TempDir(), Runtime: "kata-runtime", Command: []string{"true"},
+		}, false); err != nil {
+			t.Fatalf("prod refused kata on a podman host that may well have it: %v", err)
+		}
+	})
 }

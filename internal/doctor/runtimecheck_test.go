@@ -18,96 +18,96 @@ import (
 // verdict follows the answer.
 
 type runtimeStub struct {
-	names   []string
-	err     error
-	support *runtime.RuntimeSupport
+	support runtime.RuntimeSupport
 }
 
 func (r runtimeStub) Available(context.Context) error                 { return nil }
 func (r runtimeStub) SeccompUnavailable(context.Context) (bool, bool) { return false, true }
-func (r runtimeStub) Runtimes(context.Context) ([]string, error)      { return r.names, r.err }
+func (r runtimeStub) Runtimes(context.Context) ([]string, error)      { return r.support.All, nil }
 func (r runtimeStub) FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string) {
 	return runtime.FirewallUnknown, ""
 }
 func (r runtimeStub) ImagePresent(context.Context, string) (bool, bool) { return true, true }
 
-// StrongerRuntimeSupport is the interface upgrade checkRuntimes looks for. A
-// stub without one exercises the fallback.
 func (r runtimeStub) StrongerRuntimeSupport(context.Context) runtime.RuntimeSupport {
-	if r.support != nil {
-		return *r.support
-	}
+	return r.support
+}
+
+// dockerHost is a complete registered set with a named default, as docker
+// reports. podmanHost names only the runtime it is using.
+func dockerHost(def string, all ...string) runtime.RuntimeSupport {
 	var strong []string
-	for _, n := range r.names {
+	for _, n := range all {
 		if runtime.StrongerRuntime(n) {
 			strong = append(strong, n)
 		}
 	}
-	return runtime.RuntimeSupport{Registered: strong, Known: r.err == nil}
-}
-
-func support(registered []string, known bool) *runtime.RuntimeSupport {
-	return &runtime.RuntimeSupport{Registered: registered, Known: known}
+	return runtime.RuntimeSupport{All: all, Registered: strong, Default: def, Complete: true, Known: true}
 }
 
 func TestRuntimeCheckUnderProd(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
 		name     string
-		stub     runtimeStub
+		support  runtime.RuntimeSupport
 		selected string
-		fatal    bool // under prod
+		fatal    bool
 		wants    []string
 	}{
 		{
-			name:     "registered and selected",
-			stub:     runtimeStub{names: []string{"runc", "runsc"}, support: support([]string{"runsc"}, true)},
+			name:     "selected and registered",
+			support:  dockerHost("runc", "runc", "runsc"),
 			selected: "runsc",
 			wants:    []string{"runsc"},
 		},
 		{
-			// The sharpest case: the boundary was available and unused.
-			name:  "registered, nothing selected",
-			stub:  runtimeStub{names: []string{"runc", "kata-runtime"}, support: support([]string{"kata-runtime"}, true)},
-			fatal: true,
-			wants: []string{"kata-runtime"},
+			// The host that had already done the work. Refusing it was the
+			// sharpest of the wrong refusals.
+			name:    "the engine's default is strong",
+			support: dockerHost("runsc", "runc", "runsc"),
+			wants:   []string{"runsc", "default"},
 		},
 		{
-			// Selected but not among what the engine reported. Not a refusal:
-			// podman reports only its active runtime, so an absent name is not
-			// proof of absence — and the launch settles it either way. The check
-			// says what the engine did report.
-			name:     "a different stronger runtime is reported",
-			stub:     runtimeStub{names: []string{"runc", "kata-runtime"}, support: support([]string{"kata-runtime"}, true)},
-			selected: "runsc",
-			wants:    []string{"runsc", "kata-runtime"},
+			// The boundary was there and unused: the one provable gap.
+			name:    "registered and unused",
+			support: dockerHost("runc", "runc", "kata-runtime"),
+			fatal:   true,
+			wants:   []string{"kata-runtime"},
 		},
 		{
-			// The name no list knows. gVisor's installer produces it, and
-			// refusing it would be a refusal its operator cannot clear.
-			name:     "an unrecognised non-default name",
-			stub:     runtimeStub{names: []string{"runc"}, support: support(nil, true)},
-			selected: "runsc-hostnet",
-			wants:    []string{"runsc-hostnet"},
+			// A launch that cannot work is not a matter of degree.
+			name:     "selected but this engine has not registered it",
+			support:  dockerHost("runc", "runc"),
+			selected: "kata-runtime",
+			fatal:    true,
+			wants:    []string{"kata-runtime", "not registered"},
 		},
 		{
-			// Nothing reported. Said plainly and not failed: the tool cannot tell
-			// a host that could install Kata from a VM image its user does not
-			// compose, and refusing on that guess broke the second kind.
-			name:  "nothing reported",
-			stub:  runtimeStub{names: []string{"runc"}, support: support(nil, true)},
-			wants: []string{"share the host kernel"},
+			// Deliberate and unrecognised: permitted, and not vouched for.
+			name:     "an unrecognised name",
+			support:  dockerHost("runc", "runc", "sysbox-runc"),
+			selected: "sysbox-runc",
+			wants:    []string{"sysbox-runc", "not a runtime this tool recognises"},
 		},
 		{
-			name:  "the engine could not be asked",
-			stub:  runtimeStub{names: []string{"runc"}, support: support(nil, false)},
-			wants: []string{"share the host kernel"},
+			// The names are the point: an operator told only "install gVisor"
+			// might already have it under a name no list knows.
+			name:    "nothing stronger reported",
+			support: dockerHost("runc", "runc", "runsc-hostnet"),
+			wants:   []string{"share the host kernel", "runsc-hostnet"},
+		},
+		{
+			// Same verdict the run path reaches, which it did not before.
+			name:    "the engine could not be asked",
+			support: runtime.RuntimeSupport{},
+			fatal:   true,
+			wants:   []string{"could not be asked"},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := checkRuntimes(ctx, tc.stub, config.ProfileProd, tc.selected)
+			c := checkRuntimes(ctx, runtimeStub{support: tc.support}, config.ProfileProd, tc.selected)
 			if _, fatal := Verdict(c.Status, true); fatal != tc.fatal {
 				t.Errorf("prod fatal = %v, want %v: %+v", fatal, tc.fatal, c)
 			}
@@ -116,8 +116,6 @@ func TestRuntimeCheckUnderProd(t *testing.T) {
 					t.Errorf("the finding does not mention %q: %+v", want, c)
 				}
 			}
-			// A newline inside a tabwriter cell ends the column block, so a check
-			// added after this one would silently misalign.
 			if strings.Contains(c.Detail, "\n") {
 				t.Errorf("detail contains a newline: %q", c.Detail)
 			}
@@ -125,44 +123,52 @@ func TestRuntimeCheckUnderProd(t *testing.T) {
 	}
 }
 
-// dev reports every one of those facts and fails on none of them. That is the
-// asymmetry the profiles exist for: a developer is here to read a warning, and
-// even a runtime the engine has never heard of is a warning rather than a
-// refusal, because the launch that follows will say so plainly.
-func TestRuntimeCheckUnderDevWarnsAndNeverFails(t *testing.T) {
+// dev reports the same facts and fails on nothing it can merely warn about. The
+// two exceptions are configurations that cannot work at all: a runtime the
+// engine does not have, and an engine that could not be asked.
+func TestRuntimeCheckUnderDev(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name     string
-		stub     runtimeStub
+		support  runtime.RuntimeSupport
 		selected string
-		warns    bool
+		fatal    bool
 	}{
-		{name: "nothing registered", stub: runtimeStub{names: []string{"runc"}, support: support(nil, true)}},
-		{name: "registered, unused", stub: runtimeStub{names: []string{"runc", "runsc"}, support: support([]string{"runsc"}, true)}},
+		{name: "nothing stronger reported", support: dockerHost("runc", "runc")},
+		{name: "registered and unused", support: dockerHost("runc", "runc", "runsc")},
+		{name: "default is strong", support: dockerHost("runsc", "runc", "runsc")},
 		{
-			name:     "selected but not reported",
-			stub:     runtimeStub{names: []string{"runc"}, support: support(nil, true)},
+			name:     "selected but absent",
+			support:  dockerHost("runc", "runc"),
 			selected: "runsc",
+			fatal:    false, // reported, and dev only warns
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := checkRuntimes(ctx, tc.stub, config.ProfileDev, tc.selected)
-			if _, fatal := Verdict(c.Status, false); fatal {
-				t.Errorf("dev failed over a runtime it should only report: %+v", c)
-			}
-			if warned := c.Status != StatusOK; warned != tc.warns {
-				t.Errorf("dev warned = %v, want %v: %+v", warned, tc.warns, c)
+			c := checkRuntimes(ctx, runtimeStub{support: tc.support}, config.ProfileDev, tc.selected)
+			if _, fatal := Verdict(c.Status, false); fatal != tc.fatal {
+				t.Errorf("dev fatal = %v, want %v: %+v", fatal, tc.fatal, c)
 			}
 		})
 	}
 }
 
-func TestRuntimeCheckCannotListTheRuntimes(t *testing.T) {
-	c := checkRuntimes(context.Background(), runtimeStub{err: errors.New("nope")}, config.ProfileProd, "")
-	if c.Status != StatusUnknown {
-		t.Errorf("an unanswerable question was not reported as unknown: %+v", c)
-	}
+// The fallback for a backend without the interface upgrade reports unverified
+// rather than assembling a passing verdict out of what it can see.
+func TestRuntimeSupportFallbackIsNotPermissive(t *testing.T) {
+	c := checkRuntimes(context.Background(), bareStub{}, config.ProfileProd, "")
 	if _, fatal := Verdict(c.Status, true); !fatal {
-		t.Error("prod assumed the answer it would prefer")
+		t.Errorf("a backend that cannot be asked produced a passing verdict: %+v", c)
 	}
 }
+
+// bareStub answers the interface without the StrongerRuntimeSupport upgrade.
+type bareStub struct{}
+
+func (bareStub) Available(context.Context) error                 { return nil }
+func (bareStub) SeccompUnavailable(context.Context) (bool, bool) { return false, true }
+func (bareStub) Runtimes(context.Context) ([]string, error)      { return nil, errors.New("nope") }
+func (bareStub) FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string) {
+	return runtime.FirewallUnknown, ""
+}
+func (bareStub) ImagePresent(context.Context, string) (bool, bool) { return true, true }
