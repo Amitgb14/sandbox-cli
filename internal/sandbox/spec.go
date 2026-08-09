@@ -150,6 +150,12 @@ func isReservedEnv(name string) bool { return config.IsReservedEnv(name) }
 // resolved runtime.RunSpec. It resolves and safety-checks the workspace, folds
 // in config and flag mounts/env, and decides TTY allocation.
 func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
+	// Before anything is resolved: the profile is a statement about the run, and
+	// several of the things it forbids arrive as flags that never touch the
+	// config the loader validated. See enforceProfileOnRun.
+	if err := enforceProfileOnRun(cfg, opts); err != nil {
+		return runtime.RunSpec{}, err
+	}
 	ws, err := ResolveWorkspace(opts.Project)
 	if err != nil {
 		return runtime.RunSpec{}, err

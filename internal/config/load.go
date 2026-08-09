@@ -23,6 +23,34 @@ func Load(startDir, explicitPath string) (Config, error) {
 	return LoadProfile(startDir, explicitPath, "")
 }
 
+// Overrides are the values a CLI flag imposes on the resolved configuration,
+// applied after every file layer and before the profile is validated.
+//
+// They exist because the profile is validated *here* — against the configuration
+// that will actually run — and a flag applied afterwards therefore arrives too
+// late to be part of it. `--network allowlist` is documented as outranking the
+// profile's default, and could not: LoadProfile had already refused a prod run
+// whose config said `mode: default`, so the escape hatch never opened.
+//
+// A struct rather than another string parameter, so the next flag that outranks
+// a file does not change this signature again — and so the one place that
+// decides precedence stays one place.
+type Overrides struct {
+	// NetworkMode is "" for "no flag given", else an already-validated mode. The
+	// caller checks the spelling, because an unknown value is a flag error and
+	// should not surface as a profile complaint about a mode nobody typed.
+	NetworkMode string
+
+	// Allow is --allow. It belongs here for the same reason NetworkMode does:
+	// BuildSpec turns the allowlist on when *either* the mode says so or domains
+	// were named (`allowlist := cfg.Network.Mode == "allowlist" || len(opts.Allow) > 0`),
+	// so a prod run asking for one with --allow satisfies the profile in fact
+	// while a validation that only reads the mode refuses it. Fixing the mode
+	// flag and not this one would have left the identical unreachable escape
+	// hatch for the sibling flag root.go's own comment names beside it.
+	Allow []string
+}
+
 // LoadProfile is Load with an explicit --profile override.
 //
 // It resolves in two passes because the profile has to be the *base* layer — the
@@ -36,6 +64,12 @@ func Load(startDir, explicitPath string) (Config, error) {
 // ValidateProfile, which checks the settings that define prod against the
 // configuration that will actually run.
 func LoadProfile(startDir, explicitPath, flagProfile string) (Config, error) {
+	return LoadProfileWith(startDir, explicitPath, flagProfile, Overrides{})
+}
+
+// LoadProfileWith is LoadProfile with the CLI's own overrides folded in before
+// the profile is checked, so one validation sees the run as it will be.
+func LoadProfileWith(startDir, explicitPath, flagProfile string, ov Overrides) (Config, error) {
 	name, err := discoverProfile(startDir, explicitPath, flagProfile)
 	if err != nil {
 		return Config{}, err
@@ -73,6 +107,19 @@ func LoadProfile(startDir, explicitPath, flagProfile string) (Config, error) {
 	// The profile is not something a later layer may change out from under the
 	// caller: it was resolved above, from the layers entitled to choose it.
 	cfg.Profile = name
+
+	// Flags last, because they outrank every file — and *before* the validation
+	// below, because validating a configuration the run will not use is how the
+	// documented `--network` escape hatch came to be unreachable.
+	// --allow first, then --network: naming domains asks for an allowlist, and an
+	// explicit mode is the more specific statement, so it wins over the implied one.
+	if len(ov.Allow) > 0 && cfg.Network.Mode != "none" {
+		cfg.Network.Mode = "allowlist"
+	}
+	if ov.NetworkMode != "" {
+		cfg.Network.Mode = ov.NetworkMode
+	}
+
 	if err := ValidateProfile(name, cfg); err != nil {
 		return cfg, err
 	}

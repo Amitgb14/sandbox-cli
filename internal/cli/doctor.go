@@ -41,7 +41,7 @@ const doctorTimeout = doctor.Timeout
 var runDoctorChecks = doctor.RunChecks
 
 func newDoctorCmd() *cobra.Command {
-	var profile, cfgPath, engineFlag string
+	var profile, cfgPath, engineFlag, networkFlag string
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check whether this host can deliver what a profile promises",
@@ -56,7 +56,7 @@ func newDoctorCmd() *cobra.Command {
 			"anything on it.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, engine, err := resolveDoctorTarget(cfgPath, profile)
+			name, engine, err := resolveDoctorTarget(cfgPath, profile, networkFlag)
 			if err != nil {
 				return err
 			}
@@ -80,17 +80,28 @@ func newDoctorCmd() *cobra.Command {
 	// to read the same configuration a run would.
 	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "explicit config file path")
 	cmd.Flags().StringVar(&engineFlag, "engine", "", "container engine to check: docker (default) or podman")
+	// The run's own flag, mirrored, so the preflight can be asked about the
+	// command you are about to give rather than about the config alone. Without
+	// it `--network allowlist` satisfied a prod run that `doctor --profile prod`
+	// still refused, and the two disagreed.
+	cmd.Flags().StringVar(&networkFlag, "network", "", "check as though the run passed this --network mode")
 	return cmd
 }
 
 // resolveDoctorProfile honours the same layers a run would, so `doctor` reports
 // on the profile that would actually be in force here rather than on a guess.
-func resolveDoctorTarget(cfgPath, flag string) (profile, engine string, err error) {
+func resolveDoctorTarget(cfgPath, flag, networkFlag string) (profile, engine string, err error) {
 	wd, werr := os.Getwd()
 	if werr != nil {
 		wd = "."
 	}
-	cfg, err := config.LoadProfile(wd, cfgPath, flag)
+	// The same override the run path applies, for the same reason `doctor
+	// --runtime` exists: a preflight is worth having only for the command you are
+	// about to give. Without it, `--network allowlist` made a prod run load while
+	// `doctor --profile prod` still refused the same configuration — the two
+	// disagreeing, which is the failure this command exists to prevent.
+	cfg, err := config.LoadProfileWith(wd, cfgPath, flag,
+		config.Overrides{NetworkMode: networkFlag})
 	if err != nil {
 		// A configuration that cannot resolve is itself the finding, and the
 		// message already says which key is at fault.

@@ -79,24 +79,26 @@ type runFlags struct {
 // guest command is filled in by each subcommand.
 func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	startDir, _ := os.Getwd()
-	cfg, err := config.LoadProfile(startDir, rf.config, rf.profile)
-	if err != nil {
-		return nil, sandbox.Options{}, err
-	}
 	// An explicit --network outranks the profile's default. It is the way to
 	// decline the allowlist for one run, which matters now that the allowlist is
 	// the default: without it, --user root and --no-hardening would collide with
 	// a posture the user never asked for and there would be no way to say so.
+	//
+	// Checked here and applied by the loader, because the profile is validated
+	// as part of loading. Applying it afterwards was too late — a prod run whose
+	// config said `mode: default` was refused before the flag that fixes it was
+	// ever read, so the documented escape hatch could not be used.
 	if rf.network != "" {
 		switch rf.network {
 		case "default", "none", "allowlist":
-			cfg.Network.Mode = rf.network
 		default:
 			return nil, sandbox.Options{}, fmt.Errorf("--network %q: want allowlist, default or none", rf.network)
 		}
-		if err := config.ValidateProfile(cfg.Profile, cfg); err != nil {
-			return nil, sandbox.Options{}, err
-		}
+	}
+	cfg, err := config.LoadProfileWith(startDir, rf.config, rf.profile,
+		config.Overrides{NetworkMode: rf.network, Allow: rf.allow})
+	if err != nil {
+		return nil, sandbox.Options{}, err
 	}
 	// --user root and --no-hardening contradict the allowlist: the firewall needs
 	// the privilege drop to survive, and both undo it. BuildSpec refuses the
