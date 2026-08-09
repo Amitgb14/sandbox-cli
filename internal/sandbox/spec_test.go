@@ -337,13 +337,27 @@ func TestBuildSpec_ReservedEnvNamespace(t *testing.T) {
 	}); err == nil {
 		t.Error("--env SANDBOX_EGRESS_ALLOW=... must be refused")
 	}
+
+	// SANDBOX_UMASK is the one reserved name read *after* the drop, so it is worth
+	// its own row: the reason it is reserved is not privilege but reach. 0000 makes
+	// every file the agent writes world-writable, and those files land on a
+	// bind-mounted host path.
+	if _, err := BuildSpec(baseCfg(), Options{
+		Project: dir,
+		Env:     []string{"SANDBOX_UMASK=0000"},
+		Command: []string{"sh"},
+	}); err == nil {
+		t.Error("--env SANDBOX_UMASK=... must be refused: it decides the mode of files written to a host path")
+	}
 }
 
 // TestBuildSpec_ReservationDoesNotEatUserKnobs guards the narrowness of the
 // reservation. It was briefly a whole-namespace `SANDBOX_*` ban, which silently
 // broke `--env SANDBOX_STATUSLINE_NO_USAGE=1` — a user-facing opt-out documented
 // in docs/AGENTS.md, read by an unprivileged script long after privileges are
-// dropped. Only variables consumed by the root-phase startup belong on the list.
+// dropped. Variables consumed by the root-phase startup belong on the list; the
+// only other admissible reason is SANDBOX_UMASK's, which is read after the drop
+// but decides the mode of files written to a bind-mounted host path.
 func TestBuildSpec_ReservationDoesNotEatUserKnobs(t *testing.T) {
 	dir := t.TempDir()
 	spec, err := BuildSpec(baseCfg(), Options{
