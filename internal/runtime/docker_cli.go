@@ -745,11 +745,18 @@ func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image string) (Fir
 	// Dockerfile's business, and hardcoding /usr/sbin/iptables here would turn a
 	// packaging change into a reported host defect. This is a diagnostic, not a
 	// privilege boundary, so resolving through the image's PATH is fine.
+	//
+	// Through sandbox-iptables for the backend, because the entrypoint chooses the
+	// same way and a preflight that answers differently from the launch is worse
+	// than no preflight. Asking bare `iptables` here reported "this host cannot
+	// program the firewall" on exactly the gVisor hosts where the run works, and
+	// advised turning the allowlist off to fix it.
 	const probe = `set -e
-iptables -t nat -N SANDBOX_DOCTOR
-iptables -A OUTPUT -m owner --uid-owner 0 -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
-iptables -t nat -A SANDBOX_DOCTOR -p tcp --dport 443 -j REDIRECT --to-ports 3128`
+IPT="$(sandbox-iptables)"
+"$IPT" -t nat -N SANDBOX_DOCTOR
+"$IPT" -A OUTPUT -m owner --uid-owner 0 -j ACCEPT
+"$IPT" -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
+"$IPT" -t nat -A SANDBOX_DOCTOR -p tcp --dport 443 -j REDIRECT --to-ports 3128`
 	out, err := exec.CommandContext(ctx, d.bin(), "run", "--rm",
 		"--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--user", "0",
 		"--network", "none", "--entrypoint", "sh", image, "-c", probe).CombinedOutput()

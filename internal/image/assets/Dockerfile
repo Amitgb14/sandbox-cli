@@ -338,9 +338,63 @@ RUN chmod +x /usr/local/bin/sandbox-clipboard \
 # allowlist` / `--allow`). sandbox-egress-setup programs a default-deny OUTPUT
 # firewall that permits loopback, DNS, established flows, and the resolved IPs of
 # the allowlisted domains (passed as SANDBOX_EGRESS_ALLOW). It needs to run as
+# sandbox-iptables prints the path of an iptables backend this kernel will
+# actually serve, or fails with the kernel's own error.
+#
+# One definition, three callers: sandbox-egress-setup programs the firewall with
+# it, `doctor`'s host probe asks the same question before a run, and the
+# integration suite reads rules back through it. Three copies of "which binary
+# works" would drift, and the drift is not cosmetic — a preflight that answers
+# differently from the launch is the disagreement CLAUDE.md names as the failure
+# to avoid.
+#
+# Why there is a choice at all: Debian points `iptables` at the nft variant,
+# which is right on an ordinary host, while gVisor implements only the older
+# setsockopt interface and fails nft outright. nft is tried first so an ordinary
+# runc host keeps the backend its distribution chose.
+#
+# It **writes** rather than lists. `-L` only proves the table can be read, and a
+# backend that lists perfectly well can still be unable to touch a rule — the
+# same argument internal/runtime/docker_cli.go makes for why the host-side probe
+# creates rules instead of reading them. Creating and deleting one empty chain is
+# the cheapest thing that proves the kernel will accept a write.
+#
+# On total failure the last candidate's stderr goes to ours, unswallowed: on a
+# rootless or userns-remapped daemon that line is "Permission denied (you must be
+# root)", which names the real cause. A caller that printed only its own remedy
+# would send those users chasing the wrong one.
+RUN cat > /usr/local/bin/sandbox-iptables <<'PICK'
+#!/bin/bash
+# Absolute interpreter and a fixed PATH: this is called from the root phase, so
+# every name it resolves must come from the image. See sandbox-egress-setup.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+set -uo pipefail
+
+case "${1:-}" in
+  -6) candidates="ip6tables ip6tables-legacy" ;;
+  "") candidates="iptables iptables-legacy" ;;
+  *)  echo "usage: sandbox-iptables [-6]" >&2; exit 2 ;;
+esac
+
+chain="SANDBOX_BACKEND_PROBE"
+last=""
+for name in $candidates; do
+  resolved="$(command -v "$name" 2>/dev/null)" || continue
+  if last="$("$resolved" -N "$chain" 2>&1)"; then
+    "$resolved" -X "$chain" >/dev/null 2>&1 || true
+    printf '%s\n' "$resolved"
+    exit 0
+  fi
+done
+[ -n "$last" ] && printf '%s\n' "$last" >&2
+exit 1
+PICK
+RUN chmod +x /usr/local/bin/sandbox-iptables
+
 # root with NET_ADMIN, before the agent starts. Uses plain iptables (no ipset) so
 # it needs no extra kernel modules, and picks the backend the kernel will serve
-# rather than assuming one — see pick_iptables.
+# rather than assuming one — see sandbox-iptables.
 RUN cat > /usr/local/bin/sandbox-egress-setup <<'FW'
 #!/bin/bash
 # Absolute interpreter and a fixed PATH, both deliberate: this runs as root
@@ -354,46 +408,20 @@ set -euo pipefail
 allow="${SANDBOX_EGRESS_ALLOW:-}"
 ingress="${SANDBOX_INGRESS_PORTS:-}"
 
-# Which iptables backend this kernel will actually serve.
-#
-# Debian points `iptables` at the nft variant, which is right on an ordinary
-# host. gVisor implements only the older setsockopt interface, so under runsc
-# the nft binaries fail before they touch a rule —
-#
-#   ip6tables: Failed to initialize nft: Protocol not supported
-#
-# — and the `-legacy` ones work. Measured on Rocky Linux 10.2 with gVisor
-# installed as `runsc install -- --net-raw`; without that flag gVisor serves
-# neither, which is a host prerequisite rather than something this script can
-# fix. See docs/roadmap issue #89.
-#
-# Chosen by **trying** rather than by detecting the runtime, for the reason the
-# host-side firewall probe gives: a runtime name says what somebody installed,
-# and what is needed here is what the kernel will answer. The order matters —
-# nft first, so an ordinary host keeps the backend its distribution chose and
-# nothing about a runc run changes.
-#
-# Fails closed, like everything else here. A container that can serve neither
-# backend cannot have an allowlist programmed, and running without one is the
-# single thing this script must never do.
-pick_iptables() {
-  local cand resolved
-  for cand in "$@"; do
-    resolved="$(command -v "$cand" 2>/dev/null)" || continue
-    if "$resolved" -L -n >/dev/null 2>&1; then
-      printf '%s\n' "$resolved"
-      return 0
-    fi
-  done
-  return 1
-}
-
-if ! IPTABLES="$(pick_iptables iptables iptables-legacy)"; then
-  echo "sandbox-cli: no working iptables backend in this container; the egress" >&2
-  echo "sandbox-cli: allowlist cannot be programmed, so refusing to run without it" >&2
-  echo "sandbox-cli: under gVisor, install it with \`runsc install -- --net-raw\`" >&2
+# Which iptables backend this kernel will serve. See sandbox-iptables; the
+# choice is made there so `doctor` and the integration suite ask it the same way.
+if ! IPTABLES="$(/usr/local/bin/sandbox-iptables)"; then
+  echo "sandbox-cli: no working iptables backend in this container, so the egress" >&2
+  echo "sandbox-cli: allowlist cannot be programmed; refusing to run without it" >&2
+  echo "sandbox-cli: the line above is the kernel's own error and names the cause;" >&2
+  echo "sandbox-cli: under gVisor, iptables needs \`runsc install -- --net-raw\`" >&2
   exit 1
 fi
+# Recoverable from `docker logs`: IPv4 and IPv6 are chosen independently, so a
+# container can hold its v4 rules in one store and its v6 rules in the other, and
+# an operator reading back with the wrong binary sees an empty chain and concludes
+# nothing was programmed.
+echo "sandbox-cli: firewall backend $IPTABLES" >&2
 
 # No IPv6 allowlist yet: reject all IPv6 traffic so it can't be used to bypass the
 # IPv4 rules, inbound or outbound.
@@ -404,7 +432,7 @@ fi
 # script is careful not to do. Now: if the container has IPv6 at all, the rules
 # are required; if it has none, there is nothing to filter and nothing to fail.
 if ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
-  if ! IP6TABLES="$(pick_iptables ip6tables ip6tables-legacy)"; then
+  if ! IP6TABLES="$(/usr/local/bin/sandbox-iptables -6)"; then
     echo "sandbox-cli: this container has IPv6 but no working ip6tables backend, so the" >&2
     echo "sandbox-cli: allowlist cannot be enforced on it; refusing rather than filtering only IPv4" >&2
     exit 1
@@ -417,7 +445,7 @@ if ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
   "$IP6TABLES" -A INPUT -i lo -j ACCEPT
   "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   "$IP6TABLES" -A INPUT -j REJECT
-elif IP6TABLES="$(pick_iptables ip6tables ip6tables-legacy)"; then
+elif IP6TABLES="$(/usr/local/bin/sandbox-iptables -6)"; then
   # No global IPv6 address, but keep the rules if we can: an address could be
   # configured later, and a default-deny chain costs nothing.
   "$IP6TABLES" -F OUTPUT 2>/dev/null || true

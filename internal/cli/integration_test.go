@@ -204,7 +204,11 @@ func TestEgressAllowlistFiltersIngressToo(t *testing.T) {
 	// programming anything, so an early read returns a bare "-P INPUT ACCEPT".
 	var rules string
 	for i := 0; i < 60; i++ {
-		out, execErr := exec.Command("docker", "exec", "-u", "root", name, "iptables", "-S", "INPUT").Output()
+		// Through sandbox-iptables, not bare `iptables`: the entrypoint picks the
+		// backend the kernel will serve, and reading the other store back reports
+		// an empty chain for a container that is fully default-deny.
+		out, execErr := exec.Command("docker", "exec", "-u", "root", name,
+			"sh", "-c", `"$(sandbox-iptables)" -S INPUT`).Output()
 		if execErr == nil && strings.Contains(string(out), "REJECT") {
 			rules = string(out)
 			break
