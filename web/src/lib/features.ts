@@ -124,7 +124,7 @@ export const FEATURES: Feature[] = [
     title: "Stronger isolation on request",
     group: "boundary",
     flag: "--runtime",
-    body: "Point a run at any OCI runtime the daemon knows: kata-runtime for a microVM with its own kernel, runsc for gVisor's userspace syscall filter. Mounts, hardening, allowlist, caches and secrets all work unchanged on top.",
+    body: "Point a run at any OCI runtime the daemon knows: kata-runtime for a microVM with its own kernel, runsc for gVisor's userspace syscall filter. Mounts, hardening, caches and secrets work unchanged on top. The egress allowlist is the exception: gVisor provides no connection tracking, so a run asking for both is refused rather than run unfiltered.",
     code: "sandbox-cli claude --runtime kata-runtime",
     state: "opt-in",
   },

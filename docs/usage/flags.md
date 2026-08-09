@@ -98,7 +98,7 @@ Accepted by `run` and by every agent wrapper.
 | `--no-hardening` | Disable the default cap-drop / no-new-privileges / pids-limit (debug) |
 | `--allow` | Permit a domain on the egress allowlist, e.g. `--allow example.com` (repeatable; implies allowlist mode, and the baseline registries are always permitted) |
 | `--network` | `allowlist`, `default` (unrestricted), or `none` to reach nothing. Built-in default: `allowlist`; the config the installer writes sets `default` — see [Install](../install.md#the-config-the-installer-writes) |
-| `--profile` | `dev` (default, warns when a control is unavailable) or `prod` (refuses) |
+| `--profile` | `dev` (default, warns when a control is unavailable) or `prod` (refuses). Under `prod`, `--publish`, `--user root`, `--memory 0`, `--cpus 0` and `--no-hardening` are refused: a flag may tighten what the profile guarantees, never widen it |
 | `--engine` | `docker` (default) or `podman`. Also `engine:` in your own config — not in a project file, since it chooses which binary runs |
 | `--cache` | Persist package-manager caches (npm/pip/cargo/go) in named volumes across runs |
 | `--secret` | Brokered credential `NAME=file:PATH \| cmd:COMMAND \| env:VAR`, resolved at run time and kept off the command line (repeatable) |
@@ -108,7 +108,7 @@ Accepted by `run` and by every agent wrapper.
 | `--share-name NAME` | With `--share`, mount `~/.config/sandbox/shared/NAME` at `/shared/NAME` instead of the root — avoids collisions between concurrent runs; not an isolation boundary |
 | `--paste` | Mount `~/Desktop`, `~/Downloads` and `~/Pictures` read-only at their host paths, so an image path pasted into the agent resolves inside the container |
 | `--git` | Forward host git identity and trust the workspace so `git` commits just work in-container |
-| `-P, --publish` | Publish a container port to the host, e.g. `-P 3000` or `-P 8080:3000` (repeatable; binds `127.0.0.1` unless you give an address) |
+| `-P, --publish` | Publish a container port to the host, e.g. `-P 3000` or `-P 8080:3000` (repeatable; binds `127.0.0.1` unless you give an address). Refused under `--profile prod`, which also opens the firewall to match |
 | `--host-gateway` | Map `host.docker.internal` to the host (reach host MCP servers; needed on Linux) |
 | `--add-host` | Extra `HOST:IP` mapping passed to docker (repeatable) |
 | `--runtime` | OCI runtime for stronger isolation, e.g. `kata-runtime` (microVM) or `runsc` (gVisor) |

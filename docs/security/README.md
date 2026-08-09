@@ -35,10 +35,19 @@ worse than one that stopped.
 | Host history mount | on | off |
 | seccomp missing on the daemon | warns | **refuses** |
 | memory / cpus / pids | as configured | bounded |
+| `--publish`, `--user root`, `--memory 0`, `--cpus 0`, `--no-hardening` | allowed | **refused** |
 
 ```sh
 sandbox-cli claude --profile prod
 ```
+
+That last row is checked on the **run**, not only on the configuration. Those
+five arrive as flags rather than config keys, so a check that read the resolved
+config alone never saw them — `--profile prod --publish 0.0.0.0:8022:22` used to
+succeed, publish the container on every interface, and have the entrypoint open a
+matching hole in the default-deny INPUT chain. A flag may tighten what the
+profile guarantees and may not widen it; `--profile dev` is how you ask for the
+looser thing.
 
 A profile is the **base** config layer — under your own config rather than over
 it — so a trusted config can still tune a setup. A project `.sandbox.yaml` may
@@ -66,6 +75,12 @@ profile: prod
 
 sandbox-cli: this host cannot satisfy the prod profile: seccomp
 ```
+
+`doctor` answers for the run you are about to make, not just for the config on
+disk: `--network` and `--runtime` take the same values the run does, so
+`doctor --profile prod --network allowlist --runtime runsc` preflights that
+command. Without them the preflight and the launch can reach different verdicts,
+which is the one thing this check must never do.
 
 Non-zero exit under `prod`, so a scheduler notices. The firewall check is
 *tried*, not queried — rootless and userns-remapped daemons cannot program
@@ -154,8 +169,24 @@ sandbox-cli claude --runtime runsc          # gVisor: userspace-kernel syscall f
 Set it once in config with `runtime: kata-runtime`. This requires the runtime to
 be installed and registered with the Docker daemon (e.g. Kata needs a Linux host
 with nested virtualization; it is not available on stock macOS Docker Desktop —
-see [Platform support](../platforms/README.md)). Everything else — mounts,
-hardening, egress allowlist, caches, secrets — works unchanged on top of it.
+see [Platform support](../platforms/README.md)). Mounts, hardening, caches and
+secrets work unchanged on top of it.
+
+**The egress allowlist is the exception, and on gVisor it does not work.**
+Measured on Rocky Linux 10.2 with gVisor installed:
+
+- gVisor gates iptables behind a flag its installer leaves off, so the allowlist
+  cannot be programmed at all until you `runsc install -- --net-raw`.
+- With that flag on, gVisor serves only the older iptables backend, which
+  sandbox-cli now selects automatically.
+- But gVisor provides **no connection tracking** — neither `-m conntrack` nor
+  `-m state` exists — and the allowlist's "accept replies" rules have no
+  equivalent without it.
+
+So a run that asks for both a stronger runtime and an egress allowlist is
+refused rather than run unfiltered, which means `--profile prod` (which requires
+an allowlist) and gVisor cannot currently be combined. Kata, being a real kernel,
+is not subject to this; it has not been measured here yet.
 
 A run does not have to be taken on trust afterwards: the runtime it asked for is
 recorded in the audit log (`"runtime": "kata-runtime"`, omitted when the run took
