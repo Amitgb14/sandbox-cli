@@ -71,8 +71,8 @@ export const PROFILE_MATRIX: {
   {
     setting: "Ports published",
     dev: "whatever you ask for",
-    prod: "none in config",
-    note: "An inbound port is the one thing that opens the boundary the other way, and prod is likelier to be multi-tenant.",
+    prod: "none — `--publish` is refused too",
+    note: "An inbound port is the one thing that opens the boundary the other way, and prod is likelier to be multi-tenant. It was once asserted on the config alone, so the flag went straight past it and opened a matching hole in the ingress chain; it is checked on the run now.",
   },
   {
     setting: "Container user",
