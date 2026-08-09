@@ -6,10 +6,16 @@ import (
 	"testing"
 )
 
-// writeUserConfig puts a config where LoadProfile will find it as the user's own
-// layer, which is the layer that outranks the profile and caused the bug.
-func writeUserConfig(t *testing.T, body string) string {
+// writeConfig writes a config file for --config, the layer that outranks the
+// profile and caused the bug, and isolates the real user layer from the test.
+func writeConfig(t *testing.T, body string) string {
 	t.Helper()
+	// The user's real ~/.config/sandbox/config.yaml is merged before the explicit
+	// path, so without this these tests read the machine they run on: a developer
+	// whose own config sets `sync: true` (or persist_auth, ports, cap_add, a root
+	// user) would see prod refuse for a reason unrelated to the change, while CI
+	// with a clean HOME stayed green. Every other test in this package pins it.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
@@ -27,7 +33,7 @@ func writeUserConfig(t *testing.T, body string) string {
 // want the allowlist for this run", but it was applied *after* LoadProfile had
 // already validated and refused, so it could never take effect.
 func TestNetworkOverrideReachesTheProfileCheck(t *testing.T) {
-	cfgPath := writeUserConfig(t, "network:\n  mode: default\n")
+	cfgPath := writeConfig(t, "network:\n  mode: default\n")
 
 	if _, err := LoadProfile(t.TempDir(), cfgPath, ProfileProd); err == nil {
 		t.Fatal("prod must refuse a config whose mode is default; without that there is no bug to fix")
@@ -47,7 +53,7 @@ func TestNetworkOverrideReachesTheProfileCheck(t *testing.T) {
 // the profile's own demands. Overriding to a mode prod forbids must still be
 // refused, or the escape hatch would be a way out of prod entirely.
 func TestNetworkOverrideCannotEscapeTheProfile(t *testing.T) {
-	cfgPath := writeUserConfig(t, "network:\n  mode: allowlist\n")
+	cfgPath := writeConfig(t, "network:\n  mode: allowlist\n")
 
 	for _, mode := range []string{"default", "none"} {
 		if _, err := LoadProfileWith(t.TempDir(), cfgPath, ProfileProd,
@@ -60,7 +66,7 @@ func TestNetworkOverrideCannotEscapeTheProfile(t *testing.T) {
 // TestNoOverrideChangesNothing: an absent flag must leave the resolved mode
 // exactly as the layers left it, on every profile.
 func TestNoOverrideChangesNothing(t *testing.T) {
-	cfgPath := writeUserConfig(t, "network:\n  mode: none\n")
+	cfgPath := writeConfig(t, "network:\n  mode: none\n")
 
 	plain, err := LoadProfile(t.TempDir(), cfgPath, ProfileDev)
 	if err != nil {

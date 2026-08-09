@@ -13,6 +13,20 @@ version is tagged.
 
 ### Fixed
 
+- **A flag could widen what `--profile prod` guarantees.** The profile was
+  asserted against the resolved *configuration*, but `--publish`, `--user`,
+  `--memory`, `--cpus` and `--no-hardening` arrive as run options and are
+  applied over that configuration afterwards, so the check never saw them:
+
+  ```sh
+  sandbox-cli run --profile prod --publish 0.0.0.0:8022:22 -- sleep inf   # succeeded
+  ```
+
+  published the container on every interface and opened a matching hole in the
+  default-deny INPUT chain — the thing prod's own message says cannot happen.
+  Those flags are now refused under prod, checked where every caller converges
+  so `fleet` and the Studio API get the same answer.
+
 - **`--network allowlist` could not rescue a `prod` run.** It is documented as
   outranking the profile's default, and it did not: the profile was validated
   while the configuration was still being loaded, before any flag had been read.

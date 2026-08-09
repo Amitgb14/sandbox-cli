@@ -96,7 +96,7 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		}
 	}
 	cfg, err := config.LoadProfileWith(startDir, rf.config, rf.profile,
-		config.Overrides{NetworkMode: rf.network})
+		config.Overrides{NetworkMode: rf.network, Allow: rf.allow})
 	if err != nil {
 		return nil, sandbox.Options{}, err
 	}

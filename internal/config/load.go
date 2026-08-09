@@ -23,18 +23,6 @@ func Load(startDir, explicitPath string) (Config, error) {
 	return LoadProfile(startDir, explicitPath, "")
 }
 
-// LoadProfile is Load with an explicit --profile override.
-//
-// It resolves in two passes because the profile has to be the *base* layer — the
-// thing the other layers are merged on top of — while the name selecting it may
-// itself come from one of those layers. So the first pass reads only the profile
-// keys, and the second builds the real configuration on the base that names.
-//
-// Applying the profile underneath the user's own config, rather than over it,
-// is deliberate: their config is trusted and a profile that could not be adjusted
-// would be abandoned rather than used. What stops that from hollowing prod out is
-// ValidateProfile, which checks the settings that define prod against the
-// configuration that will actually run.
 // Overrides are the values a CLI flag imposes on the resolved configuration,
 // applied after every file layer and before the profile is validated.
 //
@@ -52,9 +40,29 @@ type Overrides struct {
 	// caller checks the spelling, because an unknown value is a flag error and
 	// should not surface as a profile complaint about a mode nobody typed.
 	NetworkMode string
+
+	// Allow is --allow. It belongs here for the same reason NetworkMode does:
+	// BuildSpec turns the allowlist on when *either* the mode says so or domains
+	// were named (`allowlist := cfg.Network.Mode == "allowlist" || len(opts.Allow) > 0`),
+	// so a prod run asking for one with --allow satisfies the profile in fact
+	// while a validation that only reads the mode refuses it. Fixing the mode
+	// flag and not this one would have left the identical unreachable escape
+	// hatch for the sibling flag root.go's own comment names beside it.
+	Allow []string
 }
 
-// LoadProfile loads the configuration with no flag overrides.
+// LoadProfile is Load with an explicit --profile override.
+//
+// It resolves in two passes because the profile has to be the *base* layer — the
+// thing the other layers are merged on top of — while the name selecting it may
+// itself come from one of those layers. So the first pass reads only the profile
+// keys, and the second builds the real configuration on the base that names.
+//
+// Applying the profile underneath the user's own config, rather than over it,
+// is deliberate: their config is trusted and a profile that could not be adjusted
+// would be abandoned rather than used. What stops that from hollowing prod out is
+// ValidateProfile, which checks the settings that define prod against the
+// configuration that will actually run.
 func LoadProfile(startDir, explicitPath, flagProfile string) (Config, error) {
 	return LoadProfileWith(startDir, explicitPath, flagProfile, Overrides{})
 }
@@ -103,6 +111,11 @@ func LoadProfileWith(startDir, explicitPath, flagProfile string, ov Overrides) (
 	// Flags last, because they outrank every file — and *before* the validation
 	// below, because validating a configuration the run will not use is how the
 	// documented `--network` escape hatch came to be unreachable.
+	// --allow first, then --network: naming domains asks for an allowlist, and an
+	// explicit mode is the more specific statement, so it wins over the implied one.
+	if len(ov.Allow) > 0 && cfg.Network.Mode != "none" {
+		cfg.Network.Mode = "allowlist"
+	}
 	if ov.NetworkMode != "" {
 		cfg.Network.Mode = ov.NetworkMode
 	}
