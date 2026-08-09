@@ -24,7 +24,7 @@ type runtimeStub struct {
 func (r runtimeStub) Available(context.Context) error                 { return nil }
 func (r runtimeStub) SeccompUnavailable(context.Context) (bool, bool) { return false, true }
 func (r runtimeStub) Runtimes(context.Context) ([]string, error)      { return r.support.All, nil }
-func (r runtimeStub) FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string) {
+func (r runtimeStub) FirewallProgrammable(context.Context, string, string) (runtime.FirewallProbe, string) {
 	return runtime.FirewallUnknown, ""
 }
 func (r runtimeStub) ImagePresent(context.Context, string) (bool, bool) { return true, true }
@@ -168,7 +168,7 @@ type bareStub struct{}
 func (bareStub) Available(context.Context) error                 { return nil }
 func (bareStub) SeccompUnavailable(context.Context) (bool, bool) { return false, true }
 func (bareStub) Runtimes(context.Context) ([]string, error)      { return nil, errors.New("nope") }
-func (bareStub) FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string) {
+func (bareStub) FirewallProgrammable(context.Context, string, string) (runtime.FirewallProbe, string) {
 	return runtime.FirewallUnknown, ""
 }
 func (bareStub) ImagePresent(context.Context, string) (bool, bool) { return true, true }

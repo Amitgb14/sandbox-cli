@@ -729,7 +729,7 @@ const (
 // command exists to prevent, so the probe programs the same kinds of rule the
 // entrypoint does. The container is --rm and its netns is its own, so the rules
 // go away with it.
-func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image string) (FirewallProbe, string) {
+func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image, runtimeName string) (FirewallProbe, string) {
 	if image == "" {
 		return FirewallUnknown, "no base image to test with"
 	}
@@ -757,9 +757,19 @@ IPT="$(sandbox-iptables)"
 "$IPT" -A OUTPUT -m owner --uid-owner 0 -j ACCEPT
 "$IPT" -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
 "$IPT" -t nat -A SANDBOX_DOCTOR -p tcp --dport 443 -j REDIRECT --to-ports 3128`
-	out, err := exec.CommandContext(ctx, d.bin(), "run", "--rm",
+	// Under the runtime the run will actually use, not the engine's default.
+	// Whether a container can program iptables is a property of the *kernel* it
+	// gets, and those differ: gVisor serves only the legacy backend, and only
+	// when installed with --net-raw. Probing the default runtime on a host whose
+	// runs select runsc answers a question nobody asked, and answers it "fine".
+	args := []string{"run", "--rm",
 		"--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--user", "0",
-		"--network", "none", "--entrypoint", "sh", image, "-c", probe).CombinedOutput()
+		"--network", "none", "--entrypoint", "sh"}
+	if runtimeName != "" {
+		args = append(args, "--runtime", runtimeName)
+	}
+	args = append(args, image, "-c", probe)
+	out, err := exec.CommandContext(ctx, d.bin(), args...).CombinedOutput()
 	if err != nil {
 		// A cancelled or timed-out probe answered nothing. Reporting it as
 		// "cannot program iptables" would fail prod for a question never asked.

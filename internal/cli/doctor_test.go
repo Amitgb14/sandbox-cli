@@ -32,7 +32,7 @@ func (f fakeHost) SeccompUnavailable(context.Context) (bool, bool) {
 	return f.seccompOff, f.seccompKnow
 }
 func (f fakeHost) Runtimes(context.Context) ([]string, error) { return f.runtimes, f.runtimesErr }
-func (f fakeHost) FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string) {
+func (f fakeHost) FirewallProgrammable(context.Context, string, string) (runtime.FirewallProbe, string) {
 	return f.firewall, f.firewallWhy
 }
 func (f fakeHost) ImagePresent(context.Context, string) (bool, bool) {

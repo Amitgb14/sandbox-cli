@@ -78,7 +78,7 @@ type Runtime interface {
 	Available(context.Context) error
 	SeccompUnavailable(context.Context) (bool, bool)
 	Runtimes(context.Context) ([]string, error)
-	FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string)
+	FirewallProgrammable(ctx context.Context, image, runtimeName string) (runtime.FirewallProbe, string)
 	ImagePresent(context.Context, string) (bool, bool)
 }
 
@@ -105,7 +105,7 @@ func RunChecks(ctx context.Context, profile, engine, selectedRuntime string) []C
 	out := []Check{{Name: engine + " daemon", Status: StatusOK, Detail: "reachable"}}
 	out = append(out, checkBaseImage(ctx, d))
 	out = append(out, checkSeccomp(ctx, d))
-	out = append(out, checkFirewall(ctx, d))
+	out = append(out, checkFirewall(ctx, d, selectedRuntime))
 	out = append(out, checkRuntimes(ctx, d, profile, selectedRuntime))
 	return out
 }
@@ -160,9 +160,15 @@ func checkSeccomp(ctx context.Context, d Runtime) Check {
 // one that changed meaning when the egress allowlist became the default: every
 // run now takes the root-entrypoint path with NET_ADMIN, so a daemon that cannot
 // grant it now affects everybody rather than only those who passed --allow.
-func checkFirewall(ctx context.Context, d Runtime) Check {
+//
+// Probed under the runtime the run will select, because the answer depends on
+// the kernel the container gets rather than on the daemon alone. A host running
+// gVisor reported a healthy firewall from a runc probe while a runsc run could
+// not program a single rule — the preflight passing and the launch failing,
+// which is the disagreement ClassifyRuntimeGap was centralised to prevent.
+func checkFirewall(ctx context.Context, d Runtime, selectedRuntime string) Check {
 	c := Check{Name: "egress firewall"}
-	switch probe, reason := d.FirewallProgrammable(ctx, image.Ref()); probe {
+	switch probe, reason := d.FirewallProgrammable(ctx, image.Ref(), selectedRuntime); probe {
 	case runtime.FirewallOK:
 		c.Status = StatusOK
 		c.Detail = "a container here can program the nat, redirect, owner and conntrack rules the firewall needs"
