@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -103,14 +102,24 @@ type writeCheck struct {
 // Three cases answer "does not arise", and each is a place where the ids do not
 // meet the way this check assumes:
 //
-//   - Off Linux. Docker Desktop virtualizes bind-mount ownership, so the mode on
-//     the host never decides anything and every path here would be judged by
-//     numbers the container will not see.
+//   - Where there is no host primary gid to share. That is off Linux, where
+//     Docker Desktop virtualizes bind-mount ownership and the host mode decides
+//     nothing, and it is also the seam that keeps this honest under test.
 //   - Under podman. HostUserMapping maps the host user onto the container user,
 //     so a directory that user owns is writable by construction.
 //   - When the guest runs as root. uid 0 is not subject to the mode bits.
+//
+// Keyed on hostPrimaryGID rather than on runtime.GOOS, and the difference is not
+// cosmetic. This is the one check that compares ids **from the spec** against
+// ownership **on the real filesystem**, so it is sound only when those ids are
+// the real ones. BuildSpec is deliberately deterministic under test — TestMain
+// pins hostPrimaryGID to "" for the whole package, so a spec built there names
+// uid 1001 gid 1001 whatever the machine is — and judging a real t.TempDir()
+// against those synthetic ids made every test that builds a spec depend on the
+// uid of whoever ran it. It passed on CI, whose runner happens to be uid 1001,
+// and failed on an ordinary workstation.
 func checkWritableMounts(spec runtime.RunSpec, engine string) writeCheck {
-	if goruntime.GOOS != "linux" || engine == string(runtime.EnginePodman) {
+	if hostPrimaryGID() == "" || engine == string(runtime.EnginePodman) {
 		return writeCheck{}
 	}
 	uid, gid, state := guestIDs(spec)

@@ -289,6 +289,9 @@ func TestUnwritableReportMatchesTheFailingClass(t *testing.T) {
 // what decides access on the other, so an answer computed here would be a guess.
 func TestCheckWritableMountsSkipsWhereTheIdsDoNotMeet(t *testing.T) {
 	requireLinux(t)
+	// TestMain pins this off for the package so BuildSpec stays deterministic;
+	// the check keys on it, so a test about the check has to put a real one back.
+	pinHostGID(t, fmt.Sprint(os.Getgid()))
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -345,6 +348,7 @@ func TestEnforceWritableMounts(t *testing.T) {
 	if os.Getuid() == 1001 {
 		t.Skip("this host's user is the container's uid; the owner class would decide")
 	}
+	pinHostGID(t, fmt.Sprint(os.Getgid())) // see the note in the test above
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o755); err != nil { // umask 022: the reported case
 		t.Fatal(err)
@@ -448,5 +452,35 @@ func requireLinux(t *testing.T) {
 	t.Helper()
 	if goruntime.GOOS != "linux" {
 		t.Skip("the check is Linux-only; that it does nothing elsewhere is the property under test")
+	}
+}
+
+// TestCheckWritableMountsIsInertWithoutAHostGroup is the regression for a defect
+// that broke `make test` for every developer whose uid is not 1001.
+//
+// The check compares ids from the spec against ownership on the real filesystem.
+// Under test BuildSpec is deliberately deterministic — TestMain pins
+// hostPrimaryGID to "" so a spec names uid 1001 gid 1001 on any machine — so
+// running the check there judged a real t.TempDir() against ids the machine does
+// not have, and refused. Every kernel-boundary test in this package failed with
+// a permissions error instead of the message it was asserting on, while CI
+// stayed green because its runner is uid 1001 and the owner class decided.
+//
+// No pinHostGID here on purpose: this test asserts what the package-wide pin
+// buys, so it must run under it.
+func TestCheckWritableMountsIsInertWithoutAHostGroup(t *testing.T) {
+	requireOwnership(t)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil { // as hostile as a mode gets
+		t.Fatal(err)
+	}
+	spec := runtime.RunSpec{
+		User:   defaultRunAsUser,
+		Mounts: []runtime.Mount{{Source: dir, Target: "/workspace"}},
+	}
+	got := checkWritableMounts(spec, "")
+	if len(got.Bad) != 0 || got.Unknown != "" {
+		t.Errorf("checkWritableMounts = %+v with no host gid pinned; a spec built from "+
+			"synthetic ids must not be judged against real ownership", got)
 	}
 }
