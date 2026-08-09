@@ -85,7 +85,7 @@ func TestPodmanGivesEachSandboxItsOwnNetwork(t *testing.T) {
 		t.Fatal("podman must not share one network between sandboxes")
 	}
 
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	cfg := config.Default()
 	cfg.Engine = "podman"
 	sess := sandbox.New(cfg)

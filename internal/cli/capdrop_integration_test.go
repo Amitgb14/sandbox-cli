@@ -26,7 +26,7 @@ import (
 // *agent* would hand a compromised process the ability to signal anything in the
 // namespace, including the proxy the egress allowlist depends on.
 func TestAllowlistAgentHasNoCapabilities(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	cfg := config.Default()
 	cfg.Network.Mode = "allowlist" // the mode that adds capabilities back
 
