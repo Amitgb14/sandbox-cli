@@ -8,6 +8,7 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 )
@@ -36,34 +37,67 @@ import (
 //
 //	error: insufficient permission for adding an object to repository database .git/objects
 //
-// This detects and reports; it never repairs. That is the same bargain
-// EnsureGuestDir makes with a foreign-owned level, and for the same reason —
-// the state can be described exactly, and fixing it would mean writing to a tree
-// the user owns.
+// Three things this gets wrong if built naively, all learned by review:
 //
-// The answer is computed from the mode and the ids rather than by starting a
-// container to try it. That is how the kernel decides, it costs a stat, and it
-// can be given for every mount rather than for one. It does not account for
-// POSIX ACLs, which can grant access the mode bits deny — so this can report a
-// problem where there is none, and says "cannot" only about what the mode says.
+//   - **A repository's mount is its worktree, not its .git.** For an ordinary
+//     checkout the mount source is the project root and `.git` sits inside it, so
+//     looking for an object store at the mount source finds one only for the
+//     linked-worktree `.git` mount — that is, only in the case that is *not* the
+//     common one. gitDirOf handles both spellings.
+//   - **A tree is not its top directory.** The umask that left the root at 0755
+//     left every directory under it at 0755, so checking the root alone and then
+//     printing a non-recursive `chmod g+w <root>` produces a fix that silences
+//     the warning and changes nothing else. The walk goes down, and the remedy
+//     is recursive.
+//   - **`chmod g+w` is only the fix when the group is the class that failed.**
+//     A directory owned by another group entirely needs the group changed first,
+//     and printing g+w there is advice that cannot work.
+//
+// It detects and never repairs. That is the same bargain EnsureGuestDir makes
+// with a foreign-owned level, and for the same reason — the state can be
+// described exactly, and fixing it would mean writing to a tree the user owns.
+
+// walkBudget bounds how many directories one mount is examined for. The walk
+// stops at the first offender, so a broken tree is answered almost immediately
+// and only an entirely healthy one pays the full cost — and a repository with a
+// node_modules is not worth a hundred thousand stats on every launch.
+//
+// The consequence is stated rather than hidden: a problem deeper than the budget
+// is not found, so this reports what it saw and never claims the tree is clean.
+const walkBudget = 4096
 
 // unwritablePath is one host directory the container user cannot create files
-// in, with the facts that decided it. Rendering is the caller's job: the run
-// path and doctor say it differently.
+// in, with the facts that decided it — including which permission class failed,
+// because that is what decides whether the remedy is a chmod or a chgrp.
 type unwritablePath struct {
-	Path string
-	Mode fs.FileMode
-	UID  int
-	GID  int
+	Root  string // the mounted directory this was found under; what the remedy names
+	Path  string // the offending directory itself, which may be Root
+	Mode  fs.FileMode
+	UID   int
+	GID   int
+	Group bool // the container's gid owns it, so opening the group bits is enough
+	Git   bool // found inside a git object store
 }
 
-// String is the one-line form both callers build on.
+// String is the one-line form the report is built from.
 func (u unwritablePath) String() string {
 	return fmt.Sprintf("%s is mode %#o owned by %d:%d", u.Path, u.Mode.Perm(), u.UID, u.GID)
 }
 
-// unwritableMounts returns the read-write host directories this run will mount
-// that the container user cannot write, or nil when the question does not arise.
+// writeCheck is the outcome for a whole run: what was found unwritable, or why
+// the question could not be put at all.
+//
+// Unknown is not an empty Bad. A run whose guest user this process cannot
+// resolve has not been checked, and saying so is what lets prod apply its own
+// rule — "a question that could not be asked counts as a failure under prod too"
+// — instead of reading silence as an all-clear.
+type writeCheck struct {
+	Bad     []unwritablePath
+	Unknown string
+}
+
+// checkWritableMounts asks, for every read-write host directory this run will
+// mount, whether the container user can create files in it.
 //
 // Three cases answer "does not arise", and each is a place where the ids do not
 // meet the way this check assumes:
@@ -73,19 +107,22 @@ func (u unwritablePath) String() string {
 //     numbers the container will not see.
 //   - Under podman. HostUserMapping maps the host user onto the container user,
 //     so a directory that user owns is writable by construction.
-//   - When the guest runs as root, or as a user this process cannot resolve to
-//     numbers. uid 0 bypasses the mode bits, and a name only the image's passwd
-//     database defines is not something to guess at from out here.
-func unwritableMounts(spec runtime.RunSpec, engine string) []unwritablePath {
+//   - When the guest runs as root. uid 0 is not subject to the mode bits.
+func checkWritableMounts(spec runtime.RunSpec, engine string) writeCheck {
 	if goruntime.GOOS != "linux" || engine == string(runtime.EnginePodman) {
-		return nil
+		return writeCheck{}
 	}
-	uid, gid, ok := guestIDs(spec)
-	if !ok {
-		return nil
+	uid, gid, state := guestIDs(spec)
+	switch state {
+	case idsRoot:
+		return writeCheck{}
+	case idsUnresolved:
+		return writeCheck{Unknown: fmt.Sprintf(
+			"the container user %q is a name only the image's passwd database defines, so this "+
+				"process cannot tell which uid and gid the guest will have", guestUser(spec))}
 	}
 
-	var out []unwritablePath
+	var out writeCheck
 	seen := map[string]bool{}
 	for _, m := range spec.Mounts {
 		// A named volume has no host path to judge, and a read-only mount is not
@@ -94,150 +131,309 @@ func unwritableMounts(spec runtime.RunSpec, engine string) []unwritablePath {
 			continue
 		}
 		seen[m.Source] = true
-		out = append(out, checkDir(m.Source, uid, gid)...)
+		out.Bad = append(out.Bad, checkTree(m.Source, uid, gid)...)
 	}
 	return out
 }
 
-// checkDir reports dir when it is unwritable, and — when dir is a git directory
-// — its object store as well.
+// checkTree walks one mounted directory, and the repository inside it, for the
+// first place the container user cannot write.
 //
-// The object store gets its own look because a writable .git with an unwritable
-// objects/ fan-out is the case that produced the opaque git error above: git
-// creates those 256 directories on demand, under whatever umask the host had at
-// the time, so a repository can be years old and half of them wrong.
-func checkDir(dir string, uid, gid int) []unwritablePath {
+// Two answers rather than one, because they have different remedies and a user
+// who fixes only the one they were shown is left where they started: the working
+// tree, where the agent edits files, and the object store, where git writes.
+func checkTree(root string, uid, gid int) []unwritablePath {
+	gitDir, hasGit := gitDirOf(root)
+	// The working-tree walk steps over the repository directory when it is inside
+	// it, so a bad object directory is reported once, by the walk that knows the
+	// remedy for it, rather than twice with two different fixes.
+	skip := ""
+	if hasGit && gitDir != root {
+		skip = gitDir
+	}
+
 	var out []unwritablePath
-	if u, bad := unwritableBy(dir, uid, gid); bad {
+	if u, ok := firstUnwritable(root, root, uid, gid, skip); ok {
 		out = append(out, u)
 	}
-	objects := filepath.Join(dir, "objects")
-	if !isExistingDir(filepath.Join(dir, "refs")) || !isExistingDir(objects) {
-		return out // not a git directory; nothing further to ask
-	}
-	if u, bad := unwritableBy(objects, uid, gid); bad {
-		out = append(out, u)
-	}
-	// The fan-out, first offender only: a repository where the umask was wrong
-	// has dozens, and a list of dozens is one nobody reads. The remedy is the
-	// same for all of them.
-	entries, err := os.ReadDir(objects)
-	if err != nil {
+	if !hasGit {
 		return out
 	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if u, bad := unwritableBy(filepath.Join(objects, e.Name()), uid, gid); bad {
-			out = append(out, u)
-			break
-		}
+	// The object store is walked separately even when the tree above was clean:
+	// git creates those 256 fan-out directories on demand, under whatever umask
+	// the host had at the time, so a repository can be years old and half of them
+	// wrong while everything else is fine.
+	if u, ok := firstUnwritable(filepath.Join(gitDir, "objects"), gitDir, uid, gid, ""); ok {
+		u.Git = true
+		out = append(out, u)
 	}
 	return out
+}
+
+// gitDirOf returns the repository directory to examine for dir, covering both
+// ways a mount can name one.
+//
+// An ordinary checkout mounts its working tree, with `.git` a directory inside
+// it. A linked worktree mounts the parent repository's `.git` at its own host
+// path, and that path *is* the git directory — while the worktree's own `.git`
+// is a pointer file, whose target is already mounted separately and so already
+// checked as a mount in its own right.
+func gitDirOf(dir string) (string, bool) {
+	if isExistingDir(filepath.Join(dir, "objects")) && isExistingDir(filepath.Join(dir, "refs")) {
+		return dir, true // the mount is itself a git directory
+	}
+	inner := filepath.Join(dir, ".git")
+	if isExistingDir(filepath.Join(inner, "objects")) && isExistingDir(filepath.Join(inner, "refs")) {
+		return inner, true
+	}
+	return "", false
+}
+
+// firstUnwritable walks from dir and returns the first directory the container
+// user cannot create a file in, attributing it to root for the remedy.
+//
+// Depth-first and bounded by walkBudget. It stops at the first offender because
+// the fix is the same for all of them and a list of forty is one nobody reads —
+// and because the common broken case answers on the very first stat.
+func firstUnwritable(dir, root string, uid, gid int, skip string) (unwritablePath, bool) {
+	var found unwritablePath
+	var ok bool
+	budget := walkBudget
+
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			// An unreadable entry is a question that could not be asked rather than
+			// an answer of "no"; skipping it keeps this from reporting a directory
+			// it never saw.
+			return nil //nolint:nilerr // deliberate: see above
+		}
+		if skip != "" && path == skip {
+			return filepath.SkipDir
+		}
+		if budget--; budget <= 0 {
+			return filepath.SkipAll
+		}
+		u, bad := unwritableBy(path, uid, gid)
+		if !bad {
+			return nil
+		}
+		u.Root = root
+		found, ok = u, true
+		return filepath.SkipAll
+	})
+	return found, ok
 }
 
 // unwritableBy reports whether uid/gid can create a file in dir, by the rule the
 // kernel uses: the first of owner/group/other that matches decides, and creating
 // an entry needs both write and search on the directory.
 //
-// A path that cannot be read at all is not reported. This is a courtesy check on
-// the way into a run, and a stat that fails is a question that could not be
-// asked rather than an answer of "no" — the same distinction doctor draws
-// between StatusUnknown and StatusWeak.
+// A directory carrying a POSIX ACL is reported writable — which is to say, not
+// reported. The mode bits do not describe access there, so judging by them is
+// how an ACL-managed workspace gets refused for a permission it actually has;
+// and the honest failure direction for a check that gates a run is to miss a
+// problem rather than to invent one.
 func unwritableBy(dir string, uid, gid int) (unwritablePath, bool) {
-	fi, err := os.Stat(dir)
+	fi, err := os.Lstat(dir)
 	if err != nil || !fi.IsDir() {
 		return unwritablePath{}, false
 	}
 	dUID, okU := ownerUID(fi)
 	dGID, okG := ownerGID(fi)
-	if !okU || !okG {
+	if !okU || !okG || hasACL(dir) {
 		return unwritablePath{}, false
 	}
 	perm := fi.Mode().Perm()
 
 	const writeAndSearch = 0o3 // w|x, in whichever class applies
 	var bits fs.FileMode
+	group := false
 	switch {
 	case dUID == uid:
 		bits = perm >> 6
 	case dGID == gid:
 		bits = perm >> 3
+		group = true
 	default:
 		bits = perm
 	}
 	if bits&writeAndSearch == writeAndSearch {
 		return unwritablePath{}, false
 	}
-	return unwritablePath{Path: dir, Mode: fi.Mode(), UID: dUID, GID: dGID}, true
+	return unwritablePath{Path: dir, Mode: fi.Mode(), UID: dUID, GID: dGID, Group: group}, true
 }
 
-// guestIDs resolves the uid and gid the guest command will actually run as.
+// idState is how much guestIDs could establish, and the three answers are three
+// different things for a caller to do.
+type idState int
+
+const (
+	idsResolved   idState = iota // the guest's uid and gid are known
+	idsRoot                      // the guest is root, which the mode bits do not constrain
+	idsUnresolved                // a name this process cannot map to numbers
+)
+
+// guestUser is the user string the guest command will actually run as.
 //
 // SANDBOX_RUN_AS before spec.User, and that order is the whole of it: in
 // allowlist mode docker's --user is **root**, because the entrypoint has to
 // program iptables before it drops. Reading spec.User there would answer for the
 // root phase and conclude that everything is writable — on the mode that is now
 // the dev default, so the check would be silently useless for most runs.
-func guestIDs(spec runtime.RunSpec) (uid, gid int, ok bool) {
-	user := spec.Env["SANDBOX_RUN_AS"]
-	if user == "" {
-		user = spec.User
+func guestUser(spec runtime.RunSpec) string {
+	if u := spec.Env["SANDBOX_RUN_AS"]; u != "" {
+		return u
 	}
+	return spec.User
+}
+
+// guestIDs resolves the uid and gid the guest command will run as.
+//
+// A **bare numeric uid** the image does not define is deliberately unresolved
+// rather than assumed to give the same gid. docker resolves `--user 5000`
+// against the image's passwd database and falls back to gid **0** when it finds
+// nothing — so guessing 5000:5000 judges the group class against a gid the
+// container will never have, and can refuse a directory root could write.
+func guestIDs(spec runtime.RunSpec) (uid, gid int, state idState) {
+	user := guestUser(spec)
 	switch user {
-	case "", "root", "0":
-		// Empty means the image default, which for the base image is root. Either
-		// way uid 0 is not subject to the mode bits.
-		return 0, 0, false
+	case "", "root", "0", "0:0":
+		// Empty means the image default, which for the base image is root.
+		return 0, 0, idsRoot
 	case defaultRunAsUser:
 		// The one name this process may resolve without reading the image: it is
 		// the image's own user, created by assets/Dockerfile.
 		u, _ := strconv.Atoi(sandboxUID)
 		g, _ := strconv.Atoi(sandboxGID)
-		return u, g, true
+		return u, g, idsResolved
 	}
-	// Numeric uid or uid:gid, which is what sharedGroupUser renders and what
-	// `--user 1000:1000` gives. A bare uid reuses itself as the gid, matching
-	// docker's own reading.
 	idPart, gidPart, split := strings.Cut(user, ":")
 	u, err := strconv.Atoi(idPart)
 	if err != nil {
-		return 0, 0, false // a name from the image's passwd database; not ours to guess
-	}
-	g := u
-	if split {
-		if g, err = strconv.Atoi(gidPart); err != nil {
-			return 0, 0, false
-		}
+		return 0, 0, idsUnresolved // a name from the image's passwd database
 	}
 	if u == 0 {
-		return 0, 0, false
+		return 0, 0, idsRoot
 	}
-	return u, g, true
+	if !split {
+		// See the doc comment: only the image's own uid has a gid we can name.
+		if idPart == sandboxUID {
+			g, _ := strconv.Atoi(sandboxGID)
+			return u, g, idsResolved
+		}
+		return 0, 0, idsUnresolved
+	}
+	g, err := strconv.Atoi(gidPart)
+	if err != nil {
+		return 0, 0, idsUnresolved
+	}
+	return u, g, idsResolved
 }
 
-// unwritableReport renders the facts and the fix, shared by the two callers so
-// the warning and the refusal describe the same host in the same words.
+// unwritableReport renders the facts and the fix, shared by the warning and the
+// refusal so the two describe the same host in the same words.
 //
-// The remedy names `chmod g+w` rather than a recursive chown, and
-// core.sharedRepository for a repository, because those are the two that leave
-// the host side working — the alternatives are the ones hostgroup.go already
-// rejected, one directory further out.
+// The remedy is **recursive**, and that is the correction to the first version
+// of this: the umask that left the root at 0755 left everything under it at 0755
+// too, so a non-recursive chmod fixes the one directory that was reported and
+// silences the check while the agent still cannot write anything deeper.
+//
+// It also depends on which class failed. `chmod g+w` is the fix only when the
+// container's gid already owns the directory; when some other group does,
+// opening the group bits changes nothing for the container and the group has to
+// change first.
 func unwritableReport(bad []unwritablePath, uid, gid int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "the container runs as uid %d gid %d, which cannot write:", uid, gid)
 	git := false
 	for _, u := range bad {
 		fmt.Fprintf(&b, "\n  %s", u)
-		if strings.Contains(u.Path, string(filepath.Separator)+"objects") {
-			git = true
+		git = git || u.Git
+	}
+	b.WriteString("\n  the agent will report that it cannot edit files")
+	if git {
+		b.WriteString(", and git will refuse to write objects")
+	}
+	for _, u := range bad {
+		if u.Group {
+			fmt.Fprintf(&b, "\n  fix: chmod -R g+w %s", u.Root)
+		} else {
+			fmt.Fprintf(&b, "\n  fix: chgrp -R %d %s && chmod -R g+w %s", gid, u.Root, u.Root)
 		}
 	}
-	b.WriteString("\n  the agent will report that it cannot edit files, and git will refuse to write objects")
-	b.WriteString("\n  fix: chmod g+w " + bad[0].Path)
 	if git {
 		b.WriteString("\n  and, so git keeps making them that way: git config core.sharedRepository group")
 	}
 	return b.String()
+}
+
+// warnedWritable is where the dev-profile warning goes. A var so tests can read
+// what was printed, the same as warnedSecret and warnedImage.
+//
+// Here rather than beside enforceWritableMounts in sandbox.go, where the first
+// version of it landed in the middle of enforceSeccomp's doc comment and left
+// that function undocumented — in a file whose comments are the design record.
+var warnedWritable = func(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format, args...)
+}
+
+// warnedTrees records the reports already said, so a twenty-task fleet resolving
+// the same mounts says this once rather than twenty times. Same argument as
+// warnedNames and warnedImages, and the same lock rationale: studioapi calls
+// Start from an HTTP handler.
+//
+// Keyed on the report rather than on the path, so a workspace that is fixed
+// mid-session and breaks again differently is reported again.
+var (
+	warnedTreeMu sync.Mutex
+	warnedTrees  = map[string]bool{}
+)
+
+// enforceWritableMounts applies the profiles' asymmetry to one host fact: the
+// container user cannot write a directory this run is about to mount read-write.
+//
+// dev warns and runs; prod refuses, because nobody is watching a prod run and an
+// agent silently unable to write is exactly the degraded-quietly failure the
+// profile exists to prevent.
+//
+// The unknown case is separate and is prod's own rule, stated in CLAUDE.md: a
+// question that could not be asked counts as a failure under prod too, because
+// it does not get to assume the answer it would prefer. dev stays quiet there
+// instead of warning, matching what doctor does with a question it could not
+// put — a warning nobody can act on is one they learn to skip.
+//
+// What keeps the refusal honest is that the check no longer answers where it
+// cannot see: a directory carrying a POSIX ACL is not reported at all, so prod
+// is not refusing on bits that stopped deciding. That was the objection to the
+// first version, where the same doc comment gave ACL blindness as the reason dev
+// must not refuse and then refused under prod on the strength of it.
+func (s *Session) enforceWritableMounts(spec runtime.RunSpec) error {
+	prod := s.Cfg.Profile == config.ProfileProd
+	res := checkWritableMounts(spec, s.Cfg.Engine)
+
+	if res.Unknown != "" {
+		if prod {
+			return fmt.Errorf("cannot confirm the container can write this run's mounts: %s\n"+
+				"  prod does not assume the answer it would prefer; name the user as uid:gid, "+
+				"or run with --profile dev", res.Unknown)
+		}
+		return nil
+	}
+	if len(res.Bad) == 0 {
+		return nil
+	}
+
+	uid, gid, _ := guestIDs(spec)
+	report := unwritableReport(res.Bad, uid, gid)
+	if prod {
+		return fmt.Errorf("%s\n  or run with --profile dev, which warns instead of refusing", report)
+	}
+	warnedTreeMu.Lock()
+	said := warnedTrees[report]
+	warnedTrees[report] = true
+	warnedTreeMu.Unlock()
+	if !said {
+		warnedWritable("sandbox-cli: %s\n", report)
+	}
+	return nil
 }

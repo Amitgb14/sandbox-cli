@@ -33,19 +33,32 @@ version is tagged.
   ```
 
   Every read-write host path a run mounts is now checked before the container
-  starts — the workspace, and for `--worktree` runs the parent repository's
-  `.git` and its object store. Under the default `dev` profile this is a warning
-  naming the path, its mode and the `chmod g+w` that fixes it; under `prod` it
-  is a refusal, since nobody is watching a prod run and an agent that quietly
-  cannot write is the failure that profile exists to prevent.
+  starts. Not just the top directory — the tree below it too, because the umask
+  that left your project root at 0755 left everything under it at 0755, and a
+  fix applied to the root alone would silence the warning without letting the
+  agent write anything. Repositories get a second look at `.git/objects`, where
+  git writes and where the fan-out directories are created piecemeal over years.
+
+  Under the default `dev` profile this is a warning naming the directory, its
+  mode and a recursive fix; under `prod` it is a refusal, since nobody is
+  watching a prod run and an agent that quietly cannot write is the failure that
+  profile exists to prevent. Said once per process, so a fleet does not repeat
+  it per task.
 
   It reports and never repairs: the workspace is your tree, and changing its
   mode on your behalf is not sandbox-cli's call. For a repository, `git config
   core.sharedRepository group` is the durable fix — git then creates future
   object directories group-writable itself.
 
-  Nothing changes under podman (your uid is mapped directly), on macOS (bind
-  ownership is virtualized), or when the guest runs as root.
+  Worktrees sandbox-cli creates are the exception, because those are its own
+  doing: `--worktree` and `fleet` now create them with the group bits open, so a
+  tree made for a container to work in is one the container can write.
+
+  Directories carrying a POSIX ACL are not reported. The mode bits do not
+  describe access there, and refusing a run over bits that stopped deciding
+  would be worse than missing one. Nothing changes under podman (your uid is
+  mapped directly), on macOS (bind ownership is virtualized), or when the guest
+  runs as root.
 
 - **A run now says which boundary it actually got.** The OCI runtime is the one
   setting that changes the *kind* of isolation rather than its degree, and
