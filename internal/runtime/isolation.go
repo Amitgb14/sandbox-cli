@@ -1,5 +1,7 @@
 package runtime
 
+import "strings"
+
 // What kind of boundary a run actually got.
 //
 // The OCI runtime is the one setting that changes the *kind* of isolation
@@ -44,7 +46,7 @@ var strongerRuntimes = map[string]bool{
 //
 // An empty name means the daemon's default, which is runc on every host this
 // tool has met — shared-kernel, so false.
-func StrongerRuntime(name string) bool { return strongerRuntimes[name] }
+func StrongerRuntime(name string) bool { return strongerRuntimes[runtimeName(name)] }
 
 // StrongerIsolation reports whether this container is running on such a runtime,
 // as read back from the engine rather than as requested.
@@ -75,7 +77,84 @@ var sharedKernelRuntimes = map[string]bool{
 //
 // So a name nobody here has heard of is shown and not characterised, which is
 // the honest pair of answers.
-func (c ContainerInfo) NotTheHostDefault() bool { return !sharedKernelRuntimes[c.Runtime] }
+func (c ContainerInfo) NotTheHostDefault() bool { return notHostDefault(c.Runtime) }
+
+// notHostDefault is the same question about a name on its own.
+//
+// It looks the name up **raw**, and that asymmetry with StrongerRuntime is the
+// point rather than an oversight. The two lists fail in opposite directions, so
+// normalisation helps one and hurts the other:
+//
+//   - strongerRuntimes must not miss a real boundary, and a shim name is still
+//     that runtime, so reducing io.containerd.kata.v2 to kata recovers a true
+//     positive it would otherwise have thrown away.
+//   - sharedKernelRuntimes must not *hide* something unusual. An engine lets an
+//     admin point any key at any binary — daemon.json may map
+//     io.containerd.runc.v2 at sysbox-runc — so folding every shim-shaped runc
+//     name into the defaults would suppress the RUNTIME column for exactly the
+//     sessions it exists to reveal.
+//
+// So a name this file has not seen literally is still shown and still not
+// characterised, which is the pair of answers the comment above argues for.
+func notHostDefault(name string) bool { return !sharedKernelRuntimes[name] }
+
+// runtimeName reduces a containerd **shim** name to the runtime name the lists
+// above are written in, and returns anything else untouched.
+//
+// One daemon answers the same question in two vocabularies, in one command:
+//
+//	$ docker info --format '{{.DefaultRuntime}}'
+//	runc
+//	$ docker info --format '{{json .Runtimes}}'
+//	{"io.containerd.runc.v2":{"path":"runc", …
+//
+// Observed on Rocky Linux 10.2 — the first host looked at that was not Docker
+// Desktop. Both names mean runc, and comparing them as plain strings said the
+// host had no runc: `--runtime runc` was refused as "not registered with the
+// Docker daemon", listing `io.containerd.runc.v2` as what it had instead.
+//
+// The pattern is fixed by containerd — `io.containerd.<runtime>.v<major>` — so
+// this matches it exactly rather than splitting on dots: a runtime genuinely
+// named with dots is left alone, and only a trailing `.v<digits>` after that
+// prefix is treated as a version.
+//
+// Reducing rather than expanding, because the mapping only goes one way. A shim
+// name yields exactly one runtime name; a runtime name does not tell you which
+// shim major version a host registered, so the raw name is what callers keep for
+// display and for handing back to the engine.
+func runtimeName(name string) string {
+	const prefix = "io.containerd."
+	rest, ok := strings.CutPrefix(name, prefix)
+	if !ok {
+		return name
+	}
+	base, version, ok := cutLast(rest, ".v")
+	if !ok || base == "" || version == "" {
+		return name
+	}
+	for _, r := range version {
+		if r < '0' || r > '9' {
+			return name
+		}
+	}
+	return base
+}
+
+// cutLast is strings.Cut around the *last* occurrence of sep, so a runtime whose
+// own name contains the separator keeps it: io.containerd.kata.v2.v2 reduces to
+// kata.v2 rather than to kata.
+func cutLast(s, sep string) (before, after string, found bool) {
+	i := strings.LastIndex(s, sep)
+	if i < 0 {
+		return s, "", false
+	}
+	return s[:i], s[i+len(sep):], true
+}
+
+// SameRuntime reports whether two names denote the same runtime, in whichever
+// vocabulary each was written. It is what `--runtime runc` has to be matched
+// with against a daemon that lists io.containerd.runc.v2.
+func SameRuntime(a, b string) bool { return runtimeName(a) == runtimeName(b) }
 
 // containerRuntime picks the runtime name out of an engine's inspect output.
 //
