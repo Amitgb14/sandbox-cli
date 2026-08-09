@@ -81,11 +81,20 @@ version is tagged.
   directly), on macOS (where bind ownership is virtualized), or when you pass an
   explicit `--user`. Group-write only — the world bits are untouched.
 
-  Files already left behind by an earlier version keep their old mode. To fix a
-  repository in that state:
+  Two limits worth knowing. A umask is a property of a process, so it applies to
+  the whole container rather than only to the paths you share with it — if your
+  primary group is one you share with other accounts (some sites put everyone in
+  `users`), what the agent writes is group-writable to all of them. And the umask
+  is applied by a script in the sandbox base image, so a custom `image:` cannot
+  honor it; sandbox-cli now says so on the way in rather than leaving you to find
+  out from git.
+
+  Files already left behind by an earlier version keep their old mode. They are
+  owned by uid 1001, and only a file's owner may change its mode, so repairing a
+  repository in that state needs root:
 
   ```sh
-  find .git -uid 1001 \! -perm -g+w -exec chmod g+w {} +
+  sudo find .git -uid 1001 \! -perm -g+w -exec chmod g+w {} +
   ```
 
 ## 0.0.1beta.11 — 2026-08-05

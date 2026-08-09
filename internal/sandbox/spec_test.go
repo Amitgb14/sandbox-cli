@@ -342,12 +342,20 @@ func TestBuildSpec_ReservedEnvNamespace(t *testing.T) {
 	// its own row: the reason it is reserved is not privilege but reach. 0000 makes
 	// every file the agent writes world-writable, and those files land on a
 	// bind-mounted host path.
-	if _, err := BuildSpec(baseCfg(), Options{
+	_, err = BuildSpec(baseCfg(), Options{
 		Project: dir,
 		Env:     []string{"SANDBOX_UMASK=0000"},
 		Command: []string{"sh"},
-	}); err == nil {
-		t.Error("--env SANDBOX_UMASK=... must be refused: it decides the mode of files written to a host path")
+	})
+	if err == nil {
+		t.Fatal("--env SANDBOX_UMASK=... must be refused: it decides the mode of files written to a host path")
+	}
+	// The refusal text is shared by every name on the list, so it has to stay true
+	// of this one — which is the only member *not* read by the root phase. A
+	// message describing a privilege drop sends the one user who sets this looking
+	// for a behavior that does not exist.
+	if msg := err.Error(); !strings.Contains(msg, "control variable") {
+		t.Errorf("refusal %q does not say what the variable is; see config.ReservedEnvReason", msg)
 	}
 }
 

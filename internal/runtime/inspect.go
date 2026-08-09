@@ -41,7 +41,7 @@ type ContainerInfo struct {
 	// what the launcher intended; these say what it got.
 	Image    string   // the image reference it was started from
 	User     string   // the user the guest runs as, as docker recorded it
-	Command  []string // entrypoint + cmd, as executed
+	Command  []string // the guest command, with sandbox-cli's own wrappers stripped
 	Workdir  string
 	Env      []string // NAME=VALUE, as docker holds them — see EnvNames
 	Mounts   []MountInfo
@@ -314,6 +314,40 @@ type dockerInspect struct {
 	} `json:"Mounts"`
 }
 
+// sandboxWrappers are sandbox-cli's own entrypoint scripts. They are how the
+// container gets a firewall and a umask, not what the user asked to run, and
+// docker reports them as part of the command because that is what an entrypoint
+// is.
+//
+// Named as absolute paths because that is how they are set — as the image's
+// ENTRYPOINT and as the `--entrypoint` an allowlist run renders — so a guest
+// command that happens to be called `sandbox-init` is not mistaken for one.
+var sandboxWrappers = map[string]bool{
+	"/usr/local/bin/sandbox-init":     true,
+	"/usr/local/bin/sandbox-firewall": true,
+}
+
+// guestCommand is entrypoint+cmd with sandbox-cli's own wrappers dropped from
+// the front, which is what every caller of ContainerInfo.Command wants: `ps`
+// prints it, Studio shows it as the command the run was launched with, and a
+// consumer reading argv[0] to identify the agent should see the agent.
+//
+// Allowlist runs have carried `/usr/local/bin/sandbox-firewall` here since that
+// entrypoint existed — and allowlist is the dev default, so this was already the
+// common case; making sandbox-init the image entrypoint extended it to the rest.
+// Both are stripped for one reason, in one place.
+//
+// A prefix that is *only* a wrapper is left alone rather than reported as an
+// empty command: that would be a container with no command at all, which is a
+// different and much more alarming claim than the truth.
+func guestCommand(entrypoint, cmd []string) []string {
+	out := append(append([]string(nil), entrypoint...), cmd...)
+	for len(out) > 1 && sandboxWrappers[out[0]] {
+		out = out[1:]
+	}
+	return out
+}
+
 func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo, error) {
 	out, err := exec.CommandContext(ctx, d.bin(), append([]string{"inspect"}, ids...)...).Output()
 	if err != nil {
@@ -346,7 +380,7 @@ func (d *DockerCLI) inspect(ctx context.Context, ids []string) ([]ContainerInfo,
 			TTY:         r.Config.Tty,
 			Image:       r.Config.Image,
 			User:        r.Config.User,
-			Command:     append(append([]string(nil), r.Config.Entrypoint...), r.Config.Cmd...),
+			Command:     guestCommand(r.Config.Entrypoint, r.Config.Cmd),
 			Workdir:     r.Config.WorkingDir,
 			Env:         r.Config.Env,
 			Mounts:      mounts,
