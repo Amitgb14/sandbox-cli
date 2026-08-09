@@ -168,6 +168,14 @@ func checkSeccomp(ctx context.Context, d Runtime) Check {
 // which is the disagreement ClassifyRuntimeGap was centralised to prevent.
 func checkFirewall(ctx context.Context, d Runtime, selectedRuntime string) Check {
 	c := Check{Name: "egress firewall"}
+	// Its own slice of the budget. This is the only check that starts a
+	// container, and under a stronger runtime that means booting a micro-VM or a
+	// userspace kernel rather than a runc container. Sharing one deadline with
+	// everything after it meant a slow probe expired the context and turned
+	// checkRuntimes into a second "could not be asked" — two prod failures on a
+	// host that was merely slow.
+	ctx, cancel := context.WithTimeout(ctx, Timeout/2)
+	defer cancel()
 	switch probe, reason := d.FirewallProgrammable(ctx, image.Ref(), selectedRuntime); probe {
 	case runtime.FirewallOK:
 		c.Status = StatusOK
@@ -180,8 +188,21 @@ func checkFirewall(ctx context.Context, d Runtime, selectedRuntime string) Check
 	default:
 		c.Status = StatusWeak
 		c.Detail = "a container here cannot program the firewall: " + reason
-		c.Remedy = "rootless or userns-remapped daemons often cannot; use --network default, " +
-			"or run on a daemon that can grant NET_ADMIN"
+		// The remedy has to name the cause the probe actually found. Once this is
+		// probed under the selected runtime, the daemon is no longer the only
+		// suspect: gVisor gates iptables behind `runsc install -- --net-raw` and
+		// serves only the legacy backend, so "rootless or userns-remapped" is
+		// simply untrue there — and the fix on offer, dropping the egress
+		// allowlist, is the one thing a prod operator must not be told to do by a
+		// check that has mis-identified the problem.
+		c.Remedy = "on a stronger runtime, iptables may be gated: gVisor needs " +
+			"`runsc install -- --net-raw`. Otherwise rootless or userns-remapped daemons " +
+			"often cannot grant NET_ADMIN — run on a daemon that can, or select a runtime " +
+			"whose kernel serves iptables"
+		if selectedRuntime == "" {
+			c.Remedy = "rootless or userns-remapped daemons often cannot; use --network default, " +
+				"or run on a daemon that can grant NET_ADMIN"
+		}
 	}
 	return c
 }

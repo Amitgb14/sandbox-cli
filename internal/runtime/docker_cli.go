@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -762,14 +763,27 @@ IPT="$(sandbox-iptables)"
 	// gets, and those differ: gVisor serves only the legacy backend, and only
 	// when installed with --net-raw. Probing the default runtime on a host whose
 	// runs select runsc answers a question nobody asked, and answers it "fine".
-	args := []string{"run", "--rm",
-		"--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--user", "0",
-		"--network", "none", "--entrypoint", "sh"}
+	resolvedRuntime := ""
 	if runtimeName != "" {
-		args = append(args, "--runtime", runtimeName)
+		// Through resolveRuntime, the same translation the run path makes. A
+		// containerd-backed daemon lists `io.containerd.runc.v2` while a config
+		// says `runtime: runc`, so sending the user's spelling verbatim made the
+		// probe die on "unknown or invalid runtime name" and report that a host
+		// whose runs program the firewall perfectly well cannot — the very
+		// disagreement this probe was scoped to a runtime to prevent, inverted.
+		resolved, rerr := d.resolveRuntime(ctx, runtimeName)
+		if rerr != nil {
+			// The engine does not have it. That is a fact about the *runtime*, not
+			// about whether this host can filter, and checkRuntimes reports it
+			// properly one line below. Answering "unknown" keeps this check from
+			// blaming the daemon — and from advising that the egress allowlist be
+			// switched off to fix a misspelled flag.
+			return FirewallUnknown, "the runtime " + strconv.Quote(runtimeName) + " is not registered, so nothing could be probed on it"
+		}
+		resolvedRuntime = resolved
 	}
-	args = append(args, image, "-c", probe)
-	out, err := exec.CommandContext(ctx, d.bin(), args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, d.bin(),
+		firewallProbeArgs(image, resolvedRuntime, probe)...).CombinedOutput()
 	if err != nil {
 		// A cancelled or timed-out probe answered nothing. Reporting it as
 		// "cannot program iptables" would fail prod for a question never asked.
@@ -779,6 +793,24 @@ IPT="$(sandbox-iptables)"
 		return FirewallBlocked, strings.TrimSpace(lastLine(string(out)))
 	}
 	return FirewallOK, ""
+}
+
+// firewallProbeArgs is the probe's argv, pure so it can be asserted without a
+// daemon.
+//
+// It is built here rather than by BuildArgs, so the --dry-run golden test does
+// not cover it and nothing else would notice if the runtime stopped being sent —
+// or if it were appended after the image, where docker hands it to the container
+// as a command argument instead of using it.
+func firewallProbeArgs(image, resolvedRuntime, probe string) []string {
+	args := []string{"run", "--rm",
+		"--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--user", "0",
+		"--network", "none", "--entrypoint", "sh"}
+	if resolvedRuntime != "" {
+		args = append(args, "--runtime", resolvedRuntime)
+	}
+	// Every flag before the image reference; everything after it is the guest's.
+	return append(args, image, "-c", probe)
 }
 
 // lastLine is the most useful part of a docker error, which is usually verbose
