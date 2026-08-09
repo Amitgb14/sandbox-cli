@@ -176,12 +176,25 @@ func BaselineEgress() []string {
 // read by an unprivileged script in the guest phase, long after the drop. Banning
 // the whole namespace would break a documented feature to fix an unrelated one.
 //
-// Anything added here must be a variable consumed before privileges are dropped.
+// Anything added here must be a variable consumed before privileges are dropped
+// — or, the narrower second case, one of sandbox-cli's own control variables
+// whose value decides something about the host filesystem rather than a
+// preference of the guest. SANDBOX_UMASK is the only member of that second group
+// and carries its reasoning at the entry.
 var reservedEnvNames = map[string]bool{
 	"SANDBOX_RUN_AS":        true,
 	"SANDBOX_EGRESS_ALLOW":  true,
 	"SANDBOX_INGRESS_PORTS": true, // which inbound ports the firewall leaves open
 	"SANDBOX_PROXY_PORT":    true, // where the name-enforcing egress proxy listens
+
+	// SANDBOX_UMASK is the one entry here that is not read as root: sandbox-init
+	// applies it after the drop, and a umask grants nothing a process could not
+	// already do. It is reserved anyway, because the rule this list encodes is
+	// "sandbox-cli's own control variables" and the alternative is a variable that
+	// a project `env:` can quietly widen — `SANDBOX_UMASK=0000` would make every
+	// file the agent writes world-writable, on a host path, which is a worse
+	// default than the one the setting exists to fix.
+	"SANDBOX_UMASK": true,
 
 	// Interpreter- and loader-control variables. These are not sandbox-cli's, but
 	// they decide what the container's root-phase startup *executes*, which puts

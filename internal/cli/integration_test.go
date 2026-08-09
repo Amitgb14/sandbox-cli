@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime" // aliased: internal/runtime is imported below as `runtime`
 	"strings"
 	"testing"
 
@@ -592,5 +593,73 @@ func TestNetworkNoneActuallyRuns(t *testing.T) {
 		"--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}").Output()
 	if got := strings.TrimSpace(string(out)); got != "none" {
 		t.Errorf("container joined %q, want the none network", got)
+	}
+}
+
+// TestSharedGroupFilesAreHostWritable is the only test that can fail the way the
+// bug did, and the reason it needs a real container is that every host-side
+// assertion about the umask is an assertion about a string in a map.
+//
+// The report was a git error rather than a permission one — a container had
+// committed in a worktree, and the host's next `git commit -m` could not open
+// COMMIT_EDITMSG, which git writes on every commit. Underneath it: the container
+// shares the host's primary group so it can reach these paths, but inherited
+// 0022 from the daemon and so stripped group-write off everything it created.
+//
+// Both network modes, because the guest is reached two different ways — docker's
+// --user in default mode, sandbox-firewall's setpriv in allowlist mode — and the
+// umask has to survive the drop as well as the direct start.
+func TestSharedGroupFilesAreHostWritable(t *testing.T) {
+	if goruntime.GOOS != "linux" {
+		t.Skip("Docker Desktop virtualizes bind ownership; the ids never meet")
+	}
+	if os.Getgid() == 0 {
+		t.Skip("running as gid 0; there is no shared group to grant")
+	}
+
+	for _, mode := range []string{"default", "allowlist"} {
+		t.Run(mode, func(t *testing.T) {
+			proj := t.TempDir()
+			cfg := config.Default()
+			cfg.Network.Mode = mode
+			sess := newTestSession(t, cfg)
+
+			opts := sandbox.Options{
+				Project: proj,
+				TTY:     ptr(false),
+				Command: []string{"sh", "-c", "umask > /workspace/mask.txt && touch /workspace/created.txt"},
+			}
+			if mode == "allowlist" {
+				opts.Allow = []string{"example.com"}
+			}
+			code, err := sess.Run(context.Background(), opts, false)
+			if err != nil {
+				t.Fatalf("run error: %v", err)
+			}
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0", code)
+			}
+
+			mask, err := os.ReadFile(filepath.Join(proj, "mask.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(mask)); got != "0002" {
+				t.Errorf("guest umask = %q, want 0002 — sandbox-init did not apply SANDBOX_UMASK", got)
+			}
+
+			// The claim that matters is about the file, not the mask: this is the bit
+			// the host needs to rewrite what the agent left behind.
+			fi, err := os.Stat(filepath.Join(proj, "created.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi.Mode().Perm()&0o020 == 0 {
+				t.Errorf("container-created file mode = %v, want group write: the host shares its group precisely so it can edit this", fi.Mode().Perm())
+			}
+			if fi.Mode().Perm()&0o002 != 0 {
+				t.Errorf("container-created file mode = %v is world-writable; 0002 must not open that", fi.Mode().Perm())
+			}
+		})
 	}
 }

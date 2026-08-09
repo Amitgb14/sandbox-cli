@@ -553,6 +553,54 @@ iptables -A INPUT -j REJECT --reject-with icmp-port-unreachable
 FW
 RUN chmod +x /usr/local/bin/sandbox-egress-setup
 
+# sandbox-init is the image's default ENTRYPOINT and the last thing that runs
+# before the guest, on every run. It exists for one setting that has nowhere else
+# to live: the umask.
+#
+# A umask is a property of a process, not of the filesystem, so no Dockerfile
+# directive and no docker flag can set it (podman has --umask; docker does not).
+# It is inherited from whatever started the container, which is 0022 — and 0022
+# is wrong whenever the host and the container are sharing a group to reach the
+# same files, because it strips the group-write bit off everything the container
+# creates. See internal/sandbox/hostgroup.go for why that group exists.
+#
+# Deliberately unprivileged: this is the *default* entrypoint, used on runs that
+# do not ask for an egress allowlist, where docker has already applied --user
+# before the first line here. Allowlist mode replaces it with sandbox-firewall,
+# which starts as root and calls back into this script after dropping.
+RUN cat > /usr/local/bin/sandbox-init <<'IN'
+#!/bin/bash
+# Absolute interpreter and a fixed PATH, for the same reason sandbox-egress-setup
+# has them. This script does not run as root, so the stakes are lower — but it is
+# also reached *from* the root entrypoint, and a script that is safe only on one
+# of its two callers is a trap for whoever adds the third.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+set -euo pipefail
+
+# SANDBOX_UMASK is reserved (config.IsReservedEnv), so the only writer is
+# sandbox-cli and only when it has decided a shared group is in play. It is still
+# matched against a literal octal shape rather than passed through: `umask` on a
+# malformed value fails, and under `set -e` that would turn a cosmetic setting
+# into a container that does not start. An unrecognized value is ignored for the
+# same reason — the guest running with the default mask is a worse run, not a
+# failed one.
+case "${SANDBOX_UMASK:-}" in
+  [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) umask "$SANDBOX_UMASK" ;;
+esac
+
+# The image carries no CMD, so an empty argv means the caller gave none. `exec`
+# with no arguments would silently exit 0 and read as a container that ran and
+# succeeded.
+if [ "$#" -eq 0 ]; then
+  echo "sandbox-cli: no command given" >&2
+  exit 1
+fi
+
+exec "$@"
+IN
+RUN chmod +x /usr/local/bin/sandbox-init
+
 # sandbox-firewall is the container entrypoint used in allowlist mode. It runs as
 # root, programs the firewall (failing closed if that errors — better to refuse
 # than to run without the requested allowlist), then drops to the intended user
@@ -591,6 +639,13 @@ if [ -n "${SANDBOX_PROXY_PORT:-}" ] && [ -n "${SANDBOX_EGRESS_ALLOW:-}" ] \
   done
 fi
 
+# Everything below hands the guest to sandbox-init rather than exec'ing it
+# directly, because this script *replaces* that entrypoint in allowlist mode: a
+# setting applied in only one of the two would hold for exactly half of the runs.
+# That is the same trap sharedGroupUser avoids by applying to SANDBOX_RUN_AS as
+# well as to --user, and the reason the umask is not simply set here is that it
+# would then also apply to the root phase above, which has no business creating
+# group-writable files.
 user="${SANDBOX_RUN_AS:-}"
 if [ -n "$user" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
   # SANDBOX_RUN_AS is whatever --user was given, so it is a name OR a numeric
@@ -620,12 +675,14 @@ if [ -n "$user" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
     # the egress allowlist mutually exclusive. Ask for supplementary groups only
     # when there is somewhere to read them from.
     if /usr/bin/id -u "$user" >/dev/null 2>&1; then
-      exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"
+      exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --init-groups -- \
+        /usr/local/bin/sandbox-init "$@"
     fi
-    exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --clear-groups -- "$@"
+    exec /usr/bin/setpriv --reuid "$uid" --regid "$gid" --clear-groups -- \
+      /usr/local/bin/sandbox-init "$@"
   fi
 fi
-exec "$@"
+exec /usr/local/bin/sandbox-init "$@"
 EP
 RUN chmod +x /usr/local/bin/sandbox-firewall
 
@@ -676,3 +733,10 @@ WORKDIR /workspace
 # runs as the non-root `sandbox` user by default (config.Default), which is safe
 # on macOS Docker Desktop where bind ownership is virtualized. Override at run
 # time with `--user root` (or `--user uid:gid`).
+
+# Declared on the image rather than rendered as `--entrypoint` on every run, and
+# that is the whole reason this works: sandbox-cli's argv does not change, so a
+# user-supplied `image:` — which may have no sandbox-init and is none of our
+# business — is not handed an entrypoint it cannot run. Allowlist mode overrides
+# this with sandbox-firewall, which calls back into it.
+ENTRYPOINT ["/usr/local/bin/sandbox-init"]

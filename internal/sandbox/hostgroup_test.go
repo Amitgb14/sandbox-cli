@@ -59,6 +59,104 @@ func TestSharedGroupUser(t *testing.T) {
 	}
 }
 
+// TestSharedGroupUmaskTracksSharedGroupUser pins the pairing rather than the
+// value: the two must fire on exactly the same rows, because either alone is
+// worse than neither. A container in the group at 0022 writes files the host
+// cannot edit — the bug this exists to fix — and a container at 0002 outside the
+// group opens the mode for a group nobody involved is in.
+func TestSharedGroupUmaskTracksSharedGroupUser(t *testing.T) {
+	tests := []struct {
+		name   string
+		engine string
+		user   string
+		gid    string
+	}{
+		{"linux docker: the sandbox user joins the host group", "", "sandbox", "1000"},
+		{"engine named explicitly is still docker", "docker", "sandbox", "1000"},
+		{"off linux there is nothing to solve", "", "sandbox", ""},
+		{"podman already maps ids with keep-id", "podman", "sandbox", "1000"},
+		{"an explicit user is the caller's decision", "", "root", "1000"},
+		{"an explicit uid:gid is left alone", "", "1000:1000", "1000"},
+		{"a host gid equal to the image's own changes nothing", "", "sandbox", "1001"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pinHostGID(t, tc.gid)
+			joined := sharedGroupUser(tc.engine, tc.user) != tc.user
+			want := ""
+			if joined {
+				want = "0002"
+			}
+			if got := sharedGroupUmask(tc.engine, tc.user); got != want {
+				t.Errorf("sharedGroupUmask(%q, %q) with gid %q = %q, want %q (shared group applied: %v)",
+					tc.engine, tc.user, tc.gid, got, want, joined)
+			}
+		})
+	}
+}
+
+// TestSharedGroupUmaskOpensOnlyTheGroup: the value is handed to the container's
+// `umask`, so a wrong digit is a silent widening of every file an agent writes to
+// a bind-mounted host path. Group-write is the whole request; the owner and world
+// bits must be exactly where the container's inherited default left them.
+func TestSharedGroupUmaskOpensOnlyTheGroup(t *testing.T) {
+	mask, err := strconv.ParseInt(sharedGroupUmaskValue, 8, 32)
+	if err != nil {
+		t.Fatalf("sharedGroupUmaskValue %q is not octal: the container reads it as octal", sharedGroupUmaskValue)
+	}
+	if mask&0o020 != 0 {
+		t.Errorf("umask %s masks group write, which is the one bit the shared group exists to grant", sharedGroupUmaskValue)
+	}
+	if mask&0o700 != 0 {
+		t.Errorf("umask %s touches the owner bits; nothing here should make the container's own files less usable to it", sharedGroupUmaskValue)
+	}
+	if mask&0o007 != 0o002 {
+		t.Errorf("umask %s = %#o world bits, want the default 2 (no world write) — this lands on host paths", sharedGroupUmaskValue, mask&0o007)
+	}
+}
+
+// TestBuildSpec_SharedGroupCarriesTheUmask is the same "both halves or neither"
+// check one level up, and it covers the split the shared group itself had to fix:
+// in allowlist mode the guest is reached through sandbox-firewall's drop rather
+// than docker's --user, and the variable has to survive that path too.
+func TestBuildSpec_SharedGroupCarriesTheUmask(t *testing.T) {
+	pinHostGID(t, "1000")
+
+	for _, mode := range []string{"default", "allowlist"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := config.Default()
+			if mode == "default" {
+				cfg.Network = config.NetworkSpec{Mode: "default"}
+			}
+			spec, err := BuildSpec(cfg, Options{Project: t.TempDir(), Command: []string{"true"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := spec.Env["SANDBOX_UMASK"]; got != "0002" {
+				t.Errorf("SANDBOX_UMASK = %q, want 0002 — without it the shared group grants a write the mask takes back", got)
+			}
+		})
+	}
+}
+
+// TestBuildSpec_NoUmaskWhereIdsDoNotMeet: absent is the correct answer off Linux
+// and under podman, and it has to be *absent* rather than "0022". A variable that
+// is always set is one sandbox-init always acts on, which turns a targeted fix
+// into a container-wide default nobody chose.
+func TestBuildSpec_NoUmaskWhereIdsDoNotMeet(t *testing.T) {
+	pinHostGID(t, "")
+
+	cfg := config.Default()
+	cfg.Network = config.NetworkSpec{Mode: "default"}
+	spec, err := BuildSpec(cfg, Options{Project: t.TempDir(), Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := spec.Env["SANDBOX_UMASK"]; ok {
+		t.Errorf("SANDBOX_UMASK = %q, want unset where the host and container ids never meet", got)
+	}
+}
+
 // TestBuildSpec_SharedGroupReachesBothUserFields is the half that was easy to
 // get wrong: in allowlist mode the container starts as root and the entrypoint
 // drops to SANDBOX_RUN_AS, so a fix applied only to --user would hold for
