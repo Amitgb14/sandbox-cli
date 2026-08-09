@@ -1,0 +1,58 @@
+name: integration
+
+# The docker_integration suite, on demand.
+#
+# Deliberately not on pull_request. ci.yml states the reason for keeping the
+# daemon out of the PR path, and nothing here disagrees with it: this suite
+# builds the base image on a cold cache and drives real containers, so it is
+# minutes rather than seconds, and most changes have no business paying that.
+#
+# What it exists for is the case ci.yml cannot answer. The unit tests pin
+# strings in a map; only a real container can show that a file the container
+# created is one the host can still write to — which is the bug
+# TestSharedGroupFilesAreHostWritable was written for, and the one thing about
+# it that has never been executed. That test also runs *only* on Linux, so a
+# developer on macOS cannot answer it either.
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "-run regexp (empty runs the whole suite)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    # Cold cache means building the base image before the first test runs.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # This suite's results depend on the ids of the account running it — the
+      # shared-group tests skip as gid 0, and take a different path when the
+      # primary gid is already the image's own 1001. A log that does not say
+      # which of those happened cannot be read afterwards.
+      - name: Runner identity and daemon
+        run: |
+          id
+          docker version --format 'client {{.Client.Version}} / server {{.Server.Version}}'
+
+      - name: make test-integration
+        env:
+          RUN: ${{ inputs.run }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RUN" ]; then
+            go test -tags docker_integration -count=1 -v -run "$RUN" ./...
+          else
+            make test-integration
+          fi
