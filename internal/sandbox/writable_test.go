@@ -589,11 +589,12 @@ func TestUnwritableReportRendersTheMixedCase(t *testing.T) {
 		{Root: git, Path: filepath.Join(git, "objects", "05"), Mode: 0o755, UID: 1000, GID: 4000, Git: true},
 	}, 1001, 1000)
 
-	if want := "chgrp -R 1000 " + git; !strings.Contains(report, want) {
-		t.Errorf("want a chgrp scoped to %s:\n%s", git, report)
-	}
-	if strings.Contains(report, "chgrp -R 1000 "+tree) {
-		t.Errorf("the chgrp must not be widened to the whole project:\n%s", report)
+	// Whole lines, not substrings: git is tree + "/.git", so a Contains check for
+	// the widened command matches the correctly scoped one and fails a report
+	// that is right. The first version of this test did exactly that.
+	chgrps := fixLines(report, "chgrp")
+	if len(chgrps) != 1 || chgrps[0] != "chgrp -R 1000 "+git {
+		t.Errorf("chgrp lines = %q, want exactly one scoped to %s:\n%s", chgrps, git, report)
 	}
 	// No `&&`: a chgrp that fails on a file somebody else owns must not swallow
 	// the chmod, leaving one recommended command that fixed nothing.
@@ -612,4 +613,17 @@ func TestUnwritableReportRendersTheMixedCase(t *testing.T) {
 	if !strings.Contains(report, "core.sharedRepository group") {
 		t.Errorf("the durable git fix must still be offered:\n%s", report)
 	}
+}
+
+// fixLines returns the commands of the report's `fix:` lines that start with the
+// given verb, whole rather than as substrings.
+func fixLines(report, verb string) []string {
+	var out []string
+	for _, line := range strings.Split(report, "\n") {
+		cmd, ok := strings.CutPrefix(strings.TrimSpace(line), "fix: ")
+		if ok && strings.HasPrefix(cmd, verb+" ") {
+			out = append(out, cmd)
+		}
+	}
+	return out
 }
