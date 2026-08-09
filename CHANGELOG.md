@@ -13,6 +13,24 @@ version is tagged.
 
 ### Fixed
 
+- **`--network allowlist` could not rescue a `prod` run.** It is documented as
+  outranking the profile's default, and it did not: the profile was validated
+  while the configuration was still being loaded, before any flag had been read.
+  A user config saying `network.mode: default` therefore refused every
+  `--profile prod` run with
+
+  ```
+  sandbox-cli: the resolved configuration does not satisfy the "prod" profile:
+    - network.mode is "default", must be "allowlist"
+  ```
+
+  and the flag that fixes it never got a chance to apply. The override now
+  reaches the loader, so one validation sees the run as it will actually be.
+
+  It still cannot escape the profile: `--network default` or `--network none`
+  under prod are refused as before. The flag beats a *file*, not prod's own
+  demands.
+
 - **The egress allowlist could not be programmed under gVisor**, so
   `--runtime runsc` with `--allow` (or `--profile prod`, which requires one)
   refused to start:

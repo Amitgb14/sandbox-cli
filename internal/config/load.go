@@ -35,7 +35,33 @@ func Load(startDir, explicitPath string) (Config, error) {
 // would be abandoned rather than used. What stops that from hollowing prod out is
 // ValidateProfile, which checks the settings that define prod against the
 // configuration that will actually run.
+// Overrides are the values a CLI flag imposes on the resolved configuration,
+// applied after every file layer and before the profile is validated.
+//
+// They exist because the profile is validated *here* — against the configuration
+// that will actually run — and a flag applied afterwards therefore arrives too
+// late to be part of it. `--network allowlist` is documented as outranking the
+// profile's default, and could not: LoadProfile had already refused a prod run
+// whose config said `mode: default`, so the escape hatch never opened.
+//
+// A struct rather than another string parameter, so the next flag that outranks
+// a file does not change this signature again — and so the one place that
+// decides precedence stays one place.
+type Overrides struct {
+	// NetworkMode is "" for "no flag given", else an already-validated mode. The
+	// caller checks the spelling, because an unknown value is a flag error and
+	// should not surface as a profile complaint about a mode nobody typed.
+	NetworkMode string
+}
+
+// LoadProfile loads the configuration with no flag overrides.
 func LoadProfile(startDir, explicitPath, flagProfile string) (Config, error) {
+	return LoadProfileWith(startDir, explicitPath, flagProfile, Overrides{})
+}
+
+// LoadProfileWith is LoadProfile with the CLI's own overrides folded in before
+// the profile is checked, so one validation sees the run as it will be.
+func LoadProfileWith(startDir, explicitPath, flagProfile string, ov Overrides) (Config, error) {
 	name, err := discoverProfile(startDir, explicitPath, flagProfile)
 	if err != nil {
 		return Config{}, err
@@ -73,6 +99,14 @@ func LoadProfile(startDir, explicitPath, flagProfile string) (Config, error) {
 	// The profile is not something a later layer may change out from under the
 	// caller: it was resolved above, from the layers entitled to choose it.
 	cfg.Profile = name
+
+	// Flags last, because they outrank every file — and *before* the validation
+	// below, because validating a configuration the run will not use is how the
+	// documented `--network` escape hatch came to be unreachable.
+	if ov.NetworkMode != "" {
+		cfg.Network.Mode = ov.NetworkMode
+	}
+
 	if err := ValidateProfile(name, cfg); err != nil {
 		return cfg, err
 	}
