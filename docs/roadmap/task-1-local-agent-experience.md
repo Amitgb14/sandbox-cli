@@ -14,12 +14,41 @@ task 2 branch, which included every commit here — so the corrected
 `internal/cli/stats_integration_test.go` is verified against a real daemon rather than
 merely compiled.
 
-**The gap that remains is coverage, not correctness:** no integration test exercises
-`list`, `logs`, `attach` or `kill`. The suite covers `stats`, isolation, egress and
-worktrees; the four session commands are proved only by unit tests against a fake
-backend. `attach`'s Ctrl-C-detaches behaviour and `kill --force` in particular have
-never run against a container. The manual pass in #35's description is still the only
-thing that would exercise them, and an integration test for them is the obvious follow-up.
+**The coverage gap this document used to record is closed.**
+`internal/cli/session_integration_test.go` now exercises all four session commands
+against a real daemon, and it covers the three claims a fake backend cannot make
+because they are claims about docker rather than about this package:
+
+- **`attach` cannot kill.** Two halves, because neither catches a regression
+  alone: `TestAttachRendersSigProxyFalse` (`internal/runtime`, no daemon) pins that
+  the argv carries `--sig-proxy=false`, and a differential integration subtest sends
+  the same SIGINT to the same guest with the flag on and off — protected, the guest
+  keeps running and never runs its `INT` trap; exposed, it exits 7. Ending the client
+  by cancelling a context is asserted separately and proves something weaker: that
+  path SIGKILLs the client, which no signal-forwarding setting can intercept.
+- **`--force` is a different signal, not a louder word.** The polite guest catches
+  SIGTERM, prints, and exits with its own code; the stubborn one ignores SIGTERM and
+  only SIGKILL (137) ends it.
+- **The listing's fields are parsed from `docker inspect`** — the exit code, the
+  timestamps, the state strings, and `OpenStdin`/`TTY` observed **both ways**: false
+  on a detached container, true on a console one started `-it`, since a field
+  asserted only at its zero value is not pinned at all.
+- **`logs` keeps stdout and stderr apart**, `--follow` blocks until the guest exits
+  rather than printing the backlog and leaving, and a cancelled `--follow` returns
+  success — the bargain that keeps the documented Ctrl-C from exiting non-zero.
+
+Two things worth keeping, both learned by a test failing:
+
+- **PID 1 does not get default signal dispositions.** A container running plain
+  `sleep 300` ignores SIGTERM, so `docker stop` falls through its 10-second grace
+  period to SIGKILL — a graceful-stop test written the obvious way passes while
+  proving the opposite of its claim. Every guest here installs a trap deliberately.
+- **An attach with `--sig-proxy=false` swallows SIGINT and keeps reading** (Docker
+  28). So the client exiting is not the observable; the guest surviving is.
+
+What is still manual, and small: nobody has typed at an interactive attached
+session from a real tty. The console container proves the *field* is right, so
+`attach` says the right thing — the keystroke itself is uncovered.
 
 This is the task that decides whether the tool gets used. Everything in it is about the
 minutes between "I want an agent to do this" and "I have read what it did".

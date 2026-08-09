@@ -46,8 +46,39 @@ func TestShareMountsSharedDir(t *testing.T) {
 	if err != nil || !fi.IsDir() {
 		t.Fatalf("shared dir %s not created: %v", dir, err)
 	}
-	if got := fi.Mode().Perm(); got != 0o700 {
-		t.Errorf("shared dir mode = %o, want 700 (owner-only, like the auth persist dir)", got)
+	if want := wantSharedPerm(); fi.Mode().Perm() != want {
+		t.Errorf("shared dir mode = %o, want %o", fi.Mode().Perm(), want)
+	}
+	assertNotWorldAccessible(t, fi, "the shared dir")
+}
+
+// wantSharedPerm is the mode --share leaves on a directory it created.
+//
+// Platform-dependent on purpose, and this is the one place that fact is
+// written down as a test expectation. A bind mount on native Linux carries
+// real uids, so a directory owned by the invoking user at 0700 is simply
+// EACCES to the container (#31): sandbox.ShareWithSandboxGroup opens the
+// group bits and sets setgid there, since the container already runs with the
+// host's primary group. macOS virtualizes bind ownership and rootless podman
+// maps the host user onto the container user, so neither needs it and neither
+// gets it.
+//
+// Asserting 0700 everywhere is what made this pass locally and fail on every
+// Linux runner from the moment #31 was fixed.
+func wantSharedPerm() os.FileMode {
+	if goruntime.GOOS == "linux" {
+		return 0o770
+	}
+	return 0o700
+}
+
+// assertNotWorldAccessible is the half of the claim that holds on every
+// platform: whatever the group may do, a shared directory is never open to
+// everyone on the machine.
+func assertNotWorldAccessible(t *testing.T, fi os.FileInfo, what string) {
+	t.Helper()
+	if world := fi.Mode().Perm() & 0o007; world != 0 {
+		t.Errorf("%s is world-accessible (mode %o)", what, fi.Mode().Perm())
 	}
 }
 

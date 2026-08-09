@@ -11,6 +11,49 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **A run now says which boundary it actually got.** The OCI runtime is the one
+  setting that changes the *kind* of isolation rather than its degree, and
+  nothing recorded it: `--runtime kata-runtime` and a plain shared-kernel run
+  looked identical after the fact. The audit log now carries `runtime` (omitted
+  when the run took the host default, because naming a runtime nobody chose
+  would be this tool asserting something it never asked for), and
+  `sandbox-cli list` and `sandbox-cli fleet status` grow a `RUNTIME` column as
+  soon as **any** listed session is on something other than the ordinary
+  shared-kernel runtimes — for every row, since the interesting question is then
+  which runs *did not* get the boundary you thought you asked for, and a runtime
+  we do not recognise is named rather than judged. The listing reads it back
+  from the engine rather than from the launch, and under podman that means
+  podman's own field: it fills the docker-compatible one with the placeholder
+  `"oci"`. A launch the engine refused is no longer written to the audit log at
+  all. First piece of [roadmap task 3](docs/roadmap/task-3-stronger-isolation.md).
+
+### Changed
+
+- **The documentation is a set of pages rather than one 1,400-line README.** The
+  README is now a landing page — what it is, install, quick start, and a map —
+  and every long section moved to a page of its own under `docs/`, indexed by
+  [`docs/README.md`](docs/README.md): install, sessions, worktrees, fleet,
+  sharing, crash recovery, monitoring, agent login and history, configuration,
+  security, and per-platform setup for Linux and Podman. Links that used to point
+  at README anchors now point at those pages.
+
+### Fixed
+
+- **The documented `.sandbox.yaml` example listed three keys a project file is no
+  longer allowed to set.** `network.allow`, `ports:` and `snapshot:` were each
+  permitted at first and later refused — `allow` only ever widens and *replaces*
+  rather than appends, publishing punches a hole in the default-deny INPUT chain,
+  and `snapshot` can disable crash protection or turn the host into a sustained
+  `git add -A` loop. The example now shows the keys a project may actually set,
+  and [Configuration](docs/configuration.md) carries the full refusal table with
+  the reason for each key.
+- **The detached-worktree walkthrough still told you to reach for `docker`.** It
+  now uses `sandbox-cli list`, `logs`, `kill` and `clean`, which have existed
+  since the session commands shipped and, unlike the raw docker equivalents,
+  cannot reach a container sandbox-cli did not start.
+
 ### Fixed
 
 - **On Linux, files a sandbox wrote were read-only to you afterwards.** It
@@ -511,7 +554,7 @@ version is tagged.
 
   Verified on macOS (Podman machine) and on Fedora with SELinux enforcing; other
   rootless Linux setups should behave the same but have not been measured. See
-  [Using Podman](README.md#using-podman).
+  [Using Podman](docs/platforms/podman.md).
 
 ## 0.0.1beta.7 — 2026-07-27
 

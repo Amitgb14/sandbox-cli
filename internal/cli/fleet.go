@@ -233,15 +233,41 @@ func renderFleetStatus(w io.Writer, rows []fleet.Status) error {
 		fmt.Fprintln(w, "no fleet branches (run `sandbox-cli fleet run` to start one)")
 		return nil
 	}
+	// The same rule, and the same helper, `list` uses: a fleet agent is a session,
+	// and the two tables must not describe one container's boundary differently.
+	var containers []runtime.ContainerInfo
+	for _, s := range rows {
+		if s.Container != nil {
+			containers = append(containers, *s.Container)
+		}
+	}
+	showRuntime := showRuntimeColumn(containers)
+
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tBRANCH\tAGENT\tSTATE\tVERIFY\tELAPSED\tDIRTY\tAHEAD")
+	header := "ID\tBRANCH\tAGENT\tSTATE\tVERIFY\tELAPSED\tDIRTY\tAHEAD"
+	if showRuntime {
+		header = "ID\tBRANCH\tAGENT\tRUNTIME\tSTATE\tVERIFY\tELAPSED\tDIRTY\tAHEAD"
+	}
+	fmt.Fprintln(tw, header)
 	for _, s := range rows {
 		// Branch and agent are label values, which is text from the repository
 		// arriving in a tab-separated table on a terminal. Cleaned for the same
 		// reason `list` cleans them: a branch name must not be able to forge a row.
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\n",
+		cells := []string{
 			fleetSessionID(s), termsafe.Clean(s.Branch), dash(termsafe.Clean(s.Agent)),
-			fleetState(s), dash(string(s.Verify)), fleetElapsed(s), s.Dirty, s.Ahead)
+		}
+		if showRuntime {
+			// A branch with no container left to ask reads as unknown, which is
+			// what it is — not as the default runtime.
+			name := ""
+			if s.Container != nil {
+				name = s.Container.Runtime
+			}
+			cells = append(cells, dash(termsafe.Clean(name)))
+		}
+		cells = append(cells, fleetState(s), dash(string(s.Verify)), fleetElapsed(s),
+			strconv.Itoa(s.Dirty), strconv.Itoa(s.Ahead))
+		fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	}
 	return tw.Flush()
 }

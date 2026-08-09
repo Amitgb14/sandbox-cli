@@ -49,6 +49,25 @@ type SessionMeta struct {
 	// one no later command can recover, and "which engine ran this" is not
 	// derivable from anything else in the line.
 	Engine string
+	// Runtime is the OCI runtime the run asked the engine for, empty meaning the
+	// host default (runc everywhere this tool has met). The same kind of fact as
+	// Network: it is resolved from several layers, so "what boundary did this run
+	// actually get" is otherwise unanswerable afterwards — and it is the one
+	// setting that changes the *kind* of boundary rather than its degree.
+	//
+	// Asked for, and the line is only written once the engine accepted the
+	// launch — a refused one is not recorded at all, since the record carries
+	// exit code 0 and would otherwise read as a run that completed inside a
+	// boundary nothing ever ran in. What that does *not* prove is that the
+	// runtime behaved: sandbox-cli's pre-flight check fails open when the daemon
+	// cannot be asked, so this is "the engine took this name", not "this name
+	// was verified".
+	//
+	// The listing reads the runtime back from the engine instead
+	// (runtime.ContainerInfo.Runtime), because a container that still exists can
+	// be asked. This field exists for the ones that cannot: a --rm run is gone
+	// by the time anybody reads the log.
+	Runtime string
 	// Network is the resolved posture: "default", "none" or "allowlist".
 	Network string
 	// NetworkName is the network object the container actually joined. Under
@@ -160,6 +179,7 @@ type record struct {
 	Branch      string   `json:"branch,omitempty"`
 	Command     []string `json:"command,omitempty"`
 	Engine      string   `json:"engine,omitempty"`
+	Runtime     string   `json:"runtime,omitempty"`
 	Network     string   `json:"network,omitempty"`
 	NetworkName string   `json:"network_name,omitempty"`
 	EnforcedBy  string   `json:"egress_enforcement_requested,omitempty"`
@@ -219,6 +239,7 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 		Branch:      meta.Branch,
 		Command:     meta.Command,
 		Engine:      meta.Engine,
+		Runtime:     meta.Runtime,
 		Network:     meta.Network,
 		NetworkName: meta.NetworkName,
 		EnforcedBy:  meta.EgressEnforcementRequested,

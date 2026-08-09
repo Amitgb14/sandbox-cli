@@ -22,7 +22,7 @@ sandbox-cli <agent> [sandbox flags] [-- ] [everything else goes to the agent]
 - **Your arguments are forwarded verbatim.** `sandbox-cli claude --dangerously-skip-permissions`
   just works. A leading run of sandbox long-flags is consumed by sandbox; the
   first token that isn't one ends the sandbox portion. See
-  [Passing flags to the agent](../README.md#passing-flags-to-the-agent).
+  [Passing flags to the agent](usage/flags.md#passing-flags-to-the-agent).
 - **The login persists, once.** Each agent gets its own sandbox-owned directory
   (`~/.config/sandbox/agents/<agent>`) bind-mounted as the container's whole
   `HOME`. It is **separate from your real config** — the sandbox never reads or
@@ -46,7 +46,7 @@ sandbox-cli <agent> [sandbox flags] [-- ] [everything else goes to the agent]
 ## Prerequisites shared by all agents
 
 1. **Docker** running (Docker Desktop on macOS/Windows).
-2. **`sandbox-cli` installed** — see the [README](../README.md#install).
+2. **`sandbox-cli` installed** — see [Install](install.md).
 3. **An account or API key for the agent you want.** The sandbox does not supply
    credentials; it only isolates the agent that uses them.
 4. **Network on an agent's first run** if it isn't baked into the image (below).

@@ -55,11 +55,19 @@ export const FEATURES: Feature[] = [
     state: "default",
   },
   {
+    title: "Sessions you can list, follow, attach to and stop",
+    group: "workflow",
+    flag: "list / logs / attach / kill",
+    body: "A kill -9 on sandbox-cli leaves the container running — the daemon owns it, not the client — with an agent still writing to your project, and --detach means to. Four commands address one by id, container name or branch, and a reference is matched against sandbox-cli's own containers rather than handed to the engine, so kill postgres finds nothing instead of your database. attach cannot kill: Ctrl-C detaches and the agent keeps working.",
+    code: "sandbox-cli list --all",
+    state: "default",
+  },
+  {
     title: "Containers you left behind, found and reaped",
     group: "workflow",
-    flag: "ps / clean",
-    body: "A kill -9 on sandbox-cli leaves the container running — the daemon owns it, not the client — with an agent still writing to your project. --detach keeps its container on purpose. ps lists both, clean reaps the exited ones, and touching a running one takes --force.",
-    code: "sandbox-cli ps",
+    flag: "clean",
+    body: "Detached and fleet containers are kept after they exit, unlike every other run: their exit code and their logs are the only record the work happened, so --rm would delete exactly what you came back for. clean reaps them once you have read what you needed, and stopping a still-running one takes --force.",
+    code: "sandbox-cli clean",
     state: "default",
   },
   {
