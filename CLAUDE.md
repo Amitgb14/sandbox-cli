@@ -118,6 +118,23 @@ rather than merely passing.
   shared directories, which needs `acl` support on the host filesystem and a second mechanism to
   keep in step.
 
+  Both halves are about what the container **creates**. What the host created earlier is a
+  third question, and nothing repairs it: `ShareWithSandboxGroup` is scoped to sandbox-owned
+  directories, and the workspace is the user's own tree. So whether the agent can write
+  `/workspace` at all comes down to the host umask — 0775 under 002 works, 0755 under 022 is a
+  read-only workspace — and it fails in the least legible way there is, an agent reporting it
+  could not save a file, or git naming `.git/objects` without naming which of 256 fan-out
+  directories is wrong. `writable.go` answers it before the run: every read-write bind is
+  checked against the ids the guest will actually have, and `guestIDs` reads **`SANDBOX_RUN_AS`
+  before `spec.User`** because in allowlist mode — the dev default — `--user` is root and
+  answering for the root phase would find every path writable. It **detects and never repairs**,
+  the same bargain `EnsureGuestDir` makes, and it is computed from the mode bits rather than by
+  starting a container to try it: that is how the kernel decides, it costs a stat, and it can be
+  answered for every mount. The cost is that POSIX ACLs are invisible to it, which is why dev
+  **warns** — a check that can be wrong in the permissive direction must not refuse an ordinary
+  laptop — while prod refuses, because nobody is watching. `docs/security/open-items.md` issue
+  #80.
+
   This is the single choke point for the isolation invariants (only
   declared mounts are host-connected; `HOME` is always the fake path; host home is never mounted)
   and is exhaustively unit-tested. `docker_cli.go` is the only backend today, hidden behind the

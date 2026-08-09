@@ -13,6 +13,40 @@ version is tagged.
 
 ### Added
 
+- **A run now tells you up front when the agent will not be able to write your
+  project.** On Linux the container runs as uid 1001 with your primary group, so
+  whether it can edit `/workspace` comes down to your umask — and nothing said
+  so:
+
+  ```
+  umask 002 (user-private groups)   directories 0775   the group has write   works
+  umask 022                         directories 0755   the group has r-x     read-only
+  ```
+
+  An agent with a read-only workspace does not fail cleanly. It tries to edit,
+  says it could not, and nothing points at a host permission bit. Reached
+  through git it is worse, because git names the object store without naming
+  which of its 256 fan-out directories is the problem:
+
+  ```
+  error: insufficient permission for adding an object to repository database .git/objects
+  ```
+
+  Every read-write host path a run mounts is now checked before the container
+  starts — the workspace, and for `--worktree` runs the parent repository's
+  `.git` and its object store. Under the default `dev` profile this is a warning
+  naming the path, its mode and the `chmod g+w` that fixes it; under `prod` it
+  is a refusal, since nobody is watching a prod run and an agent that quietly
+  cannot write is the failure that profile exists to prevent.
+
+  It reports and never repairs: the workspace is your tree, and changing its
+  mode on your behalf is not sandbox-cli's call. For a repository, `git config
+  core.sharedRepository group` is the durable fix — git then creates future
+  object directories group-writable itself.
+
+  Nothing changes under podman (your uid is mapped directly), on macOS (bind
+  ownership is virtualized), or when the guest runs as root.
+
 - **A run now says which boundary it actually got.** The OCI runtime is the one
   setting that changes the *kind* of isolation rather than its degree, and
   nothing recorded it: `--runtime kata-runtime` and a plain shared-kernel run

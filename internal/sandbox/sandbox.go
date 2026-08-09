@@ -56,6 +56,9 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	// and here rather than in Prepare for the same reason as the line above:
 	// --dry-run prints a command and must not editorialize about it.
 	warnUmaskNeedsSandboxInit(spec)
+	if err := s.enforceWritableMounts(spec); err != nil {
+		return 1, err
+	}
 	if err := s.Runtime.Available(ctx); err != nil {
 		return 1, err
 	}
@@ -116,6 +119,9 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	}
 	ShareWithSandboxGroup(opts.AuthPersistDir) // same reason as Run's
 	warnUmaskNeedsSandboxInit(spec)            // likewise
+	if err := s.enforceWritableMounts(spec); err != nil {
+		return "", err
+	}
 	if err := s.Runtime.Available(ctx); err != nil {
 		return "", err
 	}
@@ -426,6 +432,39 @@ func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode i
 //
 // A daemon that cannot be queried refuses too, under the same reasoning: prod
 // does not get to assume the answer it would prefer.
+// warnedWritable is where the dev-profile warning goes. A var so tests can read
+// what was printed, the same as warnedSecret and warnedImage.
+var warnedWritable = func(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format, args...)
+}
+
+// enforceWritableMounts applies the profiles' asymmetry to one host fact: the
+// container user cannot write a directory this run is about to mount read-write.
+//
+// dev warns and runs. Refusing would be wrong there — the check reads the mode
+// bits and not ACLs, so it can be wrong in the permissive direction, and a tool
+// that refuses to start on an ordinary laptop over a mode it mis-read is worse
+// than an agent that reports it could not save a file. prod refuses, because
+// nobody is watching a prod run and an agent silently unable to write is exactly
+// the degraded-quietly failure the profile exists to prevent.
+//
+// Before Available(), unlike enforceSeccomp: this asks the filesystem rather
+// than the daemon, so it costs nothing and can be answered on a host where
+// docker is not even running.
+func (s *Session) enforceWritableMounts(spec runtime.RunSpec) error {
+	bad := unwritableMounts(spec, s.Cfg.Engine)
+	if len(bad) == 0 {
+		return nil
+	}
+	uid, gid, _ := guestIDs(spec)
+	report := unwritableReport(bad, uid, gid)
+	if s.Cfg.Profile == config.ProfileProd {
+		return fmt.Errorf("%s\n  or run with --profile dev, which warns instead of refusing", report)
+	}
+	warnedWritable("sandbox-cli: %s\n", report)
+	return nil
+}
+
 func (s *Session) enforceSeccomp(ctx context.Context) error {
 	if s.Cfg.Security.Seccomp != config.SeccompRequired {
 		return nil
