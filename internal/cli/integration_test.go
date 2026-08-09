@@ -38,7 +38,7 @@ func newTestSession(t *testing.T, cfg config.Config) *sandbox.Session {
 // out to the built binary is avoided; instead we invoke docker via the runtime
 // but redirect stdout through a temp file written inside /workspace.
 func TestIsolation_HomeAndWorkspace(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	cfg := config.Default()
 	sess := newTestSession(t, cfg)
 
@@ -70,7 +70,7 @@ func TestIsolation_HomeAndWorkspace(t *testing.T) {
 // TestRmRfHomeSafety proves that `rm -rf ~` inside the sandbox cannot touch the
 // host home: we place a canary in a fake host HOME that is never mounted.
 func TestRmRfHomeSafety(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	fakeHome := t.TempDir()
 	canary := filepath.Join(fakeHome, "canary.txt")
 	if err := os.WriteFile(canary, []byte("keep me"), 0o644); err != nil {
@@ -99,7 +99,7 @@ func TestRmRfHomeSafety(t *testing.T) {
 // TestEnvPassthrough proves allowlisted host env reaches the container while
 // non-allowlisted vars do not.
 func TestEnvPassthrough(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	t.Setenv("SANDBOX_TEST_ALLOWED", "yes")
 	t.Setenv("SANDBOX_TEST_SECRET", "leak")
 
@@ -132,7 +132,7 @@ func TestEnvPassthrough(t *testing.T) {
 // It does not assert that an allowed domain succeeds, to avoid depending on live
 // internet in CI; the block + privilege-drop are the security-relevant claims.
 func TestEgressAllowlist(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	sess := newTestSession(t, config.Default())
 
 	// 1.1.1.1 is not in the allowlist, so the default-deny rule must reject it;
@@ -179,7 +179,7 @@ func TestEgressAllowlist(t *testing.T) {
 // the rules are the property under test, and a two-container rendezvous would be
 // slow and flaky in CI.
 func TestEgressAllowlistFiltersIngressToo(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	sess := newTestSession(t, config.Default())
 
 	// Read the chain from outside the container. The guest cannot: it is dropped
@@ -254,7 +254,7 @@ func TestEgressAllowlistFiltersIngressToo(t *testing.T) {
 // invisible in the rules (they looked correct, and were correct about addresses),
 // so only a real connection distinguishes the fixed behaviour from the broken one.
 func TestEgressIsEnforcedByNameNotAddress(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	sess := newTestSession(t, config.Default())
 
 	script := `for h in github.com gist.github.com pypi.org docs.python.org; do
@@ -308,7 +308,7 @@ done > /workspace/egress.txt`
 // the environment. An agent that unsets HTTPS_PROXY, or dials an address with no
 // hostname at all, must still be refused — otherwise the allowlist is advisory.
 func TestEgressProxyCannotBeBypassed(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	sess := newTestSession(t, config.Default())
 
 	script := `env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy \
@@ -338,7 +338,7 @@ curl -s -m 8 -o /dev/null -w "altport=%{http_code}\n" https://gist.github.com:84
 // an isolated global git config so the assertion doesn't depend on the CI user's
 // real git settings.
 func TestGitIdentity(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 
 	gc := filepath.Join(t.TempDir(), "gitconfig")
 	if err := os.WriteFile(gc, []byte("[user]\n\tname = Test User\n\temail = test@example.com\n"), 0o644); err != nil {
@@ -386,7 +386,7 @@ func TestGitIdentity(t *testing.T) {
 // container's /etc/hosts (deterministic; does not require the gateway to be
 // reachable from CI).
 func TestHostGateway(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	sess := newTestSession(t, config.Default())
 	_, err := sess.Run(context.Background(), sandbox.Options{
 		Project:     proj,
@@ -409,7 +409,7 @@ func TestHostGateway(t *testing.T) {
 // TestSecretDelivery proves the credential broker resolves each source kind
 // (file / env / cmd) at run time and delivers the value into the container.
 func TestSecretDelivery(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 
 	secretFile := filepath.Join(t.TempDir(), "tok")
 	if err := os.WriteFile(secretFile, []byte("file-value\n"), 0o600); err != nil {
@@ -454,7 +454,7 @@ func TestCachePersistsAndWritable(t *testing.T) {
 	const probe = "/sandbox/home/.npm/.sbtest_probe"
 
 	runCache := func(cmd string) string {
-		proj := t.TempDir()
+		proj := testWorkspace(t)
 		sess := newTestSession(t, config.Default())
 		if _, err := sess.Run(context.Background(), sandbox.Options{
 			Project: proj,
@@ -496,9 +496,12 @@ func TestWorktreeEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Skip("git not available")
 	}
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // isolate the managed worktree location
+	// Isolate the managed worktree location. The worktree the container mounts is
+	// created *under* this directory, so the whole chain is opened once it exists.
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
 
-	repo := t.TempDir()
+	repo := testWorkspace(t)
 	gitRun := func(args ...string) {
 		t.Helper()
 		cmd := exec.Command(git, args...)
@@ -534,6 +537,10 @@ func TestWorktreeEndToEnd(t *testing.T) {
 	if !info.Created {
 		t.Fatalf("expected the worktree to be created")
 	}
+	// The mounted project here is a worktree under xdg, not a t.TempDir(), so the
+	// path to it is opened rather than the directory alone.
+	allowTraverseTo(t, xdg, info.Path)
+	allowWrite(t, info.Path)
 
 	// Run the sandbox in the worktree and have the container report what it sees
 	// mounted at /workspace.
@@ -574,7 +581,7 @@ func ptr(b bool) *bool { return &b }
 // stayed green. This one starts a real container, which is the only way that
 // class of break is visible.
 func TestNetworkNoneActuallyRuns(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	cfg := config.Default()
 	cfg.Network.Mode = "none"
 	sess := newTestSession(t, cfg)
@@ -619,7 +626,7 @@ func TestSharedGroupFilesAreHostWritable(t *testing.T) {
 
 	for _, mode := range []string{"default", "allowlist"} {
 		t.Run(mode, func(t *testing.T) {
-			proj := t.TempDir()
+			proj := testWorkspace(t)
 			cfg := config.Default()
 			cfg.Network.Mode = mode
 			sess := newTestSession(t, cfg)

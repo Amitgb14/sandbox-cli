@@ -232,10 +232,15 @@ var reservedEnvNames = map[string]bool{
 	"DOCKER_CONTEXT":    true,
 }
 
-const reservedEnvReason = "this variable decides what the container's root-phase startup does or " +
-	"executes — which user it drops to, what egress it permits, which file its interpreter " +
-	"sources before the first line runs, or which docker daemon the run is sent to — and cannot " +
-	"be set or forwarded from outside"
+// reservedEnvReason has to be true of every name in the list above, which is
+// why it names the category rather than one mechanism: SANDBOX_UMASK is read
+// after the privilege drop, so a sentence about the root phase alone would send
+// the one user who sets it looking for a behavior that does not exist.
+const reservedEnvReason = "this is one of sandbox-cli's own control variables, not a setting — " +
+	"it decides what the container's root-phase startup does or executes (which user it drops " +
+	"to, what egress it permits, which file its interpreter sources before the first line runs), " +
+	"or which docker daemon the run is sent to, or what mode the files the container writes to " +
+	"your host paths come back with — and cannot be set or forwarded from outside"
 
 // ValidEnvName reports whether name is usable as an environment variable name.
 //

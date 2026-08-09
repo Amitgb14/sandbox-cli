@@ -570,12 +570,20 @@ RUN chmod +x /usr/local/bin/sandbox-egress-setup
 # which starts as root and calls back into this script after dropping.
 RUN cat > /usr/local/bin/sandbox-init <<'IN'
 #!/bin/bash
-# Absolute interpreter and a fixed PATH, for the same reason sandbox-egress-setup
-# has them. This script does not run as root, so the stakes are lower — but it is
-# also reached *from* the root entrypoint, and a script that is safe only on one
-# of its two callers is a trap for whoever adds the third.
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export PATH
+# Absolute interpreter, for the same reason sandbox-egress-setup has one.
+#
+# It deliberately does **not** reset PATH, and that is the difference between
+# this script and the two that do. Those run as root before the privilege drop,
+# where every name they resolve must come from the image. This one runs *after*
+# the drop, as the guest user, and is the image's default entrypoint — so it
+# stands between docker and every command sandbox-cli runs. Resetting PATH here
+# would not harden anything (the caller already has the guest's privileges); it
+# would only discard the PATH the image or a config `env:` set, and a run that
+# worked before this script existed would fail with "command not found".
+#
+# Nothing below needs a PATH: umask, echo, [ and exec are bash builtins, and the
+# one name resolved through it is the guest command, which is exactly what docker
+# would have resolved the same way with no entrypoint at all.
 set -euo pipefail
 
 # SANDBOX_UMASK is reserved (config.IsReservedEnv), so the only writer is
@@ -739,4 +747,9 @@ WORKDIR /workspace
 # user-supplied `image:` — which may have no sandbox-init and is none of our
 # business — is not handed an entrypoint it cannot run. Allowlist mode overrides
 # this with sandbox-firewall, which calls back into it.
+#
+# One consequence to know about: docker reports an entrypoint as part of a
+# container's command, so this shows up in `docker inspect` and in everything
+# built on it. runtime.guestCommand strips both wrappers back off, which is also
+# where sandbox-firewall stopped appearing there.
 ENTRYPOINT ["/usr/local/bin/sandbox-init"]
