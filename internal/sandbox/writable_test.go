@@ -484,3 +484,146 @@ func TestCheckWritableMountsIsInertWithoutAHostGroup(t *testing.T) {
 			"synthetic ids must not be judged against real ownership", got)
 	}
 }
+
+// TestPlanCollapsesChmodsButNeverWidensAChgrp.
+//
+// Real directories, not string literals: containment is decided by device and
+// inode, because that is what decides whether `chmod -R` will actually walk into
+// something. A test on synthetic paths would assert a different function.
+func TestPlanCollapsesChmodsButNeverWidensAChgrp(t *testing.T) {
+	requireOwnership(t)
+	tree := t.TempDir()
+	git := filepath.Join(tree, ".git")
+	if err := os.MkdirAll(filepath.Join(git, "objects", "05"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both only need their bits opened: one recursive chmod covers the pair.
+	got := plan([]unwritablePath{
+		{Root: tree, Path: filepath.Join(tree, "bin"), Group: true},
+		{Root: git, Path: filepath.Join(git, "objects", "05"), Group: true, Git: true},
+	})
+	if len(got.Chmod) != 1 || got.Chmod[0] != tree {
+		t.Errorf("Chmod = %v, want just %s: the recursive fix already covers what is inside it", got.Chmod, tree)
+	}
+	if len(got.Chgrp) != 0 {
+		t.Errorf("Chgrp = %v, want none: nothing here needs its group changed", got.Chgrp)
+	}
+
+	// The mixed case, and the one the first version got wrong: the tree needs
+	// only a chmod while .git belongs to another group. The chgrp must stay on
+	// .git — widening it to the tree rewrites group ownership of the whole
+	// project, including subtrees deliberately owned by someone else.
+	got = plan([]unwritablePath{
+		{Root: tree, Path: tree, Group: true},
+		{Root: git, Path: git, Group: false},
+	})
+	if len(got.Chgrp) != 1 || got.Chgrp[0] != git {
+		t.Errorf("Chgrp = %v, want exactly [%s]: a chgrp must never be widened to an ancestor", got.Chgrp, git)
+	}
+	if len(got.Chmod) != 1 || got.Chmod[0] != tree {
+		t.Errorf("Chmod = %v, want just %s", got.Chmod, tree)
+	}
+}
+
+// TestPlanKeepsSiblingsAndUncleanedPaths is the regression for the containment
+// check that used a raw string prefix.
+func TestPlanKeepsSiblingsAndUncleanedPaths(t *testing.T) {
+	requireOwnership(t)
+	base := t.TempDir()
+	project := filepath.Join(base, "project")
+	shared := filepath.Join(base, "shared")
+	for _, d := range []string{project, shared} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Siblings are two real problems and stay two lines.
+	got := plan([]unwritablePath{{Root: project, Group: true}, {Root: shared, Group: true}})
+	if len(got.Chmod) != 2 {
+		t.Errorf("Chmod = %v, want both: neither contains the other", got.Chmod)
+	}
+
+	// `--mount "$PWD/../shared:/shared:rw"` reaches spec.Mounts verbatim — nothing
+	// cleans it — so the second root arrives spelled through the first. A string
+	// prefix read that as contained and dropped the only line that named it.
+	viaParent := filepath.Join(project, "..", "shared")
+	got = plan([]unwritablePath{{Root: project, Group: true}, {Root: viaParent, Group: true}})
+	if len(got.Chmod) != 2 {
+		t.Errorf("Chmod = %v, want both: %s is not inside %s however it is spelled", got.Chmod, viaParent, project)
+	}
+}
+
+// TestPlanPreservesDiscoveryOrder: the fix lines are read against the evidence
+// lines above them, and sorting by path length put the two out of step.
+func TestPlanPreservesDiscoveryOrder(t *testing.T) {
+	requireOwnership(t)
+	base := t.TempDir()
+	long := filepath.Join(base, "a-long-monorepo-name")
+	short := filepath.Join(base, "x")
+	for _, d := range []string{long, short} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := plan([]unwritablePath{{Root: long, Group: true}, {Root: short, Group: true}})
+	if len(got.Chmod) != 2 || got.Chmod[0] != long {
+		t.Errorf("Chmod = %v, want %s first: the fixes must line up with the evidence", got.Chmod, long)
+	}
+}
+
+// TestUnwritableReportRendersTheMixedCase asserts the printed commands, not just
+// the plan. The case where collapsing changes what the command *does* was only
+// ever checked as a bool.
+func TestUnwritableReportRendersTheMixedCase(t *testing.T) {
+	requireOwnership(t)
+	tree := t.TempDir()
+	git := filepath.Join(tree, ".git")
+	if err := os.Mkdir(git, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	report := unwritableReport([]unwritablePath{
+		{Root: tree, Path: filepath.Join(tree, "bin"), Mode: 0o755, UID: 1000, GID: 1000, Group: true},
+		{Root: git, Path: filepath.Join(git, "objects", "05"), Mode: 0o755, UID: 1000, GID: 4000, Git: true},
+	}, 1001, 1000)
+
+	// Whole lines, not substrings: git is tree + "/.git", so a Contains check for
+	// the widened command matches the correctly scoped one and fails a report
+	// that is right. The first version of this test did exactly that.
+	chgrps := fixLines(report, "chgrp")
+	if len(chgrps) != 1 || chgrps[0] != "chgrp -R 1000 "+git {
+		t.Errorf("chgrp lines = %q, want exactly one scoped to %s:\n%s", chgrps, git, report)
+	}
+	// No `&&`: a chgrp that fails on a file somebody else owns must not swallow
+	// the chmod, leaving one recommended command that fixed nothing.
+	if strings.Contains(report, "&&") {
+		t.Errorf("commands must stand alone rather than short-circuit:\n%s", report)
+	}
+	if n := strings.Count(report, "chmod -R g+w"); n != 1 {
+		t.Errorf("want exactly one chmod, got %d:\n%s", n, report)
+	}
+	// Collapsing the remedy must not collapse the evidence.
+	for _, want := range []string{filepath.Join(tree, "bin"), filepath.Join(git, "objects", "05")} {
+		if !strings.Contains(report, want) {
+			t.Errorf("report no longer names %s:\n%s", want, report)
+		}
+	}
+	if !strings.Contains(report, "core.sharedRepository group") {
+		t.Errorf("the durable git fix must still be offered:\n%s", report)
+	}
+}
+
+// fixLines returns the commands of the report's `fix:` lines that start with the
+// given verb, whole rather than as substrings.
+func fixLines(report, verb string) []string {
+	var out []string
+	for _, line := range strings.Split(report, "\n") {
+		cmd, ok := strings.CutPrefix(strings.TrimSpace(line), "fix: ")
+		if ok && strings.HasPrefix(cmd, verb+" ") {
+			out = append(out, cmd)
+		}
+	}
+	return out
+}
