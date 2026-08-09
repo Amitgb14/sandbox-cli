@@ -9,7 +9,7 @@ changed default, a behavior that used to work differently.
 Entries land under `Unreleased` and are moved under a version heading when that
 version is tagged.
 
-## Unreleased
+## 0.0.1beta.13 — 2026-08-09
 
 ### Fixed
 
@@ -76,6 +76,32 @@ version is tagged.
   unfiltered, and the kernel's own error — "Permission denied (you must be
   root)" on a rootless daemon, say — is printed rather than swallowed, so the
   cause is named rather than guessed at.
+
+- **`--runtime runc` was refused on hosts that run runc.** A containerd-backed
+  daemon answers the same question in two vocabularies — `docker info` reports
+  `DefaultRuntime: runc` while keying its runtime map `io.containerd.runc.v2` —
+  and sandbox-cli compared those as plain strings:
+
+  ```
+  runtime "runc" is not registered with the Docker daemon
+    available runtimes: io.containerd.runc.v2
+  ```
+
+  Runtimes are now matched by runtime rather than by spelling, and whatever the
+  preflight accepts is the name handed to the engine. This also means a stronger
+  runtime registered under a shim name is recognised as one, rather than going
+  unnoticed. Seen on Rocky Linux 10.2; unaffected on daemons that use the plain
+  names.
+
+- **The fix printed by the workspace-writability warning could be wrong.** It
+  emitted one command per finding, so a repository whose working tree and whose
+  `.git/objects` were both unwritable got two recursive `chmod` lines where the
+  first already covered the second. Worse, a `chgrp` needed only for `.git` was
+  widened to the whole project and chained with `&&`, so a single file owned by
+  someone else stopped the `chmod` from running at all — one recommended command
+  that fixed nothing while looking complete. Nested paths now collapse to one
+  command, a `chgrp` stays scoped to the directory that needs it, and the two
+  stand as separate lines.
 
 ## 0.0.1beta.12 — 2026-08-09
 
