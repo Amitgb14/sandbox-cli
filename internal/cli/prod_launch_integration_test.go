@@ -28,7 +28,7 @@ func (seccompOK) SeccompUnavailable(context.Context) (bool, bool) { return false
 // The blocker this guards against was invisible precisely because the only
 // daemon it was tried on refused first, so the run never got as far as docker.
 func TestProdActuallyLaunchesAContainer(t *testing.T) {
-	proj := t.TempDir()
+	proj := testWorkspace(t)
 	cfg := config.Default()
 	cfg.Profile = config.ProfileProd
 	cfg.Security.Seccomp = config.SeccompRequired
