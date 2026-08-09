@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -365,12 +364,14 @@ func unwritableReport(bad []unwritablePath, uid, gid int) string {
 	if git {
 		b.WriteString(", and git will refuse to write objects")
 	}
-	for _, r := range remedyRoots(bad) {
-		if r.Group {
-			fmt.Fprintf(&b, "\n  fix: chmod -R g+w %s", r.Root)
-		} else {
-			fmt.Fprintf(&b, "\n  fix: chgrp -R %d %s && chmod -R g+w %s", gid, r.Root, r.Root)
-		}
+	// Separate lines rather than one `&&` chain: each stands on its own, so a
+	// chgrp that fails on a file somebody else owns cannot swallow the chmod.
+	p := plan(bad)
+	for _, root := range p.Chgrp {
+		fmt.Fprintf(&b, "\n  fix: chgrp -R %d %s", gid, root)
+	}
+	for _, root := range p.Chmod {
+		fmt.Fprintf(&b, "\n  fix: chmod -R g+w %s", root)
 	}
 	if git {
 		b.WriteString("\n  and, so git keeps making them that way: git config core.sharedRepository group")
@@ -449,67 +450,78 @@ func (s *Session) enforceWritableMounts(spec runtime.RunSpec) error {
 	return nil
 }
 
-// remedy is one directory a fix has to name, and whether opening the group bits
-// is enough for everything found under it.
-type remedy struct {
-	Root  string
-	Group bool
+// remedies is the smallest set of commands that fixes everything found.
+//
+// Two lists rather than one compound command, and that is the correction to the
+// first version of this. It folded a descendant's group requirement into its
+// ancestor and rendered `chgrp -R <gid> <tree> && chmod -R g+w <tree>`, which
+// went wrong twice over: it rewrote group ownership across the *whole* project
+// when only .git needed it — including subtrees deliberately owned by another
+// group — and the `&&` meant that a single file owned by someone else (a
+// vendored tree, a root-owned artifact) failed the chgrp, short-circuited the
+// chmod, and left the user's one recommended command having fixed nothing while
+// looking complete.
+//
+// So a chgrp stays scoped to the directory that needs it and is never widened,
+// while chmods still collapse — every remedy ends in a recursive chmod, so an
+// ancestor's genuinely covers what is inside it.
+type remedies struct {
+	Chgrp []string // roots whose group must change, each scoped to itself
+	Chmod []string // roots to open recursively, with nested ones collapsed
 }
 
-// remedyRoots reduces the findings to the smallest set of directories a user has
-// to act on.
+// plan reduces the findings to those commands.
 //
-// Two findings routinely name nested roots — a repository's working tree and the
-// `.git` inside it — and printing a line for each gave:
-//
-//	fix: chmod -R g+w /home/u/project
-//	fix: chmod -R g+w /home/u/project/.git
-//
-// where the first already covers the second, because it is recursive. Two
-// commands where one will do reads as two separate problems, and a reader who
-// runs only the one that names the path they recognise is left half-fixed.
-//
-// A contained root's requirement is folded into its ancestor rather than
-// dropped: if the object store needs its group changed and the tree above it
-// only needs the bits opened, the single recursive command has to do both, or
-// the collapse would quietly weaken the advice it replaced.
-func remedyRoots(bad []unwritablePath) []remedy {
-	group := map[string]bool{}
+// Discovery order is preserved within each list: the fix lines are read against
+// the evidence lines above them, and sorting by path length put the two out of
+// step in exactly the report this exists to make easier to act on.
+func plan(bad []unwritablePath) remedies {
 	var order []string
+	needsChgrp := map[string]bool{}
 	for _, u := range bad {
-		if _, seen := group[u.Root]; !seen {
+		if _, seen := needsChgrp[u.Root]; !seen {
 			order = append(order, u.Root)
-			group[u.Root] = true
 		}
-		// One finding needing a chgrp makes the whole root need one.
-		group[u.Root] = group[u.Root] && u.Group
+		// One finding whose group does not match makes the whole root need one.
+		needsChgrp[u.Root] = needsChgrp[u.Root] || !u.Group
 	}
-	// Shortest first, so an ancestor is always considered before anything it
-	// contains and the fold below only ever has to look backwards.
-	sort.SliceStable(order, func(i, j int) bool { return len(order[i]) < len(order[j]) })
 
-	var out []remedy
-	for _, root := range order {
-		if i := containingRoot(out, root); i >= 0 {
-			out[i].Group = out[i].Group && group[root]
-			continue
+	var out remedies
+	for i, root := range order {
+		if needsChgrp[root] {
+			out.Chgrp = append(out.Chgrp, root)
 		}
-		out = append(out, remedy{Root: root, Group: group[root]})
+		if !coveredByAnother(order, i) {
+			out.Chmod = append(out.Chmod, root)
+		}
 	}
 	return out
 }
 
-// containingRoot returns the index of the remedy whose recursive command already
-// reaches path, or -1.
+// coveredByAnother reports whether some other root's recursive chmod already
+// reaches order[i].
 //
-// Compared with a separator appended rather than as a bare prefix: /srv/app is
-// not inside /srv/ap, and a string test without it would silently drop a real
-// finding whose path happened to start the same way.
-func containingRoot(out []remedy, path string) int {
-	for i, r := range out {
-		if path == r.Root || strings.HasPrefix(path, r.Root+string(filepath.Separator)) {
-			return i
+// By identity rather than by string prefix. The mount sources these come from
+// are never cleaned — `--mount "$PWD/../shared:/shared:rw"` arrives verbatim —
+// so `strings.HasPrefix` read /home/u/project/../shared as living inside
+// /home/u/project and silently dropped the one fix line that named it. The
+// package already answers this correctly for the safety refusals, by device and
+// inode, which is also what decides whether `chmod -R` will actually walk into
+// something.
+//
+// An earlier index wins a tie, so two spellings of one directory collapse to the
+// first rather than to neither.
+func coveredByAnother(order []string, i int) bool {
+	for j, other := range order {
+		if i == j {
+			continue
+		}
+		if isAncestorOnDisk(other, order[i]) {
+			return true
+		}
+		if j < i && samePath(other, order[i]) {
+			return true
 		}
 	}
-	return -1
+	return false
 }
