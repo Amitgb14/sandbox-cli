@@ -174,7 +174,10 @@ func parseRuntimeNames(jsonOut []byte) ([]string, error) {
 // error. Pure, so it is unit-tested without a daemon.
 func runtimeHint(name string, avail []string) error {
 	for _, r := range avail {
-		if r == name {
+		// By runtime rather than by spelling: a containerd-backed daemon lists
+		// io.containerd.runc.v2 while naming its default `runc`, and comparing the
+		// two as strings told the user runc was not installed on a host running it.
+		if SameRuntime(r, name) {
 			return nil
 		}
 	}
