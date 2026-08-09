@@ -79,6 +79,7 @@ type Runtime interface {
 	SeccompUnavailable(context.Context) (bool, bool)
 	Runtimes(context.Context) ([]string, error)
 	FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string)
+	ResolvesNames(context.Context, string) (runtime.DNSProbe, string)
 	ImagePresent(context.Context, string) (bool, bool)
 }
 
@@ -106,6 +107,7 @@ func RunChecks(ctx context.Context, profile, engine string) []Check {
 	out = append(out, checkBaseImage(ctx, d))
 	out = append(out, checkSeccomp(ctx, d))
 	out = append(out, checkFirewall(ctx, d))
+	out = append(out, checkDNS(ctx, d))
 	out = append(out, checkRuntimes(ctx, d, profile))
 	return out
 }
@@ -176,6 +178,48 @@ func checkFirewall(ctx context.Context, d Runtime) Check {
 		c.Detail = "a container here cannot program the firewall: " + reason
 		c.Remedy = "rootless or userns-remapped daemons often cannot; use --network default, " +
 			"or run on a daemon that can grant NET_ADMIN"
+	}
+	return c
+}
+
+// checkDNS asks whether a container on a sandbox-shaped network can resolve a
+// name, which is a hard requirement the tool creates for itself.
+//
+// Under podman every sandbox gets its own network and a custom podman network
+// resolves through aardvark-dns, which the default rootless network does not —
+// so sandbox-cli depends on a resolver it caused to be used. Where that resolver
+// is broken the symptom arrives four layers away, as an agent hanging at login
+// with `getaddrinfo ETIMEOUT`, which took several rounds to trace to its cause.
+//
+// Tried rather than queried, like the firewall check beside it, and for the same
+// reason: whether aardvark-dns answers on this host is not something to ask
+// about, it is something to find out.
+//
+// The two failure states are kept apart because only one of them is this tool's
+// doing. A host that cannot resolve anywhere has no DNS and would fail whatever
+// sandbox-cli did; a host that resolves on the engine's default network but not
+// on ours is the reported bug, and is the one with a remedy.
+func checkDNS(ctx context.Context, d Runtime) Check {
+	c := Check{Name: "container DNS"}
+	switch probe, reason := d.ResolvesNames(ctx, image.Ref()); probe {
+	case runtime.DNSOK:
+		c.Status = StatusOK
+		c.Detail = "a container on a sandbox network can resolve names"
+	case runtime.DNSSandboxBroken:
+		c.Status = StatusWeak
+		c.Detail = "a container resolves names on this engine's default network but not on a " +
+			"sandbox one: " + reason
+		c.Remedy = "under podman this is usually the per-sandbox network's resolver: try " +
+			"`podman network reload --all` (and `sandbox-cli clean` first if leaked networks block it)"
+	case runtime.DNSNoResolver:
+		c.Status = StatusWeak
+		c.Detail = "no container on this host can resolve names: " + reason
+		c.Remedy = "this is the host's DNS rather than the sandbox network; an agent will fail at login until it works"
+	default:
+		// Not the host's fault, and not an answer either.
+		c.Status = StatusUnknown
+		c.Detail = reason
+		c.Remedy = "run any sandbox command once to build the image, then try again"
 	}
 	return c
 }

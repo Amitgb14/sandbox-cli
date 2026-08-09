@@ -71,6 +71,7 @@ profile: prod
   ok    docker daemon      reachable
   FAIL  seccomp            no syscall filter is applied; the container gets the full syscall table
   ok    egress firewall    a container here can program the nat, redirect, owner and conntrack rules
+  ok    container DNS      a container on a sandbox network can resolve names
   ok    isolation runtime  only the default runtime is registered: runc
 
 sandbox-cli: this host cannot satisfy the prod profile: seccomp
@@ -82,8 +83,8 @@ disk: `--network` and `--runtime` take the same values the run does, so
 command. Without them the preflight and the launch can reach different verdicts,
 which is the one thing this check must never do.
 
-Non-zero exit under `prod`, so a scheduler notices. The firewall check is
-*tried*, not queried — rootless and userns-remapped daemons cannot program
+Non-zero exit under `prod`, so a scheduler notices. The firewall and DNS checks
+are *tried*, not queried — rootless and userns-remapped daemons cannot program
 iptables, and that is a property of the daemon rather than something you can ask
 about. A question that cannot be *asked* counts as a failure under prod too: it
 does not get to assume the answer it would prefer. Under `dev` the same host
