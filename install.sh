@@ -112,10 +112,18 @@ if [ "$UNINSTALL" = 1 ]; then
 fi
 
 # ---- http helper (curl or wget) ---------------------------------------------
+# The Accept type is per call, not per script, because the two kinds of URL
+# fetched here want different ones and a token makes the difference visible:
+# release *assets* need application/octet-stream, and the JSON *API* answers a
+# request for that with 415 Unsupported Media Type. Hardcoding octet-stream
+# meant every tokened run — the documented way to install from a private repo —
+# failed at the version lookup, while untokened runs sent no Accept at all and
+# worked. Defaulting to octet-stream keeps the asset call sites unchanged.
 if command -v curl >/dev/null 2>&1; then
-  fetch() { # fetch URL OUTFILE
+  fetch() { # fetch URL OUTFILE [ACCEPT]
     if [ -n "$TOKEN" ]; then
-      curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" -o "$2" "$1"
+      curl -fsSL -H "Authorization: Bearer $TOKEN" \
+        -H "Accept: ${3:-application/octet-stream}" -o "$2" "$1"
     else
       curl -fsSL -o "$2" "$1"
     fi
@@ -123,7 +131,8 @@ if command -v curl >/dev/null 2>&1; then
 elif command -v wget >/dev/null 2>&1; then
   fetch() {
     if [ -n "$TOKEN" ]; then
-      wget -q --header "Authorization: Bearer $TOKEN" --header "Accept: application/octet-stream" -O "$2" "$1"
+      wget -q --header "Authorization: Bearer $TOKEN" \
+        --header "Accept: ${3:-application/octet-stream}" -O "$2" "$1"
     else
       wget -q -O "$2" "$1"
     fi
@@ -159,6 +168,7 @@ if [ -z "$VERSION" ]; then
   # The releases list, newest first — not /releases/latest, which silently
   # excludes pre-releases and 404s when every release is one.
   fetch "https://api.github.com/repos/${REPO}/releases?per_page=1" "$TMP/rel.json" \
+    "application/vnd.github+json" \
     || die "cannot reach the GitHub API.
   If the repository is private, pass --token or set GITHUB_TOKEN."
   VERSION=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/rel.json" | head -1)
