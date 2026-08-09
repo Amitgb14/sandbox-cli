@@ -39,6 +39,22 @@ jobs:
           persist-credentials: false
 
       - name: Install sandbox-cli
+        env:
+          # install.sh asks the releases API which version is current, and with
+          # no token that request is anonymous — 60 per hour, counted per IP and
+          # shared with every other Actions runner on it. So this step failed
+          # with a 403 on a run whose only distinguishing feature was arriving
+          # fourteen minutes after one that passed, and it failed at step 3 of
+          # 11, before the review had looked at anything. The job's own token
+          # raises the limit to 1000/hour against this repository.
+          #
+          # Scoped to this step, and that is the whole reason it is safe to add
+          # here: a step-level env does not reach the agent container two steps
+          # down, which is the property `persist-credentials: false` above and
+          # the staged copies below exist to protect. install.sh sends it as a
+          # request header only (see its `fetch`), never writing it to disk or
+          # into the workspace. Do not promote this to a job-level env.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh
           echo "$HOME/.local/bin" >> $GITHUB_PATH
