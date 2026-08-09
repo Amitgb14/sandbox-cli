@@ -9,6 +9,7 @@ install.
 - [The first run](#the-first-run)
 - [Things that are the host's, not sandbox-cli's](#things-that-are-the-hosts-not-sandbox-clis)
 - [File ownership and persisted logins](#file-ownership-and-persisted-logins)
+- ["the container … cannot write"](#the-container--cannot-write)
 
 ## Setting up
 
@@ -94,6 +95,105 @@ sandbox-cli run -- sh -c 'curl -fsSL https://claude.ai/install.sh | bash'
   group access, so both sides reach the same files. Nothing is chowned and
   nothing else about the container changes; on macOS and under Podman it renders
   nothing, because bind ownership is already handled there.
+
+## "the container … cannot write"
+
+Before a run starts, sandbox-cli checks that the container user can write the
+host directories it is about to mount, and says so if it cannot:
+
+```
+sandbox-cli: the container runs as uid 1001 gid 1000, which cannot write:
+  /home/you/project/bin is mode 0755 owned by 1000:1000
+  /home/you/project/.git/objects/05 is mode 0755 owned by 1000:1000
+  the agent will report that it cannot edit files, and git will refuse to write objects
+  fix: chmod -R g+w /home/you/project
+  and, so git keeps making them that way: git config core.sharedRepository group
+```
+
+This is not a broken install. It is a true statement about your filesystem, and
+without it the failure arrives much later and much less legibly — as an agent
+saying it could not save a file, or as git refusing to write an object and
+naming the store without naming which of its 256 fan-out directories is at
+fault.
+
+### Why it happens
+
+The container runs as **uid 1001 with your primary gid**, so it reaches your
+files through the *group* permission bits. Whether those bits are open is
+decided by the umask in effect when each directory was created — which nothing
+tells you, and which differs between distributions and between a login shell and
+a service:
+
+| umask | directories | the group gets | result |
+|---|---|---|---|
+| `002` | `0775` | `rwx` | works |
+| `022` | `0755` | `r-x` | **read-only workspace** |
+
+Both are ordinary. A repository cloned under one umask and built under another
+ends up mixed, which is why the message often names a subdirectory — `bin/` from
+a build, one `.git/objects/xx` from a single commit — while the project root is
+fine.
+
+### Fixing it
+
+Run what the message printed. It names the mount root and is recursive, because
+the umask that left one directory wrong left the ones under it wrong too:
+
+```sh
+chmod -R g+w /home/you/project
+```
+
+If the message says `chgrp` first, the directory belongs to a group you are not
+sharing with the container, and opening the group bits alone would change
+nothing:
+
+```sh
+chgrp -R "$(id -g)" /home/you/project && chmod -R g+w /home/you/project
+```
+
+### Stopping it coming back
+
+The `chmod` fixes what exists; these decide what gets created next.
+
+**For a repository** — the durable half, and the one that matters most, because
+git creates object directories on demand for years after you clone:
+
+```sh
+git config core.sharedRepository group
+```
+
+git then creates them group-writable itself, whatever your umask is.
+
+**For everything else**, set a umask that leaves the group bits alone. Check
+yours first:
+
+```sh
+umask            # 0002 is what you want; 0022 is what produces this
+```
+
+On a distribution using user-private groups — your primary group is named after
+you, `id -gn` matches `id -un` — `umask 002` is safe: the only account in that
+group is you. Where the primary group is shared between accounts (`users` on
+some setups), it is not, and the `chmod` above is the better tool.
+
+### What sandbox-cli will not do
+
+It never repairs your tree. `/workspace` is your project, and changing its mode
+on your behalf is not a decision a sandbox gets to make — the same reason it
+does not chown your files. It detects, reports, and leaves the command to you.
+
+Two consequences worth knowing:
+
+- **Under `--profile prod` this is a refusal, not a warning.** Nobody is
+  watching an unattended run, and an agent that quietly cannot write is exactly
+  the failure that profile exists to prevent.
+- **Directories with a POSIX ACL are not reported at all.** The mode bits do not
+  describe access there, so judging by them would refuse a workspace for a
+  permission it actually has.
+
+Worktrees that sandbox-cli creates itself are the exception to all of this: it
+makes those with the group bits already open, since a tree it created for a
+container to work in should be one the container can use.
 
 ---
 

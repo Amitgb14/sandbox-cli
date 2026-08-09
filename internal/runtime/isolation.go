@@ -1,5 +1,7 @@
 package runtime
 
+import "strings"
+
 // What kind of boundary a run actually got.
 //
 // The OCI runtime is the one setting that changes the *kind* of isolation
@@ -44,7 +46,7 @@ var strongerRuntimes = map[string]bool{
 //
 // An empty name means the daemon's default, which is runc on every host this
 // tool has met — shared-kernel, so false.
-func StrongerRuntime(name string) bool { return strongerRuntimes[name] }
+func StrongerRuntime(name string) bool { return strongerRuntimes[runtimeName(name)] }
 
 // StrongerIsolation reports whether this container is running on such a runtime,
 // as read back from the engine rather than as requested.
@@ -79,15 +81,86 @@ func (c ContainerInfo) NotTheHostDefault() bool { return notHostDefault(c.Runtim
 
 // notHostDefault is the same question about a name on its own.
 //
-// It is the complement of a short list rather than membership of
-// strongerRuntimes, and that direction is load-bearing in both callers. The
-// listing shows a name it does not recognise rather than hiding it; the prod
-// gate *accepts* a name it does not recognise rather than refusing a run whose
-// operator deliberately selected something — gVisor registers itself as
-// runsc-hostnet and runsc-debug, and an admin may use any name at all. A short
-// list of names we are sure are shared-kernel can be kept honest; a list of
-// every strong runtime anyone will ever register cannot.
+// It looks the name up **raw**, and that asymmetry with StrongerRuntime is the
+// point rather than an oversight. The two lists fail in opposite directions, so
+// normalisation helps one and hurts the other:
+//
+//   - strongerRuntimes must not miss a real boundary, and a shim name is still
+//     that runtime, so reducing io.containerd.kata.v2 to kata recovers a true
+//     positive it would otherwise have thrown away.
+//   - sharedKernelRuntimes must not *hide* something unusual. An engine lets an
+//     admin point any key at any binary — daemon.json may map
+//     io.containerd.runc.v2 at sysbox-runc — so folding every shim-shaped runc
+//     name into the defaults would suppress the RUNTIME column for exactly the
+//     sessions it exists to reveal.
+//
+// So a name this file has not seen literally is still shown and still not
+// characterised, which is the pair of answers the comment above argues for.
+// Both callers depend on that direction. The listing shows a name it does not
+// recognise rather than hiding it, and the prod gate *accepts* one rather than
+// refusing a run whose operator deliberately selected something — gVisor
+// registers itself as runsc-hostnet and runsc-debug, and an admin may use any
+// name at all. A short list of names we are sure are shared-kernel can be kept
+// honest; a list of every strong runtime anyone will ever register cannot.
 func notHostDefault(name string) bool { return !sharedKernelRuntimes[name] }
+
+// runtimeName reduces a containerd **shim** name to the runtime name the lists
+// above are written in, and returns anything else untouched.
+//
+// One daemon answers the same question in two vocabularies, in one command:
+//
+//	$ docker info --format '{{.DefaultRuntime}}'
+//	runc
+//	$ docker info --format '{{json .Runtimes}}'
+//	{"io.containerd.runc.v2":{"path":"runc", …
+//
+// Observed on Rocky Linux 10.2 — the first host looked at that was not Docker
+// Desktop. Both names mean runc, and comparing them as plain strings said the
+// host had no runc: `--runtime runc` was refused as "not registered with the
+// Docker daemon", listing `io.containerd.runc.v2` as what it had instead.
+//
+// The pattern is fixed by containerd — `io.containerd.<runtime>.v<major>` — so
+// this matches it exactly rather than splitting on dots: a runtime genuinely
+// named with dots is left alone, and only a trailing `.v<digits>` after that
+// prefix is treated as a version.
+//
+// Reducing rather than expanding, because the mapping only goes one way. A shim
+// name yields exactly one runtime name; a runtime name does not tell you which
+// shim major version a host registered, so the raw name is what callers keep for
+// display and for handing back to the engine.
+func runtimeName(name string) string {
+	const prefix = "io.containerd."
+	rest, ok := strings.CutPrefix(name, prefix)
+	if !ok {
+		return name
+	}
+	base, version, ok := cutLast(rest, ".v")
+	if !ok || base == "" || version == "" {
+		return name
+	}
+	for _, r := range version {
+		if r < '0' || r > '9' {
+			return name
+		}
+	}
+	return base
+}
+
+// cutLast is strings.Cut around the *last* occurrence of sep, so a runtime whose
+// own name contains the separator keeps it: io.containerd.kata.v2.v2 reduces to
+// kata.v2 rather than to kata.
+func cutLast(s, sep string) (before, after string, found bool) {
+	i := strings.LastIndex(s, sep)
+	if i < 0 {
+		return s, "", false
+	}
+	return s[:i], s[i+len(sep):], true
+}
+
+// SameRuntime reports whether two names denote the same runtime, in whichever
+// vocabulary each was written. It is what `--runtime runc` has to be matched
+// with against a daemon that lists io.containerd.runc.v2.
+func SameRuntime(a, b string) bool { return runtimeName(a) == runtimeName(b) }
 
 // containerRuntime picks the runtime name out of an engine's inspect output.
 //
@@ -201,9 +274,22 @@ func ClassifyRuntimeGap(selected string, s RuntimeSupport) RuntimeGap {
 	return GapUnverified
 }
 
+// containsRuntime reports whether the engine's list has the requested runtime,
+// in whichever vocabulary each was written.
+//
+// By runtime rather than by spelling, and this is the one comparison in the gate
+// where the difference decides a refusal. A containerd-backed daemon keys
+// .Runtimes by shim name — `io.containerd.runc.v2` on Rocky Linux 10.2 — so a
+// string match read `--runtime kata` against a host listing
+// `io.containerd.kata.v2` as GapMissing, and prod refused a machine that had the
+// kernel it was demanding.
+//
+// The permissive direction, which is the one to be careful about, is unchanged:
+// this only ever finds a runtime the engine really listed. It cannot invent one,
+// and GapMissing still fires for a name no entry means.
 func containsRuntime(names []string, want string) bool {
 	for _, n := range names {
-		if n == want {
+		if SameRuntime(n, want) {
 			return true
 		}
 	}
