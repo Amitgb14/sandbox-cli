@@ -9,7 +9,7 @@ changed default, a behavior that used to work differently.
 Entries land under `Unreleased` and are moved under a version heading when that
 version is tagged.
 
-## Unreleased
+## 0.0.1beta.12 — 2026-08-09
 
 ### Added
 
@@ -100,8 +100,6 @@ version is tagged.
   now uses `sandbox-cli list`, `logs`, `kill` and `clean`, which have existed
   since the session commands shipped and, unlike the raw docker equivalents,
   cannot reach a container sandbox-cli did not start.
-
-### Fixed
 
 - **On Linux, files a sandbox wrote were read-only to you afterwards.** It
   surfaced as a git failure rather than a permissions one, which is why it took a
