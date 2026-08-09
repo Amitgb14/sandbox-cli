@@ -449,7 +449,6 @@ func (s *Session) enforceWritableMounts(spec runtime.RunSpec) error {
 	return nil
 }
 
-
 // remedy is one directory a fix has to name, and whether opening the group bits
 // is enough for everything found under it.
 type remedy struct {
