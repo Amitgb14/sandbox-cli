@@ -128,7 +128,13 @@ func Resolve(dir, branch string) (Info, error) {
 	} else {
 		args = append(args, path, branch)
 	}
-	if _, err := runGit(root, args...); err != nil {
+	// Created with the group bits left open, because this directory exists for a
+	// container to work in and that container runs as a different uid in the
+	// user's own group. See groupWritable.
+	if err := groupWritable(func() error {
+		_, err := runGit(root, args...)
+		return err
+	}); err != nil {
 		return Info{}, fmt.Errorf("creating worktree for branch %q: %w", branch, err)
 	}
 	// Report the path git will report from here on. Resolving only now that the

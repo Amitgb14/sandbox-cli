@@ -118,6 +118,36 @@ rather than merely passing.
   shared directories, which needs `acl` support on the host filesystem and a second mechanism to
   keep in step.
 
+  Both halves are about what the container **creates**. What the host created earlier is a
+  third question, and nothing repairs it: `ShareWithSandboxGroup` is scoped to sandbox-owned
+  directories, and the workspace is the user's own tree. So whether the agent can write
+  `/workspace` at all comes down to the host umask — 0775 under 002 works, 0755 under 022 is a
+  read-only workspace — and it fails in the least legible way there is, an agent reporting it
+  could not save a file, or git naming `.git/objects` without naming which of 256 fan-out
+  directories is wrong. `writable.go` answers it before the run, and three of its
+  rules are corrections to the obvious version. `guestIDs` reads **`SANDBOX_RUN_AS` before
+  `spec.User`**, because in allowlist mode — the dev default — `--user` is root and answering for
+  the root phase finds every path writable. The walk goes **down the tree**, not just at the mount,
+  because the umask that left the root at 0755 left everything under it at 0755 and a
+  non-recursive `chmod g+w <root>` would silence the check while changing nothing the agent needs
+  (bounded by `walkBudget`, stopping at the first offender). And a repository's object store is
+  found via `gitDirOf`, which handles both spellings — an ordinary checkout mounts its *working
+  tree* with `.git` inside, so looking for `objects/` at the mount source finds one only for the
+  linked-worktree `.git` mount, which is the case that is not the common one. The remedy tracks
+  which permission class failed: `chmod` when the container's gid already owns the directory, a
+  `chgrp` first when some other group does.
+  It **detects and never repairs**, the same bargain `EnsureGuestDir` makes — with one exception
+  that proves the rule, a worktree **sandbox-cli itself created**, which `worktree.groupWritable`
+  now makes with the group bits open, since otherwise prod refuses a path the same command
+  produced seconds earlier. Computed from the mode bits rather than by starting a container: that
+  is how the kernel decides, it costs a stat, and it can be answered for every mount. A directory
+  carrying a **POSIX ACL** is not reported at all (`hasACL`) — the bits stopped deciding there, and
+  refusing on them is how an ACL-managed workspace gets rejected for access it has. That is also
+  what makes prod's refusal honest rather than a guess. The **unknown** case is separate and is
+  prod's own rule: a guest user this process cannot resolve to numbers has not been checked, so
+  prod refuses rather than reading silence as an all-clear, while dev stays quiet — a warning
+  nobody can act on is one they learn to skip. `docs/security/open-items.md` issue #80.
+
   This is the single choke point for the isolation invariants (only
   declared mounts are host-connected; `HOME` is always the fake path; host home is never mounted)
   and is exhaustively unit-tested. `docker_cli.go` is the only backend today, hidden behind the

@@ -56,6 +56,9 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	// and here rather than in Prepare for the same reason as the line above:
 	// --dry-run prints a command and must not editorialize about it.
 	warnUmaskNeedsSandboxInit(spec)
+	if err := s.enforceWritableMounts(spec); err != nil {
+		return 1, err
+	}
 	if err := s.Runtime.Available(ctx); err != nil {
 		return 1, err
 	}
@@ -116,6 +119,9 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	}
 	ShareWithSandboxGroup(opts.AuthPersistDir) // same reason as Run's
 	warnUmaskNeedsSandboxInit(spec)            // likewise
+	if err := s.enforceWritableMounts(spec); err != nil {
+		return "", err
+	}
 	if err := s.Runtime.Available(ctx); err != nil {
 		return "", err
 	}
