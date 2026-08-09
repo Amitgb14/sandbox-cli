@@ -80,7 +80,23 @@ var sharedKernelRuntimes = map[string]bool{
 func (c ContainerInfo) NotTheHostDefault() bool { return notHostDefault(c.Runtime) }
 
 // notHostDefault is the same question about a name on its own.
-func notHostDefault(name string) bool { return !sharedKernelRuntimes[runtimeName(name)] }
+//
+// It looks the name up **raw**, and that asymmetry with StrongerRuntime is the
+// point rather than an oversight. The two lists fail in opposite directions, so
+// normalisation helps one and hurts the other:
+//
+//   - strongerRuntimes must not miss a real boundary, and a shim name is still
+//     that runtime, so reducing io.containerd.kata.v2 to kata recovers a true
+//     positive it would otherwise have thrown away.
+//   - sharedKernelRuntimes must not *hide* something unusual. An engine lets an
+//     admin point any key at any binary — daemon.json may map
+//     io.containerd.runc.v2 at sysbox-runc — so folding every shim-shaped runc
+//     name into the defaults would suppress the RUNTIME column for exactly the
+//     sessions it exists to reveal.
+//
+// So a name this file has not seen literally is still shown and still not
+// characterised, which is the pair of answers the comment above argues for.
+func notHostDefault(name string) bool { return !sharedKernelRuntimes[name] }
 
 // runtimeName reduces a containerd **shim** name to the runtime name the lists
 // above are written in, and returns anything else untouched.

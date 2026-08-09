@@ -63,11 +63,18 @@ func TestClassificationSeesThroughShimNames(t *testing.T) {
 	if StrongerRuntime("io.containerd.runc.v2") {
 		t.Error("a runc shim shares the host kernel; calling it stronger would claim a boundary no run got")
 	}
-	if notHostDefault("io.containerd.runc.v2") {
-		t.Error("a runc shim IS the ordinary host default and must not be highlighted as unusual")
+	// notHostDefault deliberately does NOT normalise. An admin can point
+	// io.containerd.runc.v2 at any binary, so a name this file has not seen
+	// literally must still be shown rather than folded into the defaults — the
+	// opposite direction to strongerRuntimes, and the reason the two differ.
+	if !notHostDefault("io.containerd.runc.v2") {
+		t.Error("a shim-shaped name must still be shown: daemon.json may point it at anything")
 	}
 	if !notHostDefault("io.containerd.kata.v2") {
 		t.Error("a kata shim is worth naming in a listing")
+	}
+	if notHostDefault("runc") || notHostDefault("crun") {
+		t.Error("the plain shared-kernel names are still the ordinary case")
 	}
 	// An unrecognised name is still shown and still not characterised — the
 	// property the two lists have always had, unchanged by normalisation.
@@ -76,17 +83,43 @@ func TestClassificationSeesThroughShimNames(t *testing.T) {
 	}
 }
 
-// TestRuntimeHintMatchesByRuntimeNotSpelling is the regression for the reported
-// symptom: `--runtime runc` refused on a host whose default runtime is runc.
-func TestRuntimeHintMatchesByRuntimeNotSpelling(t *testing.T) {
+// TestMatchRuntimeReturnsTheEnginesOwnName is the regression for the reported
+// symptom — `--runtime runc` refused on a host whose default runtime is runc —
+// and for the trap in fixing it: accepting a spelling is only safe if the
+// spelling actually sent is one the engine knows.
+func TestMatchRuntimeReturnsTheEnginesOwnName(t *testing.T) {
 	avail := []string{"io.containerd.runc.v2"} // exactly what Rocky 10.2 reports
 
-	if err := runtimeHint("runc", avail); err != nil {
-		t.Errorf("--runtime runc must be accepted on a daemon that lists it as a shim: %v", err)
+	got, ok := matchRuntime("runc", avail)
+	if !ok {
+		t.Fatal("--runtime runc must be accepted on a daemon that lists it as a shim")
 	}
-	if err := runtimeHint("io.containerd.runc.v2", avail); err != nil {
-		t.Errorf("the name the daemon itself printed must also be accepted: %v", err)
+	if got != "io.containerd.runc.v2" {
+		t.Errorf("matched %q, want the daemon's own key: passing the user's spelling back to "+
+			"docker trades a wrong refusal for `unknown or invalid runtime name`", got)
 	}
+	if got, ok := matchRuntime("io.containerd.runc.v2", avail); !ok || got != "io.containerd.runc.v2" {
+		t.Errorf("the name the daemon printed must be accepted unchanged, got %q ok=%v", got, ok)
+	}
+	if _, ok := matchRuntime("runsc", avail); ok {
+		t.Error("a runtime the host does not have must still be refused")
+	}
+
+	// Exact wins over normalised: if the user typed a spelling the engine itself
+	// uses, that is the one to send.
+	both := []string{"io.containerd.runsc.v1", "runsc"}
+	if got, _ := matchRuntime("runsc", both); got != "runsc" {
+		t.Errorf("matched %q, want the literal match %q", got, "runsc")
+	}
+
+	// A shim major the host does not have resolves to the one it does, rather
+	// than being waved through and failing at launch.
+	if got, ok := matchRuntime("io.containerd.runsc.v1", []string{"io.containerd.runsc.v2"}); !ok ||
+		got != "io.containerd.runsc.v2" {
+		t.Errorf("matched %q ok=%v, want the registered shim major %q",
+			got, ok, "io.containerd.runsc.v2")
+	}
+
 	err := runtimeHint("runsc", avail)
 	if err == nil {
 		t.Fatal("a runtime the host does not have must still be refused")

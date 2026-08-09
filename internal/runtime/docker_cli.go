@@ -136,23 +136,63 @@ func (d *DockerCLI) SetBuilder(b Builder, embeddedRef string) {
 	d.embeddedRef = embeddedRef
 }
 
-// checkRuntime verifies the daemon has the requested OCI runtime registered.
-// Failing to query the daemon is non-fatal — the run proceeds and docker
+// resolveRuntime verifies the engine has the requested OCI runtime and returns
+// the name to hand it: the engine's **own** key for that runtime.
+//
+// Returning a name rather than only a verdict is what makes matching by runtime
+// safe. A containerd-backed daemon lists `io.containerd.runc.v2` while calling
+// its default `runc`, so accepting `--runtime runc` there and then passing
+// `runc` through to `docker run` would trade one failure for a worse one — the
+// preflight goes quiet and the launch dies with docker's terse "unknown or
+// invalid runtime name", which is precisely the message this check exists to
+// replace. Whatever it accepts, it now names.
+//
+// Exact match first, normalised second. If the user typed a spelling the engine
+// itself uses, that is the one to send; only when nothing matches literally does
+// it fall back to asking which entry *means* the same runtime.
+//
+// Failing to ask the engine is non-fatal — the run proceeds and the engine
 // surfaces its own error — so this only ever turns an already-broken run into a
-// friendlier message. Returns nil for the default (empty) runtime.
-func (d *DockerCLI) checkRuntime(ctx context.Context, name string) error {
+// friendlier message. The default (empty) runtime is nobody's business here.
+func (d *DockerCLI) resolveRuntime(ctx context.Context, name string) (string, error) {
 	if name == "" {
-		return nil
+		return name, nil
 	}
-	out, err := exec.CommandContext(ctx, d.bin(), "info", "--format", "{{json .Runtimes}}").Output()
-	if err != nil {
-		return nil // can't tell; let the run proceed and docker report
+	// runtimeNames rather than the docker template inline: podman does not have a
+	// .Runtimes field at all, so asking for one there failed, returned nil, and
+	// made this whole preflight silently inert on that engine.
+	avail, err := d.runtimeNames(ctx)
+	if err != nil || len(avail) == 0 {
+		return name, nil
 	}
-	avail, err := parseRuntimeNames(out)
-	if err != nil {
-		return nil
+	if match, ok := matchRuntime(name, avail); ok {
+		return match, nil
 	}
-	return runtimeHint(name, avail)
+	if d.engine() == EnginePodman {
+		// podman reports only the runtime it is *using*, so absence from that list
+		// is not evidence of absence from the host. Refusing on it would fail every
+		// run that named a second registered runtime — the same asymmetry doctor
+		// records as RuntimeSupport.Complete.
+		return name, nil
+	}
+	return name, runtimeHint(name, avail)
+}
+
+// matchRuntime picks the engine's own name for the requested runtime, or
+// reports that it has none. Pure, so the whole table is testable without a
+// daemon — which matters because the interesting hosts are the rare ones.
+func matchRuntime(name string, avail []string) (string, bool) {
+	for _, r := range avail {
+		if r == name {
+			return r, true
+		}
+	}
+	for _, r := range avail {
+		if SameRuntime(r, name) {
+			return r, true
+		}
+	}
+	return "", false
 }
 
 // parseRuntimeNames extracts the sorted runtime names from `docker info
@@ -207,9 +247,13 @@ func (d *DockerCLI) Run(ctx context.Context, spec RunSpec) (int, error) {
 
 	// Pre-flight the requested OCI runtime so a typo or missing install fails with
 	// a helpful hint instead of docker's terse "unknown or invalid runtime name".
-	if err := d.checkRuntime(ctx, spec.Runtime); err != nil {
+	resolved, err := d.resolveRuntime(ctx, spec.Runtime)
+	if err != nil {
 		return 1, err
 	}
+	// The engine's own name for it, so a spelling it accepted here is the spelling
+	// it is asked to run.
+	spec.Runtime = resolved
 
 	// A full-screen guest agent that crashes can leave the host terminal in a
 	// mode it turned on by writing escape codes — mouse reporting, bracketed
@@ -258,9 +302,13 @@ func (d *DockerCLI) Start(ctx context.Context, spec RunSpec) (string, error) {
 	if _, err := d.perRunNetwork(ctx, &spec); err != nil {
 		return "", err
 	}
-	if err := d.checkRuntime(ctx, spec.Runtime); err != nil {
+	resolved, err := d.resolveRuntime(ctx, spec.Runtime)
+	if err != nil {
 		return "", err
 	}
+	// The engine's own name for it, so a spelling it accepted here is the spelling
+	// it is asked to run.
+	spec.Runtime = resolved
 
 	cmd := exec.CommandContext(ctx, d.bin(), BuildArgs(spec)...)
 	cmd.Env = childEnv(spec)
