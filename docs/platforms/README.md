@@ -32,6 +32,13 @@ the host can provide.
 5. Requires the runtime registered with the daemon; Kata additionally needs KVM /
    nested virtualization.
 
+`--profile prod` follows that last row by asking the **engine** rather than your
+client: if it reports a runtime with a kernel of its own and nothing selected
+one, prod refuses; if it reports none — Docker Desktop, colima, a podman machine
+— prod runs and warns that the container shares the host kernel. Naming a runtime
+is how you turn the warning into a guarantee. See
+[prod demands a kernel of its own](../security/README.md#prod-demands-a-kernel-of-its-own-where-one-can-exist).
+
 **In short:** on macOS/Windows everything works except *selecting* a microVM
 runtime — and Docker Desktop already sandboxes containers in a Linux VM. For a
 hardware microVM boundary you choose per run, use native Linux with Kata or

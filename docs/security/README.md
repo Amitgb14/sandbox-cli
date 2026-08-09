@@ -3,6 +3,7 @@
 What the boundary is, what it is not, and the two profiles you choose between.
 
 - [Security profiles](#security-profiles)
+  - [prod demands a kernel of its own](#prod-demands-a-kernel-of-its-own-where-one-can-exist)
 - [Check the host first (`doctor`)](#check-the-host-first)
 - [Security model](#security-model)
 - [Stronger isolation (microVM / gVisor)](#stronger-isolation-microvm--gvisor)
@@ -35,6 +36,7 @@ worse than one that stopped.
 | Host history mount | on | off |
 | seccomp missing on the daemon | warns | **refuses** |
 | memory / cpus / pids | as configured | bounded |
+| a kernel of its own | reports what is available | **required where the engine proves it can** |
 
 ```sh
 sandbox-cli claude --profile prod
@@ -44,6 +46,59 @@ A profile is the **base** config layer — under your own config rather than ove
 it — so a trusted config can still tune a setup. A project `.sandbox.yaml` may
 **demand** the stricter profile and may never ask for the weaker one, the same
 direction-of-travel rule the network keys follow.
+
+### prod demands a kernel of its own, where one can exist
+
+A container shares the host kernel, and no amount of capability-dropping changes
+what a kernel vulnerability means. prod may carry untrusted agents, so on a host
+that **can** give a run its own kernel, prod requires one: the run refuses unless
+`runtime:` names a microVM or gVisor runtime, and `doctor --profile prod` fails
+before you schedule anything on that machine.
+
+**The engine is asked, and only what it answers is acted on.** Which boundary is
+possible is a fact about the daemon, which may not be on the machine you typed
+the command on — so prod reads what the engine reports, and refuses only what
+that proves:
+
+| The engine says | prod |
+|---|---|
+| the run gets a runtime with a kernel of its own — named by you **or by the engine's own default** | runs |
+| the run names something else non-default (`sysbox-runc`, an unrecognised name) | runs, and says it is **not** vouching for it |
+| the run names a runtime this engine has not registered | **refuses** — the launch would fail anyway |
+| a stronger runtime is registered and neither the run nor the default uses it | **refuses** — the boundary was there and unused |
+| no stronger runtime reported | runs, and **warns on every run**, naming what the engine did report |
+| the engine could not be asked | **refuses** — prod does not assume the answer it would prefer |
+
+The warning row is a deliberate limit rather than an oversight. An engine that
+names no stronger runtime has not shown there are none — podman answers this
+question with its *active* runtime rather than its registered set, which is also
+why a name it does not list is only a refusal on docker — and no signal
+distinguishes a Linux host that could install Kata from a VM image its user does
+not compose.
+
+The **engine's default runtime counts**: a host whose `daemon.json` sets
+`default-runtime: runsc` gives every container a kernel of its own without a word
+in any sandbox-cli config, and prod reads that rather than refusing the setup
+that had already done the work. An earlier version tried to infer that from the daemon's product
+name and from podman's `serviceIsRemote`, and was wrong in both directions:
+colima and OrbStack users were refused with a remedy they could not act on, while
+a podman client talking to bare metal had the demand waived silently. A boundary
+control that guesses is worse than one that says what it does not know.
+
+So the way to *have* the guarantee is to name the runtime: `runtime: kata-runtime`
+in your own config, or `--runtime` on the run. What prod will not do is choose
+for you — which of Kata or gVisor a machine has is the machine's business, and a
+profile naming either would refuse every host that has the other.
+
+`sandbox-cli doctor --profile prod` reports the same verdict from the same shared
+classification, so the preflight and the launch cannot disagree, and
+`doctor --runtime NAME` asks it about the run you are about to make rather than
+about the config alone.
+
+The demand is enforced on the runtime a run **actually gets**, not on the one its
+config names — `--runtime` reaches a run through a different path, and a check
+made against the configuration alone would pass while the container launched on
+a shared kernel.
 
 prod turning persisted auth off is the substantive answer to the credential
 problem: the default auth path is not an API key but an **OAuth refresh token**
@@ -62,9 +117,9 @@ profile: prod
   ok    docker daemon      reachable
   FAIL  seccomp            no syscall filter is applied; the container gets the full syscall table
   ok    egress firewall    a container here can program the nat, redirect, owner and conntrack rules
-  ok    isolation runtime  only the default runtime is registered: runc
+  FAIL  isolation runtime  this engine can give a run its own kernel and nothing selected one: kata-runtime
 
-sandbox-cli: this host cannot satisfy the prod profile: seccomp
+sandbox-cli: this host cannot satisfy the prod profile: seccomp, isolation runtime
 ```
 
 Non-zero exit under `prod`, so a scheduler notices. The firewall check is

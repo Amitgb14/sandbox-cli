@@ -67,6 +67,9 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	if err := s.enforceSeccomp(ctx); err != nil {
 		return 1, err
 	}
+	if err := s.enforceKernelBoundary(ctx, spec.Runtime); err != nil {
+		return 1, err
+	}
 	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
 		return 1, fmt.Errorf("preparing image %q: %w", spec.Image, err)
 	}
@@ -131,6 +134,9 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	// Before the image build, not after: a policy check that needs no image at
 	// all should not cost minutes of `docker build` before it refuses.
 	if err := s.enforceSeccomp(ctx); err != nil {
+		return "", err
+	}
+	if err := s.enforceKernelBoundary(ctx, spec.Runtime); err != nil {
 		return "", err
 	}
 	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
@@ -419,6 +425,105 @@ func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode i
 	m.NetworkName = spec.Network
 
 	return m
+}
+
+// enforceKernelBoundary is prod's demand that a run get a kernel of its own.
+//
+// It is not in ValidateProfile, and the reason is the rule CLAUDE.md records
+// from persist_auth: a check against the resolved *Config* is not a check on
+// the run. `--runtime` arrives through sandbox.Options and wins over cfg in
+// BuildSpec, so a config-level assertion would pass while the container
+// launched on runc. What is enforced here is spec.Runtime — the value that
+// reaches the engine.
+//
+// **It refuses only what it can prove.** One case is evidence: the engine
+// reports a runtime with its own kernel and the run did not select it, so the
+// boundary was available and unused. Everything else — no stronger runtime
+// reported, an engine that could not be asked — is an *absence* of evidence,
+// and the tool cannot tell a Linux host that could install Kata from a VM image
+// its user does not compose. Those warn, loudly, and the audit line records
+// which runtime the run actually got. The first version of this guessed instead,
+// from a daemon product name and a podman "remote" flag, and got both
+// directions wrong: it refused colima and OrbStack users who had no way to
+// comply, and waived the demand for a podman client talking to bare metal.
+//
+// A run that names any non-default runtime satisfies it, recognised or not. The
+// engine settles that at launch by refusing a runtime it does not have, and
+// second-guessing a name the operator chose deliberately — gVisor's own
+// installer produces runsc-hostnet — is how a short list turns into a wrong
+// refusal.
+//
+// The classification is shared with `doctor` (runtime.ClassifyRuntimeGap) so the
+// preflight and the run cannot reach different verdicts from the same evidence.
+func (s *Session) enforceKernelBoundary(ctx context.Context, selected string) error {
+	if s.Cfg.Profile != config.ProfileProd {
+		return nil
+	}
+	r, ok := s.Runtime.(interface {
+		StrongerRuntimeSupport(context.Context) runtime.RuntimeSupport
+	})
+	if !ok {
+		return nil // a runtime that cannot be asked; nothing to enforce against
+	}
+	support := r.StrongerRuntimeSupport(ctx)
+	effective := support.EffectiveRuntime(selected)
+	switch runtime.ClassifyRuntimeGap(selected, support) {
+	case runtime.GapNone:
+		return nil
+	case runtime.GapUnrecognised:
+		// Permitted: the operator named it deliberately, and no list here can
+		// hold every strong runtime anyone will register. Said out loud, because
+		// sysbox-runc is also a non-default name and it shares the host kernel —
+		// permitting a choice is not the same as vouching for it.
+		warnf("--profile prod: running on %q, which is not a runtime this tool recognises as having a kernel of its own\n"+
+			"  it is permitted because you selected it; `sandbox-cli doctor --profile prod` says what this engine reported", effective)
+		return nil
+	case runtime.GapMissing:
+		return fmt.Errorf("--profile prod: this engine has not registered %q, so the run would fail at launch\n"+
+			"  it reported: %s", effective, strings.Join(support.All, ", "))
+	case runtime.GapNotSelected:
+		return fmt.Errorf("--profile prod: this engine can give a run a kernel of its own (%s) and neither the run nor the engine's default uses one\n"+
+			"  set `runtime:` in your own config — a fleet reads the same key — or pass --runtime\n"+
+			"  a container namespace is not a boundary against an agent with a kernel exploit",
+			strings.Join(support.Registered, ", "))
+	case runtime.GapUnknown:
+		// The same bargain enforceSeccomp makes, and the same one `doctor` makes
+		// on this question: an unanswerable question is a failure under prod.
+		return fmt.Errorf("--profile prod: this engine could not be asked which OCI runtimes it has, " +
+			"so whether the run would get a kernel of its own is unknown; refusing rather than assuming it would")
+	default: // GapUnverified
+		// Said rather than refused, and said every time: prod runs unattended, so
+		// the line is for the log and for the audit record beside it.
+		reported := strings.Join(support.All, ", ")
+		if reported == "" {
+			reported = "none"
+		}
+		warnf("--profile prod: this run shares the host kernel — this engine reported no runtime with one of its own (%s)\n"+
+			"  `sandbox-cli doctor --profile prod` says what it reported; `runtime:` selects one where it exists", reported)
+		return nil
+	}
+}
+
+// CheckKernelBoundary answers the gate's question without starting anything.
+//
+// For callers that create expensive things before launching — a fleet makes a
+// branch and a worktree per task — so a refusal that was true before the first
+// one arrives before the first one, rather than N times afterwards with N
+// worktrees left on disk.
+func (s *Session) CheckKernelBoundary(ctx context.Context, opts Options) error {
+	spec, err := s.Prepare(opts)
+	if err != nil {
+		// Not this check's error to report: the launch will raise it with the
+		// context that belongs to it.
+		return nil
+	}
+	return s.enforceKernelBoundary(ctx, spec.Runtime)
+}
+
+// warnf is the one-line-to-stderr the profiles use when a control is worth
+// saying and not worth refusing over.
+func warnf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "sandbox-cli: "+format+"\n", args...)
 }
 
 // enforceSeccomp turns the seccomp warning into a refusal when the configuration

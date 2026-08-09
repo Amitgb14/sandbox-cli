@@ -58,6 +58,12 @@ export const PROFILE_MATRIX: {
     prod: "not mounted",
   },
   {
+    setting: "A kernel of its own",
+    dev: "reported, never required",
+    prod: "required where the engine proves it can",
+    note: "A container shares the host kernel, and prod may carry untrusted agents. The engine's own default counts — a host set to default-runtime: runsc has already done the work — so prod refuses only when a microVM or gVisor runtime is registered and neither the run nor the default uses it, when the run names a runtime the engine has not registered, or when the engine cannot be asked at all. If it simply reports none, prod runs and warns every time, naming what it did report: an engine's silence is not evidence, since podman answers with its active runtime rather than its registered set. A non-default runtime nobody recognises is permitted and not vouched for — sysbox-runc is non-default too, and shares the host kernel.",
+  },
+  {
     setting: "Seccomp missing on the daemon",
     dev: "warns",
     prod: "refuses, non-zero exit",
@@ -182,9 +188,9 @@ const PROD_STEPS: DeployStep[] = [
     body: "One JSON line per run, written after it ends because how it ended is the point: image, workspace, branch, agent, command, network posture, the resolved egress allowlist, exit code and duration. Environment variables appear by name only — there is nowhere in the record to put a value, deliberately.",
   },
   {
-    title: "If the agent itself is untrusted, change the runtime",
+    title: "Give the run a kernel of its own",
     code: "# ~/.config/sandbox/config.yaml\nruntime: runsc        # gVisor; or kata-runtime for a microVM",
-    body: "A container namespace is a boundary against a mistaken agent, not against a determined one with a kernel exploit. The profile deliberately does not select a stronger runtime for you — which ones are registered is a property of the machine, and doctor reports what it found rather than pretending. This is a user-config key, never a project one: a repository choosing which binary runs on your host would be choosing what executes.",
+    body: "A container namespace is a boundary against a mistaken agent, not against a determined one with a kernel exploit. Under prod this is the difference between a warning on every run and a guarantee: if your engine reports such a runtime and neither the run nor the engine's default uses it, prod refuses outright, and if it reports none, prod says on every run that the container shares the host kernel. Setting the engine's default-runtime works just as well as naming it here — prod reads what the run will actually get. What prod will not do is choose for you. `sandbox-cli doctor --profile prod --runtime runsc` asks the preflight about the exact run you are about to make. This is a user-config key, never a project one: a repository choosing which binary runs on your host would be choosing what executes.",
   },
 ];
 

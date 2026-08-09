@@ -97,12 +97,17 @@ func profileBase(name string) Config {
 		// port is the one thing that opens the boundary the other way.
 		cfg.Ports = []string{}
 
-		// Runtime is deliberately left as the host default rather than set to
-		// runsc or kata here: prod may carry untrusted agents, for which a
-		// container namespace is not the boundary, but which stronger runtime is
-		// registered is a property of the machine. `doctor --profile prod` is
-		// where that gets checked, and until it exists this profile does not
-		// pretend to provide it.
+		// Runtime is **demanded but not named**, and the difference is the whole
+		// design. prod may carry untrusted agents, for which a container
+		// namespace is not a boundary — but *which* stronger runtime a host has
+		// is a property of the machine, and writing `runsc` here would refuse
+		// every prod run on a host that has Kata, while writing `kata-runtime`
+		// would refuse every host that has gVisor. A profile that guesses a name
+		// fails on the machine it was supposed to protect.
+		//
+		// So the name stays the user's to choose, and the demand is made where
+		// the resolved runtime and the daemon are both in hand:
+		// sandbox.enforceKernelBoundary.
 	case ProfileDev:
 		// Today's defaults. Dev's own hardening is expressed in Default() so that
 		// running without a profile and running `--profile dev` cannot drift
@@ -174,6 +179,12 @@ func ValidateProfile(name string, cfg Config) error {
 		return nil
 	}
 	var bad []string
+	// Not here: prod's demand for a kernel of its own. It cannot be asserted
+	// against a Config at all — `--runtime` reaches the run through
+	// sandbox.Options and would defeat any check made here, the way persist_auth
+	// once did for the fleet — and it needs the *daemon's* answer, which this
+	// function has no way to ask for. It lives in sandbox.enforceKernelBoundary,
+	// beside enforceSeccomp, where both are true.
 	if cfg.Network.Mode != "allowlist" {
 		bad = append(bad, fmt.Sprintf("network.mode is %q, must be \"allowlist\"", cfg.Network.Mode))
 	}

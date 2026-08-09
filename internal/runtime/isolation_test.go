@@ -98,3 +98,100 @@ func TestContainerRuntimePrefersPodmansOwnField(t *testing.T) {
 		})
 	}
 }
+
+// ClassifyRuntimeGap is the verdict `doctor` explains and the prod profile
+// enforces, so it is pinned here rather than twice in two callers' terms.
+//
+// Each case is a shape of evidence this function has been wrong about at least
+// once: an engine whose *default* is already strong, a name no list knows, a
+// name the engine does not have, and the difference between an engine that
+// reported nothing and one that could not be asked.
+func TestClassifyRuntimeGap(t *testing.T) {
+	docker := func(def string, all ...string) RuntimeSupport {
+		return RuntimeSupport{All: all, Registered: strongerOnly(all), Default: def, Complete: true, Known: true}
+	}
+	// podman names only the runtime it is using, so All is not a registered set.
+	podman := func(active string) RuntimeSupport {
+		return RuntimeSupport{All: []string{active}, Registered: strongerOnly([]string{active}),
+			Default: active, Complete: false, Known: true}
+	}
+
+	cases := []struct {
+		name     string
+		selected string
+		support  RuntimeSupport
+		want     RuntimeGap
+	}{
+		{"selected and registered", "runsc", docker("runc", "runc", "runsc"), GapNone},
+		// The host that had already done the work, and was refused for it.
+		{"the engine's default is strong", "", docker("runsc", "runc", "runsc"), GapNone},
+		{"podman's default is strong", "", podman("kata"), GapNone},
+		// podman cannot list what it is not running, so an absent name proves
+		// nothing and must not refuse.
+		{"podman, selected but not its active one", "kata-runtime", podman("crun"), GapNone},
+		// Docker's list is complete, so an absent name is evidence.
+		{"docker, selected but not registered", "kata-runtime", docker("runc", "runc"), GapMissing},
+		// Deliberate, unrecognised, permitted — and not called a kernel of its own.
+		{"an unrecognised name", "sysbox-runc", docker("runc", "runc", "sysbox-runc"), GapUnrecognised},
+		{"registered and unused", "", docker("runc", "runc", "kata-runtime"), GapNotSelected},
+		{"a shared-kernel name is not a selection", "runc", docker("runc", "runc", "kata-runtime"), GapNotSelected},
+		{"nothing stronger reported", "", docker("runc", "runc"), GapUnverified},
+		{"the engine could not be asked", "", RuntimeSupport{}, GapUnknown},
+		{"could not be asked, name selected", "kata-runtime", RuntimeSupport{}, GapUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClassifyRuntimeGap(tc.selected, tc.support); got != tc.want {
+				t.Errorf("ClassifyRuntimeGap(%q, %+v) = %v, want %v", tc.selected, tc.support, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveRuntimeFallsBackToTheEnginesDefault(t *testing.T) {
+	s := RuntimeSupport{Default: "runsc", Known: true}
+	if got := s.EffectiveRuntime(""); got != "runsc" {
+		t.Errorf("EffectiveRuntime(\"\") = %q, want the engine default", got)
+	}
+	if got := s.EffectiveRuntime("kata-runtime"); got != "kata-runtime" {
+		t.Errorf("EffectiveRuntime = %q, want what the run selected", got)
+	}
+}
+
+// TestClassifyRuntimeGapSeesThroughShimNames: the gate's one membership test
+// decides a refusal, and a containerd-backed daemon writes the list in a
+// different vocabulary from the one a user types.
+//
+// Observed on Rocky Linux 10.2, where `docker info` reports DefaultRuntime
+// `runc` and keys .Runtimes `io.containerd.runc.v2` in the same breath.
+func TestClassifyRuntimeGapSeesThroughShimNames(t *testing.T) {
+	// A host with Kata registered under its shim name, nothing selecting it.
+	shimHost := RuntimeSupport{
+		All:        []string{"io.containerd.runc.v2", "io.containerd.kata.v2"},
+		Registered: strongerOnly([]string{"io.containerd.runc.v2", "io.containerd.kata.v2"}),
+		Default:    "runc",
+		Complete:   true,
+		Known:      true,
+	}
+	if len(shimHost.Registered) != 1 {
+		t.Fatalf("Registered = %v, want the kata shim recognised as a kernel of its own", shimHost.Registered)
+	}
+	if got := ClassifyRuntimeGap("", shimHost); got != GapNotSelected {
+		t.Errorf("gap = %v, want GapNotSelected: the boundary is installed and unused", got)
+	}
+
+	// Asking for it by the name a user would type must not read as missing.
+	if got := ClassifyRuntimeGap("kata", shimHost); got != GapNone {
+		t.Errorf("gap = %v, want GapNone: the host has kata, however it spells the key", got)
+	}
+	// And by the daemon's own spelling.
+	if got := ClassifyRuntimeGap("io.containerd.kata.v2", shimHost); got != GapNone {
+		t.Errorf("gap = %v, want GapNone for the engine's own name", got)
+	}
+
+	// The permissive direction is unchanged: a runtime no entry means is still
+	// missing, so prod still refuses before the launch fails.
+	if got := ClassifyRuntimeGap("runsc", shimHost); got != GapMissing {
+		t.Errorf("gap = %v, want GapMissing: this host has no gVisor under any spelling", got)
+	}
+}

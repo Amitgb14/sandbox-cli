@@ -41,7 +41,7 @@ const doctorTimeout = doctor.Timeout
 var runDoctorChecks = doctor.RunChecks
 
 func newDoctorCmd() *cobra.Command {
-	var profile, cfgPath, engineFlag string
+	var profile, cfgPath, engineFlag, runtimeFlag string
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check whether this host can deliver what a profile promises",
@@ -56,9 +56,12 @@ func newDoctorCmd() *cobra.Command {
 			"anything on it.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, engine, err := resolveDoctorTarget(cfgPath, profile)
+			name, engine, runtimeName, err := resolveDoctorTarget(cfgPath, profile)
 			if err != nil {
 				return err
+			}
+			if runtimeFlag != "" {
+				runtimeName = runtimeFlag
 			}
 			if engineFlag != "" {
 				// Validated rather than executed: an unvalidated flag turned
@@ -71,10 +74,15 @@ func newDoctorCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), doctorTimeout)
 			defer cancel()
-			return reportDoctor(name, runDoctorChecks(ctx, name, engine))
+			return reportDoctor(name, runDoctorChecks(ctx, name, engine, runtimeName))
 		},
 	}
 	cmd.Flags().StringVar(&profile, "profile", "", "profile to check against: dev (default) or prod")
+	// The run path enforces the runtime it *resolves*, and --runtime on the run
+	// wins over the config — so without this the preflight could pass on a
+	// configuration the launch would refuse, and refuse one the launch would
+	// accept. It answers about the command you are about to type.
+	cmd.Flags().StringVar(&runtimeFlag, "runtime", "", "check as though the run selected this OCI runtime (default: whatever the config resolves to)")
 	// The setups most worth preflighting are the checked-in ones loaded
 	// deliberately, so the command that diagnoses a configuration has to be able
 	// to read the same configuration a run would.
@@ -85,7 +93,7 @@ func newDoctorCmd() *cobra.Command {
 
 // resolveDoctorProfile honours the same layers a run would, so `doctor` reports
 // on the profile that would actually be in force here rather than on a guess.
-func resolveDoctorTarget(cfgPath, flag string) (profile, engine string, err error) {
+func resolveDoctorTarget(cfgPath, flag string) (profile, engine, runtimeName string, err error) {
 	wd, werr := os.Getwd()
 	if werr != nil {
 		wd = "."
@@ -94,12 +102,15 @@ func resolveDoctorTarget(cfgPath, flag string) (profile, engine string, err erro
 	if err != nil {
 		// A configuration that cannot resolve is itself the finding, and the
 		// message already says which key is at fault.
-		return "", "", err
+		return "", "", "", err
 	}
 	// The engine matters as much as the profile: checking docker on a machine
 	// configured for podman answers a question nobody asked, and would have
 	// reported a healthy docker while every run went elsewhere.
-	return cfg.Profile, cfg.Engine, nil
+	// The selected runtime comes along for the same reason: under prod, "this
+	// host can give a run its own kernel and nothing selected one" is a finding,
+	// and it cannot be made without knowing what was selected.
+	return cfg.Profile, cfg.Engine, cfg.Runtime, nil
 }
 
 // reportDoctor prints the findings and returns a non-zero-exit error when the

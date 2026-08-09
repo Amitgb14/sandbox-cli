@@ -503,9 +503,30 @@ explicitly requested allowlist still refuses.
 program iptables (tried, not queried, since rootless and userns-remapped daemons cannot), which
 runtimes are registered — and applies the same asymmetry, warning under dev and failing with a
 non-zero exit under prod. A question that could not be *asked* counts as a failure under prod
-too: it does not get to assume the answer it would prefer. The runtime check reports rather than
-refuses, because prod does not yet *select* a stronger runtime and failing for something the tool
-does not do would be theatre.
+too: it does not get to assume the answer it would prefer.
+
+The **runtime check now refuses under prod, but only what it can prove**, and the shape of that is
+worth keeping. prod demands a kernel of its own, and the evidence is read in a fixed order: the
+run's own selection, then **the engine's default** (a host with `default-runtime: runsc` has already
+done the work and must not be refused for "nothing selected"), then whether the engine has the name
+at all — on docker, whose list is complete, never on podman, which names only the runtime it is
+using. A non-default name nobody recognises is permitted and explicitly *not* vouched for, since
+`sysbox-runc` is also non-default and shares the host kernel. An engine reporting a stronger runtime
+that nothing uses is refused, and one that could not be asked is refused too — the run path and
+`doctor` agree on that, which they did not when "could not ask" was folded in with "reported none".
+Everything else warns: an engine that reported none has not shown
+there are none (podman answers with its **active** runtime, not its registered set), and no signal
+distinguishes a Linux host that could install Kata from a VM image its user does not compose. The
+first version tried to infer that from the daemon's product name and podman's `serviceIsRemote`, and
+was wrong in both directions — refusing colima and OrbStack users who could not comply, waiving the
+demand for a podman client talking to bare metal. The verdict is one shared function,
+`runtime.ClassifyRuntimeGap`, called by `doctor` and by `sandbox.enforceKernelBoundary`, so the
+preflight and the launch cannot disagree; `doctor --runtime` exists so the preflight can be asked
+about the run you are about to make, since `--runtime` on the run outranks the config.
+
+The demand is enforced on `spec.Runtime` in `internal/sandbox`, **not** in `ValidateProfile`: a check
+against the resolved `Config` is not a check on the run, because `--runtime` arrives through
+`sandbox.Options` and wins. That is the `persist_auth` class of leak, one layer up.
 
 ### The trust boundary (read before touching config, mounts, or the entrypoint)
 

@@ -86,7 +86,7 @@ type Runtime interface {
 var NewRuntime = func(engine string) Runtime { return runtime.NewEngine(engine) }
 
 // RunChecks asks the host every question this profile depends on.
-func RunChecks(ctx context.Context, profile, engine string) []Check {
+func RunChecks(ctx context.Context, profile, engine, selectedRuntime string) []Check {
 	d := NewRuntime(engine)
 	if engine == "" {
 		engine = "docker"
@@ -106,7 +106,7 @@ func RunChecks(ctx context.Context, profile, engine string) []Check {
 	out = append(out, checkBaseImage(ctx, d))
 	out = append(out, checkSeccomp(ctx, d))
 	out = append(out, checkFirewall(ctx, d))
-	out = append(out, checkRuntimes(ctx, d, profile))
+	out = append(out, checkRuntimes(ctx, d, profile, selectedRuntime))
 	return out
 }
 
@@ -182,47 +182,115 @@ func checkFirewall(ctx context.Context, d Runtime) Check {
 
 // checkRuntimes reports whether a stronger-isolation runtime is registered.
 //
-// This is a warning even under prod, and the reasoning is worth stating rather
-// than quietly deciding: prod covers untrusted agents, for which a shared kernel
-// is not a boundary, so gVisor or a microVM is the honest answer. But sandbox-cli
-// does not yet *select* one — the prod profile deliberately leaves Runtime at
-// the host default rather than guessing a name — and failing a check for
-// something the tool does not yet do would be theatre. It reports the gap
-// truthfully and says what it means.
-func checkRuntimes(ctx context.Context, d Runtime, profile string) Check {
+// Under prod this has teeth, and they close on the one thing that can be proved:
+// an engine that reports a runtime with its own kernel while nothing selected
+// it. Where there is no such evidence the check says so and does not fail —
+// see runtime.ClassifyRuntimeGap for why an engine's silence is not proof that a
+// stronger runtime was unavailable.
+//
+// The verdict itself is shared with the run path (sandbox.enforceKernelBoundary)
+// so the preflight and the launch cannot reach different conclusions from the
+// same evidence. What is local here is only how a verdict is *worded* and
+// whether it is fatal, which is the profile's business rather than the engine's.
+//
+// selected is the runtime the run would actually use, not merely the configured
+// one: `doctor --runtime X` preflights the command you are about to type, since
+// --runtime on the run would otherwise change the answer after the check passed.
+func checkRuntimes(ctx context.Context, d Runtime, profile, selected string) Check {
 	c := Check{Name: "isolation runtime"}
-	names, err := d.Runtimes(ctx)
-	if err != nil {
+	support := runtimeSupport(ctx, d)
+	prod := profile == config.ProfileProd
+	effective := support.EffectiveRuntime(selected)
+	reported := strings.Join(support.All, ", ")
+
+	switch runtime.ClassifyRuntimeGap(selected, support) {
+	case runtime.GapNone:
+		c.Status = StatusOK
+		c.Detail = "runs get a kernel of their own: " + effective
+		if selected == "" {
+			c.Detail += " (this engine's default)"
+		}
+	case runtime.GapUnrecognised:
+		// Not failed — the operator chose it — and not vouched for either.
+		c.Status = StatusOK
+		c.Detail = "runs on " + effective + ", which is not a runtime this tool recognises as having a kernel of its own"
+	case runtime.GapMissing:
+		// The launch would fail on this, so it is a finding on every profile:
+		// a configuration that cannot work is not a matter of degree.
+		c.Status = StatusWeak
+		c.Detail = "runtime is set to " + effective + ", which this engine has not registered"
+		c.Remedy = "register it, or name one of the runtimes with a kernel of their own that this engine has" +
+			registeredSuffix(support)
+	case runtime.GapNotSelected:
+		c.Detail = "stronger isolation available: " + strings.Join(support.Registered, ", ") +
+			" (select with `runtime:` in your config)"
+		if prod {
+			c.Status = StatusWeak
+			c.Detail = "this engine can give a run its own kernel and neither the run nor its default uses one: " +
+				strings.Join(support.Registered, ", ")
+			// Only the stronger names: suggesting runc here would send an
+			// operator to a second refusal.
+			c.Remedy = "set `runtime: " + support.Registered[0] + "` in your own config — prod refuses a shared kernel it did not have to accept"
+		}
+	case runtime.GapUnknown:
+		// Same verdict the run path reaches, so a preflight that passes is a run
+		// that starts and one that fails is a run that would have been refused.
 		c.Status = StatusUnknown
-		c.Detail = "the daemon could not be asked which runtimes are registered"
-		return c
+		c.Detail = "the engine could not be asked which runtimes it has"
+	default: // GapUnverified
+		c.Status = StatusOK
+		c.Detail = "runs share the host kernel: this engine reported no runtime with one of its own"
+		if reported != "" {
+			// The names matter: gVisor installs itself as runsc-hostnet on some
+			// setups, and an operator told only "install gVisor" would be
+			// installing what they already have instead of naming what they have.
+			c.Detail += " (it reported " + reported + ")"
+		}
+		if prod {
+			c.Remedy = "a container namespace is not a boundary against a kernel exploit — " +
+				"install gVisor (runsc) or Kata where you can, and name it with `runtime:`"
+		}
+	}
+	return c
+}
+
+func registeredSuffix(s runtime.RuntimeSupport) string {
+	if len(s.Registered) > 0 {
+		return ": " + strings.Join(s.Registered, ", ")
+	}
+	if len(s.All) > 0 {
+		return " (this engine reported only " + strings.Join(s.All, ", ") + ")"
+	}
+	return ""
+}
+
+// runtimeSupport asks the engine, once.
+//
+// The fallback is for a backend predating the interface upgrade, and it reports
+// **Known: false** rather than assembling a verdict from whatever it can see:
+// an engine that cannot be asked is unverified, and a fallback that quietly
+// produced a passing verdict would be the permissive reading of an absence.
+func runtimeSupport(ctx context.Context, d Runtime) runtime.RuntimeSupport {
+	if r, ok := d.(interface {
+		StrongerRuntimeSupport(context.Context) runtime.RuntimeSupport
+	}); ok {
+		return r.StrongerRuntimeSupport(ctx)
+	}
+	names, err := d.Runtimes(ctx)
+	if err != nil || len(names) == 0 {
+		return runtime.RuntimeSupport{}
 	}
 	var strong []string
 	for _, n := range names {
-		// One list, in internal/runtime: the listing has to make the same
-		// judgement about a running container that this makes about a registered
-		// runtime, and two copies of "which runtimes are stronger" would drift the
-		// way two copies of a security-relevant list always do.
 		if runtime.StrongerRuntime(n) {
 			strong = append(strong, n)
 		}
 	}
 	sort.Strings(strong)
-	if len(strong) > 0 {
-		c.Status = StatusOK
-		c.Detail = "stronger isolation available: " + strings.Join(strong, ", ") +
-			" (select with `runtime:` in your config)"
-		return c
-	}
-	c.Status = StatusOK // reported, not failed — see the doc comment
-	c.Detail = "only the default runtime is registered: " + strings.Join(names, ", ")
-	if profile == config.ProfileProd {
-		// Kept out of Detail: a newline inside a tabwriter cell ends the column
-		// block, so a check added after this one would silently misalign.
-		c.Remedy = "prod may carry untrusted agents, and a shared kernel is not a boundary for those — " +
-			"install gVisor (runsc) or Kata and set `runtime:`"
-	}
-	return c
+	// No default and no completeness claim: this backend cannot say which
+	// runtime it would pick, and guessing "the first one" is how a listing
+	// becomes an assertion.
+	return runtime.RuntimeSupport{All: names, Registered: strong, Known: true}
 }
 
 // Verdict turns a status into a mark and whether it blocks, which is the one

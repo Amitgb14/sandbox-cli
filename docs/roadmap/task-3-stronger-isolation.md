@@ -3,7 +3,41 @@
 **Goal.** When you need real isolation for untrusted code, give each sandbox its own
 lightweight VM — Kata Containers on Linux — instead of a shared kernel.
 
-**Branch.** Not started.
+**Status.** §4 (honest reporting) and §2/§3 (doctor's teeth, prod's demand) are
+built. §1 — a tested Kata path and its setup documentation — is what remains, and
+it needs a Linux host with hardware virtualization to verify.
+
+**One deviation from §3 as written, and the reason.** The scope said "prod sets a
+runtime rather than inheriting the host default". It does not: prod **demands**
+one and refuses to **name** one. Which of Kata or gVisor a machine has is a
+property of the machine, so a profile that wrote `runsc` into itself would refuse
+every host that has Kata, and `kata-runtime` every host that has gVisor — a
+profile that guesses fails on the machine it was meant to protect. The demand is
+enforced in `sandbox.enforceKernelBoundary` — **not** in `ValidateProfile`, which
+sees a resolved `Config` and would be defeated by `--runtime` — and reported
+early by `doctor`; the choice stays the user's, in a config only they can write.
+
+**And one rule the scope did not anticipate: prod refuses only what it can
+prove.** The demand is real where the engine reports a stronger runtime and
+nothing selected it. Where it reports none, prod warns and runs — because an
+engine's silence is not evidence. Podman answers the question with its *active*
+runtime rather than its registered set, and nothing distinguishes a Linux host
+that could install Kata from a VM image its user does not compose. The first
+attempt inferred that from the daemon's product name and podman's
+`serviceIsRemote` and was wrong in both directions, refusing colima and OrbStack
+users who could not comply and waiving the demand for a podman client talking to
+bare metal. Closing that gap properly is §1's job: once a Kata path is tested and
+documented, "install this" becomes advice a user can follow, and the warning can
+become a refusal for hosts that ignored it.
+
+**Where the demand is enforced matters as much as what it demands.** Not in
+`ValidateProfile`: `--runtime` reaches a run through `sandbox.Options`, which
+wins over the config, so a check against the resolved `Config` would pass while
+the container launched on runc — the `persist_auth` class of leak CLAUDE.md
+already records. It lives in `sandbox.enforceKernelBoundary`, beside
+`enforceSeccomp`, and reads the resolved `spec.Runtime`. The verdict itself is
+`runtime.ClassifyRuntimeGap`, shared with `doctor`, so the preflight and the
+launch cannot disagree about the same host.
 
 ```
 Runtime interface
@@ -63,7 +97,7 @@ carry a microVM, and make prod able to demand one".
 - Setup instructions per distribution, in `docs/`, in the same register as the existing
   Podman page: what to install, how to register the runtime, how to check it took.
 
-### 2. `doctor` gains teeth for prod
+### 2. `doctor` gains teeth for prod — ✅
 
 Once the tool can *select* a stronger runtime, the runtime check stops being advisory:
 
@@ -73,7 +107,7 @@ Once the tool can *select* a stronger runtime, the runtime check stops being adv
   change.
 - Under `dev`, unchanged: a warning, because a laptop is allowed not to have Kata.
 
-### 3. The prod profile selects it
+### 3. The prod profile demands it — ✅
 
 - `prod` sets a runtime rather than inheriting the host default, and `ValidateProfile`
   asserts it against the configuration that will actually run — the same mechanism that
@@ -83,7 +117,7 @@ Once the tool can *select* a stronger runtime, the runtime check stops being adv
   `internal/config/trust.go`, and it stays there — a hostile repository must not be able to
   select a *weaker* runtime any more than it can select a weaker profile.
 
-### 4. Honest reporting of what you got
+### 4. Honest reporting of what you got — ✅
 
 A run under a microVM and a run under runc must not look identical after the fact:
 

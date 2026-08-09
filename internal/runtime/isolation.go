@@ -96,6 +96,12 @@ func (c ContainerInfo) NotTheHostDefault() bool { return notHostDefault(c.Runtim
 //
 // So a name this file has not seen literally is still shown and still not
 // characterised, which is the pair of answers the comment above argues for.
+// Both callers depend on that direction. The listing shows a name it does not
+// recognise rather than hiding it, and the prod gate *accepts* one rather than
+// refusing a run whose operator deliberately selected something — gVisor
+// registers itself as runsc-hostnet and runsc-debug, and an admin may use any
+// name at all. A short list of names we are sure are shared-kernel can be kept
+// honest; a list of every strong runtime anyone will ever register cannot.
 func notHostDefault(name string) bool { return !sharedKernelRuntimes[name] }
 
 // runtimeName reduces a containerd **shim** name to the runtime name the lists
@@ -177,3 +183,115 @@ func containerRuntime(ociRuntime, hostConfigRuntime string) string {
 
 // podmanRuntimePlaceholder is what podman puts in the docker-compatible field.
 const podmanRuntimePlaceholder = "oci"
+
+// RuntimeGap says whether a run gets a kernel of its own, or why it might not.
+//
+// Six outcomes, because the evidence really does come in six shapes, and the
+// history of this function is a list of what happens when they are collapsed.
+// It has been wrong by inferring a host's capabilities from a product name, by
+// treating a short list of known-strong names as a gate on refusal, and by
+// reading "nothing selected" without first asking what the engine runs by
+// *default* — which refused the hosts that had already done the right thing.
+type RuntimeGap int
+
+const (
+	// GapNone: the run gets a runtime this tool recognises as having a kernel of
+	// its own — named by the run, or the engine's own default.
+	GapNone RuntimeGap = iota
+	// GapUnrecognised: the run gets a non-default runtime nobody here has heard
+	// of. Permitted, because an operator who names one has chosen deliberately
+	// and gVisor's own installer produces names this list will never hold — but
+	// **not called a kernel of its own**, because sysbox-runc is also a
+	// non-default name and it shares the host kernel.
+	GapUnrecognised
+	// GapMissing: the run names a runtime and the engine's *complete* list does
+	// not have it. The launch would fail; this is the cheaper place to learn it.
+	GapMissing
+	// GapNotSelected: the engine reports a runtime with its own kernel, and
+	// neither the run nor the engine's default uses it. The boundary was there
+	// and unused.
+	GapNotSelected
+	// GapUnverified: no stronger runtime was reported. Not proof there is none —
+	// podman names only its active runtime — and nothing distinguishes a host
+	// that could install one from a VM image its user does not compose.
+	GapUnverified
+	// GapUnknown: the engine could not be asked. Prod does not get to assume the
+	// answer it would prefer, so this refuses rather than warns; the run path and
+	// the preflight agree on that, which they did not when this was folded into
+	// GapUnverified.
+	GapUnknown
+)
+
+// RuntimeSupport is what an engine said about the runtimes it has.
+//
+// Complete is the field that keeps the two engines honest about different
+// answers to the same question: docker lists every registered runtime, podman
+// names only the one it is using. Membership of All is therefore evidence on
+// docker and nothing on podman, and a check that forgot the difference refused
+// every prod run on a podman host that had Kata configured.
+type RuntimeSupport struct {
+	All        []string // every runtime name the engine reported
+	Registered []string // those of them with a kernel of their own
+	Default    string   // what the engine runs when nothing selects a runtime
+	Complete   bool     // All is the full registered set, not just the active one
+	Known      bool     // the engine answered at all
+}
+
+// EffectiveRuntime is what a run will actually be given: what it selected, or
+// the engine's default when it selected nothing.
+//
+// Reading the default is the difference between "you did not ask for a kernel of
+// its own" and "you did not have to" — a host whose daemon.json sets
+// default-runtime: runsc gives every container one without a word in any config
+// of ours, and refusing it for "nothing selected one" punished the setup that
+// had already done the work.
+func (s RuntimeSupport) EffectiveRuntime(selected string) string {
+	if selected != "" {
+		return selected
+	}
+	return s.Default
+}
+
+// ClassifyRuntimeGap is the verdict `doctor` explains and the prod profile
+// enforces, computed once so the preflight and the launch cannot disagree.
+func ClassifyRuntimeGap(selected string, s RuntimeSupport) RuntimeGap {
+	if !s.Known {
+		return GapUnknown
+	}
+	effective := s.EffectiveRuntime(selected)
+	if notHostDefault(effective) {
+		if s.Complete && !containsRuntime(s.All, effective) {
+			return GapMissing
+		}
+		if StrongerRuntime(effective) {
+			return GapNone
+		}
+		return GapUnrecognised
+	}
+	if len(s.Registered) > 0 {
+		return GapNotSelected
+	}
+	return GapUnverified
+}
+
+// containsRuntime reports whether the engine's list has the requested runtime,
+// in whichever vocabulary each was written.
+//
+// By runtime rather than by spelling, and this is the one comparison in the gate
+// where the difference decides a refusal. A containerd-backed daemon keys
+// .Runtimes by shim name — `io.containerd.runc.v2` on Rocky Linux 10.2 — so a
+// string match read `--runtime kata` against a host listing
+// `io.containerd.kata.v2` as GapMissing, and prod refused a machine that had the
+// kernel it was demanding.
+//
+// The permissive direction, which is the one to be careful about, is unchanged:
+// this only ever finds a runtime the engine really listed. It cannot invent one,
+// and GapMissing still fires for a name no entry means.
+func containsRuntime(names []string, want string) bool {
+	for _, n := range names {
+		if SameRuntime(n, want) {
+			return true
+		}
+	}
+	return false
+}
