@@ -620,6 +620,25 @@ func TestSharedGroupFilesAreHostWritable(t *testing.T) {
 	for _, mode := range []string{"default", "allowlist"} {
 		t.Run(mode, func(t *testing.T) {
 			proj := t.TempDir()
+			// t.TempDir() is 0700, and this is the one test in this file that
+			// actually runs on Linux — where a bind mount carries real uids and the
+			// container is a *different* uid in the same group. Every other test
+			// here writes to /workspace the same way and passes only because it runs
+			// on macOS, where Docker Desktop virtualizes bind ownership. Without
+			// this the container cannot create the files at all and the run fails
+			// before the umask is ever observed.
+			//
+			// 0770, matching what a user's own project directory looks like once
+			// ShareWithSandboxGroup has been over it: group access, no world bits.
+			// The parent gets search only — t.TempDir() nests one level and the
+			// container has to *traverse* every component, the same rule
+			// EnsureGuestDir exists for.
+			if err := os.Chmod(filepath.Dir(proj), 0o710); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(proj, 0o770); err != nil {
+				t.Fatal(err)
+			}
 			cfg := config.Default()
 			cfg.Network.Mode = mode
 			sess := newTestSession(t, cfg)

@@ -52,6 +52,10 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	// callers have to remember is one a new caller will not. Never in Prepare,
 	// which --dry-run uses: printing a command must not touch the filesystem.
 	ShareWithSandboxGroup(opts.AuthPersistDir)
+	// Said on the way in, while the user can still choose a different image —
+	// and here rather than in Prepare for the same reason as the line above:
+	// --dry-run prints a command and must not editorialize about it.
+	warnUmaskNeedsSandboxInit(spec)
 	if err := s.Runtime.Available(ctx); err != nil {
 		return 1, err
 	}
@@ -111,6 +115,7 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 		return "", err
 	}
 	ShareWithSandboxGroup(opts.AuthPersistDir) // same reason as Run's
+	warnUmaskNeedsSandboxInit(spec)            // likewise
 	if err := s.Runtime.Available(ctx); err != nil {
 		return "", err
 	}

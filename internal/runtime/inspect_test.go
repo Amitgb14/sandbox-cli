@@ -107,3 +107,60 @@ func TestSortNewestFirstOrdersByCreation(t *testing.T) {
 		}
 	}
 }
+
+// TestGuestCommandStripsSandboxWrappers: the command a supervision layer reports
+// must be the command the user asked for. Both wrappers are entrypoints, so
+// docker reports them as part of it — sandbox-firewall has done so since
+// allowlist mode existed, and sandbox-init since it became the image's default.
+func TestGuestCommandStripsSandboxWrappers(t *testing.T) {
+	tests := []struct {
+		name       string
+		entrypoint []string
+		cmd        []string
+		want       []string
+	}{
+		{
+			name:       "default mode: the image entrypoint",
+			entrypoint: []string{"/usr/local/bin/sandbox-init"},
+			cmd:        []string{"claude", "--dangerously-skip-permissions"},
+			want:       []string{"claude", "--dangerously-skip-permissions"},
+		},
+		{
+			name:       "allowlist mode: the firewall entrypoint",
+			entrypoint: []string{"/usr/local/bin/sandbox-firewall"},
+			cmd:        []string{"npm", "test"},
+			want:       []string{"npm", "test"},
+		},
+		{
+			name:       "a user image with its own entrypoint is not ours to edit",
+			entrypoint: []string{"/opt/start.sh"},
+			cmd:        []string{"npm", "test"},
+			want:       []string{"/opt/start.sh", "npm", "test"},
+		},
+		{
+			name:       "a guest command merely named sandbox-init is left alone",
+			entrypoint: nil,
+			cmd:        []string{"sandbox-init", "--help"},
+			want:       []string{"sandbox-init", "--help"},
+		},
+		{
+			name:       "a wrapper with nothing after it is reported, not erased",
+			entrypoint: []string{"/usr/local/bin/sandbox-init"},
+			cmd:        nil,
+			want:       []string{"/usr/local/bin/sandbox-init"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := guestCommand(tc.entrypoint, tc.cmd)
+			if len(got) != len(tc.want) {
+				t.Fatalf("guestCommand = %q, want %q", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("guestCommand = %q, want %q", got, tc.want)
+				}
+			}
+		})
+	}
+}

@@ -1,13 +1,17 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
+	goruntime "runtime"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/image"
+	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 )
 
 // TestMain pins the host gid off for the whole package, and that is a statement
@@ -30,68 +34,88 @@ func pinHostGID(t *testing.T, gid string) {
 	t.Cleanup(func() { hostPrimaryGID = prev })
 }
 
-// TestSharedGroupUser covers the whole decision table, because every row of it
-// is a machine somebody runs on.
+// sharedGroupCases is the whole decision table, because every row of it is a
+// machine somebody runs on. One table shared by both tests below rather than two
+// copies: a new row — a third engine, a new user spelling — added to one and not
+// the other would leave that machine's umask untested, which is the same silent
+// divergence this whole mechanism was written to fix.
+//
+// `wantUser` is what gets rendered; `shared` is whether a shared group exists at
+// all. The last row is where they part company and is the reason the two columns
+// are separate: on a host whose primary gid is already 1001 the container joins
+// the group without any --user override, so there is nothing to render — and the
+// group is no less shared for that, so the umask must still fire.
+var sharedGroupCases = []struct {
+	name     string
+	engine   string
+	user     string
+	gid      string
+	wantUser string
+	shared   bool
+}{
+	{"linux docker: the sandbox user joins the host group", "", "sandbox", "1000", "1001:1000", true},
+	{"engine named explicitly is still docker", "docker", "sandbox", "1000", "1001:1000", true},
+	{"off linux there is nothing to solve", "", "sandbox", "", "sandbox", false},
+	{"podman already maps ids with keep-id", "podman", "sandbox", "1000", "sandbox", false},
+	{"an explicit user is the caller's decision", "", "root", "1000", "root", false},
+	{"an explicit uid:gid is left alone", "", "1000:1000", "1000", "1000:1000", false},
+	{"a host gid equal to the image's own renders nothing but still shares", "", "sandbox", "1001", "sandbox", true},
+}
+
 func TestSharedGroupUser(t *testing.T) {
-	tests := []struct {
-		name   string
-		engine string
-		user   string
-		gid    string
-		want   string
-	}{
-		{"linux docker: the sandbox user joins the host group", "", "sandbox", "1000", "1001:1000"},
-		{"engine named explicitly is still docker", "docker", "sandbox", "1000", "1001:1000"},
-		{"off linux there is nothing to solve", "", "sandbox", "", "sandbox"},
-		{"podman already maps ids with keep-id", "podman", "sandbox", "1000", "sandbox"},
-		{"an explicit user is the caller's decision", "", "root", "1000", "root"},
-		{"an explicit uid:gid is left alone", "", "1000:1000", "1000", "1000:1000"},
-		{"a host gid equal to the image's own changes nothing", "", "sandbox", "1001", "sandbox"},
-	}
-	for _, tc := range tests {
+	for _, tc := range sharedGroupCases {
 		t.Run(tc.name, func(t *testing.T) {
 			pinHostGID(t, tc.gid)
-			if got := sharedGroupUser(tc.engine, tc.user); got != tc.want {
+			if got := sharedGroupUser(tc.engine, tc.user); got != tc.wantUser {
 				t.Errorf("sharedGroupUser(%q, %q) with gid %q = %q, want %q",
-					tc.engine, tc.user, tc.gid, got, tc.want)
+					tc.engine, tc.user, tc.gid, got, tc.wantUser)
 			}
 		})
 	}
 }
 
-// TestSharedGroupUmaskTracksSharedGroupUser pins the pairing rather than the
-// value: the two must fire on exactly the same rows, because either alone is
-// worse than neither. A container in the group at 0022 writes files the host
-// cannot edit — the bug this exists to fix — and a container at 0002 outside the
-// group opens the mode for a group nobody involved is in.
-func TestSharedGroupUmaskTracksSharedGroupUser(t *testing.T) {
-	tests := []struct {
-		name   string
-		engine string
-		user   string
-		gid    string
-	}{
-		{"linux docker: the sandbox user joins the host group", "", "sandbox", "1000"},
-		{"engine named explicitly is still docker", "docker", "sandbox", "1000"},
-		{"off linux there is nothing to solve", "", "sandbox", ""},
-		{"podman already maps ids with keep-id", "podman", "sandbox", "1000"},
-		{"an explicit user is the caller's decision", "", "root", "1000"},
-		{"an explicit uid:gid is left alone", "", "1000:1000", "1000"},
-		{"a host gid equal to the image's own changes nothing", "", "sandbox", "1001"},
-	}
-	for _, tc := range tests {
+// TestSharedGroupUmaskFiresWhereverTheGroupIsShared pins the pairing rather than
+// the value: both halves must fire wherever a shared group exists, because
+// either alone is worse than neither. A container in the group at 0022 writes
+// files the host cannot edit — the bug this exists to fix — and a container at
+// 0002 outside the group opens the mode for a group nobody involved is in.
+//
+// Keyed on `shared`, deliberately not on "did sharedGroupUser change the
+// string". Defining it that way is what left the gid-1001 row unfixed: the user
+// is unchanged there because no override is needed, not because the ids fail to
+// meet.
+func TestSharedGroupUmaskFiresWhereverTheGroupIsShared(t *testing.T) {
+	for _, tc := range sharedGroupCases {
 		t.Run(tc.name, func(t *testing.T) {
 			pinHostGID(t, tc.gid)
-			joined := sharedGroupUser(tc.engine, tc.user) != tc.user
 			want := ""
-			if joined {
+			if tc.shared {
 				want = "0002"
 			}
 			if got := sharedGroupUmask(tc.engine, tc.user); got != want {
-				t.Errorf("sharedGroupUmask(%q, %q) with gid %q = %q, want %q (shared group applied: %v)",
-					tc.engine, tc.user, tc.gid, got, want, joined)
+				t.Errorf("sharedGroupUmask(%q, %q) with gid %q = %q, want %q (shared group: %v)",
+					tc.engine, tc.user, tc.gid, got, want, tc.shared)
 			}
 		})
+	}
+}
+
+// TestSharedGroupUmaskWhereTheHostGIDIsAlreadySandboxs is the row above on its
+// own, because it is the one the first version of this fix got wrong and a table
+// row is easy to lose. Nothing is rendered into --user; the container runs as
+// uid 1001 in group 1001, the host user is a member of 1001, ShareWithSandboxGroup
+// has already chgrp'd the persisted HOME to it — and at 0022 every file the
+// container writes still comes back g-r-only, which is the reported bug verbatim.
+func TestSharedGroupUmaskWhereTheHostGIDIsAlreadySandboxs(t *testing.T) {
+	pinHostGID(t, sandboxGID)
+
+	if got := sharedGroupUser("", defaultRunAsUser); got != defaultRunAsUser {
+		t.Errorf("sharedGroupUser = %q, want %q unchanged: there is no override to render",
+			got, defaultRunAsUser)
+	}
+	if got := sharedGroupUmask("", defaultRunAsUser); got != sharedGroupUmaskValue {
+		t.Errorf("sharedGroupUmask = %q, want %q: the group is shared, so the mask has to be",
+			got, sharedGroupUmaskValue)
 	}
 }
 
@@ -119,23 +143,29 @@ func TestSharedGroupUmaskOpensOnlyTheGroup(t *testing.T) {
 // check one level up, and it covers the split the shared group itself had to fix:
 // in allowlist mode the guest is reached through sandbox-firewall's drop rather
 // than docker's --user, and the variable has to survive that path too.
+//
+// Both host gids, for the reason the unit test above spells out: gid 1001 needs
+// no --user override and so exercises the path where only the umask carries the
+// mechanism.
 func TestBuildSpec_SharedGroupCarriesTheUmask(t *testing.T) {
-	pinHostGID(t, "1000")
+	for _, gid := range []string{"1000", sandboxGID} {
+		for _, mode := range []string{"default", "allowlist"} {
+			t.Run(gid+"/"+mode, func(t *testing.T) {
+				pinHostGID(t, gid)
 
-	for _, mode := range []string{"default", "allowlist"} {
-		t.Run(mode, func(t *testing.T) {
-			cfg := config.Default()
-			if mode == "default" {
-				cfg.Network = config.NetworkSpec{Mode: "default"}
-			}
-			spec, err := BuildSpec(cfg, Options{Project: t.TempDir(), Command: []string{"true"}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := spec.Env["SANDBOX_UMASK"]; got != "0002" {
-				t.Errorf("SANDBOX_UMASK = %q, want 0002 — without it the shared group grants a write the mask takes back", got)
-			}
-		})
+				cfg := config.Default()
+				if mode == "default" {
+					cfg.Network = config.NetworkSpec{Mode: "default"}
+				}
+				spec, err := BuildSpec(cfg, Options{Project: t.TempDir(), Command: []string{"true"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := spec.Env["SANDBOX_UMASK"]; got != "0002" {
+					t.Errorf("SANDBOX_UMASK = %q, want 0002 — without it the shared group grants a write the mask takes back", got)
+				}
+			})
+		}
 	}
 }
 
@@ -204,13 +234,91 @@ func TestBuildSpec_UnchangedWhereIdsDoNotMeet(t *testing.T) {
 	}
 }
 
+// TestWarnUmaskNeedsSandboxInit covers the three answers, because the middle one
+// is the whole reason the function exists: the baked image applies the mask and
+// says nothing, an image that cannot apply it says so, and a run with no shared
+// group has nothing to warn about whatever image it uses.
+func TestWarnUmaskNeedsSandboxInit(t *testing.T) {
+	tests := []struct {
+		name  string
+		spec  runtime.RunSpec
+		warns bool
+	}{
+		{
+			name:  "the baked image applies it",
+			spec:  runtime.RunSpec{Image: image.Ref(), Env: map[string]string{"SANDBOX_UMASK": "0002"}},
+			warns: false,
+		},
+		{
+			name:  "a custom image cannot",
+			spec:  runtime.RunSpec{Image: "my/toolchain:1", Env: map[string]string{"SANDBOX_UMASK": "0002"}},
+			warns: true,
+		},
+		{
+			name:  "no shared group, nothing to say",
+			spec:  runtime.RunSpec{Image: "my/toolchain:1", Env: map[string]string{}},
+			warns: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			said := captureImageWarning(t)
+			warnUmaskNeedsSandboxInit(tc.spec)
+			if got := len(*said) > 0; got != tc.warns {
+				t.Fatalf("warned = %v, want %v (said %q)", got, tc.warns, *said)
+			}
+			if tc.warns && !strings.Contains((*said)[0], tc.spec.Image) {
+				t.Errorf("warning %q does not name the image that cannot honor the mask", (*said)[0])
+			}
+		})
+	}
+}
+
+// TestWarnUmaskNeedsSandboxInitSaysItOnce is the fleet case: twenty tasks resolve
+// the same config, and a sentence said twenty times is one nobody reads — the
+// argument warnedNames already makes for the secret warning.
+func TestWarnUmaskNeedsSandboxInitSaysItOnce(t *testing.T) {
+	said := captureImageWarning(t)
+	spec := runtime.RunSpec{Image: "my/toolchain:1", Env: map[string]string{"SANDBOX_UMASK": "0002"}}
+
+	warnUmaskNeedsSandboxInit(spec)
+	warnUmaskNeedsSandboxInit(spec)
+	warnUmaskNeedsSandboxInit(spec)
+
+	if len(*said) != 1 {
+		t.Errorf("said it %d times, want 1: %q", len(*said), *said)
+	}
+}
+
+// captureImageWarning redirects the warning and clears the once-per-image state,
+// so tests do not depend on which of them ran first.
+func captureImageWarning(t *testing.T) *[]string {
+	t.Helper()
+	var said []string
+	prev := warnedImage
+	warnedImage = func(format string, args ...any) {
+		said = append(said, fmt.Sprintf(format, args...))
+	}
+	warnedImageMu.Lock()
+	prevSeen := warnedImages
+	warnedImages = map[string]bool{}
+	warnedImageMu.Unlock()
+	t.Cleanup(func() {
+		warnedImage = prev
+		warnedImageMu.Lock()
+		warnedImages = prevSeen
+		warnedImageMu.Unlock()
+	})
+	return &said
+}
+
 // TestResolveHostPrimaryGID pins the two answers that are not a gid: off Linux
 // the ids never meet, and root's group is a widening rather than a fix.
 func TestResolveHostPrimaryGID(t *testing.T) {
 	got := resolveHostPrimaryGID()
-	if runtime.GOOS != "linux" {
+	if goruntime.GOOS != "linux" {
 		if got != "" {
-			t.Errorf("resolveHostPrimaryGID() = %q on %s, want empty", got, runtime.GOOS)
+			t.Errorf("resolveHostPrimaryGID() = %q on %s, want empty", got, goruntime.GOOS)
 		}
 		return
 	}
@@ -224,7 +332,7 @@ func TestResolveHostPrimaryGID(t *testing.T) {
 // group read/write on the files directly inside, and setgid so what the agent
 // writes next stays readable from the host.
 func TestShareWithSandboxGroup(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	if goruntime.GOOS != "linux" {
 		t.Skip("bind-mount ownership is virtualized off Linux; nothing to share")
 	}
 	pinHostGID(t, mustGID(t))
@@ -270,7 +378,7 @@ func TestShareWithSandboxGroup(t *testing.T) {
 // cheap and keep it honest: it does not walk into a tree the container already
 // owns, and it never follows a symlink out of the directory it was given.
 func TestShareWithSandboxGroupIsShallowAndSafe(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	if goruntime.GOOS != "linux" {
 		t.Skip("no-op off Linux")
 	}
 	pinHostGID(t, mustGID(t))
