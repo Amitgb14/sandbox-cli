@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -364,11 +365,11 @@ func unwritableReport(bad []unwritablePath, uid, gid int) string {
 	if git {
 		b.WriteString(", and git will refuse to write objects")
 	}
-	for _, u := range bad {
-		if u.Group {
-			fmt.Fprintf(&b, "\n  fix: chmod -R g+w %s", u.Root)
+	for _, r := range remedyRoots(bad) {
+		if r.Group {
+			fmt.Fprintf(&b, "\n  fix: chmod -R g+w %s", r.Root)
 		} else {
-			fmt.Fprintf(&b, "\n  fix: chgrp -R %d %s && chmod -R g+w %s", gid, u.Root, u.Root)
+			fmt.Fprintf(&b, "\n  fix: chgrp -R %d %s && chmod -R g+w %s", gid, r.Root, r.Root)
 		}
 	}
 	if git {
@@ -446,4 +447,70 @@ func (s *Session) enforceWritableMounts(spec runtime.RunSpec) error {
 		warnedWritable("sandbox-cli: %s\n", report)
 	}
 	return nil
+}
+
+
+// remedy is one directory a fix has to name, and whether opening the group bits
+// is enough for everything found under it.
+type remedy struct {
+	Root  string
+	Group bool
+}
+
+// remedyRoots reduces the findings to the smallest set of directories a user has
+// to act on.
+//
+// Two findings routinely name nested roots — a repository's working tree and the
+// `.git` inside it — and printing a line for each gave:
+//
+//	fix: chmod -R g+w /home/u/project
+//	fix: chmod -R g+w /home/u/project/.git
+//
+// where the first already covers the second, because it is recursive. Two
+// commands where one will do reads as two separate problems, and a reader who
+// runs only the one that names the path they recognise is left half-fixed.
+//
+// A contained root's requirement is folded into its ancestor rather than
+// dropped: if the object store needs its group changed and the tree above it
+// only needs the bits opened, the single recursive command has to do both, or
+// the collapse would quietly weaken the advice it replaced.
+func remedyRoots(bad []unwritablePath) []remedy {
+	group := map[string]bool{}
+	var order []string
+	for _, u := range bad {
+		if _, seen := group[u.Root]; !seen {
+			order = append(order, u.Root)
+			group[u.Root] = true
+		}
+		// One finding needing a chgrp makes the whole root need one.
+		group[u.Root] = group[u.Root] && u.Group
+	}
+	// Shortest first, so an ancestor is always considered before anything it
+	// contains and the fold below only ever has to look backwards.
+	sort.SliceStable(order, func(i, j int) bool { return len(order[i]) < len(order[j]) })
+
+	var out []remedy
+	for _, root := range order {
+		if i := containingRoot(out, root); i >= 0 {
+			out[i].Group = out[i].Group && group[root]
+			continue
+		}
+		out = append(out, remedy{Root: root, Group: group[root]})
+	}
+	return out
+}
+
+// containingRoot returns the index of the remedy whose recursive command already
+// reaches path, or -1.
+//
+// Compared with a separator appended rather than as a bare prefix: /srv/app is
+// not inside /srv/ap, and a string test without it would silently drop a real
+// finding whose path happened to start the same way.
+func containingRoot(out []remedy, path string) int {
+	for i, r := range out {
+		if path == r.Root || strings.HasPrefix(path, r.Root+string(filepath.Separator)) {
+			return i
+		}
+	}
+	return -1
 }

@@ -484,3 +484,83 @@ func TestCheckWritableMountsIsInertWithoutAHostGroup(t *testing.T) {
 			"synthetic ids must not be judged against real ownership", got)
 	}
 }
+
+// TestRemedyRootsCollapsesNestedPaths is the regression for output observed on a
+// real run:
+//
+//	fix: chmod -R g+w /home/u/project
+//	fix: chmod -R g+w /home/u/project/.git
+//
+// The first is recursive and already covers the second. Two commands where one
+// will do reads as two separate problems, and a reader who runs only the one
+// naming the path they recognise is left half-fixed.
+func TestRemedyRootsCollapsesNestedPaths(t *testing.T) {
+	tree := "/home/u/project"
+	git := "/home/u/project/.git"
+
+	got := remedyRoots([]unwritablePath{
+		{Root: tree, Path: tree + "/bin", Group: true},
+		{Root: git, Path: git + "/objects/05", Group: true, Git: true},
+	})
+	if len(got) != 1 || got[0].Root != tree {
+		t.Fatalf("remedyRoots = %+v, want just %s: the recursive fix already covers what is inside it", got, tree)
+	}
+
+	// A contained root's requirement is folded in, not dropped: if the object
+	// store needs its group changed, the single command has to do that too.
+	got = remedyRoots([]unwritablePath{
+		{Root: tree, Path: tree, Group: true},
+		{Root: git, Path: git, Group: false},
+	})
+	if len(got) != 1 || got[0].Group {
+		t.Fatalf("remedyRoots = %+v, want one root needing a chgrp: collapsing must not weaken the advice", got)
+	}
+
+	// Order of discovery must not change the answer.
+	got = remedyRoots([]unwritablePath{
+		{Root: git, Path: git, Group: false},
+		{Root: tree, Path: tree, Group: true},
+	})
+	if len(got) != 1 || got[0].Root != tree || got[0].Group {
+		t.Fatalf("remedyRoots = %+v, want the same answer whichever finding came first", got)
+	}
+
+	// Siblings are two real problems and stay two lines.
+	a, b := "/home/u/one", "/home/u/two"
+	if got := remedyRoots([]unwritablePath{{Root: a, Group: true}, {Root: b, Group: true}}); len(got) != 2 {
+		t.Errorf("remedyRoots = %+v, want both: neither contains the other", got)
+	}
+
+	// Containment is by path component, not by string prefix: /srv/app is not
+	// inside /srv/ap, and dropping it would lose a real finding.
+	if got := remedyRoots([]unwritablePath{
+		{Root: "/srv/ap", Group: true},
+		{Root: "/srv/app", Group: true},
+	}); len(got) != 2 {
+		t.Errorf("remedyRoots = %+v, want both: /srv/app is not inside /srv/ap", got)
+	}
+}
+
+// TestUnwritableReportPrintsOneFixPerProblem ties the collapse to what a user
+// actually reads.
+func TestUnwritableReportPrintsOneFixPerProblem(t *testing.T) {
+	report := unwritableReport([]unwritablePath{
+		{Root: "/home/u/project", Path: "/home/u/project/bin", Mode: 0o755, UID: 1000, GID: 1000, Group: true},
+		{Root: "/home/u/project/.git", Path: "/home/u/project/.git/objects/05", Mode: 0o755, UID: 1000, GID: 1000, Group: true, Git: true},
+	}, 1001, 1000)
+
+	if n := strings.Count(report, "fix: "); n != 1 {
+		t.Errorf("report has %d fix lines, want 1:\n%s", n, report)
+	}
+	// Both offending directories are still named — collapsing the remedy must not
+	// collapse the evidence.
+	for _, want := range []string{"/home/u/project/bin", "/home/u/project/.git/objects/05"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("report no longer names %s:\n%s", want, report)
+		}
+	}
+	// The git advice is separate from the chmod and survives the collapse.
+	if !strings.Contains(report, "core.sharedRepository group") {
+		t.Errorf("the durable git fix must still be offered:\n%s", report)
+	}
+}
