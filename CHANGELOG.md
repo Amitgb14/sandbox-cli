@@ -9,6 +9,28 @@ changed default, a behavior that used to work differently.
 Entries land under `Unreleased` and are moved under a version heading when that
 version is tagged.
 
+## Unreleased
+
+### Added
+
+- **`doctor` now asks whether a container can resolve a name**, which is a
+  requirement sandbox-cli creates for itself and nothing was checking. Under
+  podman every sandbox gets its own network, and a custom podman network
+  resolves through `aardvark-dns` where the default rootless network does not —
+  so a resolver broken there is the tool's own doing. On the host that prompted
+  this it was broken, and what the user saw was four layers away:
+
+  ```
+  OAuth error: getaddrinfo ETIMEOUT platform.claude.com
+  ```
+
+  an agent hanging at login. Tried rather than queried, like the firewall check
+  beside it. It also tells the two failures apart: a name that resolves on the
+  engine's default network but not on a sandbox one is the case with a remedy
+  (`podman network reload --all`), while a host that resolves on neither has no
+  DNS at all and would fail whatever sandbox-cli did. Warns under `dev`, fails
+  under `prod`.
+
 ## 0.0.1beta.13 — 2026-08-09
 
 ### Fixed

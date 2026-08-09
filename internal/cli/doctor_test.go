@@ -25,6 +25,8 @@ type fakeHost struct {
 	firewallWhy string
 	imageThere  bool
 	imageKnown  bool
+	dns         runtime.DNSProbe
+	dnsWhy      string
 }
 
 func (f fakeHost) Available(context.Context) error { return f.unavailable }
@@ -34,6 +36,9 @@ func (f fakeHost) SeccompUnavailable(context.Context) (bool, bool) {
 func (f fakeHost) Runtimes(context.Context) ([]string, error) { return f.runtimes, f.runtimesErr }
 func (f fakeHost) FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string) {
 	return f.firewall, f.firewallWhy
+}
+func (f fakeHost) ResolvesNames(context.Context, string) (runtime.DNSProbe, string) {
+	return f.dns, f.dnsWhy
 }
 func (f fakeHost) ImagePresent(context.Context, string) (bool, bool) {
 	return f.imageThere, f.imageKnown
@@ -51,6 +56,7 @@ func healthy() fakeHost {
 	return fakeHost{
 		seccompKnow: true,
 		firewall:    runtime.FirewallOK,
+		dns:         runtime.DNSOK,
 		runtimes:    []string{"runc"},
 		imageThere:  true,
 		imageKnown:  true,
@@ -423,4 +429,67 @@ func TestDoctorTreatsATimedOutProbeAsUnknown(t *testing.T) {
 			t.Errorf("a timed-out probe was reported as %v, want unknown", c.Status)
 		}
 	}
+}
+
+// TestDoctorSeparatesABrokenSandboxResolverFromNoDNSAtAll.
+//
+// The distinction is the whole value of the check. sandbox-cli *chooses* the
+// network a sandbox runs on — under podman a per-run one, which resolves through
+// aardvark-dns where the default rootless network does not — so a resolver
+// broken there is the tool's own doing and has a remedy. A host that cannot
+// resolve anywhere would fail whatever sandbox-cli did, and telling that user to
+// reload podman's networks sends them after the wrong thing.
+//
+// The symptom this exists to shorten was an agent hanging at login with
+// `getaddrinfo ETIMEOUT`, four layers from the cause.
+func TestDoctorSeparatesABrokenSandboxResolverFromNoDNSAtAll(t *testing.T) {
+	broken := healthy()
+	broken.dns, broken.dnsWhy = runtime.DNSSandboxBroken, "could not resolve registry.npmjs.org"
+	withHost(t, broken)
+	c := findCheck(t, runDoctorChecks(context.Background(), config.ProfileDev, "docker"), "container DNS")
+	if c.Status != doctor.StatusWeak {
+		t.Errorf("status = %v, want a warning", c.Status)
+	}
+	if !strings.Contains(c.Remedy, "podman network reload") {
+		t.Errorf("a sandbox-network resolver failure should name its remedy, got %q", c.Remedy)
+	}
+
+	none := healthy()
+	none.dns, none.dnsWhy = runtime.DNSNoResolver, "could not resolve registry.npmjs.org"
+	withHost(t, none)
+	c = findCheck(t, runDoctorChecks(context.Background(), config.ProfileDev, "docker"), "container DNS")
+	if strings.Contains(c.Remedy, "podman network reload") {
+		t.Errorf("a host with no DNS must not be sent to reload podman's networks: %q", c.Remedy)
+	}
+	if !strings.Contains(c.Detail, "no container on this host") {
+		t.Errorf("the detail should say the host cannot resolve at all, got %q", c.Detail)
+	}
+}
+
+// TestDoctorFailsProdWhenTheSandboxNetworkCannotResolve: same asymmetry as every
+// other check — a developer can act on a warning, an unattended run cannot.
+func TestDoctorFailsProdWhenTheSandboxNetworkCannotResolve(t *testing.T) {
+	h := healthy()
+	h.dns, h.dnsWhy = runtime.DNSSandboxBroken, "could not resolve registry.npmjs.org"
+	withHost(t, h)
+
+	if err := reportDoctor(config.ProfileDev, runDoctorChecks(context.Background(), config.ProfileDev, "docker")); err != nil {
+		t.Errorf("dev must warn and pass: %v", err)
+	}
+	if err := reportDoctor(config.ProfileProd, runDoctorChecks(context.Background(), config.ProfileProd, "docker")); err == nil {
+		t.Error("prod must refuse a host whose sandbox network cannot resolve names")
+	}
+}
+
+// findCheck fails rather than returning a zero Check, so a renamed check shows up
+// as a missing check instead of a silently passing assertion.
+func findCheck(t *testing.T, checks []doctor.Check, name string) doctor.Check {
+	t.Helper()
+	for _, c := range checks {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("no %q check in %v", name, checks)
+	return doctor.Check{}
 }
