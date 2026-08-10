@@ -471,10 +471,8 @@ fi
 # DROP denies exactly as much — the difference is the courtesy, not the boundary.
 if rule_ok "$IPTABLES" -j REJECT --reject-with icmp-port-unreachable; then
   DENY="-j REJECT --reject-with icmp-port-unreachable"
-  DENY6="-j REJECT"
 else
   DENY="-j DROP"
-  DENY6="-j DROP"
   echo "sandbox-cli: this kernel has no REJECT target, so refused traffic is dropped" >&2
   echo "sandbox-cli: silently; a blocked client waits for its own timeout instead of" >&2
   echo "sandbox-cli: failing at once. The same traffic is refused either way." >&2
@@ -494,6 +492,27 @@ else
   echo "sandbox-cli: connection, because the answer would leave from a denied uid." >&2
 fi
 
+# The probes above answer for the **v4** backend, and only for it. The two
+# families are served independently — `sandbox-iptables` resolves each one on its
+# own, and a host can end up with legacy for one and nft for the other — so a
+# capability measured on v4 is not evidence about v6. Probing the v6 chain with
+# the v4 binary is worse than useless here: the required rules below have no
+# `|| true`, so inferring REJECT from a v4 measurement on a v6 backend without it
+# would abort the whole setup under `set -e` and refuse the run over a target
+# nobody asked about.
+probe6() { # sets DENY6 and CONNTRACK6 by asking "$IP6TABLES" itself
+  if rule_ok "$IP6TABLES" -j REJECT; then
+    DENY6="-j REJECT"
+  else
+    DENY6="-j DROP"
+  fi
+  if rule_ok "$IP6TABLES" -m conntrack --ctstate ESTABLISHED -j ACCEPT; then
+    CONNTRACK6=1
+  else
+    CONNTRACK6=0
+  fi
+}
+
 # No IPv6 allowlist yet: reject all IPv6 traffic so it can't be used to bypass the
 # IPv4 rules, inbound or outbound.
 #
@@ -508,24 +527,31 @@ if ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
     echo "sandbox-cli: allowlist cannot be enforced on it; refusing rather than filtering only IPv4" >&2
     exit 1
   fi
+  probe6
   "$IP6TABLES" -F OUTPUT
   "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT
-  [ "$CONNTRACK" = 1 ] && "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+  [ "$CONNTRACK6" = 1 ] && "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
   "$IP6TABLES" -A OUTPUT $DENY6
   "$IP6TABLES" -F INPUT
   "$IP6TABLES" -A INPUT -i lo -j ACCEPT
-  [ "$CONNTRACK" = 1 ] && "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+  [ "$CONNTRACK6" = 1 ] && "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
   "$IP6TABLES" -A INPUT $DENY6
 elif IP6TABLES="$(/usr/local/bin/sandbox-iptables -6)"; then
   # No global IPv6 address, but keep the rules if we can: an address could be
   # configured later, and a default-deny chain costs nothing.
+  #
+  # Gated on CONNTRACK6 exactly as the branch above is. Everything here is
+  # `|| true`, so an ungated conntrack rule would merely fail quietly — but the
+  # two branches writing the same chain from different premises is how one of
+  # them ends up wrong later, and a silent difference is the kind nobody finds.
+  probe6
   "$IP6TABLES" -F OUTPUT 2>/dev/null || true
   "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
-  "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  [ "$CONNTRACK6" = 1 ] && "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
   "$IP6TABLES" -A OUTPUT $DENY6 2>/dev/null || true
   "$IP6TABLES" -F INPUT 2>/dev/null || true
   "$IP6TABLES" -A INPUT -i lo -j ACCEPT 2>/dev/null || true
-  "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  [ "$CONNTRACK6" = 1 ] && "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
   "$IP6TABLES" -A INPUT $DENY6 2>/dev/null || true
 fi
 
