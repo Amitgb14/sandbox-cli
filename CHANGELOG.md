@@ -25,6 +25,12 @@ version is tagged.
   the run says so. Nothing inside the container can answer an unsolicited
   connection anyway, because the answer would leave from a denied uid.
 
+  Two other things gVisor lacks degrade the same way rather than refusing:
+  refused packets are not logged (`-m limit` / `-j LOG` are missing, so denials
+  are enforced but not counted), and refusals are dropped rather than rejected
+  (no `REJECT` target, so a blocked client waits for its own timeout instead of
+  failing at once). Each is announced when it applies.
+
   Detected by trying, not assumed, so nothing changes on an ordinary host.
   gVisor also needs `runsc install -- --net-raw`, without which no iptables
   backend works at all.

@@ -434,19 +434,53 @@ echo "sandbox-cli: firewall backend $IPTABLES" >&2
 #
 # Tried on a scratch chain, like everything else here. A rule that cannot be
 # added to a chain nobody consults is the cheapest way to ask.
-conntrack_ok() {
-  local chain="SANDBOX_CT_PROBE"
-  "$1" -N "$chain" >/dev/null 2>&1 || true
-  if "$1" -A "$chain" -m conntrack --ctstate ESTABLISHED -j ACCEPT >/dev/null 2>&1; then
-    "$1" -F "$chain" >/dev/null 2>&1 || true
-    "$1" -X "$chain" >/dev/null 2>&1 || true
+#
+# Asked once per extension, up front, rather than discovered one failed run at a
+# time — which is how this was found: conntrack was probed, `-m limit` and
+# `-j LOG` were not, and the second wall only appeared after the first was
+# cleared.
+rule_ok() { # rule_ok BINARY RULE...
+  local ipt="$1" chain="SANDBOX_FEATURE_PROBE"
+  shift
+  "$ipt" -N "$chain" >/dev/null 2>&1 || true
+  if "$ipt" -A "$chain" "$@" >/dev/null 2>&1; then
+    "$ipt" -F "$chain" >/dev/null 2>&1 || true
+    "$ipt" -X "$chain" >/dev/null 2>&1 || true
     return 0
   fi
-  "$1" -X "$chain" >/dev/null 2>&1 || true
+  "$ipt" -F "$chain" >/dev/null 2>&1 || true
+  "$ipt" -X "$chain" >/dev/null 2>&1 || true
   return 1
 }
 
-if conntrack_ok "$IPTABLES"; then
+# Rate-limited logging of what the firewall refused. Diagnostics, not
+# enforcement: without it the rules are identical and only the explanation is
+# missing, so it degrades rather than refusing. gVisor has neither `-m limit`
+# nor `-j LOG`.
+if rule_ok "$IPTABLES" -m limit --limit 1/min -j LOG; then
+  DENYLOG=1
+else
+  DENYLOG=0
+  echo "sandbox-cli: this kernel cannot log refused packets (no -m limit / -j LOG), so" >&2
+  echo "sandbox-cli: denials are enforced but not counted or explained in the run log." >&2
+fi
+
+# How to refuse. REJECT answers with an ICMP error so a blocked client fails
+# immediately instead of hanging until its timeout, which is worth a lot when the
+# blocked client is an agent waiting on a request. Where the target is missing,
+# DROP denies exactly as much — the difference is the courtesy, not the boundary.
+if rule_ok "$IPTABLES" -j REJECT --reject-with icmp-port-unreachable; then
+  DENY="-j REJECT --reject-with icmp-port-unreachable"
+  DENY6="-j REJECT"
+else
+  DENY="-j DROP"
+  DENY6="-j DROP"
+  echo "sandbox-cli: this kernel has no REJECT target, so refused traffic is dropped" >&2
+  echo "sandbox-cli: silently; a blocked client waits for its own timeout instead of" >&2
+  echo "sandbox-cli: failing at once. The same traffic is refused either way." >&2
+fi
+
+if rule_ok "$IPTABLES" -m conntrack --ctstate ESTABLISHED -j ACCEPT; then
   CONNTRACK=1
 else
   CONNTRACK=0
@@ -477,22 +511,22 @@ if ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
   "$IP6TABLES" -F OUTPUT
   "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT
   [ "$CONNTRACK" = 1 ] && "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
-  "$IP6TABLES" -A OUTPUT -j REJECT
+  "$IP6TABLES" -A OUTPUT $DENY6
   "$IP6TABLES" -F INPUT
   "$IP6TABLES" -A INPUT -i lo -j ACCEPT
   [ "$CONNTRACK" = 1 ] && "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
-  "$IP6TABLES" -A INPUT -j REJECT
+  "$IP6TABLES" -A INPUT $DENY6
 elif IP6TABLES="$(/usr/local/bin/sandbox-iptables -6)"; then
   # No global IPv6 address, but keep the rules if we can: an address could be
   # configured later, and a default-deny chain costs nothing.
   "$IP6TABLES" -F OUTPUT 2>/dev/null || true
   "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
   "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-  "$IP6TABLES" -A OUTPUT -j REJECT 2>/dev/null || true
+  "$IP6TABLES" -A OUTPUT $DENY6 2>/dev/null || true
   "$IP6TABLES" -F INPUT 2>/dev/null || true
   "$IP6TABLES" -A INPUT -i lo -j ACCEPT 2>/dev/null || true
   "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-  "$IP6TABLES" -A INPUT -j REJECT 2>/dev/null || true
+  "$IP6TABLES" -A INPUT $DENY6 2>/dev/null || true
 fi
 
 "$IPTABLES" -F OUTPUT
@@ -583,9 +617,12 @@ done
 # --log-prefix is what makes it greppable; the rate limit is what stops a busy
 # agent filling the kernel ring buffer (and the host's syslog on Linux, where the
 # container shares it) with one line per retry.
-"$IPTABLES" -A OUTPUT -m limit --limit 12/min --limit-burst 20 \
-  -j LOG --log-prefix "sandbox-cli DENY-OUT " --log-level 4
-"$IPTABLES" -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
+if [ "$DENYLOG" = 1 ]; then
+  "$IPTABLES" -A OUTPUT -m limit --limit 12/min --limit-burst 20 \
+    -j LOG --log-prefix "sandbox-cli DENY-OUT " --log-level 4
+fi
+# shellcheck disable=SC2086 # $DENY is several words by design
+"$IPTABLES" -A OUTPUT $DENY
 
 # Ingress. An egress allowlist that ignores inbound traffic is not a boundary:
 # the OUTPUT chain accepts ESTABLISHED,RELATED, so a connection someone else
@@ -673,9 +710,11 @@ if [ "$CONNTRACK" = 1 ]; then
     "$IPTABLES" -A INPUT -p "$proto" --dport "$port" -j ACCEPT
   done
 
-  "$IPTABLES" -A INPUT -m limit --limit 12/min --limit-burst 20 \
-    -j LOG --log-prefix "sandbox-cli DENY-IN " --log-level 4
-  "$IPTABLES" -A INPUT -j REJECT --reject-with icmp-port-unreachable
+  if [ "$DENYLOG" = 1 ]; then
+    "$IPTABLES" -A INPUT -m limit --limit 12/min --limit-burst 20 \
+      -j LOG --log-prefix "sandbox-cli DENY-IN " --log-level 4
+  fi
+  "$IPTABLES" -A INPUT $DENY
 else
   "$IPTABLES" -P INPUT ACCEPT
 fi
