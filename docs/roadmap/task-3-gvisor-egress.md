@@ -13,6 +13,7 @@ changes what that guest is."* It was right, for gVisor. Kata is untested.
 - [What was measured](#what-was-measured)
 - [Why the two demands conflict](#why-the-two-demands-conflict)
 - [The options](#the-options)
+- [What #88 should ship as](#what-88-should-ship-as)
 - [A fourth possibility, untested](#a-fourth-possibility-untested)
 - [How to settle it](#how-to-settle-it)
 
@@ -129,6 +130,71 @@ available" until it can.
   container start, not a `docker info` read. `doctor` can afford that; a run
   cannot do it on every launch.
 
+## What #88 should ship as
+
+The options above are about what prod *does*. This is the narrower question in
+front of us. #88 adds the kernel demand and is **not merged**, so today prod has
+no opinion about runtimes at all: it runs on runc with the allowlist, which
+works — verified on the gVisor host itself:
+
+```console
+$ sandbox-cli run --profile prod --allow api.anthropic.com -- echo "Hi"
+sandbox-cli: egress enforced by name (proxy on 127.0.0.1:3128)
+sandbox-cli: egress proxy on 127.0.0.1:3128 enforcing 1 name(s)
+Hi
+```
+
+So merging #88 turns a working run into some other outcome. Which one is the
+decision.
+
+### Ship it as a refusal
+
+prod demands a kernel of its own. A host with a stronger runtime registered and
+nothing selecting it is refused, non-zero exit, as with seccomp and the firewall.
+
+- **For:** the rule means what it says. An unattended run on a shared kernel is
+  what the profile exists to prevent, and a demand that yields when inconvenient
+  is not a demand.
+- **Against — this is the gVisor limitation biting directly:** on a host whose
+  only stronger runtime is gVisor, prod becomes **unusable**. Not degraded,
+  unusable. Not selecting runsc is refused for not selecting it; selecting runsc
+  is refused because the allowlist cannot be programmed inside it — gVisor has
+  no connection tracking, so the accept-replies rules cannot be written. There
+  is no third choice on such a host short of installing Kata or removing gVisor,
+  and the run quoted above stops working the day this merges.
+- Needs a deliberate escape hatch designed alongside it, or the first person to
+  hit this invents one. Any such key is privileged and belongs on
+  `internal/config/trust.go`'s refused list.
+
+### Ship it as a warning
+
+prod reports that a stronger runtime was available and unused, and runs.
+
+- **For:** preserves the behaviour verified above; makes visible a gap that is
+  currently invisible; and the demand can be tightened to a refusal later, once
+  a host exists that satisfies *both* requirements. A warning naming a real gap
+  is worth more than a refusal nobody can satisfy.
+- **Against:** prod's stated promise is that it refuses where dev warns — that
+  asymmetry is the profile's whole point, and an exception to it is a precedent.
+  A warning in an unattended run goes into a log nobody reads, which is the
+  argument the profile was built on.
+- The gVisor limitation has to be stated in the warning itself, or it misleads:
+  "a stronger runtime is available" would be true only in the sense that it is
+  registered, and acting on that advice trades the allowlist for the kernel.
+
+### Hold it
+
+Neither, until the untested possibility below is checked, or Kata is measured on
+a real host.
+
+- **For:** a refusal only makes sense once some host can satisfy both demands,
+  and none of the measured ones can. Merging now turns a working setup into a
+  broken one to enforce a rule nothing can currently meet. If the allowlist can
+  be rebuilt without connection tracking, the conflict disappears and the demand
+  ships as a refusal at no cost.
+- **Against:** #88 is written and reviewed, and holding finished work has its own
+  cost.
+
 ## A fourth possibility, untested
 
 The conflict may be an artefact of how the allowlist is written rather than a
@@ -189,5 +255,6 @@ design around.
   ([#102](https://github.com/Amitgb14/sandbox-cli/pull/102)).
 - Blocked on this decision:
   [#88](https://github.com/Amitgb14/sandbox-cli/pull/88) and the parts of task 3
-  §2 that give prod teeth.
+  §2 that give prod teeth. The gate itself is verified (#89 phase 3); what is
+  open is whether it ships as a refusal, as a warning, or waits.
 - Untested: Kata, and the fourth possibility above.
