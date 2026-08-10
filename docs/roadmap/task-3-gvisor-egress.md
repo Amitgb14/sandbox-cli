@@ -11,11 +11,12 @@ changes what that guest is."* It was right, for gVisor. Kata is untested.
 
 - [The short version](#the-short-version)
 - [What was measured](#what-was-measured)
+- [The blocker is not iptables — it is DNS](#the-blocker-is-not-iptables--it-is-dns)
 - [Why the two demands conflict](#why-the-two-demands-conflict)
 - [The options](#the-options)
 - [What #88 should ship as](#what-88-should-ship-as)
-- [A fourth possibility — now half-measured](#a-fourth-possibility--now-half-measured)
-- [How to settle it](#how-to-settle-it)
+- [A fourth possibility — now measured for the sender](#a-fourth-possibility--now-measured-for-the-sender)
+- [How to settle what is left](#how-to-settle-what-is-left)
 
 ## The short version
 
@@ -27,9 +28,16 @@ changes what that guest is."* It was right, for gVisor. Kata is untested.
 They defend different things: the first against *escape*, the second against
 *exfiltration*.
 
-On a host whose stronger runtime is gVisor, **only the first is available**. The
-allowlist cannot be programmed inside gVisor. So prod, as specified, cannot run
-there at all.
+On a host whose stronger runtime is gVisor, **only the first is available**. So
+prod, as specified, cannot run there at all.
+
+*Why* the second is unavailable changed as the measurements came in, and the
+current answer is not the one this document started with. It is no longer the
+firewall: [#108](https://github.com/Amitgb14/sandbox-cli/pull/108) builds the
+allowlist without connection tracking, and it programs cleanly under gVisor. It
+is **DNS** — a container on a docker user-defined network cannot resolve a
+hostname under gVisor, with or without a firewall, so there is nothing for an
+allowlist to permit. That is not a limitation sandbox-cli can code around.
 
 ## What was measured
 
@@ -59,19 +67,101 @@ prerequisite no code change can remove.
 
 **What gVisor's iptables can and cannot do**, with `--net-raw` on:
 
-| capability | works? | the firewall uses it for |
-|---|---|---|
-| `-m owner --uid-owner` | **yes** | permitting the egress proxy's uid |
-| nat `-N`, `-j REDIRECT` | **yes** | redirecting guest 80/443 into the proxy |
-| `-m conntrack --ctstate` | **no** | accepting replies to our own connections |
-| `-m state --state` | **no** | (the older spelling of the same thing) |
+| capability | works? | how it was established | the firewall uses it for |
+|---|---|---|---|
+| `-m owner --uid-owner` | **yes** | two-sided: allowing the running uid reached the network, allowing a different one was blocked | permitting the egress proxy's uid |
+| nat `-N`, `-j REDIRECT` | **yes** | behavioural: a listener on 127.0.0.1 accepted a redirected connection | redirecting guest 80/443 into the proxy |
+| `-m conntrack --ctstate` | **no** | rule insertion refused | accepting replies to our own connections |
+| `-m state --state` | **no** | rule insertion refused | (the older spelling of the same thing) |
+| `-m limit` | **no** | rule insertion refused | rate-limiting the log of denied packets |
+| `-j LOG` | **no** | rule insertion refused | logging denied packets |
+| `-j REJECT` | **yes** | rule insertion accepted | denying with an immediate error rather than a hang |
 
-There is no third spelling to fall back on. gVisor's netstack simply does not
-track connections.
+There is no third spelling of conntrack to fall back on. gVisor's netstack simply
+does not track connections.
+
+Two of these rows were wrong in the first version of this document, both in the
+same way: the rule was **inserted** and that was recorded as the capability
+working. Insertion is not behaviour — gVisor's iptables accepts rules its
+netstack will not act on. `REDIRECT` was recorded from an insertion test and
+later confirmed behaviourally (it does work); `owner` was too, and is confirmed
+above. The lesson is in the third column, which is why the third column exists.
+
+One trap when reading a chain back: `iptables-legacy -S` renders the working
+owner rule as
+
+```
+-A OUTPUT -m owner [unsupported revision] -j ACCEPT
+```
+
+That string is a **display artefact** — iptables-legacy asking gVisor about a
+match revision it reports differently — and not a statement about whether the
+rule matches. It does match. Do not re-derive a capability from a listing; the
+whole table above is behavioural for the rows that matter.
+
+## The blocker is not iptables — it is DNS
+
+Once the conntrack rules were made conditional
+([#108](https://github.com/Amitgb14/sandbox-cli/pull/108)) the firewall
+programmed cleanly under gVisor: all three degradation notices printed, the
+proxy started, the chains were exactly as intended. The request still failed,
+with `curl` reporting:
+
+```
+* Could not resolve host: registry.npmjs.org
+```
+
+**The container cannot resolve names under gVisor, and no firewall is involved.**
+The control run proves it — no allowlist, no firewall, nothing programmed:
+
+```console
+$ sandbox-cli run --runtime runsc --network default -- \
+    sh -c 'cat /etc/resolv.conf; getent hosts registry.npmjs.org && echo RESOLVED'
+nameserver 127.0.0.11
+options ndots:0
+# ExtServers: [host(75.75.75.75) host(75.75.76.76) ...]
+```
+
+No `RESOLVED`. The lookup fails on its own.
+
+`127.0.0.11` is docker's **embedded resolver**, which docker uses on
+*user-defined* networks and implements with NAT plumbing inside the container's
+network namespace. gVisor's netstack does not carry that plumbing — the
+container's `nat OUTPUT` contains only sandbox-cli's own jump, with docker's
+DNAT rules for `127.0.0.11` absent entirely. So the address is there in
+`resolv.conf` and nothing answers on it.
+
+sandbox-cli always runs its containers on its own network, so **every**
+sandbox-cli run under gVisor hits this, allowlist or not.
+
+### Why this was invisible for so long
+
+Every hand-written probe in this document used `docker run` with no `--network`,
+which lands on the **default bridge** — where `resolv.conf` lists the host's real
+resolvers and DNS works normally. That is why probe after probe returned `200`
+while the real thing failed. The one network shape the probes never used is the
+only one sandbox-cli uses.
+
+This is also a direct vindication of the `container DNS` check added in
+[#106](https://github.com/Amitgb14/sandbox-cli/pull/106): it compares a
+sandbox-shaped network against the engine's default, and that differential *is*
+this failure. It would have reported `DNSSandboxBroken` in one line. It does not
+catch it yet only because the DNS probe still runs on the engine's default
+runtime — it needs the same per-runtime threading
+[#102](https://github.com/Amitgb14/sandbox-cli/pull/102) gives the firewall
+probe. That is a small, well-defined follow-up.
+
+Whether this is gVisor's limitation in general or specific to this host's
+docker/gVisor pairing is not established. It was measured on one host.
 
 ## Why the two demands conflict
 
-The allowlist is currently built as:
+*This section describes the ruleset as it stood before
+[#108](https://github.com/Amitgb14/sandbox-cli/pull/108), which is what made the
+conflict look like a conntrack problem. Kept because the reasoning is what led
+to the conditional ruleset.*
+
+The allowlist was built as:
 
 ```
 OUTPUT  -j DROP                                  (default)
@@ -158,10 +248,17 @@ nothing selecting it is refused, non-zero exit, as with seccomp and the firewall
 - **Against — this is the gVisor limitation biting directly:** on a host whose
   only stronger runtime is gVisor, prod becomes **unusable**. Not degraded,
   unusable. Not selecting runsc is refused for not selecting it; selecting runsc
-  is refused because the allowlist cannot be programmed inside it — gVisor has
-  no connection tracking, so the accept-replies rules cannot be written. There
-  is no third choice on such a host short of installing Kata or removing gVisor,
-  and the run quoted above stops working the day this merges.
+  gives a container that cannot resolve a hostname, so the allowlist has nothing
+  to permit and the agent reaches nothing. There is no third choice on such a
+  host short of installing Kata or removing gVisor, and the run quoted above
+  stops working the day this merges.
+
+  The *reason* in that bullet changed once #108 landed the conditional ruleset:
+  it used to be "the allowlist cannot be programmed inside gVisor, because there
+  is no connection tracking." It can now be programmed. The obstacle moved to
+  DNS, which is both more fundamental — it defeats a plain `--network default`
+  run with no firewall at all — and not ours to fix. A refusal message should
+  name DNS, not conntrack.
 - Needs a deliberate escape hatch designed alongside it, or the first person to
   hit this invents one. Any such key is privileged and belongs on
   `internal/config/trust.go`'s refused list.
@@ -195,7 +292,7 @@ a real host.
 - **Against:** #88 is written and reviewed, and holding finished work has its own
   cost.
 
-## A fourth possibility — now half-measured
+## A fourth possibility — now measured for the sender
 
 The conflict may be an artefact of how the allowlist is written rather than a
 property of gVisor. **This is reasoning, not a measurement.**
@@ -245,10 +342,28 @@ accept-replies rule the current design leans on.
 The allowlist therefore does not need connection tracking in principle. It needs
 it the way it is currently written.
 
-### Still unmeasured
+### The conditional ruleset was built, and it works
 
-Two things, and the first is the one that decides whether this is a real design
-or only a promising result.
+[#108](https://github.com/Amitgb14/sandbox-cli/pull/108) makes the conntrack
+rules conditional in `sandbox-egress-setup`: a generic `rule_ok` probe writes
+each candidate rule into a scratch chain and the ruleset is assembled from what
+the backend will actually serve. Where conntrack is absent the accept-replies
+rules are omitted and `INPUT` is left accepting, since its default-deny form
+depends on them.
+
+Under gVisor the firewall now programs completely — the three degradation
+notices print, the chains render as designed, and the proxy starts. Under runc
+nothing changes: same backend, no notices, `200`, so the fallback costs the
+common path nothing.
+
+What it does **not** do is make the allowlist work under gVisor, because the
+guest cannot resolve names there for reasons that have nothing to do with the
+firewall. See [the DNS section](#the-blocker-is-not-iptables--it-is-dns). The
+change stands on its own — a firewall that degrades to what the backend supports
+is right regardless — but it cannot be verified end to end on gVisor until DNS
+is solved.
+
+### Still unmeasured
 
 1. **Ingress containment.** The probe left `INPUT` at its default (accept). The
    real design has `INPUT` default-deny, whose purpose is the demonstrated hole
@@ -256,53 +371,71 @@ or only a promising result.
    argument that uid-locked OUTPUT closes that hole on its own — an inbound
    connection cannot be answered, because the answer would be outbound from a
    uid that is denied, so the handshake never completes — is reasoning, not a
-   measurement. It needs two containers on one network to settle.
-2. **The full shape.** The probe permitted uid 0 and sent traffic as uid 0. The
-   real arrangement permits the *proxy's* uid, runs the agent as a different one,
-   and REDIRECTs the agent's 80/443 into the proxy over loopback. `REDIRECT` and
-   `owner` were both measured working earlier, but not composed like that under
-   gVisor.
+   measurement. It needs two containers on one network to settle, and it matters
+   more now: without conntrack, #108 leaves `INPUT` accepting under gVisor, so
+   the uid rule is the *only* thing standing where the INPUT chain used to.
+2. **The composed shape.** `owner` and `REDIRECT` are each confirmed
+   behavioural under gVisor, but never composed — proxy uid permitted, agent on
+   a different uid, agent's 80/443 redirected into the proxy over loopback. DNS
+   fails before that composition is exercised, so it stays untested.
+3. **Whether the DNS failure is gVisor's or this host's.** One host, one
+   docker version.
 
-The cheapest way to settle both is to make the conntrack rules conditional in
-`sandbox-egress-setup` — omitted when the backend cannot serve them — and run a
-real `--allow` run under runsc. That is the fix and the test at once.
+## How to settle what is left
 
-## How to settle it
+The iptables question is settled: the ruleset can be built without conntrack,
+and #108 builds it. Three things remain, in the order they are worth doing.
 
-On a host with gVisor and `--net-raw` enabled, program the reduced ruleset by
-hand and see whether a request completes:
+**1. Is the DNS failure gVisor's, or this host's?** Cheapest first — run any
+container, not sandbox-cli, on a user-defined network under runsc:
 
 ```sh
-docker run --rm --runtime runsc --cap-add NET_ADMIN --cap-add NET_RAW \
-  sandbox-base:<tag> sh -c '
-    IPT=iptables-legacy
-    $IPT -P OUTPUT DROP
-    $IPT -A OUTPUT -o lo -j ACCEPT
-    $IPT -A OUTPUT -m owner --uid-owner 0 -j ACCEPT   # stand-in for the proxy uid
-    # No conntrack rule at all, and INPUT left open.
-    curl -s -o /dev/null -w "%{http_code}\n" -m 10 https://registry.npmjs.org
-  '
+docker network create probe-net
+docker run --rm --runtime runsc --network probe-net alpine \
+  sh -c 'cat /etc/resolv.conf; getent hosts example.com && echo RESOLVED'
+docker network rm probe-net
 ```
 
-A `200` means replies arrive without conntrack and the fourth option is real. A
-timeout means they do not, and the decision above has to be made.
+No `RESOLVED` means it is gVisor's embedded-DNS gap and not anything sandbox-cli
+does — which is what the evidence so far says, since the control run used
+`--network default` and no firewall.
 
-Worth running the same probe under **Kata**, which nobody has tested. Kata is a
-real kernel, so conntrack should simply work — if it does, "install Kata" is a
-genuine remedy and gVisor is a documented limitation rather than a case to
-design around.
+**2. Ingress containment without conntrack.** Two containers on one network:
+one running the reduced ruleset with `INPUT` accepting, the other dialling in.
+If the handshake never completes — because the reply would be outbound from a
+denied uid — then uid-locked OUTPUT closes the co-resident hole on its own and
+#108's `INPUT`-accepting fallback is sound. If data comes back, the fallback is
+a hole and needs a different answer.
+
+**3. Kata, which nobody has tested.** Its value rose with these findings: a real
+kernel should have conntrack *and* working DNS, so if it does, "install Kata" is
+a genuine remedy and gVisor becomes a documented limitation rather than a case
+to design around.
 
 ## Status
 
-- Measured: gVisor's iptables surface, above.
+- Measured: gVisor's iptables surface, above — behaviourally for the rows that
+  decide anything.
+- Measured: **DNS does not work under gVisor on a docker user-defined network**,
+  which is what actually blocks the allowlist there. Independent of the
+  firewall.
 - Fixed: backend selection ([#101](https://github.com/Amitgb14/sandbox-cli/pull/101)),
   runtime-scoped firewall probe in `doctor`
-  ([#102](https://github.com/Amitgb14/sandbox-cli/pull/102)).
+  ([#102](https://github.com/Amitgb14/sandbox-cli/pull/102)), conntrack-optional
+  ruleset ([#108](https://github.com/Amitgb14/sandbox-cli/pull/108)).
+- Follow-up: thread the selected runtime through `doctor`'s DNS probe as #102
+  does for the firewall probe, so this failure is reported rather than
+  investigated.
 - Blocked on this decision:
   [#88](https://github.com/Amitgb14/sandbox-cli/pull/88) and the parts of task 3
   §2 that give prod teeth. The gate itself is verified (#89 phase 3); what is
-  open is whether it ships as a refusal, as a warning, or waits.
-- Half-measured: the fourth possibility. A uid rule carries a connection under
-  gVisor with no conntrack at all (200 above); ingress containment and the full
-  proxy shape are still untested.
-- Untested: Kata.
+  open is whether it ships as a refusal, as a warning, or waits. The measurements
+  now point at a refusal: a gVisor host cannot satisfy prod's second demand for
+  a reason no code change of ours removes.
+- Still open: the fourth possibility. The uid rule carries a connection under
+  gVisor with no conntrack at all, and `owner`/`REDIRECT` are individually
+  confirmed — but ingress containment and the composed proxy shape are untested,
+  and DNS prevents testing the latter today.
+- Untested: Kata. Its value rose: a real kernel should have both conntrack and
+  working DNS, which would make "install Kata" a genuine remedy and gVisor a
+  documented limitation rather than a case to design around.
