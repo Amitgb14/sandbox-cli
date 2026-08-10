@@ -423,6 +423,43 @@ fi
 # nothing was programmed.
 echo "sandbox-cli: firewall backend $IPTABLES" >&2
 
+# Whether this backend can match connection state.
+#
+# gVisor's netstack provides no connection tracking at all — neither
+# `-m conntrack` nor the older `-m state` — while `owner` matching and nat
+# REDIRECT both work. So the allowlist is buildable there, but not the way it is
+# written by default, and the difference has to be detected rather than assumed:
+# it is a property of the kernel the container got, not of the engine or the
+# binary.
+#
+# Tried on a scratch chain, like everything else here. A rule that cannot be
+# added to a chain nobody consults is the cheapest way to ask.
+conntrack_ok() {
+  local chain="SANDBOX_CT_PROBE"
+  "$1" -N "$chain" >/dev/null 2>&1 || true
+  if "$1" -A "$chain" -m conntrack --ctstate ESTABLISHED -j ACCEPT >/dev/null 2>&1; then
+    "$1" -F "$chain" >/dev/null 2>&1 || true
+    "$1" -X "$chain" >/dev/null 2>&1 || true
+    return 0
+  fi
+  "$1" -X "$chain" >/dev/null 2>&1 || true
+  return 1
+}
+
+if conntrack_ok "$IPTABLES"; then
+  CONNTRACK=1
+else
+  CONNTRACK=0
+  echo "sandbox-cli: this kernel has no connection tracking, so the egress allowlist is" >&2
+  echo "sandbox-cli: enforced by uid and destination instead of by connection state." >&2
+  echo "sandbox-cli: OUTBOUND filtering is unchanged: only the proxy may leave, and the" >&2
+  echo "sandbox-cli: guest's 80/443 is still redirected into it." >&2
+  echo "sandbox-cli: INBOUND filtering is NOT applied — a stateless chain cannot tell a" >&2
+  echo "sandbox-cli: reply from an unsolicited connection, and dropping both would break" >&2
+  echo "sandbox-cli: every allowed request. Nothing inside can answer an inbound" >&2
+  echo "sandbox-cli: connection, because the answer would leave from a denied uid." >&2
+fi
+
 # No IPv6 allowlist yet: reject all IPv6 traffic so it can't be used to bypass the
 # IPv4 rules, inbound or outbound.
 #
@@ -439,11 +476,11 @@ if ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
   fi
   "$IP6TABLES" -F OUTPUT
   "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT
-  "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  [ "$CONNTRACK" = 1 ] && "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
   "$IP6TABLES" -A OUTPUT -j REJECT
   "$IP6TABLES" -F INPUT
   "$IP6TABLES" -A INPUT -i lo -j ACCEPT
-  "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  [ "$CONNTRACK" = 1 ] && "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
   "$IP6TABLES" -A INPUT -j REJECT
 elif IP6TABLES="$(/usr/local/bin/sandbox-iptables -6)"; then
   # No global IPv6 address, but keep the rules if we can: an address could be
@@ -468,7 +505,13 @@ fi
 # every connection failed with the proxy sitting idle and logging nothing.
 # 127.0.0.0/8 is this container's own loopback, so this widens nothing.
 "$IPTABLES" -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
-"$IPTABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# Replies to our own connections. On a backend without connection tracking this
+# is omitted and the rules below carry the whole chain: the proxy's packets match
+# on its uid — including the ACKs and retransmits the kernel generates, measured
+# — and the guest's redirected traffic is loopback-bound by the rule above.
+if [ "$CONNTRACK" = 1 ]; then
+  "$IPTABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+fi
 # DNS, so the allowlist below (and the agent's own runtime lookups) can resolve —
 # but only to the resolvers this container was actually given.
 #
@@ -558,68 +601,84 @@ done
 #
 # FORWARD is deliberately untouched: a container network namespace has one
 # interface and routes nothing, so the chain is unreachable.
-"$IPTABLES" -F INPUT
-"$IPTABLES" -A INPUT -i lo -j ACCEPT
-"$IPTABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# Ingress filtering needs connection state: the chain has to admit replies to
+# connections the sandbox opened while refusing everything unsolicited, and
+# without conntrack those are indistinguishable. Denying both would reject every
+# reply and break each allowed request; admitting both is what a default-ACCEPT
+# INPUT already does, with no rule to write.
+#
+# What holds the boundary in that case is the OUTPUT chain above: nothing but the
+# proxy may send anything outward, so an inbound connection cannot be answered —
+# the answer would leave from a denied uid and the handshake never completes.
+# That is the containment argument, and it is why this is a documented
+# limitation of stateless kernels rather than a hole. See
+# docs/roadmap/task-3-gvisor-egress.md.
+if [ "$CONNTRACK" = 1 ]; then
+  "$IPTABLES" -F INPUT
+  "$IPTABLES" -A INPUT -i lo -j ACCEPT
+  "$IPTABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# Published ports are the one deliberate exception: `--publish` is an explicit
-# request for ingress, so the container ports it names stay reachable. Entries
-# arrive as proto:port or proto:lo-hi (see sandbox.IngressPorts); iptables wants
-# lo:hi for a range.
-# Only from the bridge gateway, which is where docker's own port forwarding
-# arrives from. Accepting a published port from *any* source contradicted the
-# thing that makes --publish safe: sandbox.NormalizePublish deliberately binds
-# the HOST side to 127.0.0.1 unless told otherwise, and then the container
-# accepted the same port from every other container on the bridge — a peer read
-# workspace data out of a sandbox whose port the user had published to loopback
-# only.
-# || true: under set -e a failing substitution would abort the whole setup, and
-# a missing default route is not a reason to refuse to run.
-gw="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}' || true)"
-# The container's own bridge subnet — the address range its peers live in, and
-# the only range that must not reach a published port.
-#
-# Anchoring on the gateway alone assumed docker's userland proxy, which
-# re-originates the connection from the gateway address. With
-# "userland-proxy": false (common on Linux servers) it is pure DNAT: the source
-# stays the original client, which is 127.0.0.1 for the loopback-bound publish
-# that is sandbox-cli's default, and an arbitrary external address otherwise.
-# Neither matches "$gw", so the published port would silently stop answering
-# under --allow — the exact regression these rules were written to avoid.
-#
-# So the property is expressed directly instead of by proxy: everything may
-# reach a published port except this container's bridge peers.
-#
-# That is a denylist where the old rule was an allowlist, and the difference is
-# worth stating: a container on a *different* docker bridge is not in $subnet, so
-# these rules now accept it where gateway-only would have denied it. Docker's own
-# DOCKER-ISOLATION-STAGE-* chains block inter-bridge traffic, so this leans on
-# that rather than opening a path — but it is defence in depth given up, and if
-# docker ever stops isolating bridges by default this needs revisiting.
-#
-# A malformed $subnet would make the iptables call fail and, under `set -e`,
-# refuse the run. That is the right direction, if an opaque one: the alternative
-# is a published port with no peer filtering at all.
-subnet="$(ip route 2>/dev/null | awk '/proto kernel/ && /src/ {print $1; exit}' || true)"
-for p in $(printf '%s' "$ingress" | tr ',' ' '); do
-  [ -z "$p" ] && continue
-  proto="${p%%:*}"
-  port="$(printf '%s' "${p#*:}" | tr '-' ':')"
-  # The gateway is inside the subnet, so it is admitted before peers are denied.
-  [ -n "$gw" ] && "$IPTABLES" -A INPUT -s "$gw" -p "$proto" --dport "$port" -j ACCEPT
-  # Pure DNAT of a loopback-bound publish arrives on eth0 with a 127/8 source
-  # (route_localnet), so the `-i lo` rule above does not cover it.
-  "$IPTABLES" -A INPUT -s 127.0.0.0/8 -p "$proto" --dport "$port" -j ACCEPT
-  if [ -n "$subnet" ]; then
-    "$IPTABLES" -A INPUT -s "$subnet" -p "$proto" --dport "$port" -j DROP
-  fi
-  # Everyone else: publishing is an explicit request for ingress.
-  "$IPTABLES" -A INPUT -p "$proto" --dport "$port" -j ACCEPT
-done
+  # Published ports are the one deliberate exception: `--publish` is an explicit
+  # request for ingress, so the container ports it names stay reachable. Entries
+  # arrive as proto:port or proto:lo-hi (see sandbox.IngressPorts); iptables wants
+  # lo:hi for a range.
+  # Only from the bridge gateway, which is where docker's own port forwarding
+  # arrives from. Accepting a published port from *any* source contradicted the
+  # thing that makes --publish safe: sandbox.NormalizePublish deliberately binds
+  # the HOST side to 127.0.0.1 unless told otherwise, and then the container
+  # accepted the same port from every other container on the bridge — a peer read
+  # workspace data out of a sandbox whose port the user had published to loopback
+  # only.
+  # || true: under set -e a failing substitution would abort the whole setup, and
+  # a missing default route is not a reason to refuse to run.
+  gw="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}' || true)"
+  # The container's own bridge subnet — the address range its peers live in, and
+  # the only range that must not reach a published port.
+  #
+  # Anchoring on the gateway alone assumed docker's userland proxy, which
+  # re-originates the connection from the gateway address. With
+  # "userland-proxy": false (common on Linux servers) it is pure DNAT: the source
+  # stays the original client, which is 127.0.0.1 for the loopback-bound publish
+  # that is sandbox-cli's default, and an arbitrary external address otherwise.
+  # Neither matches "$gw", so the published port would silently stop answering
+  # under --allow — the exact regression these rules were written to avoid.
+  #
+  # So the property is expressed directly instead of by proxy: everything may
+  # reach a published port except this container's bridge peers.
+  #
+  # That is a denylist where the old rule was an allowlist, and the difference is
+  # worth stating: a container on a *different* docker bridge is not in $subnet, so
+  # these rules now accept it where gateway-only would have denied it. Docker's own
+  # DOCKER-ISOLATION-STAGE-* chains block inter-bridge traffic, so this leans on
+  # that rather than opening a path — but it is defence in depth given up, and if
+  # docker ever stops isolating bridges by default this needs revisiting.
+  #
+  # A malformed $subnet would make the iptables call fail and, under `set -e`,
+  # refuse the run. That is the right direction, if an opaque one: the alternative
+  # is a published port with no peer filtering at all.
+  subnet="$(ip route 2>/dev/null | awk '/proto kernel/ && /src/ {print $1; exit}' || true)"
+  for p in $(printf '%s' "$ingress" | tr ',' ' '); do
+    [ -z "$p" ] && continue
+    proto="${p%%:*}"
+    port="$(printf '%s' "${p#*:}" | tr '-' ':')"
+    # The gateway is inside the subnet, so it is admitted before peers are denied.
+    [ -n "$gw" ] && "$IPTABLES" -A INPUT -s "$gw" -p "$proto" --dport "$port" -j ACCEPT
+    # Pure DNAT of a loopback-bound publish arrives on eth0 with a 127/8 source
+    # (route_localnet), so the `-i lo` rule above does not cover it.
+    "$IPTABLES" -A INPUT -s 127.0.0.0/8 -p "$proto" --dport "$port" -j ACCEPT
+    if [ -n "$subnet" ]; then
+      "$IPTABLES" -A INPUT -s "$subnet" -p "$proto" --dport "$port" -j DROP
+    fi
+    # Everyone else: publishing is an explicit request for ingress.
+    "$IPTABLES" -A INPUT -p "$proto" --dport "$port" -j ACCEPT
+  done
 
-"$IPTABLES" -A INPUT -m limit --limit 12/min --limit-burst 20 \
-  -j LOG --log-prefix "sandbox-cli DENY-IN " --log-level 4
-"$IPTABLES" -A INPUT -j REJECT --reject-with icmp-port-unreachable
+  "$IPTABLES" -A INPUT -m limit --limit 12/min --limit-burst 20 \
+    -j LOG --log-prefix "sandbox-cli DENY-IN " --log-level 4
+  "$IPTABLES" -A INPUT -j REJECT --reject-with icmp-port-unreachable
+else
+  "$IPTABLES" -P INPUT ACCEPT
+fi
 FW
 RUN chmod +x /usr/local/bin/sandbox-egress-setup
 
