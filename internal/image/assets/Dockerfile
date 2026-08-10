@@ -528,13 +528,20 @@ if ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
     exit 1
   fi
   probe6
+  # if/fi rather than `[ cond ] && rule || true`: in this branch a rule that
+  # fails must abort, and the `|| true` that shape needs to survive a false
+  # condition swallows a real failure too.
   "$IP6TABLES" -F OUTPUT
   "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT
-  [ "$CONNTRACK6" = 1 ] && "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+  if [ "$CONNTRACK6" = 1 ]; then
+    "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  fi
   "$IP6TABLES" -A OUTPUT $DENY6
   "$IP6TABLES" -F INPUT
   "$IP6TABLES" -A INPUT -i lo -j ACCEPT
-  [ "$CONNTRACK6" = 1 ] && "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+  if [ "$CONNTRACK6" = 1 ]; then
+    "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  fi
   "$IP6TABLES" -A INPUT $DENY6
 elif IP6TABLES="$(/usr/local/bin/sandbox-iptables -6)"; then
   # No global IPv6 address, but keep the rules if we can: an address could be
@@ -547,11 +554,15 @@ elif IP6TABLES="$(/usr/local/bin/sandbox-iptables -6)"; then
   probe6
   "$IP6TABLES" -F OUTPUT 2>/dev/null || true
   "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
-  [ "$CONNTRACK6" = 1 ] && "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  if [ "$CONNTRACK6" = 1 ]; then
+    "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  fi
   "$IP6TABLES" -A OUTPUT $DENY6 2>/dev/null || true
   "$IP6TABLES" -F INPUT 2>/dev/null || true
   "$IP6TABLES" -A INPUT -i lo -j ACCEPT 2>/dev/null || true
-  [ "$CONNTRACK6" = 1 ] && "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  if [ "$CONNTRACK6" = 1 ]; then
+    "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  fi
   "$IP6TABLES" -A INPUT $DENY6 2>/dev/null || true
 fi
 
@@ -742,7 +753,31 @@ if [ "$CONNTRACK" = 1 ]; then
   fi
   "$IPTABLES" -A INPUT $DENY
 else
+  # Flushed as well as opened: the chain above is rebuilt from empty on every
+  # run, and leaving whatever was there on the one path that does not filter is
+  # the difference nobody would look for.
+  "$IPTABLES" -F INPUT
   "$IPTABLES" -P INPUT ACCEPT
+  # --publish stops working here, and it stops working silently, so say it.
+  #
+  # The carve-out above exists because a dev server that quietly stopped
+  # answering the moment someone added --allow is a bad trade. On a stateless
+  # kernel that regression returns by a different route: the published service
+  # runs as the sandbox user, OUTPUT admits only the proxy's uid, and without
+  # ESTABLISHED,RELATED there is no rule under which the service's replies may
+  # leave. The port is reachable and the answer never comes back.
+  #
+  # That is the containment argument working as designed — it is the same
+  # sentence as "nothing inside can answer an inbound connection" — but a user
+  # who asked for a published port is owed the consequence rather than the
+  # principle.
+  if [ -n "$ingress" ]; then
+    echo "sandbox-cli: --publish cannot work on this kernel. The port is reachable, but the" >&2
+    echo "sandbox-cli: service answering it runs as the sandbox user, and without connection" >&2
+    echo "sandbox-cli: tracking there is no rule that lets its replies out — only the egress" >&2
+    echo "sandbox-cli: proxy may send. Requests will connect and then hang." >&2
+    echo "sandbox-cli: Run without --allow if you need the published port." >&2
+  fi
 fi
 FW
 RUN chmod +x /usr/local/bin/sandbox-egress-setup
