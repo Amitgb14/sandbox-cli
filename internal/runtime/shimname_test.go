@@ -54,11 +54,17 @@ func TestRuntimeName(t *testing.T) {
 // failure directions are not equally harmless. Being unable to see runc is a
 // wrong label; being unable to see kata is a boundary that goes unnoticed.
 func TestClassificationSeesThroughShimNames(t *testing.T) {
-	if !StrongerRuntime("io.containerd.kata.v2") {
-		t.Error("a kata shim must be recognised as a kernel of its own; missing it is a boundary reported as absent")
+	if !StrongerRuntime("io.containerd.kata-fc.v2") {
+		t.Error("a kata-fc shim must be recognised as a kernel of its own; missing it is a boundary reported as absent")
 	}
 	if !StrongerRuntime("io.containerd.runsc.v1") {
 		t.Error("a gVisor shim must be recognised as a kernel of its own")
+	}
+	// Normalisation is not the same as admission. The bare kata shim reduces to
+	// "kata" correctly (TestRuntimeName pins that) and is still not vouched for,
+	// because the name says nothing about which hypervisor is underneath.
+	if StrongerRuntime("io.containerd.kata.v2") {
+		t.Error("a bare kata name does not say which device model the VM has; see strongerRuntimes")
 	}
 	if StrongerRuntime("io.containerd.runc.v2") {
 		t.Error("a runc shim shares the host kernel; calling it stronger would claim a boundary no run got")

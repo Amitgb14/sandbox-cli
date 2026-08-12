@@ -224,6 +224,27 @@ func checkDNS(ctx context.Context, d Runtime) Check {
 	return c
 }
 
+// unvouchedRuntimes are the registered names that are neither an ordinary
+// shared-kernel runtime nor one this tool will call a kernel of its own.
+//
+// It asks internal/runtime rather than keeping a third list, for the reason
+// checkRuntimes already gives about the second: the same two questions are
+// answered about a running container in the session listing, and the answers
+// have to agree.
+func unvouchedRuntimes(names []string) []string {
+	var out []string
+	for _, n := range names {
+		if runtime.StrongerRuntime(n) {
+			continue
+		}
+		if (runtime.ContainerInfo{Runtime: n}).NotTheHostDefault() {
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // checkRuntimes reports whether a stronger-isolation runtime is registered.
 //
 // This is a warning even under prod, and the reasoning is worth stating rather
@@ -259,7 +280,22 @@ func checkRuntimes(ctx context.Context, d Runtime, profile string) Check {
 		return c
 	}
 	c.Status = StatusOK // reported, not failed — see the doc comment
-	c.Detail = "only the default runtime is registered: " + strings.Join(names, ", ")
+	// "only the default" would be a false sentence about a host that has an
+	// unvouched-for runtime registered — a bare `kata-runtime`, or an admin's
+	// `sysbox-runc`. Those are real runtimes that this tool declines to make a
+	// claim about, which is a different thing from their not being there, and
+	// printing them as the default is how a reader concludes they are absent.
+	//
+	// Falls through to the prod remedy below rather than returning: the gap is the
+	// same one either way — no runtime this tool will vouch for — and prod's advice
+	// about it is just as due to a host that has an unrecognised one registered.
+	if unvouched := unvouchedRuntimes(names); len(unvouched) > 0 {
+		c.Detail = "no runtime this tool vouches for; registered: " + strings.Join(names, ", ") +
+			" (" + strings.Join(unvouched, ", ") + " may still be stronger — " +
+			"sandbox-cli only vouches for names that say which hypervisor they use, e.g. kata-fc)"
+	} else {
+		c.Detail = "only the default runtime is registered: " + strings.Join(names, ", ")
+	}
 	if profile == config.ProfileProd {
 		// Kept out of Detail: a newline inside a tabwriter cell ends the column
 		// block, so a check added after this one would silently misalign.

@@ -30,15 +30,26 @@ import "strings"
 // stronger runtime is reported by name and simply not *called* stronger. It is
 // never the other way round — nothing here can claim a boundary a run did not
 // get.
+// Kata is admitted only under the names that say which hypervisor is underneath.
+// A VM boundary is only as good as the device model on the other side of it, and
+// QEMU's is large — historically most VM escapes have come through emulated
+// devices rather than through the CPU boundary itself. kata-fc (Firecracker) and
+// kata-clh (Cloud Hypervisor) are minimal device models; kata-qemu is not, and
+// the bare `kata`/`kata-runtime` names are worse than either, because they say
+// nothing at all — they resolve to whatever hypervisor configuration.toml
+// selects, which is QEMU by default.
+//
+// This is the same rule the list already applies to everything else: it may only
+// contain names that are distinctive about what they promise. Dropping the three
+// costs the mild thing — `--runtime kata-runtime` still runs, and is still shown
+// in the RUNTIME column by NotTheHostDefault; it is simply not *called* a kernel
+// of its own. Never the other way round.
 var strongerRuntimes = map[string]bool{
-	"runsc":        true, // gVisor
-	"runsc-kvm":    true, // gVisor on KVM
-	"kata":         true, // Kata Containers
-	"kata-runtime": true,
-	"kata-qemu":    true,
-	"kata-fc":      true, // Firecracker shim
-	"kata-clh":     true, // Cloud Hypervisor shim
-	"crun-vm":      true, // crun's microVM mode
+	"runsc":     true, // gVisor
+	"runsc-kvm": true, // gVisor on KVM
+	"kata-fc":   true, // Kata on Firecracker
+	"kata-clh":  true, // Kata on Cloud Hypervisor
+	"crun-vm":   true, // crun's microVM mode
 }
 
 // StrongerRuntime reports whether the named OCI runtime gives the container a
