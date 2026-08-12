@@ -124,8 +124,8 @@ export const FEATURES: Feature[] = [
     title: "Stronger isolation on request",
     group: "boundary",
     flag: "--runtime",
-    body: "Point a run at any OCI runtime the daemon knows: kata-runtime for a microVM with its own kernel, runsc for gVisor's userspace syscall filter. Mounts, hardening, caches and secrets work unchanged on top. The egress allowlist is the exception: gVisor provides no connection tracking, so a run asking for both is refused rather than run unfiltered.",
-    code: "sandbox-cli claude --runtime kata-runtime",
+    body: "Point a run at any OCI runtime the daemon knows: kata-fc or kata-clh for a microVM with its own kernel, runsc for gVisor's userspace kernel. Mounts, hardening, caches, secrets and the egress allowlist all work unchanged on top. gVisor takes two adjustments — it has no connection tracking, so the allowlist is built by uid and destination instead and inbound filtering is skipped (nothing inside can answer an unsolicited connection anyway), and it cannot reach docker's embedded resolver, so the host's own nameservers are supplied.",
+    code: "sandbox-cli claude --runtime kata-fc",
     state: "opt-in",
   },
   {

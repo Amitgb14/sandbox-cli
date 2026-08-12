@@ -252,7 +252,7 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
         where: "user",
         type: "string",
         fallback: "docker default (runc)",
-        body: "Any OCI runtime the daemon has registered: kata-runtime for a microVM with its own kernel, runsc for gVisor. Mounts, hardening, allowlist and caches all work unchanged on top.",
+        body: "Any OCI runtime the daemon has registered: kata-fc or kata-clh for a microVM with its own kernel, runsc for gVisor. Mounts, hardening, allowlist and caches all work unchanged on top. Only names that say which hypervisor is underneath are reported as a kernel of their own — a bare kata resolves to whatever configuration.toml picks.",
       },
     ],
   },
