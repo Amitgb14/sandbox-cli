@@ -41,6 +41,19 @@ var embeddedResolverUnreachable = map[string]bool{
 // Kata is deliberately absent. It boots a real kernel, so the question has a
 // different answer and has not been measured; adding it on the assumption that
 // "a VM is also isolated" is the kind of guess this file exists to avoid.
+//
+// # Known limitation
+//
+// It answers about the runtime a run *asked for*, which is "" when the caller
+// named none — so a daemon configured with `"default-runtime": "runsc"` in
+// daemon.json gets no resolvers, and its containers resolve nothing, while the
+// identical container launched with an explicit `--runtime runsc` works.
+//
+// Not fixed here because the fix is not local: BuildSpec resolves a spec without
+// talking to an engine, so answering it means adding a DefaultRuntime call to
+// the Runtime interface and paying a `docker info` on every launch to serve an
+// unusual configuration. Worth doing if anyone hits it; recorded rather than
+// guessed at until then.
 func EmbeddedResolverUnreachable(name string) bool {
 	return embeddedResolverUnreachable[runtimeName(name)]
 }

@@ -52,9 +52,27 @@ func TestParseResolversKeepsOnlyRoutableAddresses(t *testing.T) {
 			want: []string{"8.8.8.8"},
 		},
 		{
-			name: "IPv6 resolvers are addresses like any other",
+			// Not because it is a bad address, but because it is unreachable from
+			// this container: the sandbox network has no IPv6 and the firewall skips
+			// IPv6 nameservers outright. Keeping it would satisfy "a resolver was
+			// found" while leaving the container with nothing it can reach.
+			name: "IPv6 resolvers cannot be reached from the sandbox network",
 			in:   "nameserver 2001:558:feed::1\n",
-			want: []string{"2001:558:feed::1"},
+			want: nil,
+		},
+		{
+			// The shape an IPv6-first network produces, and the one that made the
+			// refusal fire on a false positive: the v4 entry is a loopback stub and
+			// the v6 one is real, so admitting IPv6 meant "found one" and a silent
+			// no-DNS container.
+			name: "loopback v4 plus real v6 leaves nothing usable",
+			in:   "nameserver 127.0.0.53\nnameserver 2001:4860:4860::8888\n",
+			want: nil,
+		},
+		{
+			name: "a real v4 resolver alongside v6 still counts",
+			in:   "nameserver 2001:4860:4860::8888\nnameserver 8.8.4.4\n",
+			want: []string{"8.8.4.4"},
 		},
 		{
 			name: "comments, search domains and options are not resolvers",
@@ -178,6 +196,11 @@ func TestBuildSpecSuppliesResolversOnlyWhereTheyAreNeeded(t *testing.T) {
 			if !m.RO {
 				t.Error("resolv.conf mount is writable; the agent must not be able to redirect its own name resolution")
 			}
+			// BuildSpec decides; the launch path writes. Both halves are checked in
+			// TestBuildSpecDoesNotWriteTheResolvConf; here we just need the content.
+			if err := materializeResolvConf(spec); err != nil {
+				t.Fatalf("materializeResolvConf: %v", err)
+			}
 			data, err := os.ReadFile(m.Source)
 			if err != nil {
 				t.Fatalf("generated file unreadable: %v", err)
@@ -186,6 +209,93 @@ func TestBuildSpecSuppliesResolversOnlyWhereTheyAreNeeded(t *testing.T) {
 				t.Errorf("generated file does not carry the host's resolver:\n%s", data)
 			}
 		})
+	}
+}
+
+// The regression the first version shipped: `network` is not final until the
+// allowlist has had its say, because an allowlist needs bridge networking and
+// promotes a configured `mode: none`. Deciding the resolver before that line
+// meant this combination got a networked container with docker's unreachable
+// 127.0.0.11 and no refusal — the exact silent no-DNS state the refusal exists
+// to prevent, reached by never calling it.
+func TestBuildSpecSuppliesResolversWhenTheAllowlistPromotesNetworkNone(t *testing.T) {
+	pinResolvers(t, "8.8.8.8")
+	cfg := baseCfg()
+	cfg.Network.Mode = "none"
+	spec, err := BuildSpec(cfg, Options{
+		Project: t.TempDir(), Runtime: "runsc", Allow: []string{"api.example.com"},
+		Command: []string{"sh"},
+	})
+	if err != nil {
+		t.Fatalf("BuildSpec: %v", err)
+	}
+	if spec.Network == "none" {
+		t.Fatal("an allowlist needs bridge networking; the premise of this test is gone")
+	}
+	if _, ok := resolvMount(spec); !ok {
+		t.Error("allowlist promoted the network but no resolvers were supplied: " +
+			"the container would reach the bridge and resolve nothing")
+	}
+}
+
+// A user who mounted their own /etc/resolv.conf has answered the question. Two
+// mounts on one target is a docker error rather than a decision.
+func TestBuildSpecYieldsToAUserSuppliedResolvConf(t *testing.T) {
+	pinResolvers(t, "8.8.8.8")
+	dir := t.TempDir()
+	own := filepath.Join(dir, "my-resolv.conf")
+	if err := os.WriteFile(own, []byte("nameserver 9.9.9.9\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project: t.TempDir(), Runtime: "runsc", Command: []string{"sh"},
+		ExtraMounts: []string{own + ":" + resolvConfTarget},
+	})
+	if err != nil {
+		t.Fatalf("BuildSpec: %v", err)
+	}
+	var n int
+	for _, m := range spec.Mounts {
+		if m.Target == resolvConfTarget {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d mounts on %s; docker refuses a duplicate mount point", n, resolvConfTarget)
+	}
+	m, _ := resolvMount(spec)
+	if m.Source != own {
+		t.Errorf("generated file won over the user's explicit mount: source = %q, want %q", m.Source, own)
+	}
+}
+
+// BuildSpec is what --dry-run calls, and printing a command must not touch the
+// filesystem — the rule ShareWithSandboxGroup and forwardedValues already keep.
+func TestBuildSpecDoesNotWriteTheResolvConf(t *testing.T) {
+	pinResolvers(t, "8.8.8.8")
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project: t.TempDir(), Runtime: "runsc", Command: []string{"sh"},
+	})
+	if err != nil {
+		t.Fatalf("BuildSpec: %v", err)
+	}
+	m, ok := resolvMount(spec)
+	if !ok {
+		t.Fatal("no resolver mount; the premise of this test is gone")
+	}
+	if _, err := os.Stat(m.Source); !os.IsNotExist(err) {
+		t.Errorf("BuildSpec wrote %s; resolving a spec must not have side effects", m.Source)
+	}
+	// ...and the launch path does write it, or the mount would carry nothing.
+	if err := materializeResolvConf(spec); err != nil {
+		t.Fatalf("materializeResolvConf: %v", err)
+	}
+	data, err := os.ReadFile(m.Source)
+	if err != nil {
+		t.Fatalf("launch path did not write the file: %v", err)
+	}
+	if !strings.Contains(string(data), "nameserver 8.8.8.8") {
+		t.Errorf("written file does not carry the resolver:\n%s", data)
 	}
 }
 
@@ -203,6 +313,12 @@ func TestBuildSpecRefusesWhenNoResolverCanBeFound(t *testing.T) {
 	// agent reporting that every request failed, which points at nothing.
 	if !strings.Contains(err.Error(), "/etc/resolv.conf") {
 		t.Errorf("refusal does not say where to look: %v", err)
+	}
+	// And it must not tell the reader to drop a flag they never typed: the
+	// runtime is as often a `runtime:` key in their config as a command-line
+	// flag, and "run without --runtime runsc" then points at nothing they can edit.
+	if strings.Contains(err.Error(), "without --runtime") {
+		t.Errorf("refusal assumes the runtime came from a flag: %v", err)
 	}
 }
 

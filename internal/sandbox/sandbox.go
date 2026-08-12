@@ -52,6 +52,12 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	// callers have to remember is one a new caller will not. Never in Prepare,
 	// which --dry-run uses: printing a command must not touch the filesystem.
 	ShareWithSandboxGroup(opts.AuthPersistDir)
+	// Same split, same reason: BuildSpec decided whether this run needs its own
+	// resolv.conf and refused if none could be built, but writing the file is a
+	// side effect and --dry-run must not have one.
+	if err := materializeResolvConf(spec); err != nil {
+		return 1, err
+	}
 	// Said on the way in, while the user can still choose a different image —
 	// and here rather than in Prepare for the same reason as the line above:
 	// --dry-run prints a command and must not editorialize about it.
@@ -119,6 +125,9 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	}
 	ShareWithSandboxGroup(opts.AuthPersistDir) // same reason as Run's
 	warnUmaskNeedsSandboxInit(spec)            // likewise
+	if err := materializeResolvConf(spec); err != nil {
+		return "", err
+	}
 	if err := s.enforceWritableMounts(spec); err != nil {
 		return "", err
 	}

@@ -757,7 +757,7 @@ func TestBuildSpec_GitIdentity(t *testing.T) {
 func TestBuildSpec_Runtime(t *testing.T) {
 	dir := t.TempDir()
 	// runsc below needs resolvers supplied to it (see resolvers.go), which would
-	// otherwise depend on — and write into — the machine running the test.
+	// otherwise depend on the machine running the test.
 	pinResolvers(t, "8.8.8.8")
 
 	// Default: no runtime (docker's default runc).
