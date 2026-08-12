@@ -13,6 +13,29 @@ version is tagged.
 
 ### Added
 
+- **The egress allowlist now works on kernels with no connection tracking**,
+  which is what makes `--runtime runsc` (gVisor) usable with an allowlist at
+  all. It used to refuse: the rules that admit replies to your own connections
+  need `-m conntrack`, and gVisor has neither that nor the older `-m state`.
+
+  Where the kernel cannot track connections, outbound filtering is unchanged —
+  only the egress proxy may send anything out, and the agent's 80/443 is still
+  redirected into it. The difference is inbound: a stateless chain cannot tell a
+  reply from an unsolicited connection, so inbound filtering is not applied and
+  the run says so. Nothing inside the container can answer an unsolicited
+  connection anyway, because the answer would leave from a denied uid.
+
+  Two other things gVisor lacks degrade the same way rather than refusing:
+  refused packets are not logged (`-m limit` / `-j LOG` are missing, so denials
+  are enforced but not counted), and refusals are dropped rather than rejected
+  (no `REJECT` target, so a blocked client waits for its own timeout instead of
+  failing at once). Each is announced when it applies.
+
+  Detected by trying, not assumed, so nothing changes on an ordinary host.
+  gVisor also needs `runsc install -- --net-raw`, without which no iptables
+  backend works at all.
+
+
 - **`doctor` now asks whether a container can resolve a name**, which is a
   requirement sandbox-cli creates for itself and nothing was checking. Under
   podman every sandbox gets its own network, and a custom podman network
