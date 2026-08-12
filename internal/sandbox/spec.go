@@ -421,6 +421,20 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	if network != "none" {
 		network = runtime.SandboxNetwork
 	}
+
+	// Some runtimes cannot reach the engine's embedded DNS server, so they need
+	// real resolvers handed to them or they resolve nothing at all — see
+	// resolvers.go. Placed after the network is decided rather than beside the
+	// other mounts, because `network: none` gives the container no interfaces and
+	// so no resolver of any kind is worth mounting for it.
+	if network != "none" && runtime.EmbeddedResolverUnreachable(runtimeName) {
+		m, err := hostResolverMount(runtimeName)
+		if err != nil {
+			return runtime.RunSpec{}, err
+		}
+		mounts = append(mounts, m)
+	}
+
 	egress := cfg.Network.EgressDomains()
 	allowlist := cfg.Network.Mode == "allowlist" || len(opts.Allow) > 0
 	if len(opts.Allow) > 0 {
