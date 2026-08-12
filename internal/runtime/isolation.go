@@ -109,6 +109,21 @@ func (c ContainerInfo) NotTheHostDefault() bool { return notHostDefault(c.Runtim
 // characterised, which is the pair of answers the comment above argues for.
 func notHostDefault(name string) bool { return !sharedKernelRuntimes[name] }
 
+// SharedKernelRuntime reports whether a name denotes one of the ordinary
+// shared-kernel runtimes, **normalising shim names first**.
+//
+// The opposite normalisation choice to NotTheHostDefault above, and the two are
+// asked by different callers for different purposes. The listing asks "is this
+// worth showing", where folding io.containerd.runc.v2 into the defaults would
+// hide a runtime an admin may have pointed at anything. A caller asking "may I
+// say this might be stronger than a shared kernel" needs the opposite: on every
+// containerd-backed daemon runc *is* reported as io.containerd.runc.v2, and
+// reading that as an unrecognised runtime tells the reader plain runc might be a
+// boundary it is not. Erring toward "this is the ordinary case" is the safe
+// direction for that question, exactly as erring toward "show it" is for the
+// other.
+func SharedKernelRuntime(name string) bool { return sharedKernelRuntimes[runtimeName(name)] }
+
 // runtimeName reduces a containerd **shim** name to the runtime name the lists
 // above are written in, and returns anything else untouched.
 //

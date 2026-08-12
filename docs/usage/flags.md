@@ -111,7 +111,7 @@ Accepted by `run` and by every agent wrapper.
 | `-P, --publish` | Publish a container port to the host, e.g. `-P 3000` or `-P 8080:3000` (repeatable; binds `127.0.0.1` unless you give an address). Refused under `--profile prod`, which also opens the firewall to match |
 | `--host-gateway` | Map `host.docker.internal` to the host (reach host MCP servers; needed on Linux) |
 | `--add-host` | Extra `HOST:IP` mapping passed to docker (repeatable) |
-| `--runtime` | OCI runtime for stronger isolation, e.g. `kata-runtime` (microVM) or `runsc` (gVisor) |
+| `--runtime` | OCI runtime for stronger isolation, e.g. `kata-fc` (microVM) or `runsc` (gVisor) |
 | `--no-snapshot` | Disable the crash safety net (periodic snapshots of the workspace under `refs/sandbox`) |
 | `--snapshot-interval` | How often to snapshot the workspace, e.g. `30s` (default: 2m) |
 

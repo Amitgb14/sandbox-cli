@@ -216,6 +216,53 @@ func TestDoctorReportsStrongerRuntimesWithoutRequiringThem(t *testing.T) {
 	}
 }
 
+// Every containerd-backed daemon reports runc as io.containerd.runc.v2 — the
+// Rocky Linux 10.2 host this repo's own comments cite, and every modern Docker
+// install. Classifying that as unrecognised told the reader plain runc "may
+// still be stronger", which is the one direction nothing here may fail in.
+func TestDoctorDoesNotCallShimSpelledRuncStronger(t *testing.T) {
+	h := healthy()
+	h.runtimes = []string{"io.containerd.runc.v2", "runc"}
+	withHost(t, h)
+	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev, "docker") {
+		if c.Name != "isolation runtime" {
+			continue
+		}
+		if strings.Contains(c.Detail, "may still be stronger") {
+			t.Errorf("the shim spelling of runc was reported as possibly stronger: %q", c.Detail)
+		}
+	}
+}
+
+// An unrecognised runtime is a different case and must still be named, rather
+// than folded into "only the default runtime is registered" — that sentence
+// would be false, and a reader concludes the runtime is absent.
+func TestDoctorNamesAnUnrecognisedRuntimeWithoutVouchingForIt(t *testing.T) {
+	h := healthy()
+	h.runtimes = []string{"io.containerd.runc.v2", "kata-runtime"}
+	withHost(t, h)
+	var saw bool
+	for _, c := range runDoctorChecks(context.Background(), config.ProfileDev, "docker") {
+		if c.Name != "isolation runtime" {
+			continue
+		}
+		saw = true
+		if strings.Contains(c.Detail, "only the default runtime") {
+			t.Errorf("an unrecognised runtime was reported as the default: %q", c.Detail)
+		}
+		if !strings.Contains(c.Detail, "kata-runtime") {
+			t.Errorf("the unrecognised runtime is not named: %q", c.Detail)
+		}
+		// Named, and still not characterised as a boundary.
+		if strings.Contains(c.Detail, "stronger isolation available") {
+			t.Errorf("a name that does not say its hypervisor was vouched for: %q", c.Detail)
+		}
+	}
+	if !saw {
+		t.Fatal("no isolation runtime check ran")
+	}
+}
+
 // With no daemon there is one fact worth printing, not six unknowns.
 func TestDoctorSaysOneThingWhenDockerIsAbsent(t *testing.T) {
 	withHost(t, fakeHost{unavailable: errors.New("cannot reach the docker daemon")})

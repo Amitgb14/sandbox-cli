@@ -89,6 +89,30 @@ func TestClassificationSeesThroughShimNames(t *testing.T) {
 	}
 }
 
+// SharedKernelRuntime is notHostDefault's question with the opposite
+// normalisation, and the asymmetry is the point. doctor asks "may I suggest this
+// might be stronger than a shared kernel", and on every containerd-backed daemon
+// runc is reported as io.containerd.runc.v2 — reading that as unrecognised told
+// the reader plain runc might be a boundary it is not.
+func TestSharedKernelRuntimeSeesRuncThroughItsShimName(t *testing.T) {
+	for _, name := range []string{
+		"", "runc", "crun", "youki", "docker-runc",
+		"io.containerd.runc.v2", "io.containerd.crun.v2",
+	} {
+		if !SharedKernelRuntime(name) {
+			t.Errorf("SharedKernelRuntime(%q) = false, want true", name)
+		}
+	}
+	// Anything that is not an ordinary shared-kernel name: the stronger runtimes,
+	// and names nobody here has heard of. Both must stay outside, so a caller
+	// asking this question never mistakes one for the plain default.
+	for _, name := range []string{"runsc", "kata-fc", "kata-runtime", "sysbox-runc", "RUNC"} {
+		if SharedKernelRuntime(name) {
+			t.Errorf("SharedKernelRuntime(%q) = true, want false", name)
+		}
+	}
+}
+
 // TestMatchRuntimeReturnsTheEnginesOwnName is the regression for the reported
 // symptom — `--runtime runc` refused on a host whose default runtime is runc —
 // and for the trap in fixing it: accepting a spelling is only safe if the

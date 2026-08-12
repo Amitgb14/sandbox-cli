@@ -68,7 +68,7 @@ const scaffoldConfig = `# sandbox configuration (https://github.com/Amitgb14/san
 #
 #   image: my-org/my-dev-image:latest
 #   user: sandbox            # sandbox (non-root default) | root
-#   runtime: runsc           # stronger boundary (gVisor / kata-runtime)
+#   runtime: runsc           # stronger boundary (gVisor / kata-fc)
 #   mounts:
 #     - { host: ./data, container: /workspace/data, mode: rw }
 #   env:

@@ -18,7 +18,7 @@ path` to see which files were consulted.
 image: sandbox-base:0.0.1-9f95ae16   # default; tag is content-addressed
 workdir: /workspace
 user: sandbox           # non-root; agents refuse --dangerously-skip-permissions as root
-# runtime: kata-runtime # stronger isolation (microVM); or runsc for gVisor. default: runc
+# runtime: kata-fc      # stronger isolation (microVM); or runsc for gVisor. default: runc
 # engine: podman        # docker (default) or podman
 mounts:
   - { host: ~/data, container: /workspace/data, mode: rw }

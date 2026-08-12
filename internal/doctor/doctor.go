@@ -231,15 +231,20 @@ func checkDNS(ctx context.Context, d Runtime) Check {
 // checkRuntimes already gives about the second: the same two questions are
 // answered about a running container in the session listing, and the answers
 // have to agree.
+// It asks runtime.SharedKernelRuntime and not ContainerInfo.NotTheHostDefault,
+// which is the same question with the opposite normalisation and was the first
+// version's bug. NotTheHostDefault looks the name up raw on purpose, so on every
+// containerd-backed daemon — where `docker info` reports runc as
+// io.containerd.runc.v2 — it classified plain runc as unrecognised and this
+// check told the reader that runc "may still be stronger". Nothing here may ever
+// suggest a boundary a run did not get.
 func unvouchedRuntimes(names []string) []string {
 	var out []string
 	for _, n := range names {
-		if runtime.StrongerRuntime(n) {
+		if runtime.StrongerRuntime(n) || runtime.SharedKernelRuntime(n) {
 			continue
 		}
-		if (runtime.ContainerInfo{Runtime: n}).NotTheHostDefault() {
-			out = append(out, n)
-		}
+		out = append(out, n)
 	}
 	sort.Strings(out)
 	return out
@@ -290,9 +295,18 @@ func checkRuntimes(ctx context.Context, d Runtime, profile string) Check {
 	// same one either way — no runtime this tool will vouch for — and prod's advice
 	// about it is just as due to a host that has an unrecognised one registered.
 	if unvouched := unvouchedRuntimes(names); len(unvouched) > 0 {
-		c.Detail = "no runtime this tool vouches for; registered: " + strings.Join(names, ", ") +
-			" (" + strings.Join(unvouched, ", ") + " may still be stronger — " +
-			"sandbox-cli only vouches for names that say which hypervisor they use, e.g. kata-fc)"
+		c.Detail = "no runtime this tool vouches for; registered: " + strings.Join(names, ", ")
+		// Name the unvouched subset only when it *is* a subset. On a host whose
+		// only registered runtime is the unrecognised one, repeating the identical
+		// list inside its own parenthesis reads as a second fact rather than the
+		// same one twice.
+		if len(unvouched) < len(names) {
+			c.Detail += " (" + strings.Join(unvouched, ", ") + " may still be stronger)"
+		} else {
+			c.Detail += " (it may still be stronger)"
+		}
+		c.Detail += "; sandbox-cli only vouches for names that say which hypervisor " +
+			"they use, e.g. kata-fc"
 	} else {
 		c.Detail = "only the default runtime is registered: " + strings.Join(names, ", ")
 	}

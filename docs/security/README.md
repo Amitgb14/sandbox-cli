@@ -217,7 +217,7 @@ Kata, being a real kernel, is subject to none of this; it has not been measured
 here yet.
 
 A run does not have to be taken on trust afterwards: the runtime it asked for is
-recorded in the audit log (`"runtime": "kata-runtime"`, omitted when the run took
+recorded in the audit log (`"runtime": "kata-fc"`, omitted when the run took
 the host default), and `sandbox-cli list` grows a `RUNTIME` column as soon as any
 session is on something other than the default — read back from the engine rather
 than remembered from the launch.

@@ -11,7 +11,7 @@ the host can provide.
 | Egress allowlist (`--allow`) | ✅ ¹ | ✅ | ✅ ¹ |
 | `--host-gateway` | auto ² | ✅ (needed) | auto ² |
 | `/workspace` file ownership | virtualized to you | container uid ³ | virtualized to you |
-| `--runtime kata-runtime` / `runsc` (microVM / gVisor) | ❌ ⁴ | ✅ ⁵ | ❌ ⁴ |
+| `--runtime kata-fc` / `runsc` (microVM / gVisor) | ❌ ⁴ | ✅ ⁵ | ❌ ⁴ |
 
 1. The firewall runs `iptables` inside the (Linux) container, so it works wherever
    the container kernel is Linux — including Docker Desktop. Verified in CI on

@@ -52,7 +52,7 @@ or build anything by hand.
 
 **Platform note:** the tool and nearly every feature work on macOS, Linux, and
 Windows wherever Docker runs. The one exception is selecting a microVM/gVisor
-runtime (`--runtime kata-runtime` / `runsc`), which needs **native Linux** —
+runtime (`--runtime kata-fc` / `runsc`), which needs **native Linux** —
 Docker Desktop on macOS/Windows doesn't allow custom runtimes (it already runs
 containers in its own Linux VM). See the
 [Platform support table](platforms/README.md) for the full breakdown.
@@ -1077,7 +1077,7 @@ stronger OCI runtime installed, ask for it and get a harder boundary — nothing
 else changes:
 
 ```sh
-sandbox-cli claude --runtime kata-runtime   # microVM: its own kernel
+sandbox-cli claude --runtime kata-fc        # microVM: its own kernel
 sandbox-cli claude --runtime runsc          # gVisor: userspace-kernel filter
 ```
 
@@ -1250,7 +1250,7 @@ Only you write this file, so it may set anything:
 ```yaml
 image: my-org/dev:latest
 user: sandbox                 # non-root by default
-runtime: ""                   # runsc / kata-runtime for a stronger boundary
+runtime: ""                   # runsc / kata-fc for a stronger boundary
 
 mounts:
   - { host: ~/data, container: /workspace/data, mode: ro }
