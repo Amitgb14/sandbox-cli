@@ -54,11 +54,17 @@ func TestRuntimeName(t *testing.T) {
 // failure directions are not equally harmless. Being unable to see runc is a
 // wrong label; being unable to see kata is a boundary that goes unnoticed.
 func TestClassificationSeesThroughShimNames(t *testing.T) {
-	if !StrongerRuntime("io.containerd.kata.v2") {
-		t.Error("a kata shim must be recognised as a kernel of its own; missing it is a boundary reported as absent")
+	if !StrongerRuntime("io.containerd.kata-fc.v2") {
+		t.Error("a kata-fc shim must be recognised as a kernel of its own; missing it is a boundary reported as absent")
 	}
 	if !StrongerRuntime("io.containerd.runsc.v1") {
 		t.Error("a gVisor shim must be recognised as a kernel of its own")
+	}
+	// Normalisation is not the same as admission. The bare kata shim reduces to
+	// "kata" correctly (TestRuntimeName pins that) and is still not vouched for,
+	// because the name says nothing about which hypervisor is underneath.
+	if StrongerRuntime("io.containerd.kata.v2") {
+		t.Error("a bare kata name does not say which device model the VM has; see strongerRuntimes")
 	}
 	if StrongerRuntime("io.containerd.runc.v2") {
 		t.Error("a runc shim shares the host kernel; calling it stronger would claim a boundary no run got")
@@ -80,6 +86,30 @@ func TestClassificationSeesThroughShimNames(t *testing.T) {
 	// property the two lists have always had, unchanged by normalisation.
 	if !notHostDefault("sysbox-runc") || StrongerRuntime("sysbox-runc") {
 		t.Error("an unrecognised runtime must be shown and not vouched for")
+	}
+}
+
+// SharedKernelRuntime is notHostDefault's question with the opposite
+// normalisation, and the asymmetry is the point. doctor asks "may I suggest this
+// might be stronger than a shared kernel", and on every containerd-backed daemon
+// runc is reported as io.containerd.runc.v2 — reading that as unrecognised told
+// the reader plain runc might be a boundary it is not.
+func TestSharedKernelRuntimeSeesRuncThroughItsShimName(t *testing.T) {
+	for _, name := range []string{
+		"", "runc", "crun", "youki", "docker-runc",
+		"io.containerd.runc.v2", "io.containerd.crun.v2",
+	} {
+		if !SharedKernelRuntime(name) {
+			t.Errorf("SharedKernelRuntime(%q) = false, want true", name)
+		}
+	}
+	// Anything that is not an ordinary shared-kernel name: the stronger runtimes,
+	// and names nobody here has heard of. Both must stay outside, so a caller
+	// asking this question never mistakes one for the plain default.
+	for _, name := range []string{"runsc", "kata-fc", "kata-runtime", "sysbox-runc", "RUNC"} {
+		if SharedKernelRuntime(name) {
+			t.Errorf("SharedKernelRuntime(%q) = true, want false", name)
+		}
 	}
 }
 

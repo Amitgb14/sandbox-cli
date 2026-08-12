@@ -33,7 +33,8 @@ type Config struct {
 	Secrets  map[string]SecretSpec `yaml:"secrets"`
 	// Runtime is the OCI runtime (docker --runtime); "" uses docker's default
 	// (runc). Set to a stronger-isolation runtime the host has registered, e.g.
-	// "kata-runtime" (microVM) or "runsc" (gVisor).
+	// "kata-fc" (microVM) or "runsc" (gVisor). Any registered name is accepted;
+	// runtime.StrongerRuntime decides which are reported as a kernel of their own.
 	Runtime string `yaml:"runtime"`
 
 	// Engine is the container engine: "docker" (default) or "podman".

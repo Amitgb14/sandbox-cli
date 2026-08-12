@@ -12,7 +12,7 @@ import "testing"
 
 func TestStrongerRuntimeNamesOnlyWhatItKnows(t *testing.T) {
 	for _, name := range []string{
-		"runsc", "runsc-kvm", "kata", "kata-runtime", "kata-qemu", "kata-fc", "kata-clh", "crun-vm",
+		"runsc", "runsc-kvm", "kata-fc", "kata-clh", "crun-vm",
 	} {
 		if !StrongerRuntime(name) {
 			t.Errorf("StrongerRuntime(%q) = false, want true", name)
@@ -21,7 +21,14 @@ func TestStrongerRuntimeNamesOnlyWhatItKnows(t *testing.T) {
 	// The default, the shared-kernel alternatives, and anything unrecognised —
 	// including a name that only looks like one of ours. Nothing here may claim
 	// a boundary a run did not get.
-	for _, name := range []string{"", "runc", "crun", "youki", "docker-runc", "RUNSC", "runsc-hostnet"} {
+	//
+	// The three Kata names are here rather than above on purpose: a VM boundary
+	// is only as strong as its device model, and none of these three names says
+	// which one it got. See strongerRuntimes.
+	for _, name := range []string{
+		"", "runc", "crun", "youki", "docker-runc", "RUNSC", "runsc-hostnet",
+		"kata", "kata-runtime", "kata-qemu",
+	} {
 		if StrongerRuntime(name) {
 			t.Errorf("StrongerRuntime(%q) = true, want false", name)
 		}
@@ -60,14 +67,20 @@ func TestContainerRuntimePrefersPodmansOwnField(t *testing.T) {
 	}{
 		{name: "docker, default", hostConfig: "runc", want: "runc"},
 		{
-			name: "docker, kata", hostConfig: "kata-runtime", want: "kata-runtime",
-			wantStronger: true, wantWorthShowing: true,
+			// Shown, and deliberately not vouched for. A bare kata name resolves to
+			// whatever hypervisor configuration.toml selects — QEMU by default — so
+			// it does not say which device model the boundary actually has. This is
+			// the pair of answers strongerRuntimes and notHostDefault exist to give
+			// separately: worth naming in a listing, not a claim about the boundary.
+			name: "docker, kata-runtime", hostConfig: "kata-runtime", want: "kata-runtime",
+			wantStronger: false, wantWorthShowing: true,
 		},
 		{
 			// The regression: without the OCIRuntime branch this yielded "oci",
 			// which is neither stronger nor the default, so podman users saw a
 			// RUNTIME column full of a placeholder — or, before that, none at all.
-			name: "podman, kata", oci: "kata-runtime", hostConfig: "oci", want: "kata-runtime",
+			// A name that says which hypervisor it got, so it is vouched for.
+			name: "podman, kata-fc", oci: "kata-fc", hostConfig: "oci", want: "kata-fc",
 			wantStronger: true, wantWorthShowing: true,
 		},
 		{name: "podman, crun", oci: "crun", hostConfig: "oci", want: "crun"},

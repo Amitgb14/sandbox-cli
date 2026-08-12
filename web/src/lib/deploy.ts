@@ -183,7 +183,7 @@ const PROD_STEPS: DeployStep[] = [
   },
   {
     title: "If the agent itself is untrusted, change the runtime",
-    code: "# ~/.config/sandbox/config.yaml\nruntime: runsc        # gVisor; or kata-runtime for a microVM",
+    code: "# ~/.config/sandbox/config.yaml\nruntime: runsc        # gVisor; or kata-fc for a microVM",
     body: "A container namespace is a boundary against a mistaken agent, not against a determined one with a kernel exploit. The profile deliberately does not select a stronger runtime for you — which ones are registered is a property of the machine, and doctor reports what it found rather than pretending. This is a user-config key, never a project one: a repository choosing which binary runs on your host would be choosing what executes.",
   },
 ];

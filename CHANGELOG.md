@@ -13,6 +13,28 @@ version is tagged.
 
 ### Added
 
+- **`--runtime runsc` (gVisor) can resolve names again**, which it could not do
+  at all before — in any network mode, allowlist or not. On a user-defined
+  network docker does not give a container real resolvers; it writes
+  `nameserver 127.0.0.11` and makes that address answer through a redirect in
+  the host kernel's netfilter. gVisor implements its own network stack and never
+  consults that, so the address had nothing behind it and every lookup failed.
+  The agent could not reach `api.anthropic.com`, and the allowlist could not
+  turn a domain into an address to write a rule for.
+
+  sandbox-cli now generates a `resolv.conf` from the host's own routable
+  nameservers and mounts it read-only into runs on those runtimes. The firewall
+  needed no change: it already permits exactly the resolvers the container's
+  `/etc/resolv.conf` lists, so those and nothing else are reachable on port 53.
+
+  Two consequences worth knowing. Docker's embedded resolver also answers
+  *container* names on the network, and that is gone on these runtimes —
+  deliberately, since sandboxes reaching each other by name is what the
+  isolated network exists to prevent. And a host whose only nameserver is a
+  loopback stub (systemd-resolved's `127.0.0.53`) has nothing a container can
+  reach, so the run **refuses** rather than starting a sandbox that resolves
+  nothing.
+
 - **The egress allowlist now works on kernels with no connection tracking**,
   which is what makes `--runtime runsc` (gVisor) usable with an allowlist at
   all. It used to refuse: the rules that admit replies to your own connections

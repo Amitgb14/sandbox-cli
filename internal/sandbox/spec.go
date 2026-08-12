@@ -421,6 +421,7 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	if network != "none" {
 		network = runtime.SandboxNetwork
 	}
+
 	egress := cfg.Network.EgressDomains()
 	allowlist := cfg.Network.Mode == "allowlist" || len(opts.Allow) > 0
 	if len(opts.Allow) > 0 {
@@ -524,6 +525,33 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		dockerUser = "root"
 		entrypoint = "/usr/local/bin/sandbox-firewall"
 		network = runtime.SandboxNetwork // allowlist needs networking, not "none"
+	}
+
+	// Some runtimes cannot reach the engine's embedded DNS server and resolve
+	// nothing without real resolvers handed to them — see resolvers.go.
+	//
+	// It has to be **here**, below the line above, and the first version was
+	// wrong for being above it. `network` is not final until the allowlist has
+	// had its say: an allowlist needs bridge networking, so a configured
+	// `mode: none` is promoted to the sandbox network right there. Deciding
+	// beforehand meant `--allow` + `mode: none` + runsc skipped the resolver
+	// *and* got a network — a container on the bridge with docker's unreachable
+	// 127.0.0.11, resolving nothing, while sandbox-cli reported the allowlist
+	// enforced. That is the exact state hostResolverMount's refusal exists to
+	// prevent, reached by never calling it.
+	if network != "none" && runtime.EmbeddedResolverUnreachable(runtimeName) {
+		// A user who mounted their own /etc/resolv.conf has answered this
+		// question themselves, and two mounts on one target is a docker error
+		// ("Duplicate mount point") rather than a decision. Theirs wins: it is
+		// the more specific instruction, and generating a file to fight it would
+		// be overriding an explicit request with an inferred one.
+		if !hasMountTarget(mounts, resolvConfTarget) {
+			m, err := hostResolverMount(runtimeName)
+			if err != nil {
+				return runtime.RunSpec{}, err
+			}
+			mounts = append(mounts, m)
+		}
 	}
 	// Read by sandbox-init, which is the image's default entrypoint and also what
 	// sandbox-firewall hands off to after its drop — so this lands on the guest in

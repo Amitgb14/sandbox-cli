@@ -301,7 +301,7 @@ export const PLATFORMS = [
     footnote: "On native Linux, use --user \"$(id -u):$(id -g)\" if ownership matters.",
   },
   {
-    capability: "--runtime kata-runtime / runsc",
+    capability: "--runtime kata-fc / runsc",
     macos: "no",
     linux: "yes",
     windows: "no",

@@ -125,7 +125,7 @@ the deferred list onto the roadmap:
   ~320ms, Zeroboot forks a KVM VM at p50 0.79ms by mmap'ing a Firecracker snapshot. Our
   "snapshots" are git refs of the workspace (`internal/rescue`), which is a different
   feature wearing the same word.
-- **macOS cannot reach the stronger boundary at all.** `--runtime kata-runtime`/`runsc` is
+- **macOS cannot reach the stronger boundary at all.** `--runtime kata-fc`/`runsc` is
   unavailable on Docker Desktop, which is most developers. libkrun embeds a
   Hypervisor.framework microVM on macOS and Microsandbox ships per-sandbox kernels on it,
   so this is no longer "Firecracker later" — it is a thing that exists on the platform the

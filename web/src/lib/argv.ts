@@ -77,10 +77,10 @@ export const OPTIONS: Option[] = [
   },
   {
     id: "microvm",
-    flag: "--runtime kata-runtime",
+    flag: "--runtime kata-fc",
     label: "microVM runtime",
     effect:
-      "Hands the container to a different OCI runtime — Kata gives it its own kernel. Everything else is built identically on top.",
+      "Hands the container to a different OCI runtime — Kata gives it its own kernel. kata-fc names the hypervisor (Firecracker), which is the part that decides how large the escape surface is. Everything else is built identically on top.",
     direction: "tightens",
   },
   {
@@ -175,7 +175,7 @@ export function buildArgv(agent: string, on: Set<OptionId>): ArgLine[] {
 
   push("docker run --init --rm -it", "base", undefined, "Every container is --rm: nothing survives the run.");
   if (on.has("microvm"))
-    push("--runtime kata-runtime", "base", "microvm", "A different OCI runtime — its own kernel.");
+    push("--runtime kata-fc", "base", "microvm", "A different OCI runtime — its own kernel.");
   push("--hostname sandbox", "base");
   push(on.has("root") ? "--user root" : "--user sandbox", "base", on.has("root") ? "root" : undefined,
     on.has("root") ? "Root in the container." : "Non-root by default.");

@@ -72,11 +72,14 @@ sandbox-cli run -- sh -c 'curl -fsSL https://claude.ai/install.sh | bash'
   directly with `sandbox-cli run -- sh -c 'getent hosts api.anthropic.com'`; if
   that fails, so will everything else.
 - **Stronger runtimes are opt-in and unvalidated by the host.** `--runtime runsc`
-  and `--runtime kata-runtime` need the runtime installed *and* registered with
+  and `--runtime kata-fc` need the runtime installed *and* registered with
   the daemon — see [Stronger isolation](../security/README.md#stronger-isolation-microvm--gvisor).
-  gVisor replaces the network stack, and some workloads (Claude Code included,
-  in one report) fail to reach an API through it; drop the flag to confirm before
-  chasing it elsewhere.
+  gVisor additionally needs `runsc install -- --net-raw` before an allowlist can
+  be programmed. It replaces the network stack, which is why the earlier reports
+  of workloads failing to reach an API through it were correct: docker's embedded
+  resolver is unreachable there, so nothing resolved. sandbox-cli supplies the
+  host's resolvers on that runtime now, but if a name still fails, drop the flag
+  to confirm before chasing it elsewhere.
 
 ## File ownership and persisted logins
 
