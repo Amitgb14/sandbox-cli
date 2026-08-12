@@ -163,31 +163,58 @@ host has a stronger OCI runtime registered, select it per run for a harder
 boundary — no other change to how the sandbox is built:
 
 ```sh
-sandbox-cli claude --runtime kata-runtime   # microVM: own kernel (hardware boundary)
-sandbox-cli claude --runtime runsc          # gVisor: userspace-kernel syscall filter
+sandbox-cli claude --runtime kata-fc        # microVM: own kernel (hardware boundary)
+sandbox-cli claude --runtime runsc          # gVisor: userspace kernel in front of the host's
 ```
 
-Set it once in config with `runtime: kata-runtime`. This requires the runtime to
+Set it once in config with `runtime: kata-fc`. This requires the runtime to
 be installed and registered with the Docker daemon (e.g. Kata needs a Linux host
 with nested virtualization; it is not available on stock macOS Docker Desktop —
 see [Platform support](../platforms/README.md)). Mounts, hardening, caches and
 secrets work unchanged on top of it.
 
-**The egress allowlist is the exception, and on gVisor it does not work.**
-Measured on Rocky Linux 10.2 with gVisor installed:
+Any registered runtime can be selected, but sandbox-cli only *vouches for* — that
+is, only calls a kernel of its own — names that say which hypervisor is
+underneath: `kata-fc` (Firecracker), `kata-clh` (Cloud Hypervisor), `runsc`,
+`runsc-kvm`, `crun-vm`. A VM boundary is only as good as the device model on the
+other side of it, and historically most VM escapes have come through emulated
+devices rather than the CPU boundary; a bare `kata` or `kata-runtime` resolves to
+whatever `configuration.toml` selects, which is QEMU by default. Those names still
+run and still appear in the `RUNTIME` column — they are simply not characterised.
 
-- gVisor gates iptables behind a flag its installer leaves off, so the allowlist
-  cannot be programmed at all until you `runsc install -- --net-raw`.
-- With that flag on, gVisor serves only the older iptables backend, which
-  sandbox-cli now selects automatically.
-- But gVisor provides **no connection tracking** — neither `-m conntrack` nor
-  `-m state` exists — and the allowlist's "accept replies" rules have no
-  equivalent without it.
+**gVisor needs one thing from the host and gets three adjustments from
+sandbox-cli.** All measured on Rocky Linux 10.2 with gVisor installed:
 
-So a run that asks for both a stronger runtime and an egress allowlist is
-refused rather than run unfiltered, which means `--profile prod` (which requires
-an allowlist) and gVisor cannot currently be combined. Kata, being a real kernel,
-is not subject to this; it has not been measured here yet.
+- gVisor gates iptables behind a flag its installer leaves off. Run
+  `runsc install -- --net-raw` or the allowlist cannot be programmed at all.
+- It serves only the older iptables backend, which sandbox-cli selects
+  automatically.
+- It has **no connection tracking** — neither `-m conntrack` nor `-m state`. The
+  allowlist is built without it and says so at startup. Outbound filtering is
+  unchanged: only the proxy's uid may send, and the guest's 80/443 is still
+  redirected into it. Inbound filtering is *not* applied, because a stateless
+  chain cannot tell a reply from an unsolicited connection and denying both would
+  break every allowed request. Nothing inside can answer an unsolicited
+  connection anyway — the answer would leave from a denied uid — and that is
+  measured, not argued: a host connecting to an unpublished port inside a gVisor
+  sandbox never completes the TCP handshake, while the same container without an
+  allowlist answers immediately.
+- It cannot reach docker's embedded DNS server (`127.0.0.11` is made to answer by
+  a redirect in the host kernel's netfilter, which gVisor's own network stack
+  never consults), so **no name resolved at all** — in any network mode.
+  sandbox-cli now generates a `resolv.conf` from the host's own routable
+  nameservers and mounts it read-only into runs on these runtimes. A host whose
+  only nameserver is a loopback stub has nothing a container can reach, so such a
+  run refuses rather than starting a sandbox that resolves nothing.
+
+Two limits remain on gVisor. `--publish` cannot be combined with `--allow`: with
+no connection tracking there is no reply path for a service running as the sandbox
+uid, so the port connects and hangs — the run warns and says to drop one of the
+two. And refused packets are not logged by the kernel (`-m limit` / `-j LOG` are
+missing), though the egress proxy still names each denied host.
+
+Kata, being a real kernel, is subject to none of this; it has not been measured
+here yet.
 
 A run does not have to be taken on trust afterwards: the runtime it asked for is
 recorded in the audit log (`"runtime": "kata-runtime"`, omitted when the run took
