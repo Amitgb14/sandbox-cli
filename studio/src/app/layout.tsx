@@ -36,6 +36,24 @@ export const viewport: Viewport = {
   ],
 };
 
+/**
+ * A string, encoded so it is safe *inside a `<script>` element*.
+ *
+ * `JSON.stringify` alone is not that, which is easy to believe it is: it escapes
+ * quotes and control characters for a JavaScript *parser*, while the HTML parser
+ * gets there first and ends the block at the literal text `</script`, wherever it
+ * appears — inside a string literal included. `<!--` opens a comment on the same
+ * terms. Escaping every `<` as its `<` form removes both, and changes
+ * nothing about the value the browser ends up with.
+ *
+ * Today these values come from the operator's own environment, so this is
+ * hygiene rather than a hole. It is written down because the alternative is a
+ * comment claiming an encoding is a safety measure when it is not.
+ */
+function scriptSafe(value: string): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   // Where the daemon is, handed to the browser at *request* time.
   //
@@ -46,9 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // that reason.
   //
   // Emitted only when it is set, so `npm run dev` and any self-built deployment
-  // keep the build-time value and this script does not appear at all. It is a
-  // JSON-encoded string rather than an interpolation: the value comes from the
-  // environment, and a URL is not a place to trust quoting.
+  // keep the build-time value and this script does not appear at all.
   //
   // The token rides along for the same reason: a script that starts both halves
   // knows the token it generated, and making someone copy it out of a terminal
@@ -57,8 +73,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const apiUrl = process.env.SANDBOX_API_URL;
   const apiToken = process.env.SANDBOX_STUDIO_TOKEN;
   const boot = [
-    apiUrl ? `window.__SANDBOX_API__=${JSON.stringify(apiUrl)};` : "",
-    apiToken ? `window.__SANDBOX_TOKEN__=${JSON.stringify(apiToken)};` : "",
+    apiUrl ? `window.__SANDBOX_API__=${scriptSafe(apiUrl)};` : "",
+    apiToken ? `window.__SANDBOX_TOKEN__=${scriptSafe(apiToken)};` : "",
   ].join("");
   return (
     // `className="dark"` is the designed default, and next-themes takes over

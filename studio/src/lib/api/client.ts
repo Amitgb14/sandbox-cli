@@ -215,15 +215,25 @@ async function errorText(res: Response, method: string, path: string): Promise<s
  *
  * Three sources, in this order:
  *
- *   localStorage        set from the console panel, which is where the need
- *                       appears. Wins, because it is the one a person can change
- *                       without restarting anything.
  *   window.__SANDBOX_…  injected per request from the server's environment
  *                       (`SANDBOX_STUDIO_TOKEN`), so a scripted install can
  *                       generate a token, hand it to both halves and leave
  *                       nobody a value to copy between two terminals.
+ *   localStorage        set from the console panel, which is where the need
+ *                       appears when nothing was injected.
  *   NEXT_PUBLIC_…       baked in at build time, for a Studio that builds its own
  *                       bundle next to a daemon whose token never changes.
+ *
+ * The injected value is first, and that ordering is the whole reason this is a
+ * list rather than one source. It used to be second, on the reasoning that a
+ * person's own paste should beat a build — but the injected value is not a
+ * build, it is *this* server saying what token it is running with right now.
+ * Anyone who had used the console panel before (the manual and compose tracks
+ * document exactly that) kept a stale key that silently outranked the fresh
+ * one, so every request 401'd while `studio.sh` promised there was nothing to
+ * paste and deleting the token file changed nothing. A stored token is now the
+ * fallback for a daemon that injected none, which is the case it was written
+ * for.
  *
  * The injected one is same-origin script content, which is the same exposure the
  * localStorage copy already has: a page on another origin can neither read this
@@ -235,9 +245,9 @@ export const TOKEN_STORAGE_KEY = "sandbox-studio-token";
 
 export function apiToken(): string {
   if (typeof window !== "undefined") {
+    if (window.__SANDBOX_TOKEN__) return window.__SANDBOX_TOKEN__;
     const stored = window.localStorage.getItem(TOKEN_STORAGE_KEY);
     if (stored) return stored;
-    if (window.__SANDBOX_TOKEN__) return window.__SANDBOX_TOKEN__;
   }
   return process.env.NEXT_PUBLIC_STUDIO_TOKEN ?? "";
 }

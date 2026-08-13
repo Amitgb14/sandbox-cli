@@ -295,11 +295,22 @@ non-interactive mode is a flag rather than a subcommand have one, which
 copy of a security-relevant argv.
 
 Studio surfaces this as the **Let it work without asking** toggle under
-*Autonomy*. On a headless run it renders checked and locked rather than
-unchecked and disabled, because checked is what the launch actually does: the
-daemon builds a headless agent with `Descriptor.Autonomous`, which appends the
-flag unconditionally. A control plane may mis-render many things; what its own
-boundary is set to is not one of them.
+*Autonomy*, and it has three states rather than two, because the honest answer
+differs by agent:
+
+- **Checked and locked** — headless, for an agent that has the flag.
+  `Descriptor.Autonomous` appends it, so checked is what the launch actually
+  does; rendering it unchecked described the opposite of the run being started.
+- **Unchecked and locked** — an agent with no such flag (`canSkipPermissions:
+  false`). sandbox-cli adds nothing, and whether it stops to ask is the agent's
+  own policy: `codex exec` in particular "applies its own approval policy on
+  top", which sandbox-cli deliberately does not relax. Claiming always-on there
+  would be the same false statement pointed the other way.
+- **A real choice** — a console run of an agent that has the flag, the one case
+  where somebody is attached and could answer.
+
+A control plane may mis-render many things; what its own boundary is set to is
+not one of them.
 
 `"resume": "<session-id>"` carries on an existing conversation instead of
 starting one, using the agent's own resume flag from the verified descriptor.

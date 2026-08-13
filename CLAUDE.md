@@ -676,9 +676,14 @@ flow, forwarded variables, `--allow` domains — is `docs/AGENTS.md`; a new adap
 section there.
 
 **Who turns the approval prompts off is settled, three different ways, and the wrapper is
-deliberately the one that does not.** A *headless* run has it unconditionally
-(`Descriptor.Autonomous` appends `SkipPermissionArgs`) because an agent that stops to ask with
-nobody attached does not fail — it hangs, holding a `max_parallel` slot. A Studio *console* run
+deliberately the one that does not.** A *headless* run gets it from
+`Descriptor.Autonomous`, which appends `SkipPermissionArgs` — for the agents that have such a
+flag, because an agent that stops to ask with nobody attached does not fail, it hangs, holding
+a `max_parallel` slot. For codex, opencode and droid that list is **empty**: their
+non-interactive mode is a subcommand, and codex "applies its own approval policy on top" which
+sandbox-cli does not relax. So "headless means no approvals" is true of claude and gemini and
+an assumption about the other three — Studio's toggle is keyed on `CanSkipPermissions` for
+exactly that reason. A Studio *console* run
 opts in per request (`skipPermissions`), since somebody is attached and being asked is the point;
 the Launch toggle renders **checked and locked** when the run is headless, because unchecked
 would describe the opposite of what is about to be launched. And a **CLI** run adds nothing: the

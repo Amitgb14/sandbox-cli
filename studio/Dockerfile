@@ -12,15 +12,27 @@
 # of what that daemon answers. That is why this half is safe to hand somebody as
 # an image to pull, and the API half is not (see docker-compose.yml).
 #
-# ── Why the build stage is pinned to $BUILDPLATFORM ──────────────────────────
+# ── Why this builds per-architecture, slowly, on purpose ─────────────────────
 #
-# The output of `next build` is JavaScript, which is the same bytes whatever
-# machine produced it. So the compile runs *natively* on the builder — once —
-# and only the runtime layer is per-architecture. Building arm64 the other way
-# means running node and the Tailwind/SWC native binaries under QEMU, which
-# turns a two-minute build into a twenty-minute one for an identical result.
+# The tempting version pins the build stage to $BUILDPLATFORM: `next build`
+# emits JavaScript, the same bytes whatever machine produced it, so compiling
+# once natively and varying only the runtime layer makes arm64 nearly free
+# instead of a QEMU-paced twenty minutes.
+#
+# It is wrong, and quietly. `output: "standalone"` does not emit JavaScript
+# alone — it traces the server's dependencies and copies them in, *as installed
+# on the builder*. This image ends up carrying
+# `node_modules/@img/sharp-linux-<arch>/lib/sharp-linux-<arch>.node`, a native
+# binary Next uses for image optimization. Cross-built that way, the arm64 image
+# would ship amd64 objects: fine until something loads them, and the CI pull
+# request build only covers amd64, so the first machine to find out would be a
+# user's Mac pulling `latest`.
+#
+# A published artifact is the wrong place to trade correctness for build
+# minutes, and this cost lands only on tag and main pushes — pull requests build
+# one native architecture and push nothing.
 
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS build
+FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
 ENV NEXT_TELEMETRY_DISABLED=1

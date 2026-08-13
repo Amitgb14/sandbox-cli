@@ -65,6 +65,8 @@ PROJECT=""
 CONFIG=""
 UI_PORT=3100
 API_PORT=8787
+UI_PORT_SET=0
+API_PORT_SET=0
 TAG=""
 VERSION=""
 DEST="${HOME}/.local/bin"
@@ -77,6 +79,7 @@ STATE="${XDG_CONFIG_HOME:-${HOME}/.config}/sandbox/studio"
 PIDFILE="${STATE}/api.pid"
 LOGFILE="${STATE}/api.log"
 TOKENFILE="${STATE}/token"
+PORTFILE="${STATE}/ports"
 
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
@@ -89,8 +92,8 @@ while [ $# -gt 0 ]; do
     ui|api)          ARG="$1"; shift ;;   # `logs ui` / `logs api`
     --project)       PROJECT="${2:-}"; shift 2 ;;
     --config)        CONFIG="${2:-}"; shift 2 ;;
-    --port)          UI_PORT="${2:-}"; shift 2 ;;
-    --api-port)      API_PORT="${2:-}"; shift 2 ;;
+    --port)          UI_PORT="${2:-}"; UI_PORT_SET=1; shift 2 ;;
+    --api-port)      API_PORT="${2:-}"; API_PORT_SET=1; shift 2 ;;
     --tag)           TAG="${2:-}"; shift 2 ;;
     --version)       VERSION="${2:-}"; shift 2 ;;
     --dest)          DEST="${2:-}"; shift 2 ;;
@@ -104,6 +107,17 @@ while [ $# -gt 0 ]; do
 done
 CMD="${CMD:-up}"
 ARG="${ARG:-}"
+
+# `up` records the ports it chose; every other command reads them back, unless
+# this invocation named its own. Without it, `status` after
+# `up --api-port 9000` probed 8787 and reported a healthy Studio as absent —
+# the ports were a fact about the running pair that nothing had written down.
+if [ -r "$PORTFILE" ]; then
+  saved_ui=$(sed -n '1p' "$PORTFILE" 2>/dev/null || true)
+  saved_api=$(sed -n '2p' "$PORTFILE" 2>/dev/null || true)
+  if [ "$UI_PORT_SET" = 0 ] && [ -n "${saved_ui:-}" ]; then UI_PORT="$saved_ui"; fi
+  if [ "$API_PORT_SET" = 0 ] && [ -n "${saved_api:-}" ]; then API_PORT="$saved_api"; fi
+fi
 
 # The binaries move together, so one version means one flag rather than two that
 # can disagree. An explicit --tag still wins.
@@ -156,10 +170,16 @@ resolve_project() {
 # already in your browser. 0600 in a 0700 directory: it is a credential for a
 # server that can start containers.
 resolve_token() {
-  if [ -n "$TOKEN" ]; then return 0; fi
+  # Exported rather than interpolated at each use: `docker run -e NAME` with no
+  # value takes it from this process's environment, so the token stays out of
+  # the argv — which is visible in `ps` to every other user on this machine, and
+  # afterwards in `docker inspect`. The host path has always done this via the
+  # -token flag's env default; the container paths were passing `-e NAME=value`
+  # and undoing it.
+  if [ -n "$TOKEN" ]; then export SANDBOX_STUDIO_TOKEN="$TOKEN"; return 0; fi
   if [ -r "$TOKENFILE" ]; then
     TOKEN=$(cat "$TOKENFILE")
-    if [ -n "$TOKEN" ]; then return 0; fi
+    if [ -n "$TOKEN" ]; then export SANDBOX_STUDIO_TOKEN="$TOKEN"; return 0; fi
   fi
   if have openssl; then
     TOKEN=$(openssl rand -hex 32)
@@ -168,13 +188,25 @@ resolve_token() {
   fi
   [ -n "$TOKEN" ] || die "could not generate a token; pass --token"
   (umask 077; mkdir -p "$STATE"; printf '%s\n' "$TOKEN" > "$TOKENFILE")
+  export SANDBOX_STUDIO_TOKEN="$TOKEN"
 }
 
+# Alive *and* still the process we started.
+#
+# The pidfile lives in ~/.config/sandbox and outlives a reboot, while pids are
+# recycled — so `kill -0` alone eventually says yes about somebody else's
+# process, and `down` (which `up` calls first) would signal it. The command name
+# is the cheap half of the answer; it is not proof, but it turns "some process
+# has this number" into "a sandbox-studio-api has this number".
 api_running() {
   [ -f "$PIDFILE" ] || return 1
   pid=$(cat "$PIDFILE" 2>/dev/null || true)
   [ -n "$pid" ] || return 1
-  kill -0 "$pid" 2>/dev/null
+  kill -0 "$pid" 2>/dev/null || return 1
+  case "$(ps -p "$pid" -o comm= 2>/dev/null)" in
+    *sandbox-studio-api*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 container_exists() { docker container inspect "$1" >/dev/null 2>&1; }
@@ -203,7 +235,21 @@ do_down() {
     fi
   done
   if api_running; then
-    kill "$(cat "$PIDFILE")" 2>/dev/null || true
+    pid=$(cat "$PIDFILE")
+    kill "$pid" 2>/dev/null || true
+    # Waited for rather than assumed: `up` calls this and then binds the same
+    # port, and a signal only asks. Without the wait a restart raced its own
+    # predecessor for the socket and died with "address already in use" —
+    # reported as "Studio did not come up", on the path the docs call a restart.
+    i=0
+    while [ "$i" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+      i=$((i + 1))
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+      sleep 1
+    fi
     info "stopped the API process"
     stopped=1
   fi
@@ -259,6 +305,18 @@ do_logs() {
 install_binaries() {
   [ "$NO_INSTALL" = 0 ] || return 0
 
+  # Already installed and no version asked for: nothing to do.
+  #
+  # install.sh resolves "latest" against api.github.com, which is 60 requests an
+  # hour unauthenticated and needs the network at all — so running it on every
+  # `up` made a *restart* of an already-installed Studio fail on a rate-limited
+  # or offline machine, with `set -e` turning that into no Studio rather than a
+  # missed upgrade. Pass --version to force the download.
+  if [ -z "$VERSION" ] && [ -x "${DEST}/sandbox-cli" ] &&
+     { [ "$API_IN_DOCKER" = 1 ] || [ -x "${DEST}/${API_BIN_NAME}" ]; }; then
+    return 0
+  fi
+
   set -- --dest "$DEST"
   if [ -n "$VERSION" ]; then set -- "$@" --version "$VERSION"; fi
   # The API binary comes from the same archive as the CLI, so both halves are one
@@ -301,7 +359,7 @@ start_api_host() {
   # defaults to this variable.
   # -config is always passed; empty means "discover normally", which is what the
   # flag's own default is, so there is no second code path for the common case.
-  SANDBOX_STUDIO_TOKEN="$TOKEN" \
+  # SANDBOX_STUDIO_TOKEN is exported by resolve_token, and -token defaults to it.
   nohup "$API_BIN" \
     -addr "127.0.0.1:${API_PORT}" \
     -project "$PROJECT" \
@@ -323,9 +381,10 @@ start_api_container() {
     -p "127.0.0.1:${API_PORT}:8787" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${PROJECT}:${PROJECT}" \
+    ${CONFIG:+-v "${CONFIG}:${CONFIG}:ro"} \
     -v "${HOME}/.config/sandbox:${HOME}/.config/sandbox" \
     -e "HOME=${HOME}" \
-    -e "SANDBOX_STUDIO_TOKEN=${TOKEN}" \
+    -e SANDBOX_STUDIO_TOKEN \
     -e GIT_CONFIG_COUNT=1 \
     -e GIT_CONFIG_KEY_0=safe.directory \
     -e GIT_CONFIG_VALUE_0='*' \
@@ -347,7 +406,7 @@ start_ui() {
     --name "$UI_NAME" \
     -p "127.0.0.1:${UI_PORT}:3100" \
     -e "SANDBOX_API_URL=http://localhost:${API_PORT}" \
-    -e "SANDBOX_STUDIO_TOKEN=${TOKEN}" \
+    -e SANDBOX_STUDIO_TOKEN \
     "$UI_REF" >/dev/null
 }
 
@@ -361,6 +420,10 @@ do_up() {
   do_down >/dev/null 2>&1 || true
 
   install_binaries
+
+  # Written down before anything binds them, so `status`, `logs` and `down`
+  # address the pair that is actually running rather than the defaults.
+  (umask 077; mkdir -p "$STATE"; printf '%s\n%s\n' "$UI_PORT" "$API_PORT" > "$PORTFILE")
 
   info "starting Studio"
   if [ "$API_IN_DOCKER" = 1 ]; then
@@ -391,7 +454,15 @@ do_up() {
   info ""
   info "Open http://localhost:${UI_PORT}"
   info "  project  ${PROJECT}"
-  info "  token    ${TOKENFILE}  (already handed to the UI; no need to paste it)"
+  # Only names the file when the file is what is in force. With --token or
+  # $SANDBOX_STUDIO_TOKEN, resolve_token returns before writing it, so pointing
+  # at it would name a stale value — and the next `up` without the flag would
+  # then run with a different token than the one just described.
+  if [ -r "$TOKENFILE" ] && [ "$TOKEN" = "$(cat "$TOKENFILE" 2>/dev/null)" ]; then
+    info "  token    ${TOKENFILE}  (already handed to the UI; no need to paste it)"
+  else
+    info "  token    the one you supplied  (already handed to the UI; not written to disk)"
+  fi
   info "  stop     sh studio.sh down"
 }
 

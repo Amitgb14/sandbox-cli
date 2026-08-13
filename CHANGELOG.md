@@ -276,9 +276,13 @@ version is tagged.
   *Let it work without asking* rendered unchecked and disabled whenever there was
   no console — while the run being launched skips permissions regardless, because
   the daemon builds a headless agent with `Descriptor.Autonomous` and that
-  appends the flag unconditionally (an agent that stops to ask with nobody
-  attached does not fail, it hangs). It now renders **checked and locked** there,
-  and stays a real choice for a console run, where somebody is attached and could
+  appends the flag (an agent that stops to ask with nobody attached does not
+  fail, it hangs). It now renders **checked and locked** for the agents that have
+  such a flag, **unchecked and locked** for those that do not — codex, opencode
+  and droid reach autonomy through a subcommand, and codex applies its own
+  approval policy that sandbox-cli deliberately does not relax, so claiming
+  always-on there would be the same false statement pointed the other way — and
+  stays a real choice for a console run, where somebody is attached and could
   answer. The hint names the flag it adds — `--dangerously-skip-permissions`,
   `--yolo` — from the daemon's own answer: `GET /v1/agents` now carries
   `skipPermissionArgs` beside `canSkipPermissions`, rather than the UI keeping a
