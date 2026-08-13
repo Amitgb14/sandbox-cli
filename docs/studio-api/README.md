@@ -33,7 +33,22 @@ correct), `-history-retain` (drop indexed runs older than this on start; the log
 itself is never touched),
 `-config`, `-profile` (`dev`/`prod`, same meaning as the CLI's `--profile`),
 `-token` (or `$SANDBOX_STUDIO_TOKEN`), `-cors-origin` (repeatable),
-`-allow-host` (repeatable), `-usage-refresh-interval` (default `10m`).
+`-allow-host` (repeatable), `-usage-refresh-interval` (default `0`, off).
+
+### `abandoned`, on `GET /v1/usage`
+
+True when the file carrying the figures is being written while the reading in it
+is not: the agent is running and no longer recording usage there. Claude Code
+2.1.x stopped maintaining `cachedUsageUtilization`, which made a working feature
+look like a broken button — every remedy for a stale reading did nothing,
+because there was nothing left to advance.
+
+It is a comparison of two stamps the daemon already had: the file's mtime
+against the reading's own `fetchedAt`. A day apart is far more than an agent in
+use produces and far less than the weeks that accumulate once it stops. Studio
+withdraws the refresh control and says the figure cannot be made current; the
+CLI prints the same thing under `sandbox-cli usage`. The figures themselves are
+still shown, because they were true when they were taken.
 
 ### `-usage-refresh-interval`
 
@@ -43,8 +58,13 @@ useless — *18 days old* is a true answer to a question nobody asked. This make
 the agent fetch it on a timer, the same act `POST /v1/usage/refresh` performs
 once.
 
+**Off by default**, and the default was 10m for about an hour before the reason
+to change it arrived: on a machine whose Claude Code no longer records usage,
+the timer spends requests advancing a reading that cannot move. Turn it on where
+the reading demonstrably updates.
+
 **It spends a request from the subscription window it reports on** — roughly 144
-a day at the default — which is why the server says so at startup rather than
+a day at ten minutes — which is why the server says so at startup rather than
 leaving it to be discovered in a bill of quota. `0` turns it off, and anything
 under a minute is refused rather than clamped: the agent will not refetch that
 often anyway, so those requests buy nothing.

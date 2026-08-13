@@ -169,6 +169,18 @@ type UsageSnapshot struct {
 	CanRefresh bool    `json:"canRefresh"`
 	FetchedAt  *string `json:"fetchedAt"`
 	Path       *string `json:"path"`
+
+	// Abandoned reports that the file carrying these figures is being written
+	// while the reading inside it is not — the agent is running and no longer
+	// recording usage there.
+	//
+	// The distinction matters because the remedies are opposite. An old reading
+	// on an idle machine is fixed by using the agent, or by the refresh button.
+	// An abandoned one cannot be fixed at all: refreshing drives the agent, the
+	// agent rewrites the file, and the reading stays where it was. A client that
+	// cannot tell them apart offers a button that does nothing, which is what
+	// this field exists to stop.
+	Abandoned bool `json:"abandoned,omitempty"`
 }
 
 // DoctorCheck is one host property, as `sandbox-cli doctor` reports it.

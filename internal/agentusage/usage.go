@@ -77,11 +77,46 @@ type Snapshot struct {
 	// not when we read the file. Zero if it was not recorded.
 	FetchedAt time.Time `json:"fetched_at,omitempty"`
 	Path      string    `json:"path,omitempty"`
+
+	// SourceModAt is when the file itself was last written, which is a different
+	// fact from FetchedAt and the difference is the whole point. The agent
+	// rewrites this file constantly — every session, every project, every
+	// setting — while FetchedAt only moves when it records a usage reading. A
+	// file written today carrying a reading from three weeks ago is therefore
+	// not an idle machine; it is an agent that is running and no longer writing
+	// usage here. See Abandoned.
+	SourceModAt time.Time `json:"source_modified_at,omitempty"`
 }
 
 // Empty reports whether the snapshot carries no usable window — either because
 // nothing was found or because the file no longer says what we know how to read.
 func (s Snapshot) Empty() bool { return len(s.Windows) == 0 }
+
+// abandonedAfter is how far the file may outrun its reading before we stop
+// calling the reading merely old. A day is far longer than any gap an agent in
+// use produces, and far shorter than the weeks that accumulate once it stops
+// recording.
+const abandonedAfter = 24 * time.Hour
+
+// Abandoned reports that this cache is being written without its usage reading
+// being updated — the agent is running, and recording usage somewhere else or
+// not at all.
+//
+// It exists because Claude Code stopped maintaining `cachedUsageUtilization`,
+// and the failure was indistinguishable from disuse: the panel said "19 days
+// old" and every remedy for a stale reading — the refresh button, a timer, a
+// sandbox run — did nothing, because there was nothing left to advance. The
+// figures are still true about the moment they were taken; what changes is that
+// waiting will not improve them, and only this comparison can say so.
+//
+// Both stamps are required. Without a file time there is nothing to compare, and
+// a reading with no stamp of its own is already reported as unaged.
+func (s Snapshot) Abandoned() bool {
+	if s.FetchedAt.IsZero() || s.SourceModAt.IsZero() {
+		return false
+	}
+	return s.SourceModAt.Sub(s.FetchedAt) >= abandonedAfter
+}
 
 // Age is how long ago the agent refreshed these numbers, or 0 when unknown.
 func (s Snapshot) Age(now time.Time) time.Duration {
@@ -288,6 +323,11 @@ func Read(path string) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	s.Path = path
+	// Best effort: the reading stands with or without a file time, and a stat
+	// that fails only costs the Abandoned comparison.
+	if fi, err := os.Stat(path); err == nil {
+		s.SourceModAt = fi.ModTime().UTC()
+	}
 	return s, nil
 }
 

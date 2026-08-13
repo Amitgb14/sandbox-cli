@@ -146,6 +146,16 @@ func printUsage(s agentusage.Snapshot, now time.Time, offerRefresh bool) {
 	}
 	fmt.Printf("\n%s\n", line)
 
+	// An abandoned cache is not a stale one, and offering --refresh for it sells
+	// a request that cannot buy anything: the file is being written, the reading
+	// in it is not, so driving the agent changes nothing. Said here, once,
+	// instead of leaving someone to discover it by spending.
+	if s.Abandoned() {
+		fmt.Println("that file is still being written, but this reading is not — the agent has")
+		fmt.Println("stopped recording usage there, so --refresh cannot make it current")
+		return
+	}
+
 	// Say where a current reading comes from, but only when something on screen
 	// is actually out of date. Advertising a flag that costs a request under
 	// numbers that are already good would be selling the spend for nothing.

@@ -91,7 +91,7 @@ export function UsageGauge() {
             in the sandbox-owned agent HOME, and the daemon may itself be in a
             container with no claude binary — so the control is hidden rather
             than offered and then failed. */}
-        {data.canRefresh ? (
+        {data.canRefresh && !data.abandoned ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -128,7 +128,14 @@ export function UsageGauge() {
             {ageMs === null
               ? "Age unknown — the agent did not record when it last refreshed."
               : `Read ${formatDurationTight(ageMs)} ago from ${sourceLabel(data.path)}.`}
-            {data.canRefresh ? null : (
+            {data.abandoned ? (
+              <>
+                {" "}
+                That file is still being written, but this reading is not — the agent has stopped
+                recording usage there, so it cannot be made current and the refresh is not offered.
+                The figure was true when it was taken.
+              </>
+            ) : data.canRefresh ? null : (
               <>
                 {" "}
                 Only Claude Code can advance it, and this server has none on its PATH — so this

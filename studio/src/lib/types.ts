@@ -422,6 +422,13 @@ export interface UsageSnapshot {
    * figures and being able to make them current are different questions.
    */
   canRefresh: boolean;
+  /**
+   * Whether the file carrying these figures is being written while the reading
+   * inside it is not — the agent is running and no longer recording usage
+   * there. An old reading on an idle machine is fixed by using the agent; this
+   * one cannot be fixed at all, and the two look identical without this flag.
+   */
+  abandoned?: boolean;
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,22 @@ version is tagged.
 
 ### Fixed
 
+- **An old usage reading and a dead one now look different.** Claude Code 2.1.x
+  stopped maintaining `cachedUsageUtilization` in `~/.claude.json`, and the
+  symptom was indistinguishable from an idle machine: the panel said *19 days
+  old* while the file itself was being rewritten every session, and every remedy
+  — the refresh button, the timer, running an agent — did nothing, because there
+  was nothing left to advance. `agentusage.Snapshot.Abandoned` compares the
+  file's mtime against the reading's own stamp; a day apart is far more than an
+  agent in use produces and far less than the weeks that accumulate once it
+  stops. `sandbox-cli usage` says so instead of offering `--refresh`, and Studio
+  withdraws the refresh control and explains why. The figures are still shown:
+  they were true when they were taken.
+- **`sandbox-studio-api -usage-refresh-interval` now defaults to `0` (off).** It
+  shipped at `10m` and the reason to change it arrived the same day: where the
+  agent no longer records usage, the timer spends a request every ten minutes
+  advancing a reading that cannot move. Turn it on where the reading
+  demonstrably updates.
 - **Studio's usage refresh gave no sign of what it had done.** A refresh drives
   the agent and re-reads the cache — but the agent decides whether to refetch,
   and where it writes is not necessarily where the reading comes from: a host

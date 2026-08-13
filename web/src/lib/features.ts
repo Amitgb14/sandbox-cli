@@ -249,7 +249,7 @@ export const FEATURES: Feature[] = [
   {
     title: "How much of the window is left",
     group: "observability",
-    body: "sandbox-cli usage prints the same two subscription windows from anywhere — a second terminal, or a run that already finished. Several sandboxes on several branches are separate containers but one account quota. The reading comes from the cache Claude Code keeps for its own /usage, so the command always prints how old it is, and a window that has since reset shows no percentage rather than a figure about the period before it. --refresh spends one throwaway turn to make it current; --json for scripts.",
+    body: "sandbox-cli usage prints the same two subscription windows from anywhere — a second terminal, or a run that already finished. Several sandboxes on several branches are separate containers but one account quota. The reading comes from the cache Claude Code keeps for its own /usage, so the command always prints how old it is, and a window that has since reset shows no percentage rather than a figure about the period before it. --refresh spends one throwaway turn to make it current; --json for scripts. And when the file is being written while the reading in it is not — the agent running, but no longer recording usage there — it says so instead of offering a refresh that cannot help, because an old reading and a dead one are fixed by opposite things.",
     code: "5h   23%  resets in 2h14m   ·   week   49%  resets in 4d",
     state: "opt-in",
   },
