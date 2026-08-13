@@ -15,13 +15,19 @@ name: images
 # `packages: write`, so publishing needs no long-lived credential stored in the
 # repository — which is the same argument the tool itself makes about handing an
 # agent a months-long token.
+#
+# It also *builds* on pull requests without pushing, because a workflow that only
+# runs after merge means the first time a broken Dockerfile is noticed is on
+# `main`, in the job that was supposed to publish. Those runs build one
+# architecture and skip the registry login: nothing is being pushed, and a PR
+# from a fork gets no `packages: write` to log in with anyway.
 on:
   push:
     branches: [main]
     tags: ["*"]
     # A UI change and an API change touch different trees, so building both on
     # every docs commit would be most of the cost for none of the benefit.
-    paths:
+    paths: &image_paths
       - "studio/**"
       - "cmd/sandbox-studio-api/**"
       - "internal/**"
@@ -29,6 +35,8 @@ on:
       - "go.sum"
       - "Dockerfile.studio-api"
       - ".github/workflows/images.yml"
+  pull_request:
+    paths: *image_paths
   workflow_dispatch:
 
 permissions:
@@ -57,6 +65,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -80,8 +89,10 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: true
+          # One architecture on a pull request: the second proves the manifest,
+          # not the Dockerfile, and arm64 under QEMU is where the minutes go.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Keyed by image, so the two matrix legs do not evict each other's
