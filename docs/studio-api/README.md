@@ -33,7 +33,30 @@ correct), `-history-retain` (drop indexed runs older than this on start; the log
 itself is never touched),
 `-config`, `-profile` (`dev`/`prod`, same meaning as the CLI's `--profile`),
 `-token` (or `$SANDBOX_STUDIO_TOKEN`), `-cors-origin` (repeatable),
-`-allow-host` (repeatable).
+`-allow-host` (repeatable), `-usage-refresh-interval` (default `10m`).
+
+### `-usage-refresh-interval`
+
+The usage reading only moves when Claude Code talks to the server, so on a
+machine nobody has used the agent on for a fortnight the panel is honest and
+useless — *18 days old* is a true answer to a question nobody asked. This makes
+the agent fetch it on a timer, the same act `POST /v1/usage/refresh` performs
+once.
+
+**It spends a request from the subscription window it reports on** — roughly 144
+a day at the default — which is why the server says so at startup rather than
+leaving it to be discovered in a bill of quota. `0` turns it off, and anything
+under a minute is refused rather than clamped: the agent will not refetch that
+often anyway, so those requests buy nothing.
+
+Three things it declines to do. It does not start where the agent is not on
+PATH — the ordinary containerised deployment, where the cache is readable
+through the mounted agent HOME and the binary is absent, so a timer would only
+fail every ten minutes forever. It skips a tick whose reading is already younger
+than the interval, since the refresh button, a sandbox run and the operator's
+own Claude Code all advance the same file. And it reports a failure once,
+repeating only when the message changes, because 144 identical lines a day is
+how a log stops being read.
 
 ## Trust model
 

@@ -60,15 +60,16 @@ func main() {
 
 func run() error {
 	var (
-		addr          string
-		project       string
-		cfgPath       string
-		profile       string
-		token         string
-		origins       repeatedFlag
-		hosts         repeatedFlag
-		historyDB     string
-		historyRetain time.Duration
+		addr           string
+		project        string
+		cfgPath        string
+		profile        string
+		token          string
+		origins        repeatedFlag
+		hosts          repeatedFlag
+		historyDB      string
+		historyRetain  time.Duration
+		usageRefreshIn time.Duration
 	)
 	flag.StringVar(&addr, "addr", "127.0.0.1:8787",
 		"address to listen on — loopback by default; see docs/studio-api/README.md before binding this to a network interface")
@@ -82,11 +83,30 @@ func run() error {
 		"path to a SQLite index over the audit log; empty means scan the log, which is the default and always correct")
 	flag.DurationVar(&historyRetain, "history-retain", 0,
 		"drop indexed runs older than this on start (e.g. 2160h for 90 days); 0 keeps everything the log holds")
+	flag.DurationVar(&usageRefreshIn, "usage-refresh-interval", 10*time.Minute,
+		"how often to make the agent refresh the usage reading; each one spends a request from the window it measures, and 0 turns it off")
 	flag.Var(&origins, "cors-origin",
 		"origin allowed to drive this control plane cross-origin (repeatable); default: none, so a web page cannot reach it at all")
 	flag.Var(&hosts, "allow-host",
 		"additional Host header value to answer to, beyond the loopback names always accepted (repeatable); needed when reaching a rebound -addr by name")
 	flag.Parse()
+
+	// Validated here, before anything with a side effect. `openHistory` below
+	// syncs the index and, with -history-retain, prunes rows out of it — so a
+	// mistyped interval used to delete indexed history and *then* exit without
+	// ever serving. A refusal that comes after the damage is not a refusal.
+	//
+	// A refusal rather than a clamp, and negatives are refused too: silently
+	// substituting a different number for the one that was typed is how a setting
+	// stops meaning what it says, and `-usage-refresh-interval -10m` reading as
+	// "off" would swallow exactly the typo this check exists to catch. Zero is the
+	// one way to say off. Claude Code will not refetch inside its own interval
+	// regardless, so requests below the floor buy nothing at all.
+	if usageRefreshIn != 0 && usageRefreshIn < time.Minute {
+		return fmt.Errorf("-usage-refresh-interval %s is not usable: each refresh spends a request "+
+			"from the window it measures, and the agent will not refetch more than once a minute "+
+			"regardless. Use a minute or more, or 0 to turn it off", usageRefreshIn)
+	}
 
 	if project == "" {
 		wd, err := os.Getwd()
@@ -163,6 +183,21 @@ func run() error {
 			// below this line assumes only this machine can open a connection.
 			log.Printf("sandbox-studio-api: %s is not a loopback address — anything that can route to this "+
 				"host can now ask it to start containers; set -token, and -allow-host for the name you reach it by", addr)
+		}
+		// Stated rather than assumed, in both directions: a refresh costs a request
+		// from the subscription it reports on, and a deployment that cannot refresh
+		// at all should say so at startup instead of leaving someone waiting for a
+		// number that will never move.
+		switch {
+		case usageRefreshIn <= 0:
+			// Off is off; nothing to say.
+		case srv.StartUsageRefresh(ctx, usageRefreshIn):
+			log.Printf("sandbox-studio-api: refreshing the usage reading every %s — each one spends a "+
+				"request from the window it measures (-usage-refresh-interval 0 turns it off)", usageRefreshIn)
+		default:
+			log.Printf("sandbox-studio-api: not refreshing usage — the agent that records these numbers " +
+				"is not on this server's PATH. The figures are still read and shown; only advancing them " +
+				"needs the agent, which is what running the API on your host gives it")
 		}
 		errCh <- httpSrv.ListenAndServe()
 	}()

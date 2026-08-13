@@ -13,6 +13,23 @@ version is tagged.
 
 ### Added
 
+- **Studio's usage reading refreshes itself.** The figures only move when Claude
+  Code talks to the server, so on a machine where nobody has run the agent for a
+  fortnight the panel was honest and useless — *18 days old* is a true answer to
+  a question nobody asked. `sandbox-studio-api -usage-refresh-interval` (default
+  `10m`, `0` to turn it off) makes the agent fetch it on a timer, the same act
+  the refresh button performs once. **Each refresh spends a request from the
+  subscription window it reports on**, ~144 a day at the default, so the server
+  says as much at startup rather than leaving it to be found in the quota; an
+  interval under a minute is refused rather than clamped, since the agent will
+  not refetch that often anyway. It never starts where the agent is not on the
+  server's PATH — the containerised deployment, where the cache is readable and
+  the binary is absent, and where a timer would fail every ten minutes forever;
+  it skips a tick whose reading is already fresher than the interval, because
+  the refresh button, a sandbox run and your own Claude Code all advance the
+  same file; and it reports a failure once, repeating only when the message
+  changes.
+
 - **`--runtime runsc` (gVisor) can resolve names again**, which it could not do
   at all before — in any network mode, allowlist or not. On a user-defined
   network docker does not give a container real resolvers; it writes
