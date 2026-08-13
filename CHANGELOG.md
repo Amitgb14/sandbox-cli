@@ -11,6 +11,19 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **Studio's usage refresh gave no sign of what it had done.** A refresh drives
+  the agent and re-reads the cache — but the agent decides whether to refetch,
+  and where it writes is not necessarily where the reading comes from: a host
+  Claude Code with no usage cache of its own leaves the daemon serving the
+  sandbox agent's copy, unchanged. So a *successful* refresh routinely moved
+  nothing, and with no feedback it was indistinguishable from a broken button
+  (reported as one three times). It now says which happened — "the reading is
+  now 2 minutes old", or "the agent reported no newer reading", naming the file
+  the figures come from — and a refusal shows the daemon's own explanation
+  instead of being swallowed.
+
 ### Added
 
 - **Studio's usage reading refreshes itself.** The figures only move when Claude
