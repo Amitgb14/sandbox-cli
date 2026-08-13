@@ -149,6 +149,23 @@ export function AgentExplorer({ className }: { className?: string }) {
           </div>
         ) : null}
 
+        {agent.unsupportedLogin ? (
+          <div className="flex flex-col gap-1.5 rounded-lg border border-caution/25 bg-caution-soft px-3 py-2.5">
+            <p className="eyebrow">
+              <CircleAlert className="size-3 text-caution" /> login method not supported
+            </p>
+            <p className="text-[0.8rem] leading-relaxed text-foreground/80">
+              <span className="text-caution">Does not work here:</span>{" "}
+              <code className="font-mono text-[0.76rem]">{agent.unsupportedLogin.method}</code>. {agent.unsupportedLogin.why}
+            </p>
+            <p className="text-[0.8rem] leading-relaxed text-foreground/80">
+              <span className="text-contained">Use instead:</span>{" "}
+              <code className="font-mono text-[0.76rem]">{agent.unsupportedLogin.instead}</code> — a device-code flow, which needs
+              no callback at all.
+            </p>
+          </div>
+        ) : null}
+
         {agent.gotcha ? (
           <p className="mt-auto flex items-start gap-2.5 rounded-lg border border-caution/25 bg-caution-soft px-3 py-2.5 text-[0.8rem] leading-relaxed text-foreground/80">
             <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-caution" />

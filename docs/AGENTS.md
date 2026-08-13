@@ -159,7 +159,12 @@ sandbox-cli claude --worktree feature-a -- -p "implement the API"
 ## codex — Codex CLI
 
 - **Prerequisites:** a ChatGPT account or `OPENAI_API_KEY`.
-- **Setup:** `sandbox-cli codex` and log in, or export the key on your host.
+- **Setup:** `sandbox-cli codex`, then pick **`Sign in with Device Code`** at the
+  sign-in menu. `Sign in with ChatGPT` is **not supported here** — it finishes
+  through a login server on the container's own loopback, which no amount of
+  publishing can expose ([why](#browser-callback-logins-are-not-supported)).
+  Codex hints at this on screen: "On a remote or headless machine?". Exporting
+  `OPENAI_API_KEY` on your host skips the menu entirely.
 - **Forwarded if set:** `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_HOME`.
 
 ```sh
@@ -196,6 +201,15 @@ sandbox-cli gemini --mount ~/adc.json:/sandbox/home/adc.json:ro \
 sandbox-cli opencode
 sandbox-cli opencode run 'run the tests'
 ```
+
+**xAI / SuperGrok:** choose **`xAI Grok OAuth (Headless / Remote / VPS)`**. It is
+a device-code flow — a short code and a URL you open on any device — and it is
+the only xAI browser login that works here. `xAI Grok OAuth (SuperGrok
+Subscription)` is **not supported**: it finishes through a fixed
+`http://127.0.0.1:56121/callback`, a redirect URI registered with xAI and so not
+repointable, served inside the container where your host browser cannot reach it
+([why](#browser-callback-logins-are-not-supported)). With `--allow`, add
+`auth.x.ai` (login and token refresh) and `api.x.ai` (inference).
 
 ## cline — Cline
 
@@ -560,6 +574,42 @@ covers for Anthropic and OpenAI. Add e.g. `generativelanguage.googleapis.com`
 appropriate — and note the allowlist resolves each domain to IPs when the
 container starts, so hosts behind rotating CDN addresses can still be refused.
 
+## Browser-callback logins are not supported
+
+Some agents offer a sign-in that finishes by redirecting your browser to a
+**loopback address** — `http://127.0.0.1:<port>/callback`. That method **cannot
+work in the sandbox**, and it is not a limitation you can configure away:
+
+- The server receiving the callback runs inside the **container**, on the
+  container's own `127.0.0.1`. Your host browser follows the redirect to *your*
+  loopback and finds nothing listening.
+- **`--publish` does not fix it.** A published port forwards to the container's
+  *interface* address; a process bound to the container's loopback never sees
+  that traffic. The connection is accepted and closed, which looks like an empty
+  reply rather than a refusal.
+- The redirect URI is usually **registered with the provider** and fixed, so it
+  cannot be repointed at something reachable.
+
+Every agent below offers a second method — a device code or a pasted
+authorization code — that needs no callback at all. Pick that one:
+
+| Agent | Do **not** pick | Pick this instead |
+| --- | --- | --- |
+| `codex` | `Sign in with ChatGPT` | `Sign in with Device Code` |
+| `opencode` (xAI / SuperGrok) | `xAI Grok OAuth (SuperGrok Subscription)` | `xAI Grok OAuth (Headless / Remote / VPS)` |
+
+The rest of the fleet needs no such choice, and it is worth knowing why rather
+than trusting the table. `gemini` and `qwen` **detect** the container and switch
+themselves: browser launch is suppressed when Linux has no `DISPLAY`,
+`WAYLAND_DISPLAY` or `MIR_SOCKET`, and the sandbox sets none, so they take their
+paste-the-code path on their own (`qwen` is additionally forced with
+`NO_BROWSER=1`, and `cursor` with `NO_OPEN_BROWSER=1`). `claude` offers a pasted
+code and a device code. `copilot`, `droid`, `openhands`, `crush` and `amp` are
+device-code or poll-for-result flows to begin with. `cline` has loopback
+callbacks but refuses them with an auth message rather than opening a browser —
+use `cline auth --provider … --apikey …`, as its section says. `aider` and
+`continue` have no login at all.
+
 ## Troubleshooting
 
 **"is not installed, and installing it just now failed" (exit 127)**
@@ -587,9 +637,14 @@ Expected — that's the one-time install into the agent home. The table above ha
 rough sizes. Later runs start immediately.
 
 **Login prints a URL and nothing happens.**
-Open the URL on your **host machine**. There is no browser in the container. Every
-agent here uses either a device code or a poll-for-result flow, so none of them
-needs a localhost callback.
+Open the URL on your **host machine**. There is no browser in the container. Most
+of these flows are a device code or a poll-for-result, which need no callback at
+all.
+
+**The browser opens, then the page cannot connect to `127.0.0.1`.**
+You picked a login method that is not supported here — see
+[Browser-callback logins are not supported](#browser-callback-logins-are-not-supported)
+for which method to pick instead. Publishing the port does not help.
 
 **I want a clean session.**
 `--no-persist-auth` runs with a throwaway home; nothing is kept.
