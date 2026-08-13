@@ -25,6 +25,26 @@ export type Agent = {
   env: string[];
   /** Extra domains needed when the egress allowlist is on. */
   allow?: string[];
+  /**
+   * A login method this sandbox cannot support, and the one to use instead.
+   *
+   * Only for flows that complete through a **loopback callback**: the agent
+   * starts a server on the container's own 127.0.0.1 and hands the provider that
+   * address as the redirect URI, so your host browser follows the redirect to its
+   * *own* loopback and finds nothing. `--publish` does not rescue it — a
+   * published port forwards to the container's interface address, never to its
+   * loopback — which is why this is stated as unsupported rather than as a
+   * workaround. Every agent listed here offers a device-code or paste flow that
+   * needs no callback at all; that is the `instead`.
+   */
+  unsupportedLogin?: {
+    /** The menu entry that cannot work here. */
+    method: string;
+    /** The menu entry to pick instead. */
+    instead: string;
+    /** Why the first one cannot work, in one sentence. */
+    why: string;
+  };
   /** The one thing that will bite you if nobody tells you. */
   gotcha?: string;
   /** A representative invocation. */
@@ -56,6 +76,11 @@ export const AGENTS: Agent[] = [
     delivery: "baked",
     login: "A ChatGPT account, or export OPENAI_API_KEY on the host.",
     env: ["OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME"],
+    unsupportedLogin: {
+      method: "Sign in with ChatGPT",
+      instead: "Sign in with Device Code",
+      why: "Codex starts a login server on the container's own loopback and gives OpenAI that address as the redirect, so your host browser lands on its own 127.0.0.1 and finds nothing. The port is picked at runtime, and --publish forwards to the container's interface rather than its loopback, so neither can be worked around.",
+    },
     example: "sandbox-cli codex exec 'run the tests'",
   },
   {
@@ -91,6 +116,12 @@ export const AGENTS: Agent[] = [
       "OPENCODE_CONFIG",
       "OPENCODE_DISABLE_AUTOUPDATE",
     ],
+    allow: ["auth.x.ai", "api.x.ai"],
+    unsupportedLogin: {
+      method: "xAI Grok OAuth (SuperGrok Subscription)",
+      instead: "xAI Grok OAuth (Headless / Remote / VPS)",
+      why: "The subscription method redirects to a fixed http://127.0.0.1:56121/callback served inside the container — a URI registered with xAI, so it cannot be repointed — and your host browser follows it to its own loopback instead. --publish cannot expose it either, since a published port forwards to the container's interface rather than its loopback.",
+    },
     example: "sandbox-cli opencode run 'run the tests'",
   },
   {
