@@ -92,11 +92,18 @@ BIN=$(mktemp -d)          # scratch, so nothing here touches ~/.local/bin
 **1. Static checks.** Most breakage is caught here, in seconds.
 
 ```sh
-gofmt -l . && go build ./... && go test ./...
+gofmt -l . && go vet ./... && go build ./... && go test ./...
+go test -race ./internal/sandbox/ ./internal/egressproxy/ ./internal/studioapi/ ./internal/fleet/
 sh -n studio.sh && sh -n install.sh
 (cd studio && npx tsc --noEmit && npm run lint)
 (cd web    && npx tsc --noEmit && npm run lint)
 ```
+
+The second line is not optional and is easy to skip, because everything it
+catches passes without it. CI runs the race detector over the four packages that
+start goroutines, and a plain `go test` over those same packages is green while
+holding a genuine race — a background loop reading a package-level variable that
+a test restores, say. Run it before pushing anything that starts a goroutine.
 
 **2. Build what CI will build.** The `:local` tag is what step 3 pulls instead of
 GHCR.

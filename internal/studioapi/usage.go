@@ -115,7 +115,7 @@ func (s *Server) handleUsageRefresh(w http.ResponseWriter, r *http.Request) {
 				"shape is the API on your host"))
 		return
 	}
-	if err := agentusage.Refresh(r.Context()); err != nil {
+	if err := usageRefresh(r.Context()); err != nil {
 		// The stale reading is still the honest one, and returning it with a 200
 		// would say the refresh worked. The client keeps what it had and learns
 		// why it could not be improved.

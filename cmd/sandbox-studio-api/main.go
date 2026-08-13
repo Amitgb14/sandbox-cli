@@ -91,6 +91,23 @@ func run() error {
 		"additional Host header value to answer to, beyond the loopback names always accepted (repeatable); needed when reaching a rebound -addr by name")
 	flag.Parse()
 
+	// Validated here, before anything with a side effect. `openHistory` below
+	// syncs the index and, with -history-retain, prunes rows out of it — so a
+	// mistyped interval used to delete indexed history and *then* exit without
+	// ever serving. A refusal that comes after the damage is not a refusal.
+	//
+	// A refusal rather than a clamp, and negatives are refused too: silently
+	// substituting a different number for the one that was typed is how a setting
+	// stops meaning what it says, and `-usage-refresh-interval -10m` reading as
+	// "off" would swallow exactly the typo this check exists to catch. Zero is the
+	// one way to say off. Claude Code will not refetch inside its own interval
+	// regardless, so requests below the floor buy nothing at all.
+	if usageRefreshIn != 0 && usageRefreshIn < time.Minute {
+		return fmt.Errorf("-usage-refresh-interval %s is not usable: each refresh spends a request "+
+			"from the window it measures, and the agent will not refetch more than once a minute "+
+			"regardless. Use a minute or more, or 0 to turn it off", usageRefreshIn)
+	}
+
 	if project == "" {
 		wd, err := os.Getwd()
 		if err != nil {
@@ -140,17 +157,6 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	// A refusal rather than a clamp: an interval this short spends more on
-	// measuring than the measurement is worth, and silently substituting a
-	// different number for the one that was typed is how a setting stops meaning
-	// what it says. Claude Code will not refetch inside its own interval anyway,
-	// so the requests below this buy nothing at all.
-	if usageRefreshIn > 0 && usageRefreshIn < time.Minute {
-		return fmt.Errorf("-usage-refresh-interval %s is below the one-minute floor: each refresh "+
-			"spends a request from the window it measures, and the agent will not refetch that "+
-			"often regardless. Use 0 to turn it off", usageRefreshIn)
-	}
 
 	errCh := make(chan error, 1)
 	go func() {

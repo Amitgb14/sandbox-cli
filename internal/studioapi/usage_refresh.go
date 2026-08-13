@@ -38,6 +38,10 @@ import (
 // usageSnapshot and usageRefresh are variables for the same reason
 // usageRefreshable is: the loop's decisions depend on a file and a binary that
 // belong to another program, and the decisions are what deserve a test.
+//
+// `handleUsageRefresh` goes through the same `usageRefresh`, so the endpoint and
+// the timer cannot drift into refreshing by different means — and a test that
+// stubs it is not quietly leaving one of the two callers driving the real agent.
 var (
 	usageSnapshot = func() (agentusage.Snapshot, error) {
 		return agentusage.Find(agentusage.ClaudePaths()...)
@@ -57,36 +61,84 @@ const usageRefreshTimeout = 2 * time.Minute
 // that refused to boot over it would be refusing to serve numbers it can read
 // perfectly well.
 func (s *Server) StartUsageRefresh(ctx context.Context, every time.Duration) bool {
-	if every <= 0 || !usageRefreshable() {
-		return false
-	}
-	go s.usageRefreshLoop(ctx, every)
-	return true
+	return s.startUsageRefresh(ctx, every) != nil
 }
 
-func (s *Server) usageRefreshLoop(ctx context.Context, every time.Duration) {
+// startUsageRefresh is the same thing with a handle on the goroutine: the
+// returned channel closes when the loop has stopped, and is nil when it never
+// started.
+//
+// The handle exists for the tests, and the capture below exists because of what
+// the tests found. Reading the package-level seams on every tick is a data race
+// against anything that restores them — `go test -race` says so — and it is also
+// wrong on its own terms: a loop should not be able to change which functions it
+// is calling half way through. Both are fixed by taking them once, here, before
+// the goroutine starts.
+func (s *Server) startUsageRefresh(ctx context.Context, every time.Duration) <-chan struct{} {
+	if every <= 0 || !usageRefreshable() {
+		return nil
+	}
+	snapshot, refresh := usageSnapshot, usageRefresh
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.usageRefreshLoop(ctx, every, snapshot, refresh)
+	}()
+	return done
+}
+
+func (s *Server) usageRefreshLoop(
+	ctx context.Context,
+	every time.Duration,
+	snapshot func() (agentusage.Snapshot, error),
+	refresh func(context.Context) error,
+) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
+	// The skip threshold is deliberately *below* the interval, and the gap is the
+	// whole reason it works.
+	//
+	// A refresh is not instant: the tick fires at T, `claude -p` answers a few
+	// seconds later, and Claude Code stamps the cache at roughly T+3s. Comparing
+	// the next tick against `every` then measures the loop's own last refresh as
+	// 9m57s old, calls it fresh, and skips — so it fires every *other* tick and
+	// the reading reaches twenty minutes at a setting that says ten. Ninety
+	// percent is wide enough to swallow any plausible refresh, and far narrower
+	// than the case the check exists for: a reading somebody else advanced since
+	// the last tick.
+	freshEnough := every - every/10
+
+	// Checked before the first tick, because the state this feature exists for is
+	// a reading that is already old — a daemon started next to a nineteen-day-old
+	// figure should not serve it for another ten minutes first. It costs nothing
+	// when the reading is current: that is what the skip below decides.
+	first := true
+
 	var lastErr string
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+		if !first {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+		first = false
+		if ctx.Err() != nil {
+			return // cancelled before the first check ever ran
 		}
 
 		// Someone may have advanced it since the last tick — the refresh button,
-		// a sandbox run, or the operator's own Claude Code. `every` is the window
-		// this loop is responsible for, so a reading younger than that is one it
-		// does not need to buy again.
-		if snap, err := usageSnapshot(); err == nil && !snap.FetchedAt.IsZero() &&
-			snap.Age(time.Now()) < every {
+		// a sandbox run, or the operator's own Claude Code. A reading that recent
+		// is one this loop does not need to buy again.
+		if snap, err := snapshot(); err == nil && !snap.FetchedAt.IsZero() &&
+			snap.Age(time.Now()) < freshEnough {
 			continue
 		}
 
 		attempt, cancel := context.WithTimeout(ctx, usageRefreshTimeout)
-		err := usageRefresh(attempt)
+		err := refresh(attempt)
 		cancel()
 
 		if err == nil {
