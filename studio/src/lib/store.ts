@@ -53,9 +53,14 @@ interface UiState {
    * fossil with an explanation attached. Explaining something useless every time
    * you look at the sidebar is its own kind of noise.
    *
-   * Shown by default, because the panel is correct wherever the reading still
-   * moves — and it will move again for everyone if the recording written by the
-   * status line is wired up (docs/proposals/usage-stats.md).
+   * **Hidden by default.** The panel is correct wherever the reading still
+   * moves, but that is no longer the common case: Claude Code stopped
+   * maintaining the cache the daemon reads, so out of the box the gauge is a
+   * fossil explaining itself. A default that is wrong for most people is worse
+   * than one that is merely conservative — nothing is lost by having to turn it
+   * on, and a number that cannot move costs a query on a timer and a paragraph
+   * of sidebar. Revisit when the status-line recording is read back
+   * (docs/proposals/usage-stats.md).
    */
   usageHidden: boolean;
   setUsageHidden: (v: boolean) => void;
@@ -87,7 +92,7 @@ export const useUi = create<UiState>()(
 
       usageCollapsed: false,
       setUsageCollapsed: (usageCollapsed) => set({ usageCollapsed }),
-      usageHidden: false,
+      usageHidden: true,
       setUsageHidden: (usageHidden) => set({ usageHidden }),
 
       recentRuns: [],

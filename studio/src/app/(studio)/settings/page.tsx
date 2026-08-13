@@ -173,7 +173,7 @@ export default function SettingsPage() {
               checked={!usageHidden}
               onChange={(v) => setUsageHidden(!v)}
               label="Show subscription usage"
-              hint="The sidebar gauge. Worth turning off where the reading cannot move — current Claude Code no longer maintains the cache the daemon reads, so on many machines the panel is a fossil with an explanation attached. Hiding it also stops the request behind it."
+              hint="The sidebar gauge, off by default. Current Claude Code no longer maintains the cache the daemon reads, so on most machines it shows a reading that cannot be made current — turn it on where yours still moves. Off also stops the request behind it."
             />
           </CardContent>
         </Card>
