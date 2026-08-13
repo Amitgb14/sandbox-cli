@@ -43,6 +43,23 @@ interface UiState {
   usageCollapsed: boolean;
   setUsageCollapsed: (v: boolean) => void;
 
+  /**
+   * Whether the usage panel appears at all.
+   *
+   * Collapsing hides the numbers and keeps the header; this removes the panel.
+   * They are different requests, and the second one became worth serving when
+   * the figures stopped being maintained upstream: Claude Code no longer writes
+   * the cache the host reads, so on many machines the panel is a permanent
+   * fossil with an explanation attached. Explaining something useless every time
+   * you look at the sidebar is its own kind of noise.
+   *
+   * Shown by default, because the panel is correct wherever the reading still
+   * moves — and it will move again for everyone if the recording written by the
+   * status line is wired up (docs/proposals/usage-stats.md).
+   */
+  usageHidden: boolean;
+  setUsageHidden: (v: boolean) => void;
+
   /** Recently visited runs, for the palette. */
   recentRuns: string[];
   pushRecentRun: (id: string) => void;
@@ -70,6 +87,8 @@ export const useUi = create<UiState>()(
 
       usageCollapsed: false,
       setUsageCollapsed: (usageCollapsed) => set({ usageCollapsed }),
+      usageHidden: false,
+      setUsageHidden: (usageHidden) => set({ usageHidden }),
 
       recentRuns: [],
       pushRecentRun: (id) =>
@@ -85,6 +104,7 @@ export const useUi = create<UiState>()(
         terminalTimestamps: s.terminalTimestamps,
         diffView: s.diffView,
         usageCollapsed: s.usageCollapsed,
+        usageHidden: s.usageHidden,
         recentRuns: s.recentRuns,
       }),
     },

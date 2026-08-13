@@ -13,6 +13,14 @@ version is tagged.
 
 ### Added
 
+- **Studio's usage panel can be turned off** — Settings → Terminal → *Show
+  subscription usage*, persisted. Collapsing it already hid the numbers and kept
+  the header; this removes the panel, which became worth serving once the
+  figures stopped being maintained upstream: on a machine whose Claude Code no
+  longer writes the cache, the gauge is a permanent fossil with an explanation
+  attached, and explaining something useless every time you glance at the
+  sidebar is its own noise. Hiding it also stops the request behind it. Shown by
+  default, because it is still correct wherever the reading moves.
 - **The status line now records the usage figures it is handed**, to
   `$HOME/.sandbox/usage.json` inside the container — which, with the persisted
   agent HOME mounted, is a file on your host. Claude Code pipes `rate_limits` to

@@ -33,10 +33,17 @@ import type { UsageWindow } from "@/lib/types";
  * weight. Absent still means absent; it is now visibly absent.
  */
 export function UsageGauge() {
-  const { data, isPending } = useUsage();
+  const hidden = useUi((s) => s.usageHidden);
+  const { data, isPending } = useUsage(!hidden);
   const refresh = useRefreshUsage();
   const collapsed = useUi((s) => s.usageCollapsed);
   const setCollapsed = useUi((s) => s.setUsageCollapsed);
+
+  // Before the loading state, so hiding it also stops the request: there is no
+  // point asking a daemon for numbers nobody is going to see, and on a
+  // deployment where the answer cannot change that is a query on a timer for a
+  // constant.
+  if (hidden) return null;
 
   if (isPending) {
     return (

@@ -162,8 +162,8 @@ export function useHistoryStats(days = 14) {
   });
 }
 
-export function useUsage() {
-  return useQuery({ queryKey: qk.usage, queryFn: api.usage, staleTime: 60_000 });
+export function useUsage(enabled = true) {
+  return useQuery({ queryKey: qk.usage, queryFn: api.usage, staleTime: 60_000, enabled });
 }
 
 export function useDoctor(opts?: Partial<UseQueryOptions<Awaited<ReturnType<typeof api.doctor>>>>) {
