@@ -1,4 +1,4 @@
-import { API_BASE } from "@/lib/constants";
+import { apiBase } from "@/lib/constants";
 
 /**
  * The transport.
@@ -51,7 +51,7 @@ async function probeDaemon(): Promise<TransportMode> {
     try {
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS);
-      const res = await fetch(`${API_BASE}/v1/health`, {
+      const res = await fetch(`${apiBase()}/v1/health`, {
         signal: ctl.signal,
         cache: "no-store",
       });
@@ -114,7 +114,7 @@ export async function request<T>(path: string, opts: RequestOptions<T>): Promise
     const token = apiToken();
     if (token) headers.authorization = `Bearer ${token}`;
 
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(`${apiBase()}${path}`, {
       method: opts.method ?? "GET",
       headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -158,7 +158,7 @@ export async function* streamNdjson<T>(
     yield* fixture();
     return;
   }
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${apiBase()}${path}`, {
     signal,
     cache: "no-store",
     headers: authHeaders(),
@@ -213,16 +213,23 @@ async function errorText(res: Response, method: string, path: string): Promise<s
  * agent requires a token whatever the rest of the server is doing, so this has
  * to exist before that screen can work.
  *
- * Two sources, in this order:
+ * Three sources, in this order:
  *
- *   localStorage   set from the console panel, which is where the need appears.
- *                  Wins, because it is the one a person can change without a
- *                  rebuild.
- *   NEXT_PUBLIC_…  baked in at build time, for a Studio deployed next to a
- *                  daemon that always has the same token.
+ *   localStorage        set from the console panel, which is where the need
+ *                       appears. Wins, because it is the one a person can change
+ *                       without restarting anything.
+ *   window.__SANDBOX_…  injected per request from the server's environment
+ *                       (`SANDBOX_STUDIO_TOKEN`), so a scripted install can
+ *                       generate a token, hand it to both halves and leave
+ *                       nobody a value to copy between two terminals.
+ *   NEXT_PUBLIC_…       baked in at build time, for a Studio that builds its own
+ *                       bundle next to a daemon whose token never changes.
  *
- * Deliberately not a cookie: this goes to a daemon on another origin, and a
- * cookie would be attached by the browser to requests this code did not make.
+ * The injected one is same-origin script content, which is the same exposure the
+ * localStorage copy already has: a page on another origin can neither read this
+ * document nor that key. What it is not is a *cookie* — this goes to a daemon on
+ * another origin, and a cookie would be attached by the browser to requests this
+ * code did not make.
  */
 export const TOKEN_STORAGE_KEY = "sandbox-studio-token";
 
@@ -230,6 +237,7 @@ export function apiToken(): string {
   if (typeof window !== "undefined") {
     const stored = window.localStorage.getItem(TOKEN_STORAGE_KEY);
     if (stored) return stored;
+    if (window.__SANDBOX_TOKEN__) return window.__SANDBOX_TOKEN__;
   }
   return process.env.NEXT_PUBLIC_STUDIO_TOKEN ?? "";
 }
@@ -274,7 +282,7 @@ export async function* streamConsole(
   const resolved = await probeDaemon();
   if (resolved !== "live") return;
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${apiBase()}${path}`, {
     signal,
     cache: "no-store",
     headers: authHeaders(),

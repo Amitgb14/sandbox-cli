@@ -9,6 +9,8 @@
 #   --dest DIR      install directory                 (default: ~/.local/bin)
 #   --token TOK     GitHub token for a private repo   (or set GITHUB_TOKEN)
 #   --no-config     do not write ~/.config/sandbox/config.yaml
+#   --with-studio-api  also install sandbox-studio-api from the same archive
+#                   (Studio's control plane; studio.sh passes this)
 #   --uninstall     remove the binary, then report what else is left behind
 #   --purge         with --uninstall: also delete ~/.config/sandbox (agent
 #                   logins!) and the sandbox Docker images and cache volumes
@@ -30,6 +32,12 @@ TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 UNINSTALL=0
 PURGE=0
 NO_CONFIG=0
+WITH_STUDIO_API=0
+
+# The second binary in the release archive. Not installed by default: it is
+# Studio's HTTP control plane, and somebody installing the CLI has not asked for
+# a server. studio.sh asks for it.
+STUDIO_API="sandbox-studio-api"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
@@ -40,9 +48,10 @@ while [ $# -gt 0 ]; do
     --dest)      DEST="${2:-}"; shift 2 ;;
     --token)     TOKEN="${2:-}"; shift 2 ;;
     --no-config) NO_CONFIG=1; shift ;;
+    --with-studio-api) WITH_STUDIO_API=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge)     PURGE=1; shift ;;
-    -h|--help)   sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
@@ -65,12 +74,16 @@ if [ "$UNINSTALL" = 1 ]; then
   }
 
   removed=0
+  # Both binaries: an uninstall that left the server behind would leave the one
+  # thing here that listens on a port.
   for d in "$DEST" "${HOME}/.local/bin" /usr/local/bin; do
-    if [ -f "${d}/${BINARY}" ]; then
-      rm -f "${d}/${BINARY}"
-      info "removed ${d}/${BINARY}"
-      removed=1
-    fi
+    for b in "$BINARY" "$STUDIO_API"; do
+      if [ -f "${d}/${b}" ]; then
+        rm -f "${d}/${b}"
+        info "removed ${d}/${b}"
+        removed=1
+      fi
+    done
   done
   if [ "$removed" = 0 ]; then
     info "no ${BINARY} binary found in ${DEST}, ~/.local/bin or /usr/local/bin"
@@ -225,6 +238,25 @@ mv "$TMP/$BINARY" "$DEST/.${BINARY}.new"
 mv "$DEST/.${BINARY}.new" "$DEST/$BINARY"
 
 info "installed ${DEST}/${BINARY}"
+
+# ---- the studio control plane, on request ------------------------------------
+# From the archive already downloaded and already checksummed, so the two halves
+# cannot end up at different versions and there is no second thing to verify.
+# Releases before this binary existed simply do not carry it, which is a plain
+# message rather than a failure: the CLI install above is complete either way.
+if [ "$WITH_STUDIO_API" = 1 ]; then
+  if [ ! -f "$TMP/$STUDIO_API" ]; then
+    tar -xzf "$TMP/$ARCHIVE" -C "$TMP" "$STUDIO_API" 2>/dev/null || true
+  fi
+  if [ -f "$TMP/$STUDIO_API" ]; then
+    chmod +x "$TMP/$STUDIO_API"
+    mv "$TMP/$STUDIO_API" "$DEST/.${STUDIO_API}.new"
+    mv "$DEST/.${STUDIO_API}.new" "$DEST/$STUDIO_API"
+    info "installed ${DEST}/${STUDIO_API}"
+  else
+    info "! ${VERSION} does not ship ${STUDIO_API}; install a newer release for Studio's API"
+  fi
+fi
 
 # ---- default user config ----------------------------------------------------
 # Written once, on a machine that has none. Two rules make this safe to run from

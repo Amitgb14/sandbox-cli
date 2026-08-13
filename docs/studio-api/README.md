@@ -19,6 +19,13 @@ make build-studio-api
 ./bin/sandbox-studio-api -project /path/to/repo
 ```
 
+Released as a binary too, in the same archive as the CLI (`install.sh
+--with-studio-api`), and as an image (`ghcr.io/amitgb14/sandbox-studio-api`) for
+people who choose the container shape knowing what the docker socket costs.
+`studio.sh` at the repository root is the one command that installs the pair,
+pulls the UI image and starts both halves — with `-project` resolved to the
+repository **root**, which is the single most common way this is got wrong.
+
 Flags: `-addr` (default `127.0.0.1:8787`, loopback), `-project` (default: cwd),
 `-history-db` (a SQLite index over the audit log; without it every history
 question is answered by scanning the log, which is the default and always
@@ -282,7 +289,17 @@ console run is one somebody is attached to, where being asked is the point, so
 here it is opt-in. It changes what the agent asks, never what it can reach; the
 container is the blast-radius boundary either way. Only agents whose
 non-interactive mode is a flag rather than a subcommand have one, which
-`GET /v1/agents` reports as `canSkipPermissions`.
+`GET /v1/agents` reports as `canSkipPermissions` — alongside
+`skipPermissionArgs`, the flag itself (`--dangerously-skip-permissions`,
+`--yolo`), so a client can name what the control adds instead of keeping its own
+copy of a security-relevant argv.
+
+Studio surfaces this as the **Let it work without asking** toggle under
+*Autonomy*. On a headless run it renders checked and locked rather than
+unchecked and disabled, because checked is what the launch actually does: the
+daemon builds a headless agent with `Descriptor.Autonomous`, which appends the
+flag unconditionally. A control plane may mis-render many things; what its own
+boundary is set to is not one of them.
 
 `"resume": "<session-id>"` carries on an existing conversation instead of
 starting one, using the agent's own resume flag from the verified descriptor.

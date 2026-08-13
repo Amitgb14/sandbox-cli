@@ -170,6 +170,13 @@ export function LaunchForm() {
   const blocked = preview.refusals.length > 0;
 
   const agentMeta = agents?.find((a) => a.name === req.agent);
+
+  // An agent run with no console skips permissions whatever this form says: the
+  // daemon builds it with `Descriptor.Autonomous`, which appends the flag
+  // unconditionally. So the toggle below reports that rather than offering it.
+  // A plain command is excluded — there is no agent, so nothing to ask.
+  const headlessAlwaysSkips = !!req.agent && !req.console;
+  const skipFlag = agentMeta?.skipPermissionArgs?.join(" ");
   // Matched by repo **id**, never by a name derived from the workspace path.
   // Two clones of a same-named repo would otherwise share a namespace — and the
   // name-derived version was already wrong here, because a worktree path
@@ -623,19 +630,31 @@ export function LaunchForm() {
 
           {req.console && req.agent && <ResumePicker req={req} patch={patch} />}
 
+          {/*
+            Checked and locked for a headless run, because that is what actually
+            happens: the daemon starts a headless agent in its autonomous argv,
+            which carries the skip-permissions flag unconditionally — an agent
+            that stops for permission with nobody attached does not fail, it
+            hangs. Rendering the control unchecked-and-disabled there described
+            the opposite of the run being launched, which is the one thing a
+            control plane may not do about its own boundary. The choice is real
+            only for a console run, where somebody is attached and could answer.
+          */}
           <Toggle
             id="skip-permissions"
-            checked={req.skipPermissions}
-            disabled={!req.console || !agentMeta?.canSkipPermissions}
+            checked={headlessAlwaysSkips || req.skipPermissions}
+            disabled={headlessAlwaysSkips || !req.console || !agentMeta?.canSkipPermissions}
             onCheckedChange={(skipPermissions) => patch({ skipPermissions })}
             label="Let it work without asking"
-            tone={req.skipPermissions ? "caution" : undefined}
+            tone={headlessAlwaysSkips || req.skipPermissions ? "caution" : undefined}
             hint={
-              !req.console
-                ? "Only for a console run. A headless run always works without asking — an agent that stops for permission does not fail, it hangs."
-                : agentMeta?.canSkipPermissions === false
-                  ? `${req.agent}'s non-interactive mode is a subcommand rather than a flag, so there is nothing to add to an interactive session.`
-                  : "Adds the agent's skip-permissions flag, so an attached session runs to the end instead of waiting for you. The container is the blast-radius boundary either way — this changes what it asks, not what it can reach."
+              headlessAlwaysSkips
+                ? `Always on for a headless run, and not a choice: ${agentMeta?.label ?? req.agent} is started in its autonomous argv${skipFlag ? ` (${skipFlag})` : ""}, because an agent that stops for permission with nobody attached does not fail — it hangs. Keep a console below if you want to be asked.`
+                : !req.console
+                  ? "Pick an agent first. A plain command is whatever argv you typed; there are no approval prompts to turn off."
+                  : agentMeta?.canSkipPermissions === false
+                    ? `${req.agent}'s non-interactive mode is a subcommand rather than a flag, so there is nothing to add to an interactive session.`
+                    : `Adds ${skipFlag ? `${skipFlag}, ` : "the agent's skip-permissions flag, "}so an attached session runs to the end instead of waiting for you. The container is the blast-radius boundary either way — this changes what it asks, not what it can reach.`
             }
           />
 

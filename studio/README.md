@@ -16,6 +16,29 @@ npm run build
 npm run test:e2e   # Playwright: every route renders with no console errors
 ```
 
+## In one command
+
+From the repository you want to work in:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh
+```
+
+`studio.sh` installs `sandbox-cli` and `sandbox-studio-api` from the same
+release archive, pulls `ghcr.io/amitgb14/sandbox-studio-ui`, starts both halves
+and prints the URL. Re-running it is a restart; `studio.sh down`, `status` and
+`logs` are the rest of it.
+
+It is the same shape as everything below — UI containerised, API on your host —
+with the three things that are easy to get wrong done for you: the project
+resolved to the **repository root** (a subdirectory is what makes every
+branch-addressed screen answer *not a git repository*), one token generated once
+and handed to both halves, and a CORS origin matching the port it just chose.
+`--api-in-docker` puts the API in a container too, and says what that costs.
+
+The images are published on every tag and on every push to `main`
+(`.github/workflows/images.yml` → `latest`, the tag, and `edge`).
+
 ## Without a Node toolchain
 
 `docker-compose.yml` at the repository root runs the UI in a container:
@@ -72,8 +95,20 @@ badge and the ⌘K palette.
 
 ## The backend contract
 
-Point Studio at a different daemon with `NEXT_PUBLIC_SANDBOX_API`; it defaults to
-`http://localhost:8787`.
+Point Studio at a different daemon two ways, and which one you want depends on
+whether you are building the bundle or running someone else's:
+
+- `NEXT_PUBLIC_SANDBOX_API` — read at **build** time and inlined, so it is the
+  one for `npm run dev` and for a deployment that compiles its own bundle.
+- `SANDBOX_API_URL` — read per request by the server and handed to the page as
+  `window.__SANDBOX_API__`, so it is the one for the **published image**, whose
+  build could not have known which port your daemon would end up on. It wins
+  when both are set. `SANDBOX_STUDIO_TOKEN` rides the same channel, which is how
+  `studio.sh` gets a token into the browser without anybody copying one.
+
+Both default to `http://localhost:8787`. The root layout is `force-dynamic` for
+this reason: prerendered, it would read the environment once at build time and
+the runtime value would silently do nothing.
 
 | Method | Path | Returns |
 |---|---|---|
