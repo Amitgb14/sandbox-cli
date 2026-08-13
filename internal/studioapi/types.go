@@ -170,6 +170,13 @@ type UsageSnapshot struct {
 	FetchedAt  *string `json:"fetchedAt"`
 	Path       *string `json:"path"`
 
+	// Source is which kind of file answered: "statusline" for the recording
+	// sandbox-statusline writes from the hook payload, "cache" for Claude Code's
+	// own ~/.claude.json. A client needs it to say how a newer reading is
+	// obtained — driving the agent advances the cache and nothing else, so a
+	// refresh control belongs to one of these and not the other.
+	Source string `json:"source,omitempty"`
+
 	// Abandoned reports that the file carrying these figures is being written
 	// while the reading inside it is not — the agent is running and no longer
 	// recording usage there.

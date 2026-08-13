@@ -98,7 +98,7 @@ export function UsageGauge() {
             in the sandbox-owned agent HOME, and the daemon may itself be in a
             container with no claude binary — so the control is hidden rather
             than offered and then failed. */}
-        {data.canRefresh && !data.abandoned ? (
+        {data.canRefresh && !data.abandoned && data.source !== "statusline" ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -135,7 +135,14 @@ export function UsageGauge() {
             {ageMs === null
               ? "Age unknown — the agent did not record when it last refreshed."
               : `Read ${formatDurationTight(ageMs)} ago from ${sourceLabel(data.path)}.`}
-            {data.abandoned ? (
+            {data.source === "statusline" ? (
+              <>
+                {" "}
+                Recorded by the status line as an agent ran, which is the live source — Claude Code
+                no longer maintains the cache the daemon reads. Start a sandboxed claude for a
+                newer one; there is nothing to refresh from here.
+              </>
+            ) : data.abandoned ? (
               <>
                 {" "}
                 That file is still being written, but this reading is not — the agent has stopped
@@ -166,6 +173,7 @@ export function UsageGauge() {
  */
 function sourceLabel(path: string | null): string {
   if (!path) return "the agent's own cache";
+  if (path.endsWith("/.sandbox/usage.json")) return "the status line's own record";
   return path.includes("/.config/sandbox/agents/") ? "the sandbox agent's cache" : "your own cache";
 }
 

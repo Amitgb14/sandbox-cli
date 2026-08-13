@@ -21,6 +21,18 @@ version is tagged.
   explaining itself, and a default that is wrong for most people is worse than
   one that is merely conservative. Off also stops the request behind it. Turn it
   on where your reading still moves.
+- **Usage figures come back to life, from the status line.** `internal/agentusage`
+  now reads the recording written by `sandbox-statusline` as another candidate
+  and takes whichever source is newest, so on any machine where a sandboxed
+  claude has run interactively the reading is current again — `5h 31% · week
+  58% · as of just now` where the same command showed a three-week-old fossil
+  before. `Read` decides which parser by the document's own top-level key rather
+  than by filename, so nothing downstream changed. `GET /v1/usage` reports
+  `source` (`statusline` | `cache`), and both surfaces act on it: the refresh
+  control is withdrawn for a recording, because driving the agent advances the
+  *cache* and never that file, and each says a sandboxed run is what produces a
+  newer figure. Unchanged where it should be: a machine with only the cache
+  behaves exactly as before.
 - **The status line now records the usage figures it is handed**, to
   `$HOME/.sandbox/usage.json` inside the container — which, with the persisted
   agent HOME mounted, is a file on your host. Claude Code pipes `rate_limits` to

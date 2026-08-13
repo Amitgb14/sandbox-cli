@@ -144,7 +144,21 @@ func printUsage(s agentusage.Snapshot, now time.Time, offerRefresh bool) {
 	if s.Path != "" {
 		line += " — " + shortenHome(s.Path)
 	}
+	if s.Source == agentusage.SourceStatusLine {
+		line += " (recorded by the status line)"
+	}
 	fmt.Printf("\n%s\n", line)
+
+	// A recording is advanced by running the agent, not by driving it from here:
+	// --refresh spends a request to rewrite a *cache*, and this reading did not
+	// come from one. Saying where a newer figure comes from beats offering a
+	// flag that cannot produce it.
+	if s.Source == agentusage.SourceStatusLine {
+		if stale {
+			fmt.Println("start a sandboxed claude for a current reading — the status line records it as it runs")
+		}
+		return
+	}
 
 	// An abandoned cache is not a stale one, and offering --refresh for it sells
 	// a request that cannot buy anything: the file is being written, the reading

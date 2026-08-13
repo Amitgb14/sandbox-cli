@@ -71,6 +71,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		out.Agent = snap.Agent
 	}
 	out.Abandoned = snap.Abandoned()
+	out.Source = snap.Source
 	if !snap.FetchedAt.IsZero() {
 		at := snap.FetchedAt.UTC().Format(time.RFC3339)
 		out.FetchedAt = &at

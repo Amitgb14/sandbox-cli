@@ -46,6 +46,15 @@ const (
 	KindSevenDay = "7d"
 )
 
+// Where a reading came from. Reported rather than inferred, because the two
+// differ in a way a caller has to act on: a cache reading can be advanced by
+// driving the agent, and a status-line recording cannot — it is written by a
+// run, so the way to a newer one is another run.
+const (
+	SourceCache      = "cache"      // ~/.claude.json, written by Claude Code
+	SourceStatusLine = "statusline" // recorded by sandbox-statusline from the hook payload
+)
+
 // Window is one usage window: how much of it is spent, and when it starts over.
 type Window struct {
 	Kind    string  `json:"kind"`
@@ -86,6 +95,10 @@ type Snapshot struct {
 	// not an idle machine; it is an agent that is running and no longer writing
 	// usage here. See Abandoned.
 	SourceModAt time.Time `json:"source_modified_at,omitempty"`
+
+	// Source is which kind of file this came from: SourceCache or
+	// SourceStatusLine. Empty on a zero Snapshot.
+	Source string `json:"source,omitempty"`
 }
 
 // Empty reports whether the snapshot carries no usable window — either because
@@ -127,6 +140,65 @@ func (s Snapshot) Age(now time.Time) time.Duration {
 		return d
 	}
 	return 0
+}
+
+// statusRecord is what sandbox-statusline writes: the `rate_limits` object
+// Claude Code hands the status-line hook, stamped with when it was handed over.
+//
+// This is the live source. The cache below stopped being maintained by Claude
+// Code (see Abandoned), while this arrives on a documented contract the agent
+// still honours — so on any machine where a sandboxed claude has run
+// interactively, it is both fresher and more trustworthy than the file it sits
+// beside. It carries no `limits[]`, so per-model windows and the is_active flag
+// are simply absent here rather than guessed at.
+type statusRecord struct {
+	RecordedAt int64  `json:"recorded_at"`
+	Agent      string `json:"agent"`
+	RateLimits struct {
+		FiveHour *rateWindow `json:"five_hour"`
+		SevenDay *rateWindow `json:"seven_day"`
+	} `json:"rate_limits"`
+}
+
+// rateWindow is one window as the hook reports it: a percentage and an epoch
+// second. Both pointers, because absent and zero are different answers — 0% of
+// a window is a real reading and a missing field is not.
+type rateWindow struct {
+	UsedPercentage *float64 `json:"used_percentage"`
+	ResetsAt       *int64   `json:"resets_at"`
+}
+
+// parseRecord turns a status-line recording into the same Snapshot shape the
+// cache produces, so every caller downstream is unchanged.
+func parseRecord(data []byte) (Snapshot, error) {
+	var r statusRecord
+	if err := json.Unmarshal(data, &r); err != nil {
+		return Snapshot{}, fmt.Errorf("parse usage record: %w", err)
+	}
+	s := Snapshot{Agent: r.Agent, Source: SourceStatusLine}
+	if s.Agent == "" {
+		s.Agent = "claude"
+	}
+	if r.RecordedAt > 0 {
+		s.FetchedAt = time.Unix(r.RecordedAt, 0).UTC()
+	}
+	for _, w := range []struct {
+		kind string
+		win  *rateWindow
+	}{
+		{KindFiveHour, r.RateLimits.FiveHour},
+		{KindSevenDay, r.RateLimits.SevenDay},
+	} {
+		if w.win == nil || w.win.UsedPercentage == nil {
+			continue
+		}
+		out := Window{Kind: w.kind, Percent: *w.win.UsedPercentage}
+		if w.win.ResetsAt != nil && *w.win.ResetsAt > 0 {
+			out.ResetsAt = time.Unix(*w.win.ResetsAt, 0).UTC()
+		}
+		s.Windows = append(s.Windows, out)
+	}
+	return s, nil
 }
 
 // claudeConfig is the sliver of ~/.claude.json this package understands. Every
@@ -224,7 +296,7 @@ func Parse(data []byte) (Snapshot, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Snapshot{}, fmt.Errorf("parse usage cache: %w", err)
 	}
-	s := Snapshot{Agent: "claude"}
+	s := Snapshot{Agent: "claude", Source: SourceCache}
 	if ms := c.Cached.FetchedAtMs; ms > 0 {
 		s.FetchedAt = time.UnixMilli(ms).UTC()
 	}
@@ -318,7 +390,23 @@ func Read(path string) (Snapshot, error) {
 		}
 		return Snapshot{}, err
 	}
-	s, err := Parse(data)
+	// Which reader, decided by the document rather than by the filename: two
+	// different files live under the same agent HOME now, and a name is a
+	// convention while a top-level key is the thing that actually determines
+	// whether the bytes parse. Probed on exact keys rather than by searching the
+	// text — the cache is a hundred kilobytes of unrelated settings, and some of
+	// them have "rate_limit" in the name.
+	var probe struct {
+		RateLimits json.RawMessage `json:"rate_limits"`
+	}
+	_ = json.Unmarshal(data, &probe)
+
+	var s Snapshot
+	if len(probe.RateLimits) > 0 && string(probe.RateLimits) != "null" {
+		s, err = parseRecord(data)
+	} else {
+		s, err = Parse(data)
+	}
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -340,6 +428,10 @@ func Read(path string) (Snapshot, error) {
 func ClaudePaths() []string {
 	var out []string
 	if dir := config.AgentStateDir("claude"); dir != "" {
+		// The status-line recording first, because it is the live one — though
+		// order decides nothing: Find compares stamps, so a cache that somehow
+		// updates again still wins on merit rather than on position.
+		out = append(out, filepath.Join(dir, ".sandbox", "usage.json"))
 		out = append(out, filepath.Join(dir, ".claude.json"))
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {

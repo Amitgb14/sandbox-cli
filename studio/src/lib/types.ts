@@ -423,6 +423,14 @@ export interface UsageSnapshot {
    */
   canRefresh: boolean;
   /**
+   * Which file answered: `"statusline"` for the recording written from the
+   * hook payload while an agent runs, `"cache"` for Claude Code's own
+   * ~/.claude.json. It decides how a newer reading is obtained — driving the
+   * agent advances the cache and nothing else — so the refresh control belongs
+   * to one of them and not the other.
+   */
+  source?: "statusline" | "cache";
+  /**
    * Whether the file carrying these figures is being written while the reading
    * inside it is not — the agent is running and no longer recording usage
    * there. An old reading on an idle machine is fixed by using the agent; this
