@@ -313,6 +313,12 @@ export interface Agent {
    * silently doing nothing.
    */
   canSkipPermissions?: boolean;
+  /**
+   * That flag, verbatim — `--dangerously-skip-permissions`, `--yolo`. From the
+   * daemon rather than kept here, so the control can name what it adds without
+   * this file becoming a second copy of a security-relevant argv.
+   */
+  skipPermissionArgs?: string[];
   /** The argv a fleet would start it with, for the dry-run preview. */
   autonomousInvocation?: string[];
 

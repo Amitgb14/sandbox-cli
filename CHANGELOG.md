@@ -220,6 +220,29 @@ version is tagged.
   would be worse than missing one. Nothing changes under podman (your uid is
   mapped directly), on macOS (bind ownership is virtualized), or when the guest
   runs as root.
+- **Studio comes up in one command.** `studio.sh`, run from the repository you
+  want to work in, installs `sandbox-cli` and `sandbox-studio-api` from the same
+  release archive, pulls the UI image from GHCR, starts both halves and prints
+  the URL; `down`, `status` and `logs` are the rest of it. The shape is the one
+  the compose file argues for rather than a new one — **UI containerised, API on
+  your host** — because the API launches containers, and in a container that
+  means holding the host's docker socket, which is root on the host.
+  `--api-in-docker` takes the other path and says what it costs. Three things it
+  gets right that are easy to get wrong by hand: the project is resolved to the
+  repository **root** (a subdirectory is what makes every branch-addressed screen
+  answer *not a git repository*), one token is generated once and handed to both
+  halves, and the CORS origin matches the port it just chose. A `.sandbox.yaml`
+  the API refuses to trust is still your decision — `--config` forwards it and
+  the script never guesses.
+- **The Studio UI is published as an image**
+  (`ghcr.io/amitgb14/sandbox-studio-ui`), alongside the API
+  (`ghcr.io/amitgb14/sandbox-studio-api`) — multi-arch, built on every tag and
+  every push to `main`. The UI image is told its daemon's URL and token at
+  `docker run` time (`SANDBOX_API_URL`, `SANDBOX_STUDIO_TOKEN`) rather than at
+  build time, because neither is knowable when the image is built; a build-time
+  `NEXT_PUBLIC_SANDBOX_API` still wins for anyone compiling their own bundle.
+  `sandbox-studio-api` is now in the release archive too, so the recommended
+  host-process shape does not require a Go toolchain.
 
 - **A run now says which boundary it actually got.** The OCI runtime is the one
   setting that changes the *kind* of isolation rather than its degree, and
@@ -249,6 +272,33 @@ version is tagged.
 
 ### Fixed
 
+- **Studio's autonomy toggle said the opposite of what a headless run does.**
+  *Let it work without asking* rendered unchecked and disabled whenever there was
+  no console — while the run being launched skips permissions regardless, because
+  the daemon builds a headless agent with `Descriptor.Autonomous` and that
+  appends the flag (an agent that stops to ask with nobody attached does not
+  fail, it hangs). It now renders **checked and locked** for the agents that have
+  such a flag, **unchecked and locked** for those that do not — codex, opencode
+  and droid reach autonomy through a subcommand, and codex applies its own
+  approval policy that sandbox-cli deliberately does not relax, so claiming
+  always-on there would be the same false statement pointed the other way — and
+  stays a real choice for a console run, where somebody is attached and could
+  answer. The hint names the flag it adds — `--dangerously-skip-permissions`,
+  `--yolo` — from the daemon's own answer: `GET /v1/agents` now carries
+  `skipPermissionArgs` beside `canSkipPermissions`, rather than the UI keeping a
+  second copy of a security-relevant argv. The offline fixtures carry it too;
+  without a daemon the control had been permanently disabled.
+- **Studio's `api` profile managed whatever directory you launched it from.** The
+  compose file resolved the project as `${PWD}`, but compose finds that file by
+  walking *up* from where you stand — so `docker compose --profile api up` in a
+  subdirectory (`studio/`, say) mounted and managed the subdirectory, leaving the
+  repository's `.git` one level outside the mount. Every branch-addressed request
+  then failed with `not a git repository … Stopping at filesystem boundary`, once
+  per request, with nothing naming the cause. The path now comes from
+  `SANDBOX_PROJECT` when set (`.env.example` documents it) and `${PWD}` when it is
+  not, so the directory you launch from stops mattering; and
+  `sandbox-studio-api` says at startup — where it is one line rather than a stream
+  of 500s — when its `-project` is not a git repository at all.
 - **The documented `.sandbox.yaml` example listed three keys a project file is no
   longer allowed to set.** `network.allow`, `ports:` and `snapshot:` were each
   permitted at first and later refused — `allow` only ever widens and *replaces*

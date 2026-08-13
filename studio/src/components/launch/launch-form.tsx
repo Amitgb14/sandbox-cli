@@ -170,6 +170,19 @@ export function LaunchForm() {
   const blocked = preview.refusals.length > 0;
 
   const agentMeta = agents?.find((a) => a.name === req.agent);
+
+  // An agent run with no console skips permissions whatever this form says —
+  // *for the agents that have a flag to skip with*. `Descriptor.Autonomous`
+  // appends `SkipPermissionArgs`, and that is empty for codex, opencode and
+  // droid, whose non-interactive mode is a subcommand. Codex in particular
+  // "applies its own approval policy on top" (its descriptor says so) and
+  // sandbox-cli deliberately does not relax it, so claiming the run works
+  // without asking would be the same false statement this control was fixed to
+  // stop making, pointed the other way. A plain command is excluded too: no
+  // agent, nothing to ask.
+  const headlessAlwaysSkips =
+    !!req.agent && !req.console && agentMeta?.canSkipPermissions === true;
+  const skipFlag = agentMeta?.skipPermissionArgs?.join(" ");
   // Matched by repo **id**, never by a name derived from the workspace path.
   // Two clones of a same-named repo would otherwise share a namespace — and the
   // name-derived version was already wrong here, because a worktree path
@@ -623,19 +636,39 @@ export function LaunchForm() {
 
           {req.console && req.agent && <ResumePicker req={req} patch={patch} />}
 
+          {/*
+            Three states, and each says something different about the run.
+
+            Checked and locked when the agent has a skip flag and there is no
+            console: that is what the launch actually does, since Autonomous
+            appends the flag and an agent that stops for permission with nobody
+            attached hangs rather than fails. Rendering it unchecked there
+            described the opposite of the run being started.
+
+            Unchecked and locked when the agent has no such flag at all. Its
+            non-interactive mode is a subcommand, sandbox-cli adds nothing, and
+            whether it asks is the agent's own policy — codex says so in its
+            descriptor. Claiming "always on" for those would be the same false
+            statement pointed the other way.
+
+            A real choice only for a console run of an agent that has the flag,
+            which is the one case where somebody is attached and could answer.
+          */}
           <Toggle
             id="skip-permissions"
-            checked={req.skipPermissions}
-            disabled={!req.console || !agentMeta?.canSkipPermissions}
+            checked={headlessAlwaysSkips || req.skipPermissions}
+            disabled={headlessAlwaysSkips || !req.console || !agentMeta?.canSkipPermissions}
             onCheckedChange={(skipPermissions) => patch({ skipPermissions })}
             label="Let it work without asking"
-            tone={req.skipPermissions ? "caution" : undefined}
+            tone={headlessAlwaysSkips || req.skipPermissions ? "caution" : undefined}
             hint={
-              !req.console
-                ? "Only for a console run. A headless run always works without asking — an agent that stops for permission does not fail, it hangs."
-                : agentMeta?.canSkipPermissions === false
-                  ? `${req.agent}'s non-interactive mode is a subcommand rather than a flag, so there is nothing to add to an interactive session.`
-                  : "Adds the agent's skip-permissions flag, so an attached session runs to the end instead of waiting for you. The container is the blast-radius boundary either way — this changes what it asks, not what it can reach."
+              headlessAlwaysSkips
+                ? `Always on for a headless run, and not a choice: ${agentMeta?.label ?? req.agent} is started in its autonomous argv${skipFlag ? ` (${skipFlag})` : ""}, because an agent that stops for permission with nobody attached does not fail — it hangs. Keep a console below if you want to be asked.`
+                : !req.agent
+                  ? "Pick an agent first. A plain command is whatever argv you typed; there are no approval prompts to turn off."
+                  : agentMeta?.canSkipPermissions === false
+                    ? `${agentMeta?.label ?? req.agent}'s non-interactive mode is a subcommand rather than a flag, so sandbox-cli adds nothing here — whether it stops to ask is its own approval policy, headless or not.`
+                    : `Adds ${skipFlag ?? "the agent's skip-permissions flag"}, so an attached session runs to the end instead of waiting for you. The container is the blast-radius boundary either way — this changes what it asks, not what it can reach.`
             }
           />
 

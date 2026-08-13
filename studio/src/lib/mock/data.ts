@@ -436,6 +436,11 @@ export const MOCK_AGENTS: Agent[] = AGENT_SEEDS.map((seed, i) => {
     env: seed.env,
     delivery: seed.delivery,
     headlessVerified: seed.headlessVerified,
+    // Offline, the Launch form's skip-permissions control was permanently
+    // disabled without these: it keys off canSkipPermissions, which only the
+    // daemon was answering.
+    canSkipPermissions: (seed.skipPermissionArgs ?? []).length > 0,
+    skipPermissionArgs: seed.skipPermissionArgs,
     autonomousInvocation: seed.headlessVerified
       ? autonomousArgv(seed.name)
       : undefined,

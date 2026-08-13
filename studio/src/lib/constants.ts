@@ -1,8 +1,46 @@
 import type { AgentDelivery, AgentName, Profile } from "@/lib/types";
 
-/** `NEXT_PUBLIC_SANDBOX_API`, with the local daemon as the default. */
-export const API_BASE =
-  process.env.NEXT_PUBLIC_SANDBOX_API ?? "http://localhost:8787";
+/**
+ * Where the daemon is, resolved per call rather than frozen into the bundle.
+ *
+ * `NEXT_PUBLIC_*` is inlined by Next at **build** time, which is fine for a
+ * developer running `npm run dev` and wrong for a *published image*: the URL
+ * would be decided when the image was built, on a machine that could not know
+ * which port this user's daemon ended up on. So the published image is told at
+ * `docker run` time — `SANDBOX_API_URL` — and the root layout emits that value
+ * as `window.__SANDBOX_API__` before the bundle loads.
+ *
+ * Three sources, in this order, mirroring how `apiToken` resolves:
+ *
+ *   window.__SANDBOX_API__   injected per request from the server's environment.
+ *                            Wins, because it is the one that can change without
+ *                            a rebuild.
+ *   NEXT_PUBLIC_SANDBOX_API  baked in at build time — `npm run dev`, and any
+ *                            deployment that builds its own bundle.
+ *   http://localhost:8787    the daemon's own default address.
+ *
+ * Server and browser agree on the answer because both read the same variable:
+ * the server reads `SANDBOX_API_URL` directly, and what the browser reads is
+ * that value, rendered into the document. A mismatch would surface as a
+ * hydration error on the one screen that prints the endpoint.
+ */
+declare global {
+  interface Window {
+    __SANDBOX_API__?: string;
+    /** `SANDBOX_STUDIO_TOKEN`, injected the same way. See `apiToken`. */
+    __SANDBOX_TOKEN__?: string;
+  }
+}
+
+export function apiBase(): string {
+  if (typeof window !== "undefined" && window.__SANDBOX_API__) {
+    return window.__SANDBOX_API__;
+  }
+  if (typeof process !== "undefined" && process.env.SANDBOX_API_URL) {
+    return process.env.SANDBOX_API_URL;
+  }
+  return process.env.NEXT_PUBLIC_SANDBOX_API ?? "http://localhost:8787";
+}
 
 /**
  * `config.baselineEgress` — the always-permitted domain set in allowlist mode.
@@ -79,6 +117,12 @@ interface AgentSeed {
   env: string[];
   statusLine?: boolean;
   historySync?: boolean;
+  /**
+   * The flag that turns this agent's approval prompts off, where it has one.
+   * Mirrors `Descriptor.SkipPermissionArgs`; the daemon sends the real value on
+   * `GET /v1/agents`, so this is only what the fixtures answer offline.
+   */
+  skipPermissionArgs?: string[];
   note: string;
 }
 
@@ -95,6 +139,7 @@ export const AGENT_SEEDS: AgentSeed[] = [
     headlessVerified: true,
     envAllow: ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"],
     env: [],
+    skipPermissionArgs: ["--dangerously-skip-permissions"],
     statusLine: true,
     historySync: true,
     note: "The only agent with a status line, and the only one whose host history bucket is mounted. Self-updating install in the persisted HOME; the baked npm copy is the offline fallback.",
@@ -115,6 +160,7 @@ export const AGENT_SEEDS: AgentSeed[] = [
     headlessVerified: true,
     envAllow: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     env: [],
+    skipPermissionArgs: ["--yolo"],
     note: "No status-line hook upstream, so nothing is drawn on screen. Use Studio's metrics instead.",
   },
   {

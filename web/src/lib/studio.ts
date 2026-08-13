@@ -138,6 +138,60 @@ export const STUDIO_STEPS: StudioStep[] = [
   },
 ];
 
+/* ----------------------------------------------------- the one-command track */
+
+/**
+ * `studio.sh`, for someone who wants Studio rather than a lesson in how it is
+ * assembled.
+ *
+ * It is the same two processes the other tracks describe, in the same shape:
+ * the UI as a container, the API as a host process. What the script adds is the
+ * part people get wrong by hand — the project resolved to the *repository root*,
+ * one token generated once and handed to both halves, the CORS origin matching
+ * the port it just chose. Nothing here is a different security posture; it is
+ * the same one, typed correctly.
+ */
+export const STUDIO_SCRIPT_STEPS: StudioStep[] = [
+  {
+    title: "Run it from the repository you want to work in",
+    side: "daemon",
+    code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh",
+    body:
+      "It installs sandbox-cli and sandbox-studio-api from the same release archive, pulls the UI image from GHCR, starts both halves and prints the URL. Re-running it is a restart. The project it manages is the git repository root — not the directory you are standing in, which is the difference between Studio working and every branch-addressed screen answering \"not a git repository\".",
+    expect:
+      "`api http://127.0.0.1:8787`, `ui http://localhost:3100`, and a project line naming your repository root.",
+  },
+  {
+    title: "Open it — there is nothing to paste",
+    side: "browser",
+    code: "open http://localhost:3100",
+    body:
+      "The script generates a bearer token once, keeps it in ~/.config/sandbox/studio/token, and hands the same value to the API and to the UI container — which passes it to the page at request time rather than baking it into the image. So the header badge reads live on the first load, and the console works without visiting a settings field. Delete that file to rotate it.",
+    expect: "The header badge reading live rather than fixture.",
+  },
+  {
+    title: "Stop it, or look at what it is doing",
+    side: "daemon",
+    code: [
+      "sh studio.sh status     # what is running, and whether it answers",
+      "sh studio.sh logs       # the API's own log (logs ui for the container)",
+      "sh studio.sh down       # stop both halves",
+    ].join("\n"),
+    body:
+      "Download the script once (curl -fsSLO …) and these are the rest of the commands. The API is an ordinary host process with a pidfile, and the UI is a container named sandbox-studio-ui — nothing here is hidden state, and `docker rm -f sandbox-studio-ui` plus killing that pid is exactly what `down` does.",
+  },
+  {
+    title: "When your project has a .sandbox.yaml the API will not trust",
+    side: "daemon",
+    code: "sh studio.sh up --config \"$PWD/.sandbox.yaml\"",
+    body:
+      "A project config travels with the repository, so discovery refuses the privilege-relevant keys in it — image, mounts, secrets, env, env_allow, a weakening network.mode — and the API refuses to start rather than honour them quietly. Naming the path is the deliberate act that makes the file trusted, and the script forwards the flag rather than guessing it for you.",
+    expect: "The server starting instead of refusing, having been told to trust that specific file.",
+    warn:
+      "Read the file first. This is the one flag here that turns an untrusted input into a trusted one, and a secrets: block in it resolves credentials wherever the API runs.",
+  },
+];
+
 /* ------------------------------------------------- the docker compose track */
 
 /**
@@ -176,7 +230,7 @@ export const STUDIO_COMPOSE_STEPS: StudioStep[] = [
     side: "daemon",
     code: "SANDBOX_STUDIO_TOKEN=$(openssl rand -hex 16) docker compose --profile api up -d",
     body:
-      "The api profile mounts /var/run/docker.sock, ${PWD} at its own path, and ~/.config/sandbox at its own path. The duplicated paths are not redundancy: when the API asks the daemon for -v /a/b:/workspace, the daemon resolves /a/b on the host, so the project must live at the same absolute path in both places or every sandbox it starts mounts a directory that is not there.",
+      "The api profile mounts /var/run/docker.sock, your project at its own path, and ~/.config/sandbox at its own path. The duplicated paths are not redundancy: when the API asks the daemon for -v /a/b:/workspace, the daemon resolves /a/b on the host, so the project must live at the same absolute path in both places or every sandbox it starts mounts a directory that is not there. Which project that is comes from SANDBOX_PROJECT, falling back to $PWD — set it in .env, because compose finds its file by walking up from where you stand, so launching in a subdirectory would otherwise mount and manage the subdirectory, leaving the repository's .git outside the mount and every branch-addressed request answering \"not a git repository\".",
     expect: "Both services up, with the API published on 127.0.0.1:8787 only.",
     warn:
       "Mounting the docker socket into a container is root on the host: anything that can reach it can start a container mounting /. That is fine on a laptop you already trust and wrong as a default, which is why it is behind a profile rather than on by default.",

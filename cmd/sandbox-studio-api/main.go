@@ -142,6 +142,19 @@ func run() error {
 	go func() {
 		log.Printf("sandbox-studio-api listening on %s (project %s, engine %s, profile %s)",
 			addr, project, srv.Engine, cfg.Profile)
+		if srv.RepoID == "" {
+			// Said here rather than left to the first request. The server runs
+			// without a repository on purpose — a run naming its own project still
+			// works — but everything addressed by branch (the worktree listing, the
+			// diffs, any run asking for a worktree) fails, one 500 at a time, with
+			// nothing in the message naming the thing that was wrong at startup.
+			//
+			// The usual way to arrive here is compose: `${PWD}` is the directory you
+			// launched from, while compose finds its file by walking up from there,
+			// so launching in a subdirectory mounts and manages the subdirectory.
+			log.Printf("sandbox-studio-api: %s is not a git repository — worktrees, diffs and any run asking for a branch "+
+				"will fail; point -project at the repository root (with docker compose, set SANDBOX_PROJECT or launch from it)", project)
+		}
 		if token == "" {
 			log.Printf("sandbox-studio-api: no -token set — every request but /health is unauthenticated")
 		}

@@ -39,8 +39,44 @@ builds:
       - amd64
       - arm64
 
+  # Studio's control plane, shipped in the same archive as the CLI.
+  #
+  # It is released as a *binary* rather than only as an image because that is the
+  # recommended way to run it: this server launches containers, so running it
+  # inside one means mounting the host's docker socket into that container, which
+  # is root on the host. A host process already has the access it needs and hands
+  # nothing to anybody. The image exists for people who want the container shape
+  # anyway (studio.sh --api-in-docker), and it should not be the only option a
+  # release offers.
+  - id: sandbox-studio-api
+    main: ./cmd/sandbox-studio-api
+    binary: sandbox-studio-api
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
 archives:
   - id: default
+    # One archive carrying both binaries, rather than one archive each.
+    #
+    # The name and layout are unchanged, which is what keeps install.sh working
+    # untouched: it extracts `sandbox-cli` by name and ignores whatever else is
+    # in there. studio.sh extracts the other one from the same file, so a Studio
+    # install is one download rather than two, and the two halves cannot end up
+    # at different versions.
+    ids:
+      - sandbox-cli
+      - sandbox-studio-api
     # tar.gz everywhere except Windows, which gets a zip — the convention most
     # installers and package managers expect.
     formats: [tar.gz]

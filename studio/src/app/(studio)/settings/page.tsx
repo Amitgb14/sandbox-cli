@@ -20,7 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PageHeader } from "@/components/common/page-header";
-import { API_BASE, BASELINE_EGRESS, PROFILES } from "@/lib/constants";
+import { apiBase, BASELINE_EGRESS, PROFILES } from "@/lib/constants";
 import { useDaemon, useTransportMode } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 import { formatBytes } from "@/lib/format";
@@ -267,7 +267,7 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <dl className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Endpoint" value={API_BASE} mono />
+            <Field label="Endpoint" value={apiBase()} mono />
             <Field
               label="Transport"
               value={mode === "live" ? "live daemon" : "fixtures"}
@@ -299,7 +299,7 @@ export default function SettingsPage() {
             <div className="flex flex-wrap items-center gap-3 rounded-md border border-caution/30 bg-caution/5 p-3 text-xs">
               <Cpu className="size-4 shrink-0 text-caution" />
               <p className="min-w-0 flex-1 text-muted-foreground">
-                Nothing answered on <code className="font-mono">{API_BASE}</code>, so every screen
+                Nothing answered on <code className="font-mono">{apiBase()}</code>, so every screen
                 is showing fixtures. Nothing here reflects a real container.
               </p>
               <Button variant="outline" size="sm" className="h-7 text-xs" onClick={retry}>

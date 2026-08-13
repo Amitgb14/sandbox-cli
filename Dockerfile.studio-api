@@ -11,14 +11,22 @@
 # daemon through the mounted socket, so every container it starts is a sibling
 # on the host rather than a child here.
 
-FROM golang:1.25-bookworm AS build
+# Pinned to the builder's own architecture and cross-compiled from there: Go
+# does that in one environment variable, where building arm64 under QEMU would
+# run the whole compile through emulation for an identical binary. TARGETARCH is
+# supplied by buildx per platform.
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS build
 WORKDIR /src
+
+ARG TARGETOS
+ARG TARGETARCH
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+      go build -trimpath -ldflags="-s -w" \
       -o /out/sandbox-studio-api ./cmd/sandbox-studio-api
 
 FROM debian:bookworm-slim

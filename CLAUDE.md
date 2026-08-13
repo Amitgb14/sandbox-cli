@@ -675,6 +675,24 @@ agents still to adapt, ordered by popularity, plus the full checklist, is in
 flow, forwarded variables, `--allow` domains — is `docs/AGENTS.md`; a new adapter needs a
 section there.
 
+**Who turns the approval prompts off is settled, three different ways, and the wrapper is
+deliberately the one that does not.** A *headless* run gets it from
+`Descriptor.Autonomous`, which appends `SkipPermissionArgs` — for the agents that have such a
+flag, because an agent that stops to ask with nobody attached does not fail, it hangs, holding
+a `max_parallel` slot. For codex, opencode and droid that list is **empty**: their
+non-interactive mode is a subcommand, and codex "applies its own approval policy on top" which
+sandbox-cli does not relax. So "headless means no approvals" is true of claude and gemini and
+an assumption about the other three — Studio's toggle is keyed on `CanSkipPermissions` for
+exactly that reason. A Studio *console* run
+opts in per request (`skipPermissions`), since somebody is attached and being asked is the point;
+the Launch toggle renders **checked and locked** when the run is headless, because unchecked
+would describe the opposite of what is about to be launched. And a **CLI** run adds nothing: the
+user types `--dangerously-skip-permissions` themselves, which `splitWrapperArgs` forwards
+verbatim. That is a decision, not an omission — the flag is refused by the agents under
+`--user root`, so a wrapper that added it silently would break every root run, and a person at a
+terminal is the one party in this list who can still be asked. Adding it to the wrappers by
+default is the change to *not* make casually.
+
 ### The memory/CPU/usage status line
 
 Only `claude` gets one on screen, and that is a deliberate limit, not an oversight:

@@ -73,6 +73,137 @@ copy of `sandbox-cli`.
   codesign -s - -f ~/.local/bin/sandbox-cli
   ```
 
+## Verifying Studio before you push
+
+Studio is the one part of this repository whose pieces are published rather than
+compiled by the person running them — two container images, two binaries in the
+release archive, and a script that assembles them on someone else's machine. So
+"it works here" is a weaker claim than usual: the thing users get is built by CI
+from the same tree, and most of what can go wrong is a disagreement between the
+halves rather than a compile error in either.
+
+Run this before pushing anything under `studio/`, `cmd/sandbox-studio-api/`,
+`studio.sh` or `.github/workflows/images.yml`. From the repository root:
+
+```sh
+BIN=$(mktemp -d)          # scratch, so nothing here touches ~/.local/bin
+```
+
+**1. Static checks.** Most breakage is caught here, in seconds.
+
+```sh
+gofmt -l . && go build ./... && go test ./...
+sh -n studio.sh && sh -n install.sh
+(cd studio && npx tsc --noEmit && npm run lint)
+(cd web    && npx tsc --noEmit && npm run lint)
+```
+
+**2. Build what CI will build.** The `:local` tag is what step 3 pulls instead of
+GHCR.
+
+```sh
+docker build -f studio/Dockerfile     -t ghcr.io/amitgb14/sandbox-studio-ui:local  studio
+docker build -f Dockerfile.studio-api -t ghcr.io/amitgb14/sandbox-studio-api:local .
+go build -o "$BIN/sandbox-cli" ./cmd/sandbox-cli
+go build -o "$BIN/sandbox-studio-api" ./cmd/sandbox-studio-api
+```
+
+**3. Start the pair on non-default ports**, so it cannot collide with a compose
+stack or a Studio you already have up. `--config` is needed for *this*
+repository specifically: its own `.sandbox.yaml` carries `env` and `secrets`,
+which discovery refuses from a project file.
+
+```sh
+sh studio.sh up --no-install --no-pull --dest "$BIN" --tag local \
+  --port 3199 --api-port 8799 --config "$PWD/studio.sandbox.yaml"
+```
+
+**4. Assert it wired up**, rather than merely started. Each line here has failed
+at least once in a way the startup output did not show:
+
+```sh
+TOKEN=$(cat ~/.config/sandbox/studio/token)
+
+# the image was told its port at run time — the whole runtime-config mechanism
+curl -fsS http://localhost:3199 | grep -o 'window.__SANDBOX_API__=[^;]*;'
+
+curl -fsS http://127.0.0.1:8799/v1/health                                   # 200 + JSON
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8799/v1/worktrees # 401
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Origin: http://evil.example' \
+     http://127.0.0.1:8799/v1/health                                        # 403
+curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Origin: http://localhost:3199' \
+     http://127.0.0.1:8799/v1/worktrees | head -c 120                       # your worktrees
+```
+
+Then open `http://localhost:3199`: the header badge reads **live** on first
+load, with nothing pasted into a settings field.
+
+The first `curl` is the one worth understanding. `studio/src/app/layout.tsx` is
+`force-dynamic` on purpose — prerendered, the layout reads `process.env` once at
+image build time, the script tag is simply absent at runtime, and every screen
+quietly falls back to the baked default. Nothing else in the output changes, so
+this assertion is the only thing standing between that and a shipped image.
+
+**5. The project is the repository root, not your working directory.**
+
+```sh
+sh studio.sh down
+(cd studio && sh ../studio.sh up --no-install --no-pull --dest "$BIN" --tag local \
+   --port 3199 --api-port 8799 --config "$PWD/../studio.sandbox.yaml")
+```
+
+It must report `project: …/sandbox-cli (repository root of …/studio)`. Handed a
+subdirectory, the API answers every branch-addressed request with *not a git
+repository … Stopping at filesystem boundary*, once per request, naming nothing
+that would explain it — which is the same failure `SANDBOX_PROJECT` exists to
+prevent on the compose route.
+
+**6. The other path, then teardown.**
+
+```sh
+sh studio.sh down
+sh studio.sh up --no-install --no-pull --tag local --port 3199 --api-port 8799 \
+  --api-in-docker --config "$PWD/studio.sandbox.yaml"   # expect the socket warning
+sh studio.sh status --port 3199 --api-port 8799
+sh studio.sh down && sh studio.sh down                  # second: "nothing was running"
+```
+
+**7. What steps 1–6 cannot reach.** These need tooling or a published release,
+and are worth running when you have touched the thing each one covers:
+
+```sh
+# multi-arch, as the workflow builds it (no push; ~5 min under QEMU)
+docker buildx build --platform linux/amd64,linux/arm64 -f studio/Dockerfile studio
+
+# the archive really carries both binaries
+goreleaser check && goreleaser release --snapshot --clean --skip=validate
+tar -tzf dist/sandbox-cli_*_darwin_arm64.tar.gz
+
+# install.sh against a release that predates the second binary: a message, not a failure
+sh install.sh --with-studio-api --dest "$BIN/probe" --no-config
+```
+
+**8. Cleanup.**
+
+```sh
+docker rmi ghcr.io/amitgb14/sandbox-studio-{ui,api}:local
+rm -rf "$BIN" dist
+```
+
+A note on `studio/e2e`: `npm run test:e2e` currently has failures that are not
+yours. Several specs (`wtcols`, `copy`, `headless`, `nocontoken`, `tabswitch`,
+`ttylogs`, `dbg`) were written against a live daemon holding particular runs and
+branches, and fail without it. Before blaming a change, stash it and re-run the
+same specs — an unchanged failure list is the answer.
+
+### Publishing
+
+Images go to GHCR from `.github/workflows/images.yml`: `edge` on every push to
+`main`, and the version plus `latest` on a tag. **A newly created GHCR package is
+private**, so the first publish needs its visibility set to public by hand
+(GitHub → Packages → the package → Package settings → Change visibility) or
+`studio.sh` fails on `docker pull` with `denied` for everyone but you.
+
 ## Release engineering
 
 Releases are built by GoReleaser (`.goreleaser.yaml`) and normally published by CI

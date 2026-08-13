@@ -86,6 +86,14 @@ type AgentInfo struct {
 	// that is not offered.
 	CanSkipPermissions bool `json:"canSkipPermissions"`
 
+	// SkipPermissionArgs is that flag, verbatim — `--dangerously-skip-permissions`,
+	// `--yolo`. Sent rather than left for the client to know, because a control
+	// that turns off an agent's approval prompts should be able to name what it
+	// adds, and a UI carrying its own copy of two flag strings is a second
+	// definition of a security-relevant argv. Empty exactly when
+	// CanSkipPermissions is false.
+	SkipPermissionArgs []string `json:"skipPermissionArgs,omitempty"`
+
 	// AutonomousInvocation is the argv a fleet task or a detached run would start
 	// this agent with, prompt elided — the same string `fleet run --dry-run`
 	// prints, so a launch preview and a dry run cannot disagree about what is

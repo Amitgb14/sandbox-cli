@@ -1,27 +1,41 @@
 "use client";
 
 import { useState } from "react";
-import { Boxes, Wrench } from "lucide-react";
-import { STUDIO_COMPOSE_STEPS, STUDIO_STEPS } from "@/lib/studio";
+import { Boxes, Wrench, Zap } from "lucide-react";
+import {
+  STUDIO_COMPOSE_STEPS,
+  STUDIO_SCRIPT_STEPS,
+  STUDIO_STEPS,
+} from "@/lib/studio";
 import { StudioStepList } from "@/components/studio-steps";
 import { cn } from "@/lib/utils";
 
 /**
- * The two ways to bring Studio up, as a choice you make once rather than a page
- * you scroll past.
+ * The three ways to bring Studio up, as a choice you make once rather than a
+ * page you scroll past.
  *
- * Both tracks are complete on their own — that is the point of separating them.
- * Interleaving compose and manual instructions in one list is how a reader ends
- * up running half of each and getting a UI that cannot reach a daemon, which is
- * also the single most common way this setup fails.
+ * Each track is complete on its own — that is the point of separating them.
+ * Interleaving script, compose and manual instructions in one list is how a
+ * reader ends up running half of each and getting a UI that cannot reach a
+ * daemon, which is also the single most common way this setup fails.
  *
- * Compose is first because it is fewer decisions, not because it is more
- * secure — it is less so if you take the `--profile api` branch, which mounts
- * the docker socket. That warning lives on the step itself rather than here,
- * where it would be read once and forgotten by the time it applies.
+ * The order is fewest-decisions first, and that is not the same as
+ * most-secure-first: all three land on the same posture — UI containerised, API
+ * on the host — and the one place that changes is compose's `--profile api`
+ * branch and the script's `--api-in-docker`, which mount the docker socket. That
+ * warning lives on the step itself rather than here, where it would be read once
+ * and forgotten by the time it applies.
  */
 
 const TRACKS = [
+  {
+    id: "script",
+    label: "one command",
+    icon: Zap,
+    blurb:
+      "A script that installs both binaries, pulls the UI image and starts the pair — with the project resolved to your repository root and one token handed to both halves. The same shape as the other two, typed correctly.",
+    steps: STUDIO_SCRIPT_STEPS,
+  },
   {
     id: "compose",
     label: "docker compose",
@@ -41,7 +55,7 @@ const TRACKS = [
 ] as const;
 
 export function StudioSetup() {
-  const [track, setTrack] = useState<(typeof TRACKS)[number]["id"]>("compose");
+  const [track, setTrack] = useState<(typeof TRACKS)[number]["id"]>("script");
   const current = TRACKS.find((t) => t.id === track) ?? TRACKS[0];
 
   return (

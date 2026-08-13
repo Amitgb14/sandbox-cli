@@ -1,0 +1,24 @@
+# What must never reach the build context.
+#
+# node_modules is the one that matters rather than the one that is merely large:
+# both Dockerfiles run `npm ci` and then `COPY . .`, so a host node_modules
+# copied in afterwards *overwrites* the install with binaries built for the
+# host's platform — a macOS arm64 tree landing on top of a linux/amd64 image,
+# where `next build` then fails in a way that names neither cause. The dev image
+# has been getting away with it because compose masks that path with an
+# anonymous volume; the published image has no such cover.
+node_modules
+.next
+
+# Build and test output: never inputs, and test-results carries traces and
+# screenshots that have no business in a published image.
+test-results
+playwright-report
+tsconfig.tsbuildinfo
+
+# Local settings, and the images' own definitions.
+.env
+.env.*
+Dockerfile
+Dockerfile.dev
+.dockerignore

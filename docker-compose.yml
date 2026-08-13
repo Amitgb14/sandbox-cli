@@ -52,6 +52,18 @@
 # sandbox the API starts mounts a directory that does not exist. That is what
 # the `${PWD}:${PWD}` mounts are for, and why the API runs with `-project
 # ${PWD}` rather than a path of its own choosing.
+#
+# ── Why ${PWD} is not enough on its own ──────────────────────────────────────
+#
+# `${PWD}` is the directory *you* are standing in, while compose finds this file
+# by walking up from there — so `docker compose --profile api up` from `studio/`
+# reads this file and then mounts and manages `studio/`, which is not the
+# repository root. The repo's `.git` is then outside the mount, and every
+# request addressed by branch fails with "not a git repository ... Stopping at
+# filesystem boundary", once per request, with nothing naming the cause.
+#
+# So the path is `SANDBOX_PROJECT` when set, and `${PWD}` when it is not. Put
+# the repository root in `.env` and the working directory stops mattering.
 
 name: sandbox-studio
 
@@ -94,7 +106,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Same path inside and out, so the bind mounts this server asks the daemon
       # for resolve to the same directory the daemon sees.
-      - ${PWD}:${PWD}
+      - ${SANDBOX_PROJECT:-${PWD}}:${SANDBOX_PROJECT:-${PWD}}
       # Agent logins, worktrees, the run audit log, the rescue snapshots — the
       # same state the CLI reads and writes.
       #
@@ -170,7 +182,7 @@ services:
       - -addr
       - 0.0.0.0:8787
       - -project
-      - ${PWD}
+      - ${SANDBOX_PROJECT:-${PWD}}
       - -cors-origin
       - http://localhost:3100
       # Empty means "discover normally", which is the same as not passing it.
