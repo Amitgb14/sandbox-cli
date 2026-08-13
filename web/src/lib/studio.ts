@@ -246,7 +246,7 @@ export const STUDIO_COMPOSE_STEPS: StudioStep[] = [
       "[ -d ~/.claude.json ] && rmdir ~/.claude.json",
     ].join("\n"),
     body:
-      "The compose file can mount Claude Code's usage cache so the gauge reads the same numbers your host does. It is commented out by default, and that default is load-bearing rather than cautious — see the warning. If you uncomment it, check the file is there first. Nothing is lost by the recovery above: the directory only ever appears where the file did not exist, so there was never any content to lose, and Claude Code writes the real file itself.",
+      "The compose file can mount Claude Code's usage cache so the gauge reads the same numbers your host does. It is commented out by default, and that default is load-bearing rather than cautious — see the warning. If you uncomment it, check the file is there first. Nothing is lost by the recovery above: the directory only ever appears where the file did not exist, so there was never any content to lose, and Claude Code writes the real file itself. Note what the mount does not buy: advancing those numbers. The daemon refreshes the reading every ten minutes by default (-usage-refresh-interval), but only where the agent is on its PATH — in a container it is not, so the timer never starts and the figures age. Reading needs the file; refreshing needs the agent, which is another reason the API belongs on your host.",
     expect:
       "`ok` before you start, or nothing at all after the rmdir — `ls -la ~/.claude.json` showing a regular file rather than a directory.",
     warn:
