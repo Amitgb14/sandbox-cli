@@ -200,6 +200,47 @@ if [ -z "${SANDBOX_STATUSLINE_NO_USAGE:-}" ]; then
       usage7="wk ${p}%"
     fi
   done <<< "$rl"
+
+  # Record what we were handed, so the host can read it later.
+  #
+  # This is the only live source of these numbers left. Claude Code stopped
+  # maintaining `cachedUsageUtilization` in ~/.claude.json — measured 13 Aug
+  # 2026 on 2.1.231: the file rewritten several times a day, the reading inside
+  # it three weeks old, and on a fresh install the key absent altogether — so
+  # everything on the host reading that file reports a fossil, and no amount of
+  # refreshing moves it. The pipe this script already reads is untouched by that,
+  # because it is a documented contract the agent *hands* us rather than a file
+  # we reverse-engineer.
+  #
+  # $HOME is the persisted agent HOME when one is mounted, which is the default,
+  # so this lands on the host at ~/.config/sandbox/agents/claude/.sandbox/. It is
+  # sandbox-cli's own file: nothing here writes anything Claude owns, and the
+  # read-only rule that governs ~/.claude.json is untouched.
+  #
+  # Every failure is silent and every one of them is survivable. A status line
+  # that broke because a directory was read-only would trade the thing the user
+  # is looking at for a file they are not.
+  if [ -n "$rl" ]; then
+    rec_dir="$HOME/.sandbox"
+    if mkdir -p "$rec_dir" 2>/dev/null; then
+      # Skipped when the object is absent: an account with no windows — API-key
+      # auth, or before the first response — records nothing rather than an empty
+      # shape that a later reader would have to tell apart from zero usage.
+      #
+      # Written whole and renamed into place, because a host may read this file
+      # at any moment and half a document is worse than a stale one.
+      rec_tmp="$rec_dir/.usage.json.$$"
+      if printf '%s' "$session" | jq -c \
+        --argjson at "${now_s:-0}" \
+        '{recorded_at: $at, agent: "claude", rate_limits: .rate_limits}
+         | select(.rate_limits != null)' > "$rec_tmp" 2>/dev/null &&
+        [ -s "$rec_tmp" ]; then
+        mv -f "$rec_tmp" "$rec_dir/usage.json" 2>/dev/null || rm -f "$rec_tmp"
+      else
+        rm -f "$rec_tmp"
+      fi
+    fi
+  fi
 fi
 
 # Which model is answering. Claude reports it in the same JSON as the limits, and

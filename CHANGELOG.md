@@ -11,6 +11,21 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **The status line now records the usage figures it is handed**, to
+  `$HOME/.sandbox/usage.json` inside the container — which, with the persisted
+  agent HOME mounted, is a file on your host. Claude Code pipes `rate_limits` to
+  the `statusLine` hook as a documented contract, and that is now the only live
+  source of these numbers: the cache everything host-side reads has been retired
+  upstream. Nothing reads the recording yet; this is the first step of the
+  revision in `docs/proposals/usage-stats.md`. It writes only sandbox-cli's own
+  file, records nothing when the object is absent (API-key auth, or before the
+  first response), and every failure is silent — a status line that broke over
+  an unwritable directory would trade what you are looking at for a file you are
+  not. Note the limit found while building it: a **headless** run draws no
+  status line, so `-p` runs and `fleet` record nothing.
+
 ### Fixed
 
 - **An old usage reading and a dead one now look different.** Claude Code 2.1.x
