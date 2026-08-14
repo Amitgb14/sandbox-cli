@@ -234,6 +234,12 @@ git tag 0.0.1beta.1 && git push origin 0.0.1beta.1   # CI runs the release
 > **Never change the release version as a side effect of unrelated work.** The
 > current version lives in `internal/version`.
 
+The version exists in one more place than the release commit used to touch:
+`web/src/lib/site.ts` prints it on the site, and it sat three releases behind
+before a reader noticed the front page advertising an older version than the one
+it linked to. `TestSiteVersionMatchesTheBinary` now fails when the two disagree,
+so a release commit that forgets the site does not reach `main`.
+
 ### Building images
 
 ```sh
