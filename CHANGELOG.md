@@ -47,6 +47,12 @@ version is tagged.
 
 ### Fixed
 
+- **`sandbox-cli usage --refresh` spent a request it had just called useless.**
+  Studio withdrew its button for a status-line reading and for an abandoned
+  cache, and the CLI printed "`--refresh` cannot make it current" — then ran the
+  turn anyway, spending from the window being measured to re-read a file the turn
+  does not touch. It now refuses before the request, naming what would produce a
+  newer figure instead.
 - **Studio's usage panel rounded the reset time past the reset.** The countdown
   used the same formatter as "4m ago", which rounds to whole hours: a five-hour
   window resetting in 1h25m read *in 1h*, and at 1h35m it read **in 2h** —

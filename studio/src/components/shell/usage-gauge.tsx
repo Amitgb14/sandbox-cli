@@ -79,6 +79,11 @@ export function UsageGauge() {
 
   const ageMs = data.fetchedAt ? now - new Date(data.fetchedAt).getTime() : null;
 
+  // Computed once and passed down, because an expired row used to say "refresh
+  // to see it" while the header had already withdrawn the button — pointing at a
+  // control that was not on the screen.
+  const offersRefresh = data.canRefresh && !data.abandoned && data.source !== "statusline";
+
   return (
     <div className="space-y-2 rounded-md border bg-card/50 p-2.5 group-data-[collapsible=icon]:hidden">
       <div className="flex items-center justify-between">
@@ -98,7 +103,7 @@ export function UsageGauge() {
             in the sandbox-owned agent HOME, and the daemon may itself be in a
             container with no claude binary — so the control is hidden rather
             than offered and then failed. */}
-        {data.canRefresh && !data.abandoned && data.source !== "statusline" ? (
+        {offersRefresh ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -127,7 +132,7 @@ export function UsageGauge() {
               key={`${w.kind}-${w.scope ?? "account"}-${i}`}
               window={w}
               expired={!showable(w, now)}
-              canRefresh={data.canRefresh}
+              canRefresh={offersRefresh}
             />
           ))}
 
@@ -278,7 +283,8 @@ function WindowMeter({
           {canRefresh ? " — refresh to see it" : ""}
         </p>
       ) : (
-        w.resetsAt && (
+        w.resetsAt &&
+        untilTight(w.resetsAt) && (
           <p className="text-[10px] text-muted-foreground">resets in {untilTight(w.resetsAt)}</p>
         )
       )}

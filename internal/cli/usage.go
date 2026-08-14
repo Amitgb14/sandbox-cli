@@ -88,6 +88,24 @@ func runUsage(o usageOpts) error {
 // carries its own age, falling back to them cannot pass stale figures off as
 // fresh.
 func refreshUsage(snap agentusage.Snapshot, paths []string) agentusage.Snapshot {
+	// The two cases where a refresh is known to change nothing, refused before
+	// the request rather than explained after it.
+	//
+	// Studio withdraws its button for both and this printed "--refresh cannot
+	// make it current" underneath — while the flag went ahead and ran a turn
+	// anyway, spending from the very window being measured to re-read a file the
+	// turn does not touch. Saying a thing is useless and then doing it is worse
+	// than either.
+	if snap.Source == agentusage.SourceStatusLine {
+		fmt.Fprintln(os.Stderr, "this reading came from the status line, which a refresh does not "+
+			"touch — start a sandboxed claude for a newer one")
+		return snap
+	}
+	if snap.Abandoned() {
+		fmt.Fprintln(os.Stderr, "the agent has stopped recording usage in that file, so a refresh "+
+			"cannot advance it — not spending a request")
+		return snap
+	}
 	if !snap.NeedsRefresh(time.Now()) {
 		// Already inside the interval Claude Code refetches on. A request here
 		// would spend from the window it is trying to measure and change nothing.

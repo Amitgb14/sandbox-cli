@@ -106,10 +106,18 @@ type Snapshot struct {
 func (s Snapshot) Empty() bool { return len(s.Windows) == 0 }
 
 // abandonedAfter is how far the file may outrun its reading before we stop
-// calling the reading merely old. A day is far longer than any gap an agent in
-// use produces, and far shorter than the weeks that accumulate once it stops
-// recording.
-const abandonedAfter = 24 * time.Hour
+// calling the reading merely old.
+//
+// Three days rather than one, because the claim this gates is strong — "a
+// refresh cannot help you" — and a day is reachable without anything being
+// wrong. Claude Code rewrites this file for reasons that have nothing to do with
+// usage (startup, `mcp add`, project bookkeeping), so someone whose last reading
+// is 26 hours old and who merely opens the agent today would otherwise be told
+// their source was dead when a single turn would have fixed it. Three days is
+// still nowhere near the weeks that accumulate once recording really stops, and
+// erring this way costs only a refresh that turns out to be useless — while
+// erring the other way withdraws the remedy from someone who needed it.
+const abandonedAfter = 72 * time.Hour
 
 // Abandoned reports that this cache is being written without its usage reading
 // being updated — the agent is running, and recording usage somewhere else or
