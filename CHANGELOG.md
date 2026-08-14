@@ -13,6 +13,83 @@ version is tagged.
 
 ### Added
 
+- **Studio's usage panel can be turned off** — Settings → Terminal → *Show
+  subscription usage*, persisted. Collapsing it already hid the numbers and kept
+  the header; this removes the panel entirely, and stops the request behind it.
+  Shown by default, because the status-line recording below makes the figures
+  live again; it was briefly defaulted off while the only source was a cache
+  Claude Code had stopped maintaining, which is the same test either way — a
+  gauge is worth showing when its number can move.
+- **Usage figures come back to life, from the status line.** `internal/agentusage`
+  now reads the recording written by `sandbox-statusline` as another candidate
+  and takes whichever source is newest, so on any machine where a sandboxed
+  claude has run interactively the reading is current again — `5h 31% · week
+  58% · as of just now` where the same command showed a three-week-old fossil
+  before. `Read` decides which parser by the document's own top-level key rather
+  than by filename, so nothing downstream changed. `GET /v1/usage` reports
+  `source` (`statusline` | `cache`), and both surfaces act on it: the refresh
+  control is withdrawn for a recording, because driving the agent advances the
+  *cache* and never that file, and each says a sandboxed run is what produces a
+  newer figure. Unchanged where it should be: a machine with only the cache
+  behaves exactly as before.
+- **The status line now records the usage figures it is handed**, to
+  `$HOME/.sandbox/usage.json` inside the container — which, with the persisted
+  agent HOME mounted, is a file on your host. Claude Code pipes `rate_limits` to
+  the `statusLine` hook as a documented contract, and that is now the only live
+  source of these numbers: the cache everything host-side reads has been retired
+  upstream. Nothing reads the recording yet; this is the first step of the
+  revision in `docs/proposals/usage-stats.md`. It writes only sandbox-cli's own
+  file, records nothing when the object is absent (API-key auth, or before the
+  first response), and every failure is silent — a status line that broke over
+  an unwritable directory would trade what you are looking at for a file you are
+  not. Note the limit found while building it: a **headless** run draws no
+  status line, so `-p` runs and `fleet` record nothing.
+
+### Fixed
+
+- **`sandbox-cli usage --refresh` spent a request it had just called useless.**
+  Studio withdrew its button for a status-line reading and for an abandoned
+  cache, and the CLI printed "`--refresh` cannot make it current" — then ran the
+  turn anyway, spending from the window being measured to re-read a file the turn
+  does not touch. It now refuses before the request, naming what would produce a
+  newer figure instead.
+- **Studio's usage panel rounded the reset time past the reset.** The countdown
+  used the same formatter as "4m ago", which rounds to whole hours: a five-hour
+  window resetting in 1h25m read *in 1h*, and at 1h35m it read **in 2h** —
+  announcing a reset later than the one that would happen, on the window where
+  the minutes are most of the information. It now prints hours and minutes
+  (`resets in 1h25m`), matching what `sandbox-cli usage` and the in-container
+  status line already showed, and floors rather than rounds so the figure is
+  never optimistic. Days still read as days on the weekly window.
+- **An old usage reading and a dead one now look different.** Claude Code 2.1.x
+  stopped maintaining `cachedUsageUtilization` in `~/.claude.json`, and the
+  symptom was indistinguishable from an idle machine: the panel said *19 days
+  old* while the file itself was being rewritten every session, and every remedy
+  — the refresh button, the timer, running an agent — did nothing, because there
+  was nothing left to advance. `agentusage.Snapshot.Abandoned` compares the
+  file's mtime against the reading's own stamp; a day apart is far more than an
+  agent in use produces and far less than the weeks that accumulate once it
+  stops. `sandbox-cli usage` says so instead of offering `--refresh`, and Studio
+  withdraws the refresh control and explains why. The figures are still shown:
+  they were true when they were taken.
+- **`sandbox-studio-api -usage-refresh-interval` now defaults to `0` (off).** It
+  shipped at `10m` and the reason to change it arrived the same day: where the
+  agent no longer records usage, the timer spends a request every ten minutes
+  advancing a reading that cannot move. Turn it on where the reading
+  demonstrably updates.
+- **Studio's usage refresh gave no sign of what it had done.** A refresh drives
+  the agent and re-reads the cache — but the agent decides whether to refetch,
+  and where it writes is not necessarily where the reading comes from: a host
+  Claude Code with no usage cache of its own leaves the daemon serving the
+  sandbox agent's copy, unchanged. So a *successful* refresh routinely moved
+  nothing, and with no feedback it was indistinguishable from a broken button
+  (reported as one three times). It now says which happened — "the reading is
+  now 2 minutes old", or "the agent reported no newer reading", naming the file
+  the figures come from — and a refusal shows the daemon's own explanation
+  instead of being swallowed.
+
+### Added
+
 - **Studio's usage reading refreshes itself.** The figures only move when Claude
   Code talks to the server, so on a machine where nobody has run the agent for a
   fortnight the panel was honest and useless — *18 days old* is a true answer to

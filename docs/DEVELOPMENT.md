@@ -83,11 +83,15 @@ from the same tree, and most of what can go wrong is a disagreement between the
 halves rather than a compile error in either.
 
 Run this before pushing anything under `studio/`, `cmd/sandbox-studio-api/`,
-`studio.sh` or `.github/workflows/images.yml`. From the repository root:
+`studio.sh` or `.github/workflows/images.yml`, from the repository root.
 
-```sh
-BIN=$(mktemp -d)          # scratch, so nothing here touches ~/.local/bin
-```
+Binaries go in the repo's own `bin/`, which is gitignored and is where
+`make build` puts them. Deliberately a fixed path rather than a `$TMPDIR`
+variable: the steps below are run over several sittings, and a variable that is
+unset in a fresh shell turns `-o "$BIN/sandbox-cli"` into `-o /sandbox-cli`,
+which fails against the read-only root and reads as a Go problem rather than a
+missing export. Nothing here touches `~/.local/bin`, which is the point of not
+using `go install`.
 
 **1. Static checks.** Most breakage is caught here, in seconds.
 
@@ -111,8 +115,8 @@ GHCR.
 ```sh
 docker build -f studio/Dockerfile     -t ghcr.io/amitgb14/sandbox-studio-ui:local  studio
 docker build -f Dockerfile.studio-api -t ghcr.io/amitgb14/sandbox-studio-api:local .
-go build -o "$BIN/sandbox-cli" ./cmd/sandbox-cli
-go build -o "$BIN/sandbox-studio-api" ./cmd/sandbox-studio-api
+go build -o bin/sandbox-cli ./cmd/sandbox-cli
+go build -o bin/sandbox-studio-api ./cmd/sandbox-studio-api
 ```
 
 **3. Start the pair on non-default ports**, so it cannot collide with a compose
@@ -121,7 +125,7 @@ repository specifically: its own `.sandbox.yaml` carries `env` and `secrets`,
 which discovery refuses from a project file.
 
 ```sh
-sh studio.sh up --no-install --no-pull --dest "$BIN" --tag local \
+sh studio.sh up --no-install --no-pull --dest "$PWD/bin" --tag local \
   --port 3199 --api-port 8799 --config "$PWD/studio.sandbox.yaml"
 ```
 
@@ -155,7 +159,7 @@ this assertion is the only thing standing between that and a shipped image.
 
 ```sh
 sh studio.sh down
-(cd studio && sh ../studio.sh up --no-install --no-pull --dest "$BIN" --tag local \
+(cd studio && sh ../studio.sh up --no-install --no-pull --dest "$PWD/../bin" --tag local \
    --port 3199 --api-port 8799 --config "$PWD/../studio.sandbox.yaml")
 ```
 
@@ -187,14 +191,14 @@ goreleaser check && goreleaser release --snapshot --clean --skip=validate
 tar -tzf dist/sandbox-cli_*_darwin_arm64.tar.gz
 
 # install.sh against a release that predates the second binary: a message, not a failure
-sh install.sh --with-studio-api --dest "$BIN/probe" --no-config
+sh install.sh --with-studio-api --dest "$PWD/bin/probe" --no-config
 ```
 
 **8. Cleanup.**
 
 ```sh
 docker rmi ghcr.io/amitgb14/sandbox-studio-{ui,api}:local
-rm -rf "$BIN" dist
+rm -rf bin/probe dist
 ```
 
 A note on `studio/e2e`: `npm run test:e2e` currently has failures that are not

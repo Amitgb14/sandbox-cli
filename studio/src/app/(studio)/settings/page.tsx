@@ -63,6 +63,8 @@ export default function SettingsPage() {
   const setTerminalFollow = useUi((s) => s.setTerminalFollow);
   const diffView = useUi((s) => s.diffView);
   const setDiffView = useUi((s) => s.setDiffView);
+  const usageHidden = useUi((s) => s.usageHidden);
+  const setUsageHidden = useUi((s) => s.setUsageHidden);
 
   return (
     <div className="space-y-6">
@@ -160,6 +162,18 @@ export default function SettingsPage() {
               onChange={setTerminalFollow}
               label="Follow new output by default"
               hint="Scrolling up always turns this off for the session you are reading — a view that yanked you back to the bottom mid-read would be unreadable."
+            />
+
+            <Separator />
+
+            {/* Not in the security card below, which is read-only on purpose:
+                this is Studio's own chrome, which is exactly what Studio owns. */}
+            <Row
+              id="usage-panel"
+              checked={!usageHidden}
+              onChange={(v) => setUsageHidden(!v)}
+              label="Show subscription usage"
+              hint="The sidebar gauge. Live on any machine where a sandboxed claude has run interactively — the status line records the figures as it goes. Off also stops the request behind it."
             />
           </CardContent>
         </Card>

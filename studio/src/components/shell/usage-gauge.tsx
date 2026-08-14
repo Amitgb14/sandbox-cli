@@ -33,10 +33,17 @@ import type { UsageWindow } from "@/lib/types";
  * weight. Absent still means absent; it is now visibly absent.
  */
 export function UsageGauge() {
-  const { data, isPending } = useUsage();
+  const hidden = useUi((s) => s.usageHidden);
+  const { data, isPending } = useUsage(!hidden);
   const refresh = useRefreshUsage();
   const collapsed = useUi((s) => s.usageCollapsed);
   const setCollapsed = useUi((s) => s.setUsageCollapsed);
+
+  // Before the loading state, so hiding it also stops the request: there is no
+  // point asking a daemon for numbers nobody is going to see, and on a
+  // deployment where the answer cannot change that is a query on a timer for a
+  // constant.
+  if (hidden) return null;
 
   if (isPending) {
     return (
@@ -72,6 +79,11 @@ export function UsageGauge() {
 
   const ageMs = data.fetchedAt ? now - new Date(data.fetchedAt).getTime() : null;
 
+  // Computed once and passed down, because an expired row used to say "refresh
+  // to see it" while the header had already withdrawn the button — pointing at a
+  // control that was not on the screen.
+  const offersRefresh = data.canRefresh && !data.abandoned && data.source !== "statusline";
+
   return (
     <div className="space-y-2 rounded-md border bg-card/50 p-2.5 group-data-[collapsible=icon]:hidden">
       <div className="flex items-center justify-between">
@@ -91,7 +103,7 @@ export function UsageGauge() {
             in the sandbox-owned agent HOME, and the daemon may itself be in a
             container with no claude binary — so the control is hidden rather
             than offered and then failed. */}
-        {data.canRefresh ? (
+        {offersRefresh ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -120,7 +132,7 @@ export function UsageGauge() {
               key={`${w.kind}-${w.scope ?? "account"}-${i}`}
               window={w}
               expired={!showable(w, now)}
-              canRefresh={data.canRefresh}
+              canRefresh={offersRefresh}
             />
           ))}
 
@@ -128,7 +140,21 @@ export function UsageGauge() {
             {ageMs === null
               ? "Age unknown — the agent did not record when it last refreshed."
               : `Read ${formatDurationTight(ageMs)} ago from ${sourceLabel(data.path)}.`}
-            {data.canRefresh ? null : (
+            {data.source === "statusline" ? (
+              <>
+                {" "}
+                Recorded by the status line as an agent ran, which is the live source — Claude Code
+                no longer maintains the cache the daemon reads. Start a sandboxed claude for a
+                newer one; there is nothing to refresh from here.
+              </>
+            ) : data.abandoned ? (
+              <>
+                {" "}
+                That file is still being written, but this reading is not — the agent has stopped
+                recording usage there, so it cannot be made current and the refresh is not offered.
+                The figure was true when it was taken.
+              </>
+            ) : data.canRefresh ? null : (
               <>
                 {" "}
                 Only Claude Code can advance it, and this server has none on its PATH — so this
@@ -143,6 +169,27 @@ export function UsageGauge() {
 }
 
 /**
+ * How long until a window resets, at the precision the window deserves.
+ *
+ * `formatRelative` rounds to whole hours, which is right for "started 2h ago"
+ * and wrong here twice over: on a *five-hour* window the minutes are most of
+ * the information — 1h25m and 1h55m are different plans for the afternoon — and
+ * rounding goes **up**, so 1h35m reads as "in 2h", announcing a reset later than
+ * the one that will happen. `formatDurationTight` keeps hours and minutes under
+ * a day and collapses to days beyond it, which is what the CLI and the status
+ * line already print for the same two windows.
+ *
+ * Null when the reset is not in the future. The caller renders expired windows
+ * on another branch, so this only fires if a reset passes between that check and
+ * this line — in which case saying nothing beats counting down past zero.
+ */
+function untilTight(iso: string): string | null {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return formatDurationTight(ms);
+}
+
+/**
  * Which file the reading came from, shortened for a sidebar.
  *
  * The API returns the path it actually read, and there are two candidates — the
@@ -152,6 +199,7 @@ export function UsageGauge() {
  */
 function sourceLabel(path: string | null): string {
   if (!path) return "the agent's own cache";
+  if (path.endsWith("/.sandbox/usage.json")) return "the status line's own record";
   return path.includes("/.config/sandbox/agents/") ? "the sandbox agent's cache" : "your own cache";
 }
 
@@ -235,8 +283,9 @@ function WindowMeter({
           {canRefresh ? " — refresh to see it" : ""}
         </p>
       ) : (
-        w.resetsAt && (
-          <p className="text-[10px] text-muted-foreground">resets {formatRelative(w.resetsAt)}</p>
+        w.resetsAt &&
+        untilTight(w.resetsAt) && (
+          <p className="text-[10px] text-muted-foreground">resets in {untilTight(w.resetsAt)}</p>
         )
       )}
     </div>

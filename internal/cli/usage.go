@@ -88,6 +88,24 @@ func runUsage(o usageOpts) error {
 // carries its own age, falling back to them cannot pass stale figures off as
 // fresh.
 func refreshUsage(snap agentusage.Snapshot, paths []string) agentusage.Snapshot {
+	// The two cases where a refresh is known to change nothing, refused before
+	// the request rather than explained after it.
+	//
+	// Studio withdraws its button for both and this printed "--refresh cannot
+	// make it current" underneath — while the flag went ahead and ran a turn
+	// anyway, spending from the very window being measured to re-read a file the
+	// turn does not touch. Saying a thing is useless and then doing it is worse
+	// than either.
+	if snap.Source == agentusage.SourceStatusLine {
+		fmt.Fprintln(os.Stderr, "this reading came from the status line, which a refresh does not "+
+			"touch — start a sandboxed claude for a newer one")
+		return snap
+	}
+	if snap.Abandoned() {
+		fmt.Fprintln(os.Stderr, "the agent has stopped recording usage in that file, so a refresh "+
+			"cannot advance it — not spending a request")
+		return snap
+	}
 	if !snap.NeedsRefresh(time.Now()) {
 		// Already inside the interval Claude Code refetches on. A request here
 		// would spend from the window it is trying to measure and change nothing.
@@ -144,7 +162,31 @@ func printUsage(s agentusage.Snapshot, now time.Time, offerRefresh bool) {
 	if s.Path != "" {
 		line += " — " + shortenHome(s.Path)
 	}
+	if s.Source == agentusage.SourceStatusLine {
+		line += " (recorded by the status line)"
+	}
 	fmt.Printf("\n%s\n", line)
+
+	// A recording is advanced by running the agent, not by driving it from here:
+	// --refresh spends a request to rewrite a *cache*, and this reading did not
+	// come from one. Saying where a newer figure comes from beats offering a
+	// flag that cannot produce it.
+	if s.Source == agentusage.SourceStatusLine {
+		if stale {
+			fmt.Println("start a sandboxed claude for a current reading — the status line records it as it runs")
+		}
+		return
+	}
+
+	// An abandoned cache is not a stale one, and offering --refresh for it sells
+	// a request that cannot buy anything: the file is being written, the reading
+	// in it is not, so driving the agent changes nothing. Said here, once,
+	// instead of leaving someone to discover it by spending.
+	if s.Abandoned() {
+		fmt.Println("that file is still being written, but this reading is not — the agent has")
+		fmt.Println("stopped recording usage there, so --refresh cannot make it current")
+		return
+	}
 
 	// Say where a current reading comes from, but only when something on screen
 	// is actually out of date. Advertising a flag that costs a request under

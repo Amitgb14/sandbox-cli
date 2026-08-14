@@ -83,8 +83,8 @@ func run() error {
 		"path to a SQLite index over the audit log; empty means scan the log, which is the default and always correct")
 	flag.DurationVar(&historyRetain, "history-retain", 0,
 		"drop indexed runs older than this on start (e.g. 2160h for 90 days); 0 keeps everything the log holds")
-	flag.DurationVar(&usageRefreshIn, "usage-refresh-interval", 10*time.Minute,
-		"how often to make the agent refresh the usage reading; each one spends a request from the window it measures, and 0 turns it off")
+	flag.DurationVar(&usageRefreshIn, "usage-refresh-interval", 0,
+		"how often to make the agent refresh the usage reading (e.g. 10m); off by default because each refresh spends a request from the window it measures, and current Claude Code may not record usage at all")
 	flag.Var(&origins, "cors-origin",
 		"origin allowed to drive this control plane cross-origin (repeatable); default: none, so a web page cannot reach it at all")
 	flag.Var(&hosts, "allow-host",

@@ -86,18 +86,29 @@ info() { printf '%s\n' "$*"; }
 warn() { printf '! %s\n' "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# The value of a flag that must have one.
+#
+# An empty value used to travel: `--dest "$BIN"` with BIN unset became DEST="",
+# and the failure surfaced two screens later as "not found in  or on PATH" with
+# a blank where a directory belongs. That is a shell mistake being reported as a
+# missing binary. A flag given nothing is refused where it is typed.
+need() { # need FLAG VALUE
+  [ -n "${2:-}" ] || die "$1 needs a value"
+  printf '%s' "$2"
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     up|down|status|logs) CMD="$1"; shift ;;
     ui|api)          ARG="$1"; shift ;;   # `logs ui` / `logs api`
-    --project)       PROJECT="${2:-}"; shift 2 ;;
-    --config)        CONFIG="${2:-}"; shift 2 ;;
-    --port)          UI_PORT="${2:-}"; UI_PORT_SET=1; shift 2 ;;
-    --api-port)      API_PORT="${2:-}"; API_PORT_SET=1; shift 2 ;;
-    --tag)           TAG="${2:-}"; shift 2 ;;
-    --version)       VERSION="${2:-}"; shift 2 ;;
-    --dest)          DEST="${2:-}"; shift 2 ;;
-    --token)         TOKEN="${2:-}"; shift 2 ;;
+    --project)       PROJECT=$(need --project "${2:-}"); shift 2 ;;
+    --config)        CONFIG=$(need --config "${2:-}"); shift 2 ;;
+    --port)          UI_PORT=$(need --port "${2:-}"); UI_PORT_SET=1; shift 2 ;;
+    --api-port)      API_PORT=$(need --api-port "${2:-}"); API_PORT_SET=1; shift 2 ;;
+    --tag)           TAG=$(need --tag "${2:-}"); shift 2 ;;
+    --version)       VERSION=$(need --version "${2:-}"); shift 2 ;;
+    --dest)          DEST=$(need --dest "${2:-}"); shift 2 ;;
+    --token)         TOKEN=$(need --token "${2:-}"); shift 2 ;;
     --api-in-docker) API_IN_DOCKER=1; shift ;;
     --no-install)    NO_INSTALL=1; shift ;;
     --no-pull)       NO_PULL=1; shift ;;

@@ -8,8 +8,10 @@ import {
 } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { onTransportChange, reconnect, transportMode, type TransportMode } from "@/lib/api/client";
+import { toast } from "sonner";
 import { api } from "@/lib/api/endpoints";
-import type { LaunchRequest } from "@/lib/types";
+import { formatRelative } from "@/lib/format";
+import type { LaunchRequest, UsageSnapshot } from "@/lib/types";
 
 /**
  * Query keys, in one place. A key spelled two ways is a cache that never
@@ -160,8 +162,8 @@ export function useHistoryStats(days = 14) {
   });
 }
 
-export function useUsage() {
-  return useQuery({ queryKey: qk.usage, queryFn: api.usage, staleTime: 60_000 });
+export function useUsage(enabled = true) {
+  return useQuery({ queryKey: qk.usage, queryFn: api.usage, staleTime: 60_000, enabled });
 }
 
 export function useDoctor(opts?: Partial<UseQueryOptions<Awaited<ReturnType<typeof api.doctor>>>>) {
@@ -250,7 +252,36 @@ export function useRefreshUsage() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.refreshUsage(),
-    onSuccess: (data) => qc.setQueryData(qk.usage, data),
+    onSuccess: (data) => {
+      const before = qc.getQueryData<UsageSnapshot>(qk.usage);
+      qc.setQueryData(qk.usage, data);
+
+      // Say which of the two things happened, because they look identical.
+      //
+      // A refresh drives the agent and then re-reads; the agent decides whether
+      // to refetch, and where it writes is not necessarily where these numbers
+      // are read from — a host Claude Code with no usage cache of its own
+      // leaves the daemon serving the sandbox agent's copy, unchanged. So a
+      // *successful* refresh routinely moves nothing, and with no feedback the
+      // button is indistinguishable from a broken one. It was reported as
+      // broken three times before this line existed.
+      if (data.fetchedAt && data.fetchedAt !== before?.fetchedAt) {
+        toast.success(`Usage refreshed — the reading is now ${formatRelative(data.fetchedAt)}`);
+        return;
+      }
+      toast.info("The agent reported no newer reading", {
+        description: data.path
+          ? `Still ${formatRelative(data.fetchedAt)}, from ${data.path}. These figures only move when the agent that owns that file talks to the server.`
+          : "These figures only move when the agent that owns them talks to the server.",
+      });
+    },
+    // The daemon's own words: 501 explains that this deployment has no agent to
+    // drive, 502 that the agent ran and failed. Both are worth reading, and
+    // neither reaches the user through a mutation that swallows its error.
+    onError: (err) =>
+      toast.error("Could not refresh usage", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
   });
 }
 

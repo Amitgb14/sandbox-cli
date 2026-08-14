@@ -200,6 +200,72 @@ if [ -z "${SANDBOX_STATUSLINE_NO_USAGE:-}" ]; then
       usage7="wk ${p}%"
     fi
   done <<< "$rl"
+
+  # Record what we were handed, so the host can read it later.
+  #
+  # This is the only live source of these numbers left. Claude Code stopped
+  # maintaining `cachedUsageUtilization` in ~/.claude.json — measured 13 Aug
+  # 2026 on 2.1.231: the file rewritten several times a day, the reading inside
+  # it three weeks old, and on a fresh install the key absent altogether — so
+  # everything on the host reading that file reports a fossil, and no amount of
+  # refreshing moves it. The pipe this script already reads is untouched by that,
+  # because it is a documented contract the agent *hands* us rather than a file
+  # we reverse-engineer.
+  #
+  # $HOME is the persisted agent HOME when one is mounted, which is the default,
+  # so this lands on the host at ~/.config/sandbox/agents/claude/.sandbox/. It is
+  # sandbox-cli's own file: nothing here writes anything Claude owns, and the
+  # read-only rule that governs ~/.claude.json is untouched.
+  #
+  # Every failure is silent and every one of them is survivable. A status line
+  # that broke because a directory was read-only would trade the thing the user
+  # is looking at for a file they are not.
+  if [ -n "$rl" ]; then
+    # Everything here is inside one redirected block. `> "$tmp" 2>/dev/null`
+    # would not have been silent: the shell reports a redirection it cannot open
+    # on its *own* stderr before the command's redirection applies, so a
+    # read-only .sandbox would print "cannot create" on every single render.
+    {
+      rec_dir="$HOME/.sandbox"
+      if mkdir -p "$rec_dir"; then
+        # Skipped when the object is absent: an account with no windows —
+        # API-key auth, or before the first response — records nothing rather
+        # than an empty shape a later reader must tell apart from zero usage.
+        rl_now=$(printf '%s' "$session" | jq -c '.rate_limits // empty')
+
+        # Only when it has changed, and this is about honesty rather than IO.
+        #
+        # Claude refetches rate_limits when it talks to the server, not when it
+        # repaints, so the same object is handed to this script over and over.
+        # Stamping each render "now" would age the reading backwards — a figure
+        # from an hour ago described as current, and, worse, a recording that can
+        # never look stale, blinding the very detection this file exists to feed.
+        # Recording only on a change makes the stamp mean "first seen", which is
+        # a bound we can defend.
+        rl_old=$(jq -c '.rate_limits // empty' "$rec_dir/usage.json" 2>/dev/null || true)
+
+        if [ -n "$rl_now" ] && [ "$rl_now" != "$rl_old" ]; then
+          # Unique per invocation: $$ is a container PID, and every claude
+          # sandbox on this machine shares this directory through the persisted
+          # agent HOME — two containers routinely draw the same low pid, and
+          # both would write this path at once, interleaving the bytes that the
+          # rename is supposed to deliver whole.
+          rec_tmp=$(mktemp "$rec_dir/.usage.json.XXXXXX") || rec_tmp=""
+          if [ -n "$rec_tmp" ]; then
+            if printf '%s' "$session" | jq -c \
+              --argjson at "${now_s:-0}" \
+              '{recorded_at: $at, agent: "claude", rate_limits: .rate_limits}
+               | select(.rate_limits != null)' > "$rec_tmp" &&
+              [ -s "$rec_tmp" ]; then
+              mv -f "$rec_tmp" "$rec_dir/usage.json" || rm -f "$rec_tmp"
+            else
+              rm -f "$rec_tmp"
+            fi
+          fi
+        fi
+      fi
+    } 2>/dev/null
+  fi
 fi
 
 # Which model is answering. Claude reports it in the same JSON as the limits, and
