@@ -98,6 +98,14 @@ Studio owns no isolation policy of its own. A run it starts builds the same
 options a `--worktree --detach` run does, so every boundary above holds
 unchanged — which is also why it can be a web page at all.
 
+It manages **one repository at a time**: the one it was started in. To point it
+somewhere else, run `up` there — `cd ~/other-project && sh studio.sh up` — which
+restarts the pair on the same ports and token, so the tab you have open follows.
+`sh studio.sh status` prints whichever repository the daemon reports, and says
+so when you are standing somewhere else. `sh studio.sh uninstall` removes the
+containers, the images and Studio's own state, naming what it deliberately
+leaves behind.
+
 ## Documentation
 
 Start at the **[documentation index](docs/README.md)**, or jump to:

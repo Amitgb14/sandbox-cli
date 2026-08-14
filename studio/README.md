@@ -39,6 +39,34 @@ and handed to both halves, and a CORS origin matching the port it just chose.
 The images are published on every tag and on every push to `main`
 (`.github/workflows/images.yml` → `latest`, the tag, and `edge`).
 
+```sh
+sh studio.sh status      # what is running, and which repository it manages
+sh studio.sh down        # stop the pair, keep everything installed
+sh studio.sh uninstall   # remove the containers, the images and Studio's state
+```
+
+**One repository at a time.** `-project` is fixed for the life of the API
+process, so everything on screen belongs to the repository Studio was started
+in; standing in another one changes nothing, which is confusing exactly because
+the terminal moved and the browser did not. `cd ~/other-project && sh studio.sh
+up` restarts the pair against that repository, keeping the ports and the token
+so an open tab follows. `status` prints the repository the daemon reports and
+flags the mismatch when you are somewhere else.
+
+**Uninstalling without the script.** `uninstall` is one command if you kept
+`studio.sh`, and `curl -fsSL …/studio.sh | sh -s -- uninstall` if you did not.
+By hand it is three:
+
+```sh
+docker rm -f sandbox-studio-ui sandbox-studio-api
+docker rmi $(docker images -q 'ghcr.io/amitgb14/sandbox-studio-*')
+rm -rf ~/.config/sandbox/studio          # token, ports, api log
+```
+
+The binaries are `sandbox-cli` and `sandbox-studio-api` in `~/.local/bin`;
+`install.sh --uninstall` removes both and reports what else is left, and
+`--purge` also deletes `~/.config/sandbox` — agent logins included.
+
 ## Without a Node toolchain
 
 `docker-compose.yml` at the repository root runs the UI in a container:

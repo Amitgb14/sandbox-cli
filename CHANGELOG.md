@@ -9,6 +9,30 @@ changed default, a behavior that used to work differently.
 Entries land under `Unreleased` and are moved under a version heading when that
 version is tagged.
 
+## Unreleased
+
+### Added
+
+- **`studio.sh uninstall`**, because the only way to remove Studio was to fetch
+  the script again to do it. It stops the pair, removes every tag of the two
+  images it pulls — all of them, not just the one this invocation names, since
+  `uninstall` after `up --tag edge` should not leave edge behind — and deletes
+  its own state directory. What belongs to sandbox-cli rather than to Studio is
+  named rather than deleted: the binaries, and `~/.config/sandbox` with the agent
+  logins and worktrees in it. `studio/README.md` also documents the three
+  commands to do it by hand, for anyone who did not keep the script.
+
+### Fixed
+
+- **Studio looked broken after you changed repository.** The API manages the one
+  it was started in — `-project` is fixed for the life of the process — so
+  standing in another repository showed the first one's worktrees and runs, with
+  nothing on screen or in `status` saying which repository that was. `status` now
+  prints the repository the *daemon* reports, and says so when you are standing
+  somewhere else; the header comment, the README and `studio/README.md` all
+  describe the one-command switch (`cd ~/other && sh studio.sh up`), which keeps
+  the ports and the token so an open tab follows.
+
 ## 0.0.1beta.14 — 2026-08-13
 
 ### Added
