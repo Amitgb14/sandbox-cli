@@ -164,6 +164,27 @@ export function UsageGauge() {
 }
 
 /**
+ * How long until a window resets, at the precision the window deserves.
+ *
+ * `formatRelative` rounds to whole hours, which is right for "started 2h ago"
+ * and wrong here twice over: on a *five-hour* window the minutes are most of
+ * the information — 1h25m and 1h55m are different plans for the afternoon — and
+ * rounding goes **up**, so 1h35m reads as "in 2h", announcing a reset later than
+ * the one that will happen. `formatDurationTight` keeps hours and minutes under
+ * a day and collapses to days beyond it, which is what the CLI and the status
+ * line already print for the same two windows.
+ *
+ * Null when the reset is not in the future. The caller renders expired windows
+ * on another branch, so this only fires if a reset passes between that check and
+ * this line — in which case saying nothing beats counting down past zero.
+ */
+function untilTight(iso: string): string | null {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return formatDurationTight(ms);
+}
+
+/**
  * Which file the reading came from, shortened for a sidebar.
  *
  * The API returns the path it actually read, and there are two candidates — the
@@ -258,7 +279,7 @@ function WindowMeter({
         </p>
       ) : (
         w.resetsAt && (
-          <p className="text-[10px] text-muted-foreground">resets {formatRelative(w.resetsAt)}</p>
+          <p className="text-[10px] text-muted-foreground">resets in {untilTight(w.resetsAt)}</p>
         )
       )}
     </div>

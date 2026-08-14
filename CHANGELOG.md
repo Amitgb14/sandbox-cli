@@ -48,6 +48,14 @@ version is tagged.
 
 ### Fixed
 
+- **Studio's usage panel rounded the reset time past the reset.** The countdown
+  used the same formatter as "4m ago", which rounds to whole hours: a five-hour
+  window resetting in 1h25m read *in 1h*, and at 1h35m it read **in 2h** —
+  announcing a reset later than the one that would happen, on the window where
+  the minutes are most of the information. It now prints hours and minutes
+  (`resets in 1h25m`), matching what `sandbox-cli usage` and the in-container
+  status line already showed, and floors rather than rounds so the figure is
+  never optimistic. Days still read as days on the weekly window.
 - **An old usage reading and a dead one now look different.** Claude Code 2.1.x
   stopped maintaining `cachedUsageUtilization` in `~/.claude.json`, and the
   symptom was indistinguishable from an idle machine: the panel said *19 days
