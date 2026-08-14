@@ -39,6 +39,53 @@ and handed to both halves, and a CORS origin matching the port it just chose.
 The images are published on every tag and on every push to `main`
 (`.github/workflows/images.yml` → `latest`, the tag, and `edge`).
 
+```sh
+sh studio.sh status      # what is running, and which repository it manages
+sh studio.sh down        # stop the pair, keep everything installed
+sh studio.sh uninstall   # remove the containers, the images and Studio's state
+```
+
+**One repository at a time, from wherever you like.** `-project` is fixed for
+the life of the API process, so everything on screen belongs to the repository
+Studio was started in; standing in another one changes nothing, which is
+confusing exactly because the terminal moved and the browser did not.
+
+You do not have to go anywhere to change it — `--project` takes the path:
+
+```sh
+sh studio.sh up --project ~/other-project     # from any directory at all
+cd ~/other-project && sh studio.sh up         # or the short way, when you are there
+```
+
+Either restarts the pair against that repository on the same ports and token, so
+an open tab follows. `status` prints the repository the daemon reports and flags
+the mismatch when your shell is somewhere else.
+
+**Uninstalling needs no copy of `studio.sh`.** The installer that put it there
+takes it away, including the halves that are *running*:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --uninstall
+```
+
+That stops the UI container and the API process on your host, removes both
+binaries, and lists what it deliberately left — `~/.config/sandbox` with the
+agent logins in it, the base image, the cache volumes, the Studio images. Add
+`--purge` to delete those too.
+
+Stopping is not optional the way deleting an image is: Studio leaves a container
+and a host process holding the docker socket and a port, and removing the
+binaries while those keep running is the worst of both states.
+
+`sh studio.sh uninstall` does the Studio-scoped half if you did have the script.
+By hand it is three commands:
+
+```sh
+docker rm -f sandbox-studio-ui sandbox-studio-api
+docker rmi $(docker images -q 'ghcr.io/amitgb14/sandbox-studio-*')
+rm -rf ~/.config/sandbox/studio          # token, ports, api log
+```
+
 ## Without a Node toolchain
 
 `docker-compose.yml` at the repository root runs the UI in a container:

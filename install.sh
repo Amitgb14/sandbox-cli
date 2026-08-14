@@ -11,9 +11,10 @@
 #   --no-config     do not write ~/.config/sandbox/config.yaml
 #   --with-studio-api  also install sandbox-studio-api from the same archive
 #                   (Studio's control plane; studio.sh passes this)
-#   --uninstall     remove the binary, then report what else is left behind
+#   --uninstall     remove the binaries and stop Studio, then report what else
+#                   is left behind
 #   --purge         with --uninstall: also delete ~/.config/sandbox (agent
-#                   logins!) and the sandbox Docker images and cache volumes
+#                   logins!), the sandbox and Studio images, and cache volumes
 #
 # A first install also writes ~/.config/sandbox/config.yaml — the trusted user
 # layer — carrying the defaults with `profile: dev` and unrestricted egress, so
@@ -72,6 +73,43 @@ if [ "$UNINSTALL" = 1 ]; then
     command -v docker >/dev/null 2>&1 || return 0
     docker volume ls --filter name='sandbox-cache-' -q 2>/dev/null
   }
+  studio_images() {
+    command -v docker >/dev/null 2>&1 || return 0
+    docker images --filter reference='ghcr.io/amitgb14/sandbox-studio-*' -q 2>/dev/null | sort -u
+  }
+
+  # Studio is stopped here, and stopping it is not optional the way deleting an
+  # image is.
+  #
+  # It leaves two things *running*: a UI container, and an API process on your
+  # host holding the docker socket and a port. Removing the binaries while those
+  # stay up is the worst of both — the tool is gone and the server it started is
+  # not — so this happens on a plain --uninstall, and only the artifacts on disk
+  # wait for --purge. It is also what makes `studio.sh uninstall` unnecessary for
+  # anyone who no longer has the script: this installer is the one they already
+  # used to get here.
+  stop_studio() {
+    studio_state="${cfg}/studio"
+    if command -v docker >/dev/null 2>&1; then
+      for c in sandbox-studio-ui sandbox-studio-api; do
+        if docker container inspect "$c" >/dev/null 2>&1; then
+          docker rm -f "$c" >/dev/null 2>&1 || true
+          info "stopped ${c}"
+        fi
+      done
+    fi
+    # The host API, by pid, checked against the process name for the same reason
+    # studio.sh checks it: pids are recycled and this file outlives a reboot.
+    if [ -r "${studio_state}/api.pid" ]; then
+      pid=$(cat "${studio_state}/api.pid" 2>/dev/null || true)
+      if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+        case "$(ps -p "$pid" -o comm= 2>/dev/null)" in
+          *sandbox-studio-api*) kill "$pid" 2>/dev/null || true; info "stopped the Studio API (pid ${pid})" ;;
+        esac
+      fi
+    fi
+  }
+  stop_studio
 
   removed=0
   # Both binaries: an uninstall that left the server behind would leave the one
@@ -91,6 +129,7 @@ if [ "$UNINSTALL" = 1 ]; then
 
   imgs=$(sandbox_images)
   vols=$(sandbox_volumes)
+  simgs=$(studio_images)
 
   if [ "$PURGE" = 1 ]; then
     if [ -d "$cfg" ]; then
@@ -106,10 +145,14 @@ if [ "$UNINSTALL" = 1 ]; then
       docker volume rm $vols >/dev/null 2>&1 || true
       info "removed sandbox-cache-* volume(s)"
     fi
+    if [ -n "$simgs" ]; then
+      docker rmi -f $simgs >/dev/null 2>&1 || true
+      info "removed sandbox-studio image(s)"
+    fi
     info "purge complete"
   else
     # Only print the "left behind" report when something actually is.
-    if [ -d "$cfg" ] || [ -n "$imgs" ] || [ -n "$vols" ]; then
+    if [ -d "$cfg" ] || [ -n "$imgs" ] || [ -n "$vols" ] || [ -n "$simgs" ]; then
       info ""
       info "Left in place — re-run with --uninstall --purge to delete these too:"
       # `|| true` on each: a failed test is an AND-OR list with status 1, which
@@ -117,6 +160,7 @@ if [ "$UNINSTALL" = 1 ]; then
       [ -d "$cfg" ] && info "  ${cfg}  (config + agent logins)" || true
       [ -n "$imgs" ] && info "  sandbox-base image(s)      docker rmi \$(docker images -q sandbox-base)" || true
       [ -n "$vols" ] && info "  sandbox-cache-* volume(s)  docker volume rm \$(docker volume ls -q -f name=sandbox-cache-)" || true
+      [ -n "$simgs" ] && info "  sandbox-studio image(s)    docker rmi \$(docker images -q 'ghcr.io/amitgb14/sandbox-studio-*')" || true
     fi
     info ""
     info "Your projects and their .sandbox.yaml files are never touched."

@@ -9,8 +9,9 @@
 # Commands (when run as a file, e.g. `sh studio.sh status`):
 #   up        install what is missing, pull, start, print the URL   (default)
 #   down      stop the UI container and the API process
-#   status    what is running, where, and whether it answers
+#   status    what is running, which repository it manages, whether it answers
 #   logs      follow the API log (`logs ui` for the UI container)
+#   uninstall stop everything, remove the containers, images and Studio's state
 #
 # Options:
 #   --project DIR    repository to manage        (default: this git repo)
@@ -24,6 +25,23 @@
 #   --api-in-docker  run the API as a container too — read the warning below
 #   --no-install     use the binaries already on this machine
 #   --no-pull        do not refresh the image
+#
+# ── One repository at a time, and how to change it ───────────────────────────
+#
+# The API manages the single repository it was started in: `-project` is fixed
+# for the life of the process, and everything Studio shows — worktrees, runs,
+# diffs — belongs to it. Standing in another repository changes nothing on its
+# own, which is confusing precisely because the terminal moved and the browser
+# did not.
+#
+# To point it somewhere else, run `up` there:
+#
+#   cd ~/other-project && sh studio.sh up
+#
+# That stops the pair and starts it again against the new repository, keeping
+# the same ports and the same token, so the tab you already have open follows.
+# `--project DIR` does the same without moving. `status` prints whichever
+# repository the daemon reports, so the answer is always one command away.
 #
 # ── What runs where, and why it is split ─────────────────────────────────────
 #
@@ -99,7 +117,7 @@ need() { # need FLAG VALUE
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    up|down|status|logs) CMD="$1"; shift ;;
+    up|down|status|logs|uninstall) CMD="$1"; shift ;;
     ui|api)          ARG="$1"; shift ;;   # `logs ui` / `logs api`
     --project)       PROJECT=$(need --project "${2:-}"); shift 2 ;;
     --config)        CONFIG=$(need --config "${2:-}"); shift 2 ;;
@@ -112,7 +130,7 @@ while [ $# -gt 0 ]; do
     --api-in-docker) API_IN_DOCKER=1; shift ;;
     --no-install)    NO_INSTALL=1; shift ;;
     --no-pull)       NO_PULL=1; shift ;;
-    -h|--help)       sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)       sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1  (try --help)" ;;
   esac
 done
@@ -141,9 +159,11 @@ API_REF="${REGISTRY}/${API_IMAGE}:${TAG}"
 
 if have curl; then
   http_ok() { curl -fsS -o /dev/null --max-time 2 "$1" 2>/dev/null; }
+  http_get() { curl -fsS --max-time 2 "$1" 2>/dev/null; }
   fetch_stdout() { curl -fsSL "$1"; }
 elif have wget; then
   http_ok() { wget -q -O /dev/null --timeout=2 "$1" 2>/dev/null; }
+  http_get() { wget -q -O- --timeout=2 "$1" 2>/dev/null; }
   fetch_stdout() { wget -qO- "$1"; }
 else
   die "need curl or wget"
@@ -289,12 +309,64 @@ do_status() {
     info "  api   not running"
   fi
 
-  if http_ok "http://127.0.0.1:${API_PORT}/v1/health"; then
+  # The repository, asked of the running daemon rather than inferred from the
+  # directory this command was typed in — those are exactly the two things that
+  # drift apart, and the confusion is that the terminal moves and Studio does
+  # not. Parsed with sed because jq is not a prerequisite for this script.
+  health=$(http_get "http://127.0.0.1:${API_PORT}/v1/health" || true)
+  if [ -n "$health" ]; then
     info "  http://127.0.0.1:${API_PORT}/v1/health answers"
+    proj=$(printf '%s' "$health" | sed -n 's/.*"project":"\([^"]*\)".*/\1/p')
+    if [ -n "$proj" ]; then
+      info "  repository  ${proj}"
+      here=$(git rev-parse --show-toplevel 2>/dev/null || true)
+      if [ -n "$here" ] && [ "$here" != "$proj" ]; then
+        info "              (you are in ${here} — run \`up\` here to point Studio at it)"
+      fi
+    fi
   else
     info "  nothing answers on http://127.0.0.1:${API_PORT}/v1/health"
   fi
   info "  ui at http://localhost:${UI_PORT}"
+}
+
+# ---- uninstall ---------------------------------------------------------------
+
+# Everything this script created, and nothing it did not.
+#
+# It exists because the alternative was fetching the script again to get rid of
+# it. Scoped deliberately: the containers, the images it pulled, and its own
+# state directory — while the binaries and ~/.config/sandbox (agent logins,
+# worktrees, the audit log) belong to sandbox-cli and are named rather than
+# deleted. install.sh --uninstall is where those live, and it says the same about
+# what it leaves behind.
+do_uninstall() {
+  do_down
+
+  # Every tag of the two repositories this script pulls, not just the one this
+  # invocation happens to name. `uninstall` after `up --tag edge` would otherwise
+  # leave the edge images behind, which is not what the word means.
+  #
+  # Matched on the fully qualified name, so an unrelated local image called
+  # `sandbox-studio-ui:latest` — built by hand, from another registry, or from a
+  # checkout — is somebody else's and stays.
+  for repo in "${REGISTRY}/${UI_IMAGE}" "${REGISTRY}/${API_IMAGE}"; do
+    for ref in $(docker images --filter "reference=${repo}" --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort -u); do
+      docker rmi -f "$ref" >/dev/null 2>&1 || true
+      info "removed image ${ref}"
+    done
+  done
+
+  if [ -d "$STATE" ]; then
+    rm -rf "$STATE"
+    info "removed ${STATE}  (token, ports, api log)"
+  fi
+
+  info ""
+  info "Left in place, deliberately:"
+  info "  the binaries        sh install.sh --uninstall"
+  info "  ~/.config/sandbox   agent logins, worktrees, the run audit log"
+  info "                      (install.sh --uninstall --purge removes those too)"
 }
 
 # ---- logs --------------------------------------------------------------------
@@ -484,8 +556,9 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 
 case "$CMD" in
-  up)     do_up ;;
-  down)   do_down ;;
-  status) do_status ;;
-  logs)   do_logs ;;
+  up)        do_up ;;
+  down)      do_down ;;
+  status)    do_status ;;
+  logs)      do_logs ;;
+  uninstall) do_uninstall ;;
 esac

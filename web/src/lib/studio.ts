@@ -173,12 +173,34 @@ export const STUDIO_SCRIPT_STEPS: StudioStep[] = [
     title: "Stop it, or look at what it is doing",
     side: "daemon",
     code: [
-      "sh studio.sh status     # what is running, and whether it answers",
+      "sh studio.sh status     # what is running, which repository, whether it answers",
       "sh studio.sh logs       # the API's own log (logs ui for the container)",
       "sh studio.sh down       # stop both halves",
     ].join("\n"),
     body:
       "Download the script once (curl -fsSLO …) and these are the rest of the commands. The API is an ordinary host process with a pidfile, and the UI is a container named sandbox-studio-ui — nothing here is hidden state, and `docker rm -f sandbox-studio-ui` plus killing that pid is exactly what `down` does.",
+    expect:
+      "status naming the repository the daemon manages — which is the answer when the browser shows worktrees you were not expecting.",
+  },
+  {
+    title: "Point it at another repository without going there",
+    side: "daemon",
+    code: [
+      "sh studio.sh up --project ~/other-project   # from any directory",
+      "cd ~/other-project && sh studio.sh up       # or the short way",
+    ].join("\n"),
+    body:
+      "Studio manages one repository at a time: the API's -project is fixed for the life of the process, so everything on screen — worktrees, runs, diffs — belongs to the repository it was started in. Changing directory in your terminal does not change it, which is confusing precisely because the terminal moved and the browser did not. Either command above restarts the pair against the repository you name, keeping the same ports and the same token, so a tab you already have open follows it.",
+    expect: "The `project` line in the output, and the same path from `status` afterwards.",
+  },
+  {
+    title: "Remove it — no copy of the script required",
+    side: "daemon",
+    code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --uninstall",
+    body:
+      "The installer that put Studio there takes it away: it stops the UI container and the API process on your host, removes both binaries, and then lists what it deliberately left — ~/.config/sandbox with your agent logins, the images, the cache volumes. Add --purge to delete those too. Stopping is not deferred the way deleting is, because Studio leaves a container and a host process holding the docker socket and a port, and removing the binaries while those keep running is the worst of both states. `sh studio.sh uninstall` does the Studio-scoped half if you kept the script.",
+    expect:
+      "`stopped sandbox-studio-ui`, `stopped the Studio API`, and a list of what remains under `--purge`.",
   },
   {
     title: "When your project has a .sandbox.yaml the API will not trust",

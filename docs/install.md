@@ -106,10 +106,18 @@ Release targets: linux, macOS and Windows on amd64 and arm64.
 curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --uninstall
 ```
 
-That removes the `sandbox-cli` binary and then *reports* what else is on disk
-without deleting it — because `~/.config/sandbox` holds your agent logins, and
-silently deleting it would sign you out of Claude/Codex with no warning. To
-remove everything, including those logins, the base image, and the cache volumes:
+That removes both binaries — `sandbox-cli` and `sandbox-studio-api` — **stops
+Studio if it is running**, and then *reports* what else is on disk without
+deleting it, because `~/.config/sandbox` holds your agent logins and silently
+deleting it would sign you out of Claude/Codex with no warning.
+
+Stopping is not deferred the way deleting is: Studio leaves a UI container and
+an API process on your host holding the docker socket and a port, and removing
+the binaries while those keep running is the worst of both states. It also means
+uninstalling Studio needs no copy of `studio.sh` — the installer you already used
+is enough.
+
+To remove everything, including those logins, the images, and the cache volumes:
 
 ```sh
 sh install.sh --uninstall --purge
@@ -117,9 +125,11 @@ sh install.sh --uninstall --purge
 
 | What | Where | Removed by |
 |---|---|---|
-| Binary | `~/.local/bin/sandbox-cli` (also checks `/usr/local/bin`) | `--uninstall` |
-| Config + agent logins | `~/.config/sandbox/` | `--purge` |
+| Binaries | `~/.local/bin/sandbox-cli`, `sandbox-studio-api` (also checks `/usr/local/bin`) | `--uninstall` |
+| Studio, running | the `sandbox-studio-ui` container and the host API process | `--uninstall` |
+| Config + agent logins | `~/.config/sandbox/` (Studio's token and ports included) | `--purge` |
 | Base image | `sandbox-base:*` Docker images | `--purge` |
+| Studio images | `ghcr.io/amitgb14/sandbox-studio-*` | `--purge` |
 | Package caches | `sandbox-cache-*` Docker volumes | `--purge` |
 
 Containers are `--rm`, so nothing lingers between runs. Your projects and their

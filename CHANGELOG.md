@@ -9,6 +9,39 @@ changed default, a behavior that used to work differently.
 Entries land under `Unreleased` and are moved under a version heading when that
 version is tagged.
 
+## Unreleased
+
+### Added
+
+- **`install.sh --uninstall` now removes Studio too**, so getting rid of it needs
+  no copy of `studio.sh` — the installer you already used is enough. It **stops**
+  the UI container and the host API process on a plain `--uninstall` rather than
+  waiting for `--purge`, because those two are *running*: they hold the docker
+  socket and a port, and removing the binaries while they keep going is the worst
+  of both states. The images and `~/.config/sandbox` still wait for `--purge`, and
+  are listed rather than deleted until then.
+- **`studio.sh uninstall`**, for the Studio-scoped half when you do have the
+  script. It stops the pair, removes every tag of the two
+  images it pulls — all of them, not just the one this invocation names, since
+  `uninstall` after `up --tag edge` should not leave edge behind — and deletes
+  its own state directory. What belongs to sandbox-cli rather than to Studio is
+  named rather than deleted: the binaries, and `~/.config/sandbox` with the agent
+  logins and worktrees in it. `studio/README.md` also documents the three
+  commands to do it by hand, for anyone who did not keep the script.
+
+### Fixed
+
+- **Studio looked broken after you changed repository.** The API manages the one
+  it was started in — `-project` is fixed for the life of the process — so
+  standing in another repository showed the first one's worktrees and runs, with
+  nothing on screen or in `status` saying which repository that was. `status` now
+  prints the repository the *daemon* reports, and says so when your shell is
+  somewhere else. Switching never required going anywhere:
+  `sh studio.sh up --project ~/other-project` works from any directory, keeps the
+  ports and the token so an open tab follows, and is now documented in the
+  script's own help, the README, `studio/README.md` and on the site — the
+  capability existed, the way to find it did not.
+
 ## 0.0.1beta.14 — 2026-08-13
 
 ### Added
