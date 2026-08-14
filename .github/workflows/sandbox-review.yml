@@ -1,8 +1,20 @@
 name: Sandbox Code Review
 
+# Disabled: it no longer runs on pull requests.
+#
+# Every PR spent ten minutes and a real ANTHROPIC_API_KEY on a review nobody had
+# asked for, alongside the reviews actually being requested by hand — the same
+# work, billed twice. Turning it off is a cost decision, not a verdict on the
+# review: `/code-review` on demand covers the same ground when it is wanted.
+#
+# To re-enable, restore the two commented lines below. Note that the job is
+# written entirely against `github.event.pull_request`, so a `workflow_dispatch`
+# run has no PR to read and exits without reviewing anything — the trigger has to
+# come back for the workflow to do its job.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  # pull_request:
+  #   types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: read

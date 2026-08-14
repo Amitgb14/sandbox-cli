@@ -9,7 +9,7 @@ changed default, a behavior that used to work differently.
 Entries land under `Unreleased` and are moved under a version heading when that
 version is tagged.
 
-## Unreleased
+## 0.0.1beta.14 — 2026-08-13
 
 ### Added
 
