@@ -13,14 +13,13 @@ version is tagged.
 
 ### Added
 
-- **Studio's usage panel is off by default, and can be turned on** — Settings →
-  Terminal → *Show subscription usage*, persisted. Collapsing it already hid the
-  numbers and kept the header; this removes the panel entirely, and the default
-  flipped because the figures stopped being maintained upstream: on a machine
-  whose Claude Code no longer writes the cache, the gauge is a permanent fossil
-  explaining itself, and a default that is wrong for most people is worse than
-  one that is merely conservative. Off also stops the request behind it. Turn it
-  on where your reading still moves.
+- **Studio's usage panel can be turned off** — Settings → Terminal → *Show
+  subscription usage*, persisted. Collapsing it already hid the numbers and kept
+  the header; this removes the panel entirely, and stops the request behind it.
+  Shown by default, because the status-line recording below makes the figures
+  live again; it was briefly defaulted off while the only source was a cache
+  Claude Code had stopped maintaining, which is the same test either way — a
+  gauge is worth showing when its number can move.
 - **Usage figures come back to life, from the status line.** `internal/agentusage`
   now reads the recording written by `sandbox-statusline` as another candidate
   and takes whichever source is newest, so on any machine where a sandboxed
