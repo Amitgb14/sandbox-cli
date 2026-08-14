@@ -77,6 +77,27 @@ the exact rule is in [Running commands and agents](docs/usage/flags.md).
 - **Two profiles, neither of them lax.** `dev` warns when the host can't deliver a
   control; `prod` refuses, and doesn't mount the persisted credential at all.
 
+## Studio, in the browser
+
+The same runs, with a control plane you can look at: launch, watch the terminal,
+read the diff, land the branch. From the repository you want to work in:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh
+```
+
+That installs `sandbox-cli` and `sandbox-studio-api` from one release archive,
+pulls the UI image, and starts both halves on loopback — **the UI in a
+container, the API as an ordinary host process**. The split is the point rather
+than an accident: the API launches containers, so in a container it would need
+the host's docker socket, and a process holding that socket can start a
+container mounting `/`. `--api-in-docker` takes that path for anyone who wants
+it, and says what it costs first.
+
+Studio owns no isolation policy of its own. A run it starts builds the same
+options a `--worktree --detach` run does, so every boundary above holds
+unchanged — which is also why it can be a web page at all.
+
 ## Documentation
 
 Start at the **[documentation index](docs/README.md)**, or jump to:
@@ -92,6 +113,7 @@ Start at the **[documentation index](docs/README.md)**, or jump to:
 | [Configuration](docs/configuration.md) | The two config files, and which keys a project may not set |
 | [Security](docs/security/README.md) | Profiles, `doctor`, the security model, stronger isolation |
 | [Platform support](docs/platforms/README.md) | The matrix, plus [Linux](docs/platforms/linux.md) and [Podman](docs/platforms/podman.md) |
+| [Studio](docs/studio-api/README.md) | The browser control plane, its HTTP API, and who may drive it |
 | [Alternatives](docs/alternatives.md) | How this compares, including where it loses |
 
 ## Security

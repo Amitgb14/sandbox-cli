@@ -33,7 +33,7 @@ with. Each page stands on its own; nothing here needs to be read in order.
 | [Security](security/README.md) | The two profiles, `doctor`, the security model, stronger isolation |
 | [Platform support](platforms/README.md) | The capability matrix, plus [Linux](platforms/linux.md) and [Podman](platforms/podman.md) setup |
 | [Alternatives and prior art](alternatives.md) | How this compares, including where it loses |
-| [Studio API](studio-api/README.md) | The local HTTP control plane a frontend talks to |
+| [Studio](studio-api/README.md) | The browser control plane: the one-command install, the HTTP API, and who may drive it |
 | [Development](DEVELOPMENT.md) | Make targets, single tests, release engineering, invariants to keep honest |
 
 ## Project direction
