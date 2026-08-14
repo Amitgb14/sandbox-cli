@@ -60,6 +60,10 @@ carry a microVM, and make prod able to demand one".
 - Where any of that *doesn't* hold, the finding is documented rather than papered over.
   The egress firewall is the one to watch: it is programmed as root inside the guest before
   the privilege drop, and a microVM changes what that guest is.
+  **This turned out to be right for gVisor**, which provides no connection tracking at all,
+  so the allowlist cannot be programmed inside it and prod's two demands conflict. What was
+  measured and what it forces a decision about:
+  [gVisor and the egress allowlist](task-3-gvisor-egress.md). Kata is still untested.
 - Setup instructions per distribution, in `docs/`, in the same register as the existing
   Podman page: what to install, how to register the runtime, how to check it took.
 
