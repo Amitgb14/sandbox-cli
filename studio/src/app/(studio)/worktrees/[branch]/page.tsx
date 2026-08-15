@@ -2,6 +2,7 @@
 
 import { use, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   ChevronDown,
@@ -48,8 +49,12 @@ export default function WorktreeDetailPage({
   const { branch: raw } = use(params);
   const branch = decodeURIComponent(raw);
 
-  const { data: wt, isPending, isError } = useWorktree(branch);
-  const { data: commits } = useWorktreeCommits(branch);
+  // ?repo= comes from the row that linked here. Under "All repositories" the
+  // listing spans several, so the branch alone does not say which one — and the
+  // daemon would answer for the repository it was started in.
+  const linkedRepo = useSearchParams().get("repo") ?? undefined;
+  const { data: wt, isPending, isError } = useWorktree(branch, linkedRepo);
+  const { data: commits } = useWorktreeCommits(branch, linkedRepo);
   const { data: runs } = useBranchRuns(branch);
   const { data: history } = useAudit(branch);
 

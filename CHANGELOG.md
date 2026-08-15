@@ -115,6 +115,26 @@ version is tagged.
 
 ### Fixed
 
+- **Studio's fixtures aged into fiction.** With no daemon answering, every screen
+  falls back to fixture data — which is correct, and the header says so — but the
+  fixtures were anchored to a frozen epoch, so six runs marked *running* read as
+  agents that had been going for 226 days, and the fourteen-day charts were empty
+  because every record sat outside the window. They are plausible enough to be
+  believed (they were authored from a real repository, with its real repo id), so
+  this cost two separate debugging sessions that ended in "check docker". The
+  anchor is now the top of the current hour: ages stay honest, day buckets land on
+  real days, and the seeded RNG still makes everything else identical between two
+  reloads. Rounding is what keeps it safe — a raw `Date.now()` is read once on the
+  server and again in the browser, which is a hydration mismatch by construction
+  and is why the frozen epoch existed.
+
+- **A worktree opened from "All repositories" asked the wrong repository.** That
+  listing spans every registered repository, but the detail, commits and remove
+  calls sent no repository at all — which the daemon reads as the one it was
+  started in. Rows now carry their `repoId` through the link, and removing one
+  names it explicitly, since deleting the wrong repository's branch destroys work
+  rather than merely showing the wrong thing.
+
 - **An empty Runs screen now says which kind of empty it is.** The dashboard
   counts runs from the log, which keeps a run after its container is reaped,
   while the Runs screen lists containers — so a repository could legitimately

@@ -236,7 +236,7 @@ function WorktreesContent() {
                             row also carries a menu whose items are their own
                             actions, and a row-level click would swallow them. */}
                         <Link
-                          href={`/worktrees/${encodeURIComponent(w.branch)}`}
+                          href={`/worktrees/${encodeURIComponent(w.branch)}?repo=${encodeURIComponent(w.repoId)}`}
                           className="truncate font-mono text-sm hover:underline"
                         >
                           {w.branch}
@@ -470,7 +470,7 @@ function WorktreesContent() {
               disabled={remove.isPending || !!removing?.runId}
               onClick={() => {
                 if (!removing) return;
-                remove.mutate(removing.branch, {
+                remove.mutate({ branch: removing.branch, repoId: removing.repoId }, {
                   onSuccess: () => {
                     setRemoving(null);
                     toast.success(`Removed ${removing.branch}`);

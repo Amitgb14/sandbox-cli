@@ -184,8 +184,20 @@ export function useWorktrees(override?: string) {
   });
 }
 
-export function useWorktree(branch: string) {
-  const repo = useScopedRepo();
+/**
+ * One worktree, and the commits behind it.
+ *
+ * `repoId` is not optional decoration. Under "All repositories" the *listing*
+ * comes from `?repo=all` and spans every registered repository, so a row there
+ * may belong to any of them — while the scoped repo is `undefined`, which the
+ * daemon reads as "the one I was started in". Opening such a row without saying
+ * which repository it came from asks the wrong one. Callers that have the row
+ * pass its `repoId`; the scope is the fallback for screens already narrowed to
+ * one repository.
+ */
+export function useWorktree(branch: string, repoId?: string) {
+  const scoped = useScopedRepo();
+  const repo = repoId || scoped;
   return useQuery({
     queryKey: qk.worktree(branch, repo),
     queryFn: () => api.worktree(branch, repo),
@@ -193,8 +205,9 @@ export function useWorktree(branch: string) {
   });
 }
 
-export function useWorktreeCommits(branch: string) {
-  const repo = useScopedRepo();
+export function useWorktreeCommits(branch: string, repoId?: string) {
+  const scoped = useScopedRepo();
+  const repo = repoId || scoped;
   return useQuery({
     queryKey: qk.worktreeCommits(branch, repo),
     queryFn: () => api.worktreeCommits(branch, repo),
@@ -434,9 +447,13 @@ export function useLandWorktree() {
 
 export function useRemoveWorktree() {
   const qc = useQueryClient();
-  const repo = useScopedRepo();
+  const scoped = useScopedRepo();
   return useMutation({
-    mutationFn: (branch: string) => api.removeWorktree(branch, repo),
+    // The row's own repository, because removing the wrong repository's branch
+    // is the one mistake here that destroys work rather than merely showing the
+    // wrong thing.
+    mutationFn: ({ branch, repoId }: { branch: string; repoId?: string }) =>
+      api.removeWorktree(branch, repoId || scoped),
     // Every repository's listing, not just this one's: the key is scoped, and a
     // removal invalidating only the scoped key leaves a stale row behind for
     // anyone who switches back.
