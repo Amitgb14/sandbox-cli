@@ -119,6 +119,8 @@ func (s *Server) Handler() http.Handler {
 	// start demanding a token, and the UI's probe would report the daemon down.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+healthPath, s.handleHealth)
+	mux.HandleFunc("GET /v1/routing", s.handleRouting)
+	mux.HandleFunc("POST /v1/routing/providers", s.handleSetProviders)
 	mux.HandleFunc("GET /v1/projects", s.handleListProjects)
 	mux.HandleFunc("POST /v1/projects", s.handleCreateProject)
 	mux.HandleFunc("DELETE /v1/projects/{id}", s.handleDeleteProject)

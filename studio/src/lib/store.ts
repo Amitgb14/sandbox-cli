@@ -21,6 +21,22 @@ interface UiState {
   repoFilter: string | null;
   setRepoFilter: (repoId: string | null) => void;
 
+  /**
+   * The fallback chain to offer for each primary agent, remembered so a routing
+   * choice survives the launch that made it.
+   *
+   * Keyed by the primary rather than kept as one list, because a fallback is a
+   * statement about a *pair*: "if claude is down, use codex" says nothing about
+   * what should happen when the primary is gemini. One global list would apply
+   * somebody's claude answer to an agent they never thought about.
+   *
+   * Persisted: it is a standing preference about how you want to work, the same
+   * kind of thing as the terminal settings below — not a per-visit choice, and
+   * not something the daemon has an opinion about.
+   */
+  routingPrefs: Record<string, string[]>;
+  setRoutingPref: (primary: string, fallback: string[]) => void;
+
   /** Terminal preferences, remembered across runs because they are about you. */
   terminalFollow: boolean;
   setTerminalFollow: (v: boolean) => void;
@@ -93,6 +109,10 @@ export const useUi = create<UiState>()(
       usageHidden: false,
       setUsageHidden: (usageHidden) => set({ usageHidden }),
 
+      routingPrefs: {},
+      setRoutingPref: (primary, fallback) =>
+        set((s) => ({ routingPrefs: { ...s.routingPrefs, [primary]: fallback } })),
+
       recentRuns: [],
       pushRecentRun: (id) =>
         set((s) => ({ recentRuns: [id, ...s.recentRuns.filter((r) => r !== id)].slice(0, 8) })),
@@ -108,6 +128,7 @@ export const useUi = create<UiState>()(
         diffView: s.diffView,
         usageCollapsed: s.usageCollapsed,
         usageHidden: s.usageHidden,
+        routingPrefs: s.routingPrefs,
         recentRuns: s.recentRuns,
       }),
     },

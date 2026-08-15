@@ -336,6 +336,54 @@ rather than merely passing.
   wrong for the next branch. The sentinels carry no user-facing text — `branchRefusal` pairs
   each with a message written for the person reading it, since classifying an error and
   explaining it are different jobs.
+- **`internal/routing`** — which agent a run actually uses when the first choice is
+  unavailable, and **`internal/handoff`** — what the next one is told. Two mechanisms, and
+  the split is the design: the provider is **probed before launching** (an outage skips that
+  agent before a container exists, which is measurement rather than inference), and a run
+  that exits non-zero **having left the workspace unchanged** is retried with the next agent.
+  That second rule gates on the *workspace*, never on the conversation, and the distinction
+  is load-bearing twice over. Turns are cheap to redo and file changes are not — the hazard
+  was always a second agent inheriting half-finished edits — and gating on turns would make
+  the handoff pointless, since every case that failed over would be one with no conversation
+  to carry. Everything unknowable (a workspace that cannot be compared) counts as work done
+  and is **not** retried: a wrong retry destroys work, a missed one costs a re-run somebody
+  asks for by hand.
+
+  The probe is a liveness check and must not become an auth check: it carries no credentials,
+  so 401/403 are *success* — the endpoint answered. **429 is deliberately not an outage**,
+  because rate-limited means healthy and over-asked, and failing over would route around your
+  own quota rather than around a provider being down. `ProviderHost` is descriptor data, empty
+  for `opencode` (provider-agnostic — its EnvAllow spans five vendors because the user picks)
+  and for anything behind a proxy; `providers:` lets the user say which host is theirs, and
+  an unprobeable agent is reported **unprobed, never down**, because treating unknown as down
+  skips a working agent.
+
+  Re-targeting goes through the **prompt**, not the flags — claude's headless mode is
+  `-p <prompt>` where codex's is `exec <prompt>`, so replaying one agent's argv at another
+  produces nonsense that fails in a way nobody would connect to routing. A chain therefore
+  needs a prompt it can recover, and refuses rather than guessing when the last argument is a
+  flag. Only agents with a **verified headless mode** may be routed to; the ten adapters
+  without a descriptor are untouched, and asking for a fallback on one is refused.
+
+  `internal/handoff` is the conversation carried across, and it is a **briefing, not a
+  resume** — a limit rather than a shortcut. A session id is a primary key into one vendor's
+  private store and the schemas differ entirely, so `docs/proposals/shared-context.md` weighs
+  transcribing one into the other and rejects it: the target ends up believing a fabricated
+  history, confidently, with file-writing tools. What crosses is what survives translation —
+  `HANDOFF.md`, a vendor-neutral `transcript.jsonl` with no tool ids in it, and a `files.md`
+  ledger derived from git rather than from anything the agent said about itself. It is
+  deterministic (no network, no key, no tokens), which is what makes it safe to run in the
+  middle of a failover — the provider that would have written a nicer summary is the one that
+  just went down.
+
+  Every switch is **announced and recorded**: `routed_from`/`route_reason` in the audit line,
+  `sandbox.routed_from`/`sandbox.route_reason` on the container (a detached run's audit line
+  is written when it *ends*, long after somebody looks at the listing), and a `route_id`
+  shared by every attempt — without which the two lines of a failover are indistinguishable
+  from two unrelated runs, and "did routing help" is unanswerable. `routing:` and
+  `providers:` are both **refused from a project `.sandbox.yaml`**: choosing the agent chooses
+  which login is in reach, and a poisoned probe chooses it by another route.
+
 - **`internal/githard`** — neutralises the parts of a repository's git config that make git *run
   commands*, for every git call sandbox-cli makes on its own behalf. See the trust-boundary
   section below.
@@ -717,6 +765,16 @@ agents still to adapt, ordered by popularity, plus the full checklist, is in
 `docs/proposals/agent-adapters.md`. User-facing setup for each agent — prerequisites, login
 flow, forwarded variables, `--allow` domains — is `docs/AGENTS.md`; a new adapter needs a
 section there.
+
+A prompt is **not** a thing every agent can be handed. `Descriptor.Console` seeds an
+interactive run's first turn only where `ConsolePromptArgs` says how, and nil means it
+cannot be seeded — the same shape `SkipPermissionArgs` uses for agents with no such flag.
+Assuming otherwise cost a real run: the argv appended the prompt as a bare positional for
+every agent, and opencode reads a lone positional as *the project directory to open*, so a
+Studio console run died with `Failed to change directory to /workspace/review the code`.
+Only claude's positional is verified; the rest keep what they had rather than being changed
+on a hunch, and Studio refuses the combination up front instead of building an argv that
+dies inside the container.
 
 **Who turns the approval prompts off is settled, three different ways, and the wrapper is
 deliberately the one that does not.** A *headless* run gets it from

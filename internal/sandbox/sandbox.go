@@ -376,16 +376,21 @@ func alreadyWarned(name string) bool {
 // not what the flags asked for.
 func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode int, took time.Duration) audit.SessionMeta {
 	m := audit.SessionMeta{
-		Image:    spec.Image,
-		Runtime:  spec.Runtime,
-		Workdir:  spec.Workdir,
-		Command:  spec.Command,
-		Agent:    opts.Agent,
-		Branch:   spec.Branch,
-		Network:  "default",
-		EnvNames: spec.EnvNames, // names only — never the values
-		ExitCode: exitCode,
-		Duration: took,
+		Image:   spec.Image,
+		Runtime: spec.Runtime,
+		Workdir: spec.Workdir,
+		Command: spec.Command,
+		Agent:   opts.Agent,
+		// The agent asked for, when it differs from the one above that ran.
+		RoutedFrom:   opts.RoutedFrom,
+		RouteReason:  opts.RouteReason,
+		RouteID:      opts.RouteID,
+		RouteAttempt: opts.RouteAttempt,
+		Branch:       spec.Branch,
+		Network:      "default",
+		EnvNames:     spec.EnvNames, // names only — never the values
+		ExitCode:     exitCode,
+		Duration:     took,
 	}
 	// Set only when the run was actually observed, so a nil here and a zero mean
 	// different things in the record — see audit.SessionMeta. A run that was not

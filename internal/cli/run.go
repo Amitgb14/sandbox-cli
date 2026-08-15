@@ -132,6 +132,15 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 		return err
 	}
 	full := append(append([]string{}, agentCmd...), guest...)
+
+	// The agent this wrapper is, which is also the head of any routing chain.
+	// Empty for `run`, which has an argv rather than an adapter and nothing to
+	// route to — and empty in effect for the ten adapters that have no descriptor
+	// in internal/agents, since a fallback has to be re-targetable and only a
+	// descriptor says how. Those take the path they always took.
+	if agent := cmd.Annotations[agentAnnotation]; agent != "" {
+		return routedRun(rf, agent, guest, full)
+	}
 	return execute(rf, full)
 }
 

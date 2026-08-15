@@ -59,6 +59,20 @@ type runFlags struct {
 	noSnapshot       bool
 	snapshotInterval time.Duration
 
+	// fallback is --fallback: the agents to try, in order, when the one asked for
+	// is unavailable. Wrapper-only, because it re-targets *an agent* — a plain
+	// `run` has an argv rather than an adapter, and there is nothing to route it
+	// to.
+	fallback []string
+
+	// routedFrom/routeReason are set by the routing loop on a fallback attempt,
+	// and travel only as far as the audit line — the container is identical
+	// either way, so this is a fact *about* the run rather than an input to it.
+	routedFrom   string
+	routeReason  string
+	routeID      string
+	routeAttempt int
+
 	// Auth persistence (agent wrappers only). persistName is the sandbox-owned
 	// host state dir name (e.g. "claude") mounted as the agent's HOME.
 	// noPersistAuth opts out.
@@ -216,6 +230,8 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 		opts.Base = worktree.Branch(config.ExpandTilde(repoDir))
 	}
 	opts.Agent = rf.persistName
+	opts.RoutedFrom, opts.RouteReason = rf.routedFrom, rf.routeReason
+	opts.RouteID, opts.RouteAttempt = rf.routeID, rf.routeAttempt
 	opts.Detach = rf.detach
 
 	// --share: mount one sandbox-owned host directory at /shared. This is the

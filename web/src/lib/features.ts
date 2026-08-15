@@ -55,6 +55,14 @@ export const FEATURES: Feature[] = [
     state: "default",
   },
   {
+    title: "A fallback when a provider is down",
+    group: "workflow",
+    flag: "--fallback",
+    body: "Claude's API having an outage should not mean the afternoon stops. A chain runs the next agent instead — the provider is probed before launching, so an outage skips that agent before a container exists, and a run that failed having changed no files is retried with the next one. A run that changed files is never retried: that is a failed attempt, not an outage, and handing the next agent half-finished edits is the thing this must never do. When it fires, the previous agent's briefing is carried across — what was asked, what it said it was doing, and a ledger of the files it touched, derived from git rather than from anything the agent claimed. It is a briefing, not a resume, and says so: session ids do not cross between vendors and neither do transcripts.",
+    code: "sandbox-cli claude --fallback codex 'fix the flaky test'",
+    state: "opt-in",
+  },
+  {
     title: "Sessions you can list, follow, attach to and stop",
     group: "workflow",
     flag: "list / logs / attach / kill",

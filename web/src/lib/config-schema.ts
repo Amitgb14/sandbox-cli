@@ -242,6 +242,20 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
         body: "Mounts this project's host agent history so sessions resolve on both sides of the sandbox. The one default that reaches a host path outside the workspace, scoped to the single project bucket.",
       },
       {
+        key: "routing",
+        where: "user",
+        type: "string[]",
+        fallback: "no routing — the agent you asked for is the agent that runs",
+        body: "Agents to fall through when the one you asked for is unavailable, primary first. sandbox-cli probes the provider before launching and skips an agent that is not answering; on the command line it also retries a run that failed having changed no files, which is what a provider dying mid-run looks like. A run that changed files is never retried — that is a failed attempt, not an outage. User-config only: choosing the agent chooses which persisted login and which forwarded variables are in reach.",
+      },
+      {
+        key: "providers",
+        where: "user",
+        type: "map[agent]host",
+        fallback: "each agent's own provider, and no probe for the ones that have none",
+        body: "Which host routing probes for an agent, e.g. opencode: api.groq.com. It is what makes a provider-agnostic agent probeable at all, and what points the check at your own endpoint when an agent runs behind a proxy. Blank means do not probe. User-config only: a probe decides which agent a chain skips, so a host that always answers keeps a dead agent in play and one that never answers forces a fall through to another agent's login.",
+      },
+      {
         key: "hostname",
         type: "string",
         fallback: "sandbox",

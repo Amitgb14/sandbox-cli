@@ -72,6 +72,46 @@ type Descriptor struct {
 	// to add to an interactive session, so those simply cannot be launched this
 	// way, which is the honest answer rather than a flag that does nothing.
 	SkipPermissionArgs []string
+
+	// ProviderHost is the host this agent talks to when it works, e.g.
+	// "api.anthropic.com". Routing probes it before choosing this agent — "is the
+	// thing that answers actually answering" — and it lives in the descriptor for
+	// the same reason EnvAllow does: the alternative is a second table somewhere
+	// else that a new adapter can be added without.
+	//
+	// Empty means **do not probe**, and that is the honest answer for two kinds
+	// of agent rather than an omission. `opencode` is provider-agnostic — its
+	// EnvAllow spans four vendors because the user picks — so no single host's
+	// health says anything about it. And an agent pointed at a proxy or a
+	// self-hosted base URL (ANTHROPIC_BASE_URL and OPENAI_BASE_URL are both
+	// forwardable) is not talking to the vendor at all, so the vendor's health is
+	// not evidence about it either. An unprobeable agent still works in a chain;
+	// it simply cannot be skipped in advance, only failed over from.
+	ProviderHost string
+
+	// ConsolePromptArgs seeds an *interactive* session's first turn, or is nil
+	// when this agent has no way to be seeded.
+	//
+	// It exists because "append the prompt as a positional" is not a general
+	// truth, and assuming it was cost a real run: opencode reads a lone
+	// positional as **the project directory to open**, so a console run carrying
+	// a prompt became `opencode "review the code"` and died with "Failed to
+	// change directory to /workspace/review the code". The prompt was never a
+	// prompt to it.
+	//
+	// Nil is therefore a first-class answer and means *do not seed* — the same
+	// shape SkipPermissionArgs uses for agents with no such flag. A caller that
+	// wants a prompt honoured by such an agent wants a headless run, where the
+	// descriptor's AutonomousArgs spells it correctly (`run <prompt>`), and
+	// should be told so rather than handed an argv that fails inside the
+	// container.
+	//
+	// Only claude's positional is *verified* here — it is the agent the console
+	// feature was built and attached against. codex, gemini and droid keep the
+	// behaviour they had, marked unverified, because changing them on a hunch
+	// would regress runs that may be working; opencode is the one this was
+	// written for.
+	ConsolePromptArgs func(prompt string) []string
 }
 
 // Autonomous returns the full container argv for a headless run of prompt.
@@ -95,11 +135,20 @@ func (d Descriptor) Console(prompt string, skipPermissions bool) []string {
 	if skipPermissions {
 		argv = concat(argv, d.SkipPermissionArgs)
 	}
-	if prompt != "" {
-		argv = concat(argv, []string{prompt})
+	// Seeded only where the descriptor says how. An agent with no
+	// ConsolePromptArgs cannot be given a first turn on the command line, and
+	// appending the prompt anyway is what produced a chdir error instead of a
+	// conversation — see the field's comment. CanSeedConsole is what a caller
+	// checks to refuse the combination up front.
+	if prompt != "" && d.ConsolePromptArgs != nil {
+		argv = concat(argv, d.ConsolePromptArgs(prompt))
 	}
 	return argv
 }
+
+// CanSeedConsole reports whether an interactive run of this agent can be given
+// its first turn as an argument.
+func (d Descriptor) CanSeedConsole() bool { return d.ConsolePromptArgs != nil }
 
 // CanSkipPermissions reports whether this agent has a flag for it.
 func (d Descriptor) CanSkipPermissions() bool { return len(d.SkipPermissionArgs) > 0 }
@@ -181,8 +230,11 @@ exec claude "$@"`
 // registry is the set of known agents, keyed by Name.
 var registry = map[string]Descriptor{
 	"claude": {
-		Name:       "claude",
-		PersistDir: "claude",
+		Name: "claude",
+		// Verified: the console feature was built and attached against this agent.
+		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
+		PersistDir:        "claude",
+		ProviderHost:      "api.anthropic.com",
 		EnvAllow: []string{
 			"ANTHROPIC_API_KEY",
 			"ANTHROPIC_AUTH_TOKEN",
@@ -204,8 +256,12 @@ var registry = map[string]Descriptor{
 		SkipPermissionArgs: []string{"--dangerously-skip-permissions"},
 	},
 	"codex": {
-		Name:       "codex",
-		PersistDir: "codex",
+		Name: "codex",
+		// Unverified, and kept as it was: changing it on a hunch would regress
+		// runs that may be working today.
+		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
+		PersistDir:        "codex",
+		ProviderHost:      "api.openai.com",
 		EnvAllow: []string{
 			"OPENAI_API_KEY",
 			"OPENAI_BASE_URL",
@@ -221,8 +277,11 @@ var registry = map[string]Descriptor{
 		},
 	},
 	"gemini": {
-		Name:       "gemini",
-		PersistDir: "gemini",
+		Name: "gemini",
+		// Unverified, and kept as it was.
+		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
+		PersistDir:        "gemini",
+		ProviderHost:      "generativelanguage.googleapis.com",
 		// GOOGLE_APPLICATION_CREDENTIALS is deliberately absent: it names a host
 		// file path that is not mounted, so forwarding it would produce a confusing
 		// "credentials file not found" instead of a clean auth prompt.
@@ -264,8 +323,11 @@ var registry = map[string]Descriptor{
 		},
 	},
 	"droid": {
-		Name:       "droid",
-		PersistDir: "droid",
+		Name: "droid",
+		// Unverified, and kept as it was.
+		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
+		PersistDir:        "droid",
+		ProviderHost:      "api.factory.ai",
 		EnvAllow: []string{
 			"FACTORY_API_KEY",
 			"FACTORY_API_BASE_URL",

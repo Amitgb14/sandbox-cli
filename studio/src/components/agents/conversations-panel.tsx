@@ -7,9 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { EmptyState } from "@/components/common/empty-state";
 import { SessionViewer } from "@/components/agents/session-viewer";
-import { useAgentSessions } from "@/lib/api/queries";
+import { useAgentSessions, useProjects } from "@/lib/api/queries";
+import { useUi } from "@/lib/store";
 import { formatBytesShort, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { SessionSummary } from "@/lib/types";
@@ -31,13 +34,30 @@ import type { SessionSummary } from "@/lib/types";
 export function ConversationsPanel({ agent }: { agent: string }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<SessionSummary | null>(null);
+  // Off by default: with a repository picked, the question is "what happened
+  // here", and a list padded with conversations that may belong to anything is
+  // the same noise the repository scope exists to remove.
+  const [showUnattributed, setShowUnattributed] = useState(false);
+  const repoFilter = useUi((s) => s.repoFilter);
+  const { data: projects } = useProjects();
+  const repoName = projects?.find((p) => p.id === repoFilter)?.name;
   // A high bound rather than the picker's fifty: this list is ordered by
   // recency, so a small cap hides exactly the older conversation somebody came
   // here to find.
   const { data, isPending } = useAgentSessions(agent, { scope: "all", limit: 400 });
 
   const sessions = useMemo(() => {
-    const all = data ?? [];
+    let all = data ?? [];
+    // Scoped to the repository the app is on, when it is on one. A conversation
+    // the daemon could not attribute is a separate decision — see the toggle:
+    // hiding it silently would lose the pooled sandbox sessions entirely, and
+    // showing it always would put another project's history under this one's
+    // name.
+    if (repoFilter) {
+      all = all.filter((s) => s.repoId === repoFilter || (showUnattributed && !s.repoId));
+    } else if (!showUnattributed) {
+      all = all.filter((s) => !!s.repoId);
+    }
     if (!query.trim()) return all;
     const q = query.toLowerCase();
     // Id included, because that is what a path or a `--resume` line gives you,
@@ -45,7 +65,9 @@ export function ConversationsPanel({ agent }: { agent: string }) {
     return all.filter((s) =>
       `${s.title ?? ""} ${s.project ?? ""} ${s.id}`.toLowerCase().includes(q),
     );
-  }, [data, query]);
+  }, [data, query, repoFilter, showUnattributed]);
+
+  const unattributed = (data ?? []).filter((s) => !s.repoId).length;
 
   return (
     <Card>
@@ -60,6 +82,23 @@ export function ConversationsPanel({ agent }: { agent: string }) {
               </span>
             )}
           </span>
+          <span className="flex items-center gap-3">
+            {unattributed > 0 && (
+              <span className="flex items-center gap-1.5">
+                <Switch
+                  id="show-unattributed"
+                  checked={showUnattributed}
+                  onCheckedChange={setShowUnattributed}
+                />
+                <Label htmlFor="show-unattributed" className="text-[11px] font-normal">
+                  {/* Named for what they are rather than "other": a pooled
+                      sandbox session records only /workspace, so nothing on disk
+                      says which project it was — that is why it is not simply
+                      filed elsewhere. */}
+                  Show {unattributed} not tied to a repository
+                </Label>
+              </span>
+            )}
           <span className="relative">
             <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -68,6 +107,7 @@ export function ConversationsPanel({ agent }: { agent: string }) {
               placeholder="Filter by title, project or id"
               className="h-8 w-64 pl-7 text-xs"
             />
+          </span>
           </span>
         </CardTitle>
       </CardHeader>
@@ -83,11 +123,19 @@ export function ConversationsPanel({ agent }: { agent: string }) {
           <EmptyState
             icon={MessagesSquare}
             className="border-0"
-            title={query ? "No conversation matches" : "No conversations yet"}
+            title={
+              query
+                ? "No conversation matches"
+                : repoName
+                  ? `No conversations for ${repoName}`
+                  : "No conversations yet"
+            }
             description={
               query
                 ? "Titles, working directories and ids are searched — an id from a --resume line will find its conversation."
-                : "Run this agent once and its transcript appears here, alongside anything Claude Code has written on this machine."
+                : repoName
+                  ? `This agent has no conversation recorded against ${repoName}. A sandbox session pooled in the shared bucket records only /workspace, so it cannot be attributed to a repository — the toggle above shows those.`
+                  : "Run this agent once and its transcript appears here, alongside anything Claude Code has written on this machine."
             }
           />
         )}

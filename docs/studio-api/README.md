@@ -145,6 +145,8 @@ there is no code generation step (yet) tying them together.
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/v1/health` | Liveness + which engine/project/profile this instance manages |
+| GET | `/v1/routing` | Which agent providers are answering (`?refresh=1` to skip the 30s cache) |
+| POST | `/v1/routing/providers` | Set which host is probed for an agent |
 | GET | `/v1/projects` | Repositories this daemon answers about — the one it was started in, plus every one added |
 | POST | `/v1/projects` | Add a repository by host path (**the only endpoint that accepts one**) |
 | DELETE | `/v1/projects/{id}` | Forget a repository. Nothing on disk is touched; the started-in one is refused |
@@ -223,6 +225,57 @@ slashes included, so `GET /worktrees/feat/studio-api` works. Run paths are singl
 segment, so address a slash-bearing branch by id or name there — `GET
 /runs?branch=feat/studio-api` finds it.
 
+### Agent routing
+
+`POST /v1/runs` takes `fallback: ["codex"]` beside `agent`. Studio **probes the
+provider before launching** and starts the first agent that answers — the case
+this exists for is pressing Launch during an outage.
+
+It does not do the other half of routing, and does not pretend to: retrying a run
+that failed having changed nothing needs something watching the exit code, and
+this API launches detached and returns as soon as the container exists. A Studio
+run therefore falls through *before* it starts and never after. The CLI does
+both, because a foreground run has a process left to wait.
+
+Every candidate must have a **verified headless mode** — a detached run has
+nobody to answer an approval prompt, so an agent that stops to ask would hang in
+the fallback slot where nobody is looking. When no candidate answers, the launch
+is refused rather than started into an outage.
+
+`GET /v1/routing` answers the question a chain is configured against — until it
+existed, the only way to ask "is Claude down" was to launch a run and see. It
+probes every routable agent concurrently and caches for thirty seconds, because
+a status widget that hammers four vendors is a poor way to repay them. Three
+states, not two: `probed: false` means there was nothing to ask (opencode is
+provider-agnostic), which is not the same as down. It is not an auth check — the
+probe carries no credentials, so 401 is healthy — and not a status page, since it
+reports what *this machine* can reach; the `reason` is what distinguishes an
+outage from a proxy.
+
+`POST /v1/routing/providers` sets the host to probe per agent, which is what
+makes `opencode` probeable at all — it is provider-agnostic, so nothing true can
+be compiled in — and what makes an agent behind `ANTHROPIC_BASE_URL` probed
+against the endpoint it actually uses. An empty value is an explicit "do not
+probe this one".
+
+It is **a narrow endpoint, not a config writer**. Studio has never been able to
+write the user's configuration, and one that could write a single key is one
+refactor from writing `image:` or `mounts:`. So it writes exactly one map, into
+`~/.config/sandbox/studio/providers.json`, and validates every value as a host —
+no scheme, no path. A `providers:` block in the user's own `config.yaml` still
+**outranks** it and keeps its comments; the file is a lower layer, which inverts
+the usual "later wins" because a value somebody typed by hand is the more
+considered statement.
+
+The same key is refused from a project `.sandbox.yaml`: a probe decides which
+agent a chain skips, so a host that always answers keeps a dead agent in play and
+one that never answers forces a fall through to a different agent's login.
+
+A routed run carries `routedFrom` and `routeReason` on the `Run`, read from the
+container's `sandbox.routed_from` / `sandbox.route_reason` labels rather than
+from the audit log — a detached run's audit line is written when it *ends*, long
+after somebody looks at the listing and asks why it says codex.
+
 ### Reading conversations
 
 `/v1/agents/{agent}/sessions` lists transcripts, and the default is narrow on
@@ -233,6 +286,14 @@ history, and every row reports its `store` (`sandbox` | `host`), whether it is
 `resumable`, and the `project` (working directory) the transcript recorded. That
 last field is what tells the two apart at a glance: a container's cwd is always
 `/workspace`, a host session's is the real path.
+
+Each row also carries `repoId`: which repository the conversation belongs to, or
+absent when it cannot be attributed. A transcript records a working directory,
+and a *sandbox* session's is always `/workspace` — so attribution comes from the
+project history bucket the file sits in, matched forwards from each registered
+repository's root rather than by decoding a bucket name back into a path, which
+is lossy. A session pooled in the shared bucket is genuinely unattributable, and
+absent says so rather than guessing.
 
 `{id}` returns the parsed turns; `{id}/raw` returns the file. Raw exists because
 parsing is an interpretation — the claude jsonl carries a dozen line kinds and

@@ -24,22 +24,26 @@ import (
 // documents in one place that the *only* environment data in an audit record is
 // a list of names.
 type auditLine struct {
-	Time        string   `json:"time"`
-	Image       string   `json:"image"`
-	Workspace   string   `json:"workspace"`
-	Workdir     string   `json:"workdir"`
-	Agent       string   `json:"agent"`
-	Branch      string   `json:"branch"`
-	Command     []string `json:"command"`
-	Engine      string   `json:"engine"`
-	Network     string   `json:"network"`
-	NetworkName string   `json:"network_name"`
-	EnforcedBy  string   `json:"enforced_by"`
-	EgressAllow []string `json:"egress_allow"`
-	EnvNames    []string `json:"env_names"`
-	ExitCode    int      `json:"exit_code"`
-	DurationMS  int64    `json:"duration_ms"`
-	Detached    bool     `json:"detached"`
+	Time         string   `json:"time"`
+	Image        string   `json:"image"`
+	Workspace    string   `json:"workspace"`
+	Workdir      string   `json:"workdir"`
+	Agent        string   `json:"agent"`
+	Branch       string   `json:"branch"`
+	Command      []string `json:"command"`
+	Engine       string   `json:"engine"`
+	Network      string   `json:"network"`
+	NetworkName  string   `json:"network_name"`
+	EnforcedBy   string   `json:"enforced_by"`
+	EgressAllow  []string `json:"egress_allow"`
+	EnvNames     []string `json:"env_names"`
+	RoutedFrom   string   `json:"routed_from"`
+	RouteReason  string   `json:"route_reason"`
+	RouteID      string   `json:"route_id"`
+	RouteAttempt int      `json:"route_attempt"`
+	ExitCode     int      `json:"exit_code"`
+	DurationMS   int64    `json:"duration_ms"`
+	Detached     bool     `json:"detached"`
 }
 
 // defaultAuditLimit bounds a listing. The log is append-only across every
@@ -187,19 +191,23 @@ func readAuditFile(path, branch, repo string, projects []Project, limit int) []A
 
 func (a auditLine) toRecord() AuditRecord {
 	rec := AuditRecord{
-		Time:        a.Time,
-		Image:       a.Image,
-		Workspace:   a.Workspace,
-		Workdir:     a.Workdir,
-		Command:     a.Command,
-		Engine:      a.Engine,
-		Network:     a.Network,
-		NetworkName: a.NetworkName,
-		EgressAllow: a.EgressAllow,
-		EnvNames:    a.EnvNames,
-		ExitCode:    a.ExitCode,
-		DurationMS:  a.DurationMS,
-		Detached:    a.Detached,
+		Time:         a.Time,
+		Image:        a.Image,
+		Workspace:    a.Workspace,
+		Workdir:      a.Workdir,
+		Command:      a.Command,
+		Engine:       a.Engine,
+		Network:      a.Network,
+		NetworkName:  a.NetworkName,
+		EgressAllow:  a.EgressAllow,
+		EnvNames:     a.EnvNames,
+		RoutedFrom:   a.RoutedFrom,
+		RouteReason:  a.RouteReason,
+		RouteID:      a.RouteID,
+		RouteAttempt: a.RouteAttempt,
+		ExitCode:     a.ExitCode,
+		DurationMS:   a.DurationMS,
+		Detached:     a.Detached,
 	}
 	// Absent is null, not "": a run with no agent is a plain `run`, which is a
 	// different thing from an agent whose name went unrecorded.
@@ -238,6 +246,8 @@ func fromHistory(r history.Record) AuditRecord {
 		Agent: r.Agent, Branch: r.Branch, Command: r.Command, Engine: r.Engine,
 		Network: r.Network, NetworkName: r.NetworkName, EnforcedBy: r.EnforcedBy,
 		EgressAllow: r.EgressAllow, EnvNames: r.EnvNames,
+		RoutedFrom: r.RoutedFrom, RouteReason: r.RouteReason,
+		RouteID: r.RouteID, RouteAttempt: r.RouteAttempt,
 		ExitCode: r.ExitCode, DurationMS: r.DurationMS, Detached: r.Detached,
 	}.toRecord()
 }
@@ -334,7 +344,7 @@ func repoIDForWorkspace(ws string, projects []Project) string {
 			continue
 		}
 		if len(root) > len(best) {
-			best, ws = root, ws
+			best = root
 		}
 	}
 	for _, p := range projects {

@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
@@ -40,6 +42,10 @@ func (s *Server) handleAgentSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, SessionListResponse{Sessions: []SessionSummary{}})
 		return
 	}
+	// The registered repositories, so each conversation can say which one it
+	// belongs to — read once for the whole listing rather than per session.
+	projects := s.projects()
+
 	// `scope=all` widens this to every verified store, for *reading*. The
 	// default stays sandbox-only because it feeds the resume picker, where a
 	// session that cannot be reopened is an action that fails — see the block
@@ -75,7 +81,9 @@ func (s *Server) handleAgentSessions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[sess.ID] = true
-			out = append(out, toSessionSummary(sess, st.store))
+			summary := toSessionSummary(sess, st.store)
+			summary.RepoID = repoForSession(sess, projects)
+			out = append(out, summary)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
@@ -273,4 +281,50 @@ func toSessionSummary(sess agentctx.Session, store string) SessionSummary {
 		// the host's history into a container that was not asked to have it.
 		Resumable: store == storeSandbox,
 	}
+}
+
+// repoForSession answers which repository a conversation belongs to.
+//
+// Two facts are available and neither is sufficient alone, which is why this is
+// a function rather than a field read:
+//
+//   - The transcript records a **cwd**. For a host session that is the real
+//     project path and settles it. For a *sandbox* session it is always
+//     `/workspace`, because that is where every container mounts the project —
+//     so it identifies the container's view and says nothing about which
+//     repository was mounted there.
+//   - The transcript's **path** carries the project bucket, because Claude Code
+//     names that directory after its working directory and the claude wrapper
+//     mounts the host's per-project bucket over the container's. So a synced
+//     sandbox session lands in the bucket of the repository it worked on.
+//
+// The bucket is matched **forwards** — each registered project's root is
+// converted to its bucket name and compared — rather than by decoding a bucket
+// back into a path. Decoding is lossy: the mapping replaces every non-alphanumeric
+// character with a dash, so `my-repo` and `my.repo` produce the same bucket and
+// no reader can tell which it was.
+//
+// Empty means the conversation cannot be attributed, which is a real and common
+// answer rather than a failure: a session pooled in the shared `-workspace`
+// bucket records only `/workspace` and sits in a directory named for it, so
+// nothing on disk says which repository it belonged to. Reporting "" lets a
+// client hide those rather than file them under a repository they may not
+// belong to.
+func repoForSession(sess agentctx.Session, projects []Project) string {
+	for _, p := range projects {
+		if p.Root == "" {
+			continue
+		}
+		for _, bucket := range agentctx.ProjectBuckets(p.Root) {
+			if strings.Contains(sess.Path, string(filepath.Separator)+bucket+string(filepath.Separator)) {
+				return p.ID
+			}
+		}
+	}
+	// A host session records the real directory it ran in, so it can be matched
+	// the same way an audit line's workspace is.
+	if sess.Project != "" && sess.Project != "/workspace" {
+		return repoIDForWorkspace(sess.Project, projects)
+	}
+	return ""
 }

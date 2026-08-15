@@ -14,6 +14,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
+	"github.com/Amitgb14/sandbox-cli/internal/routing"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
@@ -88,7 +89,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts, err := s.buildRunOptions(req)
+	opts, err := s.buildRunOptions(r, req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -127,7 +128,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // created if needed), the agent descriptor supplies its env allowlist and
 // autonomous argv, and the login persistence gate is re-checked here because it
 // is a property of every path that builds Options, not of the config alone.
-func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) {
+func (s *Server) buildRunOptions(r *http.Request, req RunCreateRequest) (sandbox.Options, error) {
 	// Which repository this run is about, before anything else is decided: a
 	// worktree is resolved inside it, and with no worktree it *is* the workspace.
 	// An unregistered id refuses here rather than silently falling back to the
@@ -192,6 +193,20 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 		// say next.
 		return sandbox.Options{}, errors.New("resume needs console: resuming a conversation is something you do interactively")
 	}
+	if req.Console && req.Prompt != "" && req.Agent != "" {
+		if d, ok := agents.Lookup(req.Agent); ok && !d.CanSeedConsole() {
+			// Refused rather than dropped. Silently starting the session without
+			// the prompt would look like the agent ignored it, and appending it
+			// anyway is what this refusal replaces: opencode reads a lone
+			// positional as a directory, so the run died with "Failed to change
+			// directory to /workspace/<your prompt>".
+			return sandbox.Options{}, fmt.Errorf(
+				"%s cannot be given a prompt for an interactive session: it has no way to be seeded on the command line, "+
+					"and passing one would be read as a directory rather than a message.\n"+
+					"  Untick console to run it headless — %s spells the prompt correctly there — or leave the prompt empty and type it in the session.",
+				req.Agent, req.Agent)
+		}
+	}
 	if req.Console && req.Agent == "" {
 		// A plain command already reaches a console the same way — it is the argv
 		// the caller chose. This field exists to swap an *agent* out of headless
@@ -221,10 +236,24 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 	}
 
 	if req.Agent != "" {
-		agent, ok := agents.Lookup(req.Agent)
-		if !ok {
-			return sandbox.Options{}, fmt.Errorf("unknown agent %q (known: %s)", req.Agent, strings.Join(agents.Names(), ", "))
+		// Routing, the half of it a detached launch can do.
+		//
+		// The probe runs here and skips an agent whose provider is not answering,
+		// which is the case this feature exists for. The *other* half — retrying a
+		// run that failed having changed nothing — cannot happen in an HTTP
+		// handler: this launches detached and returns as soon as the container is
+		// up, so there is no process left to see the exit code. A run started here
+		// therefore falls through before it starts and never after, and the
+		// response says which agent it got so a client is never guessing.
+		chosen, routedFrom, reason, err := s.routeAgent(r.Context(), req)
+		if err != nil {
+			return sandbox.Options{}, err
 		}
+		agent, ok := agents.Lookup(chosen)
+		if !ok {
+			return sandbox.Options{}, fmt.Errorf("unknown agent %q (known: %s)", chosen, strings.Join(agents.Names(), ", "))
+		}
+		opts.RoutedFrom, opts.RouteReason = routedFrom, reason
 		opts.Agent = agent.Name
 		opts.EnvAllow = agent.EnvAllow
 		opts.Env = append(opts.Env, agent.Env...)
@@ -454,4 +483,48 @@ func resumeArgsFor(agent string) ([]string, bool) {
 		return nil, false
 	}
 	return store.Resume, true
+}
+
+// routeAgent picks the agent this run will actually use.
+//
+// Studio can do exactly half of routing, and the half it can do is the useful
+// one for the case it was asked for: a provider that is down when you press
+// Launch. It probes each candidate and takes the first that answers.
+//
+// The other half — retrying a run that failed having changed nothing — is not
+// available here and cannot be faked. This handler launches detached and returns
+// as soon as the container exists, so nothing is left watching for an exit code;
+// a retry would need a supervisor that outlives the request. Rather than
+// half-implement one, a Studio run falls through *before* it starts and never
+// after, and the response carries which agent it got so the client never has to
+// guess.
+//
+// Returns the chosen agent, the one it was asked for when they differ, and why.
+func (s *Server) routeAgent(ctx context.Context, req RunCreateRequest) (chosen, routedFrom, reason string, err error) {
+	// Unattended: a Studio run is detached, so an agent that stops to ask
+	// permission hangs with nobody to answer — the same rule internal/agents
+	// applies to a fleet.
+	chain, err := routing.Resolve(req.Agent, req.Fallback, true)
+	if err != nil {
+		return "", "", "", err
+	}
+	if len(chain) == 1 {
+		return chain[0], "", "", nil
+	}
+
+	var skipped []string
+	for i, name := range chain {
+		avail := routing.Probe(ctx, name, s.Session.Cfg.Providers)
+		if avail.Reachable {
+			if i == 0 {
+				return name, "", "", nil
+			}
+			return name, req.Agent, strings.Join(skipped, "; "), nil
+		}
+		skipped = append(skipped, fmt.Sprintf("%s: %s", name, avail.Reason))
+	}
+	// Every candidate was asked and none answered. Refusing beats launching into
+	// an outage and letting the container discover it: the run would fail slowly,
+	// having spent a container start, and the reason would be buried in its logs.
+	return "", "", "", fmt.Errorf("no agent in the chain is available — %s", strings.Join(skipped, "; "))
 }

@@ -154,6 +154,44 @@ type BrowseResponse struct {
 	Truncated bool          `json:"truncated,omitempty"`
 }
 
+// ProviderStatus is one agent's provider, and whether it is answering.
+type ProviderStatus struct {
+	Agent string `json:"agent"`
+	// Host is what was asked, empty for an agent with nothing to ask — opencode
+	// is provider-agnostic, and an agent behind a proxy is not talking to the
+	// vendor at all.
+	Host string `json:"host,omitempty"`
+	// Probed distinguishes "asked and answered" from "never asked". Unknown is
+	// not down: an unprobeable agent still works, it simply cannot be skipped in
+	// advance.
+	Probed    bool `json:"probed"`
+	Reachable bool `json:"reachable"`
+	// Reason is why an unreachable provider is unreachable, in a phrase: "timed
+	// out", "provider answered 503". It is also what tells an outage from a
+	// laptop with no network, which this cannot distinguish on its own.
+	Reason string `json:"reason,omitempty"`
+	// Overridden reports a host the user chose rather than the one compiled into
+	// the descriptor — which is the only way opencode gets probed at all, and the
+	// right answer for anyone pointing an agent at a proxy.
+	Overridden bool `json:"overridden,omitempty"`
+
+	// Routable is whether a chain may contain this agent at all — it needs a
+	// verified non-interactive mode, or it would hang in the fallback slot where
+	// nobody is looking.
+	Routable bool `json:"routable"`
+}
+
+// ProvidersRequest is the body of PUT /routing/providers: the host to probe per
+// agent. An empty value is an explicit "do not probe this one".
+type ProvidersRequest struct {
+	Providers map[string]string `json:"providers"`
+}
+
+// RoutingResponse is the body of GET /routing.
+type RoutingResponse struct {
+	Providers []ProviderStatus `json:"providers"`
+}
+
 // ProjectsResponse is the body of GET /projects.
 type ProjectsResponse struct {
 	Projects []Project `json:"projects"`
@@ -390,6 +428,14 @@ type Run struct {
 	// only way to see it was to select a repository that definitely had runs.
 	RepoID string `json:"repoId,omitempty"`
 
+	// RoutedFrom is the agent that was asked for, when routing fell through to a
+	// different one; empty when the run used what it was given. RouteReason says
+	// why. Read from the container's labels rather than from the audit log,
+	// because a detached run's audit line is written when it *ends* — long after
+	// somebody looks at the listing and asks why it says codex.
+	RoutedFrom  string `json:"routedFrom,omitempty"`
+	RouteReason string `json:"routeReason,omitempty"`
+
 	// RepoName is the display half of that id. Two clones of a same-named repo
 	// share it and do not share RepoID, so it is for showing and never for
 	// matching — which is exactly the mistake this pair exists to keep separate.
@@ -565,6 +611,14 @@ type AuditRecord struct {
 	// See repoIDForWorkspace.
 	RepoID string `json:"repoId,omitempty"`
 
+	// Routing, when this run was part of an episode. Runs sharing a RouteID are
+	// one attempt at one task — the agent that failed and the one that ran
+	// instead — which is the only way to tell a rescue from two unrelated runs.
+	RoutedFrom   string `json:"routedFrom,omitempty"`
+	RouteReason  string `json:"routeReason,omitempty"`
+	RouteID      string `json:"routeId,omitempty"`
+	RouteAttempt int    `json:"routeAttempt,omitempty"`
+
 	Image       string   `json:"image"`
 	Workspace   string   `json:"workspace"`
 	Workdir     string   `json:"workdir"`
@@ -731,6 +785,16 @@ type RunCreateRequest struct {
 	// several runs can work in parallel without colliding. Branch defaults to
 	// this value when Branch is empty.
 	Worktree string `json:"worktree,omitempty"`
+
+	// Fallback are the agents to try, in order, when Agent's provider is not
+	// answering — the chain from internal/routing.
+	//
+	// Studio probes before launching and takes the first that answers. It cannot
+	// do the other half of routing, which is retrying a run that failed having
+	// changed nothing: this launches detached, so nothing is left to watch the
+	// exit code. A run started here falls through before it starts and never
+	// after, and the Run it answers with says which agent it actually got.
+	Fallback []string `json:"fallback,omitempty"`
 
 	// Agent is one of the names from GET /agents. Required unless Command is set.
 	// When set, Prompt is run through the agent's autonomous/headless mode,
@@ -1036,6 +1100,13 @@ type SessionSummary struct {
 	// and the daemon resolves it.
 	Path string `json:"path,omitempty"`
 	Size int64  `json:"size,omitempty"`
+
+	// RepoID is the repository this conversation belongs to, or "" when it
+	// cannot be attributed — a session pooled in the shared bucket records only
+	// `/workspace` and nothing on disk says which project that was. Empty is an
+	// answer, not a failure: it lets a client hide those rather than file them
+	// under a repository they may not belong to.
+	RepoID string `json:"repoId,omitempty"`
 
 	// Store is "sandbox" (the agent HOME containers get) or "host" (the user's
 	// own history). Both are readable; only the first is this daemon's to

@@ -37,6 +37,28 @@ const (
 	// LabelAgent is the adapter name ("claude", "codex"), empty for a plain run.
 	LabelAgent = "sandbox.agent"
 
+	// LabelRoutedFrom is the agent that was *asked* for, when routing fell through
+	// to a different one. Absent when the run used the agent it was given.
+	//
+	// A label rather than only an audit line, because the audit line is written
+	// when a run *ends* — which for a detached run is long after the launch
+	// returned, and long after somebody looks at the Runs screen and asks why it
+	// says codex when they picked claude. Docker is the state store: a fact not
+	// stamped here is one no later command can recover.
+	LabelRoutedFrom = "sandbox.routed_from"
+
+	// LabelRouteReason is why that happened, in the words the run reported:
+	// "provider answered 503". Paired with LabelRoutedFrom because the fact and
+	// its justification are useless apart — one says a surprise happened, the
+	// other says whether it was the right one.
+	LabelRouteReason = "sandbox.route_reason"
+
+	// LabelRouteID is the routing episode this run belongs to; every attempt in
+	// one chain shares it. Stamped for the same reason the audit field exists —
+	// two containers that were one attempt at one task are otherwise
+	// indistinguishable from two unrelated runs.
+	LabelRouteID = "sandbox.route_id"
+
 	// LabelBase is the branch the work is expected to land on, recorded at launch
 	// because by landing time the checkout may be on a different one — and "the
 	// branch checked out now" is a different question from "the branch this agent

@@ -8,8 +8,7 @@ import {
   GitBranch,
   Skull,
   Square,
-  Timer,
-} from "lucide-react";
+  Timer, Shuffle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -65,6 +64,25 @@ export function RunHeader({ run }: { run: Run }) {
               {run.base && <span> → {run.base}</span>}
             </span>
             <span className="font-mono">{run.agent ?? "plain run"}</span>
+            {/* A routed run used a different agent than was asked for, which
+                moves the login, the bill and the transcript. Shown beside the
+                agent rather than tucked into a details tab: this is the first
+                thing somebody wonders when the name is not the one they picked. */}
+            {run.routedFrom && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="gap-1 text-[10px]">
+                    <Shuffle className="size-3" />
+                    routed from {run.routedFrom}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  {run.routeReason
+                    ? `${run.routedFrom} was skipped — ${run.routeReason}. This agent ran with its own login and its own transcript; it did not inherit the conversation.`
+                    : `${run.routedFrom} was asked for and this agent ran instead.`}
+                </TooltipContent>
+              </Tooltip>
+            )}
             <span className="flex items-center gap-1 tabular-nums">
               <Timer className="size-3.5" />
               {formatDuration(run.durationMs)}

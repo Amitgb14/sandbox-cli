@@ -50,6 +50,8 @@ func finishAgentCmd(cmd *cobra.Command, rf *runFlags, agent string) *cobra.Comma
 	addRunFlags(cmd, rf)
 	rf.persistName = agent
 	cmd.Flags().BoolVar(&rf.noPersistAuth, "no-persist-auth", false, "do not persist the agent login across runs")
+	cmd.Flags().StringSliceVar(&rf.fallback, "fallback", nil,
+		"agents to fall back to, in order, when this one's provider is unavailable (e.g. --fallback codex,gemini)")
 	if cmd.Annotations == nil {
 		cmd.Annotations = map[string]string{}
 	}

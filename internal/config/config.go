@@ -44,6 +44,41 @@ type Config struct {
 	// machine.
 	Engine string `yaml:"engine"`
 
+	// Routing is the ordered list of agents a run falls through when the one it
+	// asked for is unavailable — ["claude", "codex"] meaning "claude, and codex
+	// if the provider behind claude is not answering". Empty means no routing:
+	// the agent that was asked for is the agent that runs, and a provider outage
+	// is a failed run, which is what happened before this existed.
+	//
+	// User-config only, like `runtime` and `engine`, and for a sharper reason
+	// than either: choosing the agent chooses **which credentials are in reach**.
+	// Every adapter has its own persisted HOME and its own EnvAllow, so a
+	// repository that could rewrite this could aim a run at a different agent's
+	// login — a token the user never intended that repository to be near. See
+	// trust.go.
+	Routing []string `yaml:"routing"`
+
+	// Providers overrides which host routing probes for an agent, e.g.
+	// {"opencode": "api.groq.com"}. Empty for an agent means the descriptor's own
+	// ProviderHost, and no host at all means "do not probe".
+	//
+	// It exists because two real setups make the built-in host wrong. `opencode`
+	// is provider-agnostic — its EnvAllow spans five vendors because the user
+	// picks — so there is no host whose health means anything about it until
+	// somebody says which. And an agent pointed at a proxy or a self-hosted
+	// endpoint through ANTHROPIC_BASE_URL or OPENAI_BASE_URL is not talking to
+	// the vendor at all, so the vendor's health is not evidence about it.
+	//
+	// **User-config only, and for a sharper reason than convenience.** A probe
+	// decides which agent a chain skips, so a host that always answers can hold a
+	// dead agent in the chain, and one that never answers can force a fall
+	// through to a different agent — with a different login and a different
+	// credential in reach. That is the same objection as `routing:` arriving by a
+	// different door, so it is refused from a project file the same way. It also
+	// names a host this machine will make a request to, which a repository may
+	// not choose. See trust.go.
+	Providers map[string]string `yaml:"providers"`
+
 	// Profile selects the security profile: "dev" (interactive, warns) or "prod"
 	// (unattended, refuses). See profile.go. A project config may raise this and
 	// never lower it, which is what stops a hostile repository dropping a run out

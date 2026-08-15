@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,6 +77,15 @@ func LoadProfileWith(startDir, explicitPath, flagProfile string, ov Overrides) (
 	}
 	cfg := profileBase(name)
 	cfg.Profile = name
+
+	// Studio-managed provider overrides, *under* the user's own config so a value
+	// typed by hand outranks one clicked in a UI. See loadProviderOverrides.
+	for agent, host := range loadProviderOverrides() {
+		if cfg.Providers == nil {
+			cfg.Providers = map[string]string{}
+		}
+		cfg.Providers[agent] = host
+	}
 
 	if p := userConfigPath(); p != "" {
 		if err := mergeFile(&cfg, p); err != nil {
@@ -446,6 +456,22 @@ func mergeInto(dst *Config, src Config, baseDir string) {
 	if src.Engine != "" {
 		dst.Engine = src.Engine
 	}
+	// Replaced, never appended to. A chain is an ordered decision about which
+	// agent runs first and which is the safety net; merging two would produce an
+	// order nobody wrote, and append would let a nearer file only ever *add*
+	// reach — the same reason `env_allow` is not additive across layers.
+	if len(src.Routing) > 0 {
+		dst.Routing = append([]string(nil), src.Routing...)
+	}
+	// Merged key by key rather than replaced: these are independent facts about
+	// independent agents, so a layer naming opencode should not silently drop a
+	// layer's answer for codex.
+	for agent, host := range src.Providers {
+		if dst.Providers == nil {
+			dst.Providers = map[string]string{}
+		}
+		dst.Providers[agent] = host
+	}
 	if src.PersistAuth != nil {
 		dst.PersistAuth = src.PersistAuth
 	}
@@ -566,3 +592,66 @@ func UserConfigPath() string { return userConfigPath() }
 
 // FindProjectConfig exposes project config discovery for `sandbox-cli config path`.
 func FindProjectConfig(dir string) string { return findProjectConfig(dir) }
+
+// ProviderOverridesPath is the file Studio writes provider overrides into, e.g.
+// ~/.config/sandbox/studio/providers.json. Empty when there is no home to put
+// it in.
+func ProviderOverridesPath() string {
+	dir := StudioDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "providers.json")
+}
+
+// loadProviderOverrides reads that file, or returns nil.
+//
+// It is a *lower* layer than the user's own config.yaml, which inverts the usual
+// "later wins" and is deliberate: a value somebody typed into their config by
+// hand is the more considered statement, and a UI that silently outranked it
+// would make the file a lie. So Studio writes here, config.yaml wins, and the
+// screen says which is in force.
+//
+// A separate file rather than an edit to config.yaml because rewriting a
+// hand-maintained YAML file loses its comments and its ordering — a cost nobody
+// agreed to when they clicked a dropdown.
+func loadProviderOverrides() map[string]string {
+	path := ProviderOverridesPath()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal(data, &out); err != nil {
+		// A cache that went bad must not stop a run: the descriptors still have
+		// hosts, and the worst case is a probe asking the built-in one.
+		return nil
+	}
+	return out
+}
+
+// SaveProviderOverrides writes the map Studio manages, atomically.
+func SaveProviderOverrides(m map[string]string) error {
+	path := ProviderOverridesPath()
+	if path == "" {
+		return fmt.Errorf("cannot determine the sandbox config directory (no HOME?)")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if m == nil {
+		m = map[string]string{}
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
