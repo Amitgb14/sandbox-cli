@@ -23,8 +23,36 @@
 #   --dest DIR       where binaries go           (default: ~/.local/bin)
 #   --token TOK      bearer token to use         (default: generated once)
 #   --api-in-docker  run the API as a container too — read the warning below
+#   --api-only       run the daemon and agents only; prints the URL and token
+#                    for another machine's Studio  (a remote Linux box)
+#   --ui-only        run the browser half only, against a daemon elsewhere
+#   --api-url URL    which daemon the UI talks to  (implies --ui-only)
+#   --bind ADDR      address the daemon listens on  (default: 127.0.0.1)
 #   --no-install     use the binaries already on this machine
 #   --no-pull        do not refresh the image
+#
+# ── Two machines: agents there, browser here ─────────────────────────────────
+#
+# The daemon and the containers can live on another machine while the browser
+# stays in front of you. "Remote" has to mean the *whole* of sandbox-cli is
+# remote: every safety refusal is evaluated against the filesystem it runs on, so
+# a local daemon pointed at a remote docker would validate paths here and mount
+# paths there.
+#
+#   # on the Linux box
+#   sh studio.sh up --api-only
+#
+#   # it prints a URL and a token; on your laptop
+#   sh studio.sh up --api-url http://10.0.0.5:8787
+#
+# or set the same two values in the UI at Settings → Connection, which is what
+# lets one Studio reach several boxes.
+#
+# There is no TLS here. The safe shape is to leave the daemon on loopback and
+# tunnel to it — `ssh -N -L 8787:127.0.0.1:8787 you@box`, then use
+# http://localhost:8787 — which keeps every check in guard.go true. `--bind` is
+# for private networks you already trust; the daemon refuses a routable address
+# with no token.
 #
 # ── The repository it starts in, and the ones you add ────────────────────────
 #
@@ -103,6 +131,17 @@ VERSION=""
 DEST="${HOME}/.local/bin"
 TOKEN="${SANDBOX_STUDIO_TOKEN:-}"
 API_IN_DOCKER=0
+# The two halves, separable. --api-only runs the daemon and its agents (a remote
+# Linux box); --ui-only runs the browser half against a daemon somebody else is
+# running (your laptop). Neither is the default: one machine running both is
+# still the common case.
+API_ONLY=0
+UI_ONLY=0
+API_URL=""
+# --bind is the address the daemon listens on. Loopback unless said otherwise,
+# because binding a routable port is a decision rather than a default — and the
+# daemon itself now refuses one without a token.
+BIND="127.0.0.1"
 NO_INSTALL=0
 NO_PULL=0
 
@@ -141,6 +180,10 @@ while [ $# -gt 0 ]; do
     --dest)          DEST=$(need --dest "${2:-}"); shift 2 ;;
     --token)         TOKEN=$(need --token "${2:-}"); shift 2 ;;
     --api-in-docker) API_IN_DOCKER=1; shift ;;
+    --api-only)      API_ONLY=1; shift ;;
+    --ui-only)       UI_ONLY=1; shift ;;
+    --api-url)       API_URL=$(need --api-url "${2:-}"); UI_ONLY=1; shift 2 ;;
+    --bind)          BIND=$(need --bind "${2:-}"); shift 2 ;;
     --no-install)    NO_INSTALL=1; shift ;;
     --no-pull)       NO_PULL=1; shift ;;
     -h|--help)       sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -456,10 +499,18 @@ start_api_host() {
   # -config is always passed; empty means "discover normally", which is what the
   # flag's own default is, so there is no second code path for the common case.
   # SANDBOX_STUDIO_TOKEN is exported by resolve_token, and -token defaults to it.
+  # -allow-host names the address a browser dials, which for a remote daemon is
+  # not a loopback name — guard.go refuses anything else, and says so. Passed
+  # only when binding off loopback, so the local case keeps exactly the surface
+  # it had.
+  allow_host=""
+  [ "$BIND" = "127.0.0.1" ] || allow_host="$BIND"
+
   nohup "$API_BIN" \
-    -addr "127.0.0.1:${API_PORT}" \
+    -addr "${BIND}:${API_PORT}" \
     -project "$PROJECT" \
     -config "$CONFIG" \
+    ${allow_host:+-allow-host "$allow_host"} \
     -cors-origin "http://localhost:${UI_PORT}" \
     -cors-origin "http://127.0.0.1:${UI_PORT}" \
     >>"$LOGFILE" 2>&1 &
@@ -501,12 +552,74 @@ start_ui() {
   docker run -d \
     --name "$UI_NAME" \
     -p "127.0.0.1:${UI_PORT}:3100" \
-    -e "SANDBOX_API_URL=http://localhost:${API_PORT}" \
+    -e "SANDBOX_API_URL=${API_URL:-http://localhost:${API_PORT}}" \
     -e SANDBOX_STUDIO_TOKEN \
     "$UI_REF" >/dev/null
 }
 
+# do_up_api_only runs the half that owns the containers: sandbox-cli, the daemon,
+# and a token. For a Linux box you drive from somewhere else.
+#
+# It prints the two values the other machine's Settings screen asks for, because
+# that is the whole handover — and prints the token *once*, here, rather than
+# leaving somebody to find it in a file.
+do_up_api_only() {
+  resolve_project
+  resolve_token
+  # Re-running is a restart here too. do_down tolerates a half that was never
+  # started, which is exactly this machine's shape.
+  do_down >/dev/null 2>&1 || true
+  install_binaries
+  (umask 077; mkdir -p "$STATE"; printf '%s\n%s\n' "$UI_PORT" "$API_PORT" > "$PORTFILE")
+
+  info "starting the daemon only (no UI on this machine)"
+  start_api_host
+
+  if wait_for "http://127.0.0.1:${API_PORT}/v1/health"; then
+    info "  api  ${BIND}:${API_PORT}"
+  else
+    tail -n 20 "$LOGFILE" 2>/dev/null | sed 's/^/    /' || true
+    die "the daemon did not come up. The lines above are its own account of why."
+  fi
+
+  info ""
+  info "On the machine with the browser, open Studio → Settings → Connection:"
+  info "  Daemon URL   http://${BIND}:${API_PORT}"
+  info "  Token        ${TOKEN}"
+  info ""
+  if [ "$BIND" = "127.0.0.1" ]; then
+    info "This daemon is on loopback, which is the safe default — reach it with a tunnel:"
+    info "  ssh -N -L ${API_PORT}:127.0.0.1:${API_PORT} $(id -un)@$(hostname)"
+    info "then use http://localhost:${API_PORT} as the Daemon URL."
+  else
+    warn "bound to ${BIND}, and there is no TLS here: the token and everything it
+  protects cross the network in cleartext. Prefer --bind 127.0.0.1 with an SSH
+  tunnel unless this is a private network you trust."
+  fi
+}
+
+# do_up_ui_only runs the browser half against a daemon somebody else is running.
+# No binaries, no pidfile, no local port to wait on — there is nothing here but a
+# container and a URL.
+do_up_ui_only() {
+  require_docker
+  target="${API_URL:-http://localhost:${API_PORT}}"
+  docker rm -f "$UI_NAME" >/dev/null 2>&1 || true
+  [ "$NO_PULL" = 1 ] || { info "  pulling ${UI_REF}"; docker pull -q "$UI_REF" >/dev/null; }
+  (umask 077; mkdir -p "$STATE"; printf '%s\n%s\n' "$UI_PORT" "$API_PORT" > "$PORTFILE")
+
+  API_URL="$target" start_ui
+  info "Studio UI  http://localhost:${UI_PORT}"
+  info "  daemon   ${target}"
+  info ""
+  info "The URL and token can also be set in the UI: Settings → Connection. A value"
+  info "typed there outranks this one, which is what lets one UI reach several boxes."
+}
+
 do_up() {
+  if [ "$UI_ONLY" = 1 ]; then do_up_ui_only; return; fi
+  if [ "$API_ONLY" = 1 ]; then do_up_api_only; return; fi
+
   require_docker
   resolve_project
   resolve_token

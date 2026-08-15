@@ -74,6 +74,11 @@ Removing one forgets it; nothing on disk is touched. The daemon checks each path
 itself — absolute, on disk, a git repository, and never your home directory or
 an ancestor of it — and shows you its own refusal when it declines.
 
+**Forgetting one takes it off the list and nothing else.** Settings →
+Repositories → Forget. The checkout, its branches, its worktrees and any
+containers it has run stay where they are; add it again by path and its history
+comes back with it.
+
 **The repository it was *started* in is the exception.** `-project` is fixed for
 the life of the API process: it is what every screen falls back to and the one
 repository you cannot remove. You do not have to go anywhere to change it —
@@ -92,6 +97,56 @@ One limit: `--api-in-docker` stays single-repository. That container is started
 with only its one project mounted, so a repository added afterwards is a path it
 cannot see — the default, where the API is an ordinary host process, has no such
 limit.
+
+## Agents on another machine, browser on this one
+
+The daemon and its containers can live on a Linux box while the browser stays in
+front of you. "Remote" has to mean the **whole of sandbox-cli is remote**: every
+safety refusal is evaluated against the filesystem it runs on — `RefuseUnsafeHostPath`
+compares device and inode, `GitCommonDir` demands a real git directory, worktree
+paths resolve symlinks on local disk — so a local daemon pointed at a remote
+docker would validate paths here and mount paths there. `DOCKER_HOST` is a
+reserved environment name for the neighbouring reason.
+
+```sh
+# on the remote machine — daemon and agents, no UI
+sh studio.sh up --api-only
+```
+
+It prints the two values the other machine needs:
+
+```
+  Daemon URL   http://127.0.0.1:8787
+  Token        <generated once>
+```
+
+**Leave it on loopback and tunnel.** The daemon keeps binding `127.0.0.1`, so the
+`Host` it sees is still a loopback name, the DNS-rebinding defence still holds,
+and the token still governs — nothing in `guard.go` is relaxed. The transport is
+SSH's, which is a better answer than any TLS this repository would grow.
+
+```sh
+ssh -N -L 8787:127.0.0.1:8787 you@box     # on your machine
+sh studio.sh up --api-url http://localhost:8787
+```
+
+`--bind 10.0.0.5` exposes the daemon directly instead, passing `-allow-host` for
+that address because the daemon answers to loopback names only. Use it on a
+private network you trust: **there is no TLS**, so the token and everything it
+protects cross the network in cleartext. The daemon *refuses* to bind a routable
+address with no token at all — it holds the docker socket, so an unauthenticated
+routable port is root on that machine for whoever reaches it.
+
+**Or set it in the browser.** Settings → Connection takes a Daemon URL and a
+Token, kept in the browser, which is what lets one Studio reach several boxes. A
+value typed there outranks the one the UI was started with — the opposite of the
+token's precedence, and deliberately: an injected token is *this* server saying
+what it is running with, while an injected URL is only a default location.
+
+Every path on screen is then the remote machine's — the repository picker, the
+file browser, the worktree paths, the clone target — and a repository added by
+path names a directory on *that* machine. Which is also why the folder picker
+runs in the daemon.
 
 **Uninstalling needs no copy of `studio.sh`.** The installer that put it there
 takes it away, including the halves that are *running*:

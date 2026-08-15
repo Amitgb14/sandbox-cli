@@ -545,6 +545,29 @@ export function useAddProject() {
   });
 }
 
+/**
+ * Clone and register in one step.
+ *
+ * No optimistic write: a clone takes as long as it takes, and a row that
+ * appeared before the checkout existed would be a repository nothing could read
+ * yet. The daemon answers with the registered project once it is on disk.
+ */
+export function useCloneProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ url, parent, name }: { url: string; parent: string; name?: string }) =>
+      api.cloneProject(url, parent, name),
+    onSuccess: (project) => {
+      qc.invalidateQueries({ queryKey: qk.projects });
+      toast.success(`Cloned ${project.name}`, { description: project.root });
+    },
+    onError: (err) =>
+      toast.error("Could not clone that repository", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  });
+}
+
 /** Forget a repository. The checkout on disk is untouched — this is a list. */
 export function useRemoveProject() {
   const qc = useQueryClient();

@@ -32,7 +32,39 @@ declare global {
   }
 }
 
+/**
+ * Where a *typed* endpoint is kept, and why it outranks the injected one.
+ *
+ * This is the opposite precedence to the token, deliberately, and the difference
+ * is what each injected value actually claims. `SANDBOX_STUDIO_TOKEN` is this
+ * server saying what token it is running with right now — authoritative about
+ * the daemon it was started beside. `SANDBOX_API_URL` is only a *default
+ * location*, and a person typing an address in Settings is saying "not that
+ * machine, this one". If injection won there, the field could not do the one
+ * job it exists for: pointing a locally installed UI at a daemon on another
+ * host, which the local server's environment knows nothing about.
+ */
+export const API_STORAGE_KEY = "sandbox-studio-api";
+
+/** The endpoint someone typed, or "" — browser only, and never during SSR. */
+export function storedApiBase(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(API_STORAGE_KEY) ?? "";
+}
+
+export function setStoredApiBase(url: string) {
+  if (typeof window === "undefined") return;
+  if (url) window.localStorage.setItem(API_STORAGE_KEY, url);
+  else window.localStorage.removeItem(API_STORAGE_KEY);
+}
+
 export function apiBase(): string {
+  // A typed endpoint first. Read only in the browser: this function also runs
+  // during SSR, where localStorage does not exist and where returning a
+  // different value than the client would produce a hydration mismatch on every
+  // screen that prints the endpoint.
+  const stored = storedApiBase();
+  if (stored) return stored;
   if (typeof window !== "undefined" && window.__SANDBOX_API__) {
     return window.__SANDBOX_API__;
   }

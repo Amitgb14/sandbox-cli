@@ -140,6 +140,51 @@ version is tagged.
   being reaped, which is when reviewing usually happens. The two screens link to
   each other on the same branch. New endpoints: `?branch=` on `GET /v1/files` and
   `GET /v1/files/content`, and `GET /v1/worktrees/{branch}/diff`.
+- **Run the daemon on another machine and the browser on this one.**
+  `studio.sh up --api-only` installs sandbox-cli and the daemon on a remote Linux
+  box, starts it, and prints a URL and a token; `studio.sh up --api-url URL`
+  starts the browser half alone against it. The same two values can be typed into
+  **Settings → Connection**, kept in the browser, which is what lets one Studio
+  reach several machines — a typed URL outranks the one the UI was started with,
+  the opposite of the token's precedence and for a stated reason.
+
+  "Remote" means the *whole* of sandbox-cli is remote. Every safety refusal is
+  evaluated against the filesystem it runs on, so a local daemon pointed at a
+  remote docker would validate paths here and mount paths there.
+
+  The recommended shape needs no new trust: leave the daemon on loopback and
+  tunnel to it, so the `Host` it sees is still a loopback name and nothing in the
+  guard is relaxed. `--bind ADDR` exposes it directly for a private network,
+  passing `-allow-host` for that address.
+
+- **The daemon now refuses a routable address with no token**, rather than
+  warning and serving anyway. It holds the docker socket, so an unauthenticated
+  routable port is root on that machine for anyone who can reach it — and a
+  warning is not a control when the deployment it protects is the one nobody is
+  watching. Loopback is unchanged.
+
+- **Forget a repository, in Settings → Repositories.** The daemon could already
+  do it; nothing in the UI reached the control. The button says **Forget** rather
+  than Remove or Delete, and the confirmation names the path it is *not*
+  touching: Studio holds a list of directories it will answer about, and taking
+  one off that list leaves the checkout, its branches, its worktrees and its
+  containers exactly where they are. Add it again by path and its history comes
+  back with it. The repository the daemon was started in cannot be forgotten —
+  it would be back on the next listing — and the button says so instead of
+  failing.
+- **Clone from git in Add repository.** A second tab takes a URL and clones into
+  the directory you are browsing, then registers the result — one step instead of
+  a terminal and a second visit. It is the only thing in the API that writes to
+  the host filesystem and runs a program, so the refusals are the feature: the
+  transport is **allowlisted** (https, ssh, `git@host:path`) rather than
+  filtered, because `git clone 'ext::sh -c whoami'` executes a command and a
+  denylist would be a guess at the next transport; nothing that looks like a flag
+  is accepted; the destination takes the same checks a typed path does and must
+  not already exist; submodules are not fetched, since they name URLs the
+  repository chose rather than you; and **no saved credential is spent** — a
+  private HTTPS repository fails rather than quietly drawing on a keychain entry
+  saved for a terminal, though an ssh-agent will answer. A failed clone removes
+  its partial directory.
 - **A folder picker for Add repository**, so a path can be browsed to instead of
   typed. It runs in the daemon rather than the browser, and that is forced rather
   than chosen: a directory input yields relative paths and `showDirectoryPicker()`

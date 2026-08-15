@@ -123,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/routing/providers", s.handleSetProviders)
 	mux.HandleFunc("GET /v1/projects", s.handleListProjects)
 	mux.HandleFunc("POST /v1/projects", s.handleCreateProject)
+	mux.HandleFunc("POST /v1/projects/clone", s.handleCloneProject)
 	mux.HandleFunc("DELETE /v1/projects/{id}", s.handleDeleteProject)
 	mux.HandleFunc("GET /v1/browse", s.handleBrowse)
 	mux.HandleFunc("GET /v1/files", s.handleListFiles)

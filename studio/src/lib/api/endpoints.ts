@@ -148,6 +148,21 @@ export const api = {
       liveOnly: true,
     }),
 
+  /**
+   * Clone a repository and register it.
+   *
+   * The one call in this client that makes the daemon write to the host and run
+   * a program. Every refusal lives there — the transport allowlist (`ext::`
+   * executes a command rather than fetching), the target's own checks, and no
+   * stored credential being spent — so this only carries the answer back.
+   */
+  cloneProject: (url: string, parent: string, name?: string) =>
+    request<Project>("/v1/projects/clone", {
+      method: "POST",
+      body: { url, parent, ...(name ? { name } : {}) },
+      liveOnly: true,
+    }),
+
   /** Forget a repository. Nothing on disk is touched. */
   removeProject: (id: string) =>
     request<void>(`/v1/projects/${encodeURIComponent(id)}`, {

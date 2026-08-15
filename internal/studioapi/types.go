@@ -209,6 +209,24 @@ type ProjectCreateRequest struct {
 	Path string `json:"path"`
 }
 
+// ProjectCloneRequest is the body of POST /projects/clone.
+//
+// The one request in this API that makes the daemon write to the host filesystem
+// and run a program, which is why the handler's refusals are the substance of it
+// — see internal/studioapi/clone.go.
+type ProjectCloneRequest struct {
+	// URL is the repository to clone. https, ssh, or git@host:path; everything
+	// else is refused, `ext::` above all, because it executes a command rather
+	// than fetching a repository.
+	URL string `json:"url"`
+	// Parent is the absolute directory to clone *into*. It must exist and pass
+	// the same refusals a typed project path does.
+	Parent string `json:"parent"`
+	// Name is the directory to create inside it. Empty takes git's own answer:
+	// the last path segment without .git.
+	Name string `json:"name,omitempty"`
+}
+
 // AgentInfo describes one agent adapter sandbox-cli knows how to launch
 // headlessly. Only agents with a verified non-interactive mode are ever listed —
 // see internal/agents' package doc — because a Studio-launched run is always

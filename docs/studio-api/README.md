@@ -149,6 +149,7 @@ there is no code generation step (yet) tying them together.
 | POST | `/v1/routing/providers` | Set which host is probed for an agent |
 | GET | `/v1/projects` | Repositories this daemon answers about — the one it was started in, plus every one added |
 | POST | `/v1/projects` | Add a repository by host path (**the only endpoint that accepts one**) |
+| POST | `/v1/projects/clone` | Clone a repository and register it — the only write to the host filesystem |
 | DELETE | `/v1/projects/{id}` | Forget a repository. Nothing on disk is touched; the started-in one is refused |
 | GET | `/v1/browse` | Directories on the host, for the Add-repository folder picker (`?path=`) |
 | GET | `/v1/files` | List one directory of a repository (`?repo=`, `?branch=`, `?path=`) |
@@ -306,6 +307,54 @@ The rule, as everywhere else: **a request names a session by id, never by path.*
 The daemon resolves the id against the stores `internal/agentctx` has verified.
 `path` is reported so a raw view can say what it is showing; it is never accepted
 back.
+
+### Running the daemon on another machine
+
+Supported, and the shape that needs no new trust is a tunnel: the daemon keeps
+binding loopback, so the `Host` it sees is a loopback name, the rebinding defence
+holds and the token still governs.
+
+```sh
+ssh -N -L 8787:127.0.0.1:8787 you@box
+```
+
+Binding a routable address instead requires `-token` — the daemon **refuses to
+start without one**, because it holds the docker socket and an unauthenticated
+routable port is root on that host — plus `-allow-host` for the name the browser
+dials and `-cors-origin` for the page's origin. There is no TLS: off loopback the
+token and everything it protects are in cleartext, so this is for a private
+network or a reverse proxy that terminates TLS in front.
+
+What must *not* be done instead is pointing a local daemon at a remote docker.
+Every refusal here is evaluated against the filesystem this process runs on, so
+that arrangement validates paths on one machine and mounts them on another.
+
+### Cloning
+
+`POST /v1/projects/clone` is the **only endpoint that writes to the host
+filesystem and runs a program**, so its refusals are the substance of it:
+
+- **The transport is allowlisted, not filtered** — https, ssh, and
+  `git@host:path`. `ext::` is why: `git clone 'ext::sh -c whoami'` is documented
+  git behaviour and executes a command, and a denylist of that one string would
+  be a guess at the shape of the next transport. `git://` and `http://` are
+  refused as cleartext, `file://` as local.
+- **Nothing may look like a flag.** A URL or a name starting with `-` becomes an
+  option rather than an operand; `--` separates them too.
+- **The destination takes the same refusals a typed path does** — an absolute,
+  existing parent past `RefuseUnsafeHostPath`, a single path segment for the
+  name, and a target that does not already exist. Resolving where a clone *would*
+  go writes nothing.
+- **Submodules are not fetched**: they name further URLs chosen by the repository
+  rather than by the person asking.
+- **No saved credential is spent.** `githard` already sets `credential.helper=`,
+  and `GIT_TERMINAL_PROMPT=0` makes it fail rather than hang — so a private HTTPS
+  repository does not clone from here, which is the honest outcome for an HTTP
+  request. An **ssh-agent will answer**, which is the same authority the person
+  driving it already has and is worth knowing before exposing the daemon.
+
+A failed clone removes its partial directory, so the next attempt fails on the
+URL rather than on "already exists".
 
 ### Picking a repository to add
 

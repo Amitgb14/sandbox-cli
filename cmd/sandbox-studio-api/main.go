@@ -33,6 +33,20 @@ func (c *repeatedFlag) Set(v string) error {
 	return nil
 }
 
+// hostOf is the host half of a listen address, for a message that suggests a
+// tunnel to it. Empty or wildcard addresses have no name worth printing, so they
+// become a placeholder the reader substitutes.
+func hostOf(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return "your-host"
+	}
+	return host
+}
+
 // loopbackAddr reports whether a listen address keeps this server reachable only
 // from this machine. An empty or wildcard host ("", "0.0.0.0", "::") does not.
 func loopbackAddr(addr string) bool {
@@ -132,6 +146,24 @@ func run() error {
 		return err
 	}
 	srv.CORSOrigins = origins
+	// Off loopback with no token is refused rather than warned about.
+	//
+	// This process holds the docker socket, so anything that can reach the port
+	// and be answered can start a container mounting `/` — root on this machine.
+	// The token is the only thing standing between a routable port and that, and
+	// a warning is not a control: the deployment it protects is the one nobody is
+	// watching. Loopback keeps its old behaviour, where the operating system is
+	// the boundary and an unauthenticated daemon is a reasonable default.
+	if !loopbackAddr(addr) && token == "" {
+		fmt.Fprintf(os.Stderr,
+			"sandbox-studio-api: refusing to listen on %s without -token.\n"+
+				"  This process can start containers with the docker socket, so an unauthenticated\n"+
+				"  routable port is root on this machine for anyone who can reach it.\n"+
+				"  Set -token (or $SANDBOX_STUDIO_TOKEN), or bind a loopback address and reach it\n"+
+				"  through an SSH tunnel: ssh -N -L 8787:127.0.0.1:8787 you@%s\n", addr, hostOf(addr))
+		os.Exit(2)
+	}
+
 	srv.Token = token
 	srv.AllowedHosts = hosts
 
@@ -182,7 +214,8 @@ func run() error {
 			// Said once, at the moment it becomes true, because the whole trust model
 			// below this line assumes only this machine can open a connection.
 			log.Printf("sandbox-studio-api: %s is not a loopback address — anything that can route to this "+
-				"host can now ask it to start containers; set -token, and -allow-host for the name you reach it by", addr)
+				"host can now ask it to start containers; there is no TLS here, so the token and "+
+				"everything it protects cross the network in cleartext", addr)
 		}
 		// Stated rather than assumed, in both directions: a refresh costs a request
 		// from the subscription it reports on, and a deployment that cannot refresh
