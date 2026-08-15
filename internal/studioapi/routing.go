@@ -49,8 +49,15 @@ var providers providerCache
 // its provider is answering, and what a chain may contain.
 func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, RoutingResponse{
-		Providers: probeAll(r.Context(), s.Session.Cfg.Providers, r.URL.Query().Has("refresh")),
+		Providers: probeAll(r.Context(), runningProviders(s), r.URL.Query().Has("refresh")),
 	})
+}
+
+// overriddenFor reports whether the user has an opinion recorded for this agent,
+// where an empty value is an opinion.
+func overriddenFor(overrides map[string]string, agent string) bool {
+	_, ok := overrides[agent]
+	return ok
 }
 
 // probeAll asks every routable agent's provider, or returns the recent answer.
@@ -79,10 +86,12 @@ func probeAll(ctx context.Context, overrides map[string]string, force bool) []Pr
 		out[i] = ProviderStatus{
 			Agent: name,
 			Host:  host,
-			// Whether this host came from the user rather than from the
-			// descriptor, so a screen can offer to change it and can say which
-			// agents have nothing compiled in to begin with.
-			Overridden: overrides[name] != "" && overrides[name] == host,
+			// Whether the user said something about this agent — including
+			// saying "" for *do not probe this one*, which is a real setting and
+			// not an absence. Reporting that as un-overridden made the UI rebuild
+			// its map from the overridden rows only, so the next edit of any other
+			// agent silently dropped every do-not-probe entry and resumed probing.
+			Overridden: overriddenFor(overrides, name),
 			// An agent with no verified non-interactive mode cannot be routed to
 			// at all, and saying so here is what stops a UI offering it in a chain
 			// that would hang the moment it fired.
@@ -160,13 +169,13 @@ func (s *Server) handleSetProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	// The running server holds a resolved config, so the change has to reach it
 	// too or the next probe would use the old host until a restart.
-	s.Session.Cfg.Providers = mergedProviders(s.Session.Cfg.Providers, clean)
+	setRunningProviders(s, mergedProviders(runningProviders(s), clean))
 
 	// Forced: the point of setting a host is to find out whether it answers, and
 	// a cached "not checked" would sit there for thirty seconds looking like the
 	// setting had not taken.
 	writeJSON(w, http.StatusOK, RoutingResponse{
-		Providers: probeAll(r.Context(), s.Session.Cfg.Providers, true),
+		Providers: probeAll(r.Context(), runningProviders(s), true),
 	})
 }
 
@@ -202,4 +211,25 @@ func validProviderHost(host string) error {
 		return fmt.Errorf("%q is not a valid hostname", host)
 	}
 	return nil
+}
+
+// The provider overrides the running server is using.
+//
+// Guarded because they are written by one HTTP handler and read by others: the
+// resolved config is otherwise a plain struct field, and a map assigned during a
+// POST while a concurrent GET ranges over it is a data race rather than merely a
+// stale read. The same reason internal/creds guards its warn-once state — this
+// package answers requests in parallel and the CLI does not.
+var providerMu sync.RWMutex
+
+func runningProviders(s *Server) map[string]string {
+	providerMu.RLock()
+	defer providerMu.RUnlock()
+	return s.Session.Cfg.Providers
+}
+
+func setRunningProviders(s *Server, m map[string]string) {
+	providerMu.Lock()
+	defer providerMu.Unlock()
+	s.Session.Cfg.Providers = m
 }

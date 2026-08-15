@@ -117,11 +117,20 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 	if handled, err := wrapperSubcommand(cmd, rf, guest, explicit); handled {
 		return err
 	}
+	// The mounts the *user* asked for, captured before afterParse adds the
+	// wrapper's own. The claude wrapper appends the host's Claude history and its
+	// managed-settings file here, and those belong to claude alone — a fallback
+	// re-targeted at codex must not inherit them.
+	userMounts := append([]string(nil), rf.mounts...)
+
 	if afterParse != nil {
 		if err := afterParse(); err != nil {
 			return err
 		}
 	}
+	// Likewise the user's own --env-allow, before the wrapper's suggested list is
+	// folded in: those names are this agent's, and a fallback brings its own.
+	userEnvAllow := append([]string(nil), rf.envAllow...)
 	rf.envAllow = append(rf.envAllow, envAllow...)
 	announceBroadCredentials(envAllow)
 	// An abbreviated session id from `context list` is expanded here, because the
@@ -139,7 +148,7 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 	// in internal/agents, since a fallback has to be re-targetable and only a
 	// descriptor says how. Those take the path they always took.
 	if agent := cmd.Annotations[agentAnnotation]; agent != "" {
-		return routedRun(rf, agent, guest, full)
+		return routedRun(rf, agent, guest, full, userMounts, userEnvAllow)
 	}
 	return execute(rf, full)
 }

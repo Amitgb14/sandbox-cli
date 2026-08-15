@@ -186,7 +186,9 @@ while [ $# -gt 0 ]; do
     --bind)          BIND=$(need --bind "${2:-}"); shift 2 ;;
     --no-install)    NO_INSTALL=1; shift ;;
     --no-pull)       NO_PULL=1; shift ;;
-    -h|--help)       sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # The header comment, however long it has grown: a fixed line range silently
+    # truncated --help mid-sentence every time a section was added.
+    -h|--help)       sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1  (try --help)" ;;
   esac
 done
@@ -575,7 +577,10 @@ do_up_api_only() {
   info "starting the daemon only (no UI on this machine)"
   start_api_host
 
-  if wait_for "http://127.0.0.1:${API_PORT}/v1/health"; then
+  # Probed where it actually listens. A --bind daemon is not on 127.0.0.1, so a
+  # hardcoded loopback check reported "did not come up" for a daemon that had
+  # come up perfectly — on exactly the flag combination this mode exists for.
+  if wait_for "http://${BIND}:${API_PORT}/v1/health"; then
     info "  api  ${BIND}:${API_PORT}"
   else
     tail -n 20 "$LOGFILE" 2>/dev/null | sed 's/^/    /' || true

@@ -288,8 +288,9 @@ export function useFileContent(path: string | null, branch?: string) {
  * writing into that worktree as you read — slowly, since a diff is a review
  * surface rather than a live view.
  */
-export function useWorktreeDiff(branch: string | null) {
-  const repo = useScopedRepo();
+export function useWorktreeDiff(branch: string | null, repoId?: string) {
+  const scoped = useScopedRepo();
+  const repo = repoId || scoped;
   return useQuery({
     queryKey: qk.worktreeDiff(branch ?? "", repo),
     queryFn: () => api.worktreeDiff(branch as string, repo),

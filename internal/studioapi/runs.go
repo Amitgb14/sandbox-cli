@@ -193,6 +193,24 @@ func (s *Server) buildRunOptions(r *http.Request, req RunCreateRequest) (sandbox
 		// say next.
 		return sandbox.Options{}, errors.New("resume needs console: resuming a conversation is something you do interactively")
 	}
+	if req.Console && len(req.Fallback) > 0 {
+		// Routing changes which agent runs, and a console run's argv is built from
+		// the *chosen* agent's descriptor — so a gate applied to the requested one
+		// proves nothing. Rather than gate twice and hope, the combination is
+		// refused: an interactive session is something somebody is watching, and
+		// silently attaching them to a different agent than they picked is worse
+		// than asking them to pick again.
+		return sandbox.Options{}, errors.New(
+			"console and fallback cannot be combined: routing would start a different agent than the one you are about to attach to, " +
+				"and an interactive session is the case where that matters most")
+	}
+	if req.Resume != "" && len(req.Fallback) > 0 {
+		// A session id is a primary key into one vendor's store. Resuming it with
+		// another agent cannot work — see internal/handoff — so the request is
+		// refused rather than routed into a failure inside the container.
+		return sandbox.Options{}, errors.New(
+			"resume and fallback cannot be combined: a session id belongs to the agent that wrote it, and another agent cannot reopen it")
+	}
 	if req.Console && req.Prompt != "" && req.Agent != "" {
 		if d, ok := agents.Lookup(req.Agent); ok && !d.CanSeedConsole() {
 			// Refused rather than dropped. Silently starting the session without

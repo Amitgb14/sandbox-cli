@@ -45,7 +45,7 @@ import (
 // primary is the agent the wrapper was invoked as; guestArgs are the arguments
 // after the agent's own command (the prompt and its flags), which are re-applied
 // to whichever agent ends up running.
-func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string) error {
+func routedRun(rf *runFlags, primary string, guestArgs, unrouted, userMounts, userEnvAllow []string) error {
 	fallbacks, err := configuredFallbacks(rf, primary)
 	if err != nil {
 		return err
@@ -82,6 +82,15 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string) error
 	ctx := context.Background()
 	var skipped []string
 	var carried *handoff.Export
+	// One briefing directory per failover, removed when the run is over. It is a
+	// mount for the container's lifetime, so it cannot go earlier — and leaving
+	// them behind would litter the temp directory once per outage.
+	var briefings []string
+	defer func() {
+		for _, d := range briefings {
+			os.RemoveAll(d)
+		}
+	}()
 	var routedFrom, routeReason string
 
 	// One id for the whole episode, minted before the first attempt so the agent
@@ -99,12 +108,14 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string) error
 	providerHosts := configuredProviders(rf)
 
 	// What the user actually asked the agent to do, recovered from their own
-	// arguments so it can be re-expressed in another agent's spelling. See
-	// promptFrom for the rule and for what it refuses.
-	prompt, err := promptFrom(guestArgs, len(chain) > 1)
-	if err != nil {
-		return err
-	}
+	// arguments so it can be re-expressed in another agent's spelling.
+	//
+	// Not an error here, even when it cannot be recovered: the *primary* runs the
+	// argv the user typed, whatever shape it has, and only a fallback needs the
+	// task re-expressed. Refusing up front turned an ordinary interactive run
+	// (`sandbox-cli claude --dangerously-skip-permissions`, with a chain in the
+	// user's config) into a hard failure before anything launched.
+	prompt, promptErr := promptFrom(guestArgs)
 
 	for i, name := range chain {
 		d, ok := agents.Lookup(name)
@@ -114,7 +125,12 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string) error
 
 		// Probe every candidate, including the first: the whole point is to find
 		// out before starting that claude is down.
-		if avail := routing.Probe(ctx, name, providerHosts); !avail.Reachable {
+		//
+		// Except under --dry-run, which is asked to *show* a command rather than
+		// decide anything. Reaching the network there would make a preview depend
+		// on a provider's health, and could refuse to print an argv somebody only
+		// wanted to read.
+		if avail := probeUnlessDryRun(ctx, rf, name, providerHosts); !avail.Reachable {
 			skipped = append(skipped, fmt.Sprintf("%s (%s)", name, avail.Reason))
 			fmt.Fprintf(os.Stderr, "sandbox-cli: skipping %s — %s\n", name, avail.Reason)
 			if i == len(chain)-1 {
@@ -132,10 +148,23 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string) error
 		// allowlist. All three, or the fallback runs as itself with somebody
 		// else's login mounted.
 		attempt := *rf
-		attempt.persistName = d.PersistDir
-		attempt.envAllow = append(append([]string{}, rf.envAllow...), d.EnvAllow...)
 		attempt.routedFrom, attempt.routeReason = routedFrom, routeReason
 		attempt.routeID, attempt.routeAttempt = episode, i+1
+		if i > 0 {
+			// A fallback is re-targeted in *four* places, and every one of them is
+			// load-bearing: the persisted HOME (its own login), the env allowlist
+			// (its own forwarded names), the container env the descriptor sets —
+			// droid's FACTORY_DISABLE_KEYRING is exactly the unattended-login
+			// failure internal/agents documents — and the mounts, which are reset
+			// to the user's own so the primary wrapper's agent-specific reach does
+			// not travel. Without that last one a claude → codex failover
+			// bind-mounts the host's Claude history into a codex container that was
+			// never asked to have it.
+			attempt.persistName = d.PersistDir
+			attempt.envAllow = append(append([]string{}, userEnvAllow...), d.EnvAllow...)
+			attempt.env = append(append([]string{}, rf.env...), d.Env...)
+			attempt.mounts = append([]string(nil), userMounts...)
+		}
 
 		// The argv. The primary keeps exactly what the user typed; a fallback is
 		// rebuilt **from the prompt**, because agent flags do not travel: claude's
@@ -144,6 +173,19 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string) error
 		// a way nobody would connect to routing.
 		argv := unrouted
 		if i > 0 {
+			if promptErr != nil {
+				// The point at which it stops being recoverable: this agent needs the
+				// task in its own spelling and there is none to give it.
+				return promptErr
+			}
+			// The briefing, mounted read-only where its prompt says it is. Written
+			// beside the argv rather than anywhere else because the two are one
+			// statement: an agent told to read /sandbox/context and handed no such
+			// mount would burn turns looking for it.
+			if carried != nil {
+				attempt.mounts = append(attempt.mounts,
+					carried.Dir+":"+handoff.GuestDir+":ro")
+			}
 			built, perr := autonomousArgv(d, prompt, carried)
 			if perr != nil {
 				return perr
@@ -190,6 +232,7 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string) error
 		// improve.
 		if ex := prepareHandoff(&attempt, name); ex != nil {
 			carried = ex
+			briefings = append(briefings, ex.Dir)
 		}
 	}
 	return nil
@@ -214,22 +257,21 @@ func baseBranchFor(rf *runFlags) string {
 // not a flag**. That covers what people actually type — `-p "do X"`,
 // `--dangerously-skip-permissions "do X"`, a bare `"do X"` — and nothing else.
 //
-// When a chain is in play and the last argument *is* a flag, this refuses rather
-// than guessing. Flags do not travel between agents (claude's headless mode is
+// When the last argument *is* a flag this reports an error rather than guessing —
+// but the caller only acts on it at the moment a fallback has to be built, since
+// the primary runs the argv as typed and an interactive run whose last argument
+// is a flag is perfectly ordinary. Flags do not travel between agents (claude's headless mode is
 // `-p <prompt>`, codex's is `exec <prompt>`), so a fallback has to be rebuilt
 // from the prompt — and a wrong guess would send the next agent a flag value as
 // though it were the task. Refusing costs a re-run; guessing costs an agent
 // confidently doing the wrong thing with file-writing tools.
-func promptFrom(guestArgs []string, routing bool) (string, error) {
+func promptFrom(guestArgs []string) (string, error) {
 	if len(guestArgs) == 0 {
 		return "", nil // an interactive run: there is no prompt to carry
 	}
 	last := guestArgs[len(guestArgs)-1]
 	if !strings.HasPrefix(last, "-") {
 		return last, nil
-	}
-	if !routing {
-		return "", nil
 	}
 	return "", fmt.Errorf(
 		"cannot route this run: the task has to be re-expressed for a fallback agent, and the last argument (%q) is a flag rather than a prompt.\n"+
@@ -380,6 +422,19 @@ func configuredProviders(rf *runFlags) map[string]string {
 		return nil
 	}
 	return cfg.Providers
+}
+
+// probeUnlessDryRun answers the availability question, or declines to ask it.
+//
+// A dry run prints the command a real run would build; it starts nothing, so
+// there is nothing for a provider's health to decide. Reporting "reachable,
+// unprobed" keeps the preview on the primary — which is the agent the printed
+// argv is for.
+func probeUnlessDryRun(ctx context.Context, rf *runFlags, agent string, hosts map[string]string) routing.Availability {
+	if rf.dryRun {
+		return routing.Availability{Agent: agent, Reachable: true}
+	}
+	return routing.Probe(ctx, agent, hosts)
 }
 
 // announceRoute says that a different agent is running than the one typed.
