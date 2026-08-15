@@ -45,7 +45,59 @@ import (
 // primary is the agent the wrapper was invoked as; guestArgs are the arguments
 // after the agent's own command (the prompt and its flags), which are re-applied
 // to whichever agent ends up running.
-func routedRun(rf *runFlags, primary string, guestArgs, unrouted, userMounts, userEnvAllow []string) error {
+// userInputs is what the *user* asked for, held apart from what the wrapper
+// added on top.
+//
+// The distinction only exists because of routing, and it cannot be recovered
+// afterwards: by the time a run reaches the loop, `--mount /notes` and the
+// claude wrapper's own history mount are two strings in the same slice. A
+// fallback needs the first and must not inherit the second, so each is captured
+// at the point where the two are still separable (see runWrapper).
+type userInputs struct {
+	mounts   []string
+	env      []string
+	envAllow []string
+}
+
+// retarget builds the flags for a fallback attempt: the same run, aimed at a
+// different agent.
+//
+// Four things change, and every one of them is load-bearing — this is the whole
+// difference between `--fallback codex` and "claude's container with codex's
+// binary in it":
+//
+//   - the persisted HOME, so the fallback finds its own login rather than
+//     somebody else's;
+//   - the env allowlist, so its own host variables are forwarded and the
+//     primary's are not;
+//   - the container env the descriptor sets — droid's FACTORY_DISABLE_KEYRING is
+//     exactly the unattended-login failure internal/agents documents;
+//   - the mounts, reset to the user's own so the primary wrapper's
+//     agent-specific reach does not travel. Without this a claude → codex
+//     failover bind-mounts the host's Claude history into a codex container that
+//     was never asked to have it.
+//
+// The briefing is the fifth, and it belongs here rather than beside the argv
+// because the two are one statement: an agent told to read /sandbox/context and
+// handed no such mount burns its turns looking for a directory that does not
+// exist. That is exactly the shape this function exists to prevent — every
+// omission in this list fails *silently*, with a container that starts fine and
+// an agent that is simply missing something.
+//
+// Everything else about the run — the workspace, the profile, the network
+// posture, the caps — is carried unchanged. It describes the run, not the agent.
+func retarget(base runFlags, d agents.Descriptor, user userInputs, carried *handoff.Export) runFlags {
+	base.persistName = d.PersistDir
+	base.envAllow = append(append([]string(nil), user.envAllow...), d.EnvAllow...)
+	base.env = append(append([]string(nil), user.env...), d.Env...)
+	base.mounts = append([]string(nil), user.mounts...)
+	if carried != nil {
+		base.mounts = append(base.mounts, carried.Dir+":"+handoff.GuestDir+":ro")
+	}
+	return base
+}
+
+func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string, user userInputs) error {
 	fallbacks, err := configuredFallbacks(rf, primary)
 	if err != nil {
 		return err
@@ -144,26 +196,11 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted, userMounts, us
 			announceRoute(primary, name, skipped)
 		}
 
-		// Re-target: the descriptor's command, its persisted HOME, its env
-		// allowlist. All three, or the fallback runs as itself with somebody
-		// else's login mounted.
 		attempt := *rf
 		attempt.routedFrom, attempt.routeReason = routedFrom, routeReason
 		attempt.routeID, attempt.routeAttempt = episode, i+1
 		if i > 0 {
-			// A fallback is re-targeted in *four* places, and every one of them is
-			// load-bearing: the persisted HOME (its own login), the env allowlist
-			// (its own forwarded names), the container env the descriptor sets —
-			// droid's FACTORY_DISABLE_KEYRING is exactly the unattended-login
-			// failure internal/agents documents — and the mounts, which are reset
-			// to the user's own so the primary wrapper's agent-specific reach does
-			// not travel. Without that last one a claude → codex failover
-			// bind-mounts the host's Claude history into a codex container that was
-			// never asked to have it.
-			attempt.persistName = d.PersistDir
-			attempt.envAllow = append(append([]string{}, userEnvAllow...), d.EnvAllow...)
-			attempt.env = append(append([]string{}, rf.env...), d.Env...)
-			attempt.mounts = append([]string(nil), userMounts...)
+			attempt = retarget(attempt, d, user, carried)
 		}
 
 		// The argv. The primary keeps exactly what the user typed; a fallback is
@@ -177,14 +214,6 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted, userMounts, us
 				// The point at which it stops being recoverable: this agent needs the
 				// task in its own spelling and there is none to give it.
 				return promptErr
-			}
-			// The briefing, mounted read-only where its prompt says it is. Written
-			// beside the argv rather than anywhere else because the two are one
-			// statement: an agent told to read /sandbox/context and handed no such
-			// mount would burn turns looking for it.
-			if carried != nil {
-				attempt.mounts = append(attempt.mounts,
-					carried.Dir+":"+handoff.GuestDir+":ro")
 			}
 			built, perr := autonomousArgv(d, prompt, carried)
 			if perr != nil {
