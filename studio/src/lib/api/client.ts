@@ -24,6 +24,11 @@ const listeners = new Set<(m: TransportMode) => void>();
 function setMode(next: TransportMode) {
   if (mode === next) return;
   mode = next;
+  // Declared below; hoisted, and this is the one place both transitions are
+  // visible, so keeping the timer's lifetime here means it cannot be left
+  // running after the daemon comes back.
+  if (next === "fixture") startRecheck();
+  if (next === "live") stopRecheck();
   listeners.forEach((l) => l(next));
 }
 
@@ -43,6 +48,44 @@ export function reconnect(): void {
 }
 
 const PROBE_TIMEOUT_MS = 1200;
+
+/**
+ * How often a page that believes it is offline asks again.
+ *
+ * The probe is cached for the life of the page, which is right while the daemon
+ * is *there* — the alternative is a failed fetch in front of every panel. It is
+ * wrong once it has said no: a tab opened while the API was restarting shows
+ * fixtures forever, on every screen, and the only way out is a reload nobody
+ * knows to do. Worse, the fixtures are plausible — they were authored from a
+ * real repository — so the tab does not look broken, it looks like six agents
+ * have been running for eight months.
+ *
+ * So the offline state, and only the offline state, is rechecked on a timer. One
+ * request every fifteen seconds to a loopback port, and it stops the moment the
+ * answer changes.
+ */
+const OFFLINE_RECHECK_MS = 15_000;
+
+let recheckTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopRecheck() {
+  if (recheckTimer !== null) {
+    clearInterval(recheckTimer);
+    recheckTimer = null;
+  }
+}
+
+function startRecheck() {
+  if (recheckTimer !== null || typeof window === "undefined") return;
+  recheckTimer = setInterval(() => {
+    if (mode === "live") {
+      stopRecheck();
+      return;
+    }
+    probe = null; // forget the cached "no" so the next probe actually asks
+    void probeDaemon();
+  }, OFFLINE_RECHECK_MS);
+}
 
 async function probeDaemon(): Promise<TransportMode> {
   if (typeof window === "undefined") return "fixture";
@@ -84,8 +127,28 @@ interface RequestOptions<T> {
    * The fixture for this endpoint. Required — an endpoint with no fixture is one
    * that breaks the app the moment the daemon is not running, which during
    * frontend development is always.
+   *
+   * Unless `liveOnly` says otherwise. See below: the rule is right for reads and
+   * wrong for a write whose whole purpose is to change what a later read says.
    */
-  fixture: () => T | Promise<T>;
+  fixture?: () => T | Promise<T>;
+  /**
+   * Refuse rather than fake when no daemon answered.
+   *
+   * A read's fixture is a stand-in for an answer, and the header says so. A
+   * *write's* fixture is something else: it reports that state changed when
+   * nothing did, and the next read — served by the same fixtures — cannot show
+   * the change, because there was none. "Added ~/code/thing" followed by a list
+   * that does not contain it is exactly that, and it reads as a broken feature
+   * rather than as a missing daemon.
+   *
+   * So the endpoints whose point is to change what a later read returns carry
+   * this instead of a fixture. The other mutations do not: launching, stopping
+   * and killing a run are *demonstrable* without a daemon — the toast is the
+   * whole of what a fixture-mode user expects from them, and no list is claiming
+   * afterwards that it happened.
+   */
+  liveOnly?: boolean;
   /** Simulated latency for the fixture path, so loading states are real. */
   latencyMs?: number;
   signal?: AbortSignal;
@@ -106,7 +169,21 @@ interface RequestOptions<T> {
 }
 
 export async function request<T>(path: string, opts: RequestOptions<T>): Promise<T> {
-  const resolved = await probeDaemon();
+  let resolved = await probeDaemon();
+
+  // A write is a strong signal that a cached "offline" may be stale, so re-probe
+  // before refusing one.
+  //
+  // The probe is cached for the life of the page, which is right for reads — the
+  // alternative is a failed fetch in front of every panel. It is wrong here: a
+  // tab opened while the daemon was restarting believes it is offline forever,
+  // and the person then clicks Add repository against a daemon that has been up
+  // for an hour and is told to start it. Somebody deliberately asking for a
+  // change is worth one health check.
+  if (resolved !== "live" && opts.liveOnly) {
+    reconnect();
+    resolved = await probeDaemon();
+  }
 
   if (resolved === "live") {
     const headers: Record<string, string> = {};
@@ -133,6 +210,19 @@ export async function request<T>(path: string, opts: RequestOptions<T>): Promise
     if (res.status === 204) return undefined as T;
     const body: unknown = await res.json();
     return (opts.unwrap ? opts.unwrap(body) : body) as T;
+  }
+
+  if (opts.liveOnly || !opts.fixture) {
+    // Named in the message, because "no daemon" is actionable only once you know
+    // *which address* nobody answered on — the port is configurable and the tab
+    // may predate the daemon coming up.
+    throw new ApiError(
+      `No daemon answered at ${apiBase()}, so nothing was changed. ` +
+        `Start Studio's API (\`sh studio.sh up\`) and try again. ` +
+        `If it is already running, it is answering on a different address than this page is asking — ` +
+        `check the port in \`sh studio.sh status\`.`,
+      0,
+    );
   }
 
   await sleep(opts.latencyMs ?? 180);

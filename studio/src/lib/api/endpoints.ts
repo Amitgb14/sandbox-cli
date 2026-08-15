@@ -5,12 +5,16 @@ import {
   MOCK_DAEMON,
   MOCK_DOCTOR,
   MOCK_CONVERSATION,
+  MOCK_PROJECTS,
   MOCK_RUNS,
   MOCK_USAGE,
   MOCK_WORKTREES,
   buildArgv,
   mockConfig,
+  mockBrowse,
   mockDiff,
+  mockFileContent,
+  mockFiles,
   mockLogs,
   mockMetrics,
 } from "@/lib/mock/data";
@@ -26,13 +30,19 @@ import type {
   LaunchPreview,
   LaunchRequest,
   LogLine,
+  BrowseListing,
+  FileContent,
+  FileListing,
   MetricSeries,
+  Project,
   ResolvedConfig,
   Run,
   UsageSnapshot,
   Worktree,
   Conversation,
-  SessionSummary,} from "@/lib/types";
+  SessionRaw,
+  SessionSummary,
+  SessionTranscript,} from "@/lib/types";
 
 /**
  * The daemon's surface, one function per endpoint.
@@ -41,12 +51,127 @@ import type {
  * and the two will not always be the same age.
  */
 
+/**
+ * `?repo=<id>` for the endpoints scoped to one repository, and nothing at all
+ * when no repository was chosen.
+ *
+ * Nothing, rather than `?repo=`, on purpose: an empty parameter and an absent
+ * one mean the same thing to the daemon ("the repository I was started in"), and
+ * sending the empty form would make every cache key and every server log carry a
+ * question that was never asked.
+ */
+function repoQuery(repo?: string): string {
+  return repo ? `?repo=${encodeURIComponent(repo)}` : "";
+}
+
 export const api = {
   daemon: () =>
     request<DaemonInfo>("/v1/health", {
       fixture: () => MOCK_DAEMON,
       latencyMs: 120,
     }),
+
+  /**
+   * The repositories this daemon will answer about: the one it was started in,
+   * plus every one added since.
+   *
+   * This is the only source of a repository list. A screen that hardcodes one is
+   * a screen offering repositories the daemon has never heard of — which is what
+   * this endpoint was added to stop.
+   */
+  projects: () =>
+    request<Project[]>("/v1/projects", {
+      fixture: () => MOCK_PROJECTS,
+      latencyMs: 140,
+      unwrap: (b) => (b as { projects: Project[] }).projects,
+    }),
+
+  /**
+   * Directories on the host, for the folder picker.
+   *
+   * It runs in the daemon because a browser cannot answer it: a directory input
+   * yields relative paths and `showDirectoryPicker()` yields a handle with no
+   * path, and the daemon needs the absolute one. Directories only, names only,
+   * dot-directories never — see internal/studioapi/browse.go.
+   */
+  browse: (path?: string) =>
+    request<BrowseListing>(`/v1/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`, {
+      fixture: () => mockBrowse(path),
+      latencyMs: 120,
+    }),
+
+  /**
+   * Add a repository by host path — the one request in this client that carries
+   * one, matching the one endpoint that accepts one. The daemon decides whether
+   * it is acceptable (absolute, on disk, a git repository, not your home
+   * directory) and answers with the repository *root* it recorded, which is why
+   * the caller must use what comes back rather than what it sent.
+   */
+  addProject: (path: string) =>
+    request<Project>("/v1/projects", {
+      method: "POST",
+      body: { path },
+      // No fixture, deliberately. Only the daemon can say whether a path is a
+      // repository it may touch, and only the daemon can remember it — a
+      // fabricated answer here reported "Added" and then vanished from the very
+      // list the dialog was opened from, because the list is fixtures too.
+      liveOnly: true,
+    }),
+
+  /** Forget a repository. Nothing on disk is touched. */
+  removeProject: (id: string) =>
+    request<void>(`/v1/projects/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      liveOnly: true, // same reason as addProject: the list is read back
+    }),
+
+  /**
+   * One directory of a repository, from the daemon.
+   *
+   * `path` is repository-relative and comes from a previous listing — never
+   * assembled here. The daemon resolves it and refuses anything that lands
+   * outside the repository, symlinks included, which is the whole reason a
+   * client does not get to name a host path.
+   */
+  files: (path: string, repo?: string, branch?: string) =>
+    request<FileListing>(
+      `/v1/files?${new URLSearchParams({
+        ...(repo ? { repo } : {}),
+        // A branch is a different directory on disk — its own worktree — not a
+        // ref rendered into a tree. Absent means the repository's own checkout.
+        ...(branch ? { branch } : {}),
+        ...(path ? { path } : {}),
+      })}`,
+      {
+        fixture: () => mockFiles(path),
+        latencyMs: 160,
+      },
+    ),
+
+  fileContent: (path: string, repo?: string, branch?: string) =>
+    request<FileContent>(
+      `/v1/files/content?${new URLSearchParams({
+        ...(repo ? { repo } : {}),
+        ...(branch ? { branch } : {}),
+        path,
+      })}`,
+      {
+        fixture: () => mockFileContent(path),
+        latencyMs: 200,
+      },
+    ),
+
+  /**
+   * What one branch has that its base does not, plus whatever is uncommitted in
+   * its worktree — the same shape a run's diff answers with, because it is the
+   * same question asked of the branch rather than of a container. Useful after
+   * the container is gone, which is when reviewing usually happens.
+   */
+  worktreeDiff: (branch: string, repo?: string) =>
+    request<DiffFile[]>(
+      `/v1/worktrees/${encodeURIComponent(branch)}/diff${repoQuery(repo)}`,
+      { fixture: () => mockDiff(branch), latencyMs: 260 },
+    ),
 
   /**
    * Every run, finished ones included — `?all=1`.
@@ -176,11 +301,49 @@ export const api = {
       fixture: () => undefined,
     }),
 
-  /** Conversations this agent can be resumed from, newest first. */
-  agentSessions: (agent: string) =>
-    request<SessionSummary[]>(`/v1/agents/${agent}/sessions`, {
-      fixture: () => [],
-      unwrap: (b) => (b as { sessions: SessionSummary[] }).sessions ?? [],
+  /**
+   * Conversations for an agent, newest first.
+   *
+   * The default is the resume picker's question — only the sandbox-owned store,
+   * because those are the ones a container can reopen. `all` is the reading
+   * question, which includes your own ~/.claude history; every row says which
+   * store it came from and whether it can be resumed.
+   */
+  agentSessions: (agent: string, opts?: { scope?: "all"; limit?: number }) =>
+    request<SessionSummary[]>(
+      `/v1/agents/${agent}/sessions?${new URLSearchParams({
+        ...(opts?.scope ? { scope: opts.scope } : {}),
+        ...(opts?.limit ? { limit: String(opts.limit) } : {}),
+      })}`,
+      {
+        fixture: () => [],
+        unwrap: (b) => (b as { sessions: SessionSummary[] }).sessions ?? [],
+      },
+    ),
+
+  /** One conversation, parsed into turns. Named by id; the daemon finds the file. */
+  sessionTranscript: (agent: string, id: string) =>
+    request<SessionTranscript>(`/v1/agents/${agent}/sessions/${encodeURIComponent(id)}`, {
+      fixture: () => ({
+        session: { id, turns: 0, modified: new Date(0).toISOString() },
+        messages: MOCK_CONVERSATION,
+      }),
+      latencyMs: 240,
+    }),
+
+  /**
+   * The transcript file as it is on disk — the answer to "is the parsed view
+   * telling me everything", which for a format with a dozen line kinds is a
+   * question worth being able to ask.
+   */
+  sessionRaw: (agent: string, id: string) =>
+    request<SessionRaw>(`/v1/agents/${agent}/sessions/${encodeURIComponent(id)}/raw`, {
+      fixture: () => ({
+        session: { id, turns: 0, modified: new Date(0).toISOString() },
+        size: 0,
+        content: '{"type":"user","message":{"content":"fixture line"}}\n',
+      }),
+      latencyMs: 260,
     }),
 
   launch: (req: LaunchRequest) =>
@@ -211,15 +374,26 @@ export const api = {
       unwrap: (b) => (b as { agents: Agent[] }).agents,
     }),
 
-  worktrees: () =>
-    request<Worktree[]>("/v1/worktrees", {
-      fixture: () => MOCK_WORKTREES,
+  /**
+   * A repository's worktrees. `repo` is a repo id from `projects()` — absent
+   * means the repository the daemon was started in, which is what this asked
+   * before repositories were plural.
+   */
+  worktrees: (repo?: string) =>
+    // `repo=all` when nothing is scoped, because that is what the picker's "All
+    // repositories" means — and the daemon's *absent* parameter means something
+    // else, the one repository it was started in. Runs never needed this: docker
+    // lists containers across every repository already, so a dashboard showing
+    // all repositories' runs beside one repository's worktrees was comparing two
+    // different questions and looked like missing worktrees.
+    request<Worktree[]>(`/v1/worktrees?repo=${encodeURIComponent(repo ?? "all")}`, {
+      fixture: () => (repo ? MOCK_WORKTREES.filter((w) => w.repoId === repo) : MOCK_WORKTREES),
       latencyMs: 240,
       unwrap: (b) => (b as { worktrees: Worktree[] }).worktrees,
     }),
 
-  worktree: (branch: string) =>
-    request<Worktree>(`/v1/worktrees/${encodeURIComponent(branch)}`, {
+  worktree: (branch: string, repo?: string) =>
+    request<Worktree>(`/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`, {
       fixture: () => {
         const w = MOCK_WORKTREES.find((x) => x.branch === branch);
         if (!w) throw new Error(`no worktree ${branch}`);
@@ -228,12 +402,15 @@ export const api = {
       latencyMs: 140,
     }),
 
-  worktreeCommits: (branch: string) =>
-    request<Commit[]>(`/v1/worktrees/${encodeURIComponent(branch)}/commits`, {
-      fixture: () => [],
-      latencyMs: 200,
-      unwrap: (b) => (b as { commits: Commit[] }).commits,
-    }),
+  worktreeCommits: (branch: string, repo?: string) =>
+    request<Commit[]>(
+      `/v1/worktrees/${encodeURIComponent(branch)}/commits${repoQuery(repo)}`,
+      {
+        fixture: () => [],
+        latencyMs: 200,
+        unwrap: (b) => (b as { commits: Commit[] }).commits,
+      },
+    ),
 
   /** Every run that worked this branch, finished ones included. */
   branchRuns: (branch: string) =>
@@ -266,14 +443,14 @@ export const api = {
   },
 
   /** What one commit changed. Scoped to this daemon's project. */
-  commitDiff: (sha: string) =>
-    request<DiffFile[]>(`/v1/commits/${encodeURIComponent(sha)}/diff`, {
+  commitDiff: (sha: string, repo?: string) =>
+    request<DiffFile[]>(`/v1/commits/${encodeURIComponent(sha)}/diff${repoQuery(repo)}`, {
       fixture: () => [],
       latencyMs: 200,
     }),
 
-  removeWorktree: (branch: string) =>
-    request<void>(`/v1/worktrees/${encodeURIComponent(branch)}`, {
+  removeWorktree: (branch: string, repo?: string) =>
+    request<void>(`/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`, {
       method: "DELETE",
       fixture: () => undefined,
     }),
@@ -320,9 +497,11 @@ export const api = {
    * the state store. This survives, which makes it the only answer to "what has
    * run here" once the containers are cleaned up.
    */
-  audit: (branch?: string, limit?: number) =>
+  audit: (branch?: string, limit?: number, repo?: string) =>
     request<AuditRecord[]>(
-      `/v1/audit?limit=${limit ?? 200}${branch ? `&branch=${encodeURIComponent(branch)}` : ""}`,
+      `/v1/audit?limit=${limit ?? 200}` +
+        (branch ? `&branch=${encodeURIComponent(branch)}` : "") +
+        (repo ? `&repo=${encodeURIComponent(repo)}` : ""),
       {
         fixture: () =>
           branch ? MOCK_AUDIT.filter((a) => a.branch === branch) : MOCK_AUDIT,
@@ -522,10 +701,17 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
     body.command = ["sh", "-c", req.command];
   }
 
+  // Which repository, by id. Sent alongside a worktree (the branch is resolved
+  // *inside* this repository) but never alongside a project path, which the
+  // daemon refuses as two answers to one question.
+  if (req.repo) body.repo = req.repo;
+
   // A worktree is addressed by branch and replaces the workspace; only one of
-  // the two ever reaches the daemon, which refuses both together.
+  // the two ever reaches the daemon, which refuses both together. The workspace
+  // path is sent only when no repo id was chosen — a repo id already says which
+  // directory, and says it in the form the daemon can check against its registry.
   if (req.worktree) body.worktree = req.worktree;
-  else if (req.workspace) body.project = req.workspace;
+  else if (!req.repo && req.workspace) body.project = req.workspace;
 
   if (req.base) body.base = req.base;
   // Console travels: it is a property of the task ("I intend to talk to this"),

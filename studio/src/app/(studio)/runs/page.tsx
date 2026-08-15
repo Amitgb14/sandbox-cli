@@ -6,10 +6,9 @@ import { Play, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/common/page-header";
 import { RunsTable } from "@/components/runs/runs-table";
-import { useRuns } from "@/lib/api/queries";
+import { useAudit, useProjects, useRuns } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 import { scopeToRepo } from "@/lib/derive";
-import { REPOS } from "@/lib/mock/data";
 import { cn } from "@/lib/utils";
 
 export default function RunsPage() {
@@ -21,7 +20,17 @@ export default function RunsPage() {
   // setState — sometimes before the component has finished mounting, which
   // React reports as "a side-effect in your render function".
   const runs = useMemo(() => scopeToRepo(data ?? [], repoFilter), [data, repoFilter]);
-  const repoName = REPOS.find((r) => r.id === repoFilter)?.name;
+  const { data: projects } = useProjects();
+  const repoName = projects?.find((r) => r.id === repoFilter)?.name;
+
+  // Only when the table would otherwise be empty, and sharing the dashboard's
+  // query key so visiting both is one fetch. This exists to answer the question
+  // an empty Runs screen raises and cannot answer for itself: a container is
+  // reaped, the run log is not, so "no runs here" and "nothing ever ran here"
+  // are different statements.
+  const { data: history } = useAudit(undefined, 5000, {
+    enabled: !isPending && runs.length === 0,
+  });
 
   return (
     <div className="space-y-5">
@@ -55,7 +64,11 @@ export default function RunsPage() {
           </>
         }
       />
-      <RunsTable runs={runs} loading={isPending} />
+      <RunsTable
+        runs={runs}
+        loading={isPending}
+        history={{ count: history?.length ?? 0, label: repoName }}
+      />
     </div>
   );
 }

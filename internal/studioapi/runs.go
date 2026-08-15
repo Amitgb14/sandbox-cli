@@ -79,6 +79,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("project and worktree are mutually exclusive"))
 		return
 	}
+	if req.Project != "" && req.Repo != "" {
+		// Two answers to "which repository", one a registered id and one a raw
+		// path. Refusing beats picking, and picking the id would quietly ignore
+		// the more specific of the two.
+		writeError(w, http.StatusBadRequest, fmt.Errorf(
+			"repo and project are mutually exclusive: repo names a registered repository, project names a host directory"))
+		return
+	}
 
 	opts, err := s.buildRunOptions(req)
 	if err != nil {
@@ -120,14 +128,23 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // autonomous argv, and the login persistence gate is re-checked here because it
 // is a property of every path that builds Options, not of the config alone.
 func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) {
-	project := s.Project
-	repoID := s.RepoID
+	// Which repository this run is about, before anything else is decided: a
+	// worktree is resolved inside it, and with no worktree it *is* the workspace.
+	// An unregistered id refuses here rather than silently falling back to the
+	// daemon's own project, which would run the agent in a repository the request
+	// did not name.
+	sc, err := s.scopeFor(req.Repo)
+	if err != nil {
+		return sandbox.Options{}, err
+	}
+	project := sc.Project
+	repoID := sc.RepoID
 	branch := req.Branch
 	var extraMounts []string
 
 	switch {
 	case req.Worktree != "":
-		info, err := worktree.Resolve(s.Project, req.Worktree)
+		info, err := worktree.Resolve(sc.Project, req.Worktree)
 		if err != nil {
 			return sandbox.Options{}, err
 		}
@@ -136,7 +153,7 @@ func (s *Server) buildRunOptions(req RunCreateRequest) (sandbox.Options, error) 
 			branch = req.Worktree
 		}
 		extraMounts = sandbox.LinkedWorktreeMounts(info.Path)
-		// repoID stays the server's: a linked worktree belongs to the same
+		// repoID stays the scope's: a linked worktree belongs to the same
 		// repository, which is the whole point of addressing it by branch.
 	case req.Project != "":
 		project = req.Project

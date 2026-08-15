@@ -1,6 +1,8 @@
 import {
   Activity,
   Bot,
+  FileDiff,
+  FolderTree,
   GitBranch,
   LayoutDashboard,
   Play,
@@ -101,6 +103,41 @@ export const NAV: NavGroup[] = [
   },
 ];
 
+/**
+ * The Editor group, parked.
+ *
+ * Reading what the agents wrote rather than supervising the agents themselves:
+ * Files browses a branch's working tree as it stands on disk, Changes shows what
+ * a branch has beyond its base plus its uncommitted work. Both screens, their
+ * routes and their endpoints all still work — this is not surfaced yet, on
+ * purpose.
+ *
+ * Kept here rather than deleted because it is the only thing hiding it: put this
+ * group back into NAV above and the sidebar, the command palette and the
+ * keyboard shortcuts all come back with it, since all three read that one list.
+ * The routes stay reachable by URL in the meantime (/files, /changes), which is
+ * what makes it parked rather than removed.
+ */
+export const EDITOR_NAV: NavGroup = {
+  label: "Editor",
+  items: [
+    {
+      title: "Files",
+      href: "/files",
+      icon: FolderTree,
+      hint: "Browse a branch's working tree as it stands on disk, uncommitted work included",
+      shortcut: "F",
+    },
+    {
+      title: "Changes",
+      href: "/changes",
+      icon: FileDiff,
+      hint: "What a branch has that its base does not, plus whatever is still uncommitted",
+      shortcut: "C",
+    },
+  ],
+};
+
 export const ALL_NAV_ITEMS = NAV.flatMap((g) => g.items);
 
 /** Human-readable segment labels for the breadcrumb trail. */
@@ -108,6 +145,8 @@ const SEGMENT_LABELS: Record<string, string> = {
   runs: "Runs",
   launch: "Launch",
   worktrees: "Worktrees",
+  files: "Files",
+  changes: "Changes",
   agents: "Agents",
   settings: "Settings",
   doctor: "Doctor",

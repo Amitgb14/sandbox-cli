@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   flexRender,
@@ -45,7 +46,21 @@ import {
   PROFILE_FACETS,
 } from "@/components/runs/facets";
 
-export function RunsTable({ runs, loading }: { runs: Run[]; loading?: boolean }) {
+export function RunsTable({
+  runs,
+  loading,
+  history,
+}: {
+  runs: Run[];
+  loading?: boolean;
+  /**
+   * How many runs the *log* has for whatever this table is scoped to, and what
+   * to call that scope. Used only for the empty state, to tell "nothing ever ran
+   * here" apart from "the containers were reaped" — a distinction this screen
+   * cannot make on its own, because it only ever sees containers.
+   */
+  history?: { count: number; label?: string | null };
+}) {
   const router = useRouter();
   const [sorting, setSorting] = useState<SortingState>([{ id: "started", desc: true }]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -112,6 +127,14 @@ export function RunsTable({ runs, loading }: { runs: Run[]; loading?: boolean })
   }, [table, columnFilters, query]);
 
   const filtered = columnFilters.length > 0 || query.length > 0;
+
+  // The log has runs for this scope and docker has none: they finished and
+
+  // their containers are gone. Only true when nothing is being filtered out
+
+  // client-side, or this would explain an empty table that a filter emptied.
+
+  const reaped = !filtered && runs.length === 0 && (history?.count ?? 0) > 0;
   const selectedRuns = table.getFilteredSelectedRowModel().rows.map((r) => r.original);
   const selectedLive = useMemo(
     () => selectedRuns.filter((r) => r.state === "running"),
@@ -237,11 +260,36 @@ export function RunsTable({ runs, loading }: { runs: Run[]; loading?: boolean })
                 <TableCell colSpan={table.getVisibleLeafColumns().length} className="p-0">
                   <EmptyState
                     icon={Activity}
-                    title={filtered ? "No runs match these filters" : "No runs recorded yet"}
-                    description={
+                    title={
                       filtered
-                        ? "Clear a filter, or widen the search. The counts inside each filter already account for the others."
-                        : "Runs appear here as soon as one starts — and stay after it exits, because how a run ended is the point."
+                        ? "No runs match these filters"
+                        : reaped
+                          ? "No containers left here"
+                          : "No runs recorded yet"
+                    }
+                    description={
+                      filtered ? (
+                        "Clear a filter, or widen the search. The counts inside each filter already account for the others."
+                      ) : reaped ? (
+                        // The two records answer different questions, and this is
+                        // the screen where that stops being a footnote: a
+                        // container carries a run's logs and exit code until it
+                        // is reaped, while the log is written when a run *ends*
+                        // and is never removed. So "no runs here" and "nothing
+                        // ever ran here" are different, and only one of them is
+                        // true. Saying which is what stops this page from
+                        // contradicting the dashboard.
+                        <>
+                          {history?.count} {history?.count === 1 ? "run has" : "runs have"} finished
+                          {history?.label ? ` in ${history.label}` : " here"}, but their containers
+                          have been removed — by <code className="font-mono text-xs">--rm</code>,{" "}
+                          <code className="font-mono text-xs">fleet clean</code>, or docker itself.
+                          The run log keeps them: the dashboard&apos;s history and pass rate still
+                          count these.
+                        </>
+                      ) : (
+                        "Runs appear here as soon as one starts — and stay after it exits, because how a run ended is the point."
+                      )
                     }
                     className="border-0"
                     action={
@@ -255,6 +303,10 @@ export function RunsTable({ runs, loading }: { runs: Run[]; loading?: boolean })
                           }}
                         >
                           Reset filters
+                        </Button>
+                      ) : reaped ? (
+                        <Button asChild variant="outline" size="sm">
+                          <Link href="/">See the history</Link>
                         </Button>
                       ) : undefined
                     }

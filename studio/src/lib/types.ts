@@ -552,6 +552,17 @@ export interface LaunchRequest {
   /** Free command, for a plain `run`. Ignored when `agent` is set. */
   command: string;
   prompt: string;
+  /**
+   * Which registered repository this run is about, by `Project.id`. Empty means
+   * the one the daemon was started in.
+   *
+   * It is what the daemon is sent, and `workspace` below is what the form
+   * displays: an id is resolved against the list of repositories somebody
+   * deliberately added, while a path is whatever a screen put in a field. The
+   * two used to be one thing, which is how a repository root from a fixture
+   * ended up in a real launch request.
+   */
+  repo: string;
   workspace: string;
   /** `--worktree <branch>`: addressed by branch, never by directory. */
   worktree: string | null;
@@ -594,15 +605,109 @@ export interface LaunchPreview {
 }
 
 // ---------------------------------------------------------------------------
+// Repositories
+// ---------------------------------------------------------------------------
+
+/**
+ * One repository this daemon will answer about, from `GET /v1/projects`.
+ *
+ * `id` is what every request names — a repo id from the daemon, never a path a
+ * screen assembled. Two clones sharing a directory name do not share an id, and
+ * the same id is what containers are labelled with, which is what makes "the
+ * runs for this repository" and "the worktrees for this repository" the same
+ * question.
+ */
+export interface Project {
+  id: string;
+  name: string;
+  root: string;
+  /**
+   * The repository the daemon was started in: what every request naming no repo
+   * is about, and the one that cannot be removed. Changing it is a restart
+   * (`studio.sh up --project DIR`).
+   */
+  default?: boolean;
+  /**
+   * Registered, but not readable right now — the directory is gone, is no
+   * longer a git repository, or sits on a volume that is not mounted. Shown
+   * rather than hidden: a row the user added that quietly disappeared is worse
+   * than one they can see is unavailable.
+   */
+  missing?: boolean;
+}
+
+/** One row of a repository's directory listing, from `GET /v1/files`. */
+export interface FileEntry {
+  name: string;
+  /**
+   * Repository-relative and slash-separated — the daemon's own spelling, sent
+   * straight back as the next request's `path`. A client that assembled paths
+   * itself would be inventing the one string the containment check is about.
+   */
+  path: string;
+  dir?: boolean;
+  size?: number;
+  /**
+   * A symlink, reported rather than followed. Opening one may be refused: a link
+   * leaving the repository is not readable through this API, which is what stops
+   * an agent-written `notes.md -> ~/.ssh/id_ed25519` from being served.
+   */
+  symlink?: boolean;
+  modifiedAt?: string;
+}
+
+export interface FileListing {
+  /** The listed directory, repository-relative; "" is the repository root. */
+  path: string;
+  entries: FileEntry[];
+  /** More entries than one listing carries — said out loud, never silently cut. */
+  truncated?: boolean;
+}
+
+export interface FileContent {
+  path: string;
+  size: number;
+  /** Binary files are reported, never sent. */
+  binary?: boolean;
+  /** `content` is the first part of a larger file. */
+  truncated?: boolean;
+  content?: string;
+}
+
+/** One directory offered by the folder picker, from `GET /v1/browse`. */
+export interface BrowseEntry {
+  name: string;
+  /** Absolute host path — what `POST /v1/projects` takes. */
+  path: string;
+  /** Holds a .git. A hint for the picker; the daemon still decides on add. */
+  repo?: boolean;
+  /** Already managed by this Studio, so adding it again would be a no-op. */
+  registered?: boolean;
+}
+
+export interface BrowseListing {
+  path: string;
+  /** The directory above, absent at the filesystem root. */
+  parent?: string;
+  /** This user's home directory — where the picker starts. */
+  home?: string;
+  /** Whether `path` itself is a repository, so it can be picked directly. */
+  repo?: boolean;
+  entries: BrowseEntry[];
+  truncated?: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Daemon
 // ---------------------------------------------------------------------------
 
 export interface DaemonInfo {
   version: string;
   /**
-   * The host directory this daemon manages — one server, one project, the same
-   * "which project" question every sandbox-cli invocation answers. The Launch
-   * form defaults to it, because the alternative is defaulting to a fixture.
+   * The host directory this daemon was started in — its default project, the
+   * one every request naming no repository is about. Other repositories are
+   * added at runtime and listed by `GET /v1/projects`; this is the one that
+   * cannot be.
    */
   project?: string;
   engine: Engine;
@@ -653,10 +758,33 @@ export interface SessionSummary {
   title?: string;
   turns: number;
   modified: string;
-  /**
-   * Listed from the file alone, because there is no verified reader for this
-   * agent's transcript format: the id and dates are real, the title and turn
-   * count are unknown and shown as unknown rather than as zero.
-   */
+  started?: string;
+  /** No verified reader for this format: id and dates are real, the rest unknown. */
   partial?: boolean;
+  /**
+   * The working directory the transcript recorded. The one field that tells a
+   * sandbox conversation from a host one at a glance: a container's cwd is
+   * always /workspace, a host session's is the real path.
+   */
+  project?: string;
+  /** Where the transcript lives. Reported, never sent back — requests name an id. */
+  path?: string;
+  size?: number;
+  /** "sandbox" (the agent HOME containers get) or "host" (your own history). */
+  store?: "sandbox" | "host";
+  /** Only the sandbox-owned store is this daemon's to resume. */
+  resumable?: boolean;
+}
+
+export interface SessionTranscript {
+  session: SessionSummary;
+  messages: ConversationMessage[];
+}
+
+export interface SessionRaw {
+  session: SessionSummary;
+  size: number;
+  /** `content` is the *tail* of a longer file — the end is what you opened it for. */
+  truncated?: boolean;
+  content: string;
 }

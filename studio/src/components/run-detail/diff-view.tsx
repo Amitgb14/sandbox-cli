@@ -37,11 +37,46 @@ const STATUS_TONE: Record<DiffFileStatus, string> = {
  */
 export function DiffView({ run }: { run: Run }) {
   const { data, isPending } = useRunDiff(run.id, run.state === "running");
+  return (
+    <DiffFiles
+      files={data}
+      loading={isPending}
+      emptyDescription="The workspace is as it was. For a run that failed early that is expected; for one that passed, it means the work was already committed."
+    />
+  );
+}
+
+/**
+ * A set of changed files, rendered.
+ *
+ * Extracted from DiffView so a *worktree's* diff and a *run's* diff are the same
+ * screen. They are the same question asked of different things — a run's diff
+ * needs its container to still exist, a worktree's outlives every container that
+ * worked in it — and the daemon already answers both with the identical
+ * `DiffFile` shape. Two renderers would have drifted: the unified/split toggle,
+ * the untracked-file case, the binary case, and the empty state are all places
+ * where a second implementation quietly disagrees with the first.
+ *
+ * The empty *description* is a prop because it is the one thing that genuinely
+ * differs: "the run changed nothing" and "this branch is level with its base"
+ * are different facts, and one sentence cannot honestly cover both.
+ */
+export function DiffFiles({
+  files: data,
+  loading,
+  emptyTitle = "Nothing changed",
+  emptyDescription,
+}: {
+  files: DiffFile[] | undefined;
+  loading?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
+}) {
   const view = useUi((s) => s.diffView);
   const setView = useUi((s) => s.setDiffView);
   const [selected, setSelected] = useState<string | null>(null);
 
-  if (isPending) {
+  if (loading) {
     return (
       <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
         <Skeleton className="h-72 w-full" />
@@ -51,13 +86,7 @@ export function DiffView({ run }: { run: Run }) {
   }
 
   if (!data || data.length === 0) {
-    return (
-      <EmptyState
-        icon={FileDiff}
-        title="Nothing changed"
-        description="The workspace is as it was. For a run that failed early that is expected; for one that passed, it means the work was already committed."
-      />
-    );
+    return <EmptyState icon={FileDiff} title={emptyTitle} description={emptyDescription} />;
   }
 
   const active = data.find((f) => f.path === selected) ?? data[0];

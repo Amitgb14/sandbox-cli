@@ -12,9 +12,34 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
-// handleListWorktrees is GET /worktrees.
+// handleListWorktrees is GET /worktrees?repo=.
+//
+// Without repo it answers for the repository this daemon was started in, which
+// is what it answered before repositories were plural. With one it answers for
+// that registered repository — never for a path, which is the rule projects.go
+// exists to keep.
 func (s *Server) handleListWorktrees(w http.ResponseWriter, r *http.Request) {
-	infos, err := worktree.List(s.Project)
+	// `repo=all` is the union across every registered repository, and it exists
+	// because "All repositories" in a UI has to mean that.
+	//
+	// The absent parameter cannot serve both: it means "the repository this
+	// daemon was started in", which is what every client written before
+	// repositories were plural relies on. So the third meaning gets its own
+	// spelling rather than a changed default — an id is never "all", so nothing
+	// is made ambiguous. Runs did not need this because docker lists containers
+	// across every repository already; worktrees are per-repository on disk, and
+	// a dashboard showing all repositories' runs beside one repository's
+	// worktrees is comparing two different questions.
+	if r.URL.Query().Get("repo") == "all" {
+		s.listWorktreesEverywhere(w, r)
+		return
+	}
+	sc, err := s.scopeOf(r)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	infos, err := worktree.List(sc.Project)
 	if err != nil {
 		// Not 502: git is local machinery, not an upstream service. A failure here
 		// means this server's own project directory could not be read, which is a
@@ -25,10 +50,46 @@ func (s *Server) handleListWorktrees(w http.ResponseWriter, r *http.Request) {
 	// Containers read once for the whole listing rather than per row: it is one
 	// call to the engine either way, and asking per branch would let two rows of
 	// one response describe different moments.
-	runs := s.runsByBranch(r.Context())
-	out := make([]Worktree, 0, len(infos))
+	runs := s.runsByBranch(r.Context(), sc)
+	out := make([]Worktree, 0, len(infos)+1)
+	// The repository's own checkout first: it is a branch you can look at, it is
+	// where a run without --worktree works, and leaving it out is why `main`
+	// appeared in no picker.
+	if primary, ok := s.primaryWorktree(sc, runs); ok {
+		out = append(out, primary)
+	}
 	for _, info := range infos {
-		out = append(out, s.toWorktree(info, runs))
+		out = append(out, s.toWorktree(sc, info, runs))
+	}
+	writeJSON(w, http.StatusOK, WorktreesResponse{Worktrees: out})
+}
+
+// listWorktreesEverywhere answers `?repo=all`: every registered repository's
+// worktrees in one listing, each row carrying its own repo id.
+//
+// A repository that cannot be read is **skipped rather than fatal**. One
+// unmounted volume must not empty a dashboard that is asking about four
+// repositories — the rows that can be answered are still true, and the missing
+// one is already reported as such by GET /projects, which is where a client
+// learns about it rather than from a listing that failed entirely.
+func (s *Server) listWorktreesEverywhere(w http.ResponseWriter, r *http.Request) {
+	out := []Worktree{}
+	for _, p := range s.projects() {
+		if p.Missing {
+			continue
+		}
+		infos, err := worktree.List(p.Root)
+		if err != nil {
+			continue
+		}
+		sc := repoScope{Project: p.Root, RepoID: p.ID}
+		runs := s.runsByBranch(r.Context(), sc)
+		if primary, ok := s.primaryWorktree(sc, runs); ok {
+			out = append(out, primary)
+		}
+		for _, info := range infos {
+			out = append(out, s.toWorktree(sc, info, runs))
+		}
 	}
 	writeJSON(w, http.StatusOK, WorktreesResponse{Worktrees: out})
 }
@@ -46,7 +107,12 @@ func (s *Server) handleCreateWorktree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("branch is required"))
 		return
 	}
-	info, err := worktree.Resolve(s.Project, req.Branch)
+	sc, err := s.scopeFor(req.Repo)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	info, err := worktree.Resolve(sc.Project, req.Branch)
 	if err != nil {
 		// 422 rather than 500: by far the likeliest reason git declines is the
 		// branch this request named — unknown, already checked out elsewhere, or
@@ -58,13 +124,25 @@ func (s *Server) handleCreateWorktree(w http.ResponseWriter, r *http.Request) {
 	if info.Created {
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, s.toWorktree(info, s.runsByBranch(r.Context())))
+	writeJSON(w, status, s.toWorktree(sc, info, s.runsByBranch(r.Context(), sc)))
 }
 
-// handleGetWorktree is GET /worktrees/{branch}.
+// handleGetWorktree is GET /worktrees/{branch}?repo=.
 func (s *Server) handleGetWorktree(w http.ResponseWriter, r *http.Request) {
+	sc, err := s.scopeOf(r)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
 	branch := r.PathValue("branch")
-	path, exists, err := worktree.Path(s.Project, branch)
+	runs := s.runsByBranch(r.Context(), sc)
+	// The checkout is addressable by its own branch name, or the listing would
+	// offer a row whose detail page 404s.
+	if primary, ok := s.primaryWorktree(sc, runs); ok && primary.Branch == branch {
+		writeJSON(w, http.StatusOK, primary)
+		return
+	}
+	path, exists, err := worktree.Path(sc.Project, branch)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -73,33 +151,51 @@ func (s *Server) handleGetWorktree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("no worktree for branch %q", branch))
 		return
 	}
-	writeJSON(w, http.StatusOK, s.toWorktree(worktree.Info{Branch: branch, Path: path}, s.runsByBranch(r.Context())))
+	writeJSON(w, http.StatusOK, s.toWorktree(sc, worktree.Info{Branch: branch, Path: path}, runs))
 }
 
-// handleDeleteWorktree is DELETE /worktrees/{branch}?force=1. Without force,
-// git refuses to remove a worktree holding modified or untracked files — the
-// safe default, since those edits exist nowhere else.
+// handleDeleteWorktree is DELETE /worktrees/{branch}?repo=&force=1. Without
+// force, git refuses to remove a worktree holding modified or untracked files —
+// the safe default, since those edits exist nowhere else.
 func (s *Server) handleDeleteWorktree(w http.ResponseWriter, r *http.Request) {
+	sc, err := s.scopeOf(r)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
 	branch := r.PathValue("branch")
+	// Never the repository's own checkout. `worktree.Remove` would refuse it
+	// anyway, but a listing that offers a row has to explain why one of them
+	// cannot be removed rather than passing git's message through.
+	if primary, ok := s.primaryWorktree(sc, nil); ok && primary.Branch == branch {
+		writeError(w, http.StatusConflict, fmt.Errorf(
+			"%q is this repository's own checkout, not a managed worktree — there is nothing here to remove", branch))
+		return
+	}
 	force := r.URL.Query().Has("force")
-	if err := worktree.Remove(s.Project, branch, force); err != nil {
+	if err := worktree.Remove(sc.Project, branch, force); err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// runsByBranch indexes this repository's containers by the branch they worked,
+// runsByBranch indexes one repository's containers by the branch they worked,
 // newest first, so a listing can answer "what ran here" without one engine call
 // per row. An engine that cannot be reached yields an empty index rather than an
 // error: the worktrees are real whether or not docker is up, and a status
 // listing that fails entirely because one of its columns is unavailable is worse
 // than one with that column empty.
-func (s *Server) runsByBranch(ctx context.Context) map[string][]runtime.ContainerInfo {
+//
+// The repo id comes from the scope rather than from the server, which is the
+// whole of what makes a second repository's listing say anything: filtering on
+// s.RepoID while walking another repository's worktrees would show every branch
+// with no runs against it.
+func (s *Server) runsByBranch(ctx context.Context, sc repoScope) map[string][]runtime.ContainerInfo {
 	out := map[string][]runtime.ContainerInfo{}
 	infos, err := s.RT.Containers(ctx, map[string]string{
 		sandbox.LabelCLI:  "1",
-		sandbox.LabelRepo: s.RepoID,
+		sandbox.LabelRepo: sc.RepoID,
 	})
 	if err != nil {
 		return out
@@ -112,8 +208,8 @@ func (s *Server) runsByBranch(ctx context.Context) map[string][]runtime.Containe
 	return out
 }
 
-func (s *Server) toWorktree(info worktree.Info, runs map[string][]runtime.ContainerInfo) Worktree {
-	dirty := worktree.Dirty(s.Project, info.Branch, 0)
+func (s *Server) toWorktree(sc repoScope, info worktree.Info, runs map[string][]runtime.ContainerInfo) Worktree {
+	dirty := worktree.Dirty(sc.Project, info.Branch, 0)
 	if dirty == nil {
 		// A nil slice marshals to `null`, not `[]`, so a clean worktree would
 		// still hand the client something it has to guard before iterating.
@@ -125,8 +221,8 @@ func (s *Server) toWorktree(info worktree.Info, runs map[string][]runtime.Contai
 		Path:       info.Path,
 		Dirty:      dirty,
 		DirtyCount: len(dirty),
-		Head:       worktree.Head(s.Project, info.Branch),
-		RepoID:     s.RepoID,
+		Head:       worktree.Head(sc.Project, info.Branch),
+		RepoID:     sc.RepoID,
 	}
 
 	if fi, err := os.Stat(info.Path); err == nil {
@@ -145,13 +241,13 @@ func (s *Server) toWorktree(info worktree.Info, runs map[string][]runtime.Contai
 		}
 	}
 	if base == "" {
-		base = worktree.HeadBranch(s.Project)
+		base = worktree.HeadBranch(sc.Project)
 	}
 	if base != "" {
 		b := base
 		wt.Base = &b
-		wt.Ahead = worktree.Ahead(s.Project, info.Branch, base)
-		wt.Behind = worktree.Behind(s.Project, info.Branch, base)
+		wt.Ahead = worktree.Ahead(sc.Project, info.Branch, base)
+		wt.Behind = worktree.Behind(sc.Project, info.Branch, base)
 	}
 
 	for _, c := range runs[info.Branch] {
@@ -199,8 +295,13 @@ func verifiedByLastRun(cs []runtime.ContainerInfo) *bool {
 // derived the base differently would eventually disagree with `land`, which is
 // the one that matters.
 func (s *Server) handleWorktreeCommits(w http.ResponseWriter, r *http.Request) {
+	sc, err := s.scopeOf(r)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
 	branch := r.PathValue("branch")
-	path, exists, err := worktree.Path(s.Project, branch)
+	path, exists, err := worktree.Path(sc.Project, branch)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -212,18 +313,18 @@ func (s *Server) handleWorktreeCommits(w http.ResponseWriter, r *http.Request) {
 	_ = path
 
 	base := ""
-	for _, c := range s.runsByBranch(r.Context())[branch] {
+	for _, c := range s.runsByBranch(r.Context(), sc)[branch] {
 		if b := c.Labels[sandbox.LabelBase]; b != "" {
 			base = b
 			break
 		}
 	}
 	if base == "" {
-		base = worktree.HeadBranch(s.Project)
+		base = worktree.HeadBranch(sc.Project)
 	}
 
 	out := make([]Commit, 0, 32)
-	for _, c := range worktree.Commits(s.Project, branch, base, commitsLimit) {
+	for _, c := range worktree.Commits(sc.Project, branch, base, commitsLimit) {
 		out = append(out, Commit{
 			SHA: c.SHA, ShortSHA: c.ShortSHA, Subject: c.Subject,
 			Author: c.Author, Date: c.Date,
@@ -236,3 +337,49 @@ func (s *Server) handleWorktreeCommits(w http.ResponseWriter, r *http.Request) {
 // commitsLimit bounds the listing. A branch an agent has been working for a week
 // is a legitimate branch, and a screen is not a log viewer.
 const commitsLimit = 100
+
+// primaryWorktree describes the repository's own checkout as a Worktree row.
+//
+// Built by hand rather than through toWorktree, because two of that function's
+// helpers resolve a *managed* worktree by branch and find nothing for this one:
+// worktree.Dirty asks Path() where the branch lives, so the checkout's
+// uncommitted files would read as zero — the one number somebody looks at this
+// row for. WorkingStatIn asks the directory instead, which is the right question
+// here since the directory is known.
+//
+// No base, and that is deliberate rather than missing: the checkout is what
+// other branches are measured against, so "0 ahead, 0 behind" against itself is
+// noise, and `land` merges into this branch rather than landing it.
+//
+// A detached HEAD yields nothing at all. There is no branch to name it by, and
+// inventing one would put a row in a picker that no request could address.
+func (s *Server) primaryWorktree(sc repoScope, runs map[string][]runtime.ContainerInfo) (Worktree, bool) {
+	branch := worktree.HeadBranch(sc.Project)
+	if branch == "" {
+		return Worktree{}, false
+	}
+	wt := Worktree{
+		Branch:  branch,
+		Path:    sc.Project,
+		RepoID:  sc.RepoID,
+		Primary: true,
+		Head:    worktree.Head(sc.Project, branch),
+		Dirty:   []string{},
+	}
+	for _, st := range worktree.WorkingStatIn(sc.Project) {
+		wt.Dirty = append(wt.Dirty, st.Path)
+	}
+	wt.DirtyCount = len(wt.Dirty)
+	if fi, err := os.Stat(sc.Project); err == nil {
+		wt.CreatedAt = fi.ModTime().UTC().Format(time.RFC3339)
+	}
+	for _, c := range runs[branch] {
+		if c.Running() {
+			id := shortID(c.ID)
+			wt.RunID = &id
+			break
+		}
+	}
+	wt.Verified = verifiedByLastRun(runs[branch])
+	return wt, true
+}

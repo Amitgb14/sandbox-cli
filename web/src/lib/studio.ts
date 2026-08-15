@@ -183,15 +183,15 @@ export const STUDIO_SCRIPT_STEPS: StudioStep[] = [
       "status naming the repository the daemon manages — which is the answer when the browser shows worktrees you were not expecting.",
   },
   {
-    title: "Point it at another repository without going there",
+    title: "Work on more than one repository",
     side: "daemon",
     code: [
-      "sh studio.sh up --project ~/other-project   # from any directory",
-      "cd ~/other-project && sh studio.sh up       # or the short way",
+      "# in the browser: sidebar picker → Add repository…",
+      "sh studio.sh up --project ~/other-project   # or change the one it starts in",
     ].join("\n"),
     body:
-      "Studio manages one repository at a time: the API's -project is fixed for the life of the process, so everything on screen — worktrees, runs, diffs — belongs to the repository it was started in. Changing directory in your terminal does not change it, which is confusing precisely because the terminal moved and the browser did not. Either command above restarts the pair against the repository you name, keeping the same ports and the same token, so a tab you already have open follows it.",
-    expect: "The `project` line in the output, and the same path from `status` afterwards.",
+      "Add repositories from the UI: the sidebar's picker takes the absolute path of a git repository on this machine, records its root, and remembers it across restarts — the daemon checks the path itself (absolute, on disk, a git repository, never your home directory) and shows you its own refusal when it declines. The repository the API was *started* in is the exception: -project is fixed for the life of the process, it is what every unqualified screen falls back to, and it is the one you cannot remove — the command above restarts the pair against a different one, keeping the same ports and token so an open tab follows. --api-in-docker stays single-repository, since that container only has its one project mounted.",
+    expect: "The new repository in the picker, and every screen scoping to it.",
   },
   {
     title: "Remove it — no copy of the script required",

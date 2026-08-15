@@ -145,10 +145,18 @@ there is no code generation step (yet) tying them together.
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/v1/health` | Liveness + which engine/project/profile this instance manages |
+| GET | `/v1/projects` | Repositories this daemon answers about — the one it was started in, plus every one added |
+| POST | `/v1/projects` | Add a repository by host path (**the only endpoint that accepts one**) |
+| DELETE | `/v1/projects/{id}` | Forget a repository. Nothing on disk is touched; the started-in one is refused |
+| GET | `/v1/browse` | Directories on the host, for the Add-repository folder picker (`?path=`) |
+| GET | `/v1/files` | List one directory of a repository (`?repo=`, `?branch=`, `?path=`) |
+| GET | `/v1/files/content` | Read one file (`?repo=`, `?branch=`, `?path=`) — text only, bounded, binary reported not sent |
 | GET | `/v1/agents` | Agents this API can launch headlessly (a subset of `internal/agents` — only those with a verified non-interactive mode) |
 | GET | `/v1/runs` | List runs (`?all=1`, `?repo=`, `?branch=`, `?agent=`, `?fleet=1`) |
 | GET | `/v1/runs/{id}` | One run, by id/name/branch — same three references `sandbox-cli list`/`kill`/`logs` accept |
-| GET | `/v1/agents/{agent}/sessions` | Conversations a run can be resumed from (sandbox-owned store only) |
+| GET | `/v1/agents/{agent}/sessions` | Conversations, newest first (`?scope=all` includes your own history, `?limit=`) |
+| GET | `/v1/agents/{agent}/sessions/{id}` | One conversation, parsed into turns |
+| GET | `/v1/agents/{agent}/sessions/{id}/raw` | The transcript file as it is on disk (tail-bounded) |
 | POST | `/v1/runs` | Launch a run — always detached; `console:true` keeps a terminal to attach to (see below) |
 | GET | `/v1/runs/{id}/conversation` | What the agent said, and whether it can be answered |
 | GET | `/v1/runs/{id}/console` | Raw pty output as SSE (base64 frames), for a terminal view |
@@ -159,8 +167,53 @@ there is no code generation step (yet) tying them together.
 | GET | `/v1/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
 | GET | `/v1/runs/{id}/metrics` | One resource sample, or a live stream with `?stream=1` |
 | GET | `/v1/stats` | One resource sample per live run, host-wide |
-| GET/POST | `/v1/worktrees` | List / create managed git worktrees |
-| GET/DELETE | `/v1/worktrees/{branch}` | Read / remove (`?force=1`) one worktree |
+| GET/POST | `/v1/worktrees` | List (`?repo=`, or `?repo=all` for every registered repository) / create managed git worktrees |
+| GET | `/v1/worktrees/{branch}/diff` | What this branch has beyond its base, plus its uncommitted work |
+| GET/DELETE | `/v1/worktrees/{branch}` | Read / remove (`?repo=`, `?force=1`) one worktree |
+
+### Which repository a request is about
+
+One daemon has one **default** repository — what `-project` named — and every
+request that names none is about it, which is what keeps a client written
+against the original single-repository contract meaning exactly what it meant.
+Other repositories are added at runtime and persisted to
+`~/.config/sandbox/studio/projects.json`.
+
+The rule that keeps that inside the trust boundary: **a request names a
+repository by id, never by path.** `POST /v1/projects` is the single endpoint
+that accepts a host path, so it is the single place one is checked — absolute,
+on disk, a git repository, and past `sandbox.RefuseUnsafeHostPath` (never `/`,
+never your home, never an ancestor of it). It records the repository **root**,
+whichever directory inside it was named. Everything else takes `?repo=<id>` (or
+`"repo"` in a body), resolved against what that endpoint recorded, so no
+parameter-guessing talks a handler into reading a directory nobody registered —
+and the set of directories this control plane will touch stays a file you can
+read.
+
+`?repo=all` is a third meaning and gets its own spelling rather than a changed
+default: absent already means "the repository this daemon was started in", which
+every client written before repositories were plural relies on. Only the
+worktree listing needs it — docker lists containers across every repository
+already, so a screen showing all repositories' runs beside one repository's
+worktrees was comparing two different questions.
+
+`/v1/audit` takes `?repo=` too, and each record carries a `repoId`. That id is
+**derived, not recorded**: the log stores a workspace and has no repo field, so
+the daemon maps a managed worktree path (`<config>/worktrees/<repoId>/<branch>`)
+or a registered repository root back to an id. A workspace matching neither
+yields `""` — a true statement about a run in a checkout nobody registered, and
+one that correctly keeps it out of every repo-scoped view rather than filing it
+under the wrong repository. Stamping the id at write time instead would leave
+every existing line unfilterable, which on a machine with months of history reads
+as "this repository has no runs".
+
+`POST /v1/runs` still accepts `project` as a host path, for non-browser callers
+that already know the path they mean; it is refused together with `repo`, which
+would be two answers to one question. A UI should send `repo`.
+
+A registered repository that has gone away is **listed as `missing` and refused**
+rather than dropped: an absent checkout is not the same as one nobody asked for,
+and answering for it would read whatever is at that path now.
 
 A run is addressed by short id, container name, or branch — the same three
 references `sandbox-cli list`/`kill`/`logs` accept, resolved the same way (matched
@@ -169,6 +222,98 @@ with the candidates listed). The worktree routes take a *whole* branch name,
 slashes included, so `GET /worktrees/feat/studio-api` works. Run paths are single
 segment, so address a slash-bearing branch by id or name there — `GET
 /runs?branch=feat/studio-api` finds it.
+
+### Reading conversations
+
+`/v1/agents/{agent}/sessions` lists transcripts, and the default is narrow on
+purpose: only the **sandbox-owned** store, because that listing feeds a resume
+picker and a session that cannot be reopened is an action that fails. `?scope=all`
+answers the *reading* question instead — it includes the user's own `~/.claude`
+history, and every row reports its `store` (`sandbox` | `host`), whether it is
+`resumable`, and the `project` (working directory) the transcript recorded. That
+last field is what tells the two apart at a glance: a container's cwd is always
+`/workspace`, a host session's is the real path.
+
+`{id}` returns the parsed turns; `{id}/raw` returns the file. Raw exists because
+parsing is an interpretation — the claude jsonl carries a dozen line kinds and
+only some are turns — and the only way to check an interpretation is to see what
+it was made from. A long file is served **tail-first** with `truncated: true`,
+since a conversation is appended to and the end is what you opened it for, and
+the partial first line is dropped so every line handed over parses.
+
+The rule, as everywhere else: **a request names a session by id, never by path.**
+The daemon resolves the id against the stores `internal/agentctx` has verified.
+`path` is reported so a raw view can say what it is showing; it is never accepted
+back.
+
+### Picking a repository to add
+
+`/v1/browse` lists **directories on the host**, outside any repository, so the
+Add-repository dialog can offer a folder picker. It exists because a browser
+cannot answer the question: `<input webkitdirectory>` yields relative paths and
+`showDirectoryPicker()` yields a handle with no path, while the daemon needs the
+absolute one it will mount.
+
+This is the widest-reaching read in the API and the only one that leaves a
+repository, so it is narrow in four ways: **directories only** (a file is never
+listed, so it cannot be used to learn that `~/Documents/tax-2025.pdf` exists),
+**names only** (no sizes, no times, no contents — nothing here opens anything),
+**no dot-directories** (`.ssh`, `.aws`, `.gnupg` are never enumerated), and the
+same gate as everything else — loopback, `Origin`/`Host`, bearer token.
+
+The honest framing: a caller that can reach this can already `POST /v1/runs` and
+start a container mounting a directory, so which directories exist is not the
+boundary — it is a convenience built on reach already granted. What it must not
+become is a file reader. Entries are flagged `repo` when they hold a `.git` (a
+hint; `POST /v1/projects` still decides) and `registered` when Studio already
+manages them.
+
+### Reading files
+
+`/v1/files` and `/v1/files/content` browse a registered repository's working
+tree — what is on disk now, uncommitted work included. Both are **read-only**,
+and there is deliberately no write endpoint: the agent edits the workspace from
+inside a container, and a control plane that could also write to it over HTTP
+would be a second editor for the same tree with none of the isolation that makes
+the first one safe.
+
+`path` is repository-relative and slash-separated; a listing's rows carry the
+`path` for the next request, so a client never assembles one. The rule that
+matters is containment: **what a path resolves to must still be inside the
+repository.** Textual `..` is normalised away, and then the joined path is
+resolved on disk with `EvalSymlinks` and the *result* is checked — because
+`/workspace` is attacker-controlled by this tool's own threat model, and an agent
+can write `notes.md -> ~/.ssh/id_ed25519`. A path that lands outside answers "no
+such file in this repository", the same message an absent file gets, so the
+refusal cannot be used to probe what exists on the host. Symlinks are reported in
+a listing rather than followed.
+
+`?branch=` browses **that branch's worktree** instead of the repository's own
+checkout. A branch is not a view here — `--worktree` gives each one its own
+directory under `<config>/worktrees/<repoId>/<branch>`, which is why several
+agents can work in parallel — so this reads that directory rather than asking git
+to render a tree at a ref, and shows the files as they are on disk right now,
+uncommitted work included. The containment rule is re-rooted with it: a path is
+checked against the directory being browsed. A branch with no worktree is refused
+rather than answered from the checkout, which would show the wrong files under
+the right name.
+
+`/v1/worktrees/{branch}/diff` answers the same `DiffFile` shape a run's diff
+does, asked of the branch rather than of a container — so it still works after
+the container is reaped, which is when reviewing usually happens. It reuses the
+run diff's `hunksFor`, so the untracked-file, binary and committed-vs-base cases
+cannot drift between the two.
+
+Content is bounded at 512 KiB (`truncated: true` when there is more), and a file
+with a NUL in its first 8000 bytes is reported `binary: true` with no content
+rather than served as text. Directories are capped at 2000 entries per listing,
+with `truncated` saying so.
+
+Worth stating plainly, because it is a real consequence: anything in the
+repository is readable this way, including untracked files like `.env`. That is
+the same access the daemon already has for diffs, and what gates it is what gates
+the rest of this API — loopback binding, the `Origin`/`Host` checks, and the
+bearer token.
 
 ### Log streaming: WebSocket and SSE
 

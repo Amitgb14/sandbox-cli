@@ -299,6 +299,20 @@ func ContextsDir() string {
 	return filepath.Join(r, "contexts")
 }
 
+// StudioDir returns the sandbox-owned host directory holding Studio's own state
+// — today the registry of repositories the control plane has been pointed at,
+// e.g. ~/.config/sandbox/studio. Outside every repository like the rescue,
+// audit and contexts state, and for the sharper version of the same reason: the
+// list of repositories Studio manages cannot live in any one of them. Returns ""
+// if the home directory cannot be determined.
+func StudioDir() string {
+	r := configRoot()
+	if r == "" {
+		return ""
+	}
+	return filepath.Join(r, "studio")
+}
+
 // findProjectConfig walks up from dir looking for .sandbox.yaml, stopping at a
 // boundary rather than at the filesystem root. Returns "" if none is found.
 //
