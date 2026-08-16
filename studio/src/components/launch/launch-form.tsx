@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Bot, GitBranch, Play, ShieldCheck, Terminal } from "lucide-react";
+import { Bot, FolderPlus, GitBranch, Play, ShieldCheck, Terminal } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,15 +28,15 @@ import { LaunchPreview } from "@/components/launch/launch-preview";
 import {
   useAgentSessions,
   useAgents,
-  useDaemon,
   useLaunchRun,
+  useProjects,
   useRemoveRun,
   useWorktrees,
 } from "@/lib/api/queries";
+import { AddRepositoryDialog } from "@/components/shell/add-repository-dialog";
 import { localPreview } from "@/lib/api/endpoints";
 import { formatRelative, pluralize } from "@/lib/format";
 import { BASELINE_EGRESS, PROFILES, RESERVED_ENV } from "@/lib/constants";
-import { REPOS } from "@/lib/mock/data";
 import { useUi } from "@/lib/store";
 import type {
   AgentName,
@@ -63,19 +63,23 @@ export function LaunchForm() {
   const search = useSearchParams();
   const repoFilter = useUi((s) => s.repoFilter);
   const { data: agents } = useAgents();
-  const { data: daemon } = useDaemon();
-  const { data: worktrees } = useWorktrees();
+  const { data: projects } = useProjects();
+  const [addRepoOpen, setAddRepoOpen] = useState(false);
   const launch = useLaunchRun();
   const removeRun = useRemoveRun();
 
   const initialAgent = (search.get("agent") as AgentName | null) ?? "claude";
-  const initialRepo = REPOS.find((r) => r.id === repoFilter) ?? REPOS[0];
 
   const [req, setReq] = useState<LaunchRequest>({
     agent: initialAgent,
     command: "",
     prompt: "",
-    workspace: initialRepo.root,
+    // Both empty until the daemon has answered. There is nothing honest to put
+    // here before then: a repository this form invented is one the daemon has
+    // never heard of, which is exactly how a path from a fixture ended up in a
+    // real launch request.
+    repo: repoFilter ?? "",
+    workspace: "",
     worktree: null,
     base: "main",
     profile: "dev",
@@ -95,18 +99,28 @@ export function LaunchForm() {
     publish: [],
   });
 
-  // The daemon manages exactly one project, and it says which on /v1/health.
-  // Adopt it as soon as it answers, unless you have already picked something
-  // else: the initial value can only come from the fixture repos, and posting a
-  // fixture path to a live daemon fails with "project path does not exist".
+  // Adopt a repository as soon as the daemon lists one: whichever the app is
+  // scoped to, else the one the daemon was started in, else the first that can
+  // actually be read. Only while nothing is chosen — this must never move a
+  // selection out from under someone mid-form.
   useEffect(() => {
-    if (!daemon?.project) return;
-    setReq((prev) =>
-      prev.workspace === initialRepo.root && !prev.worktree
-        ? { ...prev, workspace: daemon.project as string }
-        : prev,
-    );
-  }, [daemon?.project, initialRepo.root]);
+    if (!projects?.length) return;
+    setReq((prev) => {
+      if (prev.repo && projects.some((p) => p.id === prev.repo)) return prev;
+      const usable = projects.filter((p) => !p.missing);
+      const pick =
+        usable.find((p) => p.id === repoFilter) ??
+        usable.find((p) => p.default) ??
+        usable[0];
+      if (!pick) return prev;
+      return { ...prev, repo: pick.id, workspace: pick.root };
+    });
+  }, [projects, repoFilter]);
+  // Scoped to the repository *this form* has picked, which is not necessarily
+  // the one the sidebar has scoped the app to — choosing where the agent works
+  // is the question this screen exists to answer.
+  const { data: worktrees } = useWorktrees(req.repo || undefined);
+
   const [worktreeMode, setWorktreeMode] = useState<"main" | "new" | "existing">(
     "main",
   );
@@ -132,15 +146,16 @@ export function LaunchForm() {
     );
     if (!match) return;
     deepLinkApplied.current = true;
-    // Deliberately does not touch `workspace`. It used to set it from REPOS,
-    // which is fixture data — and the fixture's id matches the real repo id, so
-    // the lookup *succeeded* and quietly replaced the daemon's project with a
-    // path that exists on nobody's disk. The launch then failed with "project
-    // path does not exist".
+    // Deliberately touches neither `repo` nor `workspace`. It used to set the
+    // workspace from REPOS, which was fixture data — and the fixture's id
+    // matched the real repo id, so the lookup *succeeded* and quietly replaced
+    // the daemon's project with a path that exists on nobody's disk. The launch
+    // then failed with "project path does not exist".
     //
     // A deep link carries a branch, and a branch is all it should apply. The
-    // workspace already holds the daemon's own project, which is the only
-    // project this server has.
+    // repository is already whichever one the app was scoped to when the link
+    // was followed — and the worktree list this branch was matched against is
+    // that repository's, so the two cannot disagree.
     setReq((prev) => ({
       ...prev,
       worktree: match.branch,
@@ -183,31 +198,20 @@ export function LaunchForm() {
   const headlessAlwaysSkips =
     !!req.agent && !req.console && agentMeta?.canSkipPermissions === true;
   const skipFlag = agentMeta?.skipPermissionArgs?.join(" ");
-  // Matched by repo **id**, never by a name derived from the workspace path.
-  // Two clones of a same-named repo would otherwise share a namespace — and the
-  // name-derived version was already wrong here, because a worktree path
-  // carries the id (`intrupt-web-1f3ab902`) while the workspace directory
-  // carries the name (`intrupt_web`), so it matched nothing for those repos.
-  // One daemon manages one project. When it has answered, that project *is* the
-  // repository list — and every worktree it reports belongs to it, so there is
-  // nothing to filter by. REPOS is fixture data and only stands in before the
-  // daemon replies; offering it against a live daemon is what put a path from
-  // somebody's imagination into a launch request.
-  const liveProject = daemon?.project ?? null;
-  const repoOptions = liveProject
-    ? [
-        {
-          id: "live",
-          name: liveProject.split("/").filter(Boolean).pop() ?? liveProject,
-          root: liveProject,
-        },
-      ]
-    : REPOS;
-  const selectedRepoId =
-    repoOptions.find((r) => r.root === req.workspace)?.id ?? null;
-  const repoWorktrees = (worktrees ?? []).filter(
-    (w) => !w.primary && (liveProject !== null || w.repoId === selectedRepoId),
-  );
+  // The repositories the daemon answers about, and nothing else. Addressed by
+  // repo **id**, never by a name derived from the workspace path: two clones of
+  // a same-named repo would otherwise share a namespace — and the name-derived
+  // version was already wrong here, because a worktree path carries the id
+  // (`intrupt-web-1f3ab902`) while the workspace directory carries the name
+  // (`intrupt_web`), so it matched nothing for those repos.
+  //
+  // A repository that cannot be read is listed and not selectable: hiding it
+  // would leave someone hunting for the one they added, and offering it would
+  // launch against a directory that is not there.
+  const repoOptions = projects ?? [];
+  // Already scoped by the query above, so every worktree here belongs to the
+  // picked repository; only the primary checkout is dropped.
+  const repoWorktrees = (worktrees ?? []).filter((w) => !w.primary);
 
   function submit() {
     launch.mutate(resolved, {
@@ -374,21 +378,48 @@ export function LaunchForm() {
         {/* ---------------------------------------------------------------- */}
         <Section icon={GitBranch} title="Where it works">
           <Field label="Repository" htmlFor="repo">
-            <Select
-              value={req.workspace}
-              onValueChange={(v) => patch({ workspace: v, worktree: null })}
-            >
-              <SelectTrigger id="repo">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {repoOptions.map((r) => (
-                  <SelectItem key={r.id} value={r.root}>
-                    {r.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex gap-2">
+              <Select
+                value={req.repo}
+                onValueChange={(v) => {
+                  const picked = repoOptions.find((r) => r.id === v);
+                  // The workspace follows the id rather than being chosen
+                  // beside it: they are one fact, and two controls for one fact
+                  // is how they end up disagreeing.
+                  patch({ repo: v, workspace: picked?.root ?? "", worktree: null });
+                }}
+              >
+                <SelectTrigger id="repo" className="flex-1">
+                  <SelectValue placeholder="Waiting for the daemon…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {repoOptions.map((r) => (
+                    <SelectItem key={r.id} value={r.id} disabled={r.missing}>
+                      {r.name}
+                      {r.missing ? " — unavailable" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                title="Add a repository"
+                aria-label="Add a repository"
+                onClick={() => setAddRepoOpen(true)}
+              >
+                <FolderPlus className="size-4" />
+              </Button>
+            </div>
+            {req.workspace && (
+              // The host path that will be mounted at /workspace. Shown because
+              // the name alone cannot tell two checkouts of one repository apart,
+              // and this is the last screen before a container reaches it.
+              <p className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
+                {req.workspace}
+              </p>
+            )}
           </Field>
 
           <Field label="Branch">
@@ -771,6 +802,17 @@ export function LaunchForm() {
       <aside className="space-y-4 xl:sticky xl:top-20 xl:self-start">
         <LaunchPreview preview={preview} />
       </aside>
+
+      {/* Selecting what was just added, since adding it here means meaning to
+          launch in it — and the daemon's recorded root, not the typed path,
+          because the two differ whenever a subdirectory was named. */}
+      <AddRepositoryDialog
+        open={addRepoOpen}
+        onOpenChange={setAddRepoOpen}
+        onAdded={(project) =>
+          patch({ repo: project.id, workspace: project.root, worktree: null })
+        }
+      />
     </div>
   );
 }

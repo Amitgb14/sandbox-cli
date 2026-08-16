@@ -26,22 +26,35 @@
 #   --no-install     use the binaries already on this machine
 #   --no-pull        do not refresh the image
 #
-# ── One repository at a time, and how to change it ───────────────────────────
+# ── The repository it starts in, and the ones you add ────────────────────────
 #
-# The API manages the single repository it was started in: `-project` is fixed
-# for the life of the process, and everything Studio shows — worktrees, runs,
-# diffs — belongs to it. Standing in another repository changes nothing on its
-# own, which is confusing precisely because the terminal moved and the browser
-# did not.
+# `-project` is the repository the API is *started* in, and it stays fixed for
+# the life of the process: it is what every request naming no repository is
+# about, and it is the one that cannot be removed. Standing in another
+# repository changes nothing on its own, which is confusing precisely because
+# the terminal moved and the browser did not.
 #
-# To point it somewhere else, run `up` there:
+# Other repositories are added from the UI — "Add repository…" in the sidebar's
+# picker, or the ＋ beside the repository field on Launch — which posts the host
+# path to `POST /v1/projects`. The daemon checks it (absolute, on disk, a git
+# repository, not your home directory) and remembers it in
+# ~/.config/sandbox/studio/projects.json, so it is still there next time.
+# Removing one forgets it; nothing on disk is touched.
 #
-#   cd ~/other-project && sh studio.sh up
+# Two limits worth knowing:
 #
-# That stops the pair and starts it again against the new repository, keeping
-# the same ports and the same token, so the tab you already have open follows.
-# `--project DIR` does the same without moving. `status` prints whichever
-# repository the daemon reports, so the answer is always one command away.
+#   * The default repository is changed by restarting, not from the UI:
+#
+#       cd ~/other-project && sh studio.sh up      # or: up --project DIR
+#
+#     That stops the pair and starts it again against the new repository,
+#     keeping the same ports and the same token, so the tab you already have
+#     open follows. `status` prints whichever repository the daemon reports.
+#
+#   * --api-in-docker stays single-repository. The API container is started with
+#     only `-v "$PROJECT:$PROJECT"`, so a repository added later is a path it
+#     cannot see whatever the registry says. The default (the API as an ordinary
+#     host process) has no such limit — it runs as you, and reaches what you can.
 #
 # ── What runs where, and why it is split ─────────────────────────────────────
 #

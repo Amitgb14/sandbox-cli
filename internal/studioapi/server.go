@@ -47,6 +47,14 @@ type Server struct {
 	RepoID  string // worktree.RepoID(Project); "" outside a git repo
 	Engine  string // "docker" | "podman"
 
+	// Projects are the *other* repositories this daemon will answer about,
+	// persisted so they survive a restart. Project above remains the default —
+	// the one every request naming no repo is scoped to — which is what keeps a
+	// client written against the single-repository contract meaning exactly what
+	// it meant. See projects.go for why a request names a repository by id and
+	// never by path.
+	Projects *projectStore
+
 	// CORSOrigins is the exact set of origins allowed to read cross-origin
 	// responses (Studio's own frontend, typically a Next dev server on another
 	// port). Empty means no CORS headers at all — combined with binding to
@@ -92,11 +100,12 @@ func New(cfg config.Config, project string) (*Server, error) {
 	// `sandbox-cli run` outside a repo.
 	repoID, _ := worktree.RepoID(project)
 	return &Server{
-		Session: sess,
-		RT:      rt,
-		Project: project,
-		RepoID:  repoID,
-		Engine:  engine,
+		Session:  sess,
+		RT:       rt,
+		Project:  project,
+		RepoID:   repoID,
+		Engine:   engine,
+		Projects: loadProjectStore(projectsPath()),
 	}, nil
 }
 
@@ -110,8 +119,16 @@ func (s *Server) Handler() http.Handler {
 	// start demanding a token, and the UI's probe would report the daemon down.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+healthPath, s.handleHealth)
+	mux.HandleFunc("GET /v1/projects", s.handleListProjects)
+	mux.HandleFunc("POST /v1/projects", s.handleCreateProject)
+	mux.HandleFunc("DELETE /v1/projects/{id}", s.handleDeleteProject)
+	mux.HandleFunc("GET /v1/browse", s.handleBrowse)
+	mux.HandleFunc("GET /v1/files", s.handleListFiles)
+	mux.HandleFunc("GET /v1/files/content", s.handleFileContent)
 	mux.HandleFunc("GET /v1/agents", s.handleAgents)
 	mux.HandleFunc("GET /v1/agents/{agent}/sessions", s.handleAgentSessions)
+	mux.HandleFunc("GET /v1/agents/{agent}/sessions/{id}", s.handleSessionTranscript)
+	mux.HandleFunc("GET /v1/agents/{agent}/sessions/{id}/raw", s.handleSessionRaw)
 	mux.HandleFunc("GET /v1/runs", s.handleListRuns)
 	mux.HandleFunc("POST /v1/runs", s.handleCreateRun)
 	mux.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
@@ -141,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	// the more specific pattern, so the mux prefers it.
 	mux.HandleFunc("GET /v1/worktrees/{branch...}", s.handleGetWorktree)
 	mux.HandleFunc("GET /v1/worktrees/{branch}/commits", s.handleWorktreeCommits)
+	mux.HandleFunc("GET /v1/worktrees/{branch}/diff", s.handleWorktreeDiff)
 	mux.HandleFunc("GET /v1/commits/{sha}/diff", s.handleCommitDiff)
 	mux.HandleFunc("DELETE /v1/worktrees/{branch...}", s.handleDeleteWorktree)
 	return s.withMiddleware(mux)

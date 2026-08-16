@@ -100,6 +100,34 @@ func ambiguousRunError(ref string, matches []runtime.ContainerInfo) error {
 	return fmt.Errorf("%s", b.String())
 }
 
+// repoNameFromID recovers the display name from a repo id.
+//
+// worktree.RepoID builds the id as `filepath.Base(root) + "-" + sha256(root)[:8]`,
+// so this inverts that construction rather than guessing: an id that does not
+// end in a dash and eight hex digits is handed back whole, because the honest
+// answer for an id this does not recognise is the id.
+//
+// Derived rather than looked up in the projects registry on purpose — a run may
+// belong to a repository nobody registered (an old container, or one launched
+// from the CLI in a checkout Studio has never been pointed at), and a name that
+// existed only for registered repositories would leave exactly those rows blank.
+// It is a *display* name either way: matching is RepoID's job.
+func repoNameFromID(id string) string {
+	if len(id) < 10 {
+		return id
+	}
+	suffix := id[len(id)-9:]
+	if suffix[0] != '-' {
+		return id
+	}
+	for _, r := range suffix[1:] {
+		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') {
+			return id
+		}
+	}
+	return id[:len(id)-9]
+}
+
 // shortID is the 12-character form docker itself displays, and the one this API
 // accepts back as Run.ID — mirrors internal/cli's shortID so ids agree between
 // `sandbox-cli list` and GET /runs.
@@ -126,7 +154,8 @@ func toRun(c runtime.ContainerInfo, engine string) Run {
 		Kind:        RunKindInteractive,
 		State:       toRunState(c.State),
 		Detached:    !c.OpenStdin && !c.TTY,
-		Repo:        c.Labels[sandbox.LabelRepo],
+		RepoID:      c.Labels[sandbox.LabelRepo],
+		RepoName:    repoNameFromID(c.Labels[sandbox.LabelRepo]),
 		Branch:      c.Labels[sandbox.LabelBranch],
 		Base:        c.Labels[sandbox.LabelBase],
 		Agent:       c.Labels[sandbox.LabelAgent],

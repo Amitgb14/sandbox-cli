@@ -22,6 +22,7 @@ import { LandQueuePanel } from "@/components/dashboard/land-queue-panel";
 import {
   useAudit,
   useHistoryStats,
+  useProjects,
   useRuns,
   useWorktrees,
 } from "@/lib/api/queries";
@@ -40,12 +41,12 @@ import {
   formatPercent,
   pluralize,
 } from "@/lib/format";
-import { REPOS } from "@/lib/mock/data";
 
 export default function DashboardPage() {
   const repoFilter = useUi((s) => s.repoFilter);
   const { data: allRuns, isPending } = useRuns();
   const { data: allWorktrees, isPending: worktreesPending } = useWorktrees();
+  const { data: projects } = useProjects();
   // History comes from the audit log, not from containers. A container carries
   // its own record until `fleet clean` reaps it, so a fourteen-day chart built
   // from containers is a chart of whatever has not been tidied up yet — on this
@@ -55,9 +56,19 @@ export default function DashboardPage() {
   // does not. The records are only fetched for the fallback, which is why the
   // query is disabled once the daemon has answered: five thousand records to
   // draw one chart is exactly what the index exists to stop.
-  const { data: aggregate, isPending: aggregatePending } = useHistoryStats(14);
+  // The daemon's aggregate covers every repository and cannot be narrowed: the
+  // log it indexes has no repo column, because it predates repositories being
+  // plural here. So it is used only while nothing is scoped. With a repository
+  // picked, the records are fetched and bucketed in the browser instead —
+  // slower, and the only version that answers the question actually being asked.
+  // Showing the machine-wide pass rate under a repository's name would be a
+  // number about other people's work.
+  const scoped = repoFilter !== null;
+  const { data: aggregate, isPending: aggregatePending } = useHistoryStats(14, {
+    enabled: !scoped,
+  });
   const { data: history } = useAudit(undefined, 5000, {
-    enabled: !aggregatePending && !aggregate,
+    enabled: scoped || (!aggregatePending && !aggregate),
   });
 
   const runs = scopeToRepo(allRuns ?? [], repoFilter);
@@ -69,7 +80,7 @@ export default function DashboardPage() {
   const liveStats = runStats(runs);
   // The daemon's answer when there is one, the browser's when there is not.
   // Both compute the same thing from the same log; only the place differs.
-  const past = aggregate?.stats ?? historyStats(history ?? []);
+  const past = (!scoped && aggregate?.stats) || historyStats(history ?? []);
   const stats = {
     ...liveStats,
     finishedToday: past.finishedToday,
@@ -77,15 +88,14 @@ export default function DashboardPage() {
     decided: past.decided,
     medianDurationMs: past.medianDurationMs,
   };
-  const days = aggregate
-    ? toDayBuckets(aggregate.days)
-    : bucketAuditByDay(history ?? [], 14);
+  const days =
+    !scoped && aggregate ? toDayBuckets(aggregate.days) : bucketAuditByDay(history ?? [], 14);
   // Per-agent activity has no aggregate endpoint yet, so it stays client-side
   // and is simply absent when the records were not fetched — an empty panel
   // rather than a wrong one.
   const agents = byAgentAudit(history ?? []).slice(0, 7);
   const live = runs.filter((r) => r.state === "running");
-  const repoName = REPOS.find((r) => r.id === repoFilter)?.name;
+  const repoName = projects?.find((r) => r.id === repoFilter)?.name;
 
   return (
     <div className="space-y-6">
@@ -205,7 +215,7 @@ export default function DashboardPage() {
           <LiveRunsPanel runs={live} loading={isPending} />
           <ChartCard
             title="Runs by agent"
-            description="Which adapters are doing the work."
+            description="Which adapters are doing the work, counted from the run log — which keeps a run after its container is reaped."
             aside={
               <Button asChild variant="ghost" size="sm" className="h-7 text-xs">
                 <Link href="/agents">All agents</Link>

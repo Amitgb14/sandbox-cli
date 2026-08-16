@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { KeyRound, MessageSquare, SendHorizontal } from "lucide-react";
+import { FileJson, KeyRound, MessageSquare, SendHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyButton } from "@/components/common/copy-button";
+import { SessionViewer } from "@/components/agents/session-viewer";
 import { EmptyState } from "@/components/common/empty-state";
 import { setApiToken } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/client";
@@ -40,6 +41,7 @@ export function ConsoleView({ run }: { run: Run }) {
   const consoleEnabled = daemon?.authRequired === true;
   const send = useSendConsoleInput(run.id);
   const [draft, setDraft] = useState("");
+  const [viewing, setViewing] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   const messages = data?.messages ?? [];
@@ -155,6 +157,32 @@ export function ConsoleView({ run }: { run: Run }) {
             ? "This run has no console — it was launched without one, so the container was created with no stdin and cannot be typed at. Tick “Keep a console I can attach to” when launching."
               : "The run has finished. Its conversation is kept; there is nothing listening to answer."}
         </p>
+      )}
+
+      {/* The file this view is a reading of. Offered whenever there is a session
+          to open, running or not: the formatted turns are sandbox-cli's
+          interpretation of a transcript with a dozen line kinds, and the only
+          way to check an interpretation is to see what it was made from. */}
+      {data?.sessionId && run.agent && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-mono">{data.sessionId.slice(0, 8)}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setViewing(true)}
+          >
+            <FileJson className="size-3.5" />
+            Original transcript file
+          </Button>
+        </div>
+      )}
+      {data?.sessionId && run.agent && (
+        <SessionViewer
+          agent={run.agent}
+          session={viewing ? { id: data.sessionId, turns: messages.length, modified: "" } : null}
+          onOpenChange={(o) => !o && setViewing(false)}
+        />
       )}
 
       {/* The way back in. Shown once the run is over, which is when it becomes

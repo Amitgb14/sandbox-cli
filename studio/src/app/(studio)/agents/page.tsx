@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PageHeader } from "@/components/common/page-header";
+import { ConversationsPanel } from "@/components/agents/conversations-panel";
 import { EmptyState } from "@/components/common/empty-state";
 import { MetricTile } from "@/components/common/metric-tile";
 import { useAgents } from "@/lib/api/queries";
@@ -128,6 +129,12 @@ export default function AgentsPage() {
           ))}
         </div>
       )}
+
+      {/* Claude only, because it is the only agent sandbox-cli has a verified
+          transcript reader for. The others list as `partial` — id and dates real,
+          everything else unknown — and a panel that showed rows of question marks
+          would be claiming to read something it cannot. */}
+      <ConversationsPanel agent="claude" />
     </div>
   );
 }

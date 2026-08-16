@@ -397,6 +397,49 @@ rather than merely passing.
   exactly that reason). Runs are always detached: an HTTP request/response cycle has nowhere to
   hold a pty.
 
+  One daemon still has one **default** repository — what `-project` named, what every request
+  naming none is about, and the one that cannot be removed — but it is no longer the only one it
+  will answer about. `projects.go` is a persisted registry
+  (`~/.config/sandbox/studio/projects.json`) of repositories added at runtime, and the rule that
+  keeps it inside the trust boundary is why it is a registry rather than a path parameter on each
+  handler: **a request names a repository by id, never by path.** `POST /v1/projects` is the one
+  endpoint that takes a host path, so `validateProjectPath` is the one place a path is checked —
+  absolute, on disk, a git repository, and past `RefuseUnsafeHostPath`, applied to the **root**
+  (a subdirectory of your home is fine; a repository whose root *is* your home is not, and only
+  the root knows that). Every other handler resolves an id, so no parameter-guessing reaches a
+  directory nobody registered — and the set of directories this control plane will touch stays a
+  file the user can read. Ids are recomputed by `worktree.RepoID` rather than trusted from the
+  file, which makes "this run belongs to that repository" true by construction: it is the same
+  function of the same path that stamped the container's `sandbox.repo` label. `repoScope` carries
+  project and repo id **together** for the reason `buildRunOptions` already documents — taking the
+  directory from the request and the id from the server files work under a repository it never
+  touched. A registered repository that has gone away is listed `Missing` and refused, the same
+  bargain `agentctx` makes with a store it cannot see today. `RunCreateRequest.Project` (a raw
+  path) survives for non-browser callers and is refused *together with* `repo`, since two answers
+  to one question is a choice nobody should make silently. What this cannot fix is
+  `--api-in-docker`: that container is started with only `-v "$PROJECT:$PROJECT"`, so a repository
+  added later is a path it cannot see, and the refusal it gets is an honest "no such directory".
+
+  `files.go` browses a repository's working tree, and is **read-only by design, not by
+  omission**: the agent edits `/workspace` from inside a container, so an HTTP write endpoint
+  would be a second editor for the same tree with none of the isolation that makes the first one
+  safe. Its one rule is containment — `resolveInRepo` normalises the textual `..`, then resolves
+  the joined path with `EvalSymlinks` and checks *the result*, because `/workspace` is
+  attacker-controlled and an agent can write `notes.md -> ~/.ssh/id_ed25519`. The containment test
+  appends a separator before comparing, since a bare prefix says `/repo-secrets/x` is inside
+  `/repo`; a failure returns the same "no such file" as an absent path, so a refusal cannot be
+  used to probe the host. Symlinks are reported in a listing rather than followed (following would
+  read the target before anyone asked, and two links would loop). Content is bounded, binary is
+  reported rather than served, and both bounds are *stated* in the response — a listing that stops
+  without saying so reads as "this is everything".
+
+  On the frontend, the rule the projects work added is that **a write has no fixture**
+  (`client.ts`, `liveOnly`). A read's fixture stands in for an answer and the header says so; a
+  write's fixture claims state changed when nothing did, and the next read — fixtures too — cannot
+  show it. That is exactly how "Add repository" reported success against a list that never grew.
+  The mutations that merely *do* something (launch, stop, kill) keep their fixtures, since nothing
+  afterwards claims they happened.
+
   What is genuinely new here is a question the CLI never had to answer, because a terminal
   answered it: **who may ask this process to start a container?** CORS alone answers it wrong —
   refusing to *reflect* an origin only stops a page reading the response, while a cross-origin

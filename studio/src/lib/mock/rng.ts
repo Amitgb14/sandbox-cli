@@ -3,7 +3,10 @@
  *
  * Fixtures that move on their own are worse than no fixtures: a chart whose
  * shape changes each refresh makes it impossible to tell a rendering bug from
- * new data. Only `NOW` is allowed to vary, and it is read once at module load.
+ * new data. Only `NOW` is allowed to vary — it is read once at module load and
+ * rounded to the hour, so the *shape* of everything is identical between reloads
+ * while the ages stay honest. See its own comment for why neither a fixed epoch
+ * nor a wall-clock read is right.
  */
 export function makeRng(seed: number) {
   let s = seed >>> 0;
@@ -36,20 +39,40 @@ export function rngFor(seed: number): Rng {
 }
 
 /**
- * The clock the fixtures are anchored to: a fixed epoch, not `Date.now()`.
+ * The clock the fixtures are anchored to: the top of the current hour.
  *
- * This was read once at module load, which is once on the server and again in
- * the browser — two different values, so every timestamp derived from it
- * differed between the server-rendered HTML and the client's first render. That
- * is a hydration mismatch by construction, and it does not depend on the pages
- * fetching through TanStack Query: a "use client" component is still rendered on
- * the server in the App Router.
+ * Two failures to avoid at once, and the first one is why this is not simply
+ * `Date.now()`.
  *
- * Fixtures should be deterministic anyway — the point of a seeded RNG is that
- * two runs agree, and anchoring it to wall-clock time gave that up for nothing.
- * 2026-01-01T00:00:00Z.
+ * **Not wall-clock.** Read once at module load means once on the server and
+ * again in the browser — two different values, so every timestamp derived from
+ * it differs between the server-rendered HTML and the client's first render.
+ * That is a hydration mismatch by construction, and it does not depend on the
+ * pages fetching through TanStack Query: a "use client" component is still
+ * rendered on the server in the App Router.
+ *
+ * **And not a fixed epoch either**, which is what this was and what the mismatch
+ * was traded for. A frozen anchor does not stay a neutral choice: it *rots*. Six
+ * fixture runs stamped minutes before 2026-01-01 and marked `running` read, eight
+ * months later, as agents that had been running for 226 days — and the fixtures
+ * are plausible enough to be believed, because they were authored from a real
+ * repository with its real repo id. That cost two separate debugging sessions,
+ * both of which concluded "these are fixtures" only after checking docker. The
+ * fourteen-day charts had the same problem from the other side: every record sat
+ * outside the window, so the dashboard's history was empty on a machine with
+ * hundreds of real runs behind it.
+ *
+ * Rounding to the hour gets both. Server and client compute the same number for
+ * an hour at a time, so hydration is stable unless a single page load straddles
+ * the boundary — and even then it would only matter if fixture timestamps
+ * reached server-rendered markup, which they do not: nothing imports the fixtures
+ * outside the transport layer, and that resolves in the browser. Ages stay
+ * believable ("41m ago" is 41 minutes ago, ±the hour), day buckets land on real
+ * days, and the seeded RNG still makes every other detail identical between two
+ * reloads.
  */
-export const NOW = 1767225600000;
+const HOUR_MS = 3_600_000;
+export const NOW = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
 
 export function ago(ms: number): string {
   return new Date(NOW - ms).toISOString();

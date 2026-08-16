@@ -13,6 +13,90 @@ version is tagged.
 
 ### Added
 
+- **Studio manages more than one repository, and you add them from the browser.**
+  "Add repository…" in the sidebar's picker (and the ＋ beside the repository
+  field on Launch) takes the absolute path of a git repository on this machine;
+  Studio records its **root** — any directory inside it will do — and every
+  screen can then be scoped to it. The list is remembered in
+  `~/.config/sandbox/studio/projects.json`, so it survives a restart; removing a
+  repository forgets it and touches nothing on disk. The repository the daemon
+  was *started* in is always listed, is what every unqualified request is about,
+  and is the one that cannot be removed — changing that is still
+  `studio.sh up --project DIR`. Two things worth knowing: the daemon checks each
+  path itself (absolute, on disk, a git repository, and never your home
+  directory or an ancestor of it) and shows you its own refusal, and a repository
+  that later goes away is listed as unavailable rather than quietly dropped.
+  `--api-in-docker` stays single-repository: that container is started with only
+  the one project mounted, so a repository added later is a path it cannot see.
+  New endpoints: `GET/POST /v1/projects`, `DELETE /v1/projects/{id}`, and
+  `?repo=<id>` on the worktree, commit-diff and run-creation routes —
+  a request names a repository by id, never by path.
+- **Read an agent's conversations in Studio.** The Agents screen gained a
+  **Conversations** panel listing every claude transcript on this machine —
+  filterable by title, working directory or id — and opening one shows it two
+  ways: the conversation parsed into turns, and **the original `.jsonl` file**,
+  which is there because a parsed view is an interpretation and the only way to
+  check one is to see what it was made from. A run's console view links to the
+  same viewer for its own transcript. Each row says which store it came from:
+  `sandbox` (written by a container, and resumable here) or `host` (your own
+  `~/.claude` history, readable and not this daemon's to resume) — told apart by
+  the working directory the transcript recorded, since a container's is always
+  `/workspace`. A long file is served tail-first and says so. New endpoints:
+  `GET /v1/agents/{agent}/sessions/{id}` and `.../raw`, plus `?scope=all` and
+  `?limit=` on the listing. A session is named by id and the daemon resolves it —
+  no request can point this at a file.
+
+- **The repository's own checkout is a branch you can pick.** `GET /v1/worktrees`
+  reported only the worktrees sandbox-cli manages — right for `worktree list`,
+  which lists what it created and can remove, and wrong for a branch picker,
+  where it meant `main` appeared nowhere and no screen said which branch you were
+  looking at. The listing now includes the checkout, marked `primary`, named by
+  the branch it actually has, and carrying its own uncommitted count (which its
+  row could not have shown before: the dirty helper resolves a *managed*
+  worktree, so it would have read zero). It is addressable by that branch name
+  everywhere the others are — files, diff, detail — and refuses to be removed,
+  since it is not a managed worktree.
+
+- **An Editor section in Studio** — built, and **not surfaced yet**: the nav
+  group is parked in `nav.ts` as `EDITOR_NAV`, so the sidebar, the command
+  palette and the keyboard shortcuts do not offer it, while `/files` and
+  `/changes` stay reachable by URL and every endpoint behind them works. Putting
+  that one group back into `NAV` is all it takes to ship. It holds **Files**
+  (moved out of Work) and a new **Changes** screen. Files gained a branch switcher: pick the repository's own
+  checkout or any worktree, and the tree and viewer show that branch's files as
+  they are on disk — a worktree is its own directory, so this reads that
+  directory rather than rendering a ref, and uncommitted work is included.
+  Changes shows what a branch has that its base does not *plus* whatever is still
+  uncommitted in its worktree, with the same diff view a run's changes use — read
+  from the branch rather than from a container, so it survives the container
+  being reaped, which is when reviewing usually happens. The two screens link to
+  each other on the same branch. New endpoints: `?branch=` on `GET /v1/files` and
+  `GET /v1/files/content`, and `GET /v1/worktrees/{branch}/diff`.
+- **A folder picker for Add repository**, so a path can be browsed to instead of
+  typed. It runs in the daemon rather than the browser, and that is forced rather
+  than chosen: a directory input yields relative paths and `showDirectoryPicker()`
+  yields a handle with no path, while the daemon needs the absolute one it will
+  mount. Navigate from your home directory, see which folders are git
+  repositories and which Studio already manages, and add one from the row it sits
+  on. Typing a path still works and is still what gets submitted — browsing only
+  fills the field — so a repository on an unusual volume, or one whose root is a
+  dot-directory, remains addable. The listing is deliberately narrow: directories
+  only, names only, and dot-directories such as `.ssh` are never enumerated.
+  New endpoint: `GET /v1/browse`.
+- **A file browser in Studio.** A new **Files** screen reads the scoped
+  repository's working tree as it stands on disk — uncommitted work included —
+  with a directory list, breadcrumbs and a text viewer. Read-only on purpose:
+  the agent edits the workspace from inside a container, and a control plane that
+  could also write to it over HTTP would be a second editor for the same tree
+  with none of the isolation that makes the first one safe. Paths are
+  repository-relative and what a path *resolves* to must stay inside the
+  repository, so a symlink an agent wrote pointing at `~/.ssh` is refused rather
+  than served; symlinks are marked in the listing instead of followed, files are
+  bounded at 512 KiB (and say when truncated), and binary files are reported
+  rather than dumped as text. Note that anything in the repository is readable
+  this way, `.env` included — the same access the daemon already had for diffs,
+  gated by the same loopback binding, origin checks and bearer token.
+  New endpoints: `GET /v1/files`, `GET /v1/files/content`.
 - **`install.sh --uninstall` now removes Studio too**, so getting rid of it needs
   no copy of `studio.sh` — the installer you already used is enough. It **stops**
   the UI container and the host API process on a plain `--uninstall` rather than
@@ -30,6 +114,75 @@ version is tagged.
   commands to do it by hand, for anyone who did not keep the script.
 
 ### Fixed
+
+- **Studio's fixtures aged into fiction.** With no daemon answering, every screen
+  falls back to fixture data — which is correct, and the header says so — but the
+  fixtures were anchored to a frozen epoch, so six runs marked *running* read as
+  agents that had been going for 226 days, and the fourteen-day charts were empty
+  because every record sat outside the window. They are plausible enough to be
+  believed (they were authored from a real repository, with its real repo id), so
+  this cost two separate debugging sessions that ended in "check docker". The
+  anchor is now the top of the current hour: ages stay honest, day buckets land on
+  real days, and the seeded RNG still makes everything else identical between two
+  reloads. Rounding is what keeps it safe — a raw `Date.now()` is read once on the
+  server and again in the browser, which is a hydration mismatch by construction
+  and is why the frozen epoch existed.
+
+- **A worktree opened from "All repositories" asked the wrong repository.** That
+  listing spans every registered repository, but the detail, commits and remove
+  calls sent no repository at all — which the daemon reads as the one it was
+  started in. Rows now carry their `repoId` through the link, and removing one
+  names it explicitly, since deleting the wrong repository's branch destroys work
+  rather than merely showing the wrong thing.
+
+- **An empty Runs screen now says which kind of empty it is.** The dashboard
+  counts runs from the log, which keeps a run after its container is reaped,
+  while the Runs screen lists containers — so a repository could legitimately
+  show "8 runs by claude" on one screen and nothing at all on the other, with no
+  way to tell that from a broken filter. The empty state now distinguishes them:
+  "no containers left here — N runs have finished, their containers removed by
+  --rm, fleet clean, or docker", with a link to the history. The dashboard's
+  "Runs by agent" panel says it counts the log, for the same reason.
+
+- **The dashboard mixed scopes.** With "All repositories" chosen it showed every
+  repository's runs beside only the *started-in* repository's worktrees; with one
+  repository chosen, the fourteen-day history, pass rate and per-agent panels
+  still described every repository on the machine. Both now follow the picker:
+  worktrees gained `?repo=all` for the union across every registered repository,
+  and the run log gained `?repo=` — each audit record carrying the repository it
+  belongs to, derived from the workspace it recorded, so history that predates
+  this still filters instead of vanishing. The daemon's machine-wide history
+  aggregate is skipped while a repository is scoped, since it has no repository
+  dimension to narrow and its numbers would be about other people's work.
+
+- **Scoping a screen to one repository emptied it.** A run's repository id
+  crossed the wire as `repo` while a worktree's crossed as `repoId` — one fact
+  under two names — and Studio was written against the second, so filtering runs
+  by repository compared every row against a field that did not exist. Picking a
+  repository showed no runs at all, and the runs table's repository column had
+  always been blank for the same reason. Both now spell it `repoId`, a run also
+  carries `repoName` for display, and a test fails if the two types drift apart
+  again. Only "All repositories" ever worked, which is what made it look like the
+  individual repositories were empty rather than like a broken field.
+
+- **"Add repository" reported success and then did not list the repository.**
+  Two causes, both fixed. With no daemon answering, the add was served by a
+  *fixture* — it fabricated a reply, so the toast said "Added" while nothing had
+  been added and the list, also fixtures, could not show it. Writes whose whole
+  point is to change what a later read returns no longer have fixtures at all:
+  they refuse with "No daemon answered at http://localhost:8787, so nothing was
+  changed". And adding a repository Studio *already* manages — the one it was
+  started in, above all — now says "already managed" instead of "Added", rather
+  than leaving you hunting a list for a second row that was never going to
+  appear. The new repository also appears in the list immediately rather than
+  only after the refetch lands.
+
+- **Studio's repository picker listed three repositories that did not exist.**
+  Every screen read a hardcoded fixture, so the picker showed the same three
+  invented names and ids from any directory — and offered no way to reach the
+  repository the daemon was actually managing. Repositories now come from
+  `GET /v1/projects` and nowhere else; the fixture is no longer reachable from a
+  component, and is only ever served when the header already says "Fixture data".
 
 - **Studio looked broken after you changed repository.** The API manages the one
   it was started in — `-project` is fixed for the life of the process — so

@@ -55,8 +55,13 @@ func (s *Server) handleRunDiff(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, files)
 		return
 	}
+	// The repository *this run* belongs to, read off its own sandbox.repo label
+	// rather than assumed to be the daemon's default. A run launched against a
+	// second registered repository would otherwise have its base branch — and,
+	// below, its fallback diff — computed in a checkout it never touched.
+	sc := s.scopeOfRun(c.Labels[sandbox.LabelRepo])
 	if base == "" {
-		base = worktree.HeadBranch(s.Project)
+		base = worktree.HeadBranch(sc.Project)
 	}
 
 	// The before-image, when the run recorded one. With it the question is "what
@@ -91,7 +96,7 @@ func (s *Server) handleRunDiff(w http.ResponseWriter, r *http.Request) {
 		// No snapshot was taken — not a repository, or snapshots switched off.
 		// The workspace's uncommitted state is still worth showing; it is just a
 		// broader question, and DiffScope says which one was answered.
-		for _, st := range worktree.DiffStat(s.Project, branch, base) {
+		for _, st := range worktree.DiffStat(sc.Project, branch, base) {
 			add(st)
 		}
 		for _, st := range worktree.WorkingStatIn(run.Workspace) {
@@ -165,17 +170,22 @@ func (s *Server) hunksFor(workspace, branch, base, baseline, after string, f Dif
 	return []DiffHunk{}
 }
 
-// handleCommitDiff is GET /v1/commits/{sha}/diff: what one commit changed.
+// handleCommitDiff is GET /v1/commits/{sha}/diff?repo=: what one commit changed.
 //
-// Scoped to this server's project — one daemon manages one repository, so the
-// sha is looked up there and nowhere else. It is validated as hex before it
-// reaches git, because a value beginning with a dash is read as an option
-// rather than a revision, and `--upload-pack=` is the classic way that ends
-// badly. git decides whether the object exists; this decides whether the string
-// is allowed to be a question.
+// Scoped to one repository — the registered one named by repo, or the one this
+// daemon was started in — so the sha is looked up there and nowhere else. It is
+// validated as hex before it reaches git, because a value beginning with a dash
+// is read as an option rather than a revision, and `--upload-pack=` is the
+// classic way that ends badly. git decides whether the object exists; this
+// decides whether the string is allowed to be a question.
 func (s *Server) handleCommitDiff(w http.ResponseWriter, r *http.Request) {
+	sc, err := s.scopeOf(r)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
 	sha := r.PathValue("sha")
-	stats := worktree.CommitStat(s.Project, sha)
+	stats := worktree.CommitStat(sc.Project, sha)
 	if stats == nil {
 		writeError(w, http.StatusNotFound, fmt.Errorf("no commit %q in this project", sha))
 		return
@@ -194,9 +204,111 @@ func (s *Server) handleCommitDiff(w http.ResponseWriter, r *http.Request) {
 		// Same bound as a run's diff, and for the same reason: one commit can
 		// legitimately touch hundreds of files, and a screen is not a patch file.
 		if i < maxDiffFilesWithHunks && !st.Binary {
-			f.Hunks = parseUnifiedDiff(worktree.CommitFileDiff(s.Project, sha, st.Path))
+			f.Hunks = parseUnifiedDiff(worktree.CommitFileDiff(sc.Project, sha, st.Path))
 		}
 		files = append(files, f)
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
+// handleWorktreeDiff is GET /v1/worktrees/{branch}/diff?repo=: what this branch
+// has that its base does not, plus whatever is uncommitted in its checkout.
+//
+// The same two questions a run's diff answers, asked of the *branch* rather than
+// of a container — which is what makes it useful after the container is gone.
+// A run's diff needs a container to exist; a worktree outlives every container
+// that worked in it, and reviewing an agent's work is something you usually do
+// afterwards.
+//
+// It deliberately reuses hunksFor rather than reading git a second way. The
+// three sources it tries, in order — the uncommitted state, then commits beyond
+// the base, then an untracked file rendered as one addition — are the same three
+// that make a run's diff correct, and a second implementation is a second chance
+// to get "added file with no diff output" wrong.
+func (s *Server) handleWorktreeDiff(w http.ResponseWriter, r *http.Request) {
+	sc, err := s.scopeOf(r)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	branch := r.PathValue("branch")
+	// The checkout answers here too, and its answer is narrower on purpose: it
+	// *is* what other branches are measured against, so "beyond its base" is
+	// empty by definition and what remains is whatever is uncommitted in it.
+	primary := branch == worktree.HeadBranch(sc.Project)
+	path := sc.Project
+	if !primary {
+		p, exists, err := worktree.Path(sc.Project, branch)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		if !exists {
+			writeError(w, http.StatusNotFound, fmt.Errorf("no worktree for branch %q", branch))
+			return
+		}
+		path = p
+	}
+
+	// The recorded base when a run stamped one, else the checked-out branch —
+	// the same resolution the listing and the commits view use, so "6 ahead" and
+	// a six-commit diff are counting the same thing. A view that derived the base
+	// differently would eventually disagree with `land`, which is the one that
+	// matters.
+	base := ""
+	for _, c := range s.runsByBranch(r.Context(), sc)[branch] {
+		if b := c.Labels[sandbox.LabelBase]; b != "" {
+			base = b
+			break
+		}
+	}
+	if base == "" {
+		base = worktree.HeadBranch(sc.Project)
+	}
+	if primary {
+		// Nothing to compare against: measuring a branch against itself yields
+		// every commit twice or none, and the honest answer for the checkout is
+		// its working tree.
+		base = ""
+	}
+
+	byPath := map[string]*DiffFile{}
+	add := func(stat worktree.FileStat) {
+		f, ok := byPath[stat.Path]
+		if !ok {
+			f = &DiffFile{Path: stat.Path, Status: stat.Status, Hunks: []DiffHunk{}}
+			byPath[stat.Path] = f
+		}
+		f.Insertions += stat.Insertions
+		f.Deletions += stat.Deletions
+		f.Binary = f.Binary || stat.Binary
+	}
+	// Committed work first, then the working tree. Both, not either: a branch
+	// with three commits and an unsaved fourth file is the ordinary state of an
+	// agent's worktree, and showing only one half is how a review misses the
+	// part that was still in flight.
+	if base != "" {
+		for _, st := range worktree.DiffStat(sc.Project, branch, base) {
+			add(st)
+		}
+	}
+	for _, st := range worktree.WorkingStatIn(path) {
+		add(st)
+	}
+
+	files := make([]DiffFile, 0, len(byPath))
+	for _, f := range byPath {
+		files = append(files, *f)
+	}
+	sortDiffFiles(files)
+	for i := range files {
+		if i >= maxDiffFilesWithHunks {
+			break
+		}
+		// No baseline: a branch has no before-image the way a run does. The
+		// question here is "what is on this branch", not "what did one container
+		// change", and hunksFor falls through to exactly that.
+		files[i].Hunks = s.hunksFor(path, branch, base, "", "", files[i])
 	}
 	writeJSON(w, http.StatusOK, files)
 }

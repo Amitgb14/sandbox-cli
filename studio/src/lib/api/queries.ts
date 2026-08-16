@@ -11,7 +11,8 @@ import { onTransportChange, reconnect, transportMode, type TransportMode } from 
 import { toast } from "sonner";
 import { api } from "@/lib/api/endpoints";
 import { formatRelative } from "@/lib/format";
-import type { LaunchRequest, UsageSnapshot } from "@/lib/types";
+import { useUi } from "@/lib/store";
+import type { LaunchRequest, Project, UsageSnapshot } from "@/lib/types";
 
 /**
  * Query keys, in one place. A key spelled two ways is a cache that never
@@ -24,19 +25,40 @@ export const qk = {
   runMetrics: (id: string) => ["runs", id, "metrics"] as const,
   runLogs: (id: string) => ["runs", id, "logs"] as const,
   runDiff: (id: string) => ["runs", id, "diff"] as const,
-  agentSessions: (agent: string) => ["agents", agent, "sessions"] as const,
+  agentSessions: (agent: string, scope?: string) =>
+    ["agents", agent, "sessions", scope ?? "resumable"] as const,
+  sessionTranscript: (agent: string, id: string) =>
+    ["agents", agent, "sessions", id, "transcript"] as const,
+  sessionRaw: (agent: string, id: string) =>
+    ["agents", agent, "sessions", id, "raw"] as const,
   conversation: (id: string) => ["runs", id, "conversation"] as const,
   runConfig: (id: string) => ["runs", id, "config"] as const,
   agents: ["agents"] as const,
-  worktrees: ["worktrees"] as const,
-  worktree: (b: string) => ["worktrees", b] as const,
-  worktreeCommits: (b: string) => ["worktrees", b, "commits"] as const,
+  projects: ["projects"] as const,
+  browse: (path?: string) => ["browse", path ?? "home"] as const,
+  // Repo-scoped keys carry the repo id. A key that did not would serve one
+  // repository's worktrees under another's name the moment the picker moved —
+  // the cache would hit, and the screen would be confidently wrong.
+  worktrees: (repo?: string) => ["worktrees", repo ?? "default"] as const,
+  worktree: (b: string, repo?: string) => ["worktrees", repo ?? "default", b] as const,
+  worktreeCommits: (b: string, repo?: string) =>
+    ["worktrees", repo ?? "default", b, "commits"] as const,
   branchRuns: (b: string) => ["runs", "branch", b] as const,
-  commitDiff: (sha: string) => ["commits", sha, "diff"] as const,
+  commitDiff: (sha: string, repo?: string) => ["commits", repo ?? "default", sha, "diff"] as const,
   historyStats: (days: number) => ["stats", "history", days] as const,
+  // The branch is part of the key: a worktree is its own directory, so the same
+  // path in two branches is two different files, and a key that ignored the
+  // branch would serve one under the other's name.
+  files: (path: string, repo?: string, branch?: string) =>
+    ["files", repo ?? "default", branch ?? "checkout", path] as const,
+  fileContent: (path: string, repo?: string, branch?: string) =>
+    ["files", repo ?? "default", branch ?? "checkout", path, "content"] as const,
+  worktreeDiff: (branch: string, repo?: string) =>
+    ["worktrees", repo ?? "default", branch, "diff"] as const,
   usage: ["usage"] as const,
   doctor: ["doctor"] as const,
-  audit: (branch?: string, limit?: number) => ["audit", branch ?? "all", limit ?? 200] as const,
+  audit: (branch?: string, limit?: number, repo?: string) =>
+    ["audit", repo ?? "all-repos", branch ?? "all", limit ?? 200] as const,
 };
 
 /** Live data is polled; everything else is fetched once and invalidated. */
@@ -107,23 +129,135 @@ export function useAgents() {
   return useQuery({ queryKey: qk.agents, queryFn: api.agents, staleTime: 60_000 });
 }
 
-export function useWorktrees() {
-  return useQuery({ queryKey: qk.worktrees, queryFn: api.worktrees, refetchInterval: 15_000 });
+/**
+ * The repositories this daemon answers about.
+ *
+ * Rarely changes and is read by nearly every screen, so it is cached long and
+ * invalidated by the mutations below rather than polled.
+ */
+export function useProjects() {
+  return useQuery({ queryKey: qk.projects, queryFn: api.projects, staleTime: 60_000 });
 }
 
-export function useWorktree(branch: string) {
+/**
+ * Directories on the host, for the Add-repository folder picker. Enabled only
+ * while the picker is open — this is the one query that reads outside a
+ * repository, and it should not be running because a dialog exists.
+ */
+export function useBrowse(path: string | undefined, enabled: boolean) {
   return useQuery({
-    queryKey: qk.worktree(branch),
-    queryFn: () => api.worktree(branch),
+    queryKey: qk.browse(path),
+    queryFn: () => api.browse(path),
+    enabled,
+    staleTime: 10_000,
+  });
+}
+
+/**
+ * The repository every repo-scoped query is about: whatever the sidebar picker
+ * has scoped the app to, or nothing, which the daemon reads as the repository it
+ * was started in.
+ *
+ * Read from the store here rather than threaded through a dozen call sites, and
+ * that is a deliberate trade. "Scope every screen to one repository" is what the
+ * picker promises, so the alternative is every screen remembering to pass it —
+ * and the one that forgets does not fail, it shows another repository's
+ * worktrees under this repository's name.
+ */
+function useScopedRepo(): string | undefined {
+  return useUi((s) => s.repoFilter) ?? undefined;
+}
+
+/**
+ * A repository's worktrees — the scoped one, or `override` for the one caller
+ * that legitimately asks about a different repository than the app is scoped to:
+ * the Launch form, where picking the repository to work in is the question being
+ * answered rather than a filter already applied.
+ */
+export function useWorktrees(override?: string) {
+  const scoped = useScopedRepo();
+  const repo = override || scoped;
+  return useQuery({
+    queryKey: qk.worktrees(repo),
+    queryFn: () => api.worktrees(repo),
     refetchInterval: 15_000,
   });
 }
 
-export function useWorktreeCommits(branch: string) {
+/**
+ * One worktree, and the commits behind it.
+ *
+ * `repoId` is not optional decoration. Under "All repositories" the *listing*
+ * comes from `?repo=all` and spans every registered repository, so a row there
+ * may belong to any of them — while the scoped repo is `undefined`, which the
+ * daemon reads as "the one I was started in". Opening such a row without saying
+ * which repository it came from asks the wrong one. Callers that have the row
+ * pass its `repoId`; the scope is the fallback for screens already narrowed to
+ * one repository.
+ */
+export function useWorktree(branch: string, repoId?: string) {
+  const scoped = useScopedRepo();
+  const repo = repoId || scoped;
   return useQuery({
-    queryKey: qk.worktreeCommits(branch),
-    queryFn: () => api.worktreeCommits(branch),
+    queryKey: qk.worktree(branch, repo),
+    queryFn: () => api.worktree(branch, repo),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useWorktreeCommits(branch: string, repoId?: string) {
+  const scoped = useScopedRepo();
+  const repo = repoId || scoped;
+  return useQuery({
+    queryKey: qk.worktreeCommits(branch, repo),
+    queryFn: () => api.worktreeCommits(branch, repo),
     refetchInterval: 30_000,
+  });
+}
+
+/**
+ * One directory of the scoped repository.
+ *
+ * Polled slowly rather than not at all: an agent is writing into this tree while
+ * you look at it, and a browser that showed the state at page load would be
+ * describing a directory that has since changed. Slowly, because a file listing
+ * is not a live view and a git checkout mid-run would make it flicker.
+ */
+export function useFiles(path: string, branch?: string) {
+  const repo = useScopedRepo();
+  return useQuery({
+    queryKey: qk.files(path, repo, branch),
+    queryFn: () => api.files(path, repo, branch),
+    refetchInterval: 30_000,
+  });
+}
+
+/** One file's content, fetched only once something asks to see it. */
+export function useFileContent(path: string | null, branch?: string) {
+  const repo = useScopedRepo();
+  return useQuery({
+    queryKey: qk.fileContent(path ?? "", repo, branch),
+    queryFn: () => api.fileContent(path as string, repo, branch),
+    enabled: !!path,
+    // Re-read on demand rather than on a timer: this is a file somebody opened,
+    // and a viewer that swapped the text under a reader's eyes every few seconds
+    // would be worse than one that is a minute out of date.
+    staleTime: 15_000,
+  });
+}
+
+/**
+ * One branch's changes. Polled while you look at it, because an agent may be
+ * writing into that worktree as you read — slowly, since a diff is a review
+ * surface rather than a live view.
+ */
+export function useWorktreeDiff(branch: string | null) {
+  const repo = useScopedRepo();
+  return useQuery({
+    queryKey: qk.worktreeDiff(branch ?? "", repo),
+    queryFn: () => api.worktreeDiff(branch as string, repo),
+    enabled: !!branch,
+    refetchInterval: 20_000,
   });
 }
 
@@ -142,9 +276,10 @@ export function useBranchRuns(branch: string) {
  * to see it.
  */
 export function useCommitDiff(sha: string, enabled: boolean) {
+  const repo = useScopedRepo();
   return useQuery({
-    queryKey: qk.commitDiff(sha),
-    queryFn: () => api.commitDiff(sha),
+    queryKey: qk.commitDiff(sha, repo),
+    queryFn: () => api.commitDiff(sha, repo),
     enabled,
     staleTime: Infinity, // a commit is immutable; refetching one is pure waste
   });
@@ -154,11 +289,15 @@ export function useCommitDiff(sha: string, enabled: boolean) {
  * The daemon's own aggregate of the run log. `null` means it has no index, and
  * the caller computes the same numbers client-side instead.
  */
-export function useHistoryStats(days = 14) {
+export function useHistoryStats(days = 14, opts?: { enabled?: boolean }) {
   return useQuery({
     queryKey: qk.historyStats(days),
     queryFn: () => api.historyStats(days),
     staleTime: 30_000,
+    // Disabled while a repository is scoped: this aggregate is machine-wide and
+    // has no repo dimension to narrow, so its numbers would describe other
+    // repositories' runs under this one's name.
+    enabled: opts?.enabled ?? true,
   });
 }
 
@@ -176,10 +315,19 @@ export function useDoctor(opts?: Partial<UseQueryOptions<Awaited<ReturnType<type
  * days, and the chart's older columns come back empty because nothing was
  * fetched for them, not because nothing ran.
  */
+/**
+ * The run log, scoped to the picked repository like everything else.
+ *
+ * The daemon derives each record's repository from the workspace it recorded —
+ * the log has no repo field, and stamping one now would leave every existing
+ * line unfilterable, which on a machine with months of history reads as "this
+ * repository has no runs".
+ */
 export function useAudit(branch?: string, limit?: number, opts?: { enabled?: boolean }) {
+  const repo = useScopedRepo();
   return useQuery({
-    queryKey: qk.audit(branch, limit),
-    queryFn: () => api.audit(branch, limit),
+    queryKey: qk.audit(branch, limit, repo),
+    queryFn: () => api.audit(branch, limit, repo),
     staleTime: 30_000,
     enabled: opts?.enabled ?? true,
   });
@@ -228,7 +376,10 @@ export function useLaunchRun() {
     mutationFn: (req: LaunchRequest) => api.launch(req),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.runs });
-      qc.invalidateQueries({ queryKey: qk.worktrees });
+      // Every repository's listing: a launch can create a worktree in a
+      // repository other than the one currently scoped, since the Launch form
+      // lets you pick which.
+      qc.invalidateQueries({ queryKey: ["worktrees"] });
     },
   });
 }
@@ -290,15 +441,89 @@ export function useLandWorktree() {
   return useMutation({
     mutationFn: ({ branch, onto }: { branch: string; onto?: string }) =>
       api.landWorktree(branch, onto),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.worktrees }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["worktrees"] }),
   });
 }
 
 export function useRemoveWorktree() {
   const qc = useQueryClient();
+  const scoped = useScopedRepo();
   return useMutation({
-    mutationFn: (branch: string) => api.removeWorktree(branch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.worktrees }),
+    // The row's own repository, because removing the wrong repository's branch
+    // is the one mistake here that destroys work rather than merely showing the
+    // wrong thing.
+    mutationFn: ({ branch, repoId }: { branch: string; repoId?: string }) =>
+      api.removeWorktree(branch, repoId || scoped),
+    // Every repository's listing, not just this one's: the key is scoped, and a
+    // removal invalidating only the scoped key leaves a stale row behind for
+    // anyone who switches back.
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["worktrees"] }),
+  });
+}
+
+/**
+ * Add a repository by host path. The daemon validates it — this only reports
+ * what it said, because "is that a repository, and may Studio touch it" is a
+ * question about the host rather than about the form.
+ */
+export function useAddProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => api.addProject(path),
+    onSuccess: (project) => {
+      const known = qc.getQueryData<Project[]>(qk.projects) ?? [];
+      const already = known.some((p) => p.id === project.id);
+
+      // Written into the cache *and* invalidated. The invalidation is the
+      // authority — the daemon may have recorded a different root than the path
+      // that was typed — but it is a round trip, and the row appearing only
+      // after it lands is what "it said added and the list did not change" looks
+      // like on a slow answer.
+      //
+      // An id already present is left exactly as it is rather than overwritten:
+      // the listing's copy carries `default`, and the POST's does not, so
+      // replacing it would drop the "started here" marker off the one repository
+      // that cannot be removed until the refetch put it back.
+      if (!already) {
+        qc.setQueryData<Project[]>(qk.projects, (prev) =>
+          prev ? [...prev, project] : [project],
+        );
+      }
+      qc.invalidateQueries({ queryKey: qk.projects });
+
+      // Adding a repository Studio already manages is a no-op, and saying
+      // "Added" for it is how you end up hunting a list for a second row that
+      // was never going to appear — a repository is one row, addressed by id,
+      // and adding it twice cannot make two.
+      if (already) {
+        toast.info(`${project.name} is already managed`, { description: project.root });
+        return;
+      }
+      toast.success(`Added ${project.name}`, { description: project.root });
+    },
+    onError: (err) =>
+      toast.error("Could not add that repository", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  });
+}
+
+/** Forget a repository. The checkout on disk is untouched — this is a list. */
+export function useRemoveProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.removeProject(id),
+    onSuccess: (_void, id) => {
+      qc.setQueryData<Project[]>(qk.projects, (prev) =>
+        prev?.filter((p) => p.id !== id),
+      );
+      qc.invalidateQueries({ queryKey: qk.projects });
+      qc.invalidateQueries({ queryKey: ["worktrees"] });
+    },
+    onError: (err) =>
+      toast.error("Could not remove that repository", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
   });
 }
 
@@ -314,7 +539,20 @@ export function useRemoveWorktree() {
 export function useTransportMode(): { mode: TransportMode; retry: () => void } {
   const [m, setM] = useState<TransportMode>(() => transportMode());
   const qc = useQueryClient();
-  useEffect(() => onTransportChange(setM), []);
+  // Every screen is holding fixtures at this point, and they do not stop being
+  // fixtures because the transport changed its mind — the cached answers are
+  // still the fabricated ones. Invalidating on the transition is what turns the
+  // background recheck into screens that actually update, rather than a badge
+  // that quietly changes while the table underneath still shows six agents that
+  // have been running since January.
+  useEffect(
+    () =>
+      onTransportChange((next) => {
+        setM(next);
+        if (next === "live") qc.invalidateQueries();
+      }),
+    [qc],
+  );
   return {
     mode: m,
     retry: () => {
@@ -361,10 +599,36 @@ export function useSendConsoleInput(id: string) {
 }
 
 /** Conversations an agent can be resumed from. */
-export function useAgentSessions(agent: string | null) {
+export function useAgentSessions(
+  agent: string | null,
+  opts?: { scope?: "all"; limit?: number },
+) {
   return useQuery({
-    queryKey: qk.agentSessions(agent ?? ""),
-    queryFn: () => api.agentSessions(agent!),
+    queryKey: qk.agentSessions(agent ?? "", opts?.scope),
+    queryFn: () => api.agentSessions(agent!, opts),
     enabled: !!agent,
+  });
+}
+
+/** One conversation, parsed. Fetched only when something opens it. */
+export function useSessionTranscript(agent: string | null, id: string | null) {
+  return useQuery({
+    queryKey: qk.sessionTranscript(agent ?? "", id ?? ""),
+    queryFn: () => api.sessionTranscript(agent!, id!),
+    enabled: !!agent && !!id,
+    // A finished conversation does not change. A live one is being appended to,
+    // but this is a reader rather than a follower — the console view is what
+    // polls, and two pollers on one file is one too many.
+    staleTime: 30_000,
+  });
+}
+
+/** The same conversation, unparsed. Fetched only when the raw view is opened. */
+export function useSessionRaw(agent: string | null, id: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: qk.sessionRaw(agent ?? "", id ?? ""),
+    queryFn: () => api.sessionRaw(agent!, id!),
+    enabled: enabled && !!agent && !!id,
+    staleTime: 30_000,
   });
 }

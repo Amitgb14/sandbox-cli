@@ -5,13 +5,19 @@ import type {
   AuditRecord,
   DaemonInfo,
   DiffFile,
+  BrowseEntry,
+  BrowseListing,
   DoctorCheck,
+  FileContent,
+  FileEntry,
+  FileListing,
   LogLine,
   MetricSample,
   MetricSeries,
   MountSpec,
   NetworkPosture,
   Profile,
+  Project,
   ResolvedConfig,
   Run,
   RunKind,
@@ -26,11 +32,37 @@ import { DAY, HOUR, MINUTE, NOW, ago, ahead, rngFor } from "@/lib/mock/rng";
 const HOME = "/Users/amitghadge";
 const WORKTREE_ROOT = `${HOME}/.config/sandbox/worktrees`;
 
+/**
+ * The repositories the fixtures are about.
+ *
+ * Deliberately **not exported**, and that is the whole of a bug rather than a
+ * style preference. Every screen used to import this list and render it as the
+ * repository picker, so a running daemon managing one real repository showed
+ * three invented ones — with ids and paths that look exactly like the real
+ * thing — and no way to reach the repository actually being managed. Repositories
+ * now come from `GET /v1/projects`, which is what makes the list true; this
+ * stays because the runs and worktrees below have to be *about* something, and
+ * a fixture is only reached when the header is already saying "Fixture data".
+ *
+ * If you need a repository list in a component, use `useProjects()`. If you need
+ * one here, it is because you are building a fixture.
+ */
 const REPOS = [
   { id: "sandbox-cli-82799c04", name: "sandbox-cli", root: `${HOME}/code/sandbox-cli` },
   { id: "intrupt-web-1f3ab902", name: "intrupt_web", root: `${HOME}/code/intrupt_web` },
   { id: "intrupt-api-9c02de11", name: "intrupt_api", root: `${HOME}/code/intrupt_api` },
 ] as const;
+
+/**
+ * What `GET /v1/projects` answers with no daemon: the fixtures' own repositories,
+ * the first standing in as the one Studio was started in.
+ */
+export const MOCK_PROJECTS: Project[] = REPOS.map((r, i) => ({
+  id: r.id,
+  name: r.name,
+  root: r.root,
+  default: i === 0,
+}));
 
 const IMAGE = "sandbox-cli/base:0.9.2-4f1c8ad";
 
@@ -898,7 +930,7 @@ export const MOCK_AUDIT: AuditRecord[] = MOCK_RUNS.filter((r) => r.state === "ex
   }),
 );
 
-export { REPOS, HOME, WORKTREE_ROOT };
+export { HOME, WORKTREE_ROOT };
 
 /**
  * A short conversation for the fixture path, so the console screen can be seen
@@ -927,3 +959,63 @@ export const MOCK_CONVERSATION: ConversationMessage[] = [
     at: "2026-07-31T14:07:18Z",
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+
+/**
+ * A small stand-in tree, so the Files screen can be built and reviewed without a
+ * daemon. Deliberately tiny and obviously a sample: the real listing comes from
+ * the host, and a fixture that imitated a real repository in detail is the same
+ * mistake the repository picker used to make.
+ */
+const MOCK_TREE: Record<string, FileEntry[]> = {
+  "": [
+    { name: "cmd", path: "cmd", dir: true },
+    { name: "internal", path: "internal", dir: true },
+    { name: "CHANGELOG.md", path: "CHANGELOG.md", size: 48_120 },
+    { name: "README.md", path: "README.md", size: 12_400 },
+  ],
+  cmd: [{ name: "sandbox-cli", path: "cmd/sandbox-cli", dir: true }],
+  "cmd/sandbox-cli": [{ name: "main.go", path: "cmd/sandbox-cli/main.go", size: 780 }],
+  internal: [
+    { name: "sandbox", path: "internal/sandbox", dir: true },
+    { name: "runtime", path: "internal/runtime", dir: true },
+  ],
+  "internal/sandbox": [{ name: "mounts.go", path: "internal/sandbox/mounts.go", size: 9_310 }],
+  "internal/runtime": [{ name: "args.go", path: "internal/runtime/args.go", size: 14_002 }],
+};
+
+export function mockFiles(path: string): FileListing {
+  return { path, entries: MOCK_TREE[path] ?? [] };
+}
+
+export function mockFileContent(path: string): FileContent {
+  const body = `// ${path}\n//\n// Fixture content — no daemon answered, so this is a stand-in\n// rather than the file on your disk.\n`;
+  return { path, size: body.length, content: body };
+}
+
+/**
+ * A stand-in directory tree for the folder picker, so the Add-repository dialog
+ * can be built without a daemon. Two levels and obviously a sample — the real
+ * listing is the host's, and a fixture that imitated one in detail is the
+ * mistake the repository picker used to make.
+ */
+const MOCK_BROWSE: Record<string, BrowseEntry[]> = {
+  [HOME]: [
+    { name: "code", path: `${HOME}/code` },
+    { name: "Documents", path: `${HOME}/Documents` },
+  ],
+  [`${HOME}/code`]: [
+    { name: "sandbox-cli", path: `${HOME}/code/sandbox-cli`, repo: true, registered: true },
+    { name: "intrupt_web", path: `${HOME}/code/intrupt_web`, repo: true },
+    { name: "scratch", path: `${HOME}/code/scratch` },
+  ],
+};
+
+export function mockBrowse(path?: string): BrowseListing {
+  const at = path ?? HOME;
+  const parent = at === "/" ? undefined : at.slice(0, at.lastIndexOf("/")) || "/";
+  return { path: at, parent, home: HOME, entries: MOCK_BROWSE[at] ?? [] };
+}

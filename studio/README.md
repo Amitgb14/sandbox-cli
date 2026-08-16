@@ -45,12 +45,39 @@ sh studio.sh down        # stop the pair, keep everything installed
 sh studio.sh uninstall   # remove the containers, the images and Studio's state
 ```
 
-**One repository at a time, from wherever you like.** `-project` is fixed for
-the life of the API process, so everything on screen belongs to the repository
-Studio was started in; standing in another one changes nothing, which is
-confusing exactly because the terminal moved and the browser did not.
+**Editor (parked).** The Files and Changes screens are built but not in the
+sidebar: `EDITOR_NAV` in `src/lib/nav.ts` holds the group, and moving it into
+`NAV` surfaces both, along with their palette entries and shortcuts. The routes
+and endpoints work in the meantime. What they do:
 
-You do not have to go anywhere to change it — `--project` takes the path:
+**Files** reads the scoped repository's working tree as it stands on disk,
+uncommitted work included — useful for seeing what an agent has actually written
+before you diff or land it. It is read-only: the agent edits the workspace from
+inside a container, and a control plane that could write to it over HTTP would be
+a second editor for the same tree with none of the isolation that makes the first
+one safe. A path that resolves outside the repository is refused, so a symlink an
+agent wrote pointing at `~/.ssh` reads as "no such file" rather than as a file.
+Anything *inside* the repository is readable, `.env` included — gated by the same
+loopback binding and token as the rest of the API.
+
+**Add repositories from the browser.** "Add repository…" in the sidebar's
+repository picker — or the ＋ beside the repository field on Launch — opens a
+folder picker: navigate from your home directory, and the folders holding a
+`.git` are marked, as are the ones Studio already manages. The picker runs in the
+daemon because a browser cannot produce a host path, and it lists directories
+only — never files, and never dot-directories. You can also just type or paste
+the absolute path of a git repository on this machine, which is what a repository
+on an unusual volume needs. Studio records its *root*, so
+any directory inside it will do, and remembers it in
+`~/.config/sandbox/studio/projects.json` so it is still there next time.
+Removing one forgets it; nothing on disk is touched. The daemon checks each path
+itself — absolute, on disk, a git repository, and never your home directory or
+an ancestor of it — and shows you its own refusal when it declines.
+
+**The repository it was *started* in is the exception.** `-project` is fixed for
+the life of the API process: it is what every screen falls back to and the one
+repository you cannot remove. You do not have to go anywhere to change it —
+`--project` takes the path:
 
 ```sh
 sh studio.sh up --project ~/other-project     # from any directory at all
@@ -60,6 +87,11 @@ cd ~/other-project && sh studio.sh up         # or the short way, when you are t
 Either restarts the pair against that repository on the same ports and token, so
 an open tab follows. `status` prints the repository the daemon reports and flags
 the mismatch when your shell is somewhere else.
+
+One limit: `--api-in-docker` stays single-repository. That container is started
+with only its one project mounted, so a repository added afterwards is a path it
+cannot see — the default, where the API is an ordinary host process, has no such
+limit.
 
 **Uninstalling needs no copy of `studio.sh`.** The installer that put it there
 takes it away, including the halves that are *running*:
@@ -136,9 +168,16 @@ endpoint, and nothing presents a fixture as a real reading. It is the same
 bargain the CLI makes when it prints the age of a cached usage figure instead of
 the figure alone.
 
-`src/lib/api/client.ts` probes `GET /v1/health` once, caches the answer, and
-routes every later call. `reconnect()` is the explicit retry, wired to the header
-badge and the ⌘K palette.
+`src/lib/api/client.ts` probes `GET /v1/health`, caches the answer, and routes
+every later call. The cache is one-directional: while the daemon is *there* it is
+kept, because a failed fetch in front of every panel is what caching prevents —
+but once the probe has said no it is rechecked every fifteen seconds, so a tab
+opened while the API was restarting heals itself instead of showing fixtures
+forever. Flipping to live invalidates every query, or the badge would change
+while the tables underneath kept their fabricated rows. `reconnect()` is the
+explicit retry, wired to the header badge and the ⌘K palette, and a write
+(adding a repository, say) re-probes before refusing rather than trusting a
+cached "offline".
 
 ## The backend contract
 

@@ -43,7 +43,10 @@ func (s *Server) handleRecoverRun(w http.ResponseWriter, r *http.Request) {
 		mode = RestoreModeBranch
 	}
 
-	sess, err := s.findRescueSession(branch, c.Labels[sandbox.LabelAgent])
+	// Snapshots are recorded per repository (~/.config/sandbox/rescue/<repo-id>/),
+	// so the search has to happen in the repository this run belonged to — read
+	// off its own label, not assumed to be the daemon's default.
+	sess, err := s.findRescueSession(s.scopeOfRun(c.Labels[sandbox.LabelRepo]), branch, c.Labels[sandbox.LabelAgent])
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -100,8 +103,8 @@ func (s *Server) handleRecoverRun(w http.ResponseWriter, r *http.Request) {
 // findRescueSession picks the most recently active rescue session recorded for
 // branch (and, when the run carried one, the same agent), the same "what was I
 // working on" question `sandbox-cli recover` answers by hand.
-func (s *Server) findRescueSession(branch, agent string) (rescue.Session, error) {
-	repoRoot, err := rescue.MainRepoRoot(s.Project)
+func (s *Server) findRescueSession(sc repoScope, branch, agent string) (rescue.Session, error) {
+	repoRoot, err := rescue.MainRepoRoot(sc.Project)
 	if err != nil {
 		return rescue.Session{}, err
 	}

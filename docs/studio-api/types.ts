@@ -28,9 +28,112 @@ export interface HealthResponse {
   version: string;
   engine: "docker" | "podman";
   dockerAvailable: boolean;
-  /** The host directory this server manages. */
+  /**
+   * The host directory this server was started in — its *default* repository,
+   * the one every request naming no repo is about. Others are added at runtime;
+   * see GET /projects.
+   */
   project: string;
   profile: "dev" | "prod";
+}
+
+/**
+ * One repository this daemon will answer about.
+ *
+ * `id` is what a request names — never a path. It is worktree.RepoID, the same
+ * id containers carry as their `sandbox.repo` label, which is what makes "the
+ * runs for this repository" and "the worktrees for this repository" one
+ * question.
+ */
+export interface Project {
+  id: string;
+  name: string;
+  root: string;
+  /** The repository the daemon was started in. Cannot be removed. */
+  default?: boolean;
+  /** Registered but unreadable now — gone, no longer a repository, or unmounted. */
+  missing?: boolean;
+}
+
+/** One directory offered by the folder picker (`GET /browse`). Names only. */
+export interface BrowseEntry {
+  name: string;
+  /** Absolute host path — what POST /projects takes. */
+  path: string;
+  /** Holds a .git. A hint; the add endpoint still decides. */
+  repo?: boolean;
+  /** Already managed by this Studio. */
+  registered?: boolean;
+}
+
+export interface BrowseResponse {
+  path: string;
+  /** The directory above; absent at the filesystem root. */
+  parent?: string;
+  /** This user's home directory — where a picker should start. */
+  home?: string;
+  /** Whether `path` itself is a repository. */
+  repo?: boolean;
+  entries: BrowseEntry[];
+  truncated?: boolean;
+}
+
+/** One row of a directory listing. `path` is repository-relative, slash-separated. */
+export interface FileEntry {
+  name: string;
+  path: string;
+  dir?: boolean;
+  size?: number;
+  /** Reported, never followed: a link out of the repository is not readable. */
+  symlink?: boolean;
+  modifiedAt?: string;
+}
+
+export interface FilesResponse {
+  /** The listed directory; "" is the repository root. */
+  path: string;
+  entries: FileEntry[];
+  /** More entries than one listing carries. */
+  truncated?: boolean;
+}
+
+export interface FileContentResponse {
+  path: string;
+  size: number;
+  /** Binary content is reported, not sent. */
+  binary?: boolean;
+  /** `content` is the first part of a larger file. */
+  truncated?: boolean;
+  content?: string;
+}
+
+/** One line of the run log. */
+export interface AuditRecord {
+  time: string;
+  /**
+   * Which repository this run belonged to — derived from the recorded
+   * workspace, not stored, since the log has no repo field. "" (absent) means
+   * no repository this daemon knows about.
+   */
+  repoId?: string;
+  workspace: string;
+  branch?: string | null;
+  agent?: string | null;
+  exitCode: number;
+  durationMs: number;
+}
+
+export interface ProjectsResponse {
+  projects: Project[];
+}
+
+/**
+ * POST /projects — the only request in this contract carrying a host path, so
+ * the only one where every path refusal applies. Resolved to the repository
+ * root before it is recorded.
+ */
+export interface ProjectCreateRequest {
+  path: string;
 }
 
 export interface AgentInfo {
@@ -67,7 +170,15 @@ export interface Run {
   exitCode?: number;
   detached: boolean;
 
-  repo?: string;
+  /**
+   * `sandbox.repo` — worktree.RepoID, an id and not a path. Spelled the same as
+   * Worktree.repoId: one fact, one name. (It was `repo` here and `repoId`
+   * there, and a client filtering both by repository could only be right about
+   * one of them.)
+   */
+  repoId?: string;
+  /** The display half of that id. For showing, never for matching. */
+  repoName?: string;
   branch?: string;
   base?: string;
   agent?: string;
@@ -105,9 +216,17 @@ export interface RunListQuery {
 /**
  * POST /runs always launches detached: an HTTP request/response cycle has no
  * foreground mode to offer. Set either `agent` (+ `prompt`) or `command`, not
- * both. Set either `project` or `worktree`, not both.
+ * both. Set either `project` or `worktree`, not both, and never `repo` with
+ * `project` — they are two answers to "which repository".
  */
 export interface RunCreateRequest {
+  /**
+   * Which registered repository, by `Project.id`. Absent means the one the
+   * daemon was started in. This is what a UI should send: an id is resolved
+   * against the registry, a path is not.
+   */
+  repo?: string;
+  /** A host directory, for callers that already know the path they mean. */
   project?: string;
   worktree?: string;
 
@@ -198,10 +317,18 @@ export interface Worktree {
   dirtyCount: number;
 }
 
+/**
+ * Worktree.primary marks the repository's *own checkout* — the directory
+ * -project names, the one branch with no worktree of its own. Listed because a
+ * branch picker has to know about it; marked because the operations differ (it
+ * cannot be removed, and `land` merges into it).
+ */
 export interface WorktreesResponse {
   worktrees: Worktree[];
 }
 
 export interface WorktreeCreateRequest {
   branch: string;
+  /** Which registered repository, by `Project.id`. Absent means the default. */
+  repo?: string;
 }

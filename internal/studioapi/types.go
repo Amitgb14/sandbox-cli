@@ -54,6 +54,123 @@ type HostInfo struct {
 	MemBytes int64  `json:"memBytes"`
 }
 
+// Project is one repository this control plane will answer about — the unit
+// every branch-addressed request is scoped to.
+//
+// ID, not Root, is what a request names. It is worktree.RepoID, the same id that
+// becomes a container's sandbox.repo label, which is what lets "the runs for
+// this repository" and "the worktrees for this repository" be the same question:
+// two clones sharing a directory name do not share an id, and a path is not
+// something a client is trusted to hand back. See internal/studioapi/projects.go.
+type Project struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Root string `json:"root"`
+
+	// Default marks the repository this daemon was started in — the one every
+	// request that names no repo is about. Exactly one project carries it, and it
+	// is the one that cannot be removed.
+	Default bool `json:"default,omitempty"`
+
+	// Missing reports a repository that is registered but cannot be read right
+	// now: the directory is gone, is no longer a git repository, or sits on a
+	// volume that is not mounted. Listed rather than dropped, because an absent
+	// checkout is not the same as one the user never asked for — and a client
+	// should show it greyed out rather than silently lose the row.
+	Missing bool `json:"missing,omitempty"`
+}
+
+// FileEntry is one row of a directory listing.
+//
+// Path is repository-relative and slash-separated, so a client feeds it straight
+// back as the next request's `path` without assembling anything itself — and
+// never learns a host path it did not already have from Project.Root.
+type FileEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	Dir  bool   `json:"dir,omitempty"`
+	Size int64  `json:"size,omitempty"`
+
+	// Symlink marks a link rather than resolving it. It is reported because
+	// opening one may well be refused: a link leaving the repository is not
+	// readable through this API, which is the rule that keeps an agent-written
+	// `notes.md -> ~/.ssh/id_ed25519` from being served over loopback.
+	Symlink    bool   `json:"symlink,omitempty"`
+	ModifiedAt string `json:"modifiedAt,omitempty"`
+}
+
+// FilesResponse is the body of GET /files.
+type FilesResponse struct {
+	// Path is the listed directory, repository-relative; "" is the root.
+	Path    string      `json:"path"`
+	Entries []FileEntry `json:"entries"`
+	// Truncated reports a directory with more entries than one listing carries.
+	// Said out loud rather than silently cut: a listing that stops without
+	// saying so reads as "this is everything".
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// FileContentResponse is the body of GET /files/content.
+type FileContentResponse struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+	// Binary files are reported, never sent: their bytes rendered as text are
+	// noise, and the size is the useful fact about them.
+	Binary bool `json:"binary,omitempty"`
+	// Truncated reports that Content is the first part of a larger file.
+	Truncated bool   `json:"truncated,omitempty"`
+	Content   string `json:"content,omitempty"`
+}
+
+// BrowseEntry is one directory offered by the folder picker.
+//
+// Names and a path, and nothing else: no size, no modification time, no
+// contents. See internal/studioapi/browse.go for why this endpoint is
+// deliberately not a file browser.
+type BrowseEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	// Repo marks a directory holding a .git — a hint, so the picker can point at
+	// what is worth adding. POST /projects still decides.
+	Repo bool `json:"repo,omitempty"`
+	// Registered marks a repository this Studio already manages, so the picker
+	// can say so instead of letting somebody add it twice.
+	Registered bool `json:"registered,omitempty"`
+}
+
+// BrowseResponse is the body of GET /browse.
+type BrowseResponse struct {
+	// Path is the directory being listed, absolute and symlink-resolved.
+	Path string `json:"path"`
+	// Parent is the directory above, or "" at the filesystem root.
+	Parent string `json:"parent,omitempty"`
+	// Home is this user's home directory — where a picker should start, and the
+	// one shortcut it can offer without guessing.
+	Home string `json:"home,omitempty"`
+	// Repo reports whether Path itself is a repository, so "Use this folder" can
+	// be offered for the directory you are standing in.
+	Repo      bool          `json:"repo,omitempty"`
+	Entries   []BrowseEntry `json:"entries"`
+	Truncated bool          `json:"truncated,omitempty"`
+}
+
+// ProjectsResponse is the body of GET /projects.
+type ProjectsResponse struct {
+	Projects []Project `json:"projects"`
+}
+
+// ProjectCreateRequest is the body of POST /projects, and the only place in this
+// contract where a client hands over a host path. Every refusal that applies to
+// a directory Studio will touch is applied here, once, so that every other
+// endpoint can take an id and be done.
+type ProjectCreateRequest struct {
+	// Path is an absolute host directory inside the git repository to add. It is
+	// resolved to the repository *root* before being recorded: Studio addresses
+	// work by branch, and a branch belongs to a repository rather than to
+	// whichever subdirectory somebody happened to type.
+	Path string `json:"path"`
+}
+
 // AgentInfo describes one agent adapter sandbox-cli knows how to launch
 // headlessly. Only agents with a verified non-interactive mode are ever listed —
 // see internal/agents' package doc — because a Studio-launched run is always
@@ -262,7 +379,22 @@ type Run struct {
 	ExitCode    *int     `json:"exitCode,omitempty"` // set once State is "exited"
 	Detached    bool     `json:"detached"`
 
-	Repo   string `json:"repo,omitempty"`
+	// RepoID is `sandbox.repo`: worktree.RepoID, an id and not a path.
+	//
+	// Spelled `repoId` to match Worktree, and that is a fix rather than a
+	// preference. This field was `repo` while Worktree's was `repoId` — one fact
+	// under two names in one contract — and Studio was written against the other
+	// spelling, so filtering runs by repository compared every row against
+	// `undefined` and quietly produced nothing. It looked like an empty
+	// repository rather than like a broken field, which is why it survived: the
+	// only way to see it was to select a repository that definitely had runs.
+	RepoID string `json:"repoId,omitempty"`
+
+	// RepoName is the display half of that id. Two clones of a same-named repo
+	// share it and do not share RepoID, so it is for showing and never for
+	// matching — which is exactly the mistake this pair exists to keep separate.
+	RepoName string `json:"repoName,omitempty"`
+
 	Branch string `json:"branch,omitempty"`
 	Base   string `json:"base,omitempty"`
 	Agent  string `json:"agent,omitempty"`
@@ -424,7 +556,15 @@ type MetricPeak struct {
 // keeps — the credential broker exists so secret values stay off the argv and
 // out of files, and this is one more file.
 type AuditRecord struct {
-	Time        string   `json:"time"`
+	Time string `json:"time"`
+
+	// RepoID is which repository this run belonged to, derived from Workspace
+	// rather than recorded — the log predates repositories being plural and has
+	// no such field. Empty means "no repository this daemon knows about", which
+	// is a true statement about a run in a checkout nobody registered.
+	// See repoIDForWorkspace.
+	RepoID string `json:"repoId,omitempty"`
+
 	Image       string   `json:"image"`
 	Workspace   string   `json:"workspace"`
 	Workdir     string   `json:"workdir"`
@@ -565,8 +705,24 @@ type RunsResponse struct {
 // intends to attach to and type at; it changes the agent's argv and the
 // container's stdin, and nothing about what either can reach.
 type RunCreateRequest struct {
+	// Repo names which registered repository this run is about, by id from GET
+	// /projects. Empty means the repository this daemon was started in.
+	//
+	// This is the field a UI should send, and the difference from Project below
+	// is the trust model rather than convenience: an id is resolved against the
+	// registry — a list of directories somebody deliberately added — while a path
+	// is a directory named by whoever composed the request. With no worktree, the
+	// repository root is itself the workspace; with one, the worktree is resolved
+	// inside this repository.
+	Repo string `json:"repo,omitempty"`
+
 	// Project is a host directory to mount at /workspace. Defaults to the
-	// server's configured project root. Mutually exclusive with Worktree.
+	// server's configured project root. Mutually exclusive with Worktree and
+	// with Repo.
+	//
+	// It predates the registry and is kept for callers that are not a browser —
+	// a script that already knows the path it means. Prefer Repo: it is the one
+	// that cannot name a directory nobody registered.
 	Project string `json:"project,omitempty"`
 
 	// Worktree, when set, resolves (creating if needed) a git worktree for this
@@ -764,6 +920,19 @@ type Worktree struct {
 	Head   string `json:"head"`   // the abbreviated commit this branch points at
 	RepoID string `json:"repoId"` // the id every container of this project is labelled with
 
+	// Primary marks the repository's **own checkout** rather than a managed
+	// worktree — the directory `-project` names, the one branch that has no
+	// worktree of its own, and where a run launched without `--worktree` works.
+	//
+	// It is listed at all because a client asking "which branches can I look at"
+	// has to be told about it: internal/worktree.List deliberately reports only
+	// the worktrees sandbox-cli manages, which is right for `worktree list` (they
+	// are the ones it created and can remove) and wrong for a branch picker,
+	// where its absence meant `main` appeared nowhere. Marked rather than mixed
+	// in, because the operations differ: it cannot be removed, and `land` merges
+	// *into* it.
+	Primary bool `json:"primary,omitempty"`
+
 	// Ahead and Behind are counted against Base. "3 ahead" says there is
 	// something to land; "3 ahead, 40 behind" says landing it will be a merge.
 	Ahead  int `json:"ahead"`
@@ -800,6 +969,10 @@ type WorktreesResponse struct {
 // WorktreeCreateRequest is the body of POST /worktrees.
 type WorktreeCreateRequest struct {
 	Branch string `json:"branch"`
+
+	// Repo names which registered repository the worktree belongs to, by id from
+	// GET /projects. Empty means the repository this daemon was started in.
+	Repo string `json:"repo,omitempty"`
 }
 
 // ConversationResponse is what a run said, and whether it can be answered.
@@ -845,10 +1018,49 @@ type SessionSummary struct {
 	Title    string    `json:"title,omitempty"`
 	Turns    int       `json:"turns"`
 	Modified time.Time `json:"modified"`
-	// Partial marks a session listed from its file alone, because there is no
-	// verified reader for this agent's transcript format. Its id and dates are
-	// real; the title and turn count are unknown.
+	Started  time.Time `json:"started,omitempty"`
+
+	// Partial marks a session listed from its file alone, because sandbox-cli
+	// has no verified reader for this agent's format. The id and the dates are
+	// real; the title and turn count are unknown, and are reported as unknown
+	// rather than as zero.
 	Partial bool `json:"partial,omitempty"`
+
+	// Project is the working directory the transcript recorded. It is the one
+	// field that tells a sandbox conversation from a host one at a glance: a
+	// container's cwd is always /workspace, a host session's is the real path.
+	Project string `json:"project,omitempty"`
+
+	// Path is where the transcript lives, reported so a raw view can say what it
+	// is showing. It is never accepted *back* — a request names a session by id,
+	// and the daemon resolves it.
+	Path string `json:"path,omitempty"`
+	Size int64  `json:"size,omitempty"`
+
+	// Store is "sandbox" (the agent HOME containers get) or "host" (the user's
+	// own history). Both are readable; only the first is this daemon's to
+	// resume, since resuming the other would mean mounting the host's history
+	// into a container that was not asked to have it.
+	Store     string `json:"store,omitempty"`
+	Resumable bool   `json:"resumable,omitempty"`
+}
+
+// SessionTranscriptResponse is one conversation, parsed into turns.
+type SessionTranscriptResponse struct {
+	Session  SessionSummary     `json:"session"`
+	Messages []agentctx.Message `json:"messages"`
+}
+
+// SessionRawResponse is the transcript file as it is on disk.
+//
+// The *tail* when it is long, because a conversation is appended to and the end
+// is what somebody opening it wants — and Truncated says so, since a client
+// showing half a file as though it were the file makes a claim nobody checked.
+type SessionRawResponse struct {
+	Session   SessionSummary `json:"session"`
+	Size      int64          `json:"size"`
+	Truncated bool           `json:"truncated,omitempty"`
+	Content   string         `json:"content"`
 }
 
 type SessionListResponse struct {

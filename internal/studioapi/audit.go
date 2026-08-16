@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/audit"
@@ -65,6 +66,13 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	// project on the machine and rotates rather than truncates: asking for one
 	// branch's history should not mean shipping everyone else's.
 	branch := r.URL.Query().Get("branch")
+	// Which repository, for the screens that scope to one. Derived rather than
+	// read: see repoIDForWorkspace. An unregistered id is not refused here the
+	// way it is elsewhere — this is a filter over history, and history contains
+	// runs from repositories nobody registered; asking about one of those should
+	// answer "no records", not "no such repository".
+	repo := r.URL.Query().Get("repo")
+	projects := s.projects()
 
 	out := make([]AuditRecord, 0, limit)
 	dir := config.AuditDir()
@@ -78,10 +86,28 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	// log, because an index that quietly answers a different question is worse
 	// than no index — nothing would ever notice.
 	if s.History != nil {
-		recs, err := s.History.Runs(history.Filter{Branch: branch, Limit: limit})
+		// The index cannot filter by repository — it has no such column, since
+		// the log it indexes has no such field — so a repo-scoped request asks
+		// for more rows than it needs and drops the ones that do not match. It
+		// can therefore return fewer than `limit`; that is a smaller lie than
+		// silently mixing in another repository's runs, which is the thing the
+		// filter exists to prevent.
+		want := limit
+		if repo != "" {
+			want = limit * auditRepoOverscan
+		}
+		recs, err := s.History.Runs(history.Filter{Branch: branch, Limit: want})
 		if err == nil {
 			for _, rec := range recs {
-				out = append(out, fromHistory(rec))
+				r := fromHistory(rec)
+				r.RepoID = repoIDForWorkspace(r.Workspace, projects)
+				if repo != "" && r.RepoID != repo {
+					continue
+				}
+				if len(out) >= limit {
+					break
+				}
+				out = append(out, r)
 			}
 			writeJSON(w, http.StatusOK, AuditResponse{Records: out})
 			return
@@ -104,13 +130,14 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		if len(out) >= limit {
 			break
 		}
-		out = append(out, readAuditFile(path, branch, limit-len(out))...)
+		out = append(out, readAuditFile(path, branch, repo, projects, limit-len(out))...)
 	}
 	writeJSON(w, http.StatusOK, AuditResponse{Records: out})
 }
 
-// readAuditFile returns up to limit records from one generation, newest first.
-func readAuditFile(path, branch string, limit int) []AuditRecord {
+// readAuditFile returns up to limit records from one generation, newest first,
+// keeping only those matching branch and repo when either is given.
+func readAuditFile(path, branch, repo string, projects []Project, limit int) []AuditRecord {
 	f, err := os.Open(path)
 	if err != nil {
 		// A generation that has been rotated away between listing and opening is
@@ -141,7 +168,12 @@ func readAuditFile(path, branch string, limit int) []AuditRecord {
 		if branch != "" && a.Branch != branch {
 			continue
 		}
-		all = append(all, a.toRecord())
+		rec := a.toRecord()
+		rec.RepoID = repoIDForWorkspace(rec.Workspace, projects)
+		if repo != "" && rec.RepoID != repo {
+			continue
+		}
+		all = append(all, rec)
 	}
 
 	// The file is append-only, so newest is last. Reverse into the caller's
@@ -245,4 +277,70 @@ func (s *Server) handleHistoryStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, HistoryStatsResponse{Stats: summary, Days: buckets})
+}
+
+// auditRepoOverscan is how many extra rows a repo-scoped request asks the index
+// for, since the index cannot filter by repository itself. Four is a guess with
+// a shape: a machine running several repositories through one Studio is the case
+// this exists for, and asking for four times the page is cheap on an index and
+// still bounded.
+const auditRepoOverscan = 4
+
+// repoIDForWorkspace answers which repository a recorded run belonged to.
+//
+// **Derived, not recorded** — and that is a compromise worth naming, because
+// this codebase's own rule is that a fact not stamped is one no later command
+// can recover. The audit log has no repo field: it records the *workspace*, and
+// has since before repositories were plural. Stamping one now would leave every
+// existing line unfilterable, so a repo-scoped dashboard would show an empty
+// history on every machine that has been running sandboxes for months — the
+// exact failure mode where a filter looks like an absence.
+//
+// Two shapes cover what a workspace can be, and both are exact rather than
+// heuristic:
+//
+//   - a managed worktree, `<config>/worktrees/<repoId>/<branch>`, which carries
+//     the id in the path because worktreeBase put it there;
+//   - a checkout, which is a registered repository's root or something inside it.
+//
+// A workspace matching neither yields "", meaning "this run belongs to no
+// repository this daemon knows about" — which is a true statement about a run in
+// a checkout nobody registered, and correctly excludes it from every repo-scoped
+// view rather than filing it under the wrong one. If the log ever grows a repo
+// id of its own, this becomes the fallback for old lines rather than the answer.
+func repoIDForWorkspace(ws string, projects []Project) string {
+	if ws == "" {
+		return ""
+	}
+	ws = filepath.Clean(ws)
+
+	if root := config.ConfigRoot(); root != "" {
+		base := filepath.Join(root, "worktrees") + string(filepath.Separator)
+		if strings.HasPrefix(ws, base) {
+			rest := strings.TrimPrefix(ws, base)
+			if i := strings.IndexRune(rest, filepath.Separator); i > 0 {
+				return rest[:i]
+			}
+			return rest
+		}
+	}
+
+	// Longest root first, so a repository nested inside another is matched by
+	// itself rather than by its parent.
+	best := ""
+	for _, p := range projects {
+		root := filepath.Clean(p.Root)
+		if ws != root && !strings.HasPrefix(ws, root+string(filepath.Separator)) {
+			continue
+		}
+		if len(root) > len(best) {
+			best = root
+		}
+	}
+	for _, p := range projects {
+		if filepath.Clean(p.Root) == best {
+			return p.ID
+		}
+	}
+	return ""
 }

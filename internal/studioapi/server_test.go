@@ -175,6 +175,9 @@ func newTestServer(t *testing.T) (*Server, *fakeRuntime) {
 		Project: project,
 		RepoID:  "testrepo",
 		Engine:  "docker",
+		// Under the temp XDG_CONFIG_HOME set above, so a test that registers a
+		// repository writes into its own directory and never the developer's.
+		Projects: loadProjectStore(projectsPath()),
 	}, fr
 }
 
@@ -543,10 +546,46 @@ func TestWorktreeLifecycle(t *testing.T) {
 		t.Errorf("unexpected worktree: %+v", wt)
 	}
 
+	// Two rows: the repository's own checkout, and the managed worktree just
+	// created. The checkout is listed because a client asking "which branches can
+	// I look at" has to be told about it — internal/worktree.List reports only
+	// what sandbox-cli manages, which left `main` appearing in no branch picker.
 	list := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees", nil)
 	wts := decodeBody[WorktreesResponse](t, list)
-	if len(wts.Worktrees) != 1 {
-		t.Fatalf("listed %d worktrees, want 1", len(wts.Worktrees))
+	if len(wts.Worktrees) != 2 {
+		t.Fatalf("listed %d worktrees, want 2 (the checkout and feature-a)", len(wts.Worktrees))
+	}
+	var primary, managed *Worktree
+	for i, w := range wts.Worktrees {
+		if w.Primary {
+			primary = &wts.Worktrees[i]
+		} else {
+			managed = &wts.Worktrees[i]
+		}
+	}
+	if primary == nil {
+		t.Fatal("no row marked primary: the repository's own checkout is missing from the listing")
+	}
+	if primary.Branch != "main" || primary.Path != s.Project {
+		t.Errorf("primary row = %s at %s, want main at %s", primary.Branch, primary.Path, s.Project)
+	}
+	if primary.Base != nil {
+		t.Error("the checkout was given a base; it is what other branches are measured against, so 0 ahead of itself is noise")
+	}
+	if managed == nil || managed.Branch != "feature-a" {
+		t.Fatalf("managed worktree row = %+v, want feature-a", managed)
+	}
+	if managed.Primary {
+		t.Error("a managed worktree was marked primary")
+	}
+
+	// The checkout is addressable by its own branch, or the listing would offer
+	// a row whose detail page 404s — and it cannot be removed.
+	if rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees/main", nil); rec.Code != http.StatusOK {
+		t.Errorf("GET the checkout by branch = %d, want 200", rec.Code)
+	}
+	if rec := doRequest(t, s.Handler(), http.MethodDelete, "/v1/worktrees/main", nil); rec.Code != http.StatusConflict {
+		t.Errorf("DELETE the checkout = %d, want 409: it is not a managed worktree", rec.Code)
 	}
 
 	get := doRequest(t, s.Handler(), http.MethodGet, "/v1/worktrees/feature-a", nil)
