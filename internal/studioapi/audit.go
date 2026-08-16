@@ -334,7 +334,7 @@ func repoIDForWorkspace(ws string, projects []Project) string {
 			continue
 		}
 		if len(root) > len(best) {
-			best, ws = root, ws
+			best = root
 		}
 	}
 	for _, p := range projects {
