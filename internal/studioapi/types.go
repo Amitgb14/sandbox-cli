@@ -467,6 +467,19 @@ type Run struct {
 	RoutedFrom  string `json:"routedFrom,omitempty"`
 	RouteReason string `json:"routeReason,omitempty"`
 
+	// RouteID is the episode, and RouteAttempt the position in it — 1 for the
+	// agent first asked for, 2 for the one the supervisor started after it
+	// failed. Both from labels, for the reason above.
+	//
+	// The attempt is what separates the two kinds of switch, which look identical
+	// through RoutedFrom alone: a *preflight* skip is attempt 1 and carries no
+	// conversation, because the agent it names never ran, while attempt 2 or more
+	// is a run that failed and handed its work over with a briefing. Telling a
+	// user "it did not inherit the conversation" about the second case is simply
+	// untrue.
+	RouteID      string `json:"routeId,omitempty"`
+	RouteAttempt int    `json:"routeAttempt,omitempty"`
+
 	// RepoName is the display half of that id. Two clones of a same-named repo
 	// share it and do not share RepoID, so it is for showing and never for
 	// matching — which is exactly the mistake this pair exists to keep separate.

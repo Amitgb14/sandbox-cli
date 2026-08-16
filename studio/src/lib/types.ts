@@ -160,6 +160,17 @@ export interface Run {
   routedFrom?: string;
   routeReason?: string;
 
+  /**
+   * The episode, and where in it.
+   *
+   * `routeAttempt` is what separates the two kinds of switch, which `routedFrom`
+   * alone cannot: attempt 1 is a *preflight* skip — the named agent never ran,
+   * so there is no conversation to carry — while attempt 2 or more is a run that
+   * failed and had its work handed over with a briefing.
+   */
+  routeId?: string;
+  routeAttempt?: number;
+
   /** `sandbox.repo` is `worktree.RepoID`: an id, not a path. */
   repoId: string;
   /** Display name only. Two clones of a same-named repo share it; `repoId` not. */

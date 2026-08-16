@@ -36,6 +36,15 @@ version is tagged.
   of a duplicate is what enforces one agent per branch, and the dead container's
   logs are the evidence for why the failover happened.
 
+  A live run now says which episode it belongs to and where in it: `route_id`
+  was already a label, `route_attempt` was not, so the ordering of a failover
+  existed only in the audit log — which for a detached run is written when it
+  ends, long after somebody is watching it happen. The Studio run header shows
+  the attempt beside the routed-from badge, and its tooltip stopped telling half
+  the users a false thing: a *preflight* skip carries no conversation because the
+  agent it names never ran, while a supervised retry carries a briefing, and the
+  attempt number is what tells them apart.
+
 - **Agent routing: a fallback for when a provider is down.** `--fallback codex`
   on any agent wrapper, `routing: [claude, codex]` in your own config, and a
   picker on Studio's Launch screen. Two mechanisms, deliberately split: the

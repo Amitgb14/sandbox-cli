@@ -686,13 +686,17 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		LabelRoutedFrom:  opts.RoutedFrom,
 		LabelRouteID:     opts.RouteID,
 		LabelRouteReason: opts.RouteReason,
-		LabelBase:        opts.Base,
-		LabelVerify:      opts.Verify,
-		LabelFleet:       boolLabel(opts.Fleet),
-		LabelProfile:     cfg.Profile,
-		LabelPrompt:      truncatePrompt(opts.Prompt),
-		LabelSession:     opts.SessionID,
-		LabelBaseline:    opts.Baseline,
+		// Only within an episode: "attempt 1 of 1" is a fact about a run that
+		// could never route, and stamping it would put a routing column on every
+		// container in the listing.
+		LabelRouteAttempt: attemptLabel(opts),
+		LabelBase:         opts.Base,
+		LabelVerify:       opts.Verify,
+		LabelFleet:        boolLabel(opts.Fleet),
+		LabelProfile:      cfg.Profile,
+		LabelPrompt:       truncatePrompt(opts.Prompt),
+		LabelSession:      opts.SessionID,
+		LabelBaseline:     opts.Baseline,
 	} {
 		if v != "" {
 			labels[k] = v
@@ -959,4 +963,13 @@ func hostMappedUser(engine, user string) string {
 		return user
 	}
 	return sandboxUID + ":" + sandboxGID
+}
+
+// attemptLabel renders the position within a routing episode, or "" when this
+// run is not part of one.
+func attemptLabel(opts Options) string {
+	if opts.RouteID == "" || opts.RouteAttempt <= 0 {
+		return ""
+	}
+	return strconv.Itoa(opts.RouteAttempt)
 }

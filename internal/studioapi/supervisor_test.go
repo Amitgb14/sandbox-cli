@@ -358,3 +358,58 @@ func TestALaunchWithNoFallbackIsNotSupervised(t *testing.T) {
 		t.Errorf("watching %d runs, want none", n)
 	}
 }
+
+// What a listing can say about a failover *while it is happening*.
+//
+// The audit log answers this afterwards, and only afterwards: a detached run's
+// line is written when it ends. So everything the Runs screen needs to show two
+// containers as one episode has to be on the containers — which it was not. The
+// wire type had `routeId` and `routeAttempt`; toRun never filled them, and
+// `sandbox.route_attempt` was not stamped at all, so the ordering within an
+// episode existed nowhere a live screen could read it. Found by running a real
+// failover and looking at the labels.
+func TestARunCarriesItsEpisodeInItsLabels(t *testing.T) {
+	_, fr, sv, _ := supervised(t, 1, "tree-before")
+
+	sv.tick(context.Background())
+
+	if len(fr.started) != 1 {
+		t.Fatalf("started %d containers, want the fallback", len(fr.started))
+	}
+	if got := fr.started[0].Labels[sandbox.LabelRouteAttempt]; got != "2" {
+		t.Errorf("route_attempt label = %q, want \"2\"", got)
+	}
+
+	// And it survives the trip back out through the wire type, which is where
+	// the first version lost it.
+	run := toRun(runtime.ContainerInfo{
+		ID: "abc", Labels: fr.started[0].Labels, State: "running",
+	}, "docker")
+	if run.RouteAttempt != 2 {
+		t.Errorf("Run.routeAttempt = %d, want 2", run.RouteAttempt)
+	}
+	if run.RouteID != "20260815-120000-abcdef" {
+		t.Errorf("Run.routeId = %q, want the episode's", run.RouteID)
+	}
+	if run.RoutedFrom != "claude" {
+		t.Errorf("Run.routedFrom = %q, want claude", run.RoutedFrom)
+	}
+}
+
+// An ordinary run carries no routing labels at all. "Attempt 1 of 1" is a fact
+// about a run that could never route, and stamping it would put a routing column
+// on every container in the listing.
+func TestAnUnroutableRunCarriesNoEpisode(t *testing.T) {
+	s, fr := newTestServer(t)
+	rec := doJSON(t, s, http.MethodPost, "/v1/runs", RunCreateRequest{
+		Agent: "claude", Prompt: "fix the parser",
+	}, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /v1/runs = %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, label := range []string{sandbox.LabelRouteID, sandbox.LabelRouteAttempt, sandbox.LabelRoutedFrom} {
+		if got, ok := fr.started[0].Labels[label]; ok {
+			t.Errorf("%s = %q on a run with no chain, want it absent", label, got)
+		}
+	}
+}
