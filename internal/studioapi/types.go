@@ -194,7 +194,7 @@ type ProviderStatus struct {
 	Routable bool `json:"routable"`
 }
 
-// ProvidersRequest is the body of PUT /routing/providers: the host to probe per
+// ProvidersRequest is the body of POST /routing/providers: the host to probe per
 // agent. An empty value is an explicit "do not probe this one".
 type ProvidersRequest struct {
 	Providers map[string]string `json:"providers"`
