@@ -1185,3 +1185,28 @@ func doRequestAuthed(t *testing.T, h http.Handler, method, path, token string, b
 	h.ServeHTTP(rec, req)
 	return rec
 }
+
+// The daemon can build the base image it launches from.
+//
+// internal/cli wires the lazy builder in two places and this package forgot it,
+// which is invisible on any machine where the CLI has already built the image —
+// the daemon was living off a side effect of somebody else's command. On a fresh
+// host every launch died with "image not found locally and no builder
+// configured", an error about images from a request about runs.
+func TestTheDaemonCanBuildTheBaseImage(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg := config.Default()
+	cfg.Profile = config.ProfileDev
+
+	s, err := New(cfg, t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	d, ok := s.Session.Runtime.(*runtime.DockerCLI)
+	if !ok {
+		t.Skipf("the default engine is not the docker CLI backend (%T)", s.Session.Runtime)
+	}
+	if !d.HasBuilder() {
+		t.Error("no image builder wired: a host with no cached base image cannot launch anything from Studio")
+	}
+}

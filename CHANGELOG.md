@@ -312,6 +312,18 @@ version is tagged.
 
 ### Fixed
 
+- **Studio could not launch anything on a machine where the base image had not
+  been built.** `image.Register` wires the lazy builder into the docker backend,
+  and internal/cli does it in both places that start containers; the daemon did
+  it nowhere, so `POST /runs` died with *"image not found locally and no builder
+  configured"* — an error about images, from a request about runs. It was
+  invisible on any development machine, because the CLI had already built the
+  image there and the daemon was living off the side effect of somebody else's
+  command; it took a fresh Linux box to show it. Third caller, same rule
+  internal/fleet states with teeth: a step on the run path has to be repeated by
+  every caller that builds one, and `DockerCLI.HasBuilder` now exists so a test
+  can assert it rather than trust it.
+
 - **Studio's fixtures aged into fiction.** With no daemon answering, every screen
   falls back to fixture data — which is correct, and the header says so — but the
   fixtures were anchored to a frozen epoch, so six runs marked *running* read as

@@ -136,6 +136,16 @@ func (d *DockerCLI) SetBuilder(b Builder, embeddedRef string) {
 	d.embeddedRef = embeddedRef
 }
 
+// HasBuilder reports whether a builder has been wired in.
+//
+// It exists for the callers to be *asserted* rather than trusted. Wiring this is
+// a step every process that launches containers has to repeat, and the one that
+// forgot — the Studio daemon — worked on every development machine anyway,
+// because the CLI had already built the image there. The failure surfaced only
+// on a fresh Linux box, as "not found locally and no builder configured" from a
+// launch that had nothing to do with images.
+func (d *DockerCLI) HasBuilder() bool { return d.builder != nil }
+
 // resolveRuntime verifies the engine has the requested OCI runtime and returns
 // the name to hand it: the engine's **own** key for that runtime.
 //
