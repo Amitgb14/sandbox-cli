@@ -292,8 +292,19 @@ api_running() {
   pid=$(cat "$PIDFILE" 2>/dev/null || true)
   [ -n "$pid" ] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
-  case "$(ps -p "$pid" -o comm= 2>/dev/null)" in
-    *sandbox-studio-api*) return 0 ;;
+  # The full argv rather than `comm`, because `ps -o comm=` **truncates to 15
+  # characters on Linux** — "sandbox-studio-" — so a comparison against the whole
+  # name matched on macOS, where comm is the full path, and never on Linux. The
+  # daemon there was live and answering while `status` called it stopped and
+  # `down` refused to stop the process it had started itself.
+  #
+  # `args` falls back to `comm` for a kernel that hides an argv this process may
+  # not read; a truncated name is still evidence, and this check is deliberately
+  # evidence rather than proof (see the note above).
+  proc=$(ps -p "$pid" -o args= 2>/dev/null || true)
+  [ -n "$proc" ] || proc=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+  case "$proc" in
+    *sandbox-studio-api*|*sandbox-studio-) return 0 ;;
     *) return 1 ;;
   esac
 }

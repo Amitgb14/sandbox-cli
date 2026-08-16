@@ -312,6 +312,14 @@ version is tagged.
 
 ### Fixed
 
+- **`studio.sh status` and `down` could not see the daemon on Linux.** The
+  liveness check read `ps -o comm=`, which **truncates to 15 characters** there —
+  `sandbox-studio-` — and compared it against the full name, so it matched on
+  macOS, where comm is the whole path, and never on Linux. The daemon was live
+  and answering requests while `status` reported it stopped and `down` said
+  "nothing was running" about a process it had started itself, leaving it running
+  after every `up` that was supposed to restart it. It reads the full argv now.
+
 - **Studio could not launch anything on a machine where the base image had not
   been built.** `image.Register` wires the lazy builder into the docker backend,
   and internal/cli does it in both places that start containers; the daemon did
