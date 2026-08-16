@@ -13,6 +13,31 @@ version is tagged.
 
 ### Added
 
+- **Studio's Routing screen answers with pictures now.** Four, because the
+  questions are four and one view answering all of them answers none well. A
+  **chain graph** puts what is configured, what is answering and which hops have
+  actually fired on one canvas — each of those is misleading alone, since a
+  configured chain says nothing about whether it works and a count of failovers
+  says nothing about which of them today's settings would repeat; a hop that has
+  never been taken is drawn dashed, and one that fired but is configured nowhere
+  is still drawn, because hiding it would make the picture agree with the
+  settings rather than with the record. A **trend** puts failovers per day
+  against rescued-versus-still-failed, since a rescue rate over all of history
+  cannot tell a bad week from a bad year. **Flow rows** replace the old
+  `claude → codex` text with the sequence as it happened, marking an agent that
+  was *skipped* before it started differently from one that ran for four minutes
+  and failed — the arrow between them looked identical before. And an **uptime
+  strip** per provider.
+
+  The strip is the one thing here that is collected rather than derived, and it
+  is opt-outable for that reason: nothing records whether a provider was up at a
+  moment nobody asked, so the daemon samples one credential-free HEAD per
+  provider every `-probe-interval` (default five minutes, `0` turns it off) and
+  says which at startup. A sample is a hostname, a timestamp and whether
+  something answered — no run, no prompt, no repository. A span with no samples
+  is drawn as absence, never as an outage: the usual cause is a laptop that was
+  closed, and the alternative reports an incident every night.
+
 - **Studio retries a run whose provider died mid-flight, not just one that was
   down when you pressed Launch.** `--fallback` meant half of itself here: the
   daemon probed the provider before launching and never looked again, which

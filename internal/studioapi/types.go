@@ -200,6 +200,42 @@ type ProvidersRequest struct {
 	Providers map[string]string `json:"providers"`
 }
 
+// ProbeBucket is one slot of a provider's uptime strip: how many probes in that
+// span answered and how many did not.
+//
+// Both counts rather than a state, because zero-and-zero is a third thing: the
+// daemon was not running, or was started with probing off, and nothing was
+// asked. A bucket that reported "down" for that would turn every night a laptop
+// was closed into an incident.
+type ProbeBucket struct {
+	At     time.Time `json:"at"`
+	Up     int       `json:"up"`
+	Down   int       `json:"down"`
+	Reason string    `json:"reason,omitempty"`
+}
+
+// ProviderHistory is one agent's strip.
+type ProviderHistory struct {
+	Agent   string        `json:"agent"`
+	Buckets []ProbeBucket `json:"buckets"`
+	// Uptime is the fraction of *taken* samples that answered, and Samples is how
+	// many there were. The pair travels together on purpose: 100% of two samples
+	// is not the claim 100% of six hundred is, and a percentage with no count
+	// behind it invites reading the first as the second.
+	Uptime  float64 `json:"uptime,omitempty"`
+	Samples int     `json:"samples,omitempty"`
+}
+
+// ProbeHistoryResponse is the body of GET /routing/history.
+type ProbeHistoryResponse struct {
+	Hours int `json:"hours"`
+	// Interval is the sampling period in seconds, 0 when probing is off. A client
+	// needs it to say what a gap means — with no prober running, every gap is
+	// simply "not collected" rather than anything about the provider.
+	Interval  int               `json:"interval"`
+	Providers []ProviderHistory `json:"providers"`
+}
+
 // RoutingResponse is the body of GET /routing.
 type RoutingResponse struct {
 	Providers []ProviderStatus `json:"providers"`

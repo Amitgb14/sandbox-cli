@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/history"
@@ -91,6 +92,12 @@ type Server struct {
 	// nothing.
 	supervisor *supervisor
 	svOnce     sync.Once
+
+	// Probes is the persisted history of which providers were answering, and
+	// ProbeInterval how often it is sampled — 0 when the daemon was asked not to.
+	// See probelog.go for why this one thing is collected rather than derived.
+	Probes        *probeLog
+	ProbeInterval time.Duration
 }
 
 // sv returns this server's supervisor, creating it on first use.
@@ -129,6 +136,7 @@ func New(cfg config.Config, project string) (*Server, error) {
 		RepoID:   repoID,
 		Engine:   engine,
 		Projects: loadProjectStore(projectsPath()),
+		Probes:   loadProbeLog(probesPath()),
 	}
 	return srv, nil
 }
@@ -170,6 +178,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs/{id}/console", s.handleRunConsoleStream)
 	mux.HandleFunc("POST /v1/runs/{id}/console/input", s.handleRunConsoleInput)
 	mux.HandleFunc("POST /v1/runs/{id}/console/resize", s.handleRunConsoleResize)
+	mux.HandleFunc("GET /v1/routing/history", s.handleProbeHistory)
 	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("GET /v1/usage", s.handleUsage)
 	mux.HandleFunc("POST /v1/usage/refresh", s.handleUsageRefresh)

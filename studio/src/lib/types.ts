@@ -740,6 +740,36 @@ export interface BrowseListing {
 }
 
 /** One agent's provider, and whether it is answering. From `GET /v1/routing`. */
+/**
+ * One slot of a provider's uptime strip.
+ *
+ * Two counts rather than a state, because zero-and-zero is a third thing: the
+ * daemon was not running, or was started with `-probe-interval 0`, and nothing
+ * was asked. A strip that painted that as "down" would turn every night a laptop
+ * was closed into an incident.
+ */
+export interface ProbeBucket {
+  at: string;
+  up: number;
+  down: number;
+  reason?: string;
+}
+
+export interface ProviderHistory {
+  agent: string;
+  buckets: ProbeBucket[];
+  /** Fraction of *taken* samples that answered, with the count behind it. */
+  uptime?: number;
+  samples?: number;
+}
+
+export interface ProbeHistory {
+  hours: number;
+  /** Sampling period in seconds; 0 when the daemon was asked not to probe. */
+  interval: number;
+  providers: ProviderHistory[];
+}
+
 export interface ProviderStatus {
   agent: string;
   /** What was asked. Absent for an agent with nothing to ask. */

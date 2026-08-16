@@ -453,6 +453,16 @@ rather than merely passing.
   exactly that reason). Runs are always detached: an HTTP request/response cycle has nowhere to
   hold a pty.
 
+  `probelog.go` is the one place this daemon **collects** rather than derives, and it is
+  deliberately the smallest such place. Every other routing panel reads the run log; whether a
+  provider was answering at a moment nobody asked is recorded nowhere, so a uptime history means
+  outbound requests on a timer whether or not anybody launches anything — hence `-probe-interval`
+  (default 5m, `0` off), a startup line saying which, and a sample that is a hostname, a timestamp
+  and a boolean. The rule that keeps it honest is that **a gap is not an outage**: a bucket carries
+  `up` and `down` counts, zero of both means nothing was recorded, and the strip paints that as
+  absence — the commonest cause is a closed laptop, and reading silence as failure would report an
+  incident every night.
+
   Which is also why routing's second half lives in `supervisor.go` rather than in a handler. A
   request returns as soon as the container is up, so **nothing in the request outlives the run**
   — but the daemon does, so the supervision goes where the lifetime is: one poll loop, owned by

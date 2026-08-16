@@ -253,6 +253,18 @@ nobody to answer an approval prompt, so an agent that stops to ask would hang in
 the fallback slot where nobody is looking. When no candidate answers, the launch
 is refused rather than started into an outage.
 
+`GET /v1/routing/history?hours=24` is the one thing on that screen that is
+**collected rather than derived**, and it is worth knowing what it costs. Every
+other routing panel reads the run log, which exists anyway; a provider's health
+at a moment nobody asked is recorded nowhere, so the daemon samples it on a timer
+— one credential-free HEAD per provider every `-probe-interval` (default 5m, `0`
+turns it off, and the daemon says which at startup). A sample is a hostname, a
+timestamp and whether something answered: no run, no prompt, no repository. Each
+slot carries `up` and `down` counts rather than a state, because zero of both is
+a third thing — nothing was recorded, usually a daemon that was not running — and
+painting that as an outage would report an incident every night a laptop was
+closed.
+
 `GET /v1/routing` answers the question a chain is configured against — until it
 existed, the only way to ask "is Claude down" was to launch a run and see. It
 probes every routable agent concurrently and caches for thirty seconds, because
