@@ -277,11 +277,13 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Above the daemon's own facts, because it decides *which* daemon those
-          facts are about. */}
-      <ConnectionCard />
-
       <RepositoriesCard />
+
+      {/* Below the repositories and above the daemon's own facts. Repositories
+          are what people come here to change; the connection is set once, on the
+          day a daemon moves to another machine. It stays ahead of the Daemon
+          card because it decides *which* daemon those facts are about. */}
+      <ConnectionCard />
 
       <Card className="surface-sheen gap-4">
         <CardHeader>
