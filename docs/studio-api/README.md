@@ -149,7 +149,7 @@ there is no code generation step (yet) tying them together.
 | POST | `/v1/routing/providers` | Set which host is probed for an agent |
 | GET | `/v1/projects` | Repositories this daemon answers about — the one it was started in, plus every one added |
 | POST | `/v1/projects` | Add a repository by host path (**the only endpoint that accepts one**) |
-| POST | `/v1/projects/clone` | Clone a repository and register it — the only write to the host filesystem |
+| POST | `/v1/projects/clone` | Clone a repository and register it — the only write to the host filesystem; **always needs a token** |
 | DELETE | `/v1/projects/{id}` | Forget a repository. Nothing on disk is touched; the started-in one is refused |
 | GET | `/v1/browse` | Directories on the host, for the Add-repository folder picker (`?path=`) |
 | GET | `/v1/files` | List one directory of a repository (`?repo=`, `?branch=`, `?path=`) |
@@ -356,6 +356,13 @@ that arrangement validates paths on one machine and mounts them on another.
 `POST /v1/projects/clone` is the **only endpoint that writes to the host
 filesystem and runs a program**, so its refusals are the substance of it:
 
+- **It needs the server to have a token at all**, the same gate
+  `console/input` has. Every other endpoint resolves a registered id, so what
+  this control plane touches is a list you wrote; this one names a host path and
+  fetches code into it. The refusals below bound *where* it may write, which is
+  a different question from *who* may ask. `studio.sh` always generates a token,
+  so the ordinary path is unaffected — what this refuses is a deliberately
+  unauthenticated daemon being asked to pull code onto its machine.
 - **The transport is allowlisted, not filtered** — https, ssh, and
   `git@host:path`. `ext::` is why: `git clone 'ext::sh -c whoami'` is documented
   git behaviour and executes a command, and a denylist of that one string would

@@ -285,6 +285,16 @@ version is tagged.
 
 ### Changed
 
+- **Cloning a repository needs the daemon to have a token.** It is the second
+  endpoint that refuses to work unauthenticated, and for the same reason
+  `console/input` does: it is a *new* reach rather than a new spelling of an
+  existing one. Every other endpoint resolves a registered id, so the set of
+  directories this control plane touches is a file you can read; this one takes a
+  host path and fetches code into it. Where it may write was already bounded hard
+  — an existing, safe parent, one path segment, an allowlisted transport, git's
+  config neutralised — but that is a different question from who may ask. The
+  installer always generates a token, so the ordinary path is unchanged.
+
 - **Studio's subscription-usage gauge is off by default.** The sidebar panel is
   hidden until Settings → *Show subscription usage* turns it on, which also stops
   the request behind it. Nothing behind it changed — `/v1/usage`, the refresh

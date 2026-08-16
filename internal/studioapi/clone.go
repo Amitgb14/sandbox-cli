@@ -65,7 +65,36 @@ import (
 const cloneTimeout = 10 * time.Minute
 
 // handleCloneProject is POST /v1/projects/clone.
+//
+// The second endpoint that refuses to work unauthenticated, and the reason is
+// the same one console/input has: it is a *new* reach rather than a new spelling
+// of an existing one.
+//
+// Everything else here resolves a registered id, so the set of directories this
+// control plane touches is a file the user can read. This one takes a host path
+// and creates a tree under it, from a URL the caller chose, by running git. The
+// refusals below bound it hard — an absolute, existing, RefuseUnsafeHostPath'd
+// parent, one path segment for the name, no traversal, an allowlisted transport,
+// githard's config neutralisation and GIT_TERMINAL_PROMPT=0 — but bounding where
+// a thing may write is a different question from who may ask for it, and
+// `POST /runs` starting a container in a repository somebody registered is not
+// the same act as writing a new one wherever this daemon can reach.
+//
+// So it needs the server to have been given a token at all. studio.sh always
+// generates one, so this costs the ordinary path nothing; what it refuses is a
+// daemon deliberately started with no authentication being asked to fetch code
+// onto the machine it runs on.
 func (s *Server) handleCloneProject(w http.ResponseWriter, r *http.Request) {
+	if s.Token == "" {
+		writeError(w, http.StatusForbidden, fmt.Errorf(
+			"cloning requires the server to have a -token set: it writes a new tree to this host "+
+				"from a URL the request names, which is the one thing here that reaches outside the "+
+				"repositories you registered.\n"+
+				"  Start sandbox-studio-api with -token (or $SANDBOX_STUDIO_TOKEN), or clone it yourself "+
+				"and add it by path"))
+		return
+	}
+
 	var req ProjectCloneRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
