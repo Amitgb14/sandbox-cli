@@ -36,6 +36,7 @@ export const qk = {
   agents: ["agents"] as const,
   projects: ["projects"] as const,
   routing: ["routing"] as const,
+  probeHistory: (hours: number) => ["routing", "history", hours] as const,
   browse: (path?: string) => ["browse", path ?? "home"] as const,
   // Repo-scoped keys carry the repo id. A key that did not would serve one
   // repository's worktrees under another's name the moment the picker moved —
@@ -148,6 +149,19 @@ export function useRouting() {
     queryFn: () => api.routing(),
     refetchInterval: 60_000,
     staleTime: 30_000,
+  });
+}
+
+/**
+ * Provider uptime history. Polled slowly: the daemon samples every few minutes,
+ * so asking more often than that redraws the same strip.
+ */
+export function useProbeHistory(hours = 24) {
+  return useQuery({
+    queryKey: qk.probeHistory(hours),
+    queryFn: () => api.probeHistory(hours),
+    refetchInterval: 120_000,
+    staleTime: 60_000,
   });
 }
 

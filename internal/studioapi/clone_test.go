@@ -2,6 +2,7 @@ package studioapi
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,15 +93,43 @@ func TestCloneDestinationRefusals(t *testing.T) {
 // refused *before* git runs and leaves nothing behind.
 func TestCloneEndpointRefusesBeforeWriting(t *testing.T) {
 	s, _ := newTestServer(t)
+	// Past the token gate, because what this test is about is the URL: a server
+	// with no token refuses cloning outright, which is
+	// TestCloningNeedsTheServerToHaveAToken below.
+	s.Token = "test-token"
 	parent := t.TempDir()
 
-	rec := doJSON(t, s, http.MethodPost, "/v1/projects/clone", ProjectCloneRequest{
+	req := newTestRequest(t, http.MethodPost, "/v1/projects/clone", ProjectCloneRequest{
 		URL: "ext::sh -c id", Parent: parent, Name: "pwned",
-	}, nil)
+	})
+	req.Header.Set("Authorization", "Bearer "+s.Token)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("ext:: clone = %d, want 422", rec.Code)
+		t.Fatalf("ext:: clone = %d, want 422: %s", rec.Code, rec.Body.String())
 	}
 	if _, err := os.Stat(filepath.Join(parent, "pwned")); err == nil {
 		t.Error("a refused clone left a directory behind")
+	}
+}
+
+// Cloning is refused outright on a daemon with no token.
+//
+// The same gate console/input has, for the same reason: every other endpoint
+// resolves a registered id, so what this control plane touches is a list the
+// user wrote. This one takes a host path and fetches code into it. Bounding
+// *where* it may write — which cloneDestination does hard — is a different
+// question from *who* may ask for it.
+func TestCloningNeedsTheServerToHaveAToken(t *testing.T) {
+	s, _ := newTestServer(t) // no Token set
+	rec := doJSON(t, s, http.MethodPost, "/v1/projects/clone", ProjectCloneRequest{
+		URL: "https://example.com/repo.git", Parent: t.TempDir(),
+	}, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /v1/projects/clone with no server token = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	// And it says what to do about it, rather than only that it refused.
+	if body := rec.Body.String(); !strings.Contains(body, "-token") {
+		t.Errorf("the refusal does not mention how to enable it: %s", body)
 	}
 }

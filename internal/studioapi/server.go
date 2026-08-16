@@ -14,6 +14,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/history"
@@ -78,6 +80,34 @@ type Server struct {
 	// beyond the loopback names it always accepts. Anything else is refused —
 	// see hostAllowed for the DNS-rebinding attack that check exists to stop.
 	AllowedHosts []string
+
+	// supervisor watches detached runs that have somewhere to fall through to,
+	// and starts the next agent when one fails having written nothing. It is a
+	// property of the *daemon* rather than of a request: a handler returns as
+	// soon as the container is up, and the run outlives it. See supervisor.go.
+	//
+	// Reached through sv() rather than directly, because a Server is legitimately
+	// built as a struct literal — every test in this package does — and a nil
+	// here would mean a daemon that accepts a chain and silently supervises
+	// nothing.
+	supervisor *supervisor
+	svOnce     sync.Once
+
+	// Probes is the persisted history of which providers were answering, and
+	// ProbeInterval how often it is sampled — 0 when the daemon was asked not to.
+	// See probelog.go for why this one thing is collected rather than derived.
+	Probes        *probeLog
+	ProbeInterval time.Duration
+}
+
+// sv returns this server's supervisor, creating it on first use.
+func (s *Server) sv() *supervisor {
+	s.svOnce.Do(func() {
+		if s.supervisor == nil {
+			s.supervisor = newSupervisor(s)
+		}
+	})
+	return s.supervisor
 }
 
 // New builds a Server for the given resolved config and project directory.
@@ -99,14 +129,16 @@ func New(cfg config.Config, project string) (*Server, error) {
 	// sandbox.repo label and so no repo-scoped filtering — the same as a plain
 	// `sandbox-cli run` outside a repo.
 	repoID, _ := worktree.RepoID(project)
-	return &Server{
+	srv := &Server{
 		Session:  sess,
 		RT:       rt,
 		Project:  project,
 		RepoID:   repoID,
 		Engine:   engine,
 		Projects: loadProjectStore(projectsPath()),
-	}, nil
+		Probes:   loadProbeLog(probesPath()),
+	}
+	return srv, nil
 }
 
 // Handler returns the routed, middleware-wrapped HTTP handler.
@@ -146,6 +178,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs/{id}/console", s.handleRunConsoleStream)
 	mux.HandleFunc("POST /v1/runs/{id}/console/input", s.handleRunConsoleInput)
 	mux.HandleFunc("POST /v1/runs/{id}/console/resize", s.handleRunConsoleResize)
+	mux.HandleFunc("GET /v1/routing/history", s.handleProbeHistory)
 	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("GET /v1/usage", s.handleUsage)
 	mux.HandleFunc("POST /v1/usage/refresh", s.handleUsageRefresh)

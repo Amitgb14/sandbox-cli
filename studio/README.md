@@ -45,6 +45,14 @@ sh studio.sh down        # stop the pair, keep everything installed
 sh studio.sh uninstall   # remove the containers, the images and Studio's state
 ```
 
+**Usage gauge (off by default).** The subscription panel in the sidebar footer is
+built and working, and hidden until asked for: Settings → *Show subscription
+usage* turns it on, per browser. Off also stops the request behind it. Changing
+that default needed the persist `version`/`migrate` pair in `src/lib/store.ts` —
+a preference already in localStorage outranks a default forever, so without a
+migration the new default would have reached only people who had never opened
+Studio.
+
 **Editor (parked).** The Files and Changes screens are built but not in the
 sidebar: `EDITOR_NAV` in `src/lib/nav.ts` holds the group, and moving it into
 `NAV` surfaces both, along with their palette entries and shortcuts. The routes

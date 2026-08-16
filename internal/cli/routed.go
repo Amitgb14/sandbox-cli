@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"slices"
@@ -164,7 +162,7 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string, user 
 	//
 	// Only when there is somewhere to fall through to: an id on a run that could
 	// never route describes an episode that cannot happen.
-	episode := newRouteID()
+	episode := routing.NewID()
 
 	// Which host to ask for each agent, from the user's own config. Read once:
 	// the answer cannot change mid-chain, and re-reading per attempt would make
@@ -474,23 +472,6 @@ func configuredFallbacks(rf *runFlags, primary string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-// newRouteID mints an identifier for one routing episode.
-//
-// Short and time-ordered rather than a UUID: it is read by people in a listing
-// beside a timestamp, and it only has to be unique among the episodes on one
-// machine. The same shape internal/rescue uses for a session id, for the same
-// reason — an id nobody can say out loud is one nobody quotes in a bug report.
-func newRouteID() string {
-	var b [3]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// A machine with no entropy still gets an id: a collision here costs two
-		// episodes being grouped, which is a wrong number in one table, while an
-		// empty id costs the correlation entirely.
-		return time.Now().UTC().Format("150405")
-	}
-	return time.Now().UTC().Format("20060102-150405") + "-" + hex.EncodeToString(b[:])
 }
 
 // configuredProviders is the user's provider overrides, or nil.

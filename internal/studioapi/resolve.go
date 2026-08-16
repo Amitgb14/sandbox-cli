@@ -158,15 +158,21 @@ func toRun(c runtime.ContainerInfo, engine string) Run {
 		RepoName:    repoNameFromID(c.Labels[sandbox.LabelRepo]),
 		RoutedFrom:  c.Labels[sandbox.LabelRoutedFrom],
 		RouteReason: c.Labels[sandbox.LabelRouteReason],
-		Branch:      c.Labels[sandbox.LabelBranch],
-		Base:        c.Labels[sandbox.LabelBase],
-		Agent:       c.Labels[sandbox.LabelAgent],
-		Verify:      c.Labels[sandbox.LabelVerify],
-		Profile:     c.Labels[sandbox.LabelProfile],
-		Prompt:      c.Labels[sandbox.LabelPrompt],
-		CreatedAt:   c.CreatedAt,
-		OpenStdin:   c.OpenStdin,
-		TTY:         c.TTY,
+		// The episode, and where in it. Read from the container rather than from
+		// the audit log because a detached run's audit line is written when it
+		// ends, and these are the fields a listing of *running* containers needs
+		// to show a failover as one thing rather than two.
+		RouteID:      c.Labels[sandbox.LabelRouteID],
+		RouteAttempt: atoiOrZero(c.Labels[sandbox.LabelRouteAttempt]),
+		Branch:       c.Labels[sandbox.LabelBranch],
+		Base:         c.Labels[sandbox.LabelBase],
+		Agent:        c.Labels[sandbox.LabelAgent],
+		Verify:       c.Labels[sandbox.LabelVerify],
+		Profile:      c.Labels[sandbox.LabelProfile],
+		Prompt:       c.Labels[sandbox.LabelPrompt],
+		CreatedAt:    c.CreatedAt,
+		OpenStdin:    c.OpenStdin,
+		TTY:          c.TTY,
 
 		Image:    c.Image,
 		Command:  c.Command,
@@ -352,4 +358,18 @@ func envValue(c runtime.ContainerInfo, name string) string {
 		}
 	}
 	return ""
+}
+
+// atoiOrZero reads a numeric label, treating anything unreadable as absent.
+//
+// A label is text stamped by a launcher that may be an older build of this tool,
+// so a value that is not a number is a fact this daemon does not have — the same
+// bargain every other optional label makes — rather than a reason to fail a
+// listing.
+func atoiOrZero(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }

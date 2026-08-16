@@ -370,9 +370,10 @@ export function LaunchForm() {
                   <Hint>
                     Studio checks the provider before launching and starts{" "}
                     {agents?.find((a) => a.name === req.fallback[0])?.label ?? req.fallback[0]}{" "}
-                    instead if it is not answering. It cannot retry a run that has already
-                    started — a launch here is detached, so nothing is left watching the exit
-                    code. The fallback runs with its own login and its own transcript.
+                    instead if it is not answering — and if this run fails later having written
+                    nothing, hands the work over with a briefing of what was said. A run that
+                    changed files is never retried. The fallback runs with its own login and its
+                    own transcript.
                   </Hint>
                 )}
               </Field>

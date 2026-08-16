@@ -149,7 +149,7 @@ there is no code generation step (yet) tying them together.
 | POST | `/v1/routing/providers` | Set which host is probed for an agent |
 | GET | `/v1/projects` | Repositories this daemon answers about — the one it was started in, plus every one added |
 | POST | `/v1/projects` | Add a repository by host path (**the only endpoint that accepts one**) |
-| POST | `/v1/projects/clone` | Clone a repository and register it — the only write to the host filesystem |
+| POST | `/v1/projects/clone` | Clone a repository and register it — the only write to the host filesystem; **always needs a token** |
 | DELETE | `/v1/projects/{id}` | Forget a repository. Nothing on disk is touched; the started-in one is refused |
 | GET | `/v1/browse` | Directories on the host, for the Add-repository folder picker (`?path=`) |
 | GET | `/v1/files` | List one directory of a repository (`?repo=`, `?branch=`, `?path=`) |
@@ -232,16 +232,38 @@ segment, so address a slash-bearing branch by id or name there — `GET
 provider before launching** and starts the first agent that answers — the case
 this exists for is pressing Launch during an outage.
 
-It does not do the other half of routing, and does not pretend to: retrying a run
-that failed having changed nothing needs something watching the exit code, and
-this API launches detached and returns as soon as the container exists. A Studio
-run therefore falls through *before* it starts and never after. The CLI does
-both, because a foreground run has a process left to wait.
+It also does the other half — retrying a run that failed having changed nothing —
+and where that happens is the design. A handler returns as soon as the container
+is up, so nothing in the *request* outlives the run; the **daemon** does. So a
+launch with a chain behind it is registered with a supervisor owned by the
+process, which polls the engine, applies the same workspace gate the CLI applies,
+and starts the next agent with a briefing mounted read-only. Both attempts carry
+one `routeId`.
+
+Two limits travel with it. A **daemon restart forgets**: the watch set is in
+memory, so a run in flight when the daemon is restarted keeps running, stays
+listed, and simply is not retried. And the failed container is **renamed, not
+removed** — `sandbox-<repo>-<branch>-attempt1` — because the retry needs the name
+back (docker's atomic refusal of a duplicate is what enforces one agent per
+branch) and the dead container's logs are the evidence for why the failover
+happened.
 
 Every candidate must have a **verified headless mode** — a detached run has
 nobody to answer an approval prompt, so an agent that stops to ask would hang in
 the fallback slot where nobody is looking. When no candidate answers, the launch
 is refused rather than started into an outage.
+
+`GET /v1/routing/history?hours=24` is the one thing on that screen that is
+**collected rather than derived**, and it is worth knowing what it costs. Every
+other routing panel reads the run log, which exists anyway; a provider's health
+at a moment nobody asked is recorded nowhere, so the daemon samples it on a timer
+— one credential-free HEAD per provider every `-probe-interval` (default 5m, `0`
+turns it off, and the daemon says which at startup). A sample is a hostname, a
+timestamp and whether something answered: no run, no prompt, no repository. Each
+slot carries `up` and `down` counts rather than a state, because zero of both is
+a third thing — nothing was recorded, usually a daemon that was not running — and
+painting that as an outage would report an incident every night a laptop was
+closed.
 
 `GET /v1/routing` answers the question a chain is configured against — until it
 existed, the only way to ask "is Claude down" was to launch a run and see. It
@@ -334,6 +356,13 @@ that arrangement validates paths on one machine and mounts them on another.
 `POST /v1/projects/clone` is the **only endpoint that writes to the host
 filesystem and runs a program**, so its refusals are the substance of it:
 
+- **It needs the server to have a token at all**, the same gate
+  `console/input` has. Every other endpoint resolves a registered id, so what
+  this control plane touches is a list you wrote; this one names a host path and
+  fetches code into it. The refusals below bound *where* it may write, which is
+  a different question from *who* may ask. `studio.sh` always generates a token,
+  so the ordinary path is unaffected — what this refuses is a deliberately
+  unauthenticated daemon being asked to pull code onto its machine.
 - **The transport is allowlisted, not filtered** — https, ssh, and
   `git@host:path`. `ext::` is why: `git clone 'ext::sh -c whoami'` is documented
   git behaviour and executes a command, and a denylist of that one string would

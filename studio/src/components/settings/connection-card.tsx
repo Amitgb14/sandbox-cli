@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link2, RotateCw, ShieldAlert } from "lucide-react";
+import { Eye, EyeOff, Link2, RotateCw, ShieldAlert } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +40,10 @@ export function ConnectionCard() {
   const [endpoint, setEndpoint] = useState("");
   const [token, setToken] = useState("");
   const [custom, setCustom] = useState(false);
+  // Never persisted and reset on every mount: revealing is for the moment you
+  // are typing, not a preference that leaves a token on screen for whoever
+  // walks past next.
+  const [shown, setShown] = useState(false);
   const [effective, setEffective] = useState("");
 
   useEffect(() => {
@@ -109,17 +113,39 @@ export function ConnectionCard() {
             <Label htmlFor="token" className="text-xs">
               Token
             </Label>
-            <Input
-              id="token"
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && apply(endpoint, token)}
-              placeholder="the token that daemon printed"
-              className="font-mono text-xs"
-              spellCheck={false}
-              autoComplete="off"
-            />
+            <div className="relative">
+              <Input
+                id="token"
+                type={shown ? "text" : "password"}
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && apply(endpoint, token)}
+                placeholder="the token that daemon printed"
+                className="pr-9 font-mono text-xs"
+                spellCheck={false}
+                autoComplete="off"
+              />
+              {/* Revealable, because this field is *typed into* rather than
+                  merely stored: a token pasted from another machine's terminal
+                  is checked by reading it back, and a masked field turns one
+                  wrong character into "the daemon is unreachable".
+
+                  It reveals rather than copies. A copy button would put a
+                  bearer token on the system clipboard, where the next paste
+                  anywhere sends it — a worse trade for a value whose whole job
+                  is to be secret, and one this card cannot undo. */}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setShown((v) => !v)}
+                className="absolute right-0 top-0 size-9 text-muted-foreground hover:text-foreground"
+                aria-label={shown ? "Hide the token" : "Show the token"}
+                title={shown ? "Hide" : "Show"}
+              >
+                {shown ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+              </Button>
+            </div>
           </div>
         </div>
 

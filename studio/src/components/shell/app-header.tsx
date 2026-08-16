@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
+import { apiBase } from "@/lib/constants";
 import { crumbsFor } from "@/lib/nav";
 import { useDaemon, useTransportMode } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
@@ -127,8 +128,12 @@ function TransportBadge() {
         </Button>
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
-        No daemon answered on localhost:8787, so these are fixtures. Nothing here reflects a real
-        container. Click to retry.
+        {/* The endpoint actually dialled, not a hardcoded one. This message is
+            read by somebody asking "why is this not my data", and naming a port
+            they never used sends them to look at the wrong process — the whole
+            job of this badge is to be right about where the data came from. */}
+        No daemon answered on {apiBase() || "this machine"}, so these are fixtures. Nothing here
+        reflects a real container. Click to retry.
       </TooltipContent>
     </Tooltip>
   );

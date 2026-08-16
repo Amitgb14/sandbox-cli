@@ -11,6 +11,25 @@ import { persist } from "zustand/middleware";
  * a bootstrap script: they drift, and nobody sees it until they disagree.
  */
 
+/**
+ * The persisted slice, named so `migrate` can say what it returns.
+ *
+ * Every key here is one `partialize` keeps; a stored object legitimately has
+ * fewer of them (it was written by an older build), and zustand merges whatever
+ * migrate returns over the defaults, which is what fills the gaps.
+ */
+type PersistedUi = Pick<
+  UiState,
+  | "terminalFollow"
+  | "terminalWrap"
+  | "terminalTimestamps"
+  | "diffView"
+  | "usageCollapsed"
+  | "usageHidden"
+  | "routingPrefs"
+  | "recentRuns"
+>;
+
 interface UiState {
   /** ⌘K palette. */
   paletteOpen: boolean;
@@ -69,12 +88,20 @@ interface UiState {
    * fossil with an explanation attached. Explaining something useless every time
    * you look at the sidebar is its own kind of noise.
    *
-   * **Shown by default**, and the round trip is worth recording. It was flipped
-   * off when the only source was a cache Claude Code had stopped maintaining, so
-   * the panel was a fossil explaining itself; it is on again now that the status
-   * line records the live figures and `agentusage` prefers them. The default
-   * tracks whether the number can move, which is the only thing that ever made
-   * it worth showing.
+   * **Hidden by default**, which is the third position this default has held and
+   * the reasoning has changed each time: off while the only source was a cache
+   * Claude Code had stopped maintaining and the panel was a fossil explaining
+   * itself, on once the status line began recording live figures, and off again
+   * now — not because the number is wrong but because a permanent gauge in the
+   * corner is not what most people want the sidebar for. Nothing behind it
+   * changed; this is a question about the chrome, and the switch in Settings is
+   * where somebody who does want it says so.
+   *
+   * A default change alone would not have reached anyone: this is persisted, so
+   * a browser that has already stored the old default keeps it forever. The
+   * `version`/`migrate` pair below is what makes the new default apply once to
+   * those, and exactly once — a browser that has since chosen for itself keeps
+   * its choice.
    */
   usageHidden: boolean;
   setUsageHidden: (v: boolean) => void;
@@ -106,7 +133,7 @@ export const useUi = create<UiState>()(
 
       usageCollapsed: false,
       setUsageCollapsed: (usageCollapsed) => set({ usageCollapsed }),
-      usageHidden: false,
+      usageHidden: true,
       setUsageHidden: (usageHidden) => set({ usageHidden }),
 
       routingPrefs: {},
@@ -119,6 +146,20 @@ export const useUi = create<UiState>()(
     }),
     {
       name: "sandbox-studio-ui",
+      // Bumped when a *default* changes in a way that should reach browsers
+      // which already stored the old one. Without it a persisted preference is
+      // permanent: zustand merges stored state over defaults, so changing a
+      // default only ever affects someone who has never opened the app.
+      version: 1,
+      migrate: (persisted, from) => {
+        const state = (persisted ?? {}) as Partial<UiState>;
+        // v0 -> v1: the usage panel went from shown-by-default to hidden. Applied
+        // once, to browsers carrying the old default, and then never again — a
+        // migration that re-asserted the default on every load would be a setting
+        // that cannot be changed.
+        if (from < 1) return { ...state, usageHidden: true } as PersistedUi;
+        return state as PersistedUi;
+      },
       // The palette must not reopen itself on reload, and a repo filter that
       // outlived the repo is a confusing empty table.
       partialize: (s) => ({

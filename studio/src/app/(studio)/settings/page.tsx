@@ -169,13 +169,16 @@ export default function SettingsPage() {
             <Separator />
 
             {/* Not in the security card below, which is read-only on purpose:
-                this is Studio's own chrome, which is exactly what Studio owns. */}
+                this is Studio's own chrome, which is exactly what Studio owns.
+
+                Off by default, so this row is where the panel is turned *on*
+                rather than where it is turned off. */}
             <Row
               id="usage-panel"
               checked={!usageHidden}
               onChange={(v) => setUsageHidden(!v)}
               label="Show subscription usage"
-              hint="The sidebar gauge. Live on any machine where a sandboxed claude has run interactively — the status line records the figures as it goes. Off also stops the request behind it."
+              hint="The sidebar gauge, off by default. Live on any machine where a sandboxed claude has run interactively — the status line records the figures as it goes. Leaving it off also stops the request behind it."
             />
           </CardContent>
         </Card>
@@ -274,11 +277,13 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Above the daemon's own facts, because it decides *which* daemon those
-          facts are about. */}
-      <ConnectionCard />
-
       <RepositoriesCard />
+
+      {/* Below the repositories and above the daemon's own facts. Repositories
+          are what people come here to change; the connection is set once, on the
+          day a daemon moves to another machine. It stays ahead of the Daemon
+          card because it decides *which* daemon those facts are about. */}
+      <ConnectionCard />
 
       <Card className="surface-sheen gap-4">
         <CardHeader>

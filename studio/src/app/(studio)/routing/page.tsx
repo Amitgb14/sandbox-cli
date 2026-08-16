@@ -2,7 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, CircleSlash, History, Play, RotateCw, Shuffle, XCircle } from "lucide-react";
+import {
+  Activity,
+  CheckCircle2,
+  CircleSlash,
+  History,
+  Network,
+  Play,
+  RotateCw,
+  Shuffle,
+  XCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,9 +29,18 @@ import {
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PageHeader } from "@/components/common/page-header";
-import { useAgents, useAudit, useRouting, useSetProviders } from "@/lib/api/queries";
-import { episodesFrom, routeStats } from "@/lib/routing-history";
-import { formatRelative } from "@/lib/format";
+import { ChainGraph } from "@/components/routing/chain-graph";
+import { EpisodeFlow } from "@/components/routing/episode-flow";
+import { FailoverTrend } from "@/components/routing/failover-trend";
+import { UptimeStrip } from "@/components/routing/uptime-strip";
+import {
+  useAgents,
+  useAudit,
+  useProbeHistory,
+  useRouting,
+  useSetProviders,
+} from "@/lib/api/queries";
+import { chainEdges, episodesFrom, failoverDays, routeStats } from "@/lib/routing-history";
 import { useUi } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { ProviderStatus } from "@/lib/types";
@@ -35,11 +54,19 @@ import type { ProviderStatus } from "@/lib/types";
  * are the standing answer, remembered per primary agent and applied by every
  * launch.
  *
+ * The **activity** is the third, and it is a derivation over the run log rather
+ * than anything new being collected — which is why it can answer for history
+ * written before this screen existed. It is drawn three ways because the
+ * questions are three: the graph is "if Claude goes down now, what happens", the
+ * trend is "is this getting worse", and the flow rows are "what happened that
+ * time". One picture answering all three answers none of them well.
+ *
  * What the screen must not do is imply more than routing does. Studio probes
- * before launching and takes the first provider that answers; it does not retry
- * a run that has already started, because a launch here is detached and nothing
- * is left watching the exit code. The CLI does both. That asymmetry is stated
- * here rather than discovered when a run fails and nothing falls through.
+ * before launching *and* the daemon watches a run afterwards, handing the work
+ * over when one fails having written nothing — but a daemon restarted mid-run
+ * leaves that run alone, and a run that changed files is never retried. Both
+ * limits are stated here rather than discovered when a run fails and nothing
+ * falls through.
  */
 export default function RoutingPage() {
   const { data: providers, isPending, isFetching, refetch } = useRouting();
@@ -49,12 +76,18 @@ export default function RoutingPage() {
   const { data: audit } = useAudit(undefined, 5000);
   const episodes = useMemo(() => episodesFrom(audit ?? []), [audit]);
   const stats = useMemo(() => routeStats(episodes), [episodes]);
+  const { data: history } = useProbeHistory();
   const setProviders = useSetProviders();
   const routingPrefs = useUi((s) => s.routingPrefs);
   const setRoutingPref = useUi((s) => s.setRoutingPref);
 
   const routable = (providers ?? []).filter((p) => p.routable);
   const down = routable.filter((p) => p.probed && !p.reachable);
+  const edges = useMemo(
+    () => chainEdges(routingPrefs, episodes),
+    [routingPrefs, episodes],
+  );
+  const days = useMemo(() => failoverDays(episodes), [episodes]);
 
   return (
     <div className="space-y-5">
@@ -63,9 +96,9 @@ export default function RoutingPage() {
         description={
           <>
             When an agent&apos;s provider is not answering, a chain runs the next one instead.
-            Studio checks before launching; it cannot retry a run that has already started,
-            because a launch here is detached and nothing is left watching its exit code — the
-            CLI does both.
+            Studio checks before launching, and the daemon watches a run afterwards: one that
+            fails having written nothing is handed to the next agent with a briefing. A daemon
+            restarted mid-run leaves that run alone.
           </>
         }
         actions={
@@ -132,6 +165,40 @@ export default function RoutingPage() {
 
       <Card>
         <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Activity className="size-4" />
+            Uptime
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {history ? (
+            <UptimeStrip data={history} />
+          ) : (
+            <Skeleton className="h-24 w-full" />
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Network className="size-4" />
+            Chains, as they stand
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="mb-3 text-xs text-muted-foreground">
+            What is configured, what is answering, and which hops have actually been
+            taken — the three together, because each is misleading alone: a configured
+            chain says nothing about whether it works, and a count of failovers says
+            nothing about which of them today&apos;s settings would repeat.
+          </p>
+          <ChainGraph providers={providers ?? []} edges={edges} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
           <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-sm">
             <span className="flex items-center gap-2">
               <History className="size-4" />
@@ -175,33 +242,8 @@ export default function RoutingPage() {
                   )}
                 </p>
               )}
-              <ul className="divide-y rounded-md border text-xs">
-                {episodes
-                  .filter((e) => e.switched)
-                  .slice(0, 8)
-                  .map((e) => (
-                    <li key={e.id} className="flex flex-wrap items-center gap-2 p-2.5">
-                      <span className="font-mono text-[10px] text-muted-foreground">
-                        {formatRelative(e.at)}
-                      </span>
-                      <span className="font-mono">
-                        {e.attempts.map((a) => a.agent ?? "?").join(" → ")}
-                      </span>
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          "text-[10px]",
-                          e.rescued ? "text-status-good" : "text-status-critical",
-                        )}
-                      >
-                        {e.rescued ? "rescued" : "still failed"}
-                      </Badge>
-                      <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                        {e.attempts.find((a) => a.routeReason)?.routeReason}
-                      </span>
-                    </li>
-                  ))}
-              </ul>
+              <FailoverTrend data={days} />
+              <EpisodeFlow episodes={episodes.filter((e) => e.switched).slice(0, 8)} />
             </>
           )}
         </CardContent>

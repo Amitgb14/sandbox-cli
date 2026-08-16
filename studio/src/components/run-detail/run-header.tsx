@@ -74,12 +74,20 @@ export function RunHeader({ run }: { run: Run }) {
                   <Badge variant="outline" className="gap-1 text-[10px]">
                     <Shuffle className="size-3" />
                     routed from {run.routedFrom}
+                    {(run.routeAttempt ?? 0) > 1 && ` · attempt ${run.routeAttempt}`}
                   </Badge>
                 </TooltipTrigger>
                 <TooltipContent className="max-w-xs">
-                  {run.routeReason
-                    ? `${run.routedFrom} was skipped — ${run.routeReason}. This agent ran with its own login and its own transcript; it did not inherit the conversation.`
-                    : `${run.routedFrom} was asked for and this agent ran instead.`}
+                  {/* Two different events wear the same badge, and saying the
+                      wrong one is worse than saying nothing: a preflight skip
+                      means the named agent never ran, while a later attempt
+                      means it ran, failed without writing anything, and its
+                      briefing was carried across. */}
+                  {(run.routeAttempt ?? 0) > 1
+                    ? `${run.routedFrom} ${run.routeReason || "failed"}, so this agent took over — with a briefing of that conversation mounted read-only, not the conversation itself. It runs under its own login and writes its own transcript.`
+                    : run.routeReason
+                      ? `${run.routedFrom} was skipped before it started — ${run.routeReason}. This agent ran with its own login and its own transcript; there was no conversation to inherit.`
+                      : `${run.routedFrom} was asked for and this agent ran instead.`}
                 </TooltipContent>
               </Tooltip>
             )}

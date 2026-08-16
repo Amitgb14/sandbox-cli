@@ -194,10 +194,46 @@ type ProviderStatus struct {
 	Routable bool `json:"routable"`
 }
 
-// ProvidersRequest is the body of PUT /routing/providers: the host to probe per
+// ProvidersRequest is the body of POST /routing/providers: the host to probe per
 // agent. An empty value is an explicit "do not probe this one".
 type ProvidersRequest struct {
 	Providers map[string]string `json:"providers"`
+}
+
+// ProbeBucket is one slot of a provider's uptime strip: how many probes in that
+// span answered and how many did not.
+//
+// Both counts rather than a state, because zero-and-zero is a third thing: the
+// daemon was not running, or was started with probing off, and nothing was
+// asked. A bucket that reported "down" for that would turn every night a laptop
+// was closed into an incident.
+type ProbeBucket struct {
+	At     time.Time `json:"at"`
+	Up     int       `json:"up"`
+	Down   int       `json:"down"`
+	Reason string    `json:"reason,omitempty"`
+}
+
+// ProviderHistory is one agent's strip.
+type ProviderHistory struct {
+	Agent   string        `json:"agent"`
+	Buckets []ProbeBucket `json:"buckets"`
+	// Uptime is the fraction of *taken* samples that answered, and Samples is how
+	// many there were. The pair travels together on purpose: 100% of two samples
+	// is not the claim 100% of six hundred is, and a percentage with no count
+	// behind it invites reading the first as the second.
+	Uptime  float64 `json:"uptime,omitempty"`
+	Samples int     `json:"samples,omitempty"`
+}
+
+// ProbeHistoryResponse is the body of GET /routing/history.
+type ProbeHistoryResponse struct {
+	Hours int `json:"hours"`
+	// Interval is the sampling period in seconds, 0 when probing is off. A client
+	// needs it to say what a gap means — with no prober running, every gap is
+	// simply "not collected" rather than anything about the provider.
+	Interval  int               `json:"interval"`
+	Providers []ProviderHistory `json:"providers"`
 }
 
 // RoutingResponse is the body of GET /routing.
@@ -466,6 +502,19 @@ type Run struct {
 	// somebody looks at the listing and asks why it says codex.
 	RoutedFrom  string `json:"routedFrom,omitempty"`
 	RouteReason string `json:"routeReason,omitempty"`
+
+	// RouteID is the episode, and RouteAttempt the position in it — 1 for the
+	// agent first asked for, 2 for the one the supervisor started after it
+	// failed. Both from labels, for the reason above.
+	//
+	// The attempt is what separates the two kinds of switch, which look identical
+	// through RoutedFrom alone: a *preflight* skip is attempt 1 and carries no
+	// conversation, because the agent it names never ran, while attempt 2 or more
+	// is a run that failed and handed its work over with a briefing. Telling a
+	// user "it did not inherit the conversation" about the second case is simply
+	// untrue.
+	RouteID      string `json:"routeId,omitempty"`
+	RouteAttempt int    `json:"routeAttempt,omitempty"`
 
 	// RepoName is the display half of that id. Two clones of a same-named repo
 	// share it and do not share RepoID, so it is for showing and never for
@@ -820,11 +869,12 @@ type RunCreateRequest struct {
 	// Fallback are the agents to try, in order, when Agent's provider is not
 	// answering — the chain from internal/routing.
 	//
-	// Studio probes before launching and takes the first that answers. It cannot
-	// do the other half of routing, which is retrying a run that failed having
-	// changed nothing: this launches detached, so nothing is left to watch the
-	// exit code. A run started here falls through before it starts and never
-	// after, and the Run it answers with says which agent it actually got.
+	// Two mechanisms, as in the CLI. The daemon probes before launching and takes
+	// the first agent that answers — the Run it answers with says which one that
+	// was. And a launch with somewhere left to fall through to is *supervised*:
+	// when it exits non-zero having left the workspace untouched, the next agent
+	// is started with a briefing of the conversation so far. See supervisor.go
+	// for the two limits that carries.
 	Fallback []string `json:"fallback,omitempty"`
 
 	// Agent is one of the names from GET /agents. Required unless Command is set.

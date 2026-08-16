@@ -160,6 +160,17 @@ export interface Run {
   routedFrom?: string;
   routeReason?: string;
 
+  /**
+   * The episode, and where in it.
+   *
+   * `routeAttempt` is what separates the two kinds of switch, which `routedFrom`
+   * alone cannot: attempt 1 is a *preflight* skip — the named agent never ran,
+   * so there is no conversation to carry — while attempt 2 or more is a run that
+   * failed and had its work handed over with a briefing.
+   */
+  routeId?: string;
+  routeAttempt?: number;
+
   /** `sandbox.repo` is `worktree.RepoID`: an id, not a path. */
   repoId: string;
   /** Display name only. Two clones of a same-named repo share it; `repoId` not. */
@@ -729,6 +740,36 @@ export interface BrowseListing {
 }
 
 /** One agent's provider, and whether it is answering. From `GET /v1/routing`. */
+/**
+ * One slot of a provider's uptime strip.
+ *
+ * Two counts rather than a state, because zero-and-zero is a third thing: the
+ * daemon was not running, or was started with `-probe-interval 0`, and nothing
+ * was asked. A strip that painted that as "down" would turn every night a laptop
+ * was closed into an incident.
+ */
+export interface ProbeBucket {
+  at: string;
+  up: number;
+  down: number;
+  reason?: string;
+}
+
+export interface ProviderHistory {
+  agent: string;
+  buckets: ProbeBucket[];
+  /** Fraction of *taken* samples that answered, with the count behind it. */
+  uptime?: number;
+  samples?: number;
+}
+
+export interface ProbeHistory {
+  hours: number;
+  /** Sampling period in seconds; 0 when the daemon was asked not to probe. */
+  interval: number;
+  providers: ProviderHistory[];
+}
+
 export interface ProviderStatus {
   agent: string;
   /** What was asked. Absent for an agent with nothing to ask. */

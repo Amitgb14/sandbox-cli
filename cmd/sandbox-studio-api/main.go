@@ -84,6 +84,7 @@ func run() error {
 		historyDB      string
 		historyRetain  time.Duration
 		usageRefreshIn time.Duration
+		probeIn        time.Duration
 	)
 	flag.StringVar(&addr, "addr", "127.0.0.1:8787",
 		"address to listen on — loopback by default; see docs/studio-api/README.md before binding this to a network interface")
@@ -99,6 +100,8 @@ func run() error {
 		"drop indexed runs older than this on start (e.g. 2160h for 90 days); 0 keeps everything the log holds")
 	flag.DurationVar(&usageRefreshIn, "usage-refresh-interval", 0,
 		"how often to make the agent refresh the usage reading (e.g. 10m); off by default because each refresh spends a request from the window it measures, and current Claude Code may not record usage at all")
+	flag.DurationVar(&probeIn, "probe-interval", 5*time.Minute,
+		"how often to record whether each agent's provider is answering, for the uptime strip on Studio's Routing screen; 0 turns it off")
 	flag.Var(&origins, "cors-origin",
 		"origin allowed to drive this control plane cross-origin (repeatable); default: none, so a web page cannot reach it at all")
 	flag.Var(&hosts, "allow-host",
@@ -221,6 +224,19 @@ func run() error {
 		// from the subscription it reports on, and a deployment that cannot refresh
 		// at all should say so at startup instead of leaving someone waiting for a
 		// number that will never move.
+		// Said out loud because it is the one thing this daemon does on a timer
+		// without being asked: outbound requests to vendor endpoints whether or
+		// not anybody launches anything. They carry no credentials and record
+		// nothing about the user — see internal/studioapi/probelog.go — but a
+		// process making network calls on its own should say so at startup.
+		srv.StartProbing(ctx, probeIn)
+		if probeIn > 0 {
+			log.Printf("sandbox-studio-api: recording provider uptime every %s — one credential-free "+
+				"HEAD request per provider (-probe-interval 0 turns it off)", probeIn)
+		} else {
+			log.Printf("sandbox-studio-api: provider uptime is not being recorded (-probe-interval 0); " +
+				"the strip on the Routing screen will show only history already on disk")
+		}
 		switch {
 		case usageRefreshIn <= 0:
 			// Off is off; nothing to say.

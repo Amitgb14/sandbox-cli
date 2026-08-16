@@ -43,7 +43,9 @@ import type {
   Conversation,
   SessionRaw,
   SessionSummary,
-  SessionTranscript,} from "@/lib/types";
+  SessionTranscript,
+  ProbeHistory,
+} from "@/lib/types";
 
 /**
  * The daemon's surface, one function per endpoint.
@@ -83,6 +85,20 @@ export const api = {
       fixture: () => [],
       latencyMs: 200,
       unwrap: (b) => (b as { providers: ProviderStatus[] }).providers ?? [],
+    }),
+
+  /**
+   * Whether each provider has been answering, over time.
+   *
+   * The one thing on the Routing screen that is collected rather than derived:
+   * nothing records a provider's health at a moment nobody asked, so the daemon
+   * samples on a timer. Its `interval` comes back with the data because a gap
+   * means different things with a prober running and without one.
+   */
+  probeHistory: (hours = 24) =>
+    request<ProbeHistory>(`/v1/routing/history?hours=${hours}`, {
+      fixture: () => ({ hours, interval: 0, providers: [] }),
+      latencyMs: 200,
     }),
 
   /**

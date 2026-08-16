@@ -89,7 +89,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts, err := s.buildRunOptions(r, req)
+	opts, err := s.buildRunOptions(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -102,6 +102,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// behaviour that existed before — a run must never fail because its safety
 	// net could not be strung.
 	opts.Baseline = baselineFor(opts.Project, opts.Agent)
+
+	// The workspace as it stands, for the *routing* question rather than the
+	// diffing one: whether this run wrote anything at all decides whether a
+	// failure may be retried with the next agent. A separate reading because it
+	// is a separate comparison — Baseline is a snapshot commit, and what the
+	// supervisor compares is the tree, both sides of it read the same way.
+	before := s.sv().fingerprint(opts.Project)
 
 	name, err := s.Session.Start(r.Context(), opts, false)
 	if err != nil {
@@ -120,6 +127,23 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, Run{Name: name})
 		return
 	}
+
+	// Watch it, when there is somewhere to fall through to. This is the half of
+	// routing a handler cannot do itself: the run outlives the request, so the
+	// decision belongs to something that outlives it too (supervisor.go).
+	if rest := remainingAfter(chainFor(req), opts.Agent); len(rest) > 0 {
+		s.sv().supervise(&watch{
+			container: run.ID,
+			name:      name,
+			req:       req,
+			agent:     opts.Agent,
+			remaining: rest,
+			workspace: opts.Project,
+			before:    before,
+			routeID:   opts.RouteID,
+			attempt:   opts.RouteAttempt,
+		})
+	}
 	writeJSON(w, http.StatusCreated, toRun(run, s.Engine))
 }
 
@@ -128,7 +152,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // created if needed), the agent descriptor supplies its env allowlist and
 // autonomous argv, and the login persistence gate is re-checked here because it
 // is a property of every path that builds Options, not of the config alone.
-func (s *Server) buildRunOptions(r *http.Request, req RunCreateRequest) (sandbox.Options, error) {
+func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (sandbox.Options, error) {
 	// Which repository this run is about, before anything else is decided: a
 	// worktree is resolved inside it, and with no worktree it *is* the workspace.
 	// An unregistered id refuses here rather than silently falling back to the
@@ -254,16 +278,15 @@ func (s *Server) buildRunOptions(r *http.Request, req RunCreateRequest) (sandbox
 	}
 
 	if req.Agent != "" {
-		// Routing, the half of it a detached launch can do.
+		// Routing, the half of it that happens before a container exists.
 		//
 		// The probe runs here and skips an agent whose provider is not answering,
-		// which is the case this feature exists for. The *other* half — retrying a
-		// run that failed having changed nothing — cannot happen in an HTTP
-		// handler: this launches detached and returns as soon as the container is
-		// up, so there is no process left to see the exit code. A run started here
-		// therefore falls through before it starts and never after, and the
-		// response says which agent it got so a client is never guessing.
-		chosen, routedFrom, reason, err := s.routeAgent(r.Context(), req)
+		// which is the case this feature exists for, and the response says which
+		// agent was chosen so a client is never guessing. The other half — the run
+		// that fails ten minutes later — is not something a handler can watch, so
+		// it belongs to the daemon: handleCreateRun registers the launch with the
+		// supervisor, which outlives every request (supervisor.go).
+		chosen, routedFrom, reason, err := s.routeAgent(ctx, req)
 		if err != nil {
 			return sandbox.Options{}, err
 		}
@@ -272,6 +295,17 @@ func (s *Server) buildRunOptions(r *http.Request, req RunCreateRequest) (sandbox
 			return sandbox.Options{}, fmt.Errorf("unknown agent %q (known: %s)", chosen, strings.Join(agents.Names(), ", "))
 		}
 		opts.RoutedFrom, opts.RouteReason = routedFrom, reason
+		// One id for the whole episode, minted for the agent that was *asked*
+		// for rather than at the first switch — without it on both attempts, a
+		// failover reads afterwards as two unrelated runs and "did routing help"
+		// is unanswerable for exactly the runs it helped. Only when there is
+		// somewhere to fall through to: an id on a run that could never route
+		// describes an episode that cannot happen. The supervisor overwrites
+		// both fields when it starts a later attempt of an episode already
+		// under way.
+		if len(req.Fallback) > 0 {
+			opts.RouteID, opts.RouteAttempt = routing.NewID(), 1
+		}
 		opts.Agent = agent.Name
 		opts.EnvAllow = agent.EnvAllow
 		opts.Env = append(opts.Env, agent.Env...)
@@ -503,19 +537,17 @@ func resumeArgsFor(agent string) ([]string, bool) {
 	return store.Resume, true
 }
 
-// routeAgent picks the agent this run will actually use.
+// routeAgent picks the agent this run will start with.
 //
-// Studio can do exactly half of routing, and the half it can do is the useful
-// one for the case it was asked for: a provider that is down when you press
-// Launch. It probes each candidate and takes the first that answers.
+// The preflight half of routing: probe each candidate and take the first that
+// answers, so a provider that is down when somebody presses Launch is skipped
+// before a container exists. The response carries which agent it got, so the
+// client never has to guess.
 //
-// The other half — retrying a run that failed having changed nothing — is not
-// available here and cannot be faked. This handler launches detached and returns
-// as soon as the container exists, so nothing is left watching for an exit code;
-// a retry would need a supervisor that outlives the request. Rather than
-// half-implement one, a Studio run falls through *before* it starts and never
-// after, and the response carries which agent it got so the client never has to
-// guess.
+// It is asked again on every attempt of an episode, which is why it returns the
+// agent rather than assuming the head of the chain: the supervisor's retry goes
+// through the same builder, so a fallback whose own provider has since gone down
+// is skipped the same way the first one was.
 //
 // Returns the chosen agent, the one it was asked for when they differ, and why.
 func (s *Server) routeAgent(ctx context.Context, req RunCreateRequest) (chosen, routedFrom, reason string, err error) {
@@ -548,4 +580,20 @@ func (s *Server) routeAgent(ctx context.Context, req RunCreateRequest) (chosen, 
 	// an outage and letting the container discover it: the run would fail slowly,
 	// having spent a container start, and the reason would be buried in its logs.
 	return "", "", "", fmt.Errorf("no agent in the chain is available — %s", strings.Join(skipped, "; "))
+}
+
+// chainFor is the agent order this request asked for, whether or not every
+// member of it can be reached.
+//
+// Resolve is the one place that validates a chain — unknown agents, duplicates,
+// agents with no verified headless mode — so asking it again here beats
+// rebuilding the list from the request and getting a different answer than the
+// launch did. A chain it refuses leaves nothing to supervise, which is correct:
+// the launch is about to be refused for the same reason.
+func chainFor(req RunCreateRequest) []string {
+	chain, err := routing.Resolve(req.Agent, req.Fallback, true)
+	if err != nil {
+		return nil
+	}
+	return chain
 }

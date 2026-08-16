@@ -1,3 +1,4 @@
+import { LOCALE } from "@/lib/format";
 import type { AuditRecord } from "@/lib/types";
 
 /**
@@ -96,4 +97,116 @@ export function routeStats(episodes: RouteEpisode[]): RouteStats {
     reasons: rank(reasons).map(([reason, count]) => ({ reason, count })),
     from: rank(from).map(([agent, count]) => ({ agent, count })),
   };
+}
+
+/** One hop between two agents: configured, observed, or both. */
+export interface ChainEdge {
+  from: string;
+  to: string;
+  /** A chain currently says this hop should happen. */
+  configured: boolean;
+  /** How many episodes actually took it. */
+  fired: number;
+  /** Of those, how many ended with work that finished. */
+  rescued: number;
+}
+
+/**
+ * The hops between agents: what is configured, and what has actually happened.
+ *
+ * Both, deliberately, and the difference is the interesting part. A configured
+ * hop that has never fired is untested; a hop that fired but is configured
+ * nowhere is history from before somebody changed the chain, and hiding it would
+ * make the picture agree with the settings rather than with the record.
+ *
+ * A hop is read off `routedFrom`, which every routed run carries, rather than by
+ * pairing consecutive attempts: a preflight skip is a single attempt with a
+ * routedFrom and no predecessor to pair it with, and it is a hop like any other.
+ */
+export function chainEdges(
+  chains: Record<string, string[]>,
+  episodes: RouteEpisode[],
+): ChainEdge[] {
+  const edges = new Map<string, ChainEdge>();
+  const edge = (from: string, to: string) => {
+    const k = `${from} ${to}`;
+    let e = edges.get(k);
+    if (!e) {
+      e = { from, to, configured: false, fired: 0, rescued: 0 };
+      edges.set(k, e);
+    }
+    return e;
+  };
+
+  for (const [from, chain] of Object.entries(chains)) {
+    // Only the first link: a chain of [codex, gemini] means claude falls back to
+    // codex, and codex to gemini only if codex's own chain says so. Drawing the
+    // second link as claude's would put an arrow on the graph that no run
+    // launched from here can take.
+    if (chain[0]) edge(from, chain[0]).configured = true;
+  }
+
+  for (const e of episodes) {
+    for (const a of e.attempts) {
+      if (!a.routedFrom || !a.agent || a.routedFrom === a.agent) continue;
+      const hop = edge(a.routedFrom, a.agent);
+      hop.fired++;
+      // Credited to the hop that ended the episode, since that is the one whose
+      // agent did the work: an intermediate hop in a three-agent chain rescued
+      // nothing by itself.
+      if (e.rescued && a.agent === e.finalAgent) hop.rescued++;
+    }
+  }
+  return [...edges.values()].sort((a, b) => b.fired - a.fired);
+}
+
+/** Failovers on one local day. */
+export interface FailoverDay {
+  date: string;
+  label: string;
+  rescued: number;
+  failed: number;
+}
+
+/**
+ * Episodes bucketed by day, oldest first.
+ *
+ * Every day in the window is present, including the empty ones: a chart that
+ * skips them draws a bad week and a quiet one at the same width, which is the
+ * one distinction a volume chart exists to make. Only episodes that *switched*
+ * are counted, because a chain that never fired is not a data point about
+ * routing.
+ */
+export function failoverDays(
+  episodes: RouteEpisode[],
+  days = 14,
+  now = Date.now(),
+): FailoverDay[] {
+  const dayMs = 86_400_000;
+  const key = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate(),
+    ).padStart(2, "0")}`;
+
+  const buckets = new Map<string, FailoverDay>();
+  const start = new Date(now - (days - 1) * dayMs);
+  start.setHours(0, 0, 0, 0);
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start.getTime() + i * dayMs);
+    buckets.set(key(d), {
+      date: key(d),
+      label: d.toLocaleDateString(LOCALE, { month: "short", day: "numeric" }),
+      rescued: 0,
+      failed: 0,
+    });
+  }
+
+  for (const e of episodes) {
+    if (!e.switched) continue;
+    const bucket = buckets.get(key(new Date(e.at)));
+    if (!bucket) continue;
+    if (e.rescued) bucket.rescued++;
+    else bucket.failed++;
+  }
+  return [...buckets.values()];
 }

@@ -48,6 +48,8 @@ func (f *fakeController) Remove(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeController) Rename(_ context.Context, _, _ string) error { return nil }
+
 // failingInspector answers every question with an error, which is the one shape
 // a plan must not paper over: "I could not ask" is not "nothing is in the way".
 type failingInspector struct{ err error }

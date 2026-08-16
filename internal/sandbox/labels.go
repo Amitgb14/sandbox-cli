@@ -59,6 +59,16 @@ const (
 	// indistinguishable from two unrelated runs.
 	LabelRouteID = "sandbox.route_id"
 
+	// LabelRouteAttempt is where in the episode this run sits: 1 for the agent
+	// first asked for, 2 for the next.
+	//
+	// A label as well as an audit field, and the reason is the one that put
+	// LabelRoutedFrom here: a detached run's audit line is written when it
+	// *ends*, and the listing is read while it is still going. Without it the
+	// two live containers of a failover are ordered only by their timestamps,
+	// which is exactly the reading the id exists to make unnecessary.
+	LabelRouteAttempt = "sandbox.route_attempt"
+
 	// LabelBase is the branch the work is expected to land on, recorded at launch
 	// because by landing time the checkout may be on a different one — and "the
 	// branch checked out now" is a different question from "the branch this agent

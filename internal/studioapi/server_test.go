@@ -33,6 +33,7 @@ type fakeRuntime struct {
 	stopped    []string
 	removed    []string
 	killed     []string
+	renamed    [][2]string // {id, new name}, in order
 	availErr   error
 	startErr   error
 
@@ -154,6 +155,18 @@ func (f *fakeRuntime) Remove(ctx context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.removed = append(f.removed, id)
+	return nil
+}
+
+func (f *fakeRuntime) Rename(_ context.Context, id, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renamed = append(f.renamed, [2]string{id, name})
+	for i := range f.containers {
+		if f.containers[i].ID == id {
+			f.containers[i].Name = name
+		}
+	}
 	return nil
 }
 

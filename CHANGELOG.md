@@ -13,6 +13,63 @@ version is tagged.
 
 ### Added
 
+- **Studio's Routing screen answers with pictures now.** Four, because the
+  questions are four and one view answering all of them answers none well. A
+  **chain graph** puts what is configured, what is answering and which hops have
+  actually fired on one canvas — each of those is misleading alone, since a
+  configured chain says nothing about whether it works and a count of failovers
+  says nothing about which of them today's settings would repeat; a hop that has
+  never been taken is drawn dashed, and one that fired but is configured nowhere
+  is still drawn, because hiding it would make the picture agree with the
+  settings rather than with the record. A **trend** puts failovers per day
+  against rescued-versus-still-failed, since a rescue rate over all of history
+  cannot tell a bad week from a bad year. **Flow rows** replace the old
+  `claude → codex` text with the sequence as it happened, marking an agent that
+  was *skipped* before it started differently from one that ran for four minutes
+  and failed — the arrow between them looked identical before. And an **uptime
+  strip** per provider.
+
+  The strip is the one thing here that is collected rather than derived, and it
+  is opt-outable for that reason: nothing records whether a provider was up at a
+  moment nobody asked, so the daemon samples one credential-free HEAD per
+  provider every `-probe-interval` (default five minutes, `0` turns it off) and
+  says which at startup. A sample is a hostname, a timestamp and whether
+  something answered — no run, no prompt, no repository. A span with no samples
+  is drawn as absence, never as an outage: the usual cause is a laptop that was
+  closed, and the alternative reports an incident every night.
+
+- **Studio retries a run whose provider died mid-flight, not just one that was
+  down when you pressed Launch.** `--fallback` meant half of itself here: the
+  daemon probed the provider before launching and never looked again, which
+  covers an outage that has already started and misses one that begins ten
+  seconds later — the case a long unattended run is most exposed to. The reason
+  was real but was a property of the *handler* rather than of Studio: a request
+  returns as soon as the container is up, so nothing in it outlives the run. The
+  daemon does. A launch with somewhere to fall through to is now registered with
+  a supervisor owned by the process, which applies the same gate the CLI applies
+  — a run that exits non-zero **having written nothing** is an outage; one that
+  changed files is a failed attempt and is never retried — and starts the next
+  agent with a briefing mounted read-only. Both attempts carry one route id, so
+  the pair reads afterwards as one attempt at one task.
+
+  Two limits are deliberate. A **daemon restart forgets**: the watch set is in
+  memory, so a run in flight keeps running, stays listed, and is not retried —
+  the alternative means deciding what to do with a container that finished while
+  nothing was watching, and retrying a run whose result somebody already acted on
+  is the wrong answer. And the failed container is **renamed, not removed**
+  (`…-attempt1`): the retry needs the name back, because docker's atomic refusal
+  of a duplicate is what enforces one agent per branch, and the dead container's
+  logs are the evidence for why the failover happened.
+
+  A live run now says which episode it belongs to and where in it: `route_id`
+  was already a label, `route_attempt` was not, so the ordering of a failover
+  existed only in the audit log — which for a detached run is written when it
+  ends, long after somebody is watching it happen. The Studio run header shows
+  the attempt beside the routed-from badge, and its tooltip stopped telling half
+  the users a false thing: a *preflight* skip carries no conversation because the
+  agent it names never ran, while a supervised retry carries a briefing, and the
+  attempt number is what tells them apart.
+
 - **Agent routing: a fallback for when a provider is down.** `--fallback codex`
   on any agent wrapper, `routing: [claude, codex]` in your own config, and a
   picker on Studio's Launch screen. Two mechanisms, deliberately split: the
@@ -225,6 +282,33 @@ version is tagged.
   named rather than deleted: the binaries, and `~/.config/sandbox` with the agent
   logins and worktrees in it. `studio/README.md` also documents the three
   commands to do it by hand, for anyone who did not keep the script.
+
+### Changed
+
+- **Cloning a repository needs the daemon to have a token.** It is the second
+  endpoint that refuses to work unauthenticated, and for the same reason
+  `console/input` does: it is a *new* reach rather than a new spelling of an
+  existing one. Every other endpoint resolves a registered id, so the set of
+  directories this control plane touches is a file you can read; this one takes a
+  host path and fetches code into it. Where it may write was already bounded hard
+  — an existing, safe parent, one path segment, an allowlisted transport, git's
+  config neutralised — but that is a different question from who may ask. The
+  installer always generates a token, so the ordinary path is unchanged.
+
+- **Studio's subscription-usage gauge is off by default.** The sidebar panel is
+  hidden until Settings → *Show subscription usage* turns it on, which also stops
+  the request behind it. Nothing behind it changed — `/v1/usage`, the refresh
+  endpoint, `internal/agentusage` and `sandbox-cli usage` on the host are all
+  untouched; this is a question about the chrome, and a permanent gauge in the
+  corner is not what most people want the sidebar for.
+
+  The default alone would have reached nobody, which is the part worth
+  recording: the preference is persisted, and zustand merges stored state over
+  defaults, so a changed default only ever affects someone who has never opened
+  the app. The store now carries a persist `version` and a migration that applies
+  the new default **once** to browsers holding the old one, and never again — a
+  migration that re-asserted it on every load would be a setting that cannot be
+  changed.
 
 ### Fixed
 
@@ -662,8 +746,6 @@ version is tagged.
   podman's own field: it fills the docker-compatible one with the placeholder
   `"oci"`. A launch the engine refused is no longer written to the audit log at
   all. First piece of [roadmap task 3](docs/roadmap/task-3-stronger-isolation.md).
-
-### Changed
 
 - **The documentation is a set of pages rather than one 1,400-line README.** The
   README is now a landing page — what it is, install, quick start, and a map —
