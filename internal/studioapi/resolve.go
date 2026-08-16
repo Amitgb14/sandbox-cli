@@ -156,6 +156,8 @@ func toRun(c runtime.ContainerInfo, engine string) Run {
 		Detached:    !c.OpenStdin && !c.TTY,
 		RepoID:      c.Labels[sandbox.LabelRepo],
 		RepoName:    repoNameFromID(c.Labels[sandbox.LabelRepo]),
+		RoutedFrom:  c.Labels[sandbox.LabelRoutedFrom],
+		RouteReason: c.Labels[sandbox.LabelRouteReason],
 		Branch:      c.Labels[sandbox.LabelBranch],
 		Base:        c.Labels[sandbox.LabelBase],
 		Agent:       c.Labels[sandbox.LabelAgent],

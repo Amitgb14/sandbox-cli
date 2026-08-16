@@ -21,6 +21,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PageHeader } from "@/components/common/page-header";
 import { ConversationsPanel } from "@/components/agents/conversations-panel";
+import { ProviderField } from "@/components/agents/provider-field";
 import { EmptyState } from "@/components/common/empty-state";
 import { MetricTile } from "@/components/common/metric-tile";
 import { useAgents } from "@/lib/api/queries";
@@ -181,6 +182,13 @@ function AgentCard({ agent }: { agent: Agent }) {
       </CardHeader>
 
       <CardContent className="space-y-3 text-xs">
+        {/* Which host routing probes before choosing this agent — shown where
+            the agent is, reading and writing the same daemon state the Routing
+            screen does rather than a second copy of the setting. Only for the
+            agents a chain may contain: an agent with no verified headless mode
+            cannot be routed to, so a probe host for it would answer a question
+            nobody can ask. */}
+        {agent.headlessVerified && <ProviderField agent={agent.name} />}
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="secondary" className="text-[10px]">
             {DELIVERY_LABEL[agent.delivery]}

@@ -83,7 +83,31 @@ type Options struct {
 	// here is one no later command can recover.
 	RepoID string // stable repo identity (worktree.RepoID), shared by every branch of one repo
 	Agent  string // agent adapter name ("claude", "codex"), empty for a plain run
-	Base   string // the branch this work is expected to land on
+
+	// RoutedFrom and RouteReason describe a run that is not using the agent it
+	// was asked for, because internal/routing fell through to this one. Empty
+	// when nothing was routed. They reach the audit line and nothing else: the
+	// container is identical either way, so this is a fact *about* the run rather
+	// than an input to it.
+	RoutedFrom  string
+	RouteReason string
+
+	// RouteID ties the attempts of one routing episode together. Every attempt
+	// in a chain carries the same id, so two audit lines — the agent that failed
+	// and the one that ran instead — can be recognised afterwards as one attempt
+	// at one task rather than as two unrelated runs.
+	//
+	// Without it the interesting question is unanswerable: "did routing rescue
+	// this or waste a container" needs both halves, and nothing else in the
+	// record connects them. Set only when a chain has somewhere to fall through
+	// to, so an ordinary run carries no id for an episode that cannot happen.
+	RouteID string
+
+	// RouteAttempt is 1 for the agent first asked for, 2 for the next, and so on
+	// — the order within the episode, which timestamps alone recover only when
+	// the clock is trusted and the runs are not concurrent.
+	RouteAttempt int
+	Base         string // the branch this work is expected to land on
 
 	// Fleet marks this container as launched by `fleet run` rather than by an
 	// interactive command, so the fleet's own stop/clean/slot-counting reach only
@@ -656,16 +680,19 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// container running with the workspace still mounted.
 	labels := map[string]string{LabelCLI: "1"}
 	for k, v := range map[string]string{
-		LabelRepo:     opts.RepoID,
-		LabelBranch:   opts.Branch,
-		LabelAgent:    opts.Agent,
-		LabelBase:     opts.Base,
-		LabelVerify:   opts.Verify,
-		LabelFleet:    boolLabel(opts.Fleet),
-		LabelProfile:  cfg.Profile,
-		LabelPrompt:   truncatePrompt(opts.Prompt),
-		LabelSession:  opts.SessionID,
-		LabelBaseline: opts.Baseline,
+		LabelRepo:        opts.RepoID,
+		LabelBranch:      opts.Branch,
+		LabelAgent:       opts.Agent,
+		LabelRoutedFrom:  opts.RoutedFrom,
+		LabelRouteID:     opts.RouteID,
+		LabelRouteReason: opts.RouteReason,
+		LabelBase:        opts.Base,
+		LabelVerify:      opts.Verify,
+		LabelFleet:       boolLabel(opts.Fleet),
+		LabelProfile:     cfg.Profile,
+		LabelPrompt:      truncatePrompt(opts.Prompt),
+		LabelSession:     opts.SessionID,
+		LabelBaseline:    opts.Baseline,
 	} {
 		if v != "" {
 			labels[k] = v

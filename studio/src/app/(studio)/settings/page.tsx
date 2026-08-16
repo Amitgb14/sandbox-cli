@@ -21,6 +21,8 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PageHeader } from "@/components/common/page-header";
 import { apiBase, BASELINE_EGRESS, PROFILES } from "@/lib/constants";
+import { ConnectionCard } from "@/components/settings/connection-card";
+import { RepositoriesCard } from "@/components/settings/repositories-card";
 import { useDaemon, useTransportMode } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 import { formatBytes } from "@/lib/format";
@@ -271,6 +273,12 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Above the daemon's own facts, because it decides *which* daemon those
+          facts are about. */}
+      <ConnectionCard />
+
+      <RepositoriesCard />
 
       <Card className="surface-sheen gap-4">
         <CardHeader>

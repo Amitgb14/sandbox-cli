@@ -44,9 +44,14 @@ export default function ChangesPage() {
     if (worktrees.some((w) => !w.primary && w.branch === linked)) setBranch(linked);
   }, [linked, worktrees]);
 
-  const { data, isPending, isFetching, refetch } = useWorktreeDiff(branch || null);
   const repo = projects?.find((p) => (repoFilter ? p.id === repoFilter : p.default));
   const worktree = worktrees?.find((w) => w.branch === branch);
+  // The row's own repository: under "All repositories" the list spans several,
+  // and a diff asked without one answers for the daemon's default.
+  const { data, isPending, isFetching, refetch } = useWorktreeDiff(
+    branch || null,
+    worktree?.repoId,
+  );
 
   return (
     <div className="space-y-5">
@@ -112,7 +117,7 @@ export default function ChangesPage() {
               </Link>
             </Button>
             <Button asChild variant="ghost" size="sm" className="h-7 text-xs">
-              <Link href={`/worktrees/${encodeURIComponent(branch)}`}>
+              <Link href={`/worktrees/${encodeURIComponent(branch)}${worktree?.repoId ? `?repo=${encodeURIComponent(worktree.repoId)}` : ""}`}>
                 <GitMerge className="size-3.5" />
                 Worktree
               </Link>

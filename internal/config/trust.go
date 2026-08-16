@@ -63,6 +63,20 @@ func restrictedProjectKeys(src, inherited Config) []string {
 	if src.User != "" {
 		add("user") // `user: root` cancels the non-root default
 	}
+	if len(src.Providers) > 0 {
+		// Chooses which host is probed, and therefore which agent a chain skips:
+		// a host that always answers keeps a dead agent in play, one that never
+		// answers forces a fall through to another agent's login. It also points
+		// a request from this machine at a host the repository named.
+		add("providers")
+	}
+	if len(src.Routing) > 0 {
+		// Chooses which agent runs, and with it which persisted login and which
+		// forwarded variables are in reach. A repository that could set this could
+		// point a run at an agent whose credentials it was never meant near — the
+		// same objection as `secrets` and `env`, arriving by a different door.
+		add("routing")
+	}
 	if src.Home != "" {
 		add("home") // relocates the container HOME, and with it the persisted-auth mount
 	}

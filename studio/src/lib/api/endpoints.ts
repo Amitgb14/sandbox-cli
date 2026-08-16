@@ -35,6 +35,7 @@ import type {
   FileListing,
   MetricSeries,
   Project,
+  ProviderStatus,
   ResolvedConfig,
   Run,
   UsageSnapshot,
@@ -69,6 +70,35 @@ export const api = {
     request<DaemonInfo>("/v1/health", {
       fixture: () => MOCK_DAEMON,
       latencyMs: 120,
+    }),
+
+  /**
+   * Which agent providers are answering right now.
+   *
+   * The question a routing chain is configured against, and until this existed
+   * the only way to ask it was to launch a run and see.
+   */
+  routing: (refresh = false) =>
+    request<ProviderStatus[]>(`/v1/routing${refresh ? "?refresh=1" : ""}`, {
+      fixture: () => [],
+      latencyMs: 200,
+      unwrap: (b) => (b as { providers: ProviderStatus[] }).providers ?? [],
+    }),
+
+  /**
+   * Set which host is probed for an agent.
+   *
+   * Narrow on purpose: it writes one map into a file of its own, never the
+   * user's config.yaml — a value typed there by hand outranks this and keeps its
+   * comments. The daemon validates each value as a host and answers with a fresh
+   * probe, because the point of setting one is to find out whether it answers.
+   */
+  setProviders: (providers: Record<string, string>) =>
+    request<ProviderStatus[]>("/v1/routing/providers", {
+      method: "POST",
+      body: { providers },
+      liveOnly: true,
+      unwrap: (b) => (b as { providers: ProviderStatus[] }).providers ?? [],
     }),
 
   /**
@@ -115,6 +145,21 @@ export const api = {
       // repository it may touch, and only the daemon can remember it — a
       // fabricated answer here reported "Added" and then vanished from the very
       // list the dialog was opened from, because the list is fixtures too.
+      liveOnly: true,
+    }),
+
+  /**
+   * Clone a repository and register it.
+   *
+   * The one call in this client that makes the daemon write to the host and run
+   * a program. Every refusal lives there — the transport allowlist (`ext::`
+   * executes a command rather than fetching), the target's own checks, and no
+   * stored credential being spent — so this only carries the answer back.
+   */
+  cloneProject: (url: string, parent: string, name?: string) =>
+    request<Project>("/v1/projects/clone", {
+      method: "POST",
+      body: { url, parent, ...(name ? { name } : {}) },
       liveOnly: true,
     }),
 
@@ -705,6 +750,10 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   // *inside* this repository) but never alongside a project path, which the
   // daemon refuses as two answers to one question.
   if (req.repo) body.repo = req.repo;
+  // Only when there is somewhere to fall through to. An empty chain and no chain
+  // are the same request, and sending the empty form would put a field in every
+  // launch that means nothing.
+  if (req.fallback.length > 0) body.fallback = req.fallback;
 
   // A worktree is addressed by branch and replaces the workspace; only one of
   // the two ever reaches the daemon, which refuses both together. The workspace

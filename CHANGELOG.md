@@ -13,6 +13,74 @@ version is tagged.
 
 ### Added
 
+- **Agent routing: a fallback for when a provider is down.** `--fallback codex`
+  on any agent wrapper, `routing: [claude, codex]` in your own config, and a
+  picker on Studio's Launch screen. Two mechanisms, deliberately split: the
+  provider is **probed before launching**, so an outage skips that agent before a
+  container exists; and a run that exits non-zero **having changed no files** is
+  retried with the next agent. The second rule gates on the workspace rather than
+  the conversation, because turns are cheap to redo and file changes are not — a
+  run that wrote something is a failed attempt, not an outage, and handing the
+  next agent half-finished edits is the thing this must never do. Anything
+  unknowable (a workspace that cannot be compared) counts as work done and is not
+  retried.
+
+  When it fires, the conversation is carried: the previous agent's briefing is
+  written to a read-only mount at `/sandbox/context` — `HANDOFF.md`,
+  a vendor-neutral `transcript.jsonl`, and a `files.md` ledger derived from git
+  rather than from anything the agent said about itself — and the next agent's
+  prompt points at it. It is a **briefing, not a resume**, and says so in three
+  places: session ids do not cross between agents, the schemas differ, and a
+  target told it is resuming answers from a memory it never had.
+
+  Every switch is announced, and recorded: `routed_from` and `route_reason` in
+  the audit line, and `sandbox.routed_from` / `sandbox.route_reason` on the
+  container so a detached run can be understood before it ends. `routing:` is
+  refused from a project `.sandbox.yaml` — choosing the agent chooses which
+  persisted login and which forwarded variables are in reach.
+
+  **`providers:`** says which host routing probes for an agent — settable in your
+  own `config.yaml`, or by clicking the host on Studio's Routing screen. It is
+  what makes `opencode` probeable at all (it is provider-agnostic, so nothing
+  true can be compiled in for it) and what makes an agent pointed at a proxy
+  through `ANTHROPIC_BASE_URL` checked against the endpoint it actually uses. An
+  empty value means "do not probe this one". Refused from a project
+  `.sandbox.yaml` for the same reason `routing:` is: a probe decides which agent
+  a chain skips, so a poisoned one steers the run to a different login.
+
+  The same provider setting is editable on the **Agents** screen, per agent card,
+  reading and writing the same daemon state rather than a second copy of it.
+
+  **Conversations are scoped to the repository.** The Agents screen's panel now
+  shows only the conversations belonging to the repository the app is scoped to,
+  with a toggle for the ones that cannot be attributed to any. That distinction
+  is real rather than cosmetic: a transcript records a working directory, and a
+  sandbox session's is always `/workspace`, so nothing on disk says which project
+  it was. Where the claude wrapper synced a session into a project's history
+  bucket the daemon matches it **forwards** — each registered repository's root
+  is converted to its bucket name and compared — because decoding a bucket back
+  into a path is lossy and would file `my-repo` and `my.repo` together.
+
+  Studio also gains a **Routing** screen (under Work): which providers are
+  answering right now, and the chain each agent falls back to. It reports three
+  states rather than two — an agent with no single provider to ask is "not
+  checked", never "down", since condemning a working agent on a question nobody
+  put is exactly the failure the probe is written to avoid.
+
+  Studio remembers the choice: a fallback picked once is offered again next
+  time, keyed by the primary agent — "if claude is down, use codex" says nothing
+  about what to do when the primary is gemini, so one global list would apply an
+  answer to a pair nobody put together. It is saved when chosen rather than on
+  submit, since a preference that only saves on success forgets whenever a launch
+  is refused. On the CLI the same standing choice is `routing:` in your own
+  config.
+
+  Two limits, stated rather than papered over. Routing needs a **verified
+  headless** agent to fall back to, so the ten adapters without one are
+  untouched, and asking for a fallback on one is refused. And **Studio probes but
+  does not retry**: it launches detached, so nothing is left watching the exit
+  code.
+
 - **Studio manages more than one repository, and you add them from the browser.**
   "Add repository…" in the sidebar's picker (and the ＋ beside the repository
   field on Launch) takes the absolute path of a git repository on this machine;
@@ -72,6 +140,51 @@ version is tagged.
   being reaped, which is when reviewing usually happens. The two screens link to
   each other on the same branch. New endpoints: `?branch=` on `GET /v1/files` and
   `GET /v1/files/content`, and `GET /v1/worktrees/{branch}/diff`.
+- **Run the daemon on another machine and the browser on this one.**
+  `studio.sh up --api-only` installs sandbox-cli and the daemon on a remote Linux
+  box, starts it, and prints a URL and a token; `studio.sh up --api-url URL`
+  starts the browser half alone against it. The same two values can be typed into
+  **Settings → Connection**, kept in the browser, which is what lets one Studio
+  reach several machines — a typed URL outranks the one the UI was started with,
+  the opposite of the token's precedence and for a stated reason.
+
+  "Remote" means the *whole* of sandbox-cli is remote. Every safety refusal is
+  evaluated against the filesystem it runs on, so a local daemon pointed at a
+  remote docker would validate paths here and mount paths there.
+
+  The recommended shape needs no new trust: leave the daemon on loopback and
+  tunnel to it, so the `Host` it sees is still a loopback name and nothing in the
+  guard is relaxed. `--bind ADDR` exposes it directly for a private network,
+  passing `-allow-host` for that address.
+
+- **The daemon now refuses a routable address with no token**, rather than
+  warning and serving anyway. It holds the docker socket, so an unauthenticated
+  routable port is root on that machine for anyone who can reach it — and a
+  warning is not a control when the deployment it protects is the one nobody is
+  watching. Loopback is unchanged.
+
+- **Forget a repository, in Settings → Repositories.** The daemon could already
+  do it; nothing in the UI reached the control. The button says **Forget** rather
+  than Remove or Delete, and the confirmation names the path it is *not*
+  touching: Studio holds a list of directories it will answer about, and taking
+  one off that list leaves the checkout, its branches, its worktrees and its
+  containers exactly where they are. Add it again by path and its history comes
+  back with it. The repository the daemon was started in cannot be forgotten —
+  it would be back on the next listing — and the button says so instead of
+  failing.
+- **Clone from git in Add repository.** A second tab takes a URL and clones into
+  the directory you are browsing, then registers the result — one step instead of
+  a terminal and a second visit. It is the only thing in the API that writes to
+  the host filesystem and runs a program, so the refusals are the feature: the
+  transport is **allowlisted** (https, ssh, `git@host:path`) rather than
+  filtered, because `git clone 'ext::sh -c whoami'` executes a command and a
+  denylist would be a guess at the next transport; nothing that looks like a flag
+  is accepted; the destination takes the same checks a typed path does and must
+  not already exist; submodules are not fetched, since they name URLs the
+  repository chose rather than you; and **no saved credential is spent** — a
+  private HTTPS repository fails rather than quietly drawing on a keychain entry
+  saved for a terminal, though an ssh-agent will answer. A failed clone removes
+  its partial directory.
 - **A folder picker for Add repository**, so a path can be browsed to instead of
   typed. It runs in the daemon rather than the browser, and that is forced rather
   than chosen: a directory input yields relative paths and `showDirectoryPicker()`
@@ -134,6 +247,16 @@ version is tagged.
   started in. Rows now carry their `repoId` through the link, and removing one
   names it explicitly, since deleting the wrong repository's branch destroys work
   rather than merely showing the wrong thing.
+- **A Studio console run of opencode died with "Failed to change directory to
+  /workspace/&lt;your prompt&gt;".** The interactive argv appended the prompt as a
+  bare positional for every agent — right for claude, which reads it as a first
+  turn, and wrong for opencode, which reads a lone positional as *the project
+  directory to open*. Seeding is now a per-descriptor statement rather than an
+  assumption, empty meaning "this agent cannot be seeded on the command line",
+  and Studio refuses the combination up front with the headless alternative
+  rather than building an argv that dies inside the container. Only claude's
+  positional is marked verified; the others keep the behaviour they had rather
+  than being changed on a hunch.
 
 - **An empty Runs screen now says which kind of empty it is.** The dashboard
   counts runs from the log, which keeps a run after its container is reaped,

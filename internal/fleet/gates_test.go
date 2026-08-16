@@ -72,20 +72,28 @@ var optionsPolicy = map[string]fieldPolicy{
 	// told from what was already uncommitted. fromSpec: it widens nothing — a
 	// commit id in a label grants no reach — and the run path records the same
 	// thing for the same reason.
-	"Baseline":    fromSpec,
-	"Detach":      fromSpec,
-	"RepoID":      fromSpec,
-	"Agent":       fromSpec,
-	"Base":        fromSpec,
-	"Fleet":       fromSpec,
-	"ExtraMounts": fromSpec, // the linked worktree's .git, without which the agent cannot commit
-	"EnvAllow":    fromSpec, // the descriptor's names, forwarded only if the host has them
-	"Env":         fromSpec, // the descriptor's own container settings (a keyring that is not there)
-	"Memory":      fromSpec,
-	"CPUs":        fromSpec,
-	"Allow":       fromSpec,
-	"Cache":       fromSpec,
-	"GitIdentity": fromSpec,
+	"Baseline": fromSpec,
+	"Detach":   fromSpec,
+	"RepoID":   fromSpec,
+	"Agent":    fromSpec,
+	// Set by internal/routing when a run falls through to another agent, and
+	// carried only as far as the audit line. A fleet file cannot ask for it:
+	// "which agent ran" is the router's answer about what happened, not an input
+	// a task may assert.
+	"RoutedFrom":   never,
+	"RouteReason":  never,
+	"RouteID":      never,
+	"RouteAttempt": never,
+	"Base":         fromSpec,
+	"Fleet":        fromSpec,
+	"ExtraMounts":  fromSpec, // the linked worktree's .git, without which the agent cannot commit
+	"EnvAllow":     fromSpec, // the descriptor's names, forwarded only if the host has them
+	"Env":          fromSpec, // the descriptor's own container settings (a keyring that is not there)
+	"Memory":       fromSpec,
+	"CPUs":         fromSpec,
+	"Allow":        fromSpec,
+	"Cache":        fromSpec,
+	"GitIdentity":  fromSpec,
 
 	// The one gate, and the reason this file exists.
 	"AuthPersistDir": gated,

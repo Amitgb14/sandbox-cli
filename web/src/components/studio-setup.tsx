@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Boxes, Wrench, Zap } from "lucide-react";
+import { Boxes, Wrench, Zap, Network } from "lucide-react";
 import {
   STUDIO_COMPOSE_STEPS,
+  STUDIO_REMOTE_STEPS,
   STUDIO_SCRIPT_STEPS,
   STUDIO_STEPS,
 } from "@/lib/studio";
@@ -43,6 +44,14 @@ const TRACKS = [
     blurb:
       "One file at the repository root. The default profile containerises the UI and leaves the API on your host, which is the recommended shape rather than a limitation.",
     steps: STUDIO_COMPOSE_STEPS,
+  },
+  {
+    id: "remote",
+    label: "remote machine",
+    icon: Network,
+    blurb:
+      "Agents and containers on another machine, browser on this one. The whole of sandbox-cli runs there — every safety refusal is evaluated against the filesystem it runs on, so a local daemon pointed at a remote docker would check paths here and mount them there.",
+    steps: STUDIO_REMOTE_STEPS,
   },
   {
     id: "manual",

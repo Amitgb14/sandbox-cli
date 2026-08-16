@@ -149,6 +149,17 @@ export interface Run {
   workspace: string;
   workdir: string;
 
+  /**
+   * The agent that was *asked* for, when routing fell through to a different
+   * one; absent when the run used what it was given. `routeReason` says why.
+   *
+   * Read from the container's labels rather than the run log, because a detached
+   * run's audit line is written when it ends — long after somebody looks at the
+   * listing and asks why it says codex when they picked claude.
+   */
+  routedFrom?: string;
+  routeReason?: string;
+
   /** `sandbox.repo` is `worktree.RepoID`: an id, not a path. */
   repoId: string;
   /** Display name only. Two clones of a same-named repo share it; `repoId` not. */
@@ -526,6 +537,16 @@ export interface AuditRecord {
   time: string;
   image: string;
   workspace: string;
+  /**
+   * Routing, when this run was part of an episode. Runs sharing a `routeId` are
+   * one attempt at one task — the agent that failed, and the one that ran
+   * instead — which is the only thing that tells a rescue from two unrelated
+   * runs.
+   */
+  routedFrom?: string;
+  routeReason?: string;
+  routeId?: string;
+  routeAttempt?: number;
   workdir: string;
   agent: AgentName | null;
   branch: string | null;
@@ -552,6 +573,16 @@ export interface LaunchRequest {
   /** Free command, for a plain `run`. Ignored when `agent` is set. */
   command: string;
   prompt: string;
+  /**
+   * Agents to try, in order, when the chosen one's provider is not answering.
+   *
+   * Studio probes before launching and takes the first that answers. It does not
+   * retry a run that failed after starting: a launch here is detached, so
+   * nothing is left watching the exit code. The Run that comes back says which
+   * agent it actually got.
+   */
+  fallback: string[];
+
   /**
    * Which registered repository this run is about, by `Project.id`. Empty means
    * the one the daemon was started in.
@@ -697,6 +728,36 @@ export interface BrowseListing {
   truncated?: boolean;
 }
 
+/** One agent's provider, and whether it is answering. From `GET /v1/routing`. */
+export interface ProviderStatus {
+  agent: string;
+  /** What was asked. Absent for an agent with nothing to ask. */
+  host?: string;
+  /** "asked and answered" vs "never asked" — unknown is not down. */
+  probed: boolean;
+  reachable: boolean;
+  /** Why it is unreachable, in a phrase. Also what tells an outage from no network. */
+  reason?: string;
+  /**
+   * The host came from your config rather than the descriptor — which is the
+   * only way a provider-agnostic agent like opencode gets probed at all, and the
+   * right answer for anyone pointing an agent at a proxy.
+   */
+  overridden?: boolean;
+  /**
+   * Whether the override is the one Studio writes, rather than a value in the
+   * user's own config.yaml — which outranks it and is not editable from here.
+   *
+   * The save payload is rebuilt from *this*, never from `overridden`: the
+   * endpoint writes a whole map, so building it from every set value copied
+   * config.yaml's hosts into Studio's file, where they outlived the config lines
+   * they came from.
+   */
+  managed?: boolean;
+  /** Whether a chain may contain it: it needs a verified non-interactive mode. */
+  routable: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Daemon
 // ---------------------------------------------------------------------------
@@ -770,6 +831,14 @@ export interface SessionSummary {
   /** Where the transcript lives. Reported, never sent back — requests name an id. */
   path?: string;
   size?: number;
+  /**
+   * The repository this conversation belongs to, or absent when it cannot be
+   * attributed — a session pooled in the shared bucket records only
+   * `/workspace`, and nothing on disk says which project that was. Absent is an
+   * answer, not a gap: it is why the panel can hide them rather than file them
+   * under a repository they may not belong to.
+   */
+  repoId?: string;
   /** "sandbox" (the agent HOME containers get) or "host" (your own history). */
   store?: "sandbox" | "host";
   /** Only the sandbox-owned store is this daemon's to resume. */

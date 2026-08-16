@@ -39,8 +39,30 @@ type SessionMeta struct {
 	// could actually change.
 	Workspace string
 	// Agent is the wrapper the run came from ("claude", "codex"); empty for a
-	// plain `run`.
+	// plain `run`. When routing fired this is the agent that **actually ran**,
+	// not the one that was asked for — the record describes what happened.
 	Agent string
+
+	// RoutedFrom is the agent that was asked for, when it is not the one that
+	// ran; empty when nothing was routed. Two fields rather than one because
+	// afterwards there are two different questions — "what did this run use" and
+	// "why is that not what I typed" — and a single field would answer neither
+	// without the other.
+	RoutedFrom string
+	// RouteReason is why the switch happened, in the words the run printed:
+	// "provider answered 503", "exited 1 having changed nothing". A fact not
+	// stamped is one no later command can recover, and this one is the difference
+	// between a chain that is protecting you and a chain that is quietly hiding a
+	// broken primary.
+	RouteReason string
+
+	// RouteID ties one routing episode's attempts together, and RouteAttempt
+	// orders them. Two lines sharing an id are one attempt at one task: the
+	// agent that failed, and the one that ran instead. It is the only thing that
+	// makes "did routing help" answerable, since nothing else in a line connects
+	// it to its sibling.
+	RouteID      string
+	RouteAttempt int
 	// Branch is the git branch the workspace was on, when it had one.
 	Branch string
 
@@ -171,20 +193,24 @@ func (NopSink) RecordSession(SessionMeta) {}
 // in the file stay stable and explicit rather than tracking whatever the Go
 // struct happens to be called.
 type record struct {
-	Time        string   `json:"time"`
-	Image       string   `json:"image"`
-	Workspace   string   `json:"workspace,omitempty"`
-	Workdir     string   `json:"workdir,omitempty"`
-	Agent       string   `json:"agent,omitempty"`
-	Branch      string   `json:"branch,omitempty"`
-	Command     []string `json:"command,omitempty"`
-	Engine      string   `json:"engine,omitempty"`
-	Runtime     string   `json:"runtime,omitempty"`
-	Network     string   `json:"network,omitempty"`
-	NetworkName string   `json:"network_name,omitempty"`
-	EnforcedBy  string   `json:"egress_enforcement_requested,omitempty"`
-	EgressAllow []string `json:"egress_allow,omitempty"`
-	EnvNames    []string `json:"env_names,omitempty"`
+	Time         string   `json:"time"`
+	Image        string   `json:"image"`
+	Workspace    string   `json:"workspace,omitempty"`
+	RoutedFrom   string   `json:"routed_from,omitempty"`
+	RouteReason  string   `json:"route_reason,omitempty"`
+	RouteID      string   `json:"route_id,omitempty"`
+	RouteAttempt int      `json:"route_attempt,omitempty"`
+	Workdir      string   `json:"workdir,omitempty"`
+	Agent        string   `json:"agent,omitempty"`
+	Branch       string   `json:"branch,omitempty"`
+	Command      []string `json:"command,omitempty"`
+	Engine       string   `json:"engine,omitempty"`
+	Runtime      string   `json:"runtime,omitempty"`
+	Network      string   `json:"network,omitempty"`
+	NetworkName  string   `json:"network_name,omitempty"`
+	EnforcedBy   string   `json:"egress_enforcement_requested,omitempty"`
+	EgressAllow  []string `json:"egress_allow,omitempty"`
+	EnvNames     []string `json:"env_names,omitempty"`
 	// Named for what the host knows, not for what happened — see SessionMeta. A
 	// pointer so `omitempty` drops only an unobserved run: a pointer to 0 is
 	// non-nil, so "looked, nothing refused" is written as an explicit 0 instead of
@@ -231,20 +257,24 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 	}
 	s.rotateIfLarge()
 	line, err := json.Marshal(record{
-		Time:        time.Now().Format(time.RFC3339),
-		Image:       meta.Image,
-		Workspace:   meta.Workspace,
-		Workdir:     meta.Workdir,
-		Agent:       meta.Agent,
-		Branch:      meta.Branch,
-		Command:     meta.Command,
-		Engine:      meta.Engine,
-		Runtime:     meta.Runtime,
-		Network:     meta.Network,
-		NetworkName: meta.NetworkName,
-		EnforcedBy:  meta.EgressEnforcementRequested,
-		EgressAllow: meta.EgressAllow,
-		EnvNames:    meta.EnvNames,
+		Time:         time.Now().Format(time.RFC3339),
+		Image:        meta.Image,
+		Workspace:    meta.Workspace,
+		RoutedFrom:   meta.RoutedFrom,
+		RouteReason:  meta.RouteReason,
+		RouteID:      meta.RouteID,
+		RouteAttempt: meta.RouteAttempt,
+		Workdir:      meta.Workdir,
+		Agent:        meta.Agent,
+		Branch:       meta.Branch,
+		Command:      meta.Command,
+		Engine:       meta.Engine,
+		Runtime:      meta.Runtime,
+		Network:      meta.Network,
+		NetworkName:  meta.NetworkName,
+		EnforcedBy:   meta.EgressEnforcementRequested,
+		EgressAllow:  meta.EgressAllow,
+		EnvNames:     meta.EnvNames,
 
 		EgressDenied:      meta.EgressDeniedReported,
 		EgressDeniedHosts: meta.EgressDeniedHostsReported,

@@ -68,8 +68,13 @@ CREATE TABLE IF NOT EXISTS runs (
   command       TEXT NOT NULL DEFAULT '[]',
   exit_code     INTEGER NOT NULL DEFAULT 0,
   duration_ms   INTEGER NOT NULL DEFAULT 0,
-  detached      INTEGER NOT NULL DEFAULT 0
+  detached      INTEGER NOT NULL DEFAULT 0,
+  routed_from   TEXT NOT NULL DEFAULT '',
+  route_reason  TEXT NOT NULL DEFAULT '',
+  route_id      TEXT NOT NULL DEFAULT '',
+  route_attempt INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS runs_route ON runs(route_id) WHERE route_id != '';
 CREATE INDEX IF NOT EXISTS runs_time   ON runs(time DESC);
 CREATE INDEX IF NOT EXISTS runs_branch ON runs(branch, time DESC);
 CREATE INDEX IF NOT EXISTS runs_agent  ON runs(agent, time DESC);
@@ -85,7 +90,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 
 // schemaVersion is bumped when the shape changes. A mismatch is a full rebuild,
 // which is cheap precisely because the file is the record and this is not.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Open creates or opens the index at path.
 func Open(path string) (*DB, error) {
@@ -220,8 +225,9 @@ func (h *DB) ingest(path string, from int64, end *int64) error {
 
 	stmt, err := tx.Prepare(`INSERT INTO runs
 		(time, branch, agent, image, workspace, workdir, engine, network, network_name,
-		 enforced_by, egress_allow, env_names, command, exit_code, duration_ms, detached)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		 enforced_by, egress_allow, env_names, command, exit_code, duration_ms, detached,
+		 routed_from, route_reason, route_id, route_attempt)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -247,6 +253,7 @@ func (h *DB) ingest(path string, from int64, end *int64) error {
 			r.Engine, r.Network, r.NetworkName, nullable(r.EnforcedBy),
 			jsonArray(r.EgressAllow), jsonArray(r.EnvNames), jsonArray(r.Command),
 			r.ExitCode, r.DurationMS, boolInt(r.Detached),
+			r.RoutedFrom, r.RouteReason, r.RouteID, r.RouteAttempt,
 		); err != nil {
 			return err
 		}

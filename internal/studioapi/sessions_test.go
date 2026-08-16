@@ -1,6 +1,7 @@
 package studioapi
 
 import (
+	"context"
 	"net/http"
 	"testing"
 )
@@ -59,4 +60,49 @@ func TestSessionListingDefaultsToResumableOnly(t *testing.T) {
 	if len(wide.Sessions) < len(narrow.Sessions) {
 		t.Errorf("scope=all returned %d sessions, fewer than the default's %d", len(wide.Sessions), len(narrow.Sessions))
 	}
+}
+
+// Studio does half of routing, and the half it does not do must not be implied.
+//
+// The probe runs before a launch; the retry cannot, because this API launches
+// detached and returns as soon as the container exists — nothing is left to see
+// an exit code. These cases pin the contract without touching the network:
+// opencode has no provider host, so it is chosen unprobed, which is also the
+// rule that keeps a provider-agnostic agent from being skipped as "down".
+func TestRouteAgentChoosesWithoutProbingWhatItCannotProbe(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	t.Run("one agent is not a chain and is never routed", func(t *testing.T) {
+		got, from, why, err := s.routeAgent(context.Background(), RunCreateRequest{Agent: "opencode"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "opencode" || from != "" || why != "" {
+			t.Errorf("chose %q routedFrom %q (%q); a single agent must run as itself with nothing to explain", got, from, why)
+		}
+	})
+
+	t.Run("an unprobeable primary is used rather than skipped", func(t *testing.T) {
+		// opencode is provider-agnostic — its EnvAllow spans four vendors because
+		// the user picks — so there is no host whose health means anything about
+		// it. Unknown is not down.
+		got, from, _, err := s.routeAgent(context.Background(),
+			RunCreateRequest{Agent: "opencode", Fallback: []string{"gemini"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "opencode" || from != "" {
+			t.Errorf("chose %q (from %q); an agent with nothing to probe must not be treated as unavailable", got, from)
+		}
+	})
+
+	t.Run("a fallback with no verified headless mode is refused", func(t *testing.T) {
+		// A Studio run is detached, so an agent that stops to ask permission
+		// hangs with nobody to answer — and it would hang in the fallback slot,
+		// where nobody is looking at all.
+		if _, _, _, err := s.routeAgent(context.Background(),
+			RunCreateRequest{Agent: "opencode", Fallback: []string{"cline"}}); err == nil {
+			t.Error("an agent with no verified headless argv was accepted as a fallback for a detached run")
+		}
+	})
 }

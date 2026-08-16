@@ -65,13 +65,17 @@ export function AppSidebar() {
   const repos = projects ?? [];
   const activeRepo = repos.find((r) => r.id === repoFilter);
 
-  // The scope is persisted, so it outlives the repository it names — remove a
-  // repository, or open Studio against a different daemon, and the stored id
-  // matches nothing. Every screen then filters to empty and reads as "no runs,
-  // no worktrees" rather than as "that repository is gone", which is the same
-  // failure that made the fixture picker so hard to see. Fall back to all
-  // repositories once the daemon has actually answered — never on an empty
+  // A scope can outlive the repository it names inside one session: remove a
+  // repository from the picker, or have the daemon restarted against another,
+  // and the selected id matches nothing. Every screen then filters to empty and
+  // reads as "no runs, no worktrees" rather than as "that repository is gone" —
+  // the same failure that made the fixture picker so hard to see. Fall back to
+  // all repositories once the daemon has actually answered, never on an empty
   // list, which is also what a daemon that has not replied yet looks like.
+  //
+  // (The scope itself is deliberately *not* persisted — see partialize in
+  // lib/store.ts, which leaves it out precisely so a stale id cannot greet you
+  // on a reload.)
   useEffect(() => {
     if (!repoFilter || !projects?.length) return;
     if (!projects.some((p) => p.id === repoFilter)) setRepoFilter(null);

@@ -198,9 +198,16 @@ sandbox-cli gemini --mount ~/adc.json:/sandbox/home/adc.json:ro \
   `OPENCODE_DISABLE_AUTOUPDATE`.
 
 ```sh
-sandbox-cli opencode
-sandbox-cli opencode run 'run the tests'
+sandbox-cli opencode                      # interactive
+sandbox-cli opencode run 'run the tests'  # non-interactive
 ```
+
+**`run` is not optional for a prompt.** A bare positional is read by opencode as
+*the project directory to open*, so `sandbox-cli opencode 'review the code'`
+fails with `Failed to change directory to /workspace/review the code`. The same
+is true of a Studio **console** run: opencode cannot be seeded with a first turn,
+so Studio refuses that combination and points at the headless mode, where the
+prompt is spelled correctly.
 
 **xAI / SuperGrok:** choose **`xAI Grok OAuth (Headless / Remote / VPS)`**. It is
 a device-code flow — a short code and a URL you open on any device — and it is

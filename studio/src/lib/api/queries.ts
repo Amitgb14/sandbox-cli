@@ -35,6 +35,7 @@ export const qk = {
   runConfig: (id: string) => ["runs", id, "config"] as const,
   agents: ["agents"] as const,
   projects: ["projects"] as const,
+  routing: ["routing"] as const,
   browse: (path?: string) => ["browse", path ?? "home"] as const,
   // Repo-scoped keys carry the repo id. A key that did not would serve one
   // repository's worktrees under another's name the moment the picker moved —
@@ -135,6 +136,42 @@ export function useAgents() {
  * Rarely changes and is read by nearly every screen, so it is cached long and
  * invalidated by the mutations below rather than polled.
  */
+/**
+ * Provider health, polled while the screen is open.
+ *
+ * Slowly: the daemon caches for thirty seconds anyway, and a status widget that
+ * hammers four vendors is a poor way to repay them.
+ */
+export function useRouting() {
+  return useQuery({
+    queryKey: qk.routing,
+    queryFn: () => api.routing(),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Set the host probed for an agent. Writes the whole map Studio manages, so the
+ * caller sends the current set with its edit applied.
+ */
+export function useSetProviders() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (providers: Record<string, string>) => api.setProviders(providers),
+    onSuccess: (fresh) => {
+      // The daemon answered with a fresh probe, so use it rather than
+      // invalidating and showing a stale "not checked" for a second.
+      qc.setQueryData(qk.routing, fresh);
+      toast.success("Provider updated");
+    },
+    onError: (err) =>
+      toast.error("Could not set that provider", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  });
+}
+
 export function useProjects() {
   return useQuery({ queryKey: qk.projects, queryFn: api.projects, staleTime: 60_000 });
 }
@@ -251,8 +288,9 @@ export function useFileContent(path: string | null, branch?: string) {
  * writing into that worktree as you read — slowly, since a diff is a review
  * surface rather than a live view.
  */
-export function useWorktreeDiff(branch: string | null) {
-  const repo = useScopedRepo();
+export function useWorktreeDiff(branch: string | null, repoId?: string) {
+  const scoped = useScopedRepo();
+  const repo = repoId || scoped;
   return useQuery({
     queryKey: qk.worktreeDiff(branch ?? "", repo),
     queryFn: () => api.worktreeDiff(branch as string, repo),
@@ -503,6 +541,29 @@ export function useAddProject() {
     },
     onError: (err) =>
       toast.error("Could not add that repository", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  });
+}
+
+/**
+ * Clone and register in one step.
+ *
+ * No optimistic write: a clone takes as long as it takes, and a row that
+ * appeared before the checkout existed would be a repository nothing could read
+ * yet. The daemon answers with the registered project once it is on disk.
+ */
+export function useCloneProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ url, parent, name }: { url: string; parent: string; name?: string }) =>
+      api.cloneProject(url, parent, name),
+    onSuccess: (project) => {
+      qc.invalidateQueries({ queryKey: qk.projects });
+      toast.success(`Cloned ${project.name}`, { description: project.root });
+    },
+    onError: (err) =>
+      toast.error("Could not clone that repository", {
         description: err instanceof Error ? err.message : String(err),
       }),
   });

@@ -188,3 +188,41 @@ func TestClaudeBootstrapIsBoundedAndChecksTheOutcome(t *testing.T) {
 		}
 	}
 }
+
+// A console prompt is only ever appended where the descriptor says how.
+//
+// Written from a real failure: Console appended the prompt as a bare positional
+// for every agent, and opencode reads a lone positional as the project directory
+// to open — so a Studio console run died with "Failed to change directory to
+// /workspace/review the code". The prompt was never a prompt to it.
+func TestConsoleSeedsOnlyWhereTheDescriptorSaysHow(t *testing.T) {
+	prompt := "review the code"
+
+	for _, name := range Names() {
+		d, _ := Lookup(name)
+		argv := d.Console(prompt, false)
+		last := ""
+		if len(argv) > 0 {
+			last = argv[len(argv)-1]
+		}
+		if d.CanSeedConsole() {
+			if last != prompt {
+				t.Errorf("%s says it can be seeded but its console argv does not end with the prompt: %v", name, argv)
+			}
+			continue
+		}
+		// The important half: an agent that cannot be seeded must not carry the
+		// prompt anywhere in its argv, in any position.
+		for _, a := range argv {
+			if a == prompt {
+				t.Errorf("%s cannot be seeded, yet its console argv carries the prompt (%v) — this is the bug that produced a chdir error", name, argv)
+			}
+		}
+	}
+
+	// opencode is the one this exists for, named so a later change that makes it
+	// seedable has to come with evidence rather than a hunch.
+	if d, ok := Lookup("opencode"); ok && d.CanSeedConsole() {
+		t.Error("opencode is marked seedable; its bare positional is a project directory, so a prompt there becomes a path")
+	}
+}

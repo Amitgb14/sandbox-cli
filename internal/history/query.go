@@ -29,6 +29,14 @@ type Record struct {
 	ExitCode    int      `json:"exit_code"`
 	DurationMS  int64    `json:"duration_ms"`
 	Detached    bool     `json:"detached"`
+
+	// Routing, when this run was part of an episode. RouteID ties the attempts
+	// of one chain together; without it the two lines of a failover are
+	// indistinguishable from two unrelated runs.
+	RoutedFrom   string `json:"routed_from"`
+	RouteReason  string `json:"route_reason"`
+	RouteID      string `json:"route_id"`
+	RouteAttempt int    `json:"route_attempt"`
 }
 
 // Filter narrows a query. A zero Filter means "everything, newest first".
@@ -64,7 +72,8 @@ func (h *DB) Runs(f Filter) ([]Record, error) {
 
 	q := `SELECT time, branch, agent, image, workspace, workdir, engine, network,
 	             network_name, enforced_by, egress_allow, env_names, command,
-	             exit_code, duration_ms, detached FROM runs`
+	             exit_code, duration_ms, detached,
+	             routed_from, route_reason, route_id, route_attempt FROM runs`
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -93,7 +102,8 @@ func (h *DB) Runs(f Filter) ([]Record, error) {
 		)
 		if err := rows.Scan(&r.Time, &branch, &agent, &r.Image, &r.Workspace, &r.Workdir,
 			&r.Engine, &r.Network, &r.NetworkName, &enforced,
-			&egressAllow, &envNames, &cmd, &r.ExitCode, &r.DurationMS, &detached); err != nil {
+			&egressAllow, &envNames, &cmd, &r.ExitCode, &r.DurationMS, &detached,
+			&r.RoutedFrom, &r.RouteReason, &r.RouteID, &r.RouteAttempt); err != nil {
 			return nil, err
 		}
 		r.Branch, r.Agent, r.EnforcedBy = trimNull(branch), trimNull(agent), trimNull(enforced)

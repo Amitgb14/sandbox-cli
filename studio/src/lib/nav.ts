@@ -8,6 +8,7 @@ import {
   Play,
   Settings,
   ShieldCheck,
+  Shuffle,
   Terminal,
   type LucideIcon,
 } from "lucide-react";
@@ -73,6 +74,13 @@ export const NAV: NavGroup[] = [
         icon: GitBranch,
         hint: "One branch per agent, and what is waiting to land",
         shortcut: "W",
+      },
+      {
+        title: "Routing",
+        href: "/routing",
+        icon: Shuffle,
+        hint: "Which providers are answering, and which agent runs when one is not",
+        shortcut: "T",
       },
       {
         title: "Agents",
@@ -148,6 +156,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   files: "Files",
   changes: "Changes",
   agents: "Agents",
+  routing: "Routing",
   settings: "Settings",
   doctor: "Doctor",
 };

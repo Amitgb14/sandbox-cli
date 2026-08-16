@@ -62,6 +62,8 @@ export function LaunchForm() {
   const router = useRouter();
   const search = useSearchParams();
   const repoFilter = useUi((s) => s.repoFilter);
+  const routingPrefs = useUi((s) => s.routingPrefs);
+  const setRoutingPref = useUi((s) => s.setRoutingPref);
   const { data: agents } = useAgents();
   const { data: projects } = useProjects();
   const [addRepoOpen, setAddRepoOpen] = useState(false);
@@ -69,6 +71,7 @@ export function LaunchForm() {
   const removeRun = useRemoveRun();
 
   const initialAgent = (search.get("agent") as AgentName | null) ?? "claude";
+  const routingPrefsAtMount = useRef(routingPrefs).current;
 
   const [req, setReq] = useState<LaunchRequest>({
     agent: initialAgent,
@@ -79,6 +82,9 @@ export function LaunchForm() {
     // never heard of, which is exactly how a path from a fixture ended up in a
     // real launch request.
     repo: repoFilter ?? "",
+    // Seeded from the remembered choice for this agent, so a fallback set once
+    // is still there next time rather than something to re-pick on every launch.
+    fallback: initialAgent ? (routingPrefsAtMount[initialAgent] ?? []) : [],
     workspace: "",
     worktree: null,
     base: "main",
@@ -264,9 +270,17 @@ export function LaunchForm() {
             <Field label="Agent" htmlFor="agent">
               <Select
                 value={req.agent ?? "__none"}
-                onValueChange={(v) =>
-                  patch({ agent: v === "__none" ? null : (v as AgentName) })
-                }
+                onValueChange={(v) => {
+                  const next = v === "__none" ? null : (v as AgentName);
+                  // The fallback belongs to the primary, so switching the primary
+                  // brings that agent's remembered answer rather than carrying
+                  // the previous agent's — which would silently pair two agents
+                  // nobody put together.
+                  patch({
+                    agent: next,
+                    fallback: next ? (routingPrefs[next] ?? []) : [],
+                  });
+                }}
               >
                 <SelectTrigger id="agent">
                   <SelectValue />
@@ -313,6 +327,56 @@ export function LaunchForm() {
                 </Hint>
               )}
             </Field>
+
+            {req.agent && (
+              <Field label="If its provider is down" htmlFor="fallback">
+                <Select
+                  value={req.fallback[0] ?? "__none"}
+                  onValueChange={(v) => {
+                    const chain = v === "__none" ? [] : [v];
+                    patch({ fallback: chain });
+                    // Remembered immediately rather than on submit: a choice made
+                    // and then abandoned is still the answer you would give next
+                    // time, and a preference that only saves on success is one
+                    // that quietly forgets whenever a launch is refused.
+                    if (req.agent) setRoutingPref(req.agent, chain);
+                  }}
+                >
+                  <SelectTrigger id="fallback">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>No fallback</SelectLabel>
+                      <SelectItem value="__none">Fail instead</SelectItem>
+                    </SelectGroup>
+                    <SelectGroup>
+                      <SelectLabel>Fall back to</SelectLabel>
+                      {agents
+                        // Only verified-headless agents, and only other ones. A
+                        // Studio run is detached, so an agent that stops to ask
+                        // permission hangs with nobody to answer — the same rule
+                        // a fleet applies.
+                        ?.filter((a) => a.headlessVerified && a.name !== req.agent)
+                        .map((a) => (
+                          <SelectItem key={a.name} value={a.name}>
+                            {a.label}
+                          </SelectItem>
+                        ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {req.fallback.length > 0 && (
+                  <Hint>
+                    Studio checks the provider before launching and starts{" "}
+                    {agents?.find((a) => a.name === req.fallback[0])?.label ?? req.fallback[0]}{" "}
+                    instead if it is not answering. It cannot retry a run that has already
+                    started — a launch here is detached, so nothing is left watching the exit
+                    code. The fallback runs with its own login and its own transcript.
+                  </Hint>
+                )}
+              </Field>
+            )}
 
             {req.agent === null ? (
               <Field label="Command" htmlFor="command">

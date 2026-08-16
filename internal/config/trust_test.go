@@ -71,6 +71,15 @@ func TestProjectConfigRefusesPrivilegedKeys(t *testing.T) {
 			"env:\n  PATH: /workspace/.bin:/usr/bin\n", "env"},
 		"forward a host credential": {
 			"env_allow:\n  - AWS_SECRET_ACCESS_KEY\n", "env_allow"},
+		// Choosing the agent chooses which persisted login and which forwarded
+		// variables are in reach, so a repository that could set this could aim a
+		// run at credentials it was never meant near.
+		"aim the run at another agent's login": {
+			"routing: [codex, claude]\n", "routing"},
+		// A host that never answers forces the chain past claude and onto
+		// whatever is behind it, with a different login in reach.
+		"force a failover by poisoning the probe": {
+			"providers:\n  claude: 127.0.0.1:1\n", "providers"},
 		"shadow a container path with a volume": {
 			"cache:\n  paths:\n    - /sandbox/home/.claude\n", "cache.paths"},
 		"choose where data may be sent": {
@@ -290,6 +299,11 @@ var projectKeyPolicy = map[string]bool{ // field name -> may a project file set 
 	"Secrets":  false,
 	"Runtime":  false,
 	"Engine":   false,
+	// Chooses which agent runs, and with it which persisted login and which
+	// forwarded variables the run can reach.
+	"Routing": false,
+	// Chooses which host is probed, and so which agent a chain skips.
+	"Providers": false,
 	// Direction-checked, like Network: a project may demand a stronger profile
 	// and never a weaker one, and may turn the credential mounts off but not on.
 	"Profile":     false,
@@ -326,21 +340,23 @@ func TestEveryConfigFieldIsClassified(t *testing.T) {
 // documentation, not a test.
 func TestClassifiedFieldsAreActuallyEnforced(t *testing.T) {
 	yamlFor := map[string]string{
-		"Image":    "image: x:1\n",
-		"Workdir":  "workdir: /app\n",
-		"User":     "user: root\n",
-		"Home":     "home: /tmp/h\n",
-		"Mounts":   "mounts:\n  - {host: /tmp, container: /d}\n",
-		"Env":      "env:\n  A: b\n",
-		"EnvAllow": "env_allow:\n  - A\n",
-		"Network":  "network:\n  allow:\n    - x.example.com\n",
-		"Ports":    "ports:\n  - 3000\n",
-		"Security": "security:\n  seccomp: unconfined\n",
-		"Cache":    "cache:\n  paths:\n    - /x\n",
-		"Snapshot": "snapshot:\n  enabled: false\n",
-		"Secrets":  "secrets:\n  T:\n    env: HOME\n",
-		"Runtime":  "runtime: runsc\n",
-		"Engine":   "engine: podman\n",
+		"Image":     "image: x:1\n",
+		"Workdir":   "workdir: /app\n",
+		"User":      "user: root\n",
+		"Home":      "home: /tmp/h\n",
+		"Mounts":    "mounts:\n  - {host: /tmp, container: /d}\n",
+		"Env":       "env:\n  A: b\n",
+		"EnvAllow":  "env_allow:\n  - A\n",
+		"Network":   "network:\n  allow:\n    - x.example.com\n",
+		"Ports":     "ports:\n  - 3000\n",
+		"Security":  "security:\n  seccomp: unconfined\n",
+		"Cache":     "cache:\n  paths:\n    - /x\n",
+		"Snapshot":  "snapshot:\n  enabled: false\n",
+		"Secrets":   "secrets:\n  T:\n    env: HOME\n",
+		"Runtime":   "runtime: runsc\n",
+		"Engine":    "engine: podman\n",
+		"Routing":   "routing: [codex, claude]\n",
+		"Providers": "providers:\n  claude: evil.example.com\n",
 		// Direction-checked: the sample must *weaken* something already in force,
 		// so each of these is paired with a stricter user-level config below.
 		"Profile":     "profile: dev\n",

@@ -285,3 +285,66 @@ export const STUDIO_COMPOSE_STEPS: StudioStep[] = [
       "A secrets: entry with a command: is resolved wherever the API process runs. In a container that is inside the container — `gh auth token` fails with exit status 127, and mounting ~/.config/gh to fix it would hand that container your GitHub credentials. Brokered secrets belong to a host process.",
   },
 ];
+
+/* ------------------------------------------------------------ the remote track */
+
+/**
+ * Agents on another machine, browser on this one.
+ *
+ * A fourth track rather than a note on the others, because it is the one shape
+ * where the two processes are not on the same computer — and every question the
+ * other tracks answer with "localhost" has a different answer here.
+ *
+ * The constraint that decides the design, and the reason there is no step for
+ * pointing a local daemon at a remote docker: **every safety refusal is
+ * evaluated against the filesystem sandbox-cli runs on.** RefuseUnsafeHostPath
+ * compares device and inode to reject `/` and the home directory, GitCommonDir
+ * demands a real git directory, the worktree paths resolve symlinks on local
+ * disk. A local daemon driving a remote docker would validate paths here and
+ * mount paths there. So "remote" means the whole of sandbox-cli is remote, and
+ * this becomes a networking problem rather than an isolation one.
+ *
+ * Mirrors docs/proposals/remote-studio.md, studio.sh's --api-only/--api-url, and
+ * the daemon's refusal to bind a routable address without a token.
+ */
+export const STUDIO_REMOTE_STEPS: StudioStep[] = [
+  {
+    title: "On the remote machine: the daemon and the agents",
+    side: "daemon",
+    code: "sh studio.sh up --api-only",
+    body: "Installs sandbox-cli and sandbox-studio-api, starts the daemon against the repository you run it in, and generates a token once. No UI is started here — the browser half lives on your own machine. This is also the half that holds the docker socket and runs every container, which is why it is the half that has to be on the machine with the CPUs.",
+    expect: "A printed Daemon URL and Token — the two values the other machine asks for.",
+  },
+  {
+    title: "Leave it on loopback and tunnel to it",
+    side: "daemon",
+    code: "ssh -N -L 8787:127.0.0.1:8787 you@box",
+    body: "The recommended shape, and the one that needs no new trust: the daemon keeps binding 127.0.0.1, so the Host it sees is still a loopback name, the DNS-rebinding defence still holds, and the token still governs. The transport is SSH's, which is a better answer than any TLS this project would grow, and the credential is one you already manage. Tailscale or WireGuard are the same shape with a different tunnel.",
+    expect: "http://localhost:8787/v1/health answering on your own machine.",
+  },
+  {
+    title: "Or bind it to the network, knowing what that costs",
+    side: "daemon",
+    code: "sh studio.sh up --api-only --bind 10.0.0.5",
+    body: "Passes -allow-host for that address, because the daemon answers to loopback names only and refuses anything else by design. Use it on a private network you already trust.",
+    warn: "There is no TLS here: the token and everything it protects cross the network in cleartext. The daemon refuses to bind a routable address with no token at all — an unauthenticated port on a process holding the docker socket is root on that machine for whoever reaches it.",
+  },
+  {
+    title: "On your machine: the browser half only",
+    side: "ui",
+    code: "sh studio.sh up --api-url http://localhost:8787",
+    body: "Starts the UI and nothing else — no binaries, no pidfile, no local daemon to wait for. Point it at the tunnel, or at the remote address directly if you bound one.",
+    expect: "Studio at http://localhost:3100, with the remote machine's repositories in the picker.",
+  },
+  {
+    title: "Or set it in the UI, which is what lets one Studio reach several boxes",
+    side: "browser",
+    body: "Settings → Connection takes a Daemon URL and a Token and keeps them in the browser. A value typed there outranks the one the UI was started with — the opposite of how the token behaves, and deliberately: an injected token is this server saying what it is running with, while an injected URL is only a default location. Changing it refetches everything, because what is on screen came from a different machine.",
+    expect: "The header's live badge, and the daemon's own version and engine on the Settings screen.",
+  },
+  {
+    title: "Remember whose filesystem you are looking at",
+    side: "browser",
+    body: "Every path on screen is the remote machine's: the repository picker, the file browser, the worktree paths, the clone target. They will not exist locally, and a repository added by path has to name a directory on that machine rather than on yours — which is also why the folder picker runs in the daemon.",
+  },
+] as const;

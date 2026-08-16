@@ -1,4 +1,4 @@
-import { apiBase } from "@/lib/constants";
+import { apiBase, storedApiBase } from "@/lib/constants";
 
 /**
  * The transport.
@@ -335,8 +335,14 @@ export const TOKEN_STORAGE_KEY = "sandbox-studio-token";
 
 export function apiToken(): string {
   if (typeof window !== "undefined") {
-    if (window.__SANDBOX_TOKEN__) return window.__SANDBOX_TOKEN__;
     const stored = window.localStorage.getItem(TOKEN_STORAGE_KEY);
+    // A typed endpoint changes which daemon is being talked to, and the injected
+    // token belongs to the one this page was served beside — a different machine
+    // with a different token. So when somebody has pointed the UI elsewhere,
+    // their stored token is the one for that daemon and wins; otherwise the
+    // injected value keeps the precedence the comment above argues for.
+    if (storedApiBase() && stored) return stored;
+    if (window.__SANDBOX_TOKEN__) return window.__SANDBOX_TOKEN__;
     if (stored) return stored;
   }
   return process.env.NEXT_PUBLIC_STUDIO_TOKEN ?? "";
