@@ -285,15 +285,20 @@ version is tagged.
 
 ### Changed
 
-- **Studio's subscription-usage gauge is parked.** The sidebar panel is hidden
-  and its Settings toggle with it — a switch whose only effect is invisible reads
-  as a broken setting rather than as a feature held back. Nothing is deleted:
-  `USAGE_PANEL_PARKED` in `studio/src/lib/parked.ts` is the whole of it, and
-  `/v1/usage`, the refresh endpoint, `internal/agentusage` and `sandbox-cli
-  usage` on the host are all untouched. A constant rather than a new default for
-  the existing per-browser preference, because that one is persisted: changing
-  its default would have left the panel showing for everyone who had already
-  opened Studio, which is everyone who would notice.
+- **Studio's subscription-usage gauge is off by default.** The sidebar panel is
+  hidden until Settings → *Show subscription usage* turns it on, which also stops
+  the request behind it. Nothing behind it changed — `/v1/usage`, the refresh
+  endpoint, `internal/agentusage` and `sandbox-cli usage` on the host are all
+  untouched; this is a question about the chrome, and a permanent gauge in the
+  corner is not what most people want the sidebar for.
+
+  The default alone would have reached nobody, which is the part worth
+  recording: the preference is persisted, and zustand merges stored state over
+  defaults, so a changed default only ever affects someone who has never opened
+  the app. The store now carries a persist `version` and a migration that applies
+  the new default **once** to browsers holding the old one, and never again — a
+  migration that re-asserted it on every load would be a setting that cannot be
+  changed.
 
 ### Fixed
 

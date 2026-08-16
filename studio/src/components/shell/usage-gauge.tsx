@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRefreshUsage, useUsage } from "@/lib/api/queries";
-import { USAGE_PANEL_PARKED } from "@/lib/parked";
 import { useUi } from "@/lib/store";
 import { formatDurationTight, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -34,11 +33,7 @@ import type { UsageWindow } from "@/lib/types";
  * weight. Absent still means absent; it is now visibly absent.
  */
 export function UsageGauge() {
-  // Parked (see lib/parked.ts). Read alongside the preference rather than
-  // instead of it: the preference is persisted per browser, so a park that only
-  // changed its default would still show the panel to everyone who has already
-  // used Studio.
-  const hidden = useUi((s) => s.usageHidden) || USAGE_PANEL_PARKED;
+  const hidden = useUi((s) => s.usageHidden);
   const { data, isPending } = useUsage(!hidden);
   const refresh = useRefreshUsage();
   const collapsed = useUi((s) => s.usageCollapsed);

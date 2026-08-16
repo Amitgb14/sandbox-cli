@@ -45,14 +45,13 @@ sh studio.sh down        # stop the pair, keep everything installed
 sh studio.sh uninstall   # remove the containers, the images and Studio's state
 ```
 
-**Usage gauge (parked).** The subscription panel in the sidebar footer is built
-and working but not surfaced: `USAGE_PANEL_PARKED` in `src/lib/parked.ts` hides
-it, and setting that to `false` brings back both the panel and its Settings
-toggle. Everything behind it is untouched — `/v1/usage`, the refresh endpoint,
-`internal/agentusage` and `sandbox-cli usage` on the host all still work. It is a
-constant rather than a change to the existing preference because that preference
-is persisted per browser: flipping its default would leave the panel showing for
-everyone who has already opened Studio.
+**Usage gauge (off by default).** The subscription panel in the sidebar footer is
+built and working, and hidden until asked for: Settings → *Show subscription
+usage* turns it on, per browser. Off also stops the request behind it. Changing
+that default needed the persist `version`/`migrate` pair in `src/lib/store.ts` —
+a preference already in localStorage outranks a default forever, so without a
+migration the new default would have reached only people who had never opened
+Studio.
 
 **Editor (parked).** The Files and Changes screens are built but not in the
 sidebar: `EDITOR_NAV` in `src/lib/nav.ts` holds the group, and moving it into

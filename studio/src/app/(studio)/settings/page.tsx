@@ -24,7 +24,6 @@ import { apiBase, BASELINE_EGRESS, PROFILES } from "@/lib/constants";
 import { ConnectionCard } from "@/components/settings/connection-card";
 import { RepositoriesCard } from "@/components/settings/repositories-card";
 import { useDaemon, useTransportMode } from "@/lib/api/queries";
-import { USAGE_PANEL_PARKED } from "@/lib/parked";
 import { useUi } from "@/lib/store";
 import { formatBytes } from "@/lib/format";
 
@@ -167,27 +166,20 @@ export default function SettingsPage() {
               hint="Scrolling up always turns this off for the session you are reading — a view that yanked you back to the bottom mid-read would be unreadable."
             />
 
-            {/* Hidden while the gauge is parked (lib/parked.ts). A switch whose
-                only effect is invisible is worse than no switch: it reads as a
-                broken setting rather than as a feature that is not surfaced yet.
-                Unparking restores both, and each browser's own choice with them,
-                since the preference itself is left alone. */}
-            {!USAGE_PANEL_PARKED && (
-              <>
-                <Separator />
+            <Separator />
 
-                {/* Not in the security card below, which is read-only on
-                    purpose: this is Studio's own chrome, which is exactly what
-                    Studio owns. */}
-                <Row
-                  id="usage-panel"
-                  checked={!usageHidden}
-                  onChange={(v) => setUsageHidden(!v)}
-                  label="Show subscription usage"
-                  hint="The sidebar gauge. Live on any machine where a sandboxed claude has run interactively — the status line records the figures as it goes. Off also stops the request behind it."
-                />
-              </>
-            )}
+            {/* Not in the security card below, which is read-only on purpose:
+                this is Studio's own chrome, which is exactly what Studio owns.
+
+                Off by default, so this row is where the panel is turned *on*
+                rather than where it is turned off. */}
+            <Row
+              id="usage-panel"
+              checked={!usageHidden}
+              onChange={(v) => setUsageHidden(!v)}
+              label="Show subscription usage"
+              hint="The sidebar gauge, off by default. Live on any machine where a sandboxed claude has run interactively — the status line records the figures as it goes. Leaving it off also stops the request behind it."
+            />
           </CardContent>
         </Card>
       </div>
