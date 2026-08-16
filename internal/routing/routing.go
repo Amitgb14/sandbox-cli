@@ -32,6 +32,8 @@ package routing
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -245,4 +247,26 @@ func ShouldFailOver(o Outcome) (bool, string) {
 		return false, "the run changed files, so it is a failed attempt rather than an outage"
 	}
 	return true, fmt.Sprintf("exited %d having changed nothing", o.ExitCode)
+}
+
+// NewID mints an identifier for one routing episode.
+//
+// Short and time-ordered rather than a UUID: it is read by people in a listing
+// beside a timestamp, and it only has to be unique among the episodes on one
+// machine. The same shape internal/rescue uses for a session id, for the same
+// reason — an id nobody can say out loud is one nobody quotes in a bug report.
+//
+// Here rather than in one of its two callers because both mint one: the CLI at
+// the top of its chain, and the Studio daemon when it accepts a run with a
+// fallback behind it. Two spellings of an id whose whole job is to be compared
+// is a correlation that silently stops working.
+func NewID() string {
+	var b [3]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A machine with no entropy still gets an id: a collision here costs two
+		// episodes being grouped, which is a wrong number in one table, while an
+		// empty id costs the correlation entirely.
+		return time.Now().UTC().Format("150405")
+	}
+	return time.Now().UTC().Format("20060102-150405") + "-" + hex.EncodeToString(b[:])
 }

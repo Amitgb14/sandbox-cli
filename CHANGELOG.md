@@ -13,6 +13,29 @@ version is tagged.
 
 ### Added
 
+- **Studio retries a run whose provider died mid-flight, not just one that was
+  down when you pressed Launch.** `--fallback` meant half of itself here: the
+  daemon probed the provider before launching and never looked again, which
+  covers an outage that has already started and misses one that begins ten
+  seconds later — the case a long unattended run is most exposed to. The reason
+  was real but was a property of the *handler* rather than of Studio: a request
+  returns as soon as the container is up, so nothing in it outlives the run. The
+  daemon does. A launch with somewhere to fall through to is now registered with
+  a supervisor owned by the process, which applies the same gate the CLI applies
+  — a run that exits non-zero **having written nothing** is an outage; one that
+  changed files is a failed attempt and is never retried — and starts the next
+  agent with a briefing mounted read-only. Both attempts carry one route id, so
+  the pair reads afterwards as one attempt at one task.
+
+  Two limits are deliberate. A **daemon restart forgets**: the watch set is in
+  memory, so a run in flight keeps running, stays listed, and is not retried —
+  the alternative means deciding what to do with a container that finished while
+  nothing was watching, and retrying a run whose result somebody already acted on
+  is the wrong answer. And the failed container is **renamed, not removed**
+  (`…-attempt1`): the retry needs the name back, because docker's atomic refusal
+  of a duplicate is what enforces one agent per branch, and the dead container's
+  logs are the evidence for why the failover happened.
+
 - **Agent routing: a fallback for when a provider is down.** `--fallback codex`
   on any agent wrapper, `routing: [claude, codex]` in your own config, and a
   picker on Studio's Launch screen. Two mechanisms, deliberately split: the

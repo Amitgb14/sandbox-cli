@@ -49,6 +49,10 @@ func (f *fakeSessionRuntime) Remove(_ context.Context, id string) error {
 	f.removed = append(f.removed, id)
 	return nil
 }
+
+// Rename is Controller's fifth method and nothing in internal/cli calls it: the
+// supervisor that does lives in the daemon, which outlives its runs.
+func (f *fakeSessionRuntime) Rename(_ context.Context, _, _ string) error { return nil }
 func (f *fakeSessionRuntime) Attach(_ context.Context, id string, _ io.Reader, _, _ io.Writer) error {
 	f.attached = append(f.attached, id)
 	return nil

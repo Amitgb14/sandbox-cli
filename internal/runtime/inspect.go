@@ -139,6 +139,16 @@ type Controller interface {
 	Kill(ctx context.Context, id string) error
 	// Remove deletes a stopped container along with its logs.
 	Remove(ctx context.Context, id string) error
+	// Rename gives a container a different name, freeing the old one.
+	//
+	// It exists for exactly one caller — the routing supervisor, which starts the
+	// next agent under the name the failed attempt is holding. A detached
+	// container's name is what enforces one-agent-per-branch (see
+	// sandbox.containerName), so the retry has to have it; and the failed
+	// container has to survive, because its logs are the evidence for why the
+	// failover happened. Renaming answers both, where removing answers only the
+	// first.
+	Rename(ctx context.Context, id, name string) error
 }
 
 // Attacher is the optional capability of connecting a terminal to a container
@@ -215,6 +225,14 @@ func (d *DockerCLI) Attach(ctx context.Context, id string, stdin io.Reader, stdo
 func (d *DockerCLI) Remove(ctx context.Context, id string) error {
 	if out, err := exec.CommandContext(ctx, d.bin(), "rm", id).CombinedOutput(); err != nil {
 		return fmt.Errorf("removing %s: %s", short(id), strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// Rename implements Controller. Podman spells it the same way.
+func (d *DockerCLI) Rename(ctx context.Context, id, name string) error {
+	if out, err := exec.CommandContext(ctx, d.bin(), "rename", id, name).CombinedOutput(); err != nil {
+		return fmt.Errorf("renaming %s to %s: %s", short(id), name, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

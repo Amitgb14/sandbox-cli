@@ -349,6 +349,14 @@ rather than merely passing.
   and is **not** retried: a wrong retry destroys work, a missed one costs a re-run somebody
   asks for by hand.
 
+  Both rules now have **two** callers — `cli/routed.go` for a foreground run and
+  `studioapi/supervisor.go` for a detached one — and what they share is deliberately the
+  *decision* (`ShouldFailOver`, the workspace fingerprint, `internal/handoff`) rather than the
+  re-targeting. Those differ because the inputs do: the CLI rebuilds an argv it was handed
+  (`cli.retarget`, pinned field by field by `retarget_test.go`), while the daemon still has the
+  structured request and rebuilds it through the same `buildRunOptions` the first attempt used.
+  Unifying the two would mean one of them reconstructing what the other never lost.
+
   The probe is a liveness check and must not become an auth check: it carries no credentials,
   so 401/403 are *success* — the endpoint answered. **429 is deliberately not an outage**,
   because rate-limited means healthy and over-asked, and failing over would route around your
@@ -444,6 +452,22 @@ rather than merely passing.
   by every caller that builds `Options`** (`persist_auth` is re-checked in `buildRunOptions` for
   exactly that reason). Runs are always detached: an HTTP request/response cycle has nowhere to
   hold a pty.
+
+  Which is also why routing's second half lives in `supervisor.go` rather than in a handler. A
+  request returns as soon as the container is up, so **nothing in the request outlives the run**
+  — but the daemon does, so the supervision goes where the lifetime is: one poll loop, owned by
+  the process, applying the same workspace gate `internal/routing` states and starting the next
+  agent with a briefing mounted. Two costs are accepted rather than solved, both following from
+  the watch set being in memory. A **restart forgets** — a run in flight keeps running, stays
+  listed, and is simply not retried, because the alternative means deciding what to do with a
+  container that finished while nothing was watching, and retrying a run somebody already acted
+  on is the wrong answer. And the failed container is **renamed, never removed**: the retry has
+  to take its name back, since docker's atomic refusal of a duplicate is what enforces one agent
+  per branch and a list-then-launch check has a window where two agents pass it — while the dead
+  container's logs are the evidence for why the failover happened, so deleting it to free the
+  name would pay for the invariant with the record. `sandbox.ContainerName` is exported for
+  exactly that decision: ask the function the launch will ask, rather than write the naming rule
+  down a second time.
 
   One daemon still has one **default** repository — what `-project` named, what every request
   naming none is about, and the one that cannot be removed — but it is no longer the only one it

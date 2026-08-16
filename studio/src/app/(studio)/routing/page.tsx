@@ -63,9 +63,9 @@ export default function RoutingPage() {
         description={
           <>
             When an agent&apos;s provider is not answering, a chain runs the next one instead.
-            Studio checks before launching; it cannot retry a run that has already started,
-            because a launch here is detached and nothing is left watching its exit code — the
-            CLI does both.
+            Studio checks before launching, and the daemon watches a run afterwards: one that
+            fails having written nothing is handed to the next agent with a briefing. A daemon
+            restarted mid-run leaves that run alone.
           </>
         }
         actions={

@@ -741,6 +741,15 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	}, nil
 }
 
+// ContainerName is the name a run with these options will be launched under.
+//
+// Exported for the routing supervisor, which needs to know *before* launching
+// whether the retry is about to ask for the name the failed attempt is still
+// holding — and only then take it away from it. Asking the same function the
+// launch will ask is what keeps that decision from being a second copy of the
+// rule below.
+func ContainerName(opts Options) string { return containerName(opts) }
+
 // containerName returns a docker-valid container name. Foreground runs get a
 // timestamp, which keeps repeated runs of one project from colliding.
 //

@@ -820,11 +820,12 @@ type RunCreateRequest struct {
 	// Fallback are the agents to try, in order, when Agent's provider is not
 	// answering — the chain from internal/routing.
 	//
-	// Studio probes before launching and takes the first that answers. It cannot
-	// do the other half of routing, which is retrying a run that failed having
-	// changed nothing: this launches detached, so nothing is left to watch the
-	// exit code. A run started here falls through before it starts and never
-	// after, and the Run it answers with says which agent it actually got.
+	// Two mechanisms, as in the CLI. The daemon probes before launching and takes
+	// the first agent that answers — the Run it answers with says which one that
+	// was. And a launch with somewhere left to fall through to is *supervised*:
+	// when it exits non-zero having left the workspace untouched, the next agent
+	// is started with a briefing of the conversation so far. See supervisor.go
+	// for the two limits that carries.
 	Fallback []string `json:"fallback,omitempty"`
 
 	// Agent is one of the names from GET /agents. Required unless Command is set.

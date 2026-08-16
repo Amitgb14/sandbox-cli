@@ -232,11 +232,21 @@ segment, so address a slash-bearing branch by id or name there — `GET
 provider before launching** and starts the first agent that answers — the case
 this exists for is pressing Launch during an outage.
 
-It does not do the other half of routing, and does not pretend to: retrying a run
-that failed having changed nothing needs something watching the exit code, and
-this API launches detached and returns as soon as the container exists. A Studio
-run therefore falls through *before* it starts and never after. The CLI does
-both, because a foreground run has a process left to wait.
+It also does the other half — retrying a run that failed having changed nothing —
+and where that happens is the design. A handler returns as soon as the container
+is up, so nothing in the *request* outlives the run; the **daemon** does. So a
+launch with a chain behind it is registered with a supervisor owned by the
+process, which polls the engine, applies the same workspace gate the CLI applies,
+and starts the next agent with a briefing mounted read-only. Both attempts carry
+one `routeId`.
+
+Two limits travel with it. A **daemon restart forgets**: the watch set is in
+memory, so a run in flight when the daemon is restarted keeps running, stays
+listed, and simply is not retried. And the failed container is **renamed, not
+removed** — `sandbox-<repo>-<branch>-attempt1` — because the retry needs the name
+back (docker's atomic refusal of a duplicate is what enforces one agent per
+branch) and the dead container's logs are the evidence for why the failover
+happened.
 
 Every candidate must have a **verified headless mode** — a detached run has
 nobody to answer an approval prompt, so an agent that stops to ask would hang in
