@@ -33,10 +33,12 @@ export function ProviderField({ agent }: { agent: string }) {
 
   function save(next: string) {
     setProviders.mutate({
-      // The whole managed set with this edit applied: the endpoint writes a map,
-      // so sending one key alone would forget the rest.
+      // The whole *managed* set with this edit applied: the endpoint writes a
+      // map, so sending one key alone would forget the rest — and `managed`
+      // rather than `overridden`, because a host from the user's config.yaml is
+      // set but not ours to copy into Studio's file.
       ...Object.fromEntries(
-        (providers ?? []).filter((p) => p.overridden).map((p) => [p.agent, p.host ?? ""]),
+        (providers ?? []).filter((p) => p.managed).map((p) => [p.agent, p.host ?? ""]),
       ),
       [agent]: next,
     });

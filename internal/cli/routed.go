@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -119,7 +120,18 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string, user 
 		return execute(rf, unrouted)
 	}
 
-	chain, err := routing.Resolve(primary, fallbacks, false)
+	// Whether anybody is watching this run, which decides what a fallback is
+	// allowed to become.
+	//
+	// Three ways to be unattended, and each is the user saying so rather than
+	// this inferring it: --detach leaves nothing attached, --no-tty gives the
+	// agent no terminal to ask through, and typing the agent's own
+	// skip-permissions flag is an explicit request to stop being asked. Anything
+	// else is somebody at a terminal, and a failover must not quietly remove
+	// them (see fallbackArgv).
+	unattended := rf.detach || rf.noTTY || asksForAutonomy(primary, guestArgs)
+
+	chain, err := routing.Resolve(primary, fallbacks, unattended)
 	if err != nil {
 		return err
 	}
@@ -185,6 +197,14 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string, user 
 		if avail := probeUnlessDryRun(ctx, rf, name, providerHosts); !avail.Reachable {
 			skipped = append(skipped, fmt.Sprintf("%s (%s)", name, avail.Reason))
 			fmt.Fprintf(os.Stderr, "sandbox-cli: skipping %s — %s\n", name, avail.Reason)
+			// Recorded, not merely printed. A skip is a switch: the run that
+			// starts next is not the agent that was asked for, and stderr is not
+			// where that is looked up afterwards — the container labels and the
+			// audit line are. Without this the preflight case, which is the one
+			// the feature exists for, was written down as an ordinary run of
+			// whichever agent happened to answer.
+			//
+			routedFrom, routeReason = noteSkip(routedFrom, name, skipped)
 			if i == len(chain)-1 {
 				return fmt.Errorf("no agent in the chain %s is available: %s",
 					chain, strings.Join(skipped, ", "))
@@ -215,7 +235,7 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string, user 
 				// task in its own spelling and there is none to give it.
 				return promptErr
 			}
-			built, perr := autonomousArgv(d, prompt, carried)
+			built, perr := fallbackArgv(d, prompt, carried, unattended)
 			if perr != nil {
 				return perr
 			}
@@ -223,6 +243,11 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string, user 
 		}
 
 		before := workspaceTree(&attempt)
+		// When this attempt began, kept because it is the only thing that ties
+		// the conversation it wrote to *this* run rather than to some earlier
+		// one in the same store. Taken before the container starts, with slack
+		// applied where it is used.
+		startedAt := time.Now()
 		err := execute(&attempt, argv)
 		code := exitCode
 
@@ -259,7 +284,7 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string, user 
 		// transcript is the commonest case here, and a handoff that failed the run
 		// because it had nothing to summarise would break the feature it exists to
 		// improve.
-		if ex := prepareHandoff(&attempt, name); ex != nil {
+		if ex := prepareHandoff(&attempt, name, startedAt, prompt); ex != nil {
 			carried = ex
 			briefings = append(briefings, ex.Dir)
 		}
@@ -310,13 +335,13 @@ func promptFrom(guestArgs []string) (string, error) {
 
 // prepareHandoff exports the finished agent's conversation for the next one, or
 // returns nil when there is nothing to carry and nowhere to put it.
-func prepareHandoff(rf *runFlags, from string) *handoff.Export {
+func prepareHandoff(rf *runFlags, from string, since time.Time, prompt string) *handoff.Export {
 	dir, err := os.MkdirTemp("", "sandbox-handoff-*")
 	if err != nil {
 		return nil
 	}
 	ws, _ := resolveWorkspaceFor(rf)
-	ex, err := handoff.Write(dir, from, transcriptPathFor(from, ws), ws, baseBranchFor(rf))
+	ex, err := handoff.Write(dir, from, transcriptPathFor(from, since, prompt), ws, baseBranchFor(rf))
 	if err != nil {
 		os.RemoveAll(dir)
 		return nil
@@ -327,15 +352,24 @@ func prepareHandoff(rf *runFlags, from string) *handoff.Export {
 	return ex
 }
 
-// transcriptPathFor is the newest session this agent wrote for this project, or
-// "" when there is none to find.
+// transcriptPathFor is the conversation *this attempt* wrote, or "" when it
+// cannot be told from another.
 //
-// Only the **sandbox-owned** store is searched, which is the same rule the
-// console reads by: a container's HOME is that directory and nothing else, so a
-// transcript anywhere but there was written by something other than this run —
-// the developer's own live session, most often, which is by definition the most
-// recently modified transcript on the machine.
-func transcriptPathFor(agent, workspace string) string {
+// The first version took the newest session in the sandbox-owned store by mtime,
+// which is wrong in the two ways internal/studioapi's console view documents at
+// length after hitting both. A session still being appended to has a recent
+// mtime that says nothing about who owns it, and sandbox runs of one agent all
+// pool into a single bucket — so a failover in one repository could export a
+// conversation from another, and the *commonest* case here is an agent that
+// died before writing anything at all, where the newest session is by definition
+// somebody else's.
+//
+// Correlating instead on when the session *started*, inside this attempt's
+// window, with the prompt as the tie-break when two ran at once. Nothing is
+// exported rather than the wrong thing: a briefing is handed to another agent as
+// evidence about work in progress, and a confident account of a conversation
+// that never happened is worse than the honest "there was none".
+func transcriptPathFor(agent string, since time.Time, prompt string) string {
 	f, ok := agentctx.Resolve(agent, agentctx.DefaultRoots(), time.Now())
 	if !ok || f.State != agentctx.StateVerified {
 		return ""
@@ -348,14 +382,19 @@ func transcriptPathFor(agent, workspace string) string {
 	if err != nil || len(sessions) == 0 {
 		return ""
 	}
-	newest := sessions[0]
-	for _, s := range sessions[1:] {
-		if s.Modified.After(newest.Modified) {
-			newest = s
-		}
+	// The same slack the console view uses, for the same two reasons: a clock
+	// that is not the container's, and a transcript whose first line is written
+	// a moment after the process starts.
+	path, ok := agentctx.PickSession(sessions, since.Add(-handoffSlack), time.Now().Add(handoffSlack), prompt)
+	if !ok {
+		return ""
 	}
-	return newest.Path
+	return path
 }
+
+// handoffSlack widens the window at both ends. Small on purpose: it exists to
+// absorb a second of clock skew, not to admit a neighbouring run.
+const handoffSlack = 90 * time.Second
 
 // sandboxOwnedStore narrows a finding to the agent HOME containers get. Mirrors
 // studioapi's sandboxStore; kept separate rather than exported across packages
@@ -378,14 +417,29 @@ func sandboxOwnedStore(f agentctx.Finding) agentctx.Finding {
 
 // autonomousArgv rebuilds the run for a fallback agent from the prompt, adding
 // the handoff pointer when there is one to add.
-func autonomousArgv(d agents.Descriptor, prompt string, carried *handoff.Export) ([]string, error) {
+func fallbackArgv(d agents.Descriptor, prompt string, carried *handoff.Export, unattended bool) ([]string, error) {
 	if prompt == "" {
-		// No prompt to carry: an interactive run. The fallback gets its own UI,
-		// and the briefing is mounted for the person driving it to read.
+		// No prompt to carry: an interactive run started with no task on the
+		// argv. The fallback gets its own UI, and the briefing is mounted for
+		// the person driving it to read.
 		return d.Command, nil
 	}
 	if carried != nil {
 		prompt = carried.Prompt(prompt)
+	}
+	if !unattended {
+		// The posture the user chose, kept. `sandbox-cli claude "refactor auth"`
+		// is an interactive session seeded with a task: somebody is at the
+		// terminal and the agent asks before it acts. Re-expressing that as
+		// `codex exec` with approvals off would answer a failed provider by
+		// removing the human — a larger change than the one that was asked for,
+		// and precisely the flag docs/GUIDE.md says the wrappers must never add
+		// on somebody's behalf.
+		//
+		// An agent that cannot be seeded on the command line still starts, with
+		// the briefing mounted; the alternative is refusing the failover over a
+		// first turn the person can type themselves.
+		return d.Console(prompt, false), nil
 	}
 	return d.Autonomous(prompt, nil), nil
 }
@@ -545,4 +599,38 @@ func resolveWorkspaceFor(rf *runFlags) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// asksForAutonomy reports whether the user's own arguments already turn this
+// agent's approval prompts off.
+//
+// The wrappers deliberately never add that flag — docs/GUIDE.md is explicit that
+// a person at a terminal is the one party who can still be asked — so its
+// presence in the argv is the user having asked for an agent that does not stop.
+// A fallback may then be built the same way.
+func asksForAutonomy(agent string, args []string) bool {
+	d, ok := agents.Lookup(agent)
+	if !ok {
+		return false
+	}
+	for _, flag := range d.SkipPermissionArgs {
+		if slices.Contains(args, flag) {
+			return true
+		}
+	}
+	return false
+}
+
+// noteSkip is the record a skipped provider leaves behind: which agent the run
+// was meant to use, and why it is not using it.
+//
+// The *first* agent skipped is the one that was asked for; a later one is
+// already a fallback, so the earliest answer is kept. The reason carries every
+// skip so far, because "gemini ran" is explained by the whole sequence rather
+// than by its last link.
+func noteSkip(routedFrom, name string, skipped []string) (from, reason string) {
+	if routedFrom == "" {
+		routedFrom = name
+	}
+	return routedFrom, strings.Join(skipped, "; ")
 }

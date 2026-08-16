@@ -492,6 +492,29 @@ resolve_api_bin() {
   Drop --no-install to fetch it, or use --api-in-docker."
 }
 
+# reachable_hosts prints the names this machine can be dialled by, one per line:
+# its hostname first, then every non-loopback IPv4 it holds.
+#
+# It exists because a wildcard bind says what the daemon listens *on* and nothing
+# about what a browser will type, while guard.go's Host check compares against
+# exactly that. Best effort by design — an address this cannot discover is one
+# the operator names with --bind explicitly, and the guard's refusal says which
+# host it rejected.
+reachable_hosts() {
+  hostname 2>/dev/null
+  if command -v ipconfig >/dev/null 2>&1; then          # macOS
+    for i in $(ipconfig getiflist 2>/dev/null); do
+      ipconfig getifaddr "$i" 2>/dev/null
+    done
+  elif command -v ip >/dev/null 2>&1; then              # Linux
+    ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]}'
+  fi
+  # Always successful: an interface with no address makes the last command fail,
+  # and under  that would abort a launch over a question this only
+  # answers as a courtesy.
+  return 0
+}
+
 start_api_host() {
   resolve_api_bin
   mkdir -p "$STATE"
@@ -505,14 +528,29 @@ start_api_host() {
   # not a loopback name — guard.go refuses anything else, and says so. Passed
   # only when binding off loopback, so the local case keeps exactly the surface
   # it had.
-  allow_host=""
-  [ "$BIND" = "127.0.0.1" ] || allow_host="$BIND"
+  # A wildcard bind is not an address anybody dials, so it is not one the guard
+  # can be given: the Host header carries the name the browser typed
+  # (10.0.0.5:8787), and -allow-host 0.0.0.0 matches none of them — every remote
+  # request was refused by the check that exists to protect it. So the wildcard
+  # case allows this machine's own reachable names instead, and the loopback case
+  # keeps exactly the surface it had.
+  allow_hosts=""
+  case "$BIND" in
+    127.0.0.1|localhost|::1) ;;
+    0.0.0.0|::|"*")          allow_hosts=$(reachable_hosts) ;;
+    *)                       allow_hosts="$BIND" ;;
+  esac
+  allow_args=""
+  for h in $allow_hosts; do
+    allow_args="$allow_args -allow-host $h"
+  done
 
+  # shellcheck disable=SC2086  # allow_args is a deliberately word-split list
   nohup "$API_BIN" \
     -addr "${BIND}:${API_PORT}" \
     -project "$PROJECT" \
     -config "$CONFIG" \
-    ${allow_host:+-allow-host "$allow_host"} \
+    $allow_args \
     -cors-origin "http://localhost:${UI_PORT}" \
     -cors-origin "http://127.0.0.1:${UI_PORT}" \
     >>"$LOGFILE" 2>&1 &
@@ -588,8 +626,15 @@ do_up_api_only() {
   fi
 
   info ""
+  # The address to type, which a wildcard bind is not.
+  advertise="$BIND"
+  case "$BIND" in
+    0.0.0.0|::|"*") advertise=$(reachable_hosts | sed -n 2p) ;;
+  esac
+  [ -n "$advertise" ] || advertise="$BIND"
+
   info "On the machine with the browser, open Studio → Settings → Connection:"
-  info "  Daemon URL   http://${BIND}:${API_PORT}"
+  info "  Daemon URL   http://${advertise}:${API_PORT}"
   info "  Token        ${TOKEN}"
   info ""
   if [ "$BIND" = "127.0.0.1" ]; then

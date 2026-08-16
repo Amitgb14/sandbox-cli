@@ -615,6 +615,19 @@ func ProviderOverridesPath() string {
 // A separate file rather than an edit to config.yaml because rewriting a
 // hand-maintained YAML file loses its comments and its ordering — a cost nobody
 // agreed to when they clicked a dropdown.
+// ProviderOverrides is the Studio-managed layer alone, without the user's own
+// config.yaml merged over it.
+//
+// Exported because the two are not interchangeable to a UI that *writes* one of
+// them. A resolved Config carries them merged, so a screen built from that
+// cannot tell "Studio set this" from "the user typed this by hand" — and the
+// first version of the Agents page rebuilt its save payload from every value it
+// saw as set, which copied config.yaml's hosts into providers.json and kept them
+// after the config lines were removed. Worse in the other direction: editing an
+// agent config.yaml also names looked saved and reverted on the next start,
+// because this layer is deliberately *under* it.
+func ProviderOverrides() map[string]string { return loadProviderOverrides() }
+
 func loadProviderOverrides() map[string]string {
 	path := ProviderOverridesPath()
 	if path == "" {

@@ -744,6 +744,16 @@ export interface ProviderStatus {
    * right answer for anyone pointing an agent at a proxy.
    */
   overridden?: boolean;
+  /**
+   * Whether the override is the one Studio writes, rather than a value in the
+   * user's own config.yaml — which outranks it and is not editable from here.
+   *
+   * The save payload is rebuilt from *this*, never from `overridden`: the
+   * endpoint writes a whole map, so building it from every set value copied
+   * config.yaml's hosts into Studio's file, where they outlived the config lines
+   * they came from.
+   */
+  managed?: boolean;
   /** Whether a chain may contain it: it needs a verified non-interactive mode. */
   routable: boolean;
 }

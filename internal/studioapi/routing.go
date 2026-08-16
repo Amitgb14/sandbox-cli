@@ -66,6 +66,9 @@ func overriddenFor(overrides map[string]string, agent string) bool {
 // second timeout each, and doing them in series would make a four-provider page
 // take twelve seconds to say "everything is fine".
 func probeAll(ctx context.Context, overrides map[string]string, force bool) []ProviderStatus {
+	// Read once per call rather than per agent: it is a file, and the answer
+	// cannot change half way through one listing.
+	managed := config.ProviderOverrides()
 	providers.mu.Lock()
 	if !force && time.Since(providers.at) < providerCacheTTL && providers.seen != nil {
 		out := providers.seen
@@ -92,6 +95,8 @@ func probeAll(ctx context.Context, overrides map[string]string, force bool) []Pr
 			// its map from the overridden rows only, so the next edit of any other
 			// agent silently dropped every do-not-probe entry and resumed probing.
 			Overridden: overriddenFor(overrides, name),
+			// Whether *this* is the layer that set it. See ProviderStatus.Managed.
+			Managed: overriddenFor(managed, name),
 			// An agent with no verified non-interactive mode cannot be routed to
 			// at all, and saying so here is what stops a UI offering it in a chain
 			// that would hang the moment it fired.

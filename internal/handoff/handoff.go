@@ -80,7 +80,27 @@ type Export struct {
 // with what is known — usually the file ledger alone — because "here is what
 // changed on disk, there was no conversation" is a true and useful briefing.
 func Write(dir, from, sessionPath, workspace string, base string) (*Export, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	// 0750/0640 rather than 0700/0600, and this is the difference between a
+	// briefing and a directory the agent cannot open.
+	//
+	// The export is bind-mounted into the container, which on native Linux runs
+	// as 1001:<the host user's primary gid> (sandbox/hostgroup.go). A directory
+	// created by os.MkdirTemp is 0700 and owned by the host uid, so the guest
+	// gets EACCES on every file — silently, since the run has already printed
+	// that the briefing was carried, and the agent is told by its own prompt to
+	// read a path it cannot. macOS hides this entirely: Docker Desktop
+	// virtualizes bind-mount ownership, so it is a bug that only appears where
+	// most unattended runs happen.
+	//
+	// Group bits are enough; no chown is needed, because the container's gid is
+	// the host user's own. Not world-readable: /tmp is shared, and the brief
+	// quotes a conversation.
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, err
+	}
+	// MkdirTemp made it 0700 before this was called, and MkdirAll leaves an
+	// existing directory's mode alone.
+	if err := os.Chmod(dir, 0o750); err != nil {
 		return nil, err
 	}
 	ex := &Export{Dir: dir, From: from}
@@ -103,10 +123,10 @@ func Write(dir, from, sessionPath, workspace string, base string) (*Export, erro
 	if err := writeJSONL(filepath.Join(dir, "transcript.jsonl"), msgs); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "files.md"), []byte(fileLedger(stats)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "files.md"), []byte(fileLedger(stats)), 0o640); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "HANDOFF.md"), []byte(brief(from, msgs, stats)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "HANDOFF.md"), []byte(brief(from, msgs, stats)), 0o640); err != nil {
 		return nil, err
 	}
 	return ex, nil
@@ -268,8 +288,11 @@ func firstLine(s string) string {
 		if line == "" {
 			continue
 		}
-		if len(line) > 200 {
-			line = line[:200] + "…"
+		// By runes, not bytes: this lands in HANDOFF.md, which is handed to
+		// another agent, and slicing a UTF-8 string at a byte offset writes an
+		// invalid sequence whenever a multibyte character straddles it.
+		if r := []rune(line); len(r) > 200 {
+			line = string(r[:200]) + "…"
 		}
 		return line
 	}
@@ -287,7 +310,7 @@ type normalized struct {
 }
 
 func writeJSONL(path string, msgs []agentctx.Message) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 	if err != nil {
 		return err
 	}

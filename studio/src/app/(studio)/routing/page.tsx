@@ -110,11 +110,13 @@ export default function RoutingPage() {
                   label={agents?.find((a) => a.name === p.agent)?.label ?? p.agent}
                   onSet={(host) =>
                     setProviders.mutate({
-                      // The whole managed map with this edit applied: the endpoint
-                      // writes a set, so sending one key would forget the others.
+                      // The whole *managed* map with this edit applied: the
+                      // endpoint writes a set, so sending one key would forget
+                      // the others — and `managed` rather than `overridden`,
+                      // since a host from config.yaml is not Studio's to copy.
                       ...Object.fromEntries(
                         (providers ?? [])
-                          .filter((o) => o.overridden)
+                          .filter((o) => o.managed)
                           .map((o) => [o.agent, o.host ?? ""]),
                       ),
                       [p.agent]: host,
@@ -337,9 +339,18 @@ function ProviderRow({
         </button>
       )}
       {status.overridden && (
-        <Badge variant="outline" className="text-[10px]">
-          yours
-        </Badge>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="outline" className="text-[10px]">
+              {status.managed ? "yours" : "config.yaml"}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs">
+            {status.managed
+              ? "Set here, in the file Studio writes."
+              : "Set in your own config.yaml, which outranks anything set here — edit it there. Saving from this screen would appear to work and revert on the next daemon start."}
+          </TooltipContent>
+        </Tooltip>
       )}
       {!status.routable && (
         <Tooltip>

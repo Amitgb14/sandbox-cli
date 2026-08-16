@@ -532,7 +532,10 @@ func (s *Server) routeAgent(ctx context.Context, req RunCreateRequest) (chosen, 
 
 	var skipped []string
 	for i, name := range chain {
-		avail := routing.Probe(ctx, name, s.Session.Cfg.Providers)
+		// Through runningProviders, not the field: POST /v1/routing/providers
+		// assigns this map under providerMu, and a launch that ranged over it
+		// unguarded is the data race that mutex was added for.
+		avail := routing.Probe(ctx, name, runningProviders(s))
 		if avail.Reachable {
 			if i == 0 {
 				return name, "", "", nil

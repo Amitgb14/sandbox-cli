@@ -175,6 +175,19 @@ type ProviderStatus struct {
 	// right answer for anyone pointing an agent at a proxy.
 	Overridden bool `json:"overridden,omitempty"`
 
+	// Managed says the override came from the file Studio writes, rather than
+	// from the user's own config.yaml — which outranks it and cannot be edited
+	// from here.
+	//
+	// The distinction is not cosmetic: a client that rebuilds its save payload
+	// from every overridden row copies config.yaml's values into Studio's file,
+	// where they then persist after the config lines are deleted, and an edit to
+	// an agent config.yaml also names appears to save and silently reverts on the
+	// next daemon start. A row that is overridden but not managed is read-only,
+	// and saying so is the only honest thing this API can do about a layer it
+	// does not own.
+	Managed bool `json:"managed,omitempty"`
+
 	// Routable is whether a chain may contain this agent at all — it needs a
 	// verified non-interactive mode, or it would hang in the fallback slot where
 	// nobody is looking.
