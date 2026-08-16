@@ -283,6 +283,18 @@ version is tagged.
   logins and worktrees in it. `studio/README.md` also documents the three
   commands to do it by hand, for anyone who did not keep the script.
 
+### Changed
+
+- **Studio's subscription-usage gauge is parked.** The sidebar panel is hidden
+  and its Settings toggle with it — a switch whose only effect is invisible reads
+  as a broken setting rather than as a feature held back. Nothing is deleted:
+  `USAGE_PANEL_PARKED` in `studio/src/lib/parked.ts` is the whole of it, and
+  `/v1/usage`, the refresh endpoint, `internal/agentusage` and `sandbox-cli
+  usage` on the host are all untouched. A constant rather than a new default for
+  the existing per-browser preference, because that one is persisted: changing
+  its default would have left the panel showing for everyone who had already
+  opened Studio, which is everyone who would notice.
+
 ### Fixed
 
 - **Studio's fixtures aged into fiction.** With no daemon answering, every screen
@@ -719,8 +731,6 @@ version is tagged.
   podman's own field: it fills the docker-compatible one with the placeholder
   `"oci"`. A launch the engine refused is no longer written to the audit log at
   all. First piece of [roadmap task 3](docs/roadmap/task-3-stronger-isolation.md).
-
-### Changed
 
 - **The documentation is a set of pages rather than one 1,400-line README.** The
   README is now a landing page — what it is, install, quick start, and a map —
