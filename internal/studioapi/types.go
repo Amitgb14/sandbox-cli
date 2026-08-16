@@ -18,6 +18,18 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// EgressPosture is what a run launched by this daemon may reach.
+type EgressPosture struct {
+	// Mode is "allowlist", "default" (unrestricted) or "none".
+	Mode string `json:"mode"`
+	// Baseline reports whether the built-in domains are part of an allowlist.
+	Baseline bool `json:"baseline"`
+	// Allow is the resolved list — baseline ∪ configured — which is what the
+	// firewall is actually programmed with, rather than the configured half a
+	// reader would have to add the other half to.
+	Allow []string `json:"allow,omitempty"`
+}
+
 // HealthResponse answers "is the control plane usable right now".
 type HealthResponse struct {
 	Status          string `json:"status"` // "ok" | "degraded"
@@ -37,6 +49,18 @@ type HealthResponse struct {
 	// can still ask. It reports *that* a token is required, never any part of
 	// the token itself.
 	AuthRequired bool `json:"authRequired"`
+
+	// Egress is the posture this daemon will launch with, resolved from its own
+	// config layers.
+	//
+	// Reported because a client cannot work it out and must not guess. The
+	// network mode is **not expressible per request** — a launch may add domains
+	// and may not loosen the posture, the same tighten-only rule
+	// internal/config/trust.go applies to a project file — so a form that
+	// rendered a mode selector was offering a control the request does not have,
+	// initialised to a value nobody had asked for. Showing what the daemon *will*
+	// do, and where to change it, is the honest version of that field.
+	Egress EgressPosture `json:"egress"`
 
 	// Host is what this machine is, as the engine and the Go runtime report it.
 	// Always present: a client showing "where am I running" has nowhere to put

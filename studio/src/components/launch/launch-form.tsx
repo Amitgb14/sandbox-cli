@@ -28,6 +28,7 @@ import { LaunchPreview } from "@/components/launch/launch-preview";
 import {
   useAgentSessions,
   useAgents,
+  useDaemon,
   useLaunchRun,
   useProjects,
   useRemoveRun,
@@ -36,7 +37,7 @@ import {
 import { AddRepositoryDialog } from "@/components/shell/add-repository-dialog";
 import { localPreview } from "@/lib/api/endpoints";
 import { formatRelative, pluralize } from "@/lib/format";
-import { BASELINE_EGRESS, PROFILES, RESERVED_ENV } from "@/lib/constants";
+import { PROFILES, RESERVED_ENV } from "@/lib/constants";
 import { useUi } from "@/lib/store";
 import type {
   AgentName,
@@ -58,7 +59,17 @@ import { cn } from "@/lib/utils";
  * `BuildSpec`, and a form that reimplemented the whole rule set would eventually
  * disagree with the thing that actually enforces it.
  */
+/** The posture in the words the CLI uses for it. */
+function egressLabel(mode: string): string {
+  if (mode === "allowlist") return "allowlist — default-deny";
+  if (mode === "none") return "none — reaches nothing";
+  return "unrestricted";
+}
+
 export function LaunchForm() {
+  // The daemon's own egress posture, which a launch reports rather than sets.
+  const { data: daemon } = useDaemon();
+  const egress = daemon?.egress;
   const router = useRouter();
   const search = useSearchParams();
   const repoFilter = useUi((s) => s.repoFilter);
@@ -109,6 +120,20 @@ export function LaunchForm() {
   // scoped to, else the one the daemon was started in, else the first that can
   // actually be read. Only while nothing is chosen — this must never move a
   // selection out from under someone mid-form.
+  // The form's own copy of the posture follows the daemon's, because the preview
+  // and the refusals below read it — and it is not a choice. Before this it was
+  // initialised to "allowlist" and never moved, so an unrestricted daemon got a
+  // preview describing a firewall it does not program, and a `none` daemon got
+  // one describing egress it will not have.
+  useEffect(() => {
+    if (!egress) return;
+    setReq((r) =>
+      r.network.mode === egress.mode && r.network.baseline === egress.baseline
+        ? r
+        : { ...r, network: { ...r.network, mode: egress.mode as NetworkMode, baseline: egress.baseline } },
+    );
+  }, [egress]);
+
   useEffect(() => {
     if (!projects?.length) return;
     setReq((prev) => {
@@ -616,66 +641,61 @@ export function LaunchForm() {
 
           <Separator />
 
+          {/* Read-only, because the request cannot express it.
+              `network.mode` is the daemon's own resolved posture: a launch may
+              *add* domains and may never loosen the mode, the same tighten-only
+              rule internal/config/trust.go applies to a project file. This was a
+              Select — initialised to a hardcoded "allowlist", changing nothing,
+              and reflecting nothing. Selecting "Unrestricted" and still being
+              blocked is what a control that lies feels like from the outside. */}
           <Field label="Egress">
-            <Select
-              value={req.network.mode}
-              onValueChange={(v) =>
-                patch({ network: { ...req.network, mode: v as NetworkMode } })
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="allowlist">
-                  Allowlist — default-deny, named domains
-                </SelectItem>
-                <SelectItem value="none">None — reach nothing</SelectItem>
-                <SelectItem value="default">Unrestricted — anything</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="font-mono text-[11px]">
+                {egress ? egressLabel(egress.mode) : "…"}
+              </Badge>
+              {egress?.mode === "allowlist" && (
+                <span className="text-xs text-muted-foreground">
+                  {egress.allow?.length ?? 0} domains
+                  {egress.baseline ? ", baseline included" : ", baseline off"}
+                </span>
+              )}
+            </div>
 
-            {req.network.mode === "default" && (
+            {egress?.mode === "default" && (
               <Hint tone="exposed">
                 Open egress. Any credential this agent holds can leave, and the
                 audit line will record that nothing was enforced.
               </Hint>
             )}
-
-            {req.network.mode === "allowlist" && (
-              <div className="space-y-3 pt-1">
-                <Toggle
-                  id="baseline"
-                  checked={req.network.baseline}
-                  onCheckedChange={(v) =>
-                    patch({ network: { ...req.network, baseline: v } })
-                  }
-                  label={`Built-in baseline (${BASELINE_EGRESS.length} domains)`}
-                  hint="The agent APIs, the common registries and the code hosts, so npm, pip and git work out of the box. It includes github.com — a write endpoint, and so an exfiltration channel for any token the agent holds."
-                  tone={req.network.baseline ? "caution" : "contained"}
-                />
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="allow" className="text-xs">
-                    Extra domains
-                  </Label>
-                  <TagInput
-                    id="allow"
-                    value={req.network.allow}
-                    onChange={(allow) =>
-                      patch({ network: { ...req.network, allow } })
-                    }
-                    placeholder="internal.example.com, then Enter"
-                  />
-                  <Hint>
-                    Resolved fresh per connection by the in-container proxy,
-                    which decides on the hostname read from the TLS SNI, a
-                    CONNECT, or a Host header — so a host sharing an allowlisted
-                    address does not ride in on it.
-                  </Hint>
-                </div>
-              </div>
+            {egress?.mode === "none" && (
+              <Hint tone="contained">This daemon launches with no network at all.</Hint>
             )}
+
+            <Hint>
+              Set where the daemon reads its configuration, not per run — it is
+              tighten-only from here, so a request can add domains and cannot
+              open the posture. Change it in{" "}
+              <code className="font-mono">~/.config/sandbox/config.yaml</code>{" "}
+              (or the <code className="font-mono">--config</code> file the daemon
+              was started with) and restart it.
+            </Hint>
+
+            <div className="space-y-1.5 pt-1">
+              <Label htmlFor="allow" className="text-xs">
+                Extra domains
+              </Label>
+              <TagInput
+                id="allow"
+                value={req.network.allow}
+                onChange={(allow) => patch({ network: { ...req.network, allow } })}
+                placeholder="internal.example.com, then Enter"
+              />
+              <Hint tone={egress?.mode === "default" ? "caution" : undefined}>
+                {egress?.mode === "default"
+                  ? "Adding a domain here switches the allowlist on for this run — on an unrestricted daemon that tightens the run rather than widening it, which is the only direction a request may move."
+                  : "Resolved fresh per connection by the in-container proxy, which decides on the hostname read from the TLS SNI, a CONNECT, or a Host header — so a host sharing an allowlisted address does not ride in on it."}
+              </Hint>
+            </div>
           </Field>
 
           <Separator />

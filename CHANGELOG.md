@@ -312,6 +312,18 @@ version is tagged.
 
 ### Fixed
 
+- **Studio's egress selector did nothing.** The Launch form offered
+  Allowlist / None / Unrestricted, and the network mode is **not expressible per
+  request** — a launch may add domains and may never loosen the posture, the same
+  tighten-only rule a project `.sandbox.yaml` gets — so the daemon dropped it.
+  Worse, the control was initialised to a hardcoded `allowlist` rather than to
+  the daemon's actual posture, so it reflected nothing either: on an unrestricted
+  daemon the preview described a firewall that would not be programmed. It is now
+  a read-only reading of what the daemon resolved, reported by `/v1/health`
+  (`egress`), with a line saying where to change it — and the extra-domains field
+  stays, since adding domains is the one network move a request may make. On an
+  unrestricted daemon that field says plainly that it *tightens* the run.
+
 - **`studio.sh status` and `down` could not see the daemon on Linux.** The
   liveness check read `ps -o comm=`, which **truncates to 15 characters** there —
   `sandbox-studio-` — and compared it against the full name, so it matched on

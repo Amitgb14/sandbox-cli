@@ -38,6 +38,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Project:         s.Project,
 		Profile:         profile,
 		AuthRequired:    s.Token != "",
+		Egress:          s.egressPosture(),
 		Host:            s.hostInfo(r.Context()),
 	})
 }
@@ -75,4 +76,22 @@ func (s *Server) hostInfo(ctx context.Context) HostInfo {
 		}
 	}
 	return h
+}
+
+// egressPosture is the network posture this daemon launches with.
+//
+// From the resolved config rather than from a request, because that is the only
+// place it can come from: a launch may add domains and may never loosen the
+// mode, so what a client needs is not a control but an answer.
+func (s *Server) egressPosture() EgressPosture {
+	n := s.Session.Cfg.Network
+	mode := n.Mode
+	if mode == "" {
+		mode = "default"
+	}
+	p := EgressPosture{Mode: mode, Baseline: n.BaselineEnabled()}
+	if mode == "allowlist" {
+		p.Allow = n.EgressDomains()
+	}
+	return p
 }

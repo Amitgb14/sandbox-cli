@@ -824,6 +824,14 @@ export interface DaemonInfo {
    * 401 instead of just showing one on every panel.
    */
   authRequired?: boolean;
+
+  /**
+   * What a run launched by this daemon may reach, resolved from its own config.
+   *
+   * Reported rather than requested: the mode is tighten-only from a client, so a
+   * form shows this and offers extra domains, never a mode.
+   */
+  egress?: { mode: string; baseline: boolean; allow?: string[] };
   /** True when Studio is reading fixtures because no daemon answered. */
   mock?: boolean;
 }
