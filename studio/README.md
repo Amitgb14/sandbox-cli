@@ -151,6 +151,8 @@ value typed there outranks the one the UI was started with — the opposite of t
 token's precedence, and deliberately: an injected token is *this* server saying
 what it is running with, while an injected URL is only a default location.
 
+Connections you use more than once can be **saved**: the list keeps a label, the URL and that daemon's token, and connecting to one applies both halves at once — a token belongs to a single machine, so switching the URL alone is the mistake the list removes. They are stored in the browser, where the active token already is.
+
 Every path on screen is then the remote machine's — the repository picker, the
 file browser, the worktree paths, the clone target — and a repository added by
 path names a directory on *that* machine. Which is also why the folder picker

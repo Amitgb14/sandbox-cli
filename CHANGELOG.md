@@ -13,6 +13,19 @@ version is tagged.
 
 ### Added
 
+- **Studio remembers the daemons you switch between.** Settings → Connection
+  keeps a list: save the endpoint and token you are on, and connect to any of
+  them with one click. It exists because the two-machine setup is the point of
+  the remote daemon — agents on a Linux box, browser on a laptop — and moving
+  back and forth meant pasting a 64-character token each time.
+  
+  Each entry carries the token as well as the URL, because a token belongs to one
+  machine: a list of URLs alone would ask for it again on every switch, which is
+  the paste being removed. They live in this browser's storage, where the active
+  token already lives, so it widens reach rather than exposure. The active
+  connection itself stays where it was — read while a request is built, not while
+  a component renders.
+
 - **Studio's Routing screen answers with pictures now.** Four, because the
   questions are four and one view answering all of them answers none well. A
   **chain graph** puts what is configured, what is answering and which hops have

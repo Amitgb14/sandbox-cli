@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, Link2, RotateCw, ShieldAlert } from "lucide-react";
+import { Eye, EyeOff, Link2, RotateCw, ShieldAlert, Star, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { reconnect, setApiToken, apiToken } from "@/lib/api/client";
 import { apiBase, setStoredApiBase, storedApiBase } from "@/lib/constants";
+import { useUi } from "@/lib/store";
 
 /**
  * Point this Studio at a daemon on another machine.
@@ -31,6 +32,13 @@ import { apiBase, setStoredApiBase, storedApiBase } from "@/lib/constants";
  * The token follows the endpoint. Pointing at another daemon means the injected
  * token belongs to the wrong machine, so once an endpoint is set the stored
  * token is the one used.
+ *
+ * The saved list is an address book beside those two, not a replacement for
+ * them: the active connection stays in localStorage, because it is read while a
+ * request is being built rather than while a component renders. Each entry
+ * carries a URL *and* its token, since a token belongs to exactly one machine —
+ * a list of URLs alone would ask for the token again on every switch, which is
+ * the paste this exists to remove.
  */
 export function ConnectionCard() {
   const qc = useQueryClient();
@@ -44,6 +52,9 @@ export function ConnectionCard() {
   // are typing, not a preference that leaves a token on screen for whoever
   // walks past next.
   const [shown, setShown] = useState(false);
+  const saved = useUi((s) => s.connections);
+  const save = useUi((s) => s.saveConnection);
+  const forget = useUi((s) => s.forgetConnection);
   const [effective, setEffective] = useState("");
 
   useEffect(() => {
@@ -166,7 +177,80 @@ export function ConnectionCard() {
               Use this machine
             </Button>
           )}
+          {/* Saving is separate from connecting on purpose: the pair you are
+              typing is often the one that does not work yet, and a list that
+              filled itself from every attempt would collect the typos. */}
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!endpoint.trim()}
+            onClick={() => {
+              const url = endpoint.trim().replace(/\/+$/, "");
+              save({ label: labelFor(url), url, token: token.trim() });
+              toast.success(`Saved ${labelFor(url)}`);
+            }}
+          >
+            <Star className="size-3.5" />
+            Save
+          </Button>
         </div>
+
+        {saved.length > 0 && (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Saved daemons</Label>
+            <ul className="divide-y rounded-md border">
+              {saved.map((c) => {
+                const active = c.url === effective;
+                return (
+                  <li key={c.url} className="flex items-center gap-2 px-2.5 py-2">
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-mono text-xs">{c.label}</span>
+                      <span className="ml-2 font-mono text-[10px] text-muted-foreground">
+                        {c.url}
+                      </span>
+                    </span>
+                    {active ? (
+                      <Badge variant="outline" className="text-[10px]">
+                        connected
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          // Both halves together: a token belongs to one machine,
+                          // so carrying the old one to a new URL is the failure
+                          // this list exists to remove.
+                          setEndpoint(c.url);
+                          setToken(c.token);
+                          apply(c.url, c.token);
+                        }}
+                      >
+                        Connect
+                      </Button>
+                    )}
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-7 text-muted-foreground hover:text-destructive"
+                      title="Forget this daemon"
+                      aria-label={`Forget ${c.label}`}
+                      onClick={() => forget(c.url)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="text-[11px] text-muted-foreground">
+              Stored in this browser, tokens included — the same place the active
+              one already lives, so this adds reach rather than exposure. Forget
+              an entry to remove it; it does not touch the daemon.
+            </p>
+          </div>
+        )}
 
         {/* Said where the decision is made, not in a document nobody opens. The
             daemon holds the docker socket, so this is not a detail about
@@ -190,4 +274,18 @@ export function ConnectionCard() {
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * What to call a daemon in the list: its host, which is what actually
+ * distinguishes two of them. The port joins in only when there are two on one
+ * host, which is exactly the case a bare hostname would render ambiguous.
+ */
+function labelFor(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.port && u.port !== "80" && u.port !== "443" ? `${u.hostname}:${u.port}` : u.hostname;
+  } catch {
+    return url;
+  }
 }
