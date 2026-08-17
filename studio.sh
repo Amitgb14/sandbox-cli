@@ -46,7 +46,17 @@
 #   sh studio.sh up --api-url http://10.0.0.5:8787
 #
 # or set the same two values in the UI at Settings → Connection, which is what
-# lets one Studio reach several boxes.
+# lets one Studio reach several boxes, and which can save more than one.
+#
+# Two things bite when the daemon is on another machine, in this order:
+#
+#   1. the port is closed. A server distribution denies inbound by default —
+#      `firewall-cmd --add-port=8787/tcp` or `ufw allow ... 8787`. Check it with
+#      `curl http://<box>:8787/v1/health`, which needs no token.
+#   2. the origin. `--port` here is the port the *browser's* Studio runs on: the
+#      daemon builds its CORS origins from it. Mismatch it and the network works
+#      while every request is refused on the origin check, which looks exactly
+#      like the daemon being down.
 #
 # There is no TLS here. The safe shape is to leave the daemon on loopback and
 # tunnel to it — `ssh -N -L 8787:127.0.0.1:8787 you@box`, then use

@@ -11,6 +11,8 @@ version is tagged.
 
 ## Unreleased
 
+## 0.0.1beta.15 — 2026-08-16
+
 ### Added
 
 - **Studio remembers the daemons you switch between.** Settings → Connection

@@ -139,11 +139,32 @@ sh studio.sh up --api-url http://localhost:8787
 ```
 
 `--bind 10.0.0.5` exposes the daemon directly instead, passing `-allow-host` for
-that address because the daemon answers to loopback names only. Use it on a
-private network you trust: **there is no TLS**, so the token and everything it
+that address because the daemon answers to loopback names only. `--bind 0.0.0.0`
+works too and allows this machine's own reachable names — a wildcard is not an
+address any browser dials, so it is not one the guard can be given. Use either on
+a private network you trust: **there is no TLS**, so the token and everything it
 protects cross the network in cleartext. The daemon *refuses* to bind a routable
 address with no token at all — it holds the docker socket, so an unauthenticated
 routable port is root on that machine for whoever reaches it.
+
+Two things bite in that order, and both look like the daemon being broken:
+
+```sh
+# 1. the port. A server distribution denies inbound by default.
+sudo firewall-cmd --permanent --add-port=8787/tcp && sudo firewall-cmd --reload
+sudo ufw allow from 10.0.0.0/24 to any port 8787 proto tcp   # Debian/Ubuntu
+
+# check from the machine with the browser — /health needs no token, so a JSON
+# reply means bind, firewall and routing are all correct
+curl http://10.0.0.5:8787/v1/health
+```
+
+**2. the origin.** `--port` on the *daemon* is the port your browser's Studio
+runs on, not a UI on that machine: the daemon builds its allowed CORS origins
+from it. Start it with `--port 3199` if that is where your Studio is, or the
+network will work while every request is refused on the origin check — Studio
+falls back to fixtures and the header badge says so, which reads like an outage.
+The daemon logs the refusal, so `~/.config/sandbox/studio/api.log` names it.
 
 **Or set it in the browser.** Settings → Connection takes a Daemon URL and a
 Token, kept in the browser, which is what lets one Studio reach several boxes. A
@@ -157,6 +178,14 @@ Every path on screen is then the remote machine's — the repository picker, the
 file browser, the worktree paths, the clone target — and a repository added by
 path names a directory on *that* machine. Which is also why the folder picker
 runs in the daemon.
+
+So is the configuration. The egress posture, the profile and the resolved
+allowlist belong to the daemon: a launch may add domains and may never widen the
+posture, so the Launch screen *reports* what that machine will do rather than
+offering a control it does not have. Change it in that machine's own
+`~/.config/sandbox/config.yaml` (or the `--config` file it was started with) and
+restart the daemon. The engine and version in the header badge are the quickest
+way to be sure which machine you are looking at.
 
 **Uninstalling needs no copy of `studio.sh`.** The installer that put it there
 takes it away, including the halves that are *running*:
