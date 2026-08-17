@@ -325,9 +325,16 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
   {
     title: "Or bind it to the network, knowing what that costs",
     side: "daemon",
-    code: "sh studio.sh up --api-only --bind 10.0.0.5",
-    body: "Passes -allow-host for that address, because the daemon answers to loopback names only and refuses anything else by design. Use it on a private network you already trust.",
+    code: "sh studio.sh up --api-only --bind 10.0.0.5 --port 3100",
+    body: "Passes -allow-host for that address, because the daemon answers to loopback names only and refuses anything else by design. `--bind 0.0.0.0` works too and allows the machine's own reachable names, since a wildcard is not an address any browser dials. `--port` is not about a UI on this machine: it is the port your *browser's* Studio runs on, and the daemon builds its allowed CORS origins from it. Get it wrong and the network works while every request is refused on the origin check — the UI falls back to fixtures and the header says so, which looks like the daemon being down.",
     warn: "There is no TLS here: the token and everything it protects cross the network in cleartext. The daemon refuses to bind a routable address with no token at all — an unauthenticated port on a process holding the docker socket is root on that machine for whoever reaches it.",
+  },
+  {
+    title: "Open the port, and check it from the other machine",
+    side: "daemon",
+    code: "sudo firewall-cmd --permanent --add-port=8787/tcp && sudo firewall-cmd --reload",
+    body: "A server distribution denies inbound by default, and the failure is quiet from the browser's side. Test with curl before touching Settings — /health is the one endpoint that answers without a token, so a JSON reply means the network, the bind and the firewall are all correct and anything left is authentication. On Debian and Ubuntu it is ufw: `sudo ufw allow from 10.0.0.0/24 to any port 8787 proto tcp`, scoped to your subnet rather than the world, since there is no TLS on this.",
+    expect: "curl http://10.0.0.5:8787/v1/health answering from the machine with the browser.",
   },
   {
     title: "On your machine: the browser half only",
@@ -339,12 +346,17 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
   {
     title: "Or set it in the UI, which is what lets one Studio reach several boxes",
     side: "browser",
-    body: "Settings → Connection takes a Daemon URL and a Token and keeps them in the browser. A value typed there outranks the one the UI was started with — the opposite of how the token behaves, and deliberately: an injected token is this server saying what it is running with, while an injected URL is only a default location. Changing it refetches everything, because what is on screen came from a different machine.",
+    body: "Settings → Connection takes a Daemon URL and a Token and keeps them in the browser. A value typed there outranks the one the UI was started with — the opposite of how the token behaves, and deliberately: an injected token is this server saying what it is running with, while an injected URL is only a default location. Changing it refetches everything, because what is on screen came from a different machine. Connections you use twice can be saved: the list keeps each daemon's URL and its own token together, because a token belongs to exactly one machine — and connecting applies both halves at once, so the pairing cannot drift.",
     expect: "The header's live badge, and the daemon's own version and engine on the Settings screen.",
   },
   {
     title: "Remember whose filesystem you are looking at",
     side: "browser",
     body: "Every path on screen is the remote machine's: the repository picker, the file browser, the worktree paths, the clone target. They will not exist locally, and a repository added by path has to name a directory on that machine rather than on yours — which is also why the folder picker runs in the daemon.",
+  },
+  {
+    title: "And whose configuration you are reading",
+    side: "browser",
+    body: "The egress posture, the profile and the resolved allowlist all belong to the daemon, not to the launch: a request may add domains and may never widen the posture, so the Launch screen reports what that machine will do rather than offering a control it does not have. Change it where the daemon reads its config — its own ~/.config/sandbox/config.yaml, or the file passed to --config — and restart it. The engine and version in the header badge are the quickest way to be sure which machine you are looking at.",
   },
 ] as const;
