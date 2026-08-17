@@ -230,7 +230,10 @@ var providerMu sync.RWMutex
 func runningProviders(s *Server) map[string]string {
 	providerMu.RLock()
 	defer providerMu.RUnlock()
-	return s.Session.Cfg.Providers
+	// ProbeHosts, so an agent pointed at a gateway is probed at the gateway — the
+	// vendor being down is the case a gateway survives, and probing the vendor
+	// would route away from the agent that still worked.
+	return s.Session.Cfg.ProbeHosts()
 }
 
 func setRunningProviders(s *Server, m map[string]string) {

@@ -11,6 +11,34 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
+  sandbox-cli never supplies the key.** `gateway:` in your own config names the
+  agents, the endpoint, and the *variable* the credential lives in — a name, not
+  a value. There is no bundled account and no fallback: a run configured for a
+  gateway with nothing to read is **refused**, because the alternatives are both
+  silent and both wrong, reaching the gateway unauthenticated or falling through
+  to the vendor on the agent's own credential.
+
+  Four things have to agree or the run is worse than unconfigured, so they are
+  resolved together: the base URL, the key variable (forwarded by name, exactly
+  like every other credential — its value never reaches the rendered argv), the
+  probe host, and the egress allowlist, which gains the gateway's domain because
+  otherwise the run cannot reach the thing it was configured to use and fails as
+  a connection error naming nothing.
+
+  Two refusals carry the design. An agent that speaks its **vendor's own API
+  shape** — claude, gemini, droid — is refused rather than pointed at an
+  OpenAI-shaped endpoint, since that failure lands inside a container as a parse
+  error blamed on the model; the table lists only agents where the wiring is
+  known, and marks codex unverified rather than claiming it. And a plaintext
+  `base_url` is refused: the credential and every prompt cross that connection.
+
+  `gateway:` is **user-config only**. It names the host every prompt travels
+  through and the credential that pays for it — `providers:`'s three objections
+  at once, plus one of its own, since a gateway reads the work.
+
 ### Changed
 
 - **The site's Studio setup answers two questions it used to leave to a bad

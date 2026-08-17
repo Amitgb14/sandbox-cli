@@ -485,7 +485,9 @@ func configuredProviders(rf *runFlags) map[string]string {
 	if err != nil {
 		return nil
 	}
-	return cfg.Providers
+	// ProbeHosts rather than Providers: an agent pointed at a gateway is not
+	// talking to the vendor, so the vendor's health is not evidence about it.
+	return cfg.ProbeHosts()
 }
 
 // probeUnlessDryRun answers the availability question, or declines to ask it.

@@ -79,6 +79,26 @@ type Config struct {
 	// not choose. See trust.go.
 	Providers map[string]string `yaml:"providers"`
 
+	// Gateway points agents at an OpenAI-compatible gateway — OpenRouter, or
+	// anything serving the same shape — instead of the vendor they were built
+	// for. Empty means every agent talks to its own provider, which is the
+	// default and what happened before this existed.
+	//
+	// **It names a key, and never carries one.** sandbox-cli has no bundled
+	// account and no fallback credential: `key_env` is a variable *name*, and the
+	// value arrives the way every other credential does — forwarded from the
+	// user's environment if set, or resolved by the broker from `secrets:`. A run
+	// configured for a gateway with nothing to read is refused rather than
+	// quietly falling back to the vendor with the vendor's credentials, because
+	// that failure would spend the wrong account and say nothing.
+	//
+	// **User-config only**, and for all three of the reasons `providers:` is:
+	// it decides which host this machine talks to, which credential is in reach,
+	// and — since a gateway sees every prompt in plaintext — who reads the work.
+	// A repository that could set this could route a run's conversation through a
+	// host of its choosing. See trust.go.
+	Gateway *GatewaySpec `yaml:"gateway"`
+
 	// Profile selects the security profile: "dev" (interactive, warns) or "prod"
 	// (unattended, refuses). See profile.go. A project config may raise this and
 	// never lower it, which is what stops a hostile repository dropping a run out
@@ -99,6 +119,29 @@ type Config struct {
 	// on both sides. Tri-state, same reasoning: it is the one default that
 	// reaches a host path outside the workspace.
 	Sync *bool `yaml:"sync"`
+}
+
+// GatewaySpec is the OpenAI-compatible gateway an agent talks to instead of its
+// vendor.
+type GatewaySpec struct {
+	// Agents are the agent names to point at it. Empty means none: this is opt-in
+	// per agent rather than a mode, because most fleets mix an agent that goes
+	// through a gateway with one that does not.
+	Agents []string `yaml:"agents"`
+
+	// KeyEnv is the *name* of the variable holding the gateway credential. The
+	// value is never written here and never stored by sandbox-cli — see the note
+	// on Config.Gateway. Defaults to OPENROUTER_API_KEY.
+	KeyEnv string `yaml:"key_env"`
+
+	// BaseURL is the endpoint. Defaults to OpenRouter's; a self-hosted gateway of
+	// the same shape is the reason it is a field rather than a constant.
+	BaseURL string `yaml:"base_url"`
+
+	// Host is what routing probes for these agents, and what an egress allowlist
+	// must permit. Derived from BaseURL when empty, because the two disagreeing
+	// is a run that reaches a gateway whose health was measured somewhere else.
+	Host string `yaml:"host"`
 }
 
 // SecretSpec is a brokered credential: a reference to a value resolved at run

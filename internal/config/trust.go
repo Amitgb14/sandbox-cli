@@ -70,6 +70,13 @@ func restrictedProjectKeys(src, inherited Config) []string {
 		// a request from this machine at a host the repository named.
 		add("providers")
 	}
+	if src.Gateway != nil {
+		// Points an agent's API calls at a host this config names, authenticated
+		// with a credential this config names — and a gateway sees every prompt in
+		// plaintext. All three of `providers:`'s objections at once, plus one of
+		// its own: a repository that could set this could read the work.
+		add("gateway")
+	}
 	if len(src.Routing) > 0 {
 		// Chooses which agent runs, and with it which persisted login and which
 		// forwarded variables are in reach. A repository that could set this could

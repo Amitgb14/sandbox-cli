@@ -322,6 +322,35 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		}
 	}
 
+	// The gateway, if this agent is pointed at one. Resolved before the
+	// environment is built because it contributes to it — and refused here
+	// rather than in the container, where "the agent could not parse a response"
+	// is what a wrong protocol looks like.
+	gateway, err := cfg.GatewayFor(opts.Agent)
+	if err != nil {
+		return runtime.RunSpec{}, err
+	}
+	if gateway != nil {
+		secrets, serr := secretSources(cfg, opts)
+		if serr != nil {
+			return runtime.RunSpec{}, serr
+		}
+		if _, brokered := secrets[gateway.KeyEnv]; !brokered {
+			if _, set := os.LookupEnv(gateway.KeyEnv); !set {
+				// The rule this feature is built around. sandbox-cli ships no key
+				// and holds no account, so with nothing to read the run would reach
+				// the gateway unauthenticated — or worse, fall through to the
+				// vendor on the agent's own credential, spending the wrong account
+				// against the wrong endpoint and saying nothing.
+				return runtime.RunSpec{}, fmt.Errorf(
+					"gateway is configured for %s but %s is not set: sandbox-cli never supplies this key, it only "+
+						"carries yours.\n"+
+						"  export %s=… before the run, or declare it under secrets: so it is resolved per run",
+					opts.Agent, gateway.KeyEnv, gateway.KeyEnv)
+			}
+		}
+	}
+
 	env := map[string]string{}
 	for k, v := range cfg.Env {
 		if isReservedEnv(k) {
@@ -338,6 +367,19 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		}
 		seen[n] = true
 		envNames = append(envNames, n)
+	}
+
+	// The gateway's own two variables. The base URL is a setting and is written
+	// in; the key is a *name*, forwarded from the host exactly like any other
+	// credential — so its value never passes through this function, and never
+	// appears in the argv BuildArgs renders.
+	if gateway != nil {
+		for _, kv := range gateway.Env("") {
+			if k, v, ok := strings.Cut(kv, "="); ok && !isReservedEnv(k) {
+				env[k] = v
+			}
+		}
+		addName(gateway.KeyEnv)
 	}
 
 	// Config env_allow: forward host value only if present.
@@ -447,6 +489,14 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	}
 
 	egress := cfg.Network.EgressDomains()
+	// A gateway the allowlist does not permit is a run that cannot reach the
+	// thing it was configured to use — and it would fail as a connection error
+	// from the agent, not as anything naming the allowlist. Added rather than
+	// required of the user, because the config that named the gateway is the same
+	// config the domain would be typed into.
+	if gateway != nil && gateway.Host != "" {
+		egress = config.DedupeDomains(append(egress, gateway.Host))
+	}
 	allowlist := cfg.Network.Mode == "allowlist" || len(opts.Allow) > 0
 	if len(opts.Allow) > 0 {
 		// --allow on its own switches the allowlist on, and the baseline comes with
