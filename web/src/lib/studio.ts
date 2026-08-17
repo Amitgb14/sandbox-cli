@@ -355,14 +355,8 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
   {
     title: "Or bind it to the network, knowing what that costs",
     side: "daemon",
-    code: [
-      "# the whole invocation, in the order the flags matter",
-      "sh studio.sh up --api-only --bind 10.0.0.5 --port 3199",
-      "",
-      "# built from source above? --no-install keeps your binaries",
-      "sh studio.sh up --api-only --no-install --bind 10.0.0.5 --port 3199",
-    ].join("\n"),
-    body: "Four flags, and each one answers a different question: --api-only leaves the browser half to your own machine, --no-install stops the script replacing binaries you built, --bind is the address the daemon listens on, and --port is where *your* Studio runs so the daemon can allow that origin. Passing -allow-host for the bound address is automatic, because the daemon answers to loopback names only and refuses anything else by design. `--bind 0.0.0.0` works too and allows the machine's own reachable names, since a wildcard is not an address any browser dials. `--port` is not about a UI on this machine: it is the port your *browser's* Studio runs on, and the daemon builds its allowed CORS origins from it. Get it wrong and the network works while every request is refused on the origin check — the UI falls back to fixtures and the header says so, which looks like the daemon being down.",
+    code: "sh studio.sh up --api-only --bind 10.0.0.5",
+    body: "Passes -allow-host for that address, because the daemon answers to loopback names only and refuses anything else by design. `--bind 0.0.0.0` works too and allows the machine's own reachable names, since a wildcard is not an address any browser dials. Two flags to add when they apply, and both fail quietly if you leave them out: `--no-install` if you built the binaries from source, or the script replaces them with the last release; and `--port` if your Studio runs anywhere other than 3100, because the daemon builds its allowed CORS origins from it — mismatch it and the network works while every request is refused on the origin check, so Studio falls back to fixtures and reads like an outage.",
     warn: "There is no TLS here: the token and everything it protects cross the network in cleartext. The daemon refuses to bind a routable address with no token at all — an unauthenticated port on a process holding the docker socket is root on that machine for whoever reaches it.",
   },
   {
