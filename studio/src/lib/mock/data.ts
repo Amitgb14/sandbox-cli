@@ -619,6 +619,11 @@ export const MOCK_DOCTOR: DoctorCheck[] = [
 // ---------------------------------------------------------------------------
 
 export const MOCK_DAEMON: DaemonInfo = {
+  // Fixture mode has a posture too. Without one the Launch screen's egress badge
+  // renders "…" forever and the preview falls back to whatever the form was
+  // initialised with, which is the sort of quiet half-answer the live/fixture
+  // badge exists to prevent.
+  egress: { mode: "allowlist" as const, baseline: true, domains: BASELINE_EGRESS.length },
   version: "0.9.2",
   engine: "docker",
   engineVersion: "27.4.0",

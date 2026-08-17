@@ -45,6 +45,8 @@ import type {
   SessionSummary,
   SessionTranscript,
   ProbeHistory,
+  DaemonEgress,
+  NetworkMode,
 } from "@/lib/types";
 
 /**
@@ -581,18 +583,32 @@ export const api = {
  * real preview — a form that guessed at the full rule set would eventually
  * disagree with the thing that actually enforces it.
  */
-export function localPreview(req: LaunchRequest): LaunchPreview {
+export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchPreview {
   const refusals: string[] = [];
   const warnings: string[] = [];
 
-  const allow = req.network.baseline
-    ? [...BASELINE_EGRESS, ...req.network.allow]
-    : [...req.network.allow];
+  // The posture comes from the *daemon*, because a request cannot set it: mode
+  // and baseline are its config, and `req.network.allow` holds only the extra
+  // domains this launch adds. Computing the list from the form's own copy of
+  // baseline was how a daemon with `baseline: false` and its own configured
+  // domains produced an empty allowlist here — and then a refusal, and a Launch
+  // button disabled with no control that could change it.
+  const mode = egress?.mode ?? req.network.mode;
+  const baseline = egress?.baseline ?? req.network.baseline;
+  const configured = egress?.allow ?? (baseline ? BASELINE_EGRESS : []);
+  const allow = [...new Set([...configured, ...req.network.allow])];
+
+  // What the run will *actually* get. Adding domains to an unrestricted daemon
+  // switches the allowlist on for that run — the one narrowing a request may
+  // make — so a preview that echoed the daemon's mode would describe open egress
+  // for a container that is about to be firewalled.
+  const effectiveMode: NetworkMode =
+    mode === "default" && req.network.allow.length > 0 ? "allowlist" : mode;
 
   // The edge that matters is the empty one: the firewall is wired only when
   // there are domains to permit, so an allowlist that resolved to nothing is
   // refused rather than handed back as a container with no filtering at all.
-  if (req.network.mode === "allowlist" && allow.length === 0) {
+  if (mode === "allowlist" && allow.length === 0) {
     refusals.push(
       "An allowlist that resolved to no domains is refused: the firewall is only wired when there is something to permit, so this would run with no filtering at all. Use network mode “none” to ask to reach nothing.",
     );
@@ -604,9 +620,14 @@ export function localPreview(req: LaunchRequest): LaunchPreview {
         "prod does not mount the persisted agent HOME — the default auth path is an OAuth refresh token the agent can read, and prod's answer is that there is nothing there to steal.",
       );
     }
-    if (req.network.baseline) {
-      refusals.push(
-        "prod requires network.baseline to be false: the baseline contains github.com, a write endpoint and so an exfiltration channel for any token the agent holds.",
+    // A *warning*, not a refusal, and the difference is who can act on it. The
+    // baseline is the daemon's config; a launch cannot change it, and
+    // ValidateProfile has already asserted it against the profile the daemon
+    // actually runs. Refusing here disabled Launch with no control that could
+    // satisfy the rule — a dead end rather than a check.
+    if (baseline) {
+      warnings.push(
+        "prod expects network.baseline to be false: the baseline contains github.com, a write endpoint and so an exfiltration channel for any token the agent holds. It is set where the daemon reads its config.",
       );
     }
     if (req.sync) {
@@ -646,7 +667,7 @@ export function localPreview(req: LaunchRequest): LaunchPreview {
     );
   }
 
-  if (req.network.mode === "allowlist") {
+  if (effectiveMode === "allowlist") {
     warnings.push(
       "The allowlist decides on the hostname when the in-container proxy is present, and on the resolved address when it is not. The audit line records which regime was *requested*.",
     );
@@ -664,14 +685,19 @@ export function localPreview(req: LaunchRequest): LaunchPreview {
   ];
 
   return {
-    argv: previewArgv(req, allow),
+    argv: previewArgv(req, allow, effectiveMode, baseline),
     hostPathsInReach,
     refusals,
     warnings,
   };
 }
 
-function previewArgv(req: LaunchRequest, allow: string[]): string[] {
+function previewArgv(
+  req: LaunchRequest,
+  allow: string[],
+  effectiveMode: NetworkMode,
+  baseline: boolean,
+): string[] {
   const branch = req.worktree ?? "main";
   const repoName = req.workspace.split("/").filter(Boolean).pop() ?? "repo";
   return buildArgv({
@@ -687,11 +713,11 @@ function previewArgv(req: LaunchRequest, allow: string[]): string[] {
     profile: req.profile,
     workspace: req.workspace,
     network: {
-      mode: req.network.mode,
-      baseline: req.network.baseline,
+      mode: effectiveMode,
+      baseline,
       allow,
-      networkName: req.network.mode === "allowlist" ? "sandbox-net" : undefined,
-      enforcement: req.network.mode === "allowlist" ? "name" : null,
+      networkName: effectiveMode === "allowlist" ? "sandbox-net" : undefined,
+      enforcement: effectiveMode === "allowlist" ? "name" : null,
     },
     security: {
       ...MOCK_RUNS[0].security,

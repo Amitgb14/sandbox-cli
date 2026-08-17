@@ -24,7 +24,10 @@ version is tagged.
   the paste being removed. They live in this browser's storage, where the active
   token already lives, so it widens reach rather than exposure. The active
   connection itself stays where it was — read while a request is built, not while
-  a component renders.
+  a component renders. Typing a different URL clears the token box, because a
+  token belongs to exactly one daemon: the pre-filled local token paired with a
+  remote URL was a saved row that would have sent one machine's credential to
+  another.
 
 - **Studio's Routing screen answers with pictures now.** Four, because the
   questions are four and one view answering all of them answers none well. A
@@ -335,7 +338,18 @@ version is tagged.
   a read-only reading of what the daemon resolved, reported by `/v1/health`
   (`egress`), with a line saying where to change it — and the extra-domains field
   stays, since adding domains is the one network move a request may make. On an
-  unrestricted daemon that field says plainly that it *tightens* the run.
+  unrestricted daemon that field says plainly that it *tightens* the run, and the
+  preview says so too rather than describing the open egress the daemon's mode
+  would suggest.
+
+  The tighten-only rule is now **enforced by the daemon** rather than assumed of
+  the client: on a daemon configured `mode: none`, `allow` is refused, because
+  `BuildSpec` reads a non-empty allowlist as switching networking *on* and would
+  promote the container off `--network none` — a request widening a posture the
+  operator narrowed. `/v1/health` also reports the domain *count* to everyone and
+  the names only to an authenticated caller: that endpoint answers without a
+  token on purpose, and a list of internal hostnames must not be readable by
+  anything that can open a socket.
 
 - **`studio.sh status` and `down` could not see the daemon on Linux.** The
   liveness check read `ps -o comm=`, which **truncates to 15 characters** there —

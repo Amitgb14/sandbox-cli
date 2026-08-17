@@ -112,7 +112,17 @@ export function ConnectionCard() {
             <Input
               id="endpoint"
               value={endpoint}
-              onChange={(e) => setEndpoint(e.target.value)}
+              onChange={(e) => {
+                // Changing the machine clears the token, because a token belongs
+                // to exactly one daemon. Without this the common flow — connected
+                // locally, so the box is pre-filled with *this* machine's token,
+                // then type a remote URL and press Save — stored the local token
+                // against the remote URL, and connecting to that entry would send
+                // one machine's bearer token to another. Applying both halves
+                // together cannot help when both halves were wrong.
+                if (e.target.value.trim() !== endpoint.trim()) setToken("");
+                setEndpoint(e.target.value);
+              }}
               onKeyDown={(e) => e.key === "Enter" && apply(endpoint, token)}
               placeholder="http://10.0.0.5:8787"
               className="font-mono text-xs"
@@ -183,7 +193,10 @@ export function ConnectionCard() {
           <Button
             size="sm"
             variant="ghost"
-            disabled={!endpoint.trim()}
+            // A URL with no token is not a connection anyone can use, and saving
+            // one would put a row in the list that fails the moment it is
+            // clicked.
+            disabled={!endpoint.trim() || !token.trim()}
             onClick={() => {
               const url = endpoint.trim().replace(/\/+$/, "");
               save({ label: labelFor(url), url, token: token.trim() });

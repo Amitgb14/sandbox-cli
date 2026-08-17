@@ -42,7 +42,6 @@ import { useUi } from "@/lib/store";
 import type {
   AgentName,
   LaunchRequest,
-  NetworkMode,
   Profile,
   SessionSummary,} from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -120,20 +119,6 @@ export function LaunchForm() {
   // scoped to, else the one the daemon was started in, else the first that can
   // actually be read. Only while nothing is chosen — this must never move a
   // selection out from under someone mid-form.
-  // The form's own copy of the posture follows the daemon's, because the preview
-  // and the refusals below read it — and it is not a choice. Before this it was
-  // initialised to "allowlist" and never moved, so an unrestricted daemon got a
-  // preview describing a firewall it does not program, and a `none` daemon got
-  // one describing egress it will not have.
-  useEffect(() => {
-    if (!egress) return;
-    setReq((r) =>
-      r.network.mode === egress.mode && r.network.baseline === egress.baseline
-        ? r
-        : { ...r, network: { ...r.network, mode: egress.mode as NetworkMode, baseline: egress.baseline } },
-    );
-  }, [egress]);
-
   useEffect(() => {
     if (!projects?.length) return;
     setReq((prev) => {
@@ -212,7 +197,7 @@ export function LaunchForm() {
     [req, worktreeMode, newBranch],
   );
 
-  const preview = useMemo(() => localPreview(resolved), [resolved]);
+  const preview = useMemo(() => localPreview(resolved, egress), [resolved, egress]);
   const blocked = preview.refusals.length > 0;
 
   const agentMeta = agents?.find((a) => a.name === req.agent);
@@ -655,7 +640,7 @@ export function LaunchForm() {
               </Badge>
               {egress?.mode === "allowlist" && (
                 <span className="text-xs text-muted-foreground">
-                  {egress.allow?.length ?? 0} domains
+                  {egress.domains ?? egress.allow?.length ?? 0} domains
                   {egress.baseline ? ", baseline included" : ", baseline off"}
                 </span>
               )}
@@ -680,6 +665,12 @@ export function LaunchForm() {
               was started with) and restart it.
             </Hint>
 
+            {/* Not offered on a daemon configured to reach nothing. `allow` is
+                read by BuildSpec as switching the allowlist *on*, which promotes
+                the container off `--network none` — so this field there would
+                widen the posture rather than narrow it, and the daemon refuses
+                it for exactly that reason. */}
+            {egress?.mode !== "none" && (
             <div className="space-y-1.5 pt-1">
               <Label htmlFor="allow" className="text-xs">
                 Extra domains
@@ -696,6 +687,7 @@ export function LaunchForm() {
                   : "Resolved fresh per connection by the in-container proxy, which decides on the hostname read from the TLS SNI, a CONNECT, or a Host header — so a host sharing an allowlisted address does not ride in on it."}
               </Hint>
             </div>
+            )}
           </Field>
 
           <Separator />

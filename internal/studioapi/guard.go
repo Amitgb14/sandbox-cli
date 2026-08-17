@@ -98,6 +98,22 @@ func (s *Server) authorized(r *http.Request) bool {
 	if s.Token == "" || r.URL.Path == healthPath {
 		return true
 	}
+	return s.tokenMatches(r)
+}
+
+// tokenMatches compares the presented bearer token against this server's,
+// **without** the /health exemption above.
+//
+// Held apart because "this request is allowed" and "this caller proved who it
+// is" stop being the same question at exactly one endpoint. /health answers
+// unauthenticated so a client with no token can still be told it needs one — and
+// that is precisely why anything sensitive it might carry has to ask this
+// instead: an exemption meant to make an error message possible must not become
+// a way to read the configuration.
+func (s *Server) tokenMatches(r *http.Request) bool {
+	if s.Token == "" {
+		return false
+	}
 	presented := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if presented == "" && r.Method == http.MethodGet && isWebSocketUpgrade(r) {
 		// The browser WebSocket API cannot set request headers, so a token-protected

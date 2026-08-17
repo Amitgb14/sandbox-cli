@@ -24,9 +24,16 @@ type EgressPosture struct {
 	Mode string `json:"mode"`
 	// Baseline reports whether the built-in domains are part of an allowlist.
 	Baseline bool `json:"baseline"`
+	// Domains is how many the allowlist resolved to. Always present, because a
+	// count discloses nothing about which hosts and is most of what a screen
+	// renders anyway.
+	Domains int `json:"domains,omitempty"`
+
 	// Allow is the resolved list — baseline ∪ configured — which is what the
 	// firewall is actually programmed with, rather than the configured half a
 	// reader would have to add the other half to.
+	//
+	// Present only for an authenticated caller: see egressPosture.
 	Allow []string `json:"allow,omitempty"`
 }
 
