@@ -11,6 +11,17 @@ version is tagged.
 
 ## Unreleased
 
+### Changed
+
+- **The site's Studio setup answers two questions it used to leave to a bad
+  afternoon.** The remote track now starts with installing the two binaries on
+  the Linux machine — they are two, not one with a subcommand, and `make build`
+  produces only the CLI — including the from-source path and the `--no-install`
+  flag that stops the script replacing your build with the last release. And both
+  the default and remote tracks now say how to turn the egress allowlist off:
+  `network: mode: default` in the daemon's *own* config, why a project
+  `.sandbox.yaml` cannot do it, and what it costs.
+
 ## 0.0.1beta.15 — 2026-08-16
 
 ### Added
