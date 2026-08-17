@@ -205,7 +205,7 @@ func (s *Server) StartProbing(ctx context.Context, interval time.Duration) {
 func (s *Server) sampleProviders(ctx context.Context) {
 	// force=true: the cached answer is for the screen, and recording the same
 	// thirty-second-old reading twice would draw a flat strip out of one probe.
-	for _, p := range probeAll(ctx, runningProviders(s), true) {
+	for _, p := range probeAll(ctx, runningProviders(s), gatewayHosts(s), true) {
 		if !p.Probed {
 			// Nothing was asked, so there is nothing to record. An unprobeable
 			// agent must not accumulate a history of implied uptime.
@@ -228,7 +228,7 @@ func (s *Server) handleProbeHistory(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 
 	out := make([]ProviderHistory, 0, 4)
-	for _, p := range probeAll(r.Context(), runningProviders(s), false) {
+	for _, p := range probeAll(r.Context(), runningProviders(s), gatewayHosts(s), false) {
 		if !p.Routable {
 			continue
 		}

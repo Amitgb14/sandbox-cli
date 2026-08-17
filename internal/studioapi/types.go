@@ -206,6 +206,17 @@ type ProviderStatus struct {
 	// right answer for anyone pointing an agent at a proxy.
 	Overridden bool `json:"overridden,omitempty"`
 
+	// Gateway is the host this agent's API calls travel *through* when it is
+	// pointed at an OpenAI-compatible gateway, and empty when it talks to its
+	// vendor directly.
+	//
+	// Reported separately from Host even though the two are equal today, because
+	// they answer different questions and will diverge: Host is what routing
+	// probes, Gateway is what the traffic goes through. A screen that had only
+	// Host would draw an agent talking to openrouter.ai as though openrouter.ai
+	// were its vendor — which is exactly the thing the picture is for.
+	Gateway string `json:"gateway,omitempty"`
+
 	// Managed says the override came from the file Studio writes, rather than
 	// from the user's own config.yaml — which outranks it and cannot be edited
 	// from here.
