@@ -13,6 +13,38 @@ version is tagged.
 
 ### Added
 
+- **The Routing screen answers the question it is opened with: if I launch now,
+  what runs?** Each configured chain is resolved against the probe results on the
+  same page — the join a reader previously had to do in their head, between a
+  provider list saying claude is down and a chain list saying claude falls back to
+  codex. It follows the daemon's own rule, including the part that looks like a
+  bug and is not: **unprobed is not down**, so an agent with no probeable host is
+  taken rather than skipped, because skipping it would act on a measurement nobody
+  made. A chain where nothing answers says *refused*, which is what a launch would
+  do.
+
+- **Why chains fired, and who ends up doing the work.** The reasons are ranked
+  from the run log in the words the runs recorded, because grouping them into
+  categories would be this screen inventing a taxonomy the audit line does not
+  have — and "provider answered 503" and "exited 1 having changed nothing" lead to
+  different actions. Beside it, asked-for versus ran per agent: the gap is the
+  only direct measure of what routing is doing to a setup, and an agent running
+  work it was never asked for is doing it under its own login and its own bill.
+
+### Fixed
+
+- **The Routing screen reported every Studio run as rescued.** A detached run's
+  audit line is written when the container *launches* — there is no exit code to
+  wait for — so it carries 0 whatever happens next, and every Studio run is
+  detached. Reading that 0 as success made the rescue rate 100% by construction
+  and the trend's still-failed series unreachable. An episode whose last attempt
+  was detached now reports its outcome as **not recorded**, with its own counter,
+  its own band on the chart and a row badge saying so. It is the same rule the
+  rest of the tool keeps about absent readings: a missing measurement is not a
+  good one, and `sandbox-cli list` is where a detached run's fate actually lives.
+
+### Added
+
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
   sandbox-cli never supplies the key.** `gateway:` in your own config names the
   agents, the endpoint, and the *variable* the credential lives in — a name, not

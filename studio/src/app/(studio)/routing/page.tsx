@@ -32,7 +32,10 @@ import { PageHeader } from "@/components/common/page-header";
 import { ChainGraph } from "@/components/routing/chain-graph";
 import { EpisodeFlow } from "@/components/routing/episode-flow";
 import { FailoverTrend } from "@/components/routing/failover-trend";
+import { FailoverReasons } from "@/components/routing/reasons";
 import { UptimeStrip } from "@/components/routing/uptime-strip";
+import { WhatRunsNow } from "@/components/routing/what-runs-now";
+import { Workload } from "@/components/routing/workload";
 import {
   useAgents,
   useAudit,
@@ -40,7 +43,14 @@ import {
   useRouting,
   useSetProviders,
 } from "@/lib/api/queries";
-import { chainEdges, episodesFrom, failoverDays, routeStats } from "@/lib/routing-history";
+import {
+  agentWorkload,
+  chainEdges,
+  episodesFrom,
+  failoverDays,
+  resolveNow,
+  routeStats,
+} from "@/lib/routing-history";
 import { useUi } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { ProviderStatus } from "@/lib/types";
@@ -88,6 +98,11 @@ export default function RoutingPage() {
     [routingPrefs, episodes],
   );
   const days = useMemo(() => failoverDays(episodes), [episodes]);
+  const outcomes = useMemo(
+    () => resolveNow(routingPrefs, providers ?? []),
+    [routingPrefs, providers],
+  );
+  const workload = useMemo(() => agentWorkload(episodes), [episodes]);
 
   return (
     <div className="space-y-5">
@@ -122,6 +137,23 @@ export default function RoutingPage() {
           </p>
         </div>
       )}
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Play className="size-4" />
+            If you launched now
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Each chain resolved against the probe results below — the join this page used to
+            leave you to do in your head. A skip costs nothing: it happens before a container
+            exists.
+          </p>
+          <WhatRunsNow outcomes={outcomes} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-3">
@@ -218,7 +250,7 @@ export default function RoutingPage() {
             </p>
           ) : (
             <>
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-4">
                 <Stat label="Chains fired" value={stats.switched} />
                 <Stat
                   label="Rescued"
@@ -232,6 +264,11 @@ export default function RoutingPage() {
                   hint="The chain fired and the work still did not land — a container spent for nothing."
                   tone={stats.wasted > 0 ? "critical" : undefined}
                 />
+                <Stat
+                  label="Not recorded"
+                  value={stats.unknown}
+                  hint="The last attempt was detached, so the log carries a placeholder exit code rather than a result — every Studio run is detached. `sandbox-cli list` has their fate."
+                />
               </div>
               {stats.from.length > 0 && (
                 <p className="text-xs text-muted-foreground">
@@ -243,6 +280,18 @@ export default function RoutingPage() {
                 </p>
               )}
               <FailoverTrend data={days} />
+
+              <div className="grid gap-4 pt-1 md:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-xs font-medium">Why they fired</p>
+                  <FailoverReasons reasons={stats.reasons} />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-medium">Asked for, and ran</p>
+                  <Workload rows={workload} />
+                </div>
+              </div>
+
               <EpisodeFlow episodes={episodes.filter((e) => e.switched).slice(0, 8)} />
             </>
           )}

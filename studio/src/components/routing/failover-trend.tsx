@@ -28,6 +28,10 @@ import type { FailoverDay } from "@/lib/routing-history";
 const config = {
   rescued: { label: "Rescued", color: "var(--status-good)" },
   failed: { label: "Still failed", color: "var(--status-critical)" },
+  // Its own band rather than folded into either: a detached run's audit line is
+  // written at launch, so its exit code is a placeholder. Colouring that as a
+  // rescue is how this chart read 100% success by construction.
+  unknown: { label: "Not recorded", color: "var(--status-idle)" },
 } satisfies ChartConfig;
 
 export function FailoverTrend({ data, height = 160 }: { data: FailoverDay[]; height?: number }) {
@@ -66,6 +70,13 @@ export function FailoverTrend({ data, height = 160 }: { data: FailoverDay[]; hei
           dataKey="failed"
           stackId="f"
           fill="var(--color-failed)"
+          stroke="var(--viz-surface)"
+          strokeWidth={1.5}
+        />
+        <Bar
+          dataKey="unknown"
+          stackId="f"
+          fill="var(--color-unknown)"
           stroke="var(--viz-surface)"
           strokeWidth={1.5}
           radius={[3, 3, 0, 0]}
