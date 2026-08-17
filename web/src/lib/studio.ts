@@ -394,7 +394,7 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
       "  mode: default",
       "YAML",
       "",
-      "sh studio.sh down && sh studio.sh up --api-only --bind 10.0.0.5 --port 3100",
+      "sh studio.sh down && sh studio.sh up --api-only --bind 10.0.0.5",
     ].join("\n"),
     body: "The default is an allowlist — default-deny with the built-in baseline — because the agent holds a real credential and github.com is a write endpoint, so open egress is an exfiltration channel for anything it can read. `mode: default` turns the firewall off for every run this daemon starts; `mode: none` is the other end, reaching nothing. It belongs in the *daemon's own* config or the file it was started with under --config, and it takes a restart. A repository's .sandbox.yaml cannot do it: a project file may tighten the posture and never loosen it, because it travels with code you did not write.",
     expect: "`curl http://10.0.0.5:8787/v1/health` reporting `\"egress\":{\"mode\":\"default\"…}`, and the Launch screen reading unrestricted.",
