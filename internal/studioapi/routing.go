@@ -49,7 +49,7 @@ var providers providerCache
 // its provider is answering, and what a chain may contain.
 func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, RoutingResponse{
-		Providers: probeAll(r.Context(), runningProviders(s), r.URL.Query().Has("refresh")),
+		Providers: probeAll(r.Context(), runningProviders(s), gatewayHosts(s), r.URL.Query().Has("refresh")),
 	})
 }
 
@@ -65,7 +65,7 @@ func overriddenFor(overrides map[string]string, agent string) bool {
 // Probes run concurrently: they are independent network calls with a three
 // second timeout each, and doing them in series would make a four-provider page
 // take twelve seconds to say "everything is fine".
-func probeAll(ctx context.Context, overrides map[string]string, force bool) []ProviderStatus {
+func probeAll(ctx context.Context, overrides, gateways map[string]string, force bool) []ProviderStatus {
 	// Read once per call rather than per agent: it is a file, and the answer
 	// cannot change half way through one listing.
 	managed := config.ProviderOverrides()
@@ -95,6 +95,8 @@ func probeAll(ctx context.Context, overrides map[string]string, force bool) []Pr
 			// its map from the overridden rows only, so the next edit of any other
 			// agent silently dropped every do-not-probe entry and resumed probing.
 			Overridden: overriddenFor(overrides, name),
+			// Which host the traffic goes *through*, when that is not the vendor.
+			Gateway: gateways[name],
 			// Whether *this* is the layer that set it. See ProviderStatus.Managed.
 			Managed: overriddenFor(managed, name),
 			// An agent with no verified non-interactive mode cannot be routed to
@@ -180,7 +182,7 @@ func (s *Server) handleSetProviders(w http.ResponseWriter, r *http.Request) {
 	// a cached "not checked" would sit there for thirty seconds looking like the
 	// setting had not taken.
 	writeJSON(w, http.StatusOK, RoutingResponse{
-		Providers: probeAll(r.Context(), runningProviders(s), true),
+		Providers: probeAll(r.Context(), runningProviders(s), gatewayHosts(s), true),
 	})
 }
 
@@ -240,4 +242,27 @@ func setRunningProviders(s *Server, m map[string]string) {
 	providerMu.Lock()
 	defer providerMu.Unlock()
 	s.Session.Cfg.Providers = m
+}
+
+// gatewayHosts is agent -> the gateway its calls travel through, for the agents
+// configured that way.
+//
+// Read from the resolved config under the same lock the provider overrides use:
+// a POST that rewrites providers is the one thing that mutates this struct while
+// a GET is ranging over it.
+func gatewayHosts(s *Server) map[string]string {
+	providerMu.RLock()
+	cfg := s.Session.Cfg
+	providerMu.RUnlock()
+
+	if cfg.Gateway == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, agent := range cfg.Gateway.Agents {
+		if g, err := cfg.GatewayFor(strings.TrimSpace(agent)); err == nil && g != nil {
+			out[g.Agent] = g.Host
+		}
+	}
+	return out
 }

@@ -786,6 +786,15 @@ export interface ProviderStatus {
    */
   overridden?: boolean;
   /**
+   * The host this agent's calls travel *through*, when it is pointed at an
+   * OpenAI-compatible gateway rather than at its vendor.
+   *
+   * Distinct from `host`, which is what routing probes: the two are equal for a
+   * gateway agent today and answer different questions, and a picture built from
+   * `host` alone would draw openrouter.ai as though it were the agent's vendor.
+   */
+  gateway?: string;
+  /**
    * Whether the override is the one Studio writes, rather than a value in the
    * user's own config.yaml — which outranks it and is not editable from here.
    *

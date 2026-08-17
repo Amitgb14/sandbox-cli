@@ -39,6 +39,15 @@ version is tagged.
   through and the credential that pays for it — `providers:`'s three objections
   at once, plus one of its own, since a gateway reads the work.
 
+  Studio's Routing screen draws it. A gateway is a node the traffic passes
+  *through* rather than another agent in the ring, because that is what it is:
+  agents sharing one are sharing a credential, a bill and a single point of
+  failure no chain can route around — putting it beside claude in the ring would
+  say the opposite, that it is one more thing to fall through to. Their nodes
+  carry a dashed ring, the providers list says *via <host>*, and the gateway's own
+  probe result is what is shown, since the vendor behind it being down is the case
+  a gateway survives.
+
 ### Changed
 
 - **The site's Studio setup answers two questions it used to leave to a bad

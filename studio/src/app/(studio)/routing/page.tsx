@@ -380,6 +380,20 @@ function ProviderRow({
           {status.host || "not set — click to say which provider yours uses"}
         </button>
       )}
+      {status.gateway && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="outline" className="gap-1 text-[10px]">
+              via {status.gateway}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs">
+            This agent&apos;s calls go through a gateway rather than to its vendor, so this is
+            what gets probed — and what an egress allowlist has to permit. The key is yours:
+            sandbox-cli carries the variable&apos;s name and never a value.
+          </TooltipContent>
+        </Tooltip>
+      )}
       {status.overridden && (
         <Tooltip>
           <TooltipTrigger asChild>

@@ -38,6 +38,19 @@ export function ChainGraph({
   const nodes = providers.filter((p) => p.routable);
   if (nodes.length === 0) return null;
 
+  // Agents that reach their models *through* a gateway, grouped by which one.
+  //
+  // Drawn as a node the traffic passes through rather than as another agent,
+  // because that is what it is: two agents on one gateway share a credential, a
+  // bill and a single point of failure, and a picture that put openrouter.ai in
+  // the ring beside claude would say the opposite — that it is one more thing a
+  // chain could fall through to.
+  const gateways = new Map<string, string[]>();
+  for (const p of nodes) {
+    if (!p.gateway) continue;
+    gateways.set(p.gateway, [...(gateways.get(p.gateway) ?? []), p.agent]);
+  }
+
   const size = 320;
   const c = size / 2;
   // Room for the label pill, which is wider than the dot it hangs off.
@@ -132,10 +145,63 @@ export function ChainGraph({
               >
                 {n.agent}
               </text>
+              {/* A dashed ring on an agent whose traffic leaves through a
+                  gateway, so the node and the row below it are recognisably the
+                  same fact rather than two unrelated statements. */}
+              {n.gateway && (
+                <circle
+                  cx={p.x}
+                  cy={p.y}
+                  r="11"
+                  fill="none"
+                  strokeDasharray="2 2"
+                  strokeWidth="1"
+                  className="text-muted-foreground"
+                  stroke="currentColor"
+                />
+              )}
             </g>
           );
         })}
       </svg>
+
+      {gateways.size > 0 && (
+        <div className="w-full space-y-1.5 rounded-md border border-dashed p-2.5">
+          {[...gateways.entries()].map(([host, agentsVia]) => {
+            // The gateway's own health is the agents' health: probing the vendor
+            // behind it says nothing, which is why the daemon points the probe
+            // here for exactly these agents.
+            const status = nodes.find((n) => n.gateway === host);
+            return (
+              <div key={host} className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-mono">{agentsVia.join(", ")}</span>
+                <span className="text-muted-foreground">→</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex items-center gap-1.5 rounded border border-dashed px-1.5 py-0.5 font-mono">
+                      <span
+                        className={cn(
+                          "size-1.5 rounded-full bg-current",
+                          status ? statusFill(status) : "text-muted-foreground",
+                        )}
+                      />
+                      {host}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    These agents reach their models through this gateway, so it is what routing
+                    probes — the vendor behind it being down is the case a gateway survives, and
+                    measuring the vendor would skip the agent that still worked. They also share
+                    one credential and one bill, which is the part a chain cannot route around:
+                    if the gateway is down, every agent on it is.
+                  </TooltipContent>
+                </Tooltip>
+                <span className="text-muted-foreground">→ its providers</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
         <Legend className="text-status-good" label="answering" />
@@ -143,6 +209,7 @@ export function ChainGraph({
         <Legend className="text-muted-foreground" label="not probed" />
         <span>solid = has fired, thicker = more often</span>
         <span>dashed = configured, never used</span>
+        <span>ringed node = reaches its models through a gateway</span>
       </div>
 
       {drawn.length > 0 && (
