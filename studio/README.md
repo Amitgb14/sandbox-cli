@@ -119,6 +119,10 @@ reserved environment name for the neighbouring reason.
 ```sh
 # on the remote machine — daemon and agents, no UI
 sh studio.sh up --api-only
+
+# reachable on the network, for a Studio running on :3199 over there.
+# --no-install keeps binaries you built from source rather than downloading a release.
+sh studio.sh up --api-only --no-install --bind 10.0.0.115 --port 3199
 ```
 
 It prints the two values the other machine needs:
