@@ -170,6 +170,18 @@ export const STUDIO_SCRIPT_STEPS: StudioStep[] = [
     expect: "The header badge reading live rather than fixture.",
   },
   {
+    title: "Choose what runs may reach",
+    side: "daemon",
+    code: [
+      "# ~/.config/sandbox/config.yaml — yours, not the repository's",
+      "network:",
+      "  mode: default        # anything. `allowlist` (the default) or `none` are the others",
+    ].join("\n"),
+    body: "Runs start with a default-deny allowlist and the built-in baseline, which is why npm, pip and git work without saying so. `mode: default` turns the firewall off for every run this daemon starts, and it lives in your own config rather than the project's — a .sandbox.yaml may tighten the posture and never loosen it, since it travels with code you did not write. Studio *reports* this on the Launch screen rather than offering it as a control, because a request may add domains and may never widen what the daemon decided. Restart after editing.",
+    expect: "The Launch screen's Egress line reading unrestricted instead of an allowlist.",
+    warn: "Open egress means every credential the agent holds can leave. `--allow one.example.com` adds a single domain instead, which switches the allowlist on for that run.",
+  },
+  {
     title: "Stop it, or look at what it is doing",
     side: "daemon",
     code: [
@@ -309,11 +321,29 @@ export const STUDIO_COMPOSE_STEPS: StudioStep[] = [
  */
 export const STUDIO_REMOTE_STEPS: StudioStep[] = [
   {
-    title: "On the remote machine: the daemon and the agents",
+    title: "On the Linux machine: install the two binaries",
     side: "daemon",
-    code: "sh studio.sh up --api-only",
-    body: "Installs sandbox-cli and sandbox-studio-api, starts the daemon against the repository you run it in, and generates a token once. No UI is started here — the browser half lives on your own machine. This is also the half that holds the docker socket and runs every container, which is why it is the half that has to be on the machine with the CPUs.",
-    expect: "A printed Daemon URL and Token — the two values the other machine asks for.",
+    code: [
+      "# docker first — the daemon holds its socket and starts every container",
+      "docker info >/dev/null && git --version",
+      "",
+      "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh -o studio.sh",
+      "sh studio.sh up --api-only --project ~/code/your-repo",
+    ].join("\n"),
+    body: "The script downloads sandbox-cli *and* sandbox-studio-api from the same release archive into ~/.local/bin, then starts the daemon alone. They are two binaries, not one with a subcommand: the CLI is what you run in a terminal, the daemon is what a browser talks to. --project fixes the repository the daemon manages for the life of the process; every other repository you work in gets added later from the UI. Put ~/.local/bin on PATH if it is not already, or the next run will download them again.",
+    expect: "`api 127.0.0.1:8787`, a Daemon URL and a Token — the two values the other machine asks for.",
+  },
+  {
+    title: "Building it there instead, when you want changes that are not released yet",
+    side: "daemon",
+    code: [
+      "git clone https://github.com/Amitgb14/sandbox-cli.git && cd sandbox-cli",
+      "make build && make build-studio-api",
+      "cp bin/sandbox-cli bin/sandbox-studio-api ~/.local/bin/",
+      "sh studio.sh up --api-only --no-install",
+    ].join("\n"),
+    body: "Needs the Go toolchain in go.mod. `make build` produces only the CLI — the daemon is a separate target, which is the mistake worth making once. `--no-install` is what stops the script replacing your build with the last release, and it is the flag people forget: the daemon then reports a released version and none of your changes.",
+    expect: "`sandbox-cli version` printing a commit-suffixed version rather than a bare tag.",
   },
   {
     title: "Leave it on loopback and tunnel to it",
@@ -353,6 +383,22 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
     title: "Remember whose filesystem you are looking at",
     side: "browser",
     body: "Every path on screen is the remote machine's: the repository picker, the file browser, the worktree paths, the clone target. They will not exist locally, and a repository added by path has to name a directory on that machine rather than on yours — which is also why the folder picker runs in the daemon.",
+  },
+  {
+    title: "Let it reach the whole internet, if that is what you want",
+    side: "daemon",
+    code: [
+      "mkdir -p ~/.config/sandbox",
+      "cat >> ~/.config/sandbox/config.yaml <<'YAML'",
+      "network:",
+      "  mode: default",
+      "YAML",
+      "",
+      "sh studio.sh down && sh studio.sh up --api-only --bind 10.0.0.5 --port 3100",
+    ].join("\n"),
+    body: "The default is an allowlist — default-deny with the built-in baseline — because the agent holds a real credential and github.com is a write endpoint, so open egress is an exfiltration channel for anything it can read. `mode: default` turns the firewall off for every run this daemon starts; `mode: none` is the other end, reaching nothing. It belongs in the *daemon's own* config or the file it was started with under --config, and it takes a restart. A repository's .sandbox.yaml cannot do it: a project file may tighten the posture and never loosen it, because it travels with code you did not write.",
+    expect: "`curl http://10.0.0.5:8787/v1/health` reporting `\"egress\":{\"mode\":\"default\"…}`, and the Launch screen reading unrestricted.",
+    warn: "Everything the agent can read, it can now send anywhere. `--allow one.example.com` on a launch is the middle ground: it adds a domain and switches the allowlist on for that run, which is the one direction a request may move the posture.",
   },
   {
     title: "And whose configuration you are reading",
