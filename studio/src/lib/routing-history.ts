@@ -81,8 +81,11 @@ export function episodesFrom(records: AuditRecord[]): RouteEpisode[] {
       at: attempts[0].time,
       attempts,
       finalAgent: last.agent,
-      // Detached means the exit code in the log is a placeholder, not a result.
-      rescued: last.detached ? null : last.exitCode === 0,
+      // `finished` is the daemon's own statement about whether the exit code
+      // means anything — a detached run's launch line says false. Older records
+      // predate the field, so a detached line with no answer is still unknown
+      // rather than assumed: the log is read back for months.
+      rescued: last.finished ? last.exitCode === 0 : last.detached ? null : last.exitCode === 0,
       switched: attempts.length > 1 || !!last.routedFrom,
     });
   }

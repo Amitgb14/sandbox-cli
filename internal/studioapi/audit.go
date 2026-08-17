@@ -41,6 +41,8 @@ type auditLine struct {
 	RouteReason  string   `json:"route_reason"`
 	RouteID      string   `json:"route_id"`
 	RouteAttempt int      `json:"route_attempt"`
+	RunID        string   `json:"run_id"`
+	Finished     bool     `json:"finished"`
 	ExitCode     int      `json:"exit_code"`
 	DurationMS   int64    `json:"duration_ms"`
 	Detached     bool     `json:"detached"`
@@ -113,7 +115,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 				}
 				out = append(out, r)
 			}
-			writeJSON(w, http.StatusOK, AuditResponse{Records: out})
+			writeJSON(w, http.StatusOK, AuditResponse{Records: collapseRuns(out)})
 			return
 		}
 		// A failing index falls back to the file rather than failing the request:
@@ -136,7 +138,46 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, readAuditFile(path, branch, repo, projects, limit-len(out))...)
 	}
-	writeJSON(w, http.StatusOK, AuditResponse{Records: out})
+	writeJSON(w, http.StatusOK, AuditResponse{Records: collapseRuns(out)})
+}
+
+// collapseRuns folds a detached run's two lines into the one run they describe.
+//
+// A detached launch cannot know its own exit code, so it is written twice: once
+// when the container starts, once when it stops. Both are real records and the
+// log keeps both — it is append-only, and rewriting a line would be a worse
+// bargain than this. But *counting* them as two runs would double every Studio
+// run in every total on every screen, and showing them as two would put a
+// perpetual "still running" beside its own conclusion.
+//
+// The finished half wins, whichever order they arrive in, because it is the one
+// that knows something the other could not. A launch line with no partner is
+// left exactly as it is: that is a run still going, or one whose ending nobody
+// was around to see, and both are more honestly reported as unfinished than
+// guessed at.
+func collapseRuns(in []AuditRecord) []AuditRecord {
+	seen := map[string]int{} // run id -> index in out
+	out := make([]AuditRecord, 0, len(in))
+	for _, r := range in {
+		if r.RunID == "" {
+			out = append(out, r)
+			continue
+		}
+		if i, ok := seen[r.RunID]; ok {
+			if r.Finished && !out[i].Finished {
+				// Keep the position of the first line seen — the listing is
+				// newest-first and the pair belongs where the run does — and take
+				// the outcome from the half that has one.
+				at := out[i].Time
+				out[i] = r
+				out[i].Time = at
+			}
+			continue
+		}
+		seen[r.RunID] = len(out)
+		out = append(out, r)
+	}
+	return out
 }
 
 // readAuditFile returns up to limit records from one generation, newest first,
@@ -203,6 +244,8 @@ func (a auditLine) toRecord() AuditRecord {
 		EnvNames:     a.EnvNames,
 		RoutedFrom:   a.RoutedFrom,
 		RouteReason:  a.RouteReason,
+		RunID:        a.RunID,
+		Finished:     a.Finished,
 		RouteID:      a.RouteID,
 		RouteAttempt: a.RouteAttempt,
 		ExitCode:     a.ExitCode,
@@ -247,6 +290,7 @@ func fromHistory(r history.Record) AuditRecord {
 		Network: r.Network, NetworkName: r.NetworkName, EnforcedBy: r.EnforcedBy,
 		EgressAllow: r.EgressAllow, EnvNames: r.EnvNames,
 		RoutedFrom: r.RoutedFrom, RouteReason: r.RouteReason,
+		RunID: r.RunID, Finished: r.Finished,
 		RouteID: r.RouteID, RouteAttempt: r.RouteAttempt,
 		ExitCode: r.ExitCode, DurationMS: r.DurationMS, Detached: r.Detached,
 	}.toRecord()

@@ -72,7 +72,11 @@ CREATE TABLE IF NOT EXISTS runs (
   routed_from   TEXT NOT NULL DEFAULT '',
   route_reason  TEXT NOT NULL DEFAULT '',
   route_id      TEXT NOT NULL DEFAULT '',
-  route_attempt INTEGER NOT NULL DEFAULT 0
+  route_attempt INTEGER NOT NULL DEFAULT 0,
+  -- A detached run is written twice: once at launch, once when it ends. run_id
+  -- is what makes the pair one run, and finished says which half this is.
+  run_id        TEXT NOT NULL DEFAULT '',
+  finished      INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS runs_route ON runs(route_id) WHERE route_id != '';
 CREATE INDEX IF NOT EXISTS runs_time   ON runs(time DESC);
@@ -90,7 +94,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 
 // schemaVersion is bumped when the shape changes. A mismatch is a full rebuild,
 // which is cheap precisely because the file is the record and this is not.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // Open creates or opens the index at path.
 func Open(path string) (*DB, error) {
@@ -226,8 +230,8 @@ func (h *DB) ingest(path string, from int64, end *int64) error {
 	stmt, err := tx.Prepare(`INSERT INTO runs
 		(time, branch, agent, image, workspace, workdir, engine, network, network_name,
 		 enforced_by, egress_allow, env_names, command, exit_code, duration_ms, detached,
-		 routed_from, route_reason, route_id, route_attempt)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		 routed_from, route_reason, route_id, route_attempt, run_id, finished)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -254,6 +258,7 @@ func (h *DB) ingest(path string, from int64, end *int64) error {
 			jsonArray(r.EgressAllow), jsonArray(r.EnvNames), jsonArray(r.Command),
 			r.ExitCode, r.DurationMS, boolInt(r.Detached),
 			r.RoutedFrom, r.RouteReason, r.RouteID, r.RouteAttempt,
+			r.RunID, r.Finished,
 		); err != nil {
 			return err
 		}

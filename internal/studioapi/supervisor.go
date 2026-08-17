@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/handoff"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/routing"
@@ -101,6 +102,11 @@ type watch struct {
 
 	routeID string
 	attempt int
+
+	// meta is what this run's ending will be recorded as, minus the outcome:
+	// captured at launch because that is when the resolved spec exists, and the
+	// container is only an id afterwards.
+	meta audit.SessionMeta
 
 	// briefings are the export directories mounted into attempts so far,
 	// removed when this run stops being supervised. A mount is held for the
@@ -198,6 +204,11 @@ func (sv *supervisor) tick(ctx context.Context) {
 
 // settle applies the gate to one finished run.
 func (sv *supervisor) settle(ctx context.Context, w *watch, c runtime.ContainerInfo) {
+	// First, what happened — before any decision about what to do next, and
+	// regardless of whether there is a chain. The launch line said a run started;
+	// this is the line that says how it ended, matched to that one by RunID.
+	sv.recordEnding(w, c)
+
 	if c.ExitCode == 0 || len(w.remaining) == 0 {
 		sv.drop(w)
 		return
@@ -415,4 +426,30 @@ func joinReasons(parts ...string) string {
 		}
 	}
 	return strings.Join(kept, "; ")
+}
+
+// recordEnding writes the audit line a detached run could not write for itself.
+//
+// The launch line carries Finished=false and a placeholder exit code, because at
+// that moment there is nothing else true to say. This is its partner: the same
+// RunID, the real exit code, and the duration measured from the container's own
+// timestamps rather than from this process's clock — the daemon may have started
+// after the run did, and it is the container's life being reported.
+//
+// Best-effort, like every other write to the log: the run is what the user asked
+// for and the record is a courtesy. A daemon restarted mid-run never sees the
+// ending, and that is left as "not recorded" rather than guessed — which is why
+// the reader treats an unpartnered launch line as unknown rather than as a pass.
+func (sv *supervisor) recordEnding(w *watch, c runtime.ContainerInfo) {
+	if sv.s.Session == nil || sv.s.Session.Audit == nil || w.meta.RunID == "" {
+		return
+	}
+	meta := w.meta
+	meta.ExitCode = c.ExitCode
+	meta.Finished = true
+	meta.Detached = true
+	if !c.StartedAt.IsZero() && c.FinishedAt.After(c.StartedAt) {
+		meta.Duration = c.FinishedAt.Sub(c.StartedAt)
+	}
+	sv.s.Session.Audit.RecordSession(meta)
 }

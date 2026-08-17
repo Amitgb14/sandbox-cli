@@ -722,6 +722,17 @@ type AuditRecord struct {
 	// See repoIDForWorkspace.
 	RepoID string `json:"repoId,omitempty"`
 
+	// RunID identifies the container, and Finished says whether the outcome below
+	// is a result or a placeholder.
+	//
+	// A detached run is written twice — once when it launches, once when it ends —
+	// because at launch there is no exit code to wait for. Two lines, one run: a
+	// client that counted them as two would double every Studio run in every
+	// total on every screen, so `GET /v1/audit` collapses the pair and keeps the
+	// finished half.
+	RunID    string `json:"runId,omitempty"`
+	Finished bool   `json:"finished,omitempty"`
+
 	// Routing, when this run was part of an episode. Runs sharing a RouteID are
 	// one attempt at one task — the agent that failed and the one that ran
 	// instead — which is the only way to tell a rescue from two unrelated runs.

@@ -33,6 +33,26 @@ version is tagged.
 
 ### Fixed
 
+- **A detached run's outcome is now recorded, so "did it pass" has an answer.**
+  Its audit line is written when the container *launches* — there is no exit code
+  to wait for — and every Studio run is detached, so the log said exit 0 for all
+  of them and every screen built on it agreed. The Routing screen's rescue rate
+  was 100% by construction; the dashboard's outcome counts were the same lie in
+  a different shape.
+
+  The daemon already watches these containers for routing, so it writes the
+  ending too: same `run_id`, the real exit code, and a duration measured from the
+  container's own timestamps rather than from the daemon's uptime. Two lines, one
+  run — the log stays append-only, and `GET /v1/audit` collapses the pair,
+  keeping the half that knows something. Supervision no longer depends on having
+  a fallback chain, because recording what happened needs no chain, only a
+  container that will stop.
+
+  What it deliberately does not do is guess. A launch line with no partner —
+  a run still going, or one whose ending nobody was around to see because the
+  daemon restarted — stays **unfinished**, and the screens say *not recorded*
+  rather than picking a side.
+
 - **The Routing screen reported every Studio run as rescued.** A detached run's
   audit line is written when the container *launches* — there is no exit code to
   wait for — so it carries 0 whatever happens next, and every Studio run is
