@@ -19,6 +19,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/history"
+	"github.com/Amitgb14/sandbox-cli/internal/image"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
@@ -121,6 +122,19 @@ func New(cfg config.Config, project string) (*Server, error) {
 	if !ok {
 		return nil, fmt.Errorf("engine backend %T does not support inspecting or controlling containers", sess.Runtime)
 	}
+	// The lazy image builder, exactly as internal/cli wires it.
+	//
+	// Missing here until a Linux box with no cached base image tried to launch
+	// from Studio and got "image not found locally and no builder configured".
+	// It never showed up on a development machine, where the CLI has already
+	// built the image — the daemon was living off a side effect of somebody
+	// else's command. Third caller, same rule the fleet package states with
+	// teeth: every step on the run path has to be repeated by every caller that
+	// builds one.
+	if d, ok := sess.Runtime.(*runtime.DockerCLI); ok {
+		image.Register(d)
+	}
+
 	engine := cfg.Engine
 	if engine == "" {
 		engine = "docker"

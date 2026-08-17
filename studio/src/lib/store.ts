@@ -26,9 +26,23 @@ type PersistedUi = Pick<
   | "diffView"
   | "usageCollapsed"
   | "usageHidden"
+  | "connections"
   | "routingPrefs"
   | "recentRuns"
 >;
+
+/** One daemon this browser can be pointed at. */
+export interface SavedConnection {
+  /** What to call it in the list — the host by default, since that is what
+   *  distinguishes two daemons in practice. */
+  label: string;
+  /** Full URL, exactly as the client dials it. Empty is not saveable: that is
+   *  "this machine", which needs no entry and is always offered. */
+  url: string;
+  /** The bearer token for *that* daemon. A token belongs to one machine, which
+   *  is the whole reason a list of URLs alone would not work. */
+  token: string;
+}
 
 interface UiState {
   /** ⌘K palette. */
@@ -53,6 +67,26 @@ interface UiState {
    * kind of thing as the terminal settings below — not a per-visit choice, and
    * not something the daemon has an opinion about.
    */
+  /**
+   * Daemons this browser knows how to reach, so switching machines is a click
+   * rather than a paste.
+   *
+   * The *active* connection is not in here — it stays in the two localStorage
+   * keys `client.ts` and `constants.ts` own, because those are read during a
+   * request rather than during a render, and moving them would put a fetch's
+   * base URL behind a React store. This is an address book beside them.
+   *
+   * It holds tokens, and that is a deliberate acceptance rather than an
+   * oversight: the active token is already in localStorage, so the alternative —
+   * saving URLs only — would not reduce what a script on this origin can read,
+   * and would make the feature useless by asking for the token again on every
+   * switch. What it does mean is that this list is exactly as sensitive as the
+   * machine it is on.
+   */
+  connections: SavedConnection[];
+  saveConnection: (c: SavedConnection) => void;
+  forgetConnection: (url: string) => void;
+
   routingPrefs: Record<string, string[]>;
   setRoutingPref: (primary: string, fallback: string[]) => void;
 
@@ -136,6 +170,19 @@ export const useUi = create<UiState>()(
       usageHidden: true,
       setUsageHidden: (usageHidden) => set({ usageHidden }),
 
+      connections: [],
+      // Keyed by URL: it is what actually identifies a daemon, and saving the
+      // same one twice under two labels would make "which of these am I on"
+      // unanswerable from the list.
+      saveConnection: (c) =>
+        set((s) => ({
+          connections: [...s.connections.filter((x) => x.url !== c.url), c].sort((a, b) =>
+            a.label.localeCompare(b.label),
+          ),
+        })),
+      forgetConnection: (url) =>
+        set((s) => ({ connections: s.connections.filter((c) => c.url !== url) })),
+
       routingPrefs: {},
       setRoutingPref: (primary, fallback) =>
         set((s) => ({ routingPrefs: { ...s.routingPrefs, [primary]: fallback } })),
@@ -169,6 +216,7 @@ export const useUi = create<UiState>()(
         diffView: s.diffView,
         usageCollapsed: s.usageCollapsed,
         usageHidden: s.usageHidden,
+        connections: s.connections,
         routingPrefs: s.routingPrefs,
         recentRuns: s.recentRuns,
       }),

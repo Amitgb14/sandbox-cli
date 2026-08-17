@@ -89,6 +89,25 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tighten-only, enforced here rather than trusted to a client.
+	//
+	// `allow` is the one network field a request may carry, and on a daemon
+	// configured `mode: none` it is not a narrowing at all: BuildSpec reads a
+	// non-empty Allow as switching the allowlist *on*, which then promotes the
+	// container off `--network none` onto the sandbox bridge ("allowlist needs
+	// networking"). So one domain in a request would hand a run networking the
+	// daemon was configured not to give it — a request loosening the posture,
+	// which is the thing the whole layering exists to prevent. The CLI's
+	// `--allow` is a different act: it is typed by the person who owns the
+	// machine.
+	if len(req.Allow) > 0 && s.Session.Cfg.Network.Mode == "none" {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
+			"this daemon is configured to reach nothing (network mode \"none\"), and adding domains would "+
+				"turn networking back on for this run — a request may narrow the egress posture, never widen it.\n"+
+				"  Change the mode where the daemon reads its config, and restart it"))
+		return
+	}
+
 	opts, err := s.buildRunOptions(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

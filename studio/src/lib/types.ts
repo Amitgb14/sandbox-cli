@@ -824,8 +824,28 @@ export interface DaemonInfo {
    * 401 instead of just showing one on every panel.
    */
   authRequired?: boolean;
+
+  /**
+   * What a run launched by this daemon may reach, resolved from its own config.
+   *
+   * Reported rather than requested: the mode is tighten-only from a client, so a
+   * form shows this and offers extra domains, never a mode.
+   */
+  egress?: DaemonEgress;
   /** True when Studio is reading fixtures because no daemon answered. */
   mock?: boolean;
+}
+
+/** What a run launched by a daemon may reach, as /v1/health reports it. */
+export interface DaemonEgress {
+  mode: NetworkMode;
+  baseline: boolean;
+  /** How many domains the allowlist resolved to. Always present. */
+  domains?: number;
+  /** The names, for an authenticated caller only — /health answers without a
+   *  token, and a list of internal hostnames is not for anything that can open
+   *  a socket. */
+  allow?: string[];
 }
 
 /** One turn of a run's conversation, from the agent's transcript. */

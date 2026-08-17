@@ -38,6 +38,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Project:         s.Project,
 		Profile:         profile,
 		AuthRequired:    s.Token != "",
+		Egress:          s.egressPosture(r),
 		Host:            s.hostInfo(r.Context()),
 	})
 }
@@ -75,4 +76,38 @@ func (s *Server) hostInfo(ctx context.Context) HostInfo {
 		}
 	}
 	return h
+}
+
+// egressPosture is the network posture this daemon launches with.
+//
+// From the resolved config rather than from a request, because that is the only
+// place it can come from: a launch may add domains and may never loosen the
+// mode, so what a client needs is not a control but an answer.
+func (s *Server) egressPosture(r *http.Request) EgressPosture {
+	n := s.Session.Cfg.Network
+	mode := n.Mode
+	if mode == "" {
+		mode = "default"
+	}
+	p := EgressPosture{Mode: mode, Baseline: n.BaselineEnabled()}
+	if mode != "allowlist" {
+		return p
+	}
+	domains := n.EgressDomains()
+	p.Domains = len(domains)
+	// The *names* only to a caller that authenticated, and /health is the one
+	// endpoint the token deliberately does not guard — so that a client without
+	// one can still be told it needs one. That exemption is exactly why the
+	// resolved list must not ride along on it: on a daemon reachable beyond
+	// loopback, which is the setup the saved-connection list exists for, it would
+	// let anything that can open a socket enumerate the internal hostnames this
+	// machine talks to.
+	//
+	// The count is not sensitive and is what a screen actually renders, so it is
+	// always present; the names arrive once the caller has proved it is entitled
+	// to what every other endpoint already tells it.
+	if s.tokenMatches(r) {
+		p.Allow = domains
+	}
+	return p
 }

@@ -13,6 +13,22 @@ version is tagged.
 
 ### Added
 
+- **Studio remembers the daemons you switch between.** Settings → Connection
+  keeps a list: save the endpoint and token you are on, and connect to any of
+  them with one click. It exists because the two-machine setup is the point of
+  the remote daemon — agents on a Linux box, browser on a laptop — and moving
+  back and forth meant pasting a 64-character token each time.
+  
+  Each entry carries the token as well as the URL, because a token belongs to one
+  machine: a list of URLs alone would ask for it again on every switch, which is
+  the paste being removed. They live in this browser's storage, where the active
+  token already lives, so it widens reach rather than exposure. The active
+  connection itself stays where it was — read while a request is built, not while
+  a component renders. Typing a different URL clears the token box, because a
+  token belongs to exactly one daemon: the pre-filled local token paired with a
+  remote URL was a saved row that would have sent one machine's credential to
+  another.
+
 - **Studio's Routing screen answers with pictures now.** Four, because the
   questions are four and one view answering all of them answers none well. A
   **chain graph** puts what is configured, what is answering and which hops have
@@ -311,6 +327,49 @@ version is tagged.
   changed.
 
 ### Fixed
+
+- **Studio's egress selector did nothing.** The Launch form offered
+  Allowlist / None / Unrestricted, and the network mode is **not expressible per
+  request** — a launch may add domains and may never loosen the posture, the same
+  tighten-only rule a project `.sandbox.yaml` gets — so the daemon dropped it.
+  Worse, the control was initialised to a hardcoded `allowlist` rather than to
+  the daemon's actual posture, so it reflected nothing either: on an unrestricted
+  daemon the preview described a firewall that would not be programmed. It is now
+  a read-only reading of what the daemon resolved, reported by `/v1/health`
+  (`egress`), with a line saying where to change it — and the extra-domains field
+  stays, since adding domains is the one network move a request may make. On an
+  unrestricted daemon that field says plainly that it *tightens* the run, and the
+  preview says so too rather than describing the open egress the daemon's mode
+  would suggest.
+
+  The tighten-only rule is now **enforced by the daemon** rather than assumed of
+  the client: on a daemon configured `mode: none`, `allow` is refused, because
+  `BuildSpec` reads a non-empty allowlist as switching networking *on* and would
+  promote the container off `--network none` — a request widening a posture the
+  operator narrowed. `/v1/health` also reports the domain *count* to everyone and
+  the names only to an authenticated caller: that endpoint answers without a
+  token on purpose, and a list of internal hostnames must not be readable by
+  anything that can open a socket.
+
+- **`studio.sh status` and `down` could not see the daemon on Linux.** The
+  liveness check read `ps -o comm=`, which **truncates to 15 characters** there —
+  `sandbox-studio-` — and compared it against the full name, so it matched on
+  macOS, where comm is the whole path, and never on Linux. The daemon was live
+  and answering requests while `status` reported it stopped and `down` said
+  "nothing was running" about a process it had started itself, leaving it running
+  after every `up` that was supposed to restart it. It reads the full argv now.
+
+- **Studio could not launch anything on a machine where the base image had not
+  been built.** `image.Register` wires the lazy builder into the docker backend,
+  and internal/cli does it in both places that start containers; the daemon did
+  it nowhere, so `POST /runs` died with *"image not found locally and no builder
+  configured"* — an error about images, from a request about runs. It was
+  invisible on any development machine, because the CLI had already built the
+  image there and the daemon was living off the side effect of somebody else's
+  command; it took a fresh Linux box to show it. Third caller, same rule
+  internal/fleet states with teeth: a step on the run path has to be repeated by
+  every caller that builds one, and `DockerCLI.HasBuilder` now exists so a test
+  can assert it rather than trust it.
 
 - **Studio's fixtures aged into fiction.** With no daemon answering, every screen
   falls back to fixture data — which is correct, and the header says so — but the
