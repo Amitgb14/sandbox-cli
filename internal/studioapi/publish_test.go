@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
 
@@ -75,5 +76,49 @@ func TestAnExplicitAddressIsKept(t *testing.T) {
 	}
 	if len(got) != 1 || !strings.HasPrefix(got[0], "0.0.0.0:") {
 		t.Errorf("normalised to %v, want the address the caller wrote", got)
+	}
+}
+
+// The two refusals that are the daemon's configuration rather than the caller's
+// mistake, answered before a container is attempted.
+//
+// Both were arriving through Session.Start as a 502 — "the daemon is broken" for
+// a well-formed request that was deliberately declined, which is exactly the
+// confusion the malformed-port precheck above was added to remove. A refusal is
+// only useful if it says which side has to change.
+func TestPublishingIsRefusedWhereTheDaemonWouldRefuseIt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*Server)
+		says string
+	}{
+		{
+			name: "prod",
+			set:  func(s *Server) { s.Session.Cfg.Profile = config.ProfileProd },
+			says: "prod profile",
+		},
+		{
+			name: "no network",
+			set:  func(s *Server) { s.Session.Cfg.Network.Mode = "none" },
+			says: "no network to publish from",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fr := newTestServer(t)
+			tc.set(s)
+
+			rec := doJSON(t, s, http.MethodPost, "/v1/runs", RunCreateRequest{
+				Agent: "claude", Prompt: "run the dev server", Publish: []string{"8000"},
+			}, nil)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("= %d, want 422 rather than a 502 from the launch: %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.says) {
+				t.Errorf("the refusal does not say why: %s", rec.Body.String())
+			}
+			if len(fr.started) != 0 {
+				t.Error("a container was started for a refused request")
+			}
+		})
 	}
 }

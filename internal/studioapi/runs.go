@@ -117,6 +117,26 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// The other two ways publishing is refused, asked here for the same reason:
+	// both are decided by this daemon's own configuration, both are stable
+	// answers a request cannot change, and both otherwise arrive through
+	// Session.Start as a 502 — "the daemon is broken" for a request that was
+	// well-formed and deliberately declined.
+	if len(req.Publish) > 0 {
+		if s.Session.Cfg.Profile == config.ProfileProd {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
+				"this daemon runs the prod profile, which refuses published ports: publishing opens the boundary "+
+					"inward, and prod is the profile for runs nobody is watching.\n"+
+					"  Start the daemon with -profile dev to publish from here"))
+			return
+		}
+		if s.Session.Cfg.Network.Mode == "none" {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
+				"this daemon is configured to reach nothing (network mode \"none\"), so there is no network to "+
+					"publish from — docker would take the flag and the port would never answer"))
+			return
+		}
+	}
 
 	opts, err := s.buildRunOptions(r.Context(), req)
 	if err != nil {

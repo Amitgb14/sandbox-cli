@@ -251,9 +251,17 @@ decision about the boundary, and it belongs to the user. A request carrying
 `--publish`. That distinction is the whole of the rule: not *whether* a port may
 be opened, but *who* may decide.
 
-A malformed spec is refused with a 400 before anything starts, by the same
-normaliser the CLI uses. Runs report what they got back at
-`GET /v1/runs/{id}/config` → `network.ingressPorts`.
+Three refusals arrive before anything starts, rather than as a 502 from the
+launch: a malformed spec (400, from the same normaliser the CLI uses), a `prod`
+daemon (422 — publishing opens the boundary inward, and prod is the profile for
+runs nobody is watching), and `network: none` (422 — no network to publish from).
+
+Runs report their ports back at `GET /v1/runs/{id}/config` →
+`network.ingressPorts`, **when an allowlist is in force**. That is not a gap in
+the reporting: `SANDBOX_INGRESS_PORTS` is what the field is read from, and it
+exists only where there is a default-deny inbound chain to carve. On an
+unrestricted daemon the port is published and nothing was carved, so there is
+nothing to report — the ports are still visible in the run's own argv.
 
 **On a remote daemon**, remember whose loopback it is: a bare port binds
 `127.0.0.1` on that machine, so a browser elsewhere cannot reach it. Publish on a

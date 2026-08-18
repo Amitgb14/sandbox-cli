@@ -1003,8 +1003,12 @@ type RunCreateRequest struct {
 	//
 	// Under an allowlist the firewall's default-deny INPUT chain gains a carve-out
 	// for exactly these ports (SANDBOX_INGRESS_PORTS), which is what makes a
-	// published port reachable at all — and why the run's own record reports them
-	// back (RunNetwork.IngressPorts).
+	// published port reachable at all.
+	//
+	// That variable is also where RunNetwork.IngressPorts is read from, so a run
+	// on an *unrestricted* daemon publishes its ports and reports none — there
+	// was no inbound chain to carve, so nothing recorded them. Worth knowing
+	// before reading an empty field as "nothing was published".
 	Publish []string `json:"publish,omitempty"`
 }
 

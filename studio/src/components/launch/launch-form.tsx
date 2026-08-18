@@ -718,7 +718,7 @@ export function LaunchForm() {
               <code className="font-mono">docker -p</code>; write an address out to say
               otherwise. Under an allowlist the firewall opens its default-deny inbound
               chain for exactly these ports, which is the one way a launch option lets
-              anything *in*.
+              anything <em>in</em>.
             </Hint>
           </Field>
 

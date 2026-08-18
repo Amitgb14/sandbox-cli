@@ -635,6 +635,11 @@ export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchP
         "prod does not mount the host's Claude history bucket: it is a host path outside the workspace.",
       );
     }
+    if (req.publish.length > 0) {
+      refusals.push(
+        "prod refuses published ports: publishing opens the boundary inward, and prod is the profile for runs nobody is watching. The daemon says the same thing, and would say it after the launch rather than before.",
+      );
+    }
   }
 
   for (const name of req.envAllow) {
@@ -664,6 +669,18 @@ export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchP
   if (req.share.length > 0) {
     warnings.push(
       `--share widens the boundary deliberately: ${req.share.length} extra host ${req.share.length === 1 ? "directory is" : "directories are"} in reach.`,
+    );
+  }
+
+  // Louder than share, because it is the only option here that opens a way *in*
+  // rather than widening what goes out — and a preview that warned about a mount
+  // and said nothing about an inbound port would rank them backwards.
+  if (req.publish.length > 0) {
+    const bound = req.publish.filter((p) => !/^(127\.0\.0\.1|localhost|\[::1\])[:.]/.test(p) && p.includes(":") && /^\d+\.|^\[/.test(p));
+    warnings.push(
+      bound.length > 0
+        ? `--publish ${bound.join(", ")} binds an address you named rather than loopback: anything that can reach that address can reach the container.`
+        : `--publish opens the way in for ${req.publish.length} port${req.publish.length === 1 ? "" : "s"}, bound to 127.0.0.1 on the machine running the daemon.`,
     );
   }
 
@@ -716,6 +733,11 @@ function previewArgv(
       mode: effectiveMode,
       baseline,
       allow,
+      // Container ports, as the daemon would resolve them: a spec may be
+      // "8080:8000", and what the firewall carves out is the container half.
+      ingressPorts: req.publish
+        .map((p) => Number(p.split(":").pop()?.split("/")[0]))
+        .filter((n) => Number.isFinite(n) && n > 0),
       networkName: effectiveMode === "allowlist" ? "sandbox-net" : undefined,
       enforcement: effectiveMode === "allowlist" ? "name" : null,
     },
