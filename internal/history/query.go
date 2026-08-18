@@ -177,7 +177,7 @@ func (h *DB) Buckets(days int, now time.Time) ([]DayBucket, error) {
 		       SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END),
 		       SUM(CASE WHEN exit_code = 90 THEN 1 ELSE 0 END),
 		       SUM(CASE WHEN exit_code IN (137, 143) THEN 1 ELSE 0 END)
-		FROM runs WHERE time >= ? GROUP BY d`, start.UTC().Format(time.RFC3339))
+		FROM runs WHERE time >= ? AND `+countable+` GROUP BY d`, start.UTC().Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
@@ -210,6 +210,20 @@ func (h *DB) Buckets(days int, now time.Time) ([]DayBucket, error) {
 	return out, nil
 }
 
+// countable excludes the launch half of a detached run's pair.
+//
+// A detached run is written twice — once when the container starts, once when it
+// stops — so counting rows counts those runs twice, and the launch line's
+// placeholder exit code of 0 counts them as *passed* on top of that. A Studio run
+// that exits 1 would contribute one pass and one failure, doubling the totals and
+// inflating the pass rate.
+//
+// A launch line whose partner never arrived is still excluded here, and that is
+// the honest reading rather than a convenient one: its outcome is unknown, and
+// these aggregates are about runs whose outcome is known. `Runs()` still returns
+// it, because a listing is about what happened rather than about what finished.
+const countable = `(run_id = '' OR finished = 1)`
+
 // Summary aggregates the whole window in SQL rather than shipping every record
 // to a client to be counted there.
 func (h *DB) Summary(now time.Time) (Stats, error) {
@@ -218,7 +232,7 @@ func (h *DB) Summary(now time.Time) (Stats, error) {
 		SELECT COUNT(*),
 		       SUM(CASE WHEN `+outcomeCase+` IN ('passed','failed','verify-failed') THEN 1 ELSE 0 END),
 		       SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END)
-		FROM runs`).Scan(&s.Total, &s.Decided, &s.Passed)
+		FROM runs WHERE `+countable).Scan(&s.Total, &s.Decided, &s.Passed)
 	if err != nil {
 		return s, err
 	}
@@ -230,7 +244,7 @@ func (h *DB) Summary(now time.Time) (Stats, error) {
 	}
 
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	if err := h.sql.QueryRow(`SELECT COUNT(*) FROM runs WHERE time >= ?`,
+	if err := h.sql.QueryRow(`SELECT COUNT(*) FROM runs WHERE time >= ? AND `+countable,
 		dayStart.UTC().Format(time.RFC3339)).Scan(&s.FinishedToday); err != nil {
 		return s, err
 	}
@@ -240,9 +254,9 @@ func (h *DB) Summary(now time.Time) (Stats, error) {
 	// that was not measured is not a run that took no time.
 	var median sql.NullInt64
 	err = h.sql.QueryRow(`
-		SELECT duration_ms FROM runs WHERE duration_ms > 0
+		SELECT duration_ms FROM runs WHERE duration_ms > 0 AND ` + countable + `
 		ORDER BY duration_ms
-		LIMIT 1 OFFSET (SELECT COUNT(*) / 2 FROM runs WHERE duration_ms > 0)`).Scan(&median)
+		LIMIT 1 OFFSET (SELECT COUNT(*) / 2 FROM runs WHERE duration_ms > 0 AND ` + countable + `)`).Scan(&median)
 	if err != nil && err != sql.ErrNoRows {
 		return s, err
 	}

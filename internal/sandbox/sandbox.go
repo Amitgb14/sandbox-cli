@@ -4,9 +4,12 @@ package sandbox
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -196,7 +199,7 @@ func (s *Session) StartRecorded(ctx context.Context, opts Options, forceBuild bo
 		// supervisor — and RunID is what lets the two be matched.
 		meta = auditMeta(s.Cfg, spec, opts, 0, time.Since(started))
 		meta.Detached = true
-		meta.RunID = name
+		meta.RunID = newRunID()
 		s.Audit.RecordSession(meta)
 	}
 	return name, meta, startErr
@@ -493,4 +496,26 @@ func (s *Session) enforceSeccomp(ctx context.Context) error {
 			"  or run with --profile dev, which warns instead of refusing", config.SeccompRequired)
 	}
 	return nil
+}
+
+// newRunID mints the key that pairs a detached run's two audit lines.
+//
+// Ours, not the engine's, and that is the whole design of it. The two obvious
+// candidates are both wrong. A detached container's **name** is deterministic —
+// `sandbox-<repo>-<branch>`, so that docker's duplicate-name refusal can enforce
+// one agent per branch — which means every run on a branch would share one id,
+// and any reader grouping by it would fold unrelated runs together. Worse, the
+// routing supervisor hands that same name to a retry, so both halves of a
+// failover would collapse into a single record, flattening the episode the
+// Routing screen exists to show. The container **id** is unique but belongs to
+// the engine, and this pairing has to survive a rename, which is exactly what a
+// failover does to the container it supersedes.
+func newRunID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A machine with no entropy still pairs its lines: a collision costs two
+		// records merging, where an empty id costs every detached run its outcome.
+		return "run-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return "run-" + hex.EncodeToString(b[:])
 }

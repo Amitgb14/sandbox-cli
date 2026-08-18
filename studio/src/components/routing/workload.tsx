@@ -80,9 +80,11 @@ function Bar({
           <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-sm bg-muted">
             <div
               className={cn("h-full rounded-sm", className)}
-              // A zero-width bar and an absent one look the same, so a count of
-              // zero keeps a hairline: "none" is a reading, not a missing row.
-              style={{ width: `${Math.max(value === 0 ? 0 : 4, (value / max) * 100)}%` }}
+              // A zero-width bar and an absent one look the same, so zero keeps a
+              // hairline: "none" is a reading, not a missing row — and the row it
+              // matters most on is the one this panel exists for, an agent that
+              // ran work it was never asked for.
+              style={{ width: value === 0 ? "2px" : `${Math.max(4, (value / max) * 100)}%` }}
             />
           </div>
           <span className="w-6 shrink-0 tabular-nums text-[10px] text-muted-foreground">

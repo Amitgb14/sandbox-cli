@@ -102,6 +102,11 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		if repo != "" {
 			want = limit * auditRepoOverscan
 		}
+		// And doubled for the pairs: a detached run is two rows, so a bound
+		// applied before they are folded returns as few as half the records
+		// asked for — silently, since nothing downstream can tell a short page
+		// from a quiet machine.
+		want *= 2
 		recs, err := s.History.Runs(history.Filter{Branch: branch, Limit: want})
 		if err == nil {
 			for _, rec := range recs {
@@ -110,12 +115,9 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 				if repo != "" && r.RepoID != repo {
 					continue
 				}
-				if len(out) >= limit {
-					break
-				}
 				out = append(out, r)
 			}
-			writeJSON(w, http.StatusOK, AuditResponse{Records: collapseRuns(out)})
+			writeJSON(w, http.StatusOK, AuditResponse{Records: capRecords(collapseRuns(out), limit)})
 			return
 		}
 		// A failing index falls back to the file rather than failing the request:
@@ -132,13 +134,24 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	// Newest generation first, and each file read newest-record-first, so a
 	// bounded request stops as soon as it has what it asked for instead of
 	// parsing every generation to throw most of it away.
+	// Read to twice the bound for the same reason the index path does, and cut to
+	// size only once the pairs are folded.
+	want := limit * 2
 	for _, path := range audit.Generations(filepath.Join(dir, "sessions.jsonl")) {
-		if len(out) >= limit {
+		if len(out) >= want {
 			break
 		}
-		out = append(out, readAuditFile(path, branch, repo, projects, limit-len(out))...)
+		out = append(out, readAuditFile(path, branch, repo, projects, want-len(out))...)
 	}
-	writeJSON(w, http.StatusOK, AuditResponse{Records: collapseRuns(out)})
+	writeJSON(w, http.StatusOK, AuditResponse{Records: capRecords(collapseRuns(out), limit)})
+}
+
+// capRecords trims to the requested size, after collapsing rather than before.
+func capRecords(in []AuditRecord, limit int) []AuditRecord {
+	if limit > 0 && len(in) > limit {
+		return in[:limit]
+	}
+	return in
 }
 
 // collapseRuns folds a detached run's two lines into the one run they describe.

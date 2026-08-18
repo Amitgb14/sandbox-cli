@@ -66,17 +66,22 @@ export function FailoverTrend({ data, height = 160 }: { data: FailoverDay[]; hei
           stroke="var(--viz-surface)"
           strokeWidth={1.5}
         />
-        <Bar
-          dataKey="failed"
-          stackId="f"
-          fill="var(--color-failed)"
-          stroke="var(--viz-surface)"
-          strokeWidth={1.5}
-        />
+        {/* `unknown` before `failed` so the rounded data-end stays on a series
+            that is actually there. Every episode recorded before outcomes were
+            captured is rescued-or-failed with no unknown at all, and putting the
+            radius on that empty band left their columns square-topped — a
+            regression on all the history the chart was drawn for. */}
         <Bar
           dataKey="unknown"
           stackId="f"
           fill="var(--color-unknown)"
+          stroke="var(--viz-surface)"
+          strokeWidth={1.5}
+        />
+        <Bar
+          dataKey="failed"
+          stackId="f"
+          fill="var(--color-failed)"
           stroke="var(--viz-surface)"
           strokeWidth={1.5}
           radius={[3, 3, 0, 0]}

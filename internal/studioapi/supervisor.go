@@ -289,7 +289,12 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 	restore := sv.handOverName(ctx, w, opts)
 
 	before := sv.fingerprint(opts.Project)
-	name, err := sv.s.Session.Start(ctx, opts, false)
+	// StartRecorded, for the same reason handleCreateRun uses it: this attempt is
+	// detached too, so its line says only that it launched — and without keeping
+	// that record, the retry's ending is never written. Which would have left
+	// exactly the failover episodes these panels are about sitting in the "not
+	// recorded" bucket: the one case the feature exists to report.
+	name, launched, err := sv.s.Session.StartRecorded(ctx, opts, false)
 	if err != nil {
 		restore()
 		return err
@@ -319,6 +324,7 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 		routeID:   w.routeID,
 		attempt:   w.attempt + 1,
 		briefings: w.briefings,
+		meta:      launched,
 	}
 	if brief != nil {
 		next2.briefings = append(next2.briefings, brief.Dir)
@@ -448,6 +454,13 @@ func (sv *supervisor) recordEnding(w *watch, c runtime.ContainerInfo) {
 	meta.ExitCode = c.ExitCode
 	meta.Finished = true
 	meta.Detached = true
+	// Cleared first. The launch record's duration is how long `docker run` took —
+	// a few hundred milliseconds — which was fine while the line said "not
+	// finished" and is a lie the moment it says otherwise. An engine that reports
+	// no start time leaves this at zero, which every reader already treats as
+	// "not measured" (Summary's median excludes it), rather than shipping the
+	// launch latency as the run's length.
+	meta.Duration = 0
 	if !c.StartedAt.IsZero() && c.FinishedAt.After(c.StartedAt) {
 		meta.Duration = c.FinishedAt.Sub(c.StartedAt)
 	}

@@ -510,3 +510,63 @@ func TestARunWithNoLaunchRecordWritesNoEnding(t *testing.T) {
 type recordingSink struct{ written []audit.SessionMeta }
 
 func (r *recordingSink) RecordSession(m audit.SessionMeta) { r.written = append(r.written, m) }
+
+// A retried attempt's ending is recorded too.
+//
+// The first version started it with Session.Start and kept no record, so its
+// launch line stayed unfinished forever — which left exactly the failover
+// episodes the Routing panels report sitting in the "not recorded" bucket, the
+// one case the whole feature exists to describe.
+func TestARetryCarriesARecordItsEndingCanComplete(t *testing.T) {
+	_, fr, sv, _ := supervised(t, 1, "tree-before")
+
+	sv.tick(context.Background())
+
+	if len(fr.started) != 1 {
+		t.Fatalf("started %d containers, want the fallback", len(fr.started))
+	}
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	for _, w := range sv.watched {
+		if w.meta.RunID == "" {
+			t.Error("the retry has no launch record, so its ending would never be written")
+		}
+		if w.meta.Finished {
+			t.Error("the retry's launch record claims to be finished")
+		}
+	}
+}
+
+// A duration nobody measured is not published as one.
+//
+// The record is copied from the launch line, whose duration is how long
+// `docker run` took — fine while the line says "not finished", and a lie the
+// moment it says otherwise.
+func TestAnUnmeasuredRunReportsNoDuration(t *testing.T) {
+	s, fr := newTestServer(t)
+	rec := &recordingSink{}
+	s.Session.Audit = rec
+	sv := s.sv()
+
+	fr.containers = append(fr.containers, runtime.ContainerInfo{
+		ID: "c4", Labels: map[string]string{sandbox.LabelCLI: "1"},
+		State: "exited", ExitCode: 0, FinishedAt: time.Now(),
+		// No StartedAt: the engine did not say when it began.
+	})
+	sv.supervise(&watch{
+		container: "c4",
+		meta: audit.SessionMeta{
+			RunID: "run-x", Detached: true,
+			Duration: 250 * time.Millisecond, // how long the launch call took
+		},
+	})
+
+	sv.tick(context.Background())
+
+	if len(rec.written) != 1 {
+		t.Fatalf("wrote %d lines, want the ending", len(rec.written))
+	}
+	if got := rec.written[0].Duration; got != 0 {
+		t.Errorf("duration = %s, want 0 — the launch latency is not the run's length", got)
+	}
+}

@@ -137,7 +137,19 @@ func (h *DB) Close() error { return h.sql.Close() }
 
 // reset empties the index and forgets where it had read to.
 func (h *DB) reset() error {
-	if _, err := h.sql.Exec(`DELETE FROM runs`); err != nil {
+	// Dropped and rebuilt, not emptied. A schema bump is the case this exists
+	// for, and `CREATE TABLE IF NOT EXISTS` is a no-op against a table that
+	// already exists with the old columns — so deleting the rows left a v2 table
+	// answering v3 queries, and every read failed with "no such column" for as
+	// long as the file lived. Silent, too: /v1/audit falls back to scanning the
+	// log and looks fine, while the stats endpoint 502s.
+	//
+	// Cheap precisely because the file is not the record: the log is, and this is
+	// rebuilt from it on the next sync.
+	if _, err := h.sql.Exec(`DROP TABLE IF EXISTS runs`); err != nil {
+		return err
+	}
+	if _, err := h.sql.Exec(schema); err != nil {
 		return err
 	}
 	_, err := h.sql.Exec(

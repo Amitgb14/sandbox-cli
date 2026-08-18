@@ -48,6 +48,21 @@ version is tagged.
   a fallback chain, because recording what happened needs no chain, only a
   container that will stop.
 
+  The pairing key is **minted per launch**, not borrowed. A detached container's
+  name is deterministic — that is what lets docker's duplicate-name refusal
+  enforce one agent per branch — so using it would have made every run on a
+  branch one run, with the newest ending swallowing the older records, and would
+  have folded both halves of a failover into a single line: the exact episode
+  the Routing screen exists to show. The container id is unique but is the
+  engine's, and this has to survive the rename a failover performs.
+
+  The index gains two columns and a version bump, which is a rebuild — and
+  `reset()` now drops the table rather than emptying it, because
+  `CREATE TABLE IF NOT EXISTS` is a no-op against the old shape: a v2 file
+  answering v3 queries fails every read with "no such column" for as long as it
+  lives. The aggregates behind the dashboard exclude the launch half explicitly,
+  so a Studio run counts once rather than as one pass plus one failure.
+
   What it deliberately does not do is guess. A launch line with no partner —
   a run still going, or one whose ending nobody was around to see because the
   daemon restarted — stays **unfinished**, and the screens say *not recorded*
