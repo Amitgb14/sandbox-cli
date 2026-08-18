@@ -445,6 +445,15 @@ version is tagged.
 
 ### Fixed
 
+- **A usage test had an expiry date on it.** `TestFindPrefersTheLiveRecording`
+  wrote a recording file *now* whose reading was stamped at a fixed instant, and
+  `Abandoned()` compares those two — so the gap grew by a day every day until the
+  test failed on a calendar date, on `main`, having asserted nothing new in
+  between. The fixture is anchored to the clock now, which is what the case was
+  always about: a live recording is one whose file and whose figures are the same
+  moment. The same rot as the frozen fixture epoch fixed earlier this cycle, in a
+  different corner.
+
 - **Studio's egress selector did nothing.** The Launch form offered
   Allowlist / None / Unrestricted, and the network mode is **not expressible per
   request** — a launch may add domains and may never loosen the posture, the same
