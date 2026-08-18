@@ -108,6 +108,36 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ports are checked here as well as inside BuildSpec, and the difference is
+	// which answer the caller gets: BuildSpec's refusal arrives through
+	// Session.Start, which this handler reports as a 502 — "the daemon is broken"
+	// for what is a typo in a port. Asking the same normaliser first turns it back
+	// into the 400 it is, with the message that function already writes.
+	if _, err := sandbox.NormalizePublish(req.Publish); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	// The other two ways publishing is refused, asked here for the same reason:
+	// both are decided by this daemon's own configuration, both are stable
+	// answers a request cannot change, and both otherwise arrive through
+	// Session.Start as a 502 — "the daemon is broken" for a request that was
+	// well-formed and deliberately declined.
+	if len(req.Publish) > 0 {
+		if s.Session.Cfg.Profile == config.ProfileProd {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
+				"this daemon runs the prod profile, which refuses published ports: publishing opens the boundary "+
+					"inward, and prod is the profile for runs nobody is watching.\n"+
+					"  Start the daemon with -profile dev to publish from here"))
+			return
+		}
+		if s.Session.Cfg.Network.Mode == "none" {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
+				"this daemon is configured to reach nothing (network mode \"none\"), so there is no network to "+
+					"publish from — docker would take the flag and the port would never answer"))
+			return
+		}
+	}
+
 	opts, err := s.buildRunOptions(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -282,17 +312,20 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 	}
 
 	opts := sandbox.Options{
-		Project:     project,
-		Detach:      true,
-		Console:     req.Console,
-		RepoID:      repoID,
-		Branch:      branch,
-		Base:        req.Base,
-		Verify:      req.Verify,
-		Image:       req.Image,
-		Memory:      req.Memory,
-		CPUs:        req.CPUs,
-		Allow:       req.Allow,
+		Project: project,
+		Detach:  true,
+		Console: req.Console,
+		RepoID:  repoID,
+		Branch:  branch,
+		Base:    req.Base,
+		Verify:  req.Verify,
+		Image:   req.Image,
+		Memory:  req.Memory,
+		CPUs:    req.CPUs,
+		Allow:   req.Allow,
+		// Normalised and validated by BuildSpec — a bare port becomes a loopback
+		// bind there, and a malformed spec is refused before a container exists.
+		Publish:     req.Publish,
 		ExtraMounts: extraMounts,
 	}
 	for k, v := range req.Env {

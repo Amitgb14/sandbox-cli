@@ -226,6 +226,48 @@ slashes included, so `GET /worktrees/feat/studio-api` works. Run paths are singl
 segment, so address a slash-bearing branch by id or name there — `GET
 /runs?branch=feat/studio-api` finds it.
 
+### Publishing a port — the one way in
+
+`POST /v1/runs` takes `publish: ["8000"]`, in docker's syntax, so an agent's dev
+server can be opened in a browser. It is the only launch option that opens a way
+*in* rather than narrowing what goes out, so three things about it are worth
+knowing.
+
+**A bare port binds loopback**, on the machine running the daemon —
+`8000` becomes `127.0.0.1:8000:8000`. This is where sandbox-cli deliberately
+differs from `docker -p`, which would bind every interface: you asked to see the
+port from your machine, not to serve it to the network. Writing an address out
+(`0.0.0.0:8000:8000`) still does exactly what it says.
+
+**Under an allowlist the firewall is told.** The container's `INPUT` chain is
+default-deny, with a carve-out for exactly the ports published
+(`SANDBOX_INGRESS_PORTS`) — without which the port would be open on the host and
+answer nothing.
+
+**A repository still cannot ask for one.** `trust.go` refuses `ports:` from a
+project `.sandbox.yaml`, because declaring a dev-server port is a real use but a
+decision about the boundary, and it belongs to the user. A request carrying
+`publish` *is* the user, driving their own daemon — the same act as typing
+`--publish`. That distinction is the whole of the rule: not *whether* a port may
+be opened, but *who* may decide.
+
+Three refusals arrive before anything starts, rather than as a 502 from the
+launch: a malformed spec (400, from the same normaliser the CLI uses), a `prod`
+daemon (422 — publishing opens the boundary inward, and prod is the profile for
+runs nobody is watching), and `network: none` (422 — no network to publish from).
+
+Runs report their ports back at `GET /v1/runs/{id}/config` →
+`network.ingressPorts`, **when an allowlist is in force**. That is not a gap in
+the reporting: `SANDBOX_INGRESS_PORTS` is what the field is read from, and it
+exists only where there is a default-deny inbound chain to carve. On an
+unrestricted daemon the port is published and nothing was carved, so there is
+nothing to report — the ports are still visible in the run's own argv.
+
+**On a remote daemon**, remember whose loopback it is: a bare port binds
+`127.0.0.1` on that machine, so a browser elsewhere cannot reach it. Publish on a
+reachable address, or tunnel — `ssh -N -L 8000:127.0.0.1:8000 you@box` — which
+keeps the port off the network the way the default intends.
+
 ### Agent routing
 
 `POST /v1/runs` takes `fallback: ["codex"]` beside `agent`. Studio **probes the

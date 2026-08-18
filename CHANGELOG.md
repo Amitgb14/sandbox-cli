@@ -13,6 +13,22 @@ version is tagged.
 
 ### Added
 
+- **Studio can publish a port.** An agent that starts a dev server is a real
+  reason to want one, and the Launch form now takes ports in docker's syntax. A
+  bare port binds `127.0.0.1` on the machine running the daemon — not every
+  interface, which is where sandbox-cli deliberately differs from `docker -p` —
+  and under an allowlist the firewall's default-deny inbound chain gains a
+  carve-out for exactly those ports, without which the port would be open on the
+  host and answer nothing.
+
+  A repository still cannot ask for one: `trust.go` refuses `ports:` from a
+  project file because declaring a dev-server port is a decision about the
+  boundary that belongs to the user — and a request from the Launch form *is* the
+  user, on their own daemon. The rule was never about whether a port may be
+  opened; it is about who decides. A malformed spec is now a 400 from the same
+  normaliser the CLI uses, rather than a 502 that reads as "the daemon is broken"
+  when the truth is a typo in a port.
+
 - **The Routing screen answers the question it is opened with: if I launch now,
   what runs?** Each configured chain is resolved against the probe results on the
   same page — the join a reader previously had to do in their head, between a
@@ -30,6 +46,41 @@ version is tagged.
   different actions. Beside it, asked-for versus ran per agent: the gap is the
   only direct measure of what routing is doing to a setup, and an agent running
   work it was never asked for is doing it under its own login and its own bill.
+
+- **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
+  sandbox-cli never supplies the key.** `gateway:` in your own config names the
+  agents, the endpoint, and the *variable* the credential lives in — a name, not
+  a value. There is no bundled account and no fallback: a run configured for a
+  gateway with nothing to read is **refused**, because the alternatives are both
+  silent and both wrong, reaching the gateway unauthenticated or falling through
+  to the vendor on the agent's own credential.
+
+  Four things have to agree or the run is worse than unconfigured, so they are
+  resolved together: the base URL, the key variable (forwarded by name, exactly
+  like every other credential — its value never reaches the rendered argv), the
+  probe host, and the egress allowlist, which gains the gateway's domain because
+  otherwise the run cannot reach the thing it was configured to use and fails as
+  a connection error naming nothing.
+
+  Two refusals carry the design. An agent that speaks its **vendor's own API
+  shape** — claude, gemini, droid — is refused rather than pointed at an
+  OpenAI-shaped endpoint, since that failure lands inside a container as a parse
+  error blamed on the model; the table lists only agents where the wiring is
+  known, and marks codex unverified rather than claiming it. And a plaintext
+  `base_url` is refused: the credential and every prompt cross that connection.
+
+  `gateway:` is **user-config only**. It names the host every prompt travels
+  through and the credential that pays for it — `providers:`'s three objections
+  at once, plus one of its own, since a gateway reads the work.
+
+  Studio's Routing screen draws it. A gateway is a node the traffic passes
+  *through* rather than another agent in the ring, because that is what it is:
+  agents sharing one are sharing a credential, a bill and a single point of
+  failure no chain can route around — putting it beside claude in the ring would
+  say the opposite, that it is one more thing to fall through to. Their nodes
+  carry a dashed ring, the providers list says *via <host>*, and the gateway's own
+  probe result is what is shown, since the vendor behind it being down is the case
+  a gateway survives.
 
 ### Fixed
 
@@ -77,43 +128,6 @@ version is tagged.
   its own band on the chart and a row badge saying so. It is the same rule the
   rest of the tool keeps about absent readings: a missing measurement is not a
   good one, and `sandbox-cli list` is where a detached run's fate actually lives.
-
-### Added
-
-- **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
-  sandbox-cli never supplies the key.** `gateway:` in your own config names the
-  agents, the endpoint, and the *variable* the credential lives in — a name, not
-  a value. There is no bundled account and no fallback: a run configured for a
-  gateway with nothing to read is **refused**, because the alternatives are both
-  silent and both wrong, reaching the gateway unauthenticated or falling through
-  to the vendor on the agent's own credential.
-
-  Four things have to agree or the run is worse than unconfigured, so they are
-  resolved together: the base URL, the key variable (forwarded by name, exactly
-  like every other credential — its value never reaches the rendered argv), the
-  probe host, and the egress allowlist, which gains the gateway's domain because
-  otherwise the run cannot reach the thing it was configured to use and fails as
-  a connection error naming nothing.
-
-  Two refusals carry the design. An agent that speaks its **vendor's own API
-  shape** — claude, gemini, droid — is refused rather than pointed at an
-  OpenAI-shaped endpoint, since that failure lands inside a container as a parse
-  error blamed on the model; the table lists only agents where the wiring is
-  known, and marks codex unverified rather than claiming it. And a plaintext
-  `base_url` is refused: the credential and every prompt cross that connection.
-
-  `gateway:` is **user-config only**. It names the host every prompt travels
-  through and the credential that pays for it — `providers:`'s three objections
-  at once, plus one of its own, since a gateway reads the work.
-
-  Studio's Routing screen draws it. A gateway is a node the traffic passes
-  *through* rather than another agent in the ring, because that is what it is:
-  agents sharing one are sharing a credential, a bill and a single point of
-  failure no chain can route around — putting it beside claude in the ring would
-  say the opposite, that it is one more thing to fall through to. Their nodes
-  carry a dashed ring, the providers list says *via <host>*, and the gateway's own
-  probe result is what is shown, since the vendor behind it being down is the case
-  a gateway survives.
 
 ### Changed
 

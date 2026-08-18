@@ -899,6 +899,17 @@ export function buildArgv(run: Run): string[] {
     argv.push("-e", `SANDBOX_EGRESS_ALLOW=${run.network.allow.join(",")}`);
     argv.push("-e", `SANDBOX_RUN_AS=${run.security.user}`);
   }
+  // Published ports, and — under an allowlist only — the carve-out that makes
+  // them answer. Both, because the preview exists to show what you are about to
+  // get, and the one launch option that opens a way in is the last thing that
+  // should be missing from it. The pairing is not decoration: without the
+  // carve-out the port is open on the host and refused inside the container.
+  for (const p of run.network.ingressPorts ?? []) {
+    argv.push("-p", `127.0.0.1:${p}:${p}`);
+  }
+  if (run.network.mode === "allowlist" && (run.network.ingressPorts ?? []).length > 0) {
+    argv.push("-e", `SANDBOX_INGRESS_PORTS=${(run.network.ingressPorts ?? []).join(",")}`);
+  }
   argv.push("--security-opt", "no-new-privileges");
   argv.push("--cap-drop", "ALL");
   argv.push("--pids-limit", String(run.security.pidsLimit));
