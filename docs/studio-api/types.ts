@@ -140,6 +140,13 @@ export interface AgentInfo {
   name: string;
   persistDir: string;
   envAllow: string[];
+  /**
+   * Whether a conversation of this agent's can be reopened by its native session
+   * id (`claude --resume`, `codex resume`, `opencode --session`). False for
+   * gemini and droid, which declare none — for those, "carry this conversation
+   * on" is not expressible and a client must not offer it.
+   */
+  canResume: boolean;
 }
 
 export interface AgentsResponse {

@@ -35,6 +35,17 @@ func agentAuth(persistDir string) AgentAuth {
 	return a
 }
 
+// canResume reports whether this agent's conversations can be reopened by id.
+//
+// The same table resumeArgsFor reads when a run is built, asked one layer
+// earlier: a listing that advertised a resume the launch would then refuse is
+// the shape of a control that does nothing, which CanSkipPermissions exists to
+// avoid on the neighbouring question.
+func canResume(agent string) bool {
+	store, ok := agentctx.Lookup(agent)
+	return ok && len(store.Resume) > 0
+}
+
 // handleAgents lists the agents this API can launch. Only names with a verified
 // headless mode are ever registered in internal/agents (see its package doc),
 // which is exactly the constraint POST /runs needs: every run this API starts is
@@ -85,6 +96,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			Env:                  env,
 			HeadlessVerified:     true,
 			CanSkipPermissions:   d.CanSkipPermissions(),
+			CanResume:            canResume(d.Name),
 			SkipPermissionArgs:   d.SkipPermissionArgs,
 			AutonomousInvocation: invocation,
 			Delivery:             delivery,

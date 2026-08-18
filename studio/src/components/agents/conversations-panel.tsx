@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { MessagesSquare, Search } from "lucide-react";
+import Link from "next/link";
+import { MessagesSquare, Play, Search } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { EmptyState } from "@/components/common/empty-state";
 import { SessionViewer } from "@/components/agents/session-viewer";
-import { useAgentSessions, useProjects } from "@/lib/api/queries";
+import { useAgentSessions, useAgents, useProjects } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 import { formatBytesShort, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,13 @@ import type { SessionSummary } from "@/lib/types";
  * Only the sandbox ones can be resumed here, which is why the resume picker on
  * Launch asks a narrower question. Reading is wider on purpose: a conversation
  * is worth looking at whether or not this daemon could reopen it.
+ *
+ * **Continue** is that narrower question as a row action: it deep-links to
+ * Launch with this agent, this conversation and a console, rather than making
+ * someone re-find the session in a dropdown they have to know is there. It is
+ * offered on exactly the rows a launch would accept — the sandbox store, and an
+ * agent whose CLI has a resume argv at all (`canResume`, from the daemon) —
+ * because an offer the launch would refuse is worse than no offer.
  */
 export function ConversationsPanel({ agent }: { agent: string }) {
   const [query, setQuery] = useState("");
@@ -40,6 +48,11 @@ export function ConversationsPanel({ agent }: { agent: string }) {
   const [showUnattributed, setShowUnattributed] = useState(false);
   const repoFilter = useUi((s) => s.repoFilter);
   const { data: projects } = useProjects();
+  const { data: agents } = useAgents();
+  // Absent while the daemon has not answered, and absent means no offer: an
+  // agent whose CLI cannot reopen a session by id has nothing to continue, and
+  // guessing yes here would put a button in front of a refusal.
+  const canResume = agents?.find((a) => a.name === agent)?.canResume ?? false;
   const repoName = projects?.find((p) => p.id === repoFilter)?.name;
   // A high bound rather than the picker's fifty: this list is ordered by
   // recency, so a small cap hides exactly the older conversation somebody came
@@ -139,12 +152,20 @@ export function ConversationsPanel({ agent }: { agent: string }) {
             }
           />
         )}
+        {!isPending && sessions.length > 0 && !canResume && (
+          // Said once, above the list, rather than as a disabled button on every
+          // row: the fact is about the agent, not about any one conversation.
+          <p className="border-b px-4 py-2 text-[11px] text-muted-foreground">
+            {agent} has no way to reopen a conversation by id, so these can be read
+            but not carried on.
+          </p>
+        )}
         <ul className="divide-y">
           {sessions.map((s) => (
-            <li key={s.id}>
+            <li key={s.id} className="flex items-center">
               <button
                 onClick={() => setOpen(s)}
-                className="flex w-full flex-wrap items-center gap-2 px-4 py-2.5 text-left hover:bg-accent"
+                className="flex min-w-0 flex-1 flex-wrap items-center gap-2 px-4 py-2.5 text-left hover:bg-accent"
               >
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm">
@@ -168,6 +189,38 @@ export function ConversationsPanel({ agent }: { agent: string }) {
                   <span>Open</span>
                 </Button>
               </button>
+              {/* Outside the row button, because a button inside a button is not
+                  a thing the browser will honour — and this is a navigation, not
+                  a second way to open the viewer.
+
+                  The link carries the repository as well as the session: a
+                  conversation is about files, so reopening it against another
+                  tree is a silent wrong answer, and `repoId` is the only thing
+                  on the row that says which one it was. A session with no
+                  attribution is deliberately still offered — the Launch form
+                  asks for the repository in that case rather than picking. */}
+              {canResume && s.store === "sandbox" && (
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="mr-4 h-6 shrink-0 gap-1 px-2 text-[11px]"
+                >
+                  <Link
+                    href={{
+                      pathname: "/launch",
+                      query: {
+                        agent,
+                        resume: s.id,
+                        ...(s.repoId ? { repo: s.repoId } : {}),
+                      },
+                    }}
+                  >
+                    <Play className="size-3" />
+                    Continue
+                  </Link>
+                </Button>
+              )}
             </li>
           ))}
         </ul>

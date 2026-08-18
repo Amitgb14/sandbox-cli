@@ -336,6 +336,13 @@ export interface Agent {
    */
   canSkipPermissions?: boolean;
   /**
+   * Whether a conversation of this agent's can be reopened by id. False for
+   * gemini and droid, whose CLIs have no resume argv — the conversations panel
+   * reads this before offering to carry one on, rather than offering a control
+   * the launch would refuse.
+   */
+  canResume?: boolean;
+  /**
    * That flag, verbatim — `--dangerously-skip-permissions`, `--yolo`. From the
    * daemon rather than kept here, so the control can name what it adds without
    * this file becoming a second copy of a security-relevant argv.

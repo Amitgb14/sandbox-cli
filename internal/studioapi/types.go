@@ -347,6 +347,20 @@ type AgentInfo struct {
 	// CanSkipPermissions is false.
 	SkipPermissionArgs []string `json:"skipPermissionArgs,omitempty"`
 
+	// CanResume is whether a conversation of this agent's can be reopened by its
+	// native session id — `claude --resume`, `codex resume`, `opencode --session`.
+	// **Gemini and droid declare none**, so for them "carry this conversation on"
+	// is not expressible at all, and the only honest continuation is a fresh run
+	// with a briefing.
+	//
+	// Sent rather than inferred for the same reason CanSkipPermissions is: a
+	// client that cannot see the flag cannot warn about the agents that lack it,
+	// and a picker offering "resume" where the argv has no way to say it would be
+	// offering a control the request does not have. Read from internal/agentctx's
+	// store table — the same table resumeArgsFor consults when the run is built,
+	// so the offer and the launch cannot disagree.
+	CanResume bool `json:"canResume"`
+
 	// AutonomousInvocation is the argv a fleet task or a detached run would start
 	// this agent with, prompt elided — the same string `fleet run --dry-run`
 	// prints, so a launch preview and a dry run cannot disagree about what is

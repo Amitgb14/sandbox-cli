@@ -81,6 +81,21 @@ export function LaunchForm() {
   const removeRun = useRemoveRun();
 
   const initialAgent = (search.get("agent") as AgentName | null) ?? "claude";
+  /**
+   * `?resume=` arrives from a conversation row's **Continue**, with `?agent=`
+   * and — when the conversation could be attributed — `?repo=`.
+   *
+   * It sets the console at the same time, and that is not a convenience: the
+   * daemon refuses a headless resume outright, because replaying one prompt into
+   * an old conversation and exiting is not what anyone means by carrying it on.
+   * A deep link that set the session without the console would land on a form
+   * that cannot be submitted, with nothing on screen saying why.
+   *
+   * Applied at mount rather than in an effect: unlike `?branch=`, neither value
+   * has to be matched against a list the daemon has not sent yet.
+   */
+  const initialResume = search.get("resume");
+  const initialRepo = search.get("repo");
   const routingPrefsAtMount = useRef(routingPrefs).current;
 
   const [req, setReq] = useState<LaunchRequest>({
@@ -91,7 +106,11 @@ export function LaunchForm() {
     // here before then: a repository this form invented is one the daemon has
     // never heard of, which is exactly how a path from a fixture ended up in a
     // real launch request.
-    repo: repoFilter ?? "",
+    // The link's repository outranks the sidebar's scope: it says which tree
+    // this conversation happened in, and resuming it against another one is the
+    // failure that would be hardest to see afterwards. Empty when the session
+    // could not be attributed, which leaves the picker asking.
+    repo: initialRepo ?? repoFilter ?? "",
     // Seeded from the remembered choice for this agent, so a fallback set once
     // is still there next time rather than something to re-pick on every launch.
     fallback: initialAgent ? (routingPrefsAtMount[initialAgent] ?? []) : [],
@@ -103,9 +122,9 @@ export function LaunchForm() {
     memory: "4g",
     cpus: "2",
     detach: false,
-    console: false,
+    console: !!initialResume,
     skipPermissions: false,
-    resume: null,
+    resume: initialResume,
     persistAuth: true,
     sync: true,
     statusline: true,
@@ -286,9 +305,18 @@ export function LaunchForm() {
                   // brings that agent's remembered answer rather than carrying
                   // the previous agent's — which would silently pair two agents
                   // nobody put together.
+                  //
+                  // The conversation is dropped for the sharper version of the
+                  // same reason: a session id is a primary key into *one*
+                  // vendor's private store, so carrying it across agents asks
+                  // codex to reopen a conversation claude wrote. That was always
+                  // reachable by picking a session and then changing the agent;
+                  // arriving from a conversation row's Continue makes it the
+                  // common path, since the form now lands with one already set.
                   patch({
                     agent: next,
                     fallback: next ? (routingPrefs[next] ?? []) : [],
+                    resume: null,
                   });
                 }}
               >
