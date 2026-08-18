@@ -983,6 +983,21 @@ type RunCreateRequest struct {
 	// Env sets literal KEY=VALUE pairs in the container. Reserved control
 	// variables (config.IsReservedEnv) are refused, same as the CLI.
 	Env map[string]string `json:"env,omitempty"`
+
+	// There is deliberately no field here for publishing a port.
+	//
+	// `--publish` exists on the CLI and nothing equivalent is accepted over
+	// HTTP, which is a refusal rather than an omission: in allowlist mode the
+	// container's INPUT chain is default-deny except for the ports it names, so
+	// publishing is the one launch option that opens a way *in* — through a
+	// boundary this daemon otherwise maintains, at the request of whoever can
+	// reach this port. The rest of the API widens nothing a caller could not
+	// already do by starting a container with an argv.
+	//
+	// So it stays a flag typed on the machine that would be exposed. A run
+	// started that way is still reported here (RunNetwork.IngressPorts): seeing
+	// ingress and asking for it are different acts, and only one of them needs
+	// to be refused.
 }
 
 // RunStopRequest is the body of POST /runs/:id/stop.

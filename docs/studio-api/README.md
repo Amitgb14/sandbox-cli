@@ -226,6 +226,21 @@ slashes included, so `GET /worktrees/feat/studio-api` works. Run paths are singl
 segment, so address a slash-bearing branch by id or name there — `GET
 /runs?branch=feat/studio-api` finds it.
 
+### Ingress is not requestable
+
+`POST /v1/runs` has **no field for publishing a port**, and that is a refusal
+rather than a gap. In allowlist mode the container's `INPUT` chain is default-deny
+with a carve-out only for the ports `--publish` names, so publishing is the one
+launch option that opens a way *in* — through a boundary this daemon otherwise
+maintains, at the request of whoever can reach this API. Everything else here
+widens nothing a caller could not already do by starting a container with an
+argv.
+
+So it stays a flag typed on the machine that would be exposed. Runs started that
+way are still *reported*: `GET /v1/runs/{id}/config` carries
+`network.ingressPorts`, read back from the container. Seeing ingress and asking
+for it are different acts, and only one of them needs to be refused.
+
 ### Agent routing
 
 `POST /v1/runs` takes `fallback: ["codex"]` beside `agent`. Studio **probes the

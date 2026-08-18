@@ -763,8 +763,7 @@ function previewArgv(
  *                     could pick its own profile would drop a run out of prod.
  *   network.mode      tighten-only, and not expressible per-request at all.
  *   envAllow          decides which host variables cross into the container.
- *   share / publish   a mount and an inbound port — the two widest things a
- *                     launch option can add.
+ *   share             a mount, the widest thing a launch option can add.
  *   persistAuth       whether an OAuth refresh token is mounted.
  *
  * Those are shown so you can see what you are about to get, and they come from
@@ -773,6 +772,17 @@ function previewArgv(
  *
  * What does travel is the task: which agent, what to do, where, and the limits
  * that only ever narrow it.
+ *
+ * **Publishing a port is not on either list, because it is not requestable at
+ * all** — `RunCreateRequest` has no field for it, so there is nothing a browser
+ * can send that opens one. That is a refusal rather than a gap. In allowlist
+ * mode the container's INPUT chain is default-deny with a carve-out only for
+ * ports named by `--publish`, so a published port is a hole punched through a
+ * boundary the daemon otherwise maintains, opened by whoever can reach this API.
+ * Asking for it stays a flag someone types in a terminal on the machine that
+ * would be exposed. Runs started that way still *report* their ports here — see
+ * `RunNetwork.ingressPorts` — because seeing ingress and requesting it are
+ * different acts.
  */
 function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {};

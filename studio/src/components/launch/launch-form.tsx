@@ -112,7 +112,6 @@ export function LaunchForm() {
     verify: "",
     envAllow: [],
     share: [],
-    publish: [],
   });
 
   // Adopt a repository as soon as the daemon lists one: whichever the app is

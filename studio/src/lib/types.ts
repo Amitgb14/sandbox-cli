@@ -646,7 +646,6 @@ export interface LaunchRequest {
   verify: string;
   envAllow: string[];
   share: string[];
-  publish: string[];
 }
 
 export interface LaunchPreview {
