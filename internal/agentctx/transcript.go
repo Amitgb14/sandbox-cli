@@ -42,7 +42,18 @@ func Transcript(path string, n int) ([]Message, error) {
 		return nil, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("not a regular file: %s", path)
+		return nil, errNotRegular(path)
+	}
+	// Which reader, decided by the file rather than by the caller.
+	//
+	// Every caller has a path and only some have an agent — the console
+	// correlates one, a briefing is asked for by id — so a format *parameter*
+	// would be a fact reconstructed at three call sites, and a caller that
+	// reconstructed it wrongly would get zero messages with nothing to say why.
+	// The file answers for itself: a rollout opens with a session_meta line that
+	// a claude transcript has no shape for.
+	if sniffFormat(path) == FormatCodexRollout {
+		return codexTranscript(path, n)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -187,4 +198,42 @@ func FirstPrompt(path string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// errNotRegular is the refusal shared by every reader here: these files live in
+// a directory the agent can write, so a symlink named like a transcript must be
+// refused rather than followed and rendered.
+func errNotRegular(path string) error {
+	return fmt.Errorf("not a regular file: %s", path)
+}
+
+// sniffFormat reads far enough to tell a codex rollout from a claude transcript.
+//
+// Bounded to the first few lines: a rollout's session_meta is line one, and a
+// file that has not said what it is by then is read as claude's — the format
+// this package was written against, and the one whose reader treats an
+// unrecognised line as skippable rather than fatal.
+func sniffFormat(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return FormatClaudeJSONL
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for i := 0; i < 4 && sc.Scan(); i++ {
+		var probe struct {
+			Type    string `json:"type"`
+			Payload *struct {
+				SessionID string `json:"session_id"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(sc.Bytes(), &probe) != nil {
+			continue
+		}
+		if probe.Type == "session_meta" && probe.Payload != nil {
+			return FormatCodexRollout
+		}
+	}
+	return FormatClaudeJSONL
 }

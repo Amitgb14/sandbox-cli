@@ -13,6 +13,27 @@ version is tagged.
 
 ### Added
 
+- **Codex conversations are readable, and the Conversations panel is no longer
+  claude-only.** sandbox-cli now understands codex's rollout transcripts, so its
+  sessions carry real titles and turn counts instead of listing as `partial`,
+  its runs show their conversation on the run page, and a briefing handed *from*
+  a codex conversation carries what was actually said. The panel picks among the
+  agents whose store this machine has verified; formats with no reader still
+  list honestly, with the id and dates real and the rest shown as unknown.
+
+  Two impostors are dropped, both confirmed against a real rollout, and both are
+  the same rule claude's reader already keeps — a user turn is a prompt somebody
+  typed. Codex's `developer` messages are its own shipped instructions, and it
+  injects an `<environment_context>` block as the first user turn of every
+  session: counting them made a one-prompt session report two and titled every
+  conversation `<environment_context>`.
+
+  Fixes a session id that was wrong wherever a store prefixes its file names: a
+  codex run reported `rollout-<timestamp>-<uuid>` as its conversation id and
+  offered a resume command built from it, which the agent refuses. The rule for
+  reading an id out of a path now lives in one place.
+
+
 - **Carry a conversation on, or hand it to another agent, from the row it is
   on.** Reading a conversation in Studio and continuing it were two screens
   apart; every conversation now offers **Continue**, which opens Launch with the

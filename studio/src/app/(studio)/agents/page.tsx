@@ -131,11 +131,12 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {/* Claude only, because it is the only agent sandbox-cli has a verified
-          transcript reader for. The others list as `partial` — id and dates real,
-          everything else unknown — and a panel that showed rows of question marks
-          would be claiming to read something it cannot. */}
-      <ConversationsPanel agent="claude" />
+      {/* Claude by default because it is the oldest verified reader, not because
+          it is the only one: codex's rollout format is read too, and the panel
+          picks among the agents whose store this daemon has verified. Formats
+          with no reader still list as `partial` — id and dates real, title and
+          turn count shown as unknown rather than as zero. */}
+      <ConversationsPanel />
     </div>
   );
 }
