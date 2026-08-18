@@ -8,7 +8,10 @@ import {
   GitBranch,
   Skull,
   Square,
-  Timer, Shuffle } from "lucide-react";
+  MessagesSquare,
+  Shuffle,
+  Timer,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -88,6 +91,27 @@ export function RunHeader({ run }: { run: Run }) {
                     : run.routeReason
                       ? `${run.routedFrom} was skipped before it started — ${run.routeReason}. This agent ran with its own login and its own transcript; there was no conversation to inherit.`
                       : `${run.routedFrom} was asked for and this agent ran instead.`}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {/* A handoff is not a failover, and the two must not wear one badge:
+                routing says a provider stopped answering, this says a person
+                read a conversation and chose who should carry it on. A run can
+                carry both — handed over, then routed when the target was down —
+                so they render side by side rather than as one line. */}
+            {run.handoffFrom && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="gap-1 text-[10px]">
+                    <MessagesSquare className="size-3" />
+                    briefed from {run.handoffFrom}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Started from {run.handoffFrom}&apos;s conversation
+                  {run.handoffSession ? ` ${run.handoffSession.slice(0, 8)}` : ""} — a briefing
+                  mounted read-only at /sandbox/context, not the conversation itself. This agent
+                  began a new one, under its own login and its own transcript.
                 </TooltipContent>
               </Tooltip>
             )}

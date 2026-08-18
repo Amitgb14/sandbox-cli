@@ -158,6 +158,14 @@ export interface Run {
    * listing and asks why it says codex when they picked claude.
    */
   routedFrom?: string;
+  /**
+   * The agent whose conversation this run was briefed with, and the session it
+   * came from — set when somebody handed the work over, rather than when
+   * routing did. Both look like "codex, after claude" in a listing and answer
+   * different questions, which is why they are separate fields.
+   */
+  handoffFrom?: string;
+  handoffSession?: string;
   routeReason?: string;
 
   /**
@@ -612,6 +620,17 @@ export interface LaunchRequest {
    * agent it actually got.
    */
   fallback: string[];
+  /**
+   * Another agent's conversation to start *from*, as a briefing rather than a
+   * resume. Null for an ordinary launch.
+   *
+   * Separate from `resume` because they are opposites: resume reopens a
+   * conversation with the agent that wrote it, this starts a new one carrying
+   * evidence about an old. The daemon refuses them together, so the form never
+   * holds both — picking a conversation to hand over clears the resume, and
+   * vice versa.
+   */
+  handoffFrom: { agent: string; sessionId: string } | null;
 
   /**
    * Which registered repository this run is about, by `Project.id`. Empty means

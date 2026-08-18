@@ -189,6 +189,14 @@ export interface Run {
   containerId: string;
   name: string;
   kind: RunKind;
+  /**
+   * The agent whose conversation this run was briefed with, and the session it
+   * came from — set when a person handed the work over. Distinct from
+   * `routedFrom`, which means a provider stopped answering: both read "codex,
+   * after claude" and answer different questions.
+   */
+  handoffFrom?: string;
+  handoffSession?: string;
   state: RunState;
   /** Set once state is "exited". */
   exitCode?: number;
@@ -255,6 +263,14 @@ export interface RunCreateRequest {
   worktree?: string;
 
   agent?: string;
+  /**
+   * Start this run with a briefing built from another agent's conversation.
+   * Refused with `resume` (opposites), without an agent (nothing would read it)
+   * and without a prompt (the briefing says what happened, the prompt says what
+   * to do). The source agent may be the same one — that is the only way to
+   * carry on a gemini or droid conversation, since neither can reopen by id.
+   */
+  handoffFrom?: HandoffRef;
   prompt?: string;
   command?: string[];
 

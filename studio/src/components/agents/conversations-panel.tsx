@@ -2,13 +2,21 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { MessagesSquare, Play, Search } from "lucide-react";
+import { ChevronDown, MessagesSquare, Search } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
 import { EmptyState } from "@/components/common/empty-state";
 import { SessionViewer } from "@/components/agents/session-viewer";
@@ -32,12 +40,19 @@ import type { SessionSummary } from "@/lib/types";
  * Launch asks a narrower question. Reading is wider on purpose: a conversation
  * is worth looking at whether or not this daemon could reopen it.
  *
- * **Continue** is that narrower question as a row action: it deep-links to
- * Launch with this agent, this conversation and a console, rather than making
- * someone re-find the session in a dropdown they have to know is there. It is
- * offered on exactly the rows a launch would accept — the sandbox store, and an
- * agent whose CLI has a resume argv at all (`canResume`, from the daemon) —
- * because an offer the launch would refuse is worse than no offer.
+ * **Continue with ▾** is the row action, and it asks the only question a reader
+ * of a conversation actually has: *who works on this next?* Picking the agent
+ * that held it reopens the conversation; picking another starts that one with a
+ * briefing about it. One gesture, two mechanisms, and the menu says which each
+ * row will get rather than hiding the difference — a resume carries the
+ * conversation, a briefing carries evidence about it.
+ *
+ * Every row can be handed over, including the **host** store: your own
+ * ~/.claude history is exactly what "my claude conversation, run it via codex"
+ * means. Only *resume* is narrower, because reopening a host session would mean
+ * mounting the host's history into a container that was not asked to have it —
+ * and because gemini and droid have no resume argv at all, which is what
+ * `canResume` reports.
  */
 export function ConversationsPanel({ agent }: { agent: string }) {
   const [query, setQuery] = useState("");
@@ -53,6 +68,11 @@ export function ConversationsPanel({ agent }: { agent: string }) {
   // agent whose CLI cannot reopen a session by id has nothing to continue, and
   // guessing yes here would put a button in front of a refusal.
   const canResume = agents?.find((a) => a.name === agent)?.canResume ?? false;
+  // Only agents with a verified headless argv: those are the ones POST /runs
+  // will start, and the daemon refuses the rest. The conversation's own agent
+  // stays in the list even when it cannot resume — a briefing from itself is
+  // the only way to carry a gemini conversation on.
+  const targets = (agents ?? []).filter((a) => a.headlessVerified);
   const repoName = projects?.find((p) => p.id === repoFilter)?.name;
   // A high bound rather than the picker's fifty: this list is ordered by
   // recency, so a small cap hides exactly the older conversation somebody came
@@ -156,8 +176,9 @@ export function ConversationsPanel({ agent }: { agent: string }) {
           // Said once, above the list, rather than as a disabled button on every
           // row: the fact is about the agent, not about any one conversation.
           <p className="border-b px-4 py-2 text-[11px] text-muted-foreground">
-            {agent} has no way to reopen a conversation by id, so these can be read
-            but not carried on.
+            {agent} has no way to reopen a conversation by id, so Continue starts a
+            fresh run with a briefing about it rather than resuming — including when
+            the agent picked is {agent} itself.
           </p>
         )}
         <ul className="divide-y">
@@ -199,28 +220,7 @@ export function ConversationsPanel({ agent }: { agent: string }) {
                   on the row that says which one it was. A session with no
                   attribution is deliberately still offered — the Launch form
                   asks for the repository in that case rather than picking. */}
-              {canResume && s.store === "sandbox" && (
-                <Button
-                  asChild
-                  variant="outline"
-                  size="sm"
-                  className="mr-4 h-6 shrink-0 gap-1 px-2 text-[11px]"
-                >
-                  <Link
-                    href={{
-                      pathname: "/launch",
-                      query: {
-                        agent,
-                        resume: s.id,
-                        ...(s.repoId ? { repo: s.repoId } : {}),
-                      },
-                    }}
-                  >
-                    <Play className="size-3" />
-                    Continue
-                  </Link>
-                </Button>
-              )}
+              <ContinueMenu agent={agent} session={s} targets={targets} />
             </li>
           ))}
         </ul>
@@ -228,5 +228,79 @@ export function ConversationsPanel({ agent }: { agent: string }) {
 
       <SessionViewer agent={agent} session={open} onOpenChange={(o) => !o && setOpen(null)} />
     </Card>
+  );
+}
+
+/**
+ * Who works on this conversation next.
+ *
+ * The two mechanisms are named rather than merged: **reopen** is the agent's own
+ * resume, which continues the conversation; **brief and start** is a new
+ * conversation carrying `internal/handoff`'s export. A menu that said only
+ * "continue" for both would be claiming the second one resumes something, which
+ * is exactly what the target must not be told.
+ *
+ * The repository rides along whenever the conversation could be attributed to
+ * one, because a conversation is about files and reopening it against another
+ * tree is a silent wrong answer. When it could not, the link omits it and the
+ * Launch form asks.
+ */
+function ContinueMenu({
+  agent,
+  session,
+  targets,
+}: {
+  agent: string;
+  session: SessionSummary;
+  targets: { name: string; label: string }[];
+}) {
+  if (targets.length === 0) return null;
+  const repo = session.repoId ? { repo: session.repoId } : {};
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="mr-4 h-6 shrink-0 gap-1 px-2 text-[11px]">
+          Continue with
+          <ChevronDown className="size-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+          {session.title || "This conversation"}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {targets.map((t) => {
+          // Resumable is the daemon's own answer and already accounts for both
+          // facts — the sandbox-owned store, and an agent that can reopen a
+          // session by id. Anything else is a briefing, including the same agent
+          // when it has no resume argv.
+          const reopens = t.name === agent && session.resumable;
+          return (
+            <DropdownMenuItem key={t.name} asChild>
+              <Link
+                href={{
+                  pathname: "/launch",
+                  query: reopens
+                    ? { agent, resume: session.id, ...repo }
+                    : {
+                        agent: t.name,
+                        handoffAgent: agent,
+                        handoffSession: session.id,
+                        ...repo,
+                      },
+                }}
+                className="flex items-center justify-between gap-2"
+              >
+                <span>{t.label}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {reopens ? "reopen" : "brief and start"}
+                </span>
+              </Link>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
