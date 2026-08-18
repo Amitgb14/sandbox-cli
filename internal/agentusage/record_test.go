@@ -3,6 +3,7 @@ package agentusage
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -69,10 +70,21 @@ func TestFindPrefersTheLiveRecording(t *testing.T) {
 	rec := filepath.Join(dir, "usage.json")
 	cache := filepath.Join(dir, ".claude.json")
 
-	os.WriteFile(rec, []byte(recordJSON), 0o600)
+	// Written *now*, with a reading stamped now, because that is the state under
+	// test: a live recording whose file and whose figures are the same moment.
+	//
+	// Relative to the clock rather than to a fixed instant, and that is the whole
+	// repair. Abandoned() compares the file's mtime with the reading inside it,
+	// and the fixture's reading was pinned to a date in the past while its file
+	// was written today — so the gap grew by a day every day and the test began
+	// failing on a calendar date, having asserted nothing new. A fixed timestamp
+	// in a test about freshness is a test with an expiry date on it.
+	now := time.Now()
+	fresh := strings.Replace(recordJSON, "1786742400", itoa(now.Unix()), 1)
+	os.WriteFile(rec, []byte(fresh), 0o600)
 	// A cache stamped three weeks before the recording — the real shape of this
 	// machine: written recently, reading long dead.
-	old := (time.Unix(1786742400, 0).Add(-21 * 24 * time.Hour).UnixMilli())
+	old := now.Add(-21 * 24 * time.Hour).UnixMilli()
 	os.WriteFile(cache, []byte(`{"cachedUsageUtilization":{"fetchedAtMs":`+itoa(old)+
 		`,"utilization":{"five_hour":{"utilization":90}}}}`), 0o600)
 
