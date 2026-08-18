@@ -49,6 +49,16 @@ type SessionMeta struct {
 	// "why is that not what I typed" — and a single field would answer neither
 	// without the other.
 	RoutedFrom string
+	// HandoffFrom is the agent whose conversation this run was briefed with, and
+	// HandoffSession the session it was read from.
+	//
+	// Not RoutedFrom, though a failover sets both: routing records that a
+	// provider stopped answering, this records that a person read a conversation
+	// and decided who should carry it on. In the log they are the same two words
+	// — codex, after claude — and only these fields say which story it was.
+	HandoffFrom    string
+	HandoffSession string
+
 	// RouteReason is why the switch happened, in the words the run printed:
 	// "provider answered 503", "exited 1 having changed nothing". A fact not
 	// stamped is one no later command can recover, and this one is the difference
@@ -218,6 +228,8 @@ type record struct {
 	Image        string   `json:"image"`
 	Workspace    string   `json:"workspace,omitempty"`
 	RoutedFrom   string   `json:"routed_from,omitempty"`
+	HandoffFrom  string   `json:"handoff_from,omitempty"`
+	HandoffSess  string   `json:"handoff_session,omitempty"`
 	RouteReason  string   `json:"route_reason,omitempty"`
 	RouteID      string   `json:"route_id,omitempty"`
 	RouteAttempt int      `json:"route_attempt,omitempty"`
@@ -286,6 +298,8 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 		Image:        meta.Image,
 		Workspace:    meta.Workspace,
 		RoutedFrom:   meta.RoutedFrom,
+		HandoffFrom:  meta.HandoffFrom,
+		HandoffSess:  meta.HandoffSession,
 		RouteReason:  meta.RouteReason,
 		RouteID:      meta.RouteID,
 		RouteAttempt: meta.RouteAttempt,

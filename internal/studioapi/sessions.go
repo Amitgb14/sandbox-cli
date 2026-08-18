@@ -81,7 +81,7 @@ func (s *Server) handleAgentSessions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[sess.ID] = true
-			summary := toSessionSummary(sess, st.store)
+			summary := toSessionSummary(agent, sess, st.store)
 			summary.RepoID = repoForSession(sess, projects)
 			out = append(out, summary)
 		}
@@ -200,7 +200,7 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		msgs = []agentctx.Message{}
 	}
 	writeJSON(w, http.StatusOK, SessionTranscriptResponse{
-		Session:  toSessionSummary(sess, store),
+		Session:  toSessionSummary(agent, sess, store),
 		Messages: msgs,
 	})
 }
@@ -234,7 +234,7 @@ func (s *Server) handleSessionRaw(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	resp := SessionRawResponse{Session: toSessionSummary(sess, store), Size: info.Size()}
+	resp := SessionRawResponse{Session: toSessionSummary(agent, sess, store), Size: info.Size()}
 
 	// The tail, not the head: a conversation is appended to, so the end is the
 	// part somebody opening it is looking for. Said out loud, because a client
@@ -264,7 +264,7 @@ func (s *Server) handleSessionRaw(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func toSessionSummary(sess agentctx.Session, store string) SessionSummary {
+func toSessionSummary(agent string, sess agentctx.Session, store string) SessionSummary {
 	return SessionSummary{
 		ID:       sess.ID,
 		Title:    sess.Title,
@@ -276,10 +276,18 @@ func toSessionSummary(sess agentctx.Session, store string) SessionSummary {
 		Path:     sess.Path,
 		Size:     sess.Size,
 		Store:    store,
-		// Only what a container can reopen. The host's own history is readable
-		// here and is not this daemon's to resume: doing so would mean mounting
-		// the host's history into a container that was not asked to have it.
-		Resumable: store == storeSandbox,
+		// Two facts, and both are required — the field used to carry only the
+		// first, which made it a promise the launch would break.
+		//
+		// The store: the host's own history is readable here and is not this
+		// daemon's to resume, since that would mean mounting the host's history
+		// into a container that was not asked to have it. And the *agent*:
+		// gemini and droid have no resume argv at all, so a run asking to reopen
+		// one of their sessions is refused in buildRunOptions with "no verified
+		// resume flag". Reporting those rows resumable offered an action that
+		// could only 400 — worse than not offering it, because the failure
+		// arrives after somebody chose.
+		Resumable: store == storeSandbox && canResume(agent),
 	}
 }
 

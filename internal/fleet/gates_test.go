@@ -84,16 +84,24 @@ var optionsPolicy = map[string]fieldPolicy{
 	"RouteReason":  never,
 	"RouteID":      never,
 	"RouteAttempt": never,
-	"Base":         fromSpec,
-	"Fleet":        fromSpec,
-	"ExtraMounts":  fromSpec, // the linked worktree's .git, without which the agent cannot commit
-	"EnvAllow":     fromSpec, // the descriptor's names, forwarded only if the host has them
-	"Env":          fromSpec, // the descriptor's own container settings (a keyring that is not there)
-	"Memory":       fromSpec,
-	"CPUs":         fromSpec,
-	"Allow":        fromSpec,
-	"Cache":        fromSpec,
-	"GitIdentity":  fromSpec,
+
+	// A briefing from somebody else's conversation. `never` for the reason the
+	// fleet's own doc gives about Console: a fleet is unattended, and deciding
+	// whose conversation is worth carrying on is something a person does while
+	// reading one. A fleet.yaml naming a session id would also pin a file in a
+	// vendor's private store into a checked-in configuration.
+	"HandoffFrom":    never,
+	"HandoffSession": never,
+	"Base":           fromSpec,
+	"Fleet":          fromSpec,
+	"ExtraMounts":    fromSpec, // the linked worktree's .git, without which the agent cannot commit
+	"EnvAllow":       fromSpec, // the descriptor's names, forwarded only if the host has them
+	"Env":            fromSpec, // the descriptor's own container settings (a keyring that is not there)
+	"Memory":         fromSpec,
+	"CPUs":           fromSpec,
+	"Allow":          fromSpec,
+	"Cache":          fromSpec,
+	"GitIdentity":    fromSpec,
 
 	// The one gate, and the reason this file exists.
 	"AuthPersistDir": gated,

@@ -13,6 +13,33 @@ version is tagged.
 
 ### Added
 
+- **Carry a conversation on, or hand it to another agent, from the row it is
+  on.** Reading a conversation in Studio and continuing it were two screens
+  apart; every conversation now offers **Continue**, which opens Launch with the
+  agent, the session and a console already set. The console is not a
+  convenience — a headless resume replays one prompt into an old conversation
+  and exits, so the daemon refuses it, and a link that set the session alone
+  would land on a form that cannot be submitted.
+
+  A different agent can pick the work up instead: `handoffFrom` on
+  `POST /v1/runs` starts a run **briefed with** another agent's conversation.
+  It is deliberately not a resume — a session id is a primary key into one
+  vendor's private store, so what crosses is a briefing (`HANDOFF.md`, a
+  vendor-neutral transcript, and a file ledger derived from git), mounted
+  read-only, with a prompt that tells the target it is reading a briefing rather
+  than its own history. The same mechanism a failover has always used, now
+  something a person can ask for. Recorded as `handoff_from` rather than
+  `routed_from`: routing means a provider stopped answering, a handoff means
+  somebody chose, and the two look identical in a listing.
+
+  The source agent may be the same one, which is the only way to continue a
+  **gemini** or **droid** conversation: neither has a resume flag. Studio says
+  so once above the list rather than offering a button that could only fail —
+  `GET /v1/agents` now reports `canResume`, and a session's `resumable` accounts
+  for the agent as well as the store, where before it promised any sandbox-owned
+  session could be reopened.
+
+
 - **Studio can publish a port.** An agent that starts a dev server is a real
   reason to want one, and the Launch form now takes ports in docker's syntax. A
   bare port binds `127.0.0.1` on the machine running the daemon — not every

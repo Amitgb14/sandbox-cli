@@ -13,6 +13,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
+	"github.com/Amitgb14/sandbox-cli/internal/handoff"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/routing"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
@@ -304,11 +305,68 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 				req.Agent, req.Agent)
 		}
 	}
+	if req.HandoffFrom != nil {
+		if req.Resume != "" {
+			// Two answers to one question, refused the way repo and project are.
+			// They are also opposites: resume reopens a conversation, a briefing
+			// starts a new one carrying evidence about an old.
+			return sandbox.Options{}, errors.New(
+				"resume and handoff_from cannot be combined: one reopens a conversation, the other starts a new one from a briefing about it")
+		}
+		if req.Agent == "" {
+			// A briefing is read by an agent. A plain command is the argv you
+			// gave it, and nothing in it would ever open /sandbox/context.
+			return sandbox.Options{}, errors.New("handoff_from needs an agent: a briefing is something an agent reads")
+		}
+		if req.HandoffFrom.Agent == "" || req.HandoffFrom.SessionID == "" {
+			return sandbox.Options{}, errors.New("handoff_from needs both an agent and a session id: together they name one conversation")
+		}
+		if strings.TrimSpace(req.Prompt) == "" {
+			// The briefing is *prepended* to the task. With no task the target
+			// has been handed evidence and no instruction, and what it does next
+			// is anyone's guess — which is the one thing an unattended run must
+			// not be.
+			return sandbox.Options{}, errors.New(
+				"handoff_from needs a prompt: the briefing says what happened before, and the prompt says what to do now")
+		}
+	}
+
 	if req.Console && req.Agent == "" {
 		// A plain command already reaches a console the same way — it is the argv
 		// the caller chose. This field exists to swap an *agent* out of headless
 		// mode, and there is nothing to swap without one.
 		return sandbox.Options{}, errors.New("console needs an agent: a plain command is already whatever argv you gave it")
+	}
+
+	// The briefing, before the options: the agent's argv is built from the prompt
+	// below, so a briefing that arrived after it would be mounted for an agent
+	// that was never told to read it.
+	//
+	// Refused rather than skipped when the conversation cannot be found. The
+	// alternative is a run that launches with only its prompt and no sign that
+	// the thing the request was *about* is missing — and the caller asked for a
+	// handoff, which is a different job from the one that would then run.
+	var brief *handoff.Export
+	if req.HandoffFrom != nil {
+		// host: true — this is a *selection*. Somebody read a conversation and
+		// named it, so their own ~/.claude is a legitimate source; the
+		// supervisor's correlation deliberately searches only the sandbox store,
+		// because nothing there was chosen. See briefing.go.
+		sess, _, ok := s.findSession(req.HandoffFrom.Agent, req.HandoffFrom.SessionID, true)
+		if !ok {
+			return sandbox.Options{}, fmt.Errorf(
+				"no conversation %s for %s: it is listed by GET /v1/agents/%s/sessions, and only a verified store is searched",
+				req.HandoffFrom.SessionID, req.HandoffFrom.Agent, req.HandoffFrom.Agent)
+		}
+		brief = writeBriefing(req.HandoffFrom.Agent, sess.Path, project, req.Base)
+		if brief == nil {
+			return sandbox.Options{}, fmt.Errorf(
+				"conversation %s could not be exported: sandbox-cli has no verified reader for %s's transcript format, or the file could not be read",
+				req.HandoffFrom.SessionID, req.HandoffFrom.Agent)
+		}
+		// Says three things, and the third is the one that keeps this honest:
+		// where the briefing is, what it holds, and that it *is* a briefing.
+		req.Prompt = brief.Prompt(req.Prompt)
 	}
 
 	opts := sandbox.Options{
@@ -327,6 +385,9 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 		// bind there, and a malformed spec is refused before a container exists.
 		Publish:     req.Publish,
 		ExtraMounts: extraMounts,
+	}
+	if brief != nil {
+		applyBriefing(&opts, brief, req.HandoffFrom.Agent, req.HandoffFrom.SessionID)
 	}
 	for k, v := range req.Env {
 		if config.IsReservedEnv(k) {

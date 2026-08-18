@@ -692,6 +692,42 @@ load-bearing: every correlation filter assumes a session began around the time
 its container did, and a resumed one began before — without the label a resumed
 run reports no conversation at all.
 
+### Carrying a conversation to another agent
+
+`"handoffFrom": {"agent": "claude", "sessionId": "…"}` starts a run **briefed
+with** somebody else's conversation, which is the answer to "my claude
+conversation, run it via codex". It is not a resume and the two are refused
+together.
+
+The reason is the design decision in `docs/proposals/shared-context.md`: a
+session id is a primary key into one vendor's private store and the schemas
+differ entirely, so transcribing claude's history into codex's would make the
+target believe a fabricated history — confidently, with file-writing tools.
+What crosses instead is `internal/handoff`'s export — `HANDOFF.md`, a
+vendor-neutral `transcript.jsonl` with no tool ids, and a `files.md` derived
+from git rather than from anything the agent said about itself — mounted
+**read-only** at `/sandbox/context`, with a prompt that tells the target it is
+reading a briefing rather than its own history.
+
+Four refusals, each closing a way of asking for a briefing that could only fail
+inside the container: it needs an **agent** (a plain command would never read
+it), it needs a **prompt** (the briefing says what happened before, the prompt
+says what to do now), it needs **both halves** of the reference, and a
+conversation it cannot find is refused rather than launched without one — the
+caller asked for a handoff, and a run with only its prompt is a different job.
+
+The source agent may be the **same** agent, and that is not degenerate: gemini
+and droid declare no resume argv, so a briefing from itself is the only way to
+carry one of their conversations on. `GET /v1/agents` reports `canResume` so a
+client knows which case it is in, and a session's `resumable` now accounts for
+both facts — the sandbox-owned store *and* an agent that can reopen by id.
+
+The run records it as `sandbox.handoff_from` / `sandbox.handoff_session`, and
+the audit line as `handoff_from` / `handoff_session` — deliberately **not**
+`routed_from`, though a failover sets both. Routing says a provider stopped
+answering; a handoff says a person chose. In a listing they are the same two
+words, codex after claude, and only these fields say which story it was.
+
 **Resizing is not cosmetic.** A full-screen agent renders *nothing* until it
 knows its terminal size, so `POST /console/resize` is what turns an attached
 console from a blank rectangle into the agent's interface. Measured: a console

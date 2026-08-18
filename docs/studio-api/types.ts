@@ -149,6 +149,23 @@ export interface AgentInfo {
   canResume: boolean;
 }
 
+/**
+ * The conversation a run is briefed with — the agent that held it and its
+ * session id, by id and never by path.
+ *
+ * This is **not** a resume and the two are refused together. A session id is a
+ * primary key into one vendor's private store, so claude's cannot be handed to
+ * codex; what crosses is internal/handoff's export (HANDOFF.md, a
+ * vendor-neutral transcript.jsonl, a git-derived files.md), mounted read-only
+ * at /sandbox/context, with a prompt that tells the target it is reading a
+ * briefing rather than its own history. Requires an agent and a prompt: the
+ * briefing says what happened before, the prompt says what to do now.
+ */
+export interface HandoffRef {
+  agent: string;
+  sessionId: string;
+}
+
 export interface AgentsResponse {
   agents: AgentInfo[];
 }

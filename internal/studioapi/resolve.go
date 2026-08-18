@@ -148,16 +148,18 @@ const workspaceDir = "/workspace"
 
 func toRun(c runtime.ContainerInfo, engine string) Run {
 	r := Run{
-		ID:          shortID(c.ID),
-		ContainerID: c.ID,
-		Name:        c.Name,
-		Kind:        RunKindInteractive,
-		State:       toRunState(c.State),
-		Detached:    !c.OpenStdin && !c.TTY,
-		RepoID:      c.Labels[sandbox.LabelRepo],
-		RepoName:    repoNameFromID(c.Labels[sandbox.LabelRepo]),
-		RoutedFrom:  c.Labels[sandbox.LabelRoutedFrom],
-		RouteReason: c.Labels[sandbox.LabelRouteReason],
+		ID:             shortID(c.ID),
+		ContainerID:    c.ID,
+		Name:           c.Name,
+		Kind:           RunKindInteractive,
+		State:          toRunState(c.State),
+		Detached:       !c.OpenStdin && !c.TTY,
+		RepoID:         c.Labels[sandbox.LabelRepo],
+		RepoName:       repoNameFromID(c.Labels[sandbox.LabelRepo]),
+		RoutedFrom:     c.Labels[sandbox.LabelRoutedFrom],
+		HandoffFrom:    c.Labels[sandbox.LabelHandoffFrom],
+		HandoffSession: c.Labels[sandbox.LabelHandoffSession],
+		RouteReason:    c.Labels[sandbox.LabelRouteReason],
 		// The episode, and where in it. Read from the container rather than from
 		// the audit log because a detached run's audit line is written when it
 		// ends, and these are the fields a listing of *running* containers needs

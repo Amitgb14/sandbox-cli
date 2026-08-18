@@ -274,9 +274,11 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 	if err != nil {
 		return err
 	}
-	if brief != nil {
-		opts.ExtraMounts = append(opts.ExtraMounts, brief.Dir+":"+handoff.GuestDir+":ro")
-	}
+	// The mount and the record of whose conversation it was. RoutedFrom below says
+	// the same agent's name for a different reason — this run took over from it —
+	// and both are stamped: a reader asking "why is codex doing claude's work"
+	// wants the outage, and one asking "what is it reading" wants the briefing.
+	applyBriefing(&opts, brief, w.agent, "")
 
 	// The record. buildRunOptions may have skipped further agents on its own
 	// probe, and its reason is kept alongside this one — both are true, and a
@@ -374,16 +376,7 @@ func (sv *supervisor) briefing(w *watch) *handoff.Export {
 	// would be confidently wrong in a file the next agent is told to trust.
 	path, _, _ := sv.s.transcriptFor(c)
 
-	dir, err := os.MkdirTemp("", "sandbox-handoff-*")
-	if err != nil {
-		return nil
-	}
-	ex, err := handoff.Write(dir, w.agent, path, w.workspace, w.req.Base)
-	if err != nil {
-		os.RemoveAll(dir)
-		return nil
-	}
-	return ex
+	return writeBriefing(w.agent, path, w.workspace, w.req.Base)
 }
 
 // fingerprint is the workspace as it stands, or "" when it cannot be read.

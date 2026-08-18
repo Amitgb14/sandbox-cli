@@ -69,6 +69,18 @@ const (
 	// which is exactly the reading the id exists to make unnecessary.
 	LabelRouteAttempt = "sandbox.route_attempt"
 
+	// LabelHandoffFrom is the agent whose conversation this run was briefed with,
+	// and LabelHandoffSession the session it came from.
+	//
+	// Deliberately *not* LabelRoutedFrom, though the mechanism underneath is the
+	// same briefing. Routing means a provider stopped answering and sandbox-cli
+	// chose the next agent; a handoff means a person read a conversation and
+	// decided who should carry it on. In a listing the two look identical — codex
+	// running work claude started — and they lead to opposite questions: one asks
+	// what broke, the other asks nothing at all.
+	LabelHandoffFrom    = "sandbox.handoff_from"
+	LabelHandoffSession = "sandbox.handoff_session"
+
 	// LabelBase is the branch the work is expected to land on, recorded at launch
 	// because by landing time the checkout may be on a different one — and "the
 	// branch checked out now" is a different question from "the branch this agent
