@@ -773,16 +773,14 @@ function previewArgv(
  * What does travel is the task: which agent, what to do, where, and the limits
  * that only ever narrow it.
  *
- * **Publishing a port is not on either list, because it is not requestable at
- * all** — `RunCreateRequest` has no field for it, so there is nothing a browser
- * can send that opens one. That is a refusal rather than a gap. In allowlist
- * mode the container's INPUT chain is default-deny with a carve-out only for
- * ports named by `--publish`, so a published port is a hole punched through a
- * boundary the daemon otherwise maintains, opened by whoever can reach this API.
- * Asking for it stays a flag someone types in a terminal on the machine that
- * would be exposed. Runs started that way still *report* their ports here — see
- * `RunNetwork.ingressPorts` — because seeing ingress and requesting it are
- * different acts.
+ * **Published ports do travel**, and they are the one thing here that opens a
+ * way *in* rather than narrowing what goes out. That is deliberate: an agent
+ * running a dev server is a real reason to want one, and `trust.go` already
+ * draws the line in the right place — a repository may not declare `ports:`,
+ * because it is a decision about the boundary that belongs to the user, and a
+ * request from this form *is* the user making it on their own daemon. A bare
+ * port binds loopback on the daemon's host, so the default reach is the machine
+ * you are already on.
  */
 function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {};
@@ -832,6 +830,10 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   // Domains add to the baseline and cannot subtract from it, so this narrows or
   // does nothing — the one network field a request may carry.
   if (req.network.allow.length > 0) body.allow = req.network.allow;
+  // Ports travel: publishing is a decision about the boundary, and a request is
+  // the user making it on their own daemon — the same act as typing --publish.
+  // What may not make it is a repository, which trust.go refuses `ports:` from.
+  if (req.publish.length > 0) body.publish = req.publish;
 
   return body;
 }

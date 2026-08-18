@@ -13,6 +13,24 @@ version is tagged.
 
 ### Added
 
+- **Studio can publish a port.** An agent that starts a dev server is a real
+  reason to want one, and the Launch form now takes ports in docker's syntax. A
+  bare port binds `127.0.0.1` on the machine running the daemon — not every
+  interface, which is where sandbox-cli deliberately differs from `docker -p` —
+  and under an allowlist the firewall's default-deny inbound chain gains a
+  carve-out for exactly those ports, without which the port would be open on the
+  host and answer nothing.
+
+  A repository still cannot ask for one: `trust.go` refuses `ports:` from a
+  project file because declaring a dev-server port is a decision about the
+  boundary that belongs to the user — and a request from the Launch form *is* the
+  user, on their own daemon. The rule was never about whether a port may be
+  opened; it is about who decides. A malformed spec is now a 400 from the same
+  normaliser the CLI uses, rather than a 502 that reads as "the daemon is broken"
+  when the truth is a typo in a port.
+
+### Added
+
 - **The Routing screen answers the question it is opened with: if I launch now,
   what runs?** Each configured chain is resolved against the probe results on the
   same page — the join a reader previously had to do in their head, between a

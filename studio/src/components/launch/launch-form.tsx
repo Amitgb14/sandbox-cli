@@ -112,6 +112,7 @@ export function LaunchForm() {
     verify: "",
     envAllow: [],
     share: [],
+    publish: [],
   });
 
   // Adopt a repository as soon as the daemon lists one: whichever the app is
@@ -701,6 +702,23 @@ export function LaunchForm() {
               <code className="font-mono">--share</code> widens the boundary on
               purpose. It stays something you type rather than something a file
               in the repository can turn on.
+            </Hint>
+          </Field>
+
+          <Field label="Published ports">
+            <TagInput
+              value={req.publish}
+              onChange={(publish) => patch({ publish })}
+              placeholder="8000, or 8080:8000, then Enter"
+            />
+            <Hint tone={req.publish.length > 0 ? "caution" : undefined}>
+              For reaching a dev server the agent starts. A bare port binds{" "}
+              <code className="font-mono">127.0.0.1</code> on the machine running the
+              daemon — not every interface, which is where this differs from{" "}
+              <code className="font-mono">docker -p</code>; write an address out to say
+              otherwise. Under an allowlist the firewall opens its default-deny inbound
+              chain for exactly these ports, which is the one way a launch option lets
+              anything *in*.
             </Hint>
           </Field>
 

@@ -646,6 +646,12 @@ export interface LaunchRequest {
   verify: string;
   envAllow: string[];
   share: string[];
+  /**
+   * Container ports to bind on the daemon's host, in docker's syntax. A bare
+   * port binds 127.0.0.1 there — not 0.0.0.0, which is where sandbox-cli
+   * deliberately differs from `docker -p`.
+   */
+  publish: string[];
 }
 
 export interface LaunchPreview {

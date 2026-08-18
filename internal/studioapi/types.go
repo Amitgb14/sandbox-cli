@@ -984,20 +984,28 @@ type RunCreateRequest struct {
 	// variables (config.IsReservedEnv) are refused, same as the CLI.
 	Env map[string]string `json:"env,omitempty"`
 
-	// There is deliberately no field here for publishing a port.
+	// Publish binds container ports on the daemon's host, in docker's syntax —
+	// "8000", "8080:8000", "0.0.0.0:8000:8000" — so an agent's dev server can be
+	// opened in a browser.
 	//
-	// `--publish` exists on the CLI and nothing equivalent is accepted over
-	// HTTP, which is a refusal rather than an omission: in allowlist mode the
-	// container's INPUT chain is default-deny except for the ports it names, so
-	// publishing is the one launch option that opens a way *in* — through a
-	// boundary this daemon otherwise maintains, at the request of whoever can
-	// reach this port. The rest of the API widens nothing a caller could not
-	// already do by starting a container with an argv.
+	// A bare port binds **127.0.0.1**, which is where sandbox-cli deliberately
+	// differs from `docker -p`: you asked to see the port from your machine, not
+	// to serve it to the network. Writing an address out still does exactly what
+	// it says.
 	//
-	// So it stays a flag typed on the machine that would be exposed. A run
-	// started that way is still reported here (RunNetwork.IngressPorts): seeing
-	// ingress and asking for it are different acts, and only one of them needs
-	// to be refused.
+	// This is the one launch option that opens a way *in*, so it is worth being
+	// clear about who may ask. A project `.sandbox.yaml` may not — trust.go
+	// refuses `ports:` with the reasoning that declaring a dev-server port is a
+	// real use but a decision about the boundary, so it belongs to the user. A
+	// request carrying this *is* the user, driving their own daemon, which is the
+	// same act as typing `--publish`. What it is not is a repository choosing for
+	// them.
+	//
+	// Under an allowlist the firewall's default-deny INPUT chain gains a carve-out
+	// for exactly these ports (SANDBOX_INGRESS_PORTS), which is what makes a
+	// published port reachable at all — and why the run's own record reports them
+	// back (RunNetwork.IngressPorts).
+	Publish []string `json:"publish,omitempty"`
 }
 
 // RunStopRequest is the body of POST /runs/:id/stop.
