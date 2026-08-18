@@ -10,6 +10,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -27,7 +34,11 @@ import { cn } from "@/lib/utils";
 import type { SessionSummary } from "@/lib/types";
 
 /**
- * Every conversation this agent has on this machine, readable.
+ * Every conversation an agent has on this machine, readable — with a picker,
+ * because there is now more than one agent whose transcripts sandbox-cli can
+ * actually read. It offers the agents whose store has been *verified* on this
+ * machine; an untracked store is not an empty one, and an agent that could only
+ * ever answer "nothing here" is worse in a picker than absent from it.
  *
  * Two stores, and the panel says which each row came from rather than merging
  * them: the **sandbox** store is the agent HOME containers get, so those were
@@ -54,7 +65,13 @@ import type { SessionSummary } from "@/lib/types";
  * and because gemini and droid have no resume argv at all, which is what
  * `canResume` reports.
  */
-export function ConversationsPanel({ agent }: { agent: string }) {
+export function ConversationsPanel({ defaultAgent = "claude" }: { defaultAgent?: string }) {
+  // Which agent's conversations. Owned here rather than by the page, because the
+  // picker and the list are one control: everything else on this card — the
+  // resume offers, the hint about agents that cannot reopen a session, the
+  // handoff menu's "reopen" versus "brief and start" — is an answer about the
+  // agent selected.
+  const [agent, setAgent] = useState(defaultAgent);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<SessionSummary | null>(null);
   // Off by default: with a repository picked, the question is "what happened
@@ -73,6 +90,15 @@ export function ConversationsPanel({ agent }: { agent: string }) {
   // stays in the list even when it cannot resume — a briefing from itself is
   // the only way to carry a gemini conversation on.
   const targets = (agents ?? []).filter((a) => a.headlessVerified);
+  // Agents whose store this daemon has actually *found*. `untracked` is not a
+  // synonym for empty — it means nothing was ever confirmed on this machine —
+  // so offering one would put an agent in the picker that can only ever answer
+  // "no conversations", which reads as a missing feature rather than a missing
+  // store. The selected agent stays listed even when it is not, so a picker
+  // never renders with nothing selected.
+  const readable = (agents ?? []).filter(
+    (a) => a.contextStore === "verified" || a.name === agent,
+  );
   const repoName = projects?.find((p) => p.id === repoFilter)?.name;
   // A high bound rather than the picker's fifty: this list is ordered by
   // recency, so a small cap hides exactly the older conversation somebody came
@@ -132,6 +158,23 @@ export function ConversationsPanel({ agent }: { agent: string }) {
                 </Label>
               </span>
             )}
+          {readable.length > 1 && (
+            <Select value={agent} onValueChange={setAgent}>
+              <SelectTrigger size="sm" className="h-8 w-36 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {readable.map((a) => (
+                  <SelectItem key={a.name} value={a.name} className="text-xs">
+                    {a.label}
+                    {a.sessions ? (
+                      <span className="ml-1 text-muted-foreground">{a.sessions}</span>
+                    ) : null}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <span className="relative">
             <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -196,6 +239,15 @@ export function ConversationsPanel({ agent }: { agent: string }) {
                     {s.project ?? "—"} · {s.id.slice(0, 8)}
                   </span>
                 </span>
+                {/* Who wrote it, then where it lives. Constant per panel today —
+                    this one is claude's, since that is the only transcript
+                    sandbox-cli has a verified reader for — but it stopped being
+                    implied the moment a row could hand the conversation to a
+                    *different* agent: the menu offers codex and gemini, so which
+                    agent held it is a question the row now has to answer itself. */}
+                <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
+                  {agent}
+                </Badge>
                 <Badge
                   variant="outline"
                   className={cn("shrink-0 text-[10px]", s.store === "host" && "opacity-70")}
