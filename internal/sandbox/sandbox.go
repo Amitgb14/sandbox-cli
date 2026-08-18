@@ -4,9 +4,12 @@ package sandbox
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -109,7 +112,11 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 	// moment nothing has happened yet.
 	started := time.Now()
 	code, runErr := s.Runtime.Run(ctx, spec)
-	s.Audit.RecordSession(auditMeta(s.Cfg, spec, opts, code, time.Since(started)))
+	// Foreground: this process waited for the exit, so the line is the whole
+	// story and its outcome is a result.
+	done := auditMeta(s.Cfg, spec, opts, code, time.Since(started))
+	done.Finished = true
+	s.Audit.RecordSession(done)
 	return code, runErr
 }
 
@@ -118,21 +125,37 @@ func (s *Session) Run(ctx context.Context, opts Options, forceBuild bool) (int, 
 // through the identical BuildSpec, so a detached run is isolated exactly as its
 // foreground twin is; the only thing that differs is that nothing here waits.
 func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (string, error) {
+	name, _, err := s.StartRecorded(ctx, opts, forceBuild)
+	return name, err
+}
+
+// StartRecorded is Start, and also hands back the audit record it wrote.
+//
+// It exists for the one caller that will later learn something this one cannot:
+// how the run *ended*. A detached launch has no exit code to wait for, so its
+// line carries a placeholder and `Finished: false`; whoever sees the container
+// stop completes the pair by writing the same record again with the real
+// outcome. Handing the record over is what makes that second line describe the
+// same run rather than a reconstruction of it — the spec it was resolved from is
+// gone by then, and a container is only an id.
+//
+// Two entry points, one implementation, so the two cannot drift.
+func (s *Session) StartRecorded(ctx context.Context, opts Options, forceBuild bool) (string, audit.SessionMeta, error) {
 	opts.Detach = true
 	spec, err := s.Prepare(opts)
 	if err != nil {
-		return "", err
+		return "", audit.SessionMeta{}, err
 	}
 	ShareWithSandboxGroup(opts.AuthPersistDir) // same reason as Run's
 	warnUmaskNeedsSandboxInit(spec)            // likewise
 	if err := materializeResolvConf(spec); err != nil {
-		return "", err
+		return "", audit.SessionMeta{}, err
 	}
 	if err := s.enforceWritableMounts(spec); err != nil {
-		return "", err
+		return "", audit.SessionMeta{}, err
 	}
 	if err := s.Runtime.Available(ctx); err != nil {
-		return "", err
+		return "", audit.SessionMeta{}, err
 	}
 	// Built here, before the container starts, and deliberately not left to the
 	// launch itself: a fan-out of detached runs against a cold image would
@@ -140,20 +163,20 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	// Before the image build, not after: a policy check that needs no image at
 	// all should not cost minutes of `docker build` before it refuses.
 	if err := s.enforceSeccomp(ctx); err != nil {
-		return "", err
+		return "", audit.SessionMeta{}, err
 	}
 	if err := s.Runtime.EnsureImage(ctx, spec.Image, forceBuild); err != nil {
-		return "", fmt.Errorf("preparing image %q: %w", spec.Image, err)
+		return "", audit.SessionMeta{}, fmt.Errorf("preparing image %q: %w", spec.Image, err)
 	}
 	if err := s.Runtime.EnsureNetwork(ctx, spec.Network); err != nil {
-		return "", err
+		return "", audit.SessionMeta{}, err
 	}
 
 	// Same rule as Run: resolved only on a real launch path, never in
 	// Prepare/--dry-run, and reaching the container by name rather than on the argv.
 	fwd, err := forwardedValues(s.Cfg, opts)
 	if err != nil {
-		return "", err
+		return "", audit.SessionMeta{}, err
 	}
 	spec.ForwardedEnv = fwd
 
@@ -167,14 +190,19 @@ func (s *Session) Start(ctx context.Context, opts Options, forceBuild bool) (str
 	//
 	// The failure is not lost: Start returns it to a caller that reports it. What
 	// this file will not do is write it down as a run.
+	var meta audit.SessionMeta
 	if startErr == nil {
-		// A detached run has no exit code to wait for — the record says it was
-		// launched, and `sandbox-cli list` is where its fate lives.
-		meta := auditMeta(s.Cfg, spec, opts, 0, time.Since(started))
+		// A detached run has no exit code to wait for, so this line says only that
+		// it was *launched*: Finished stays false, and the 0 below is a
+		// placeholder rather than a result. Whoever is still around when the
+		// container ends records that — the Studio daemon does, through its
+		// supervisor — and RunID is what lets the two be matched.
+		meta = auditMeta(s.Cfg, spec, opts, 0, time.Since(started))
 		meta.Detached = true
+		meta.RunID = newRunID()
 		s.Audit.RecordSession(meta)
 	}
-	return name, startErr
+	return name, meta, startErr
 }
 
 // canObserveDenials reports whether this run's egress refusals can actually be
@@ -468,4 +496,26 @@ func (s *Session) enforceSeccomp(ctx context.Context) error {
 			"  or run with --profile dev, which warns instead of refusing", config.SeccompRequired)
 	}
 	return nil
+}
+
+// newRunID mints the key that pairs a detached run's two audit lines.
+//
+// Ours, not the engine's, and that is the whole design of it. The two obvious
+// candidates are both wrong. A detached container's **name** is deterministic —
+// `sandbox-<repo>-<branch>`, so that docker's duplicate-name refusal can enforce
+// one agent per branch — which means every run on a branch would share one id,
+// and any reader grouping by it would fold unrelated runs together. Worse, the
+// routing supervisor hands that same name to a retry, so both halves of a
+// failover would collapse into a single record, flattening the episode the
+// Routing screen exists to show. The container **id** is unique but belongs to
+// the engine, and this pairing has to survive a rename, which is exactly what a
+// failover does to the container it supersedes.
+func newRunID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A machine with no entropy still pairs its lines: a collision costs two
+		// records merging, where an empty id costs every detached run its outcome.
+		return "run-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return "run-" + hex.EncodeToString(b[:])
 }

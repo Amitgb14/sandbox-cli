@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/handoff"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
@@ -344,9 +346,15 @@ func TestALaunchWithAFallbackIsSupervised(t *testing.T) {
 	}
 }
 
-// And a launch with nowhere to go is not watched at all: a supervisor that
-// polled every ordinary run would be paying for a decision it can never make.
-func TestALaunchWithNoFallbackIsNotSupervised(t *testing.T) {
+// A launch with nowhere to fall through to is watched too, and that is a change
+// of mind worth stating: it used to be skipped, on the grounds that a supervisor
+// polling a run it can never retry is paying for a decision it cannot make.
+//
+// The decision was not the only job. A detached run's audit line is written at
+// launch — there is no exit code to wait for — so without something watching,
+// "did it pass" was answered by a placeholder 0 for every run Studio started.
+// Recording the ending needs no chain, only a container that will stop.
+func TestALaunchWithNoFallbackIsStillWatchedForItsEnding(t *testing.T) {
 	s, _ := newTestServer(t)
 	rec := doJSON(t, s, http.MethodPost, "/v1/runs", RunCreateRequest{
 		Agent: "claude", Prompt: "fix the parser",
@@ -354,8 +362,24 @@ func TestALaunchWithNoFallbackIsNotSupervised(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST /v1/runs = %d, want 201: %s", rec.Code, rec.Body.String())
 	}
-	if n := len(s.sv().watched); n != 0 {
-		t.Errorf("watching %d runs, want none", n)
+
+	sv := s.sv()
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	if len(sv.watched) != 1 {
+		t.Fatalf("watching %d runs, want the launch watched so its ending is recorded", len(sv.watched))
+	}
+	for _, w := range sv.watched {
+		if len(w.remaining) != 0 {
+			t.Errorf("remaining = %v, want nothing to fall through to", w.remaining)
+		}
+		// The record it will complete when the container stops.
+		if w.meta.RunID == "" {
+			t.Error("no launch record captured, so the ending would have nothing to be matched to")
+		}
+		if w.meta.Finished {
+			t.Error("the launch record claims to be finished")
+		}
 	}
 }
 
@@ -411,5 +435,138 @@ func TestAnUnroutableRunCarriesNoEpisode(t *testing.T) {
 		if got, ok := fr.started[0].Labels[label]; ok {
 			t.Errorf("%s = %q on a run with no chain, want it absent", label, got)
 		}
+	}
+}
+
+// The line a detached run cannot write for itself.
+//
+// Its launch line carries Finished=false and a placeholder exit code, because at
+// that moment there is nothing else true to say. When the container stops, the
+// supervisor writes the partner: same RunID, real exit code, and a duration
+// measured from the container's own timestamps rather than from this process's
+// clock — the daemon may have started after the run did.
+func TestTheSupervisorRecordsHowARunEnded(t *testing.T) {
+	s, fr := newTestServer(t)
+	rec := &recordingSink{}
+	s.Session.Audit = rec
+	sv := s.sv()
+	sv.treeOf = func(string) (string, error) { return "", errors.New("no repo") }
+
+	started := time.Now().Add(-3 * time.Minute)
+	fr.containers = append(fr.containers, runtime.ContainerInfo{
+		ID: "c9", Name: "sandbox-x", Labels: map[string]string{sandbox.LabelCLI: "1"},
+		State: "exited", ExitCode: 7,
+		StartedAt: started, FinishedAt: started.Add(2 * time.Minute),
+	})
+	sv.supervise(&watch{
+		container: "c9",
+		name:      "sandbox-x",
+		agent:     "claude",
+		meta:      audit.SessionMeta{RunID: "sandbox-x", Agent: "claude", Detached: true},
+	})
+
+	sv.tick(context.Background())
+
+	if len(rec.written) != 1 {
+		t.Fatalf("wrote %d audit lines, want the ending", len(rec.written))
+	}
+	got := rec.written[0]
+	if !got.Finished {
+		t.Error("the ending is not marked finished, so a reader still cannot tell a result from a placeholder")
+	}
+	if got.ExitCode != 7 {
+		t.Errorf("exit code = %d, want the container's 7", got.ExitCode)
+	}
+	if got.RunID != "sandbox-x" {
+		t.Errorf("RunID = %q, want the launch line's so the two can be matched", got.RunID)
+	}
+	if got.Duration != 2*time.Minute {
+		t.Errorf("duration = %s, want the container's own 2m — not this process's uptime", got.Duration)
+	}
+}
+
+// A run whose ending nobody saw stays unrecorded rather than being guessed.
+func TestARunWithNoLaunchRecordWritesNoEnding(t *testing.T) {
+	s, fr := newTestServer(t)
+	rec := &recordingSink{}
+	s.Session.Audit = rec
+	sv := s.sv()
+
+	fr.containers = append(fr.containers, runtime.ContainerInfo{
+		ID: "c1", Labels: map[string]string{sandbox.LabelCLI: "1"},
+		State: "exited", ExitCode: 1, FinishedAt: time.Now(),
+	})
+	// No meta: this is the shape of a watch registered by something that never
+	// launched the run — there is nothing to complete.
+	sv.supervise(&watch{container: "c1", name: "sandbox-x", agent: "claude"})
+
+	sv.tick(context.Background())
+
+	if len(rec.written) != 0 {
+		t.Errorf("wrote %d audit lines for a run it has no record of", len(rec.written))
+	}
+}
+
+type recordingSink struct{ written []audit.SessionMeta }
+
+func (r *recordingSink) RecordSession(m audit.SessionMeta) { r.written = append(r.written, m) }
+
+// A retried attempt's ending is recorded too.
+//
+// The first version started it with Session.Start and kept no record, so its
+// launch line stayed unfinished forever — which left exactly the failover
+// episodes the Routing panels report sitting in the "not recorded" bucket, the
+// one case the whole feature exists to describe.
+func TestARetryCarriesARecordItsEndingCanComplete(t *testing.T) {
+	_, fr, sv, _ := supervised(t, 1, "tree-before")
+
+	sv.tick(context.Background())
+
+	if len(fr.started) != 1 {
+		t.Fatalf("started %d containers, want the fallback", len(fr.started))
+	}
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	for _, w := range sv.watched {
+		if w.meta.RunID == "" {
+			t.Error("the retry has no launch record, so its ending would never be written")
+		}
+		if w.meta.Finished {
+			t.Error("the retry's launch record claims to be finished")
+		}
+	}
+}
+
+// A duration nobody measured is not published as one.
+//
+// The record is copied from the launch line, whose duration is how long
+// `docker run` took — fine while the line says "not finished", and a lie the
+// moment it says otherwise.
+func TestAnUnmeasuredRunReportsNoDuration(t *testing.T) {
+	s, fr := newTestServer(t)
+	rec := &recordingSink{}
+	s.Session.Audit = rec
+	sv := s.sv()
+
+	fr.containers = append(fr.containers, runtime.ContainerInfo{
+		ID: "c4", Labels: map[string]string{sandbox.LabelCLI: "1"},
+		State: "exited", ExitCode: 0, FinishedAt: time.Now(),
+		// No StartedAt: the engine did not say when it began.
+	})
+	sv.supervise(&watch{
+		container: "c4",
+		meta: audit.SessionMeta{
+			RunID: "run-x", Detached: true,
+			Duration: 250 * time.Millisecond, // how long the launch call took
+		},
+	})
+
+	sv.tick(context.Background())
+
+	if len(rec.written) != 1 {
+		t.Fatalf("wrote %d lines, want the ending", len(rec.written))
+	}
+	if got := rec.written[0].Duration; got != 0 {
+		t.Errorf("duration = %s, want 0 — the launch latency is not the run's length", got)
 	}
 }

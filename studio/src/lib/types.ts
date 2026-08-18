@@ -572,6 +572,18 @@ export interface AuditRecord {
   exitCode: number;
   durationMs: number;
   detached: boolean;
+  /**
+   * Whether `exitCode` is a result or a placeholder, and the id that pairs a
+   * detached run's launch line with the line written when it ended.
+   *
+   * A detached run has no exit code to wait for, so its launch line carries 0 —
+   * and every Studio run is detached. Reading that as success is what made the
+   * Routing screen report a 100% rescue rate. The daemon collapses the pair, so
+   * a record arriving here with `finished: false` is a run still going, or one
+   * whose ending nobody was around to see.
+   */
+  finished?: boolean;
+  runId?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,110 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **The Routing screen answers the question it is opened with: if I launch now,
+  what runs?** Each configured chain is resolved against the probe results on the
+  same page — the join a reader previously had to do in their head, between a
+  provider list saying claude is down and a chain list saying claude falls back to
+  codex. It follows the daemon's own rule, including the part that looks like a
+  bug and is not: **unprobed is not down**, so an agent with no probeable host is
+  taken rather than skipped, because skipping it would act on a measurement nobody
+  made. A chain where nothing answers says *refused*, which is what a launch would
+  do.
+
+- **Why chains fired, and who ends up doing the work.** The reasons are ranked
+  from the run log in the words the runs recorded, because grouping them into
+  categories would be this screen inventing a taxonomy the audit line does not
+  have — and "provider answered 503" and "exited 1 having changed nothing" lead to
+  different actions. Beside it, asked-for versus ran per agent: the gap is the
+  only direct measure of what routing is doing to a setup, and an agent running
+  work it was never asked for is doing it under its own login and its own bill.
+
+### Fixed
+
+- **A detached run's outcome is now recorded, so "did it pass" has an answer.**
+  Its audit line is written when the container *launches* — there is no exit code
+  to wait for — and every Studio run is detached, so the log said exit 0 for all
+  of them and every screen built on it agreed. The Routing screen's rescue rate
+  was 100% by construction; the dashboard's outcome counts were the same lie in
+  a different shape.
+
+  The daemon already watches these containers for routing, so it writes the
+  ending too: same `run_id`, the real exit code, and a duration measured from the
+  container's own timestamps rather than from the daemon's uptime. Two lines, one
+  run — the log stays append-only, and `GET /v1/audit` collapses the pair,
+  keeping the half that knows something. Supervision no longer depends on having
+  a fallback chain, because recording what happened needs no chain, only a
+  container that will stop.
+
+  The pairing key is **minted per launch**, not borrowed. A detached container's
+  name is deterministic — that is what lets docker's duplicate-name refusal
+  enforce one agent per branch — so using it would have made every run on a
+  branch one run, with the newest ending swallowing the older records, and would
+  have folded both halves of a failover into a single line: the exact episode
+  the Routing screen exists to show. The container id is unique but is the
+  engine's, and this has to survive the rename a failover performs.
+
+  The index gains two columns and a version bump, which is a rebuild — and
+  `reset()` now drops the table rather than emptying it, because
+  `CREATE TABLE IF NOT EXISTS` is a no-op against the old shape: a v2 file
+  answering v3 queries fails every read with "no such column" for as long as it
+  lives. The aggregates behind the dashboard exclude the launch half explicitly,
+  so a Studio run counts once rather than as one pass plus one failure.
+
+  What it deliberately does not do is guess. A launch line with no partner —
+  a run still going, or one whose ending nobody was around to see because the
+  daemon restarted — stays **unfinished**, and the screens say *not recorded*
+  rather than picking a side.
+
+- **The Routing screen reported every Studio run as rescued.** A detached run's
+  audit line is written when the container *launches* — there is no exit code to
+  wait for — so it carries 0 whatever happens next, and every Studio run is
+  detached. Reading that 0 as success made the rescue rate 100% by construction
+  and the trend's still-failed series unreachable. An episode whose last attempt
+  was detached now reports its outcome as **not recorded**, with its own counter,
+  its own band on the chart and a row badge saying so. It is the same rule the
+  rest of the tool keeps about absent readings: a missing measurement is not a
+  good one, and `sandbox-cli list` is where a detached run's fate actually lives.
+
+### Added
+
+- **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
+  sandbox-cli never supplies the key.** `gateway:` in your own config names the
+  agents, the endpoint, and the *variable* the credential lives in — a name, not
+  a value. There is no bundled account and no fallback: a run configured for a
+  gateway with nothing to read is **refused**, because the alternatives are both
+  silent and both wrong, reaching the gateway unauthenticated or falling through
+  to the vendor on the agent's own credential.
+
+  Four things have to agree or the run is worse than unconfigured, so they are
+  resolved together: the base URL, the key variable (forwarded by name, exactly
+  like every other credential — its value never reaches the rendered argv), the
+  probe host, and the egress allowlist, which gains the gateway's domain because
+  otherwise the run cannot reach the thing it was configured to use and fails as
+  a connection error naming nothing.
+
+  Two refusals carry the design. An agent that speaks its **vendor's own API
+  shape** — claude, gemini, droid — is refused rather than pointed at an
+  OpenAI-shaped endpoint, since that failure lands inside a container as a parse
+  error blamed on the model; the table lists only agents where the wiring is
+  known, and marks codex unverified rather than claiming it. And a plaintext
+  `base_url` is refused: the credential and every prompt cross that connection.
+
+  `gateway:` is **user-config only**. It names the host every prompt travels
+  through and the credential that pays for it — `providers:`'s three objections
+  at once, plus one of its own, since a gateway reads the work.
+
+  Studio's Routing screen draws it. A gateway is a node the traffic passes
+  *through* rather than another agent in the ring, because that is what it is:
+  agents sharing one are sharing a credential, a bill and a single point of
+  failure no chain can route around — putting it beside claude in the ring would
+  say the opposite, that it is one more thing to fall through to. Their nodes
+  carry a dashed ring, the providers list says *via <host>*, and the gateway's own
+  probe result is what is shown, since the vendor behind it being down is the case
+  a gateway survives.
+
 ### Changed
 
 - **The site's Studio setup answers two questions it used to leave to a bad

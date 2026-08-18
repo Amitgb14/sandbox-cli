@@ -129,7 +129,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// supervisor compares is the tree, both sides of it read the same way.
 	before := s.sv().fingerprint(opts.Project)
 
-	name, err := s.Session.Start(r.Context(), opts, false)
+	// StartRecorded rather than Start: this run is detached, so its line says
+	// only that it launched — and the supervisor needs that same record to write
+	// the partner line when the container ends. See supervisor.recordEnding.
+	name, launched, err := s.Session.StartRecorded(r.Context(), opts, false)
 	if err != nil {
 		if msg, held := s.nameHeldBy(r.Context(), opts); held {
 			writeError(w, http.StatusConflict, fmt.Errorf("%s", msg))
@@ -147,22 +150,25 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Watch it, when there is somewhere to fall through to. This is the half of
-	// routing a handler cannot do itself: the run outlives the request, so the
-	// decision belongs to something that outlives it too (supervisor.go).
-	if rest := remainingAfter(chainFor(req), opts.Agent); len(rest) > 0 {
-		s.sv().supervise(&watch{
-			container: run.ID,
-			name:      name,
-			req:       req,
-			agent:     opts.Agent,
-			remaining: rest,
-			workspace: opts.Project,
-			before:    before,
-			routeID:   opts.RouteID,
-			attempt:   opts.RouteAttempt,
-		})
-	}
+	// Every run is watched, not only the ones with somewhere to fall through to.
+	//
+	// Two jobs, and the second is why the condition went away. Routing's retry
+	// needs a chain; *recording what happened* needs nothing but a container that
+	// will end. A detached run's audit line is written at launch — there is no
+	// exit code to wait for — so without something watching, the log's answer to
+	// "did it pass" was a placeholder 0 for every run Studio ever started.
+	s.sv().supervise(&watch{
+		container: run.ID,
+		name:      name,
+		req:       req,
+		agent:     opts.Agent,
+		remaining: remainingAfter(chainFor(req), opts.Agent),
+		workspace: opts.Project,
+		before:    before,
+		routeID:   opts.RouteID,
+		attempt:   opts.RouteAttempt,
+		meta:      launched,
+	})
 	writeJSON(w, http.StatusCreated, toRun(run, s.Engine))
 }
 

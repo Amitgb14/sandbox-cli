@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/handoff"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/routing"
@@ -101,6 +102,11 @@ type watch struct {
 
 	routeID string
 	attempt int
+
+	// meta is what this run's ending will be recorded as, minus the outcome:
+	// captured at launch because that is when the resolved spec exists, and the
+	// container is only an id afterwards.
+	meta audit.SessionMeta
 
 	// briefings are the export directories mounted into attempts so far,
 	// removed when this run stops being supervised. A mount is held for the
@@ -198,6 +204,11 @@ func (sv *supervisor) tick(ctx context.Context) {
 
 // settle applies the gate to one finished run.
 func (sv *supervisor) settle(ctx context.Context, w *watch, c runtime.ContainerInfo) {
+	// First, what happened — before any decision about what to do next, and
+	// regardless of whether there is a chain. The launch line said a run started;
+	// this is the line that says how it ended, matched to that one by RunID.
+	sv.recordEnding(w, c)
+
 	if c.ExitCode == 0 || len(w.remaining) == 0 {
 		sv.drop(w)
 		return
@@ -278,7 +289,12 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 	restore := sv.handOverName(ctx, w, opts)
 
 	before := sv.fingerprint(opts.Project)
-	name, err := sv.s.Session.Start(ctx, opts, false)
+	// StartRecorded, for the same reason handleCreateRun uses it: this attempt is
+	// detached too, so its line says only that it launched — and without keeping
+	// that record, the retry's ending is never written. Which would have left
+	// exactly the failover episodes these panels are about sitting in the "not
+	// recorded" bucket: the one case the feature exists to report.
+	name, launched, err := sv.s.Session.StartRecorded(ctx, opts, false)
 	if err != nil {
 		restore()
 		return err
@@ -308,6 +324,7 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 		routeID:   w.routeID,
 		attempt:   w.attempt + 1,
 		briefings: w.briefings,
+		meta:      launched,
 	}
 	if brief != nil {
 		next2.briefings = append(next2.briefings, brief.Dir)
@@ -415,4 +432,37 @@ func joinReasons(parts ...string) string {
 		}
 	}
 	return strings.Join(kept, "; ")
+}
+
+// recordEnding writes the audit line a detached run could not write for itself.
+//
+// The launch line carries Finished=false and a placeholder exit code, because at
+// that moment there is nothing else true to say. This is its partner: the same
+// RunID, the real exit code, and the duration measured from the container's own
+// timestamps rather than from this process's clock — the daemon may have started
+// after the run did, and it is the container's life being reported.
+//
+// Best-effort, like every other write to the log: the run is what the user asked
+// for and the record is a courtesy. A daemon restarted mid-run never sees the
+// ending, and that is left as "not recorded" rather than guessed — which is why
+// the reader treats an unpartnered launch line as unknown rather than as a pass.
+func (sv *supervisor) recordEnding(w *watch, c runtime.ContainerInfo) {
+	if sv.s.Session == nil || sv.s.Session.Audit == nil || w.meta.RunID == "" {
+		return
+	}
+	meta := w.meta
+	meta.ExitCode = c.ExitCode
+	meta.Finished = true
+	meta.Detached = true
+	// Cleared first. The launch record's duration is how long `docker run` took —
+	// a few hundred milliseconds — which was fine while the line said "not
+	// finished" and is a lie the moment it says otherwise. An engine that reports
+	// no start time leaves this at zero, which every reader already treats as
+	// "not measured" (Summary's median excludes it), rather than shipping the
+	// launch latency as the run's length.
+	meta.Duration = 0
+	if !c.StartedAt.IsZero() && c.FinishedAt.After(c.StartedAt) {
+		meta.Duration = c.FinishedAt.Sub(c.StartedAt)
+	}
+	sv.s.Session.Audit.RecordSession(meta)
 }
