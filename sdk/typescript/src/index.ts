@@ -1,5 +1,5 @@
 import { Transport } from "./transport.js";
-import { ApiError } from "./errors.js";
+import { ApiError, WaitError, abortError } from "./errors.js";
 import { discoverToken, discoverUrl } from "./discover.js";
 import type {
   AgentInfo,
@@ -16,7 +16,12 @@ import type {
 } from "./contract.js";
 
 export * from "./contract.js";
-export { ApiError, ConnectionError } from "./errors.js";
+export { ApiError, ConnectionError, TimeoutError, WaitError } from "./errors.js";
+// The wire shape of a repository, under a name that does not collide with the
+// Project *class* below. Without this a consumer cannot type a raw
+// `GET /v1/projects` row at all: the class shadows the interface silently, so
+// `{ id, name, root, default: true }` fails to typecheck against it.
+export type { Project as ProjectRecord } from "./contract.js";
 
 /**
  * A typed client for the sandbox-cli control plane.
@@ -203,7 +208,7 @@ export class Project {
   }
 
   /** The repository itself, for a run that should touch the checked-out tree. */
-  root_workspace(): Workspace {
+  rootWorkspace(): Workspace {
     return new Workspace(this.t, this, undefined);
   }
 }
@@ -326,7 +331,7 @@ export class Workspace {
       else signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    const res = await fetch(url, {
+    const res = await this.t.doFetch(url, {
       headers: this.t.headers({ Accept: "text/event-stream" }),
       signal: controller.signal,
     });
@@ -384,7 +389,16 @@ export class Workspace {
 
   private async launchAndWait(body: RunCreateRequest, opts: RunOptions): Promise<Outcome> {
     const started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
-    return this.wait(started.id, opts);
+    try {
+      return await this.wait(started.id, opts);
+    } catch (cause) {
+      // The launch already succeeded, so the container exists whatever went
+      // wrong here — a daemon restart mid-poll, a 502, an abort. Rejecting with
+      // a bare error would leave the caller with no id to stop or remove, and a
+      // detached run holds `sandbox-<repo>-<branch>`, which docker refuses to
+      // duplicate: the branch would be blocked by something nobody can name.
+      throw new WaitError(started, cause);
+    }
   }
 
   /**
@@ -400,13 +414,25 @@ export class Workspace {
     let delay = POLL_MIN_MS;
     let stopped = false;
     for (;;) {
-      const run = await this.t.request<Run>("GET", `/v1/runs/${encodeURIComponent(id)}`);
+      const run = await this.t.request<Run>(
+        "GET",
+        `/v1/runs/${encodeURIComponent(id)}`,
+        undefined,
+        // Passed so a cancel is noticed during the request rather than only
+        // when the next sleep begins — up to a whole request timeout later.
+        opts.signal,
+      );
       if (run.state === "exited" || run.state === "dead") {
         return this.outcome(run, stopped);
       }
       if (Date.now() >= deadline) {
         if (stopped) return this.outcome(run, true); // asked once; do not loop forever
-        await this.stop(id).catch(() => undefined);
+        // The stop is the thing that makes a deadline mean something, so its
+        // failure cannot be swallowed. Reporting `stopped: true` after a refused
+        // stop would claim the container was ended while it is still running and
+        // still holding its branch's name — the exact outcome the deadline
+        // exists to prevent, announced as if it had been prevented.
+        await this.stop(id);
         stopped = true;
         continue;
       }
@@ -446,17 +472,31 @@ function parseFrame(frame: string): LogEvent | null {
   return null;
 }
 
+/**
+ * Wait, cancellably, without leaving anything behind.
+ *
+ * The listener is removed on the resolved path too. `wait` calls this in a loop,
+ * so without that a thirty-minute run leaves hundreds of retained closures on a
+ * signal the caller may hold for the life of the process — measured at nineteen
+ * after thirty seconds.
+ *
+ * It rejects with an error named AbortError, which is the shape every other
+ * cancellable API in this ecosystem uses: `err.name === "AbortError"` is the
+ * check callers already write, and a plain Error would never match it.
+ */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(new Error("aborted"));
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(new Error("aborted"));
-      },
-      { once: true },
-    );
+    if (signal?.aborted) return reject(abortError());
+    let onAbort: (() => void) | undefined;
+    const timer = setTimeout(() => {
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort!);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

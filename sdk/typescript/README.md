@@ -77,7 +77,29 @@ wrong bill.
 The wait is bounded (30 minutes by default). When the deadline passes the run is
 **stopped**, and the outcome says `stopped: true` rather than reporting a verdict
 on a container that was interrupted. A deadline that only stopped waiting would
-leave a container holding a CPU with nobody watching it.
+leave a container holding a CPU with nobody watching it — so if the *stop* is
+refused, that surfaces rather than being swallowed: claiming a run was stopped
+while it is still running would announce the outcome the deadline exists to
+prevent as though it had been prevented.
+
+If anything goes wrong after the launch — a daemon restart mid-poll, a cancel —
+you get a `WaitError` carrying the run. The container exists whatever happened,
+and a detached run holds `sandbox-<repo>-<branch>`, which docker will not
+duplicate, so an error without the id would leave the branch blocked by something
+you cannot name:
+
+```ts
+try {
+  await ws.run(["pnpm", "test"], { timeoutMs: 60_000, signal });
+} catch (err) {
+  if (err instanceof WaitError) await ws.stop(err.run.id);
+}
+```
+
+Errors are typed and distinct on purpose: `ApiError` (the daemon refused, with
+its own message verbatim), `ConnectionError` (nothing answered), `TimeoutError`
+(it answered too slowly — reachable, not down), and a cancel that arrives as
+`err.name === "AbortError"`, the check callers already write.
 
 `stop()` and `remove()` are separate calls and neither happens for you: a
 finished run's logs are the evidence for what it did, so tidying up on the way

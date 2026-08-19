@@ -23,6 +23,8 @@ export interface FakeDaemonOptions {
   /** States returned by GET /runs/:id, in order; the last repeats. */
   runStates?: string[];
   exitCode?: number;
+  /** Refuse POST /runs/:id/stop, the way a daemon that cannot reach docker does. */
+  stopFails?: boolean;
 }
 
 export class FakeDaemon {
@@ -129,6 +131,7 @@ export class FakeDaemon {
       return json(200, run);
     }
     if (url.pathname === "/v1/runs/run-1/stop" && req.method === "POST") {
+      if (this.opts.stopFails) return json(502, { error: "docker is unreachable" });
       this.stoppedRuns.push("run-1");
       // A stopped container exits, which is what lets the wait finish.
       this.opts.runStates = ["exited"];

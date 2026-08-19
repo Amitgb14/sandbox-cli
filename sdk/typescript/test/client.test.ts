@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeDaemon } from "./daemon.js";
-import { Studio, ApiError, ConnectionError } from "../src/index.js";
+import { Studio, ApiError, ConnectionError, TimeoutError, WaitError } from "../src/index.js";
 
 async function connected(opts: ConstructorParameters<typeof FakeDaemon>[0] = {}) {
   const daemon = new FakeDaemon(opts);
@@ -220,5 +220,111 @@ test("the daemon's location and token are discovered from what studio.sh writes"
     if (prevUrl !== undefined) process.env.SANDBOX_API_URL = prevUrl;
     if (prevToken === undefined) delete process.env.SANDBOX_STUDIO_TOKEN;
     else process.env.SANDBOX_STUDIO_TOKEN = prevToken;
+  }
+});
+
+test("a stop the daemon refused is not reported as a stop", async () => {
+  // The container is still running and still holding its branch's name. Saying
+  // `stopped: true` here would announce the very outcome the deadline exists to
+  // prevent as though it had been prevented.
+  const { daemon, studio } = await connected({ runStates: ["running"], stopFails: true });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    await assert.rejects(
+      () => ws.run(["sleep", "600"], { timeoutMs: 200 }),
+      (err: unknown) => {
+        assert.ok(err instanceof WaitError, `wanted WaitError, got ${String(err)}`);
+        assert.equal(err.run.id, "run-1");
+        assert.match(String(err.cause), /docker is unreachable/);
+        return true;
+      },
+    );
+    assert.deepEqual(daemon.stopped, [], "the stub refused the stop, so nothing was stopped");
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("a run that was launched is never lost, even when the wait fails", async () => {
+  // The launch succeeded, so the container exists whatever happened next — and
+  // a detached run holds sandbox-<repo>-<branch>, which docker will not
+  // duplicate. Without the id, the branch is blocked by something nobody can
+  // name.
+  const { daemon, studio } = await connected({ runStates: ["running"] });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 120);
+    await assert.rejects(
+      () => ws.run(["sleep", "600"], { signal: ac.signal, timeoutMs: 60_000 }),
+      (err: unknown) => {
+        assert.ok(err instanceof WaitError);
+        assert.equal(err.run.id, "run-1");
+        assert.equal(err.run.name, "sandbox-app-feature");
+        return true;
+      },
+    );
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("an injected fetch is used by every call, following included", async () => {
+  const { daemon } = await connected();
+  try {
+    const seen: string[] = [];
+    const spy: typeof globalThis.fetch = (input, init) => {
+      seen.push(String(input));
+      return globalThis.fetch(input, init);
+    };
+    const studio = await Studio.connect({ url: daemon.url, token: "", fetch: spy });
+    const ws = await (await studio.project("app")).workspace("feature");
+    for await (const _ of ws.follow("run-1")) break;
+    assert.ok(
+      seen.some((u) => u.includes("/logs?follow=1")),
+      `the stream bypassed the injected fetch: ${seen.join(", ")}`,
+    );
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("slow is not unreachable, and a cancel is not a network failure", async () => {
+  const { daemon, studio } = await connected({ runStates: ["running"] });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    // A caller's cancel arrives as an AbortError, which is the check callers
+    // already write — `err.name === "AbortError"` — rather than a bare Error.
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 50);
+    await assert.rejects(
+      () => ws.run(["sleep", "600"], { signal: ac.signal, timeoutMs: 60_000 }),
+      (err: unknown) => {
+        const cause = (err as WaitError).cause;
+        assert.equal((cause as Error).name, "AbortError", `cause was ${String(cause)}`);
+        return true;
+      },
+    );
+    assert.equal(typeof TimeoutError, "function"); // exported for the slow-daemon case
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("waiting does not accumulate listeners on the caller's signal", async () => {
+  const { daemon, studio } = await connected({ runStates: ["running", "running", "running", "exited"] });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    const ac = new AbortController();
+    await ws.run(["true"], { signal: ac.signal, timeoutMs: 30_000 });
+    // Node exposes the count; a loop that registered one per sleep and never
+    // removed it left nineteen after thirty seconds.
+    const listeners = (ac.signal as unknown as { listenerCount?: (t: string) => number })
+      .listenerCount?.("abort");
+    if (typeof listeners === "number") {
+      assert.equal(listeners, 0, `${listeners} abort listeners survived the wait`);
+    }
+  } finally {
+    await daemon.stop();
   }
 });

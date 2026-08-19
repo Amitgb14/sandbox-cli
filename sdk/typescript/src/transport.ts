@@ -1,4 +1,4 @@
-import { ApiError, ConnectionError } from "./errors.js";
+import { ApiError, ConnectionError, TimeoutError, abortError } from "./errors.js";
 import type { ErrorResponse } from "./contract.js";
 
 /**
@@ -26,7 +26,10 @@ export class Transport {
   readonly url: string;
   readonly token: string;
   private readonly timeoutMs: number;
-  private readonly doFetch: typeof globalThis.fetch;
+  /** Exposed so every path uses the caller's fetch, `follow` included: an
+   *  injected wrapper that eleven methods honour and the twelfth ignores is
+   *  worse than none, because it is trusted. */
+  readonly doFetch: typeof globalThis.fetch;
 
   constructor(opts: TransportOptions) {
     this.url = opts.url.replace(/\/+$/, "");
@@ -60,10 +63,15 @@ export class Transport {
       init.body = JSON.stringify(body);
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.timeoutMs);
+    const onAbort = () => controller.abort();
     if (signal) {
       if (signal.aborted) controller.abort();
-      else signal.addEventListener("abort", () => controller.abort(), { once: true });
+      else signal.addEventListener("abort", onAbort);
     }
     init.signal = controller.signal;
 
@@ -71,9 +79,17 @@ export class Transport {
     try {
       res = await this.doFetch(url, init);
     } catch (cause) {
+      // Three different failures arrive here as one rejection, and calling them
+      // all "cannot reach the daemon" sends the reader to the network for two
+      // of them: a slow but healthy daemon, and a cancel the caller asked for.
+      if (timedOut) throw new TimeoutError(`${method} ${path}`, this.timeoutMs);
+      if (signal?.aborted) throw abortError(`${method} ${path} was aborted`);
       throw new ConnectionError(url, cause);
     } finally {
       clearTimeout(timer);
+      // Removed on every path. Left attached, one per request, these accumulate
+      // on a signal the caller may hold for the life of the process.
+      signal?.removeEventListener("abort", onAbort);
     }
 
     if (!res.ok) throw new ApiError(res.status, `${method} ${path}`, await errorText(res));
@@ -83,7 +99,9 @@ export class Transport {
     return JSON.parse(text) as T;
   }
 
-  /** The URL of a streaming endpoint, with the token where a stream can carry it. */
+  /** The absolute URL of a streaming endpoint. The credential travels in the
+   *  headers `headers()` builds, exactly as it does for every other request —
+   *  the daemon's `?token=` carve-out is for browsers, which cannot set them. */
   streamUrl(path: string): string {
     return this.url + path;
   }
