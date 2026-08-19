@@ -357,7 +357,30 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
     side: "daemon",
     code: "sh studio.sh up --api-only --bind 10.0.0.5",
     body: "Passes -allow-host for that address, because the daemon answers to loopback names only and refuses anything else by design. `--bind 0.0.0.0` works too and allows the machine's own reachable names, since a wildcard is not an address any browser dials. Two flags to add when they apply, and both fail quietly if you leave them out: `--no-install` if you built the binaries from source, or the script replaces them with the last release; and `--port` if your Studio runs anywhere other than 3100, because the daemon builds its allowed CORS origins from it — mismatch it and the network works while every request is refused on the origin check, so Studio falls back to fixtures and reads like an outage.",
-    warn: "There is no TLS here: the token and everything it protects cross the network in cleartext. The daemon refuses to bind a routable address with no token at all — an unauthenticated port on a process holding the docker socket is root on that machine for whoever reaches it.",
+    warn: "There is no TLS here: the token and everything it protects cross the network in cleartext — use the tunnel above, or the reverse proxy below, unless this is a network you already trust. The daemon refuses to bind a routable address with no token at all — an unauthenticated port on a process holding the docker socket is root on that machine for whoever reaches it.",
+  },
+  {
+    title: "Or put a reverse proxy in front, which is the only shape with a real certificate",
+    side: "daemon",
+    code: [
+      "# Caddyfile — two names, one for each half",
+      "studio.example.com { reverse_proxy 127.0.0.1:3100 }",
+      "api.example.com    { reverse_proxy 127.0.0.1:8787 }",
+      "",
+      "# the daemon, started directly rather than through studio.sh",
+      "sandbox-studio-api -addr 127.0.0.1:8787 -project ~/code/your-repo \\",
+      "  -token \"$SANDBOX_STUDIO_TOKEN\" \\",
+      "  -allow-host api.example.com -cors-origin https://studio.example.com",
+      "",
+      "# your machine: the browser half only",
+      "sh studio.sh up --ui-only --api-url https://api.example.com",
+    ].join("\n"),
+    body:
+      "For a machine more than one person reaches, or one you want to open by name rather than through a tunnel. The daemon stays on 127.0.0.1 so the proxy is the only way in — binding it routable as well would leave the cleartext port open beside the encrypted one. It is started directly here because studio.sh derives -allow-host from --bind and hardcodes its CORS origins to http://localhost:<ui port>, so it has no way to name a public origin; the script still runs the browser half. -allow-host takes the public name, because a proxy forwards the original Host and the daemon otherwise answers to loopback names only.",
+    expect:
+      "https://studio.example.com loading Studio, and https://api.example.com/v1/health answering without a token.",
+    warn:
+      "Both halves must be TLS or neither: a page served over https cannot call an http daemon — the browser blocks it as mixed content, with no request on the wire and nothing in the daemon's log, which reads exactly like the daemon being down. And -cors-origin takes the *page's* origin, https:// and not the API's; get the scheme wrong and the network works while every request is refused on the origin check.",
   },
   {
     title: "Open the port, and check it from the other machine",

@@ -13,6 +13,21 @@ version is tagged.
 
 ### Added
 
+- **How to reach a remote daemon safely, written down properly.** The daemon
+  speaks plain HTTP and has no TLS flags, and the docs now rank the three shapes
+  that hold rather than leaving it at "there is no TLS": a tunnel (nothing new to
+  trust, and still the recommendation), a **reverse proxy** terminating TLS in
+  front (the only shape with a real certificate — now with a Caddyfile, the exact
+  daemon flags, and the reason `studio.sh` cannot express it), or a private
+  network you already trust, knowingly.
+
+  Three traps are named because each fails as something else: `-allow-host` takes
+  the *public* name, since a proxy forwards the original `Host`; `-cors-origin`
+  takes the *page's* origin, `https://` and not the API's; and **both halves must
+  be TLS or neither**, because a page served over https cannot call an http
+  daemon — the browser blocks it with no request on the wire and nothing in the
+  daemon's log, which reads exactly like the daemon being down.
+
 - **Studio can publish a port.** An agent that starts a dev server is a real
   reason to want one, and the Launch form now takes ports in docker's syntax. A
   bare port binds `127.0.0.1` on the machine running the daemon — not every

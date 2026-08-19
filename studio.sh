@@ -58,11 +58,21 @@
 #      while every request is refused on the origin check, which looks exactly
 #      like the daemon being down.
 #
-# There is no TLS here. The safe shape is to leave the daemon on loopback and
-# tunnel to it — `ssh -N -L 8787:127.0.0.1:8787 you@box`, then use
-# http://localhost:8787 — which keeps every check in guard.go true. `--bind` is
-# for private networks you already trust; the daemon refuses a routable address
-# with no token.
+# There is no TLS here, so three shapes hold and they are not equal:
+#
+#   1. a tunnel — `ssh -N -L 8787:127.0.0.1:8787 you@box`, then
+#      `--api-url http://localhost:8787`. The daemon stays on loopback, so every
+#      check in guard.go stays true and the transport is SSH's. Nothing new to
+#      trust, and the recommended shape.
+#   2. a reverse proxy terminating TLS in front (Caddy, nginx), which is what to
+#      use when several people reach the machine. Start the daemon **directly**
+#      for that — this script hardcodes its CORS origins to http://localhost:<ui
+#      port> and derives -allow-host from --bind, so it cannot name a public
+#      origin. `--ui-only --api-url https://api.example.com` still runs the
+#      browser half. See docs/studio-api/README.md.
+#   3. `--bind` on a private network you already trust, knowing the token and
+#      every prompt cross it in cleartext. The daemon refuses a routable address
+#      with no token at all.
 #
 # ── The repository it starts in, and the ones you add ────────────────────────
 #

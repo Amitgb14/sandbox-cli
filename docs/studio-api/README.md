@@ -385,9 +385,79 @@ ssh -N -L 8787:127.0.0.1:8787 you@box
 Binding a routable address instead requires `-token` — the daemon **refuses to
 start without one**, because it holds the docker socket and an unauthenticated
 routable port is root on that host — plus `-allow-host` for the name the browser
-dials and `-cors-origin` for the page's origin. There is no TLS: off loopback the
-token and everything it protects are in cleartext, so this is for a private
-network or a reverse proxy that terminates TLS in front.
+dials and `-cors-origin` for the page's origin.
+
+The daemon speaks **plain HTTP and has no TLS flags**. That is not an oversight
+to work around with a bare `--bind` on an untrusted network: off loopback, the
+bearer token, every prompt and every diff cross in cleartext, and a token on the
+wire is a token you have published to whoever shares that network. There are
+three shapes that hold, ranked by how much new trust each asks for.
+
+#### 1. A tunnel — nothing new to trust
+
+```sh
+ssh -N -L 8787:127.0.0.1:8787 you@box
+sh studio.sh up --api-url http://localhost:8787
+```
+
+The daemon keeps binding loopback, so the `Host` it sees is a loopback name, the
+rebinding defence in `guard.go` still holds, and the token still governs. The
+transport is SSH's — better than any TLS this repository would grow — and the
+credential is one you already manage. Tailscale and WireGuard are the same shape
+with a different tunnel; both need `-allow-host` for the name the browser dials.
+
+#### 2. A reverse proxy — a real certificate, no new code here
+
+For a machine several people reach, or one you want to open with a name rather
+than a tunnel, terminate TLS in front and leave the daemon on loopback:
+
+```caddyfile
+studio.example.com {
+    reverse_proxy 127.0.0.1:3100      # the UI
+}
+api.example.com {
+    reverse_proxy 127.0.0.1:8787      # the daemon
+}
+```
+
+The daemon is started **directly** for this shape, not through `studio.sh`: the
+script derives `-allow-host` from `--bind` and hardcodes its CORS origins to
+`http://localhost:<ui-port>`, so it has no way to name a public origin. It still
+starts the browser half — `sh studio.sh up --ui-only --api-url https://api.example.com`.
+
+```sh
+sandbox-studio-api \
+  -addr 127.0.0.1:8787 \
+  -project ~/code/your-repo \
+  -token "$SANDBOX_STUDIO_TOKEN" \
+  -allow-host api.example.com \
+  -cors-origin https://studio.example.com
+```
+
+Three things decide whether this works, and each fails in a way that looks like
+something else:
+
+- **`-allow-host` takes the public name.** A proxy forwards the original `Host`,
+  and the daemon answers to loopback names plus whatever this flag lists. Without
+  it every request is refused and the browser reports an outage.
+- **`-cors-origin` takes the *page's* origin**, `https://…`, not the API's. Get
+  the scheme wrong and the network works while every request is refused on the
+  origin check.
+- **Both halves must be TLS or neither.** A page served over `https://` cannot
+  call an `http://` daemon — the browser blocks it as mixed content, with no
+  request on the wire and nothing in the daemon's log. If you put a certificate
+  in front of Studio, put one in front of the daemon too.
+
+Keep the daemon bound to `127.0.0.1` so the only way in is through the proxy.
+Binding it routable *and* proxying it leaves the cleartext port open beside the
+encrypted one.
+
+#### 3. A private network you already trust
+
+`--bind 10.0.0.5` with a token, on a subnet where you accept that the traffic is
+readable. Scope the firewall to that subnet rather than the world
+(`ufw allow from 10.0.0.0/24 to any port 8787 proto tcp`). This is the shape to
+use knowingly, not by default.
 
 What must *not* be done instead is pointing a local daemon at a remote docker.
 Every refusal here is evaluated against the filesystem this process runs on, so
