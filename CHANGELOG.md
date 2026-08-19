@@ -75,6 +75,25 @@ version is tagged.
   for the agent as well as the store, where before it promised any sandbox-owned
   session could be reopened.
 
+- **How to reach a remote daemon safely, written down properly.** The daemon
+  speaks plain HTTP and has no TLS flags, and the docs now rank the three shapes
+  that hold rather than leaving it at "there is no TLS": a tunnel (nothing new to
+  trust, and still the recommendation), a **reverse proxy** terminating TLS in
+  front (the only shape with a real certificate — now a Caddyfile and one command
+  either side), or a private network you already trust, knowingly.
+
+  `studio.sh` grew `--allow-host` and `--cors-origin` to make that one command:
+  a proxied deployment's names are not derivable from `--bind` or `--port`,
+  because the browser dials one name and the page is served from another. Both
+  **add** to what the script works out for itself, which is the direction the
+  daemon's own `-allow-host` already takes with loopback.
+
+  Three traps are named because each fails as something else: `-allow-host` takes
+  the *public* name, since a proxy forwards the original `Host`; `-cors-origin`
+  takes the *page's* origin, `https://` and not the API's; and **both halves must
+  be TLS or neither**, because a page served over https cannot call an http
+  daemon — the browser blocks it with no request on the wire and nothing in the
+  daemon's log, which reads exactly like the daemon being down.
 
 - **Studio can publish a port.** An agent that starts a dev server is a real
   reason to want one, and the Launch form now takes ports in docker's syntax. A
