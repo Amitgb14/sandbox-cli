@@ -367,16 +367,15 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
       "studio.example.com { reverse_proxy 127.0.0.1:3100 }",
       "api.example.com    { reverse_proxy 127.0.0.1:8787 }",
       "",
-      "# the daemon, started directly rather than through studio.sh",
-      "sandbox-studio-api -addr 127.0.0.1:8787 -project ~/code/your-repo \\",
-      "  -token \"$SANDBOX_STUDIO_TOKEN\" \\",
-      "  -allow-host api.example.com -cors-origin https://studio.example.com",
+      "# on the box",
+      "sh studio.sh up --api-only \\",
+      "  --allow-host api.example.com --cors-origin https://studio.example.com",
       "",
       "# your machine: the browser half only",
       "sh studio.sh up --ui-only --api-url https://api.example.com",
     ].join("\n"),
     body:
-      "For a machine more than one person reaches, or one you want to open by name rather than through a tunnel. The daemon stays on 127.0.0.1 so the proxy is the only way in — binding it routable as well would leave the cleartext port open beside the encrypted one. It is started directly here because studio.sh derives -allow-host from --bind and hardcodes its CORS origins to http://localhost:<ui port>, so it has no way to name a public origin; the script still runs the browser half. -allow-host takes the public name, because a proxy forwards the original Host and the daemon otherwise answers to loopback names only.",
+      "For a machine more than one person reaches, or one you want to open by name rather than through a tunnel. The daemon stays on 127.0.0.1 so the proxy is the only way in — binding it routable as well would leave the cleartext port open beside the encrypted one. Both flags add to what the script works out for itself, which is what a proxied deployment needs: neither name is derivable from --bind or --port, because the browser dials one name and the page is served from another. -allow-host takes the public name, because a proxy forwards the original Host and the daemon otherwise answers to loopback names only.",
     expect:
       "https://studio.example.com loading Studio, and https://api.example.com/v1/health answering without a token.",
     warn:

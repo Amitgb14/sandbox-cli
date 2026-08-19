@@ -17,9 +17,14 @@ version is tagged.
   speaks plain HTTP and has no TLS flags, and the docs now rank the three shapes
   that hold rather than leaving it at "there is no TLS": a tunnel (nothing new to
   trust, and still the recommendation), a **reverse proxy** terminating TLS in
-  front (the only shape with a real certificate — now with a Caddyfile, the exact
-  daemon flags, and the reason `studio.sh` cannot express it), or a private
-  network you already trust, knowingly.
+  front (the only shape with a real certificate — now a Caddyfile and one command
+  either side), or a private network you already trust, knowingly.
+
+  `studio.sh` grew `--allow-host` and `--cors-origin` to make that one command:
+  a proxied deployment's names are not derivable from `--bind` or `--port`,
+  because the browser dials one name and the page is served from another. Both
+  **add** to what the script works out for itself, which is the direction the
+  daemon's own `-allow-host` already takes with loopback.
 
   Three traps are named because each fails as something else: `-allow-host` takes
   the *public* name, since a proxy forwards the original `Host`; `-cors-origin`

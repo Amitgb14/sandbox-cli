@@ -420,18 +420,19 @@ api.example.com {
 }
 ```
 
-The daemon is started **directly** for this shape, not through `studio.sh`: the
-script derives `-allow-host` from `--bind` and hardcodes its CORS origins to
-`http://localhost:<ui-port>`, so it has no way to name a public origin. It still
-starts the browser half — `sh studio.sh up --ui-only --api-url https://api.example.com`.
+`studio.sh` takes both names, because neither is derivable from `--bind` or
+`--port`: the browser dials one and the page is served from another. They **add**
+to what the script works out for itself, the same direction the daemon's own
+`-allow-host` takes with loopback.
 
 ```sh
-sandbox-studio-api \
-  -addr 127.0.0.1:8787 \
-  -project ~/code/your-repo \
-  -token "$SANDBOX_STUDIO_TOKEN" \
-  -allow-host api.example.com \
-  -cors-origin https://studio.example.com
+# on the box
+sh studio.sh up --api-only \
+  --allow-host api.example.com \
+  --cors-origin https://studio.example.com
+
+# on your machine
+sh studio.sh up --ui-only --api-url https://api.example.com
 ```
 
 Three things decide whether this works, and each fails in a way that looks like
