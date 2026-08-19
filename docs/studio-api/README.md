@@ -374,20 +374,96 @@ back.
 
 ### Running the daemon on another machine
 
-Supported, and the shape that needs no new trust is a tunnel: the daemon keeps
-binding loopback, so the `Host` it sees is a loopback name, the rebinding defence
-holds and the token still governs.
+Supported, in three shapes ranked below by how much new trust each asks for.
+Binding a routable address requires `-token` — the daemon **refuses to
+start without one**, because it holds the docker socket and an unauthenticated
+routable port is root on that host — plus `-allow-host` for the name the browser
+dials and `-cors-origin` for the page's origin.
+
+The daemon speaks **plain HTTP and has no TLS flags**. That is not an oversight
+to work around with a bare `--bind` on an untrusted network: off loopback, the
+bearer token, every prompt and every diff cross in cleartext, and a token on the
+wire is a token you have published to whoever shares that network. There are
+three shapes that hold, ranked by how much new trust each asks for.
+
+#### 1. A tunnel — nothing new to trust
 
 ```sh
 ssh -N -L 8787:127.0.0.1:8787 you@box
+sh studio.sh up --api-url http://localhost:8787
 ```
 
-Binding a routable address instead requires `-token` — the daemon **refuses to
-start without one**, because it holds the docker socket and an unauthenticated
-routable port is root on that host — plus `-allow-host` for the name the browser
-dials and `-cors-origin` for the page's origin. There is no TLS: off loopback the
-token and everything it protects are in cleartext, so this is for a private
-network or a reverse proxy that terminates TLS in front.
+The daemon keeps binding loopback, so the `Host` it sees is a loopback name, the
+rebinding defence in `guard.go` still holds, and the token still governs. The
+transport is SSH's — better than any TLS this repository would grow — and the
+credential is one you already manage. 
+Tailscale and WireGuard are **not** this shape, though they are described as
+tunnels too: the daemon has to bind the tailnet or WireGuard address for anything
+on that network to reach it, which is a routable address — so it needs a token,
+`-allow-host` for the name the browser dials, and the reasoning of shape 3 rather
+than this one.
+
+#### 2. A reverse proxy — a real certificate, no new code here
+
+For a machine several people reach, or one you want to open with a name rather
+than a tunnel, terminate TLS in front and leave the daemon on loopback:
+
+```caddyfile
+studio.example.com {
+    reverse_proxy 127.0.0.1:3100      # the UI
+}
+api.example.com {
+    reverse_proxy 127.0.0.1:8787      # the daemon
+}
+```
+
+`studio.sh` takes both names, because neither is derivable from `--bind` or
+`--port`: the browser dials one and the page is served from another. They **add**
+to what the script works out for itself, the same direction the daemon's own
+`-allow-host` takes with loopback.
+
+**Both commands run on the box.** `--api-only` starts the daemon and says so —
+"no UI on this machine" — so the UI half has to be started there too, or the name
+the proxy serves has nothing behind it. `--ui-only` does not stop the daemon, so
+the two compose:
+
+```sh
+# on the box: the daemon, then the UI beside it on 127.0.0.1:3100
+sh studio.sh up --api-only \
+  --allow-host api.example.com \
+  --cors-origin https://studio.example.com
+
+sh studio.sh up --ui-only --api-url https://api.example.com
+```
+
+Your own machine runs nothing — you open `https://studio.example.com`. That is
+what makes the origin the daemon is told to accept the one the browser actually
+sends, and what keeps both halves on TLS, which the third point below requires.
+
+Three things decide whether this works, and each fails in a way that looks like
+something else:
+
+- **`-allow-host` takes the public name.** A proxy forwards the original `Host`,
+  and the daemon answers to loopback names plus whatever this flag lists. Without
+  it every request is refused and the browser reports an outage.
+- **`-cors-origin` takes the *page's* origin**, `https://…`, not the API's. Get
+  the scheme wrong and the network works while every request is refused on the
+  origin check.
+- **Both halves must be TLS or neither.** A page served over `https://` cannot
+  call an `http://` daemon — the browser blocks it as mixed content, with no
+  request on the wire and nothing in the daemon's log. If you put a certificate
+  in front of Studio, put one in front of the daemon too.
+
+Keep the daemon bound to `127.0.0.1` so the only way in is through the proxy.
+Binding it routable *and* proxying it leaves the cleartext port open beside the
+encrypted one.
+
+#### 3. A private network you already trust
+
+`--bind 10.0.0.5` with a token, on a subnet where you accept that the traffic is
+readable. Scope the firewall to that subnet rather than the world
+(`ufw allow from 10.0.0.0/24 to any port 8787 proto tcp`). This is the shape to
+use knowingly, not by default.
 
 What must *not* be done instead is pointing a local daemon at a remote docker.
 Every refusal here is evaluated against the filesystem this process runs on, so
