@@ -347,6 +347,20 @@ type AgentInfo struct {
 	// CanSkipPermissions is false.
 	SkipPermissionArgs []string `json:"skipPermissionArgs,omitempty"`
 
+	// CanResume is whether a conversation of this agent's can be reopened by its
+	// native session id — `claude --resume`, `codex resume`, `opencode --session`.
+	// **Gemini and droid declare none**, so for them "carry this conversation on"
+	// is not expressible at all, and the only honest continuation is a fresh run
+	// with a briefing.
+	//
+	// Sent rather than inferred for the same reason CanSkipPermissions is: a
+	// client that cannot see the flag cannot warn about the agents that lack it,
+	// and a picker offering "resume" where the argv has no way to say it would be
+	// offering a control the request does not have. Read from internal/agentctx's
+	// store table — the same table resumeArgsFor consults when the run is built,
+	// so the offer and the launch cannot disagree.
+	CanResume bool `json:"canResume"`
+
 	// AutonomousInvocation is the argv a fleet task or a detached run would start
 	// this agent with, prompt elided — the same string `fleet run --dry-run`
 	// prints, so a launch preview and a dry run cannot disagree about what is
@@ -546,6 +560,17 @@ type Run struct {
 	// untrue.
 	RouteID      string `json:"routeId,omitempty"`
 	RouteAttempt int    `json:"routeAttempt,omitempty"`
+
+	// HandoffFrom is the agent whose conversation this run was briefed with, and
+	// HandoffSession the session it came from. Empty for a run that started from
+	// its own prompt.
+	//
+	// Read from labels, and reported separately from RoutedFrom even though a
+	// failover sets both: routing says a provider stopped answering, a handoff
+	// says a person chose. A listing that collapsed them would answer "why is
+	// codex doing this" with the wrong story half the time.
+	HandoffFrom    string `json:"handoffFrom,omitempty"`
+	HandoffSession string `json:"handoffSession,omitempty"`
 
 	// RepoName is the display half of that id. Two clones of a same-named repo
 	// share it and do not share RepoID, so it is for showing and never for
@@ -925,6 +950,24 @@ type RunCreateRequest struct {
 	Agent  string `json:"agent,omitempty"`
 	Prompt string `json:"prompt,omitempty"`
 
+	// HandoffFrom starts this run with a briefing built from another
+	// conversation — the answer to "my claude conversation, run it via codex".
+	//
+	// It is **not** a resume and the two are refused together. A session id is a
+	// primary key into one vendor's private store and the schemas differ
+	// entirely, so handing claude's id to codex cannot work; what crosses instead
+	// is internal/handoff's export — HANDOFF.md, a vendor-neutral
+	// transcript.jsonl, and a files.md derived from git — mounted read-only, with
+	// a prompt that tells the target it is reading a briefing rather than its own
+	// history. docs/proposals/shared-context.md argues why the other direction is
+	// refused: an agent told it is resuming answers as though a fabricated
+	// history were its own, confidently, with file-writing tools.
+	//
+	// The source agent may be the *same* agent, and that is not a degenerate
+	// case: gemini and droid declare no resume argv, so a briefing from itself is
+	// the only way to carry one of their conversations on.
+	HandoffFrom *HandoffRef `json:"handoffFrom,omitempty"`
+
 	// Console starts the agent in its *interactive* mode on a container that
 	// keeps a pty and stdin open, so `sandbox-cli attach` from any terminal can
 	// answer it. Prompt, when set, seeds the first turn instead of being the
@@ -1010,6 +1053,18 @@ type RunCreateRequest struct {
 	// was no inbound chain to carve, so nothing recorded them. Worth knowing
 	// before reading an empty field as "nothing was published".
 	Publish []string `json:"publish,omitempty"`
+}
+
+// HandoffRef names the conversation a run is briefed with: the agent that held
+// it, and its session id from GET /agents/{agent}/sessions.
+//
+// By id, never by path — the same rule the projects registry and the session
+// endpoints keep. SessionSummary reports a `path` so a raw view can say what it
+// is showing; it is not accepted back, here least of all, since this one is
+// read and mounted into a container.
+type HandoffRef struct {
+	Agent     string `json:"agent"`
+	SessionID string `json:"sessionId"`
 }
 
 // RunStopRequest is the body of POST /runs/:id/stop.

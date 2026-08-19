@@ -58,7 +58,7 @@ export const FEATURES: Feature[] = [
     title: "A fallback when a provider is down",
     group: "workflow",
     flag: "--fallback",
-    body: "Claude's API having an outage should not mean the afternoon stops. A chain runs the next agent instead — the provider is probed before launching, so an outage skips that agent before a container exists, and a run that failed having changed no files is retried with the next one. A run that changed files is never retried: that is a failed attempt, not an outage, and handing the next agent half-finished edits is the thing this must never do. When it fires, the previous agent's briefing is carried across — what was asked, what it said it was doing, and a ledger of the files it touched, derived from git rather than from anything the agent claimed. It is a briefing, not a resume, and says so: session ids do not cross between vendors and neither do transcripts. Both halves work in Studio too: the daemon outlives the launch, so it watches the run and hands the work over when one fails quietly — a daemon restarted mid-run leaves that run alone rather than guessing.",
+    body: "Claude's API having an outage should not mean the afternoon stops. A chain runs the next agent instead — the provider is probed before launching, so an outage skips that agent before a container exists, and a run that failed having changed no files is retried with the next one. A run that changed files is never retried: that is a failed attempt, not an outage, and handing the next agent half-finished edits is the thing this must never do. When it fires, the previous agent's briefing is carried across — what was asked, what it said it was doing, and a ledger of the files it touched, derived from git rather than from anything the agent claimed. It is a briefing, not a resume, and says so: session ids do not cross between vendors and neither do transcripts. Both halves work in Studio too: the daemon outlives the launch, so it watches the run and hands the work over when one fails quietly — a daemon restarted mid-run leaves that run alone rather than guessing. The same handover is something you can ask for: every conversation in Studio offers Continue with, where picking the agent that held it reopens it and picking another starts that one with the briefing instead. It is recorded as a handoff rather than as routing, because a provider going down and a person choosing are different answers to why this agent is doing that work.",
     code: "sandbox-cli claude --fallback codex 'fix the flaky test'",
     state: "opt-in",
   },
@@ -68,6 +68,13 @@ export const FEATURES: Feature[] = [
     flag: "list / logs / attach / kill",
     body: "A kill -9 on sandbox-cli leaves the container running — the daemon owns it, not the client — with an agent still writing to your project, and --detach means to. Four commands address one by id, container name or branch, and a reference is matched against sandbox-cli's own containers rather than handed to the engine, so kill postgres finds nothing instead of your database. attach cannot kill: Ctrl-C detaches and the agent keeps working.",
     code: "sandbox-cli list --all",
+    state: "default",
+  },
+  {
+    title: "Carry a conversation on, or hand it to another agent",
+    group: "workflow",
+    flag: "Studio → Agents → Conversations",
+    body: "Every conversation Studio lists offers Continue with: pick the agent that held it and it reopens, pick another and that one starts with a briefing about it. The second is deliberately not a resume — a session id is a primary key into one vendor's private store, so what crosses is HANDOFF.md, a vendor-neutral transcript and a file ledger derived from git, mounted read-only, with a prompt that tells the target it is reading a briefing rather than its own history. Two transcript formats are parsed against a confirmed shape, claude's and codex's; a conversation in any other is listed with its id and dates and marked unknown rather than guessed at, and cannot be handed over, because a briefing carrying nothing would claim a conversation crossed when it did not.",
     state: "default",
   },
   {

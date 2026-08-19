@@ -103,6 +103,17 @@ type Options struct {
 	// to, so an ordinary run carries no id for an episode that cannot happen.
 	RouteID string
 
+	// HandoffFrom and HandoffSession record a run that began from somebody else's
+	// conversation: the agent that held it, and the session id it was read from.
+	//
+	// Separate from RoutedFrom because they answer different questions — see
+	// LabelHandoffFrom. Set by the control plane when a request asks for a
+	// briefing; a fleet task may not (gates_test.go classifies both `never`),
+	// since a fleet is unattended and choosing whose conversation to carry on is
+	// a decision somebody makes while looking at one.
+	HandoffFrom    string
+	HandoffSession string
+
 	// RouteAttempt is 1 for the agent first asked for, 2 for the next, and so on
 	// — the order within the episode, which timestamps alone recover only when
 	// the clock is trusted and the runs are not concurrent.
@@ -689,14 +700,16 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		// Only within an episode: "attempt 1 of 1" is a fact about a run that
 		// could never route, and stamping it would put a routing column on every
 		// container in the listing.
-		LabelRouteAttempt: attemptLabel(opts),
-		LabelBase:         opts.Base,
-		LabelVerify:       opts.Verify,
-		LabelFleet:        boolLabel(opts.Fleet),
-		LabelProfile:      cfg.Profile,
-		LabelPrompt:       truncatePrompt(opts.Prompt),
-		LabelSession:      opts.SessionID,
-		LabelBaseline:     opts.Baseline,
+		LabelRouteAttempt:   attemptLabel(opts),
+		LabelHandoffFrom:    opts.HandoffFrom,
+		LabelHandoffSession: opts.HandoffSession,
+		LabelBase:           opts.Base,
+		LabelVerify:         opts.Verify,
+		LabelFleet:          boolLabel(opts.Fleet),
+		LabelProfile:        cfg.Profile,
+		LabelPrompt:         truncatePrompt(opts.Prompt),
+		LabelSession:        opts.SessionID,
+		LabelBaseline:       opts.Baseline,
 	} {
 		if v != "" {
 			labels[k] = v

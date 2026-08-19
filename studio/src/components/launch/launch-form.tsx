@@ -81,6 +81,33 @@ export function LaunchForm() {
   const removeRun = useRemoveRun();
 
   const initialAgent = (search.get("agent") as AgentName | null) ?? "claude";
+  /**
+   * `?resume=` arrives from a conversation row's **Continue**, with `?agent=`
+   * and — when the conversation could be attributed — `?repo=`.
+   *
+   * It sets the console at the same time, and that is not a convenience: the
+   * daemon refuses a headless resume outright, because replaying one prompt into
+   * an old conversation and exiting is not what anyone means by carrying it on.
+   * A deep link that set the session without the console would land on a form
+   * that cannot be submitted, with nothing on screen saying why.
+   *
+   * Applied at mount rather than in an effect: unlike `?branch=`, neither value
+   * has to be matched against a list the daemon has not sent yet.
+   */
+  const initialResume = search.get("resume");
+  const initialRepo = search.get("repo");
+  /**
+   * `?handoffAgent=` + `?handoffSession=` arrive from a conversation row when
+   * the agent picked is **not** the one that held it — or is, but cannot reopen
+   * a session by id (gemini and droid have no resume argv, so a briefing from
+   * itself is the only way to carry one of theirs on).
+   *
+   * Unlike a resume this does not set the console: a handoff starts a new
+   * conversation, so headless is a legitimate way to run it and forcing an
+   * interactive session would be choosing for somebody.
+   */
+  const initialHandoffAgent = search.get("handoffAgent");
+  const initialHandoffSession = search.get("handoffSession");
   const routingPrefsAtMount = useRef(routingPrefs).current;
 
   const [req, setReq] = useState<LaunchRequest>({
@@ -91,7 +118,11 @@ export function LaunchForm() {
     // here before then: a repository this form invented is one the daemon has
     // never heard of, which is exactly how a path from a fixture ended up in a
     // real launch request.
-    repo: repoFilter ?? "",
+    // The link's repository outranks the sidebar's scope: it says which tree
+    // this conversation happened in, and resuming it against another one is the
+    // failure that would be hardest to see afterwards. Empty when the session
+    // could not be attributed, which leaves the picker asking.
+    repo: initialRepo ?? repoFilter ?? "",
     // Seeded from the remembered choice for this agent, so a fallback set once
     // is still there next time rather than something to re-pick on every launch.
     fallback: initialAgent ? (routingPrefsAtMount[initialAgent] ?? []) : [],
@@ -103,9 +134,13 @@ export function LaunchForm() {
     memory: "4g",
     cpus: "2",
     detach: false,
-    console: false,
+    console: !!initialResume,
     skipPermissions: false,
-    resume: null,
+    resume: initialResume,
+    handoffFrom:
+      initialHandoffAgent && initialHandoffSession
+        ? { agent: initialHandoffAgent, sessionId: initialHandoffSession }
+        : null,
     persistAuth: true,
     sync: true,
     statusline: true,
@@ -286,9 +321,18 @@ export function LaunchForm() {
                   // brings that agent's remembered answer rather than carrying
                   // the previous agent's — which would silently pair two agents
                   // nobody put together.
+                  //
+                  // The conversation is dropped for the sharper version of the
+                  // same reason: a session id is a primary key into *one*
+                  // vendor's private store, so carrying it across agents asks
+                  // codex to reopen a conversation claude wrote. That was always
+                  // reachable by picking a session and then changing the agent;
+                  // arriving from a conversation row's Continue makes it the
+                  // common path, since the form now lands with one already set.
                   patch({
                     agent: next,
                     fallback: next ? (routingPrefs[next] ?? []) : [],
+                    resume: null,
                   });
                 }}
               >
@@ -432,6 +476,14 @@ export function LaunchForm() {
             )}
           </div>
 
+          {req.handoffFrom && (
+            <BriefingNotice
+              from={req.handoffFrom}
+              to={req.agent}
+              onClear={() => patch({ handoffFrom: null })}
+            />
+          )}
+
           {req.agent && (
             <Field label="Prompt" htmlFor="prompt">
               <Textarea
@@ -442,9 +494,11 @@ export function LaunchForm() {
                 rows={3}
               />
               <Hint>
-                {req.console
-                  ? "This seeds the first turn rather than being the whole run — the session stays open, so a follow-up question can be answered by whoever attaches."
-                  : "For a detached run this is the whole instruction — nobody is there to answer a follow-up question."}
+                {req.handoffFrom
+                  ? "Required for a handoff, and it is the half the briefing does not carry: the briefing says what happened before, this says what to do now."
+                  : req.console
+                    ? "This seeds the first turn rather than being the whole run — the session stays open, so a follow-up question can be answered by whoever attaches."
+                    : "For a detached run this is the whole instruction — nobody is there to answer a follow-up question."}
               </Hint>
             </Field>
           )}
@@ -952,6 +1006,55 @@ function Field({
   );
 }
 
+/**
+ * What a handoff actually carries, said before the launch rather than
+ * discovered afterwards.
+ *
+ * The wording is the point. This is **not** a resume: the target is started
+ * fresh and told, in its own prompt, that a previous agent stopped before
+ * finishing and that its notes are mounted read-only. Describing it as
+ * "continuing claude's session" would be the one claim the whole mechanism
+ * exists to avoid making — an agent that believes a history is its own answers
+ * as though it were, with file-writing tools.
+ *
+ * It says the target too, because the row that started this only chose the
+ * source; the agent above can still be changed, and a briefing whose reader is
+ * not what somebody expected is worth seeing before it runs.
+ */
+function BriefingNotice({
+  from,
+  to,
+  onClear,
+}: {
+  from: { agent: string; sessionId: string };
+  to: string | null;
+  onClear: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-dashed bg-muted/40 p-3 text-xs">
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-1">
+          <p className="font-medium">
+            Starting {to ?? "an agent"} with a briefing from {from.agent}
+          </p>
+          <p className="text-muted-foreground">
+            Not a resume — {to ?? "the agent"} begins a new conversation. What crosses is a
+            briefing mounted read-only at <code>/sandbox/context</code>: HANDOFF.md, the
+            conversation as a vendor-neutral transcript, and the files that changed, derived
+            from git rather than from anything {from.agent} said about itself.
+          </p>
+          <p className="font-mono text-[10px] text-muted-foreground">
+            {from.agent} · {from.sessionId.slice(0, 8)}
+          </p>
+        </div>
+        <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-[11px]" onClick={onClear}>
+          Drop
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function Hint({
   children,
   tone,
@@ -1093,7 +1196,14 @@ function ResumePicker({
     <Field label="Resume a conversation" htmlFor="resume">
       <Select
         value={req.resume ?? "none"}
-        onValueChange={(v) => patch({ resume: v === "none" ? null : v })}
+        onValueChange={(v) => {
+          // Choosing a conversation to reopen drops one being handed over: the
+          // daemon refuses the pair, and a form that could hold both would only
+          // find out at 400. Choosing "none" clears the resume alone — it is not
+          // a statement about the briefing.
+          const next = v === "none" ? null : v;
+          patch(next ? { resume: next, handoffFrom: null } : { resume: null });
+        }}
       >
         <SelectTrigger id="resume">
           <SelectValue />

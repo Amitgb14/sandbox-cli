@@ -410,15 +410,17 @@ func auditMeta(cfg config.Config, spec runtime.RunSpec, opts Options, exitCode i
 		Command: spec.Command,
 		Agent:   opts.Agent,
 		// The agent asked for, when it differs from the one above that ran.
-		RoutedFrom:   opts.RoutedFrom,
-		RouteReason:  opts.RouteReason,
-		RouteID:      opts.RouteID,
-		RouteAttempt: opts.RouteAttempt,
-		Branch:       spec.Branch,
-		Network:      "default",
-		EnvNames:     spec.EnvNames, // names only — never the values
-		ExitCode:     exitCode,
-		Duration:     took,
+		RoutedFrom:     opts.RoutedFrom,
+		HandoffFrom:    opts.HandoffFrom,
+		HandoffSession: opts.HandoffSession,
+		RouteReason:    opts.RouteReason,
+		RouteID:        opts.RouteID,
+		RouteAttempt:   opts.RouteAttempt,
+		Branch:         spec.Branch,
+		Network:        "default",
+		EnvNames:       spec.EnvNames, // names only — never the values
+		ExitCode:       exitCode,
+		Duration:       took,
 	}
 	// Set only when the run was actually observed, so a nil here and a zero mean
 	// different things in the record — see audit.SessionMeta. A run that was not

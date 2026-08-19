@@ -220,6 +220,42 @@ func TestRetryCarriesTheBriefing(t *testing.T) {
 	}
 }
 
+// A run that *began* as a handoff must fail over like any other.
+//
+// The supervisor rebuilds from the original request, so a handoffFrom left set
+// makes buildRunOptions resolve the source conversation again, write a second
+// export and prepend a second preamble — over the briefing the failover itself
+// just wrote. Docker refuses two mounts on one target, so the retry container
+// never starts and the run is silently dropped: the failover fails in exactly
+// the case where the work being rescued was handed over by a person.
+func TestAHandoffRunFailsOverWithOneBriefing(t *testing.T) {
+	writeSandboxSession(t)
+	_, fr, sv, w := supervised(t, 1, "tree-before")
+	w.req.HandoffFrom = &HandoffRef{Agent: "claude", SessionID: handoffSessionID}
+
+	if err := sv.failOver(context.Background(), w, "exited 1 having changed nothing"); err != nil {
+		t.Fatalf("failOver: %v", err)
+	}
+	if len(fr.started) == 0 {
+		t.Fatal("the retry never started")
+	}
+	spec := fr.started[len(fr.started)-1]
+
+	mounts := 0
+	for _, m := range spec.Mounts {
+		if m.Target == handoff.GuestDir {
+			mounts++
+		}
+	}
+	if mounts != 1 {
+		t.Errorf("%d briefings mounted at %s, want 1 — docker refuses a duplicate mount point",
+			mounts, handoff.GuestDir)
+	}
+	if got := strings.Count(strings.Join(spec.Command, " "), "A previous agent"); got > 1 {
+		t.Errorf("the briefing preamble was prepended %d times", got)
+	}
+}
+
 func TestRemainingAfter(t *testing.T) {
 	chain := []string{"claude", "codex", "gemini"}
 	for _, tc := range []struct {

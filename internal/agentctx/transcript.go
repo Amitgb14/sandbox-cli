@@ -42,14 +42,41 @@ func Transcript(path string, n int) ([]Message, error) {
 		return nil, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("not a regular file: %s", path)
+		return nil, errNotRegular(path)
 	}
+	// Which reader, decided by the file: this entry point is for callers holding
+	// only a path. One that knows the agent should call TranscriptOf, so the
+	// registry's recorded format decides rather than a guess at the first lines.
+	return TranscriptOf("", path, n)
+}
+
+// TranscriptOf is Transcript for a caller that already knows the format.
+//
+// Two ways of deciding which reader runs is one too many: `List` dispatches on
+// the registry's `Finding.Format` while `Transcript` sniffs the file, and a
+// rollout whose `session_meta` is not in the first few lines would list with a
+// correct title and turn count and then render as an empty conversation — and
+// brief the next agent with an empty transcript, since handoff.Write treats a
+// parse miss as normal. Where the agent is known, its recorded format decides;
+// the sniff stays for the callers that hold only a path.
+func TranscriptOf(format, path string, n int) ([]Message, error) {
+	if format == "" {
+		format = sniffFormat(path)
+	}
+	if format == FormatCodexRollout {
+		return codexTranscript(path, n)
+	}
+	return claudeMessages(path, n)
+}
+
+// claudeMessages reads a claude-jsonl transcript. Named for the format rather
+// than for the agent, because the pairing is the store descriptor's to make.
+func claudeMessages(path string, n int) ([]Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-
 	sc := bufio.NewScanner(f)
 	// Same limit List uses, and for the same reason: one tool result can be
 	// megabytes, and the default 64KB would stop the scan partway through.
@@ -187,4 +214,42 @@ func FirstPrompt(path string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// errNotRegular is the refusal shared by every reader here: these files live in
+// a directory the agent can write, so a symlink named like a transcript must be
+// refused rather than followed and rendered.
+func errNotRegular(path string) error {
+	return fmt.Errorf("not a regular file: %s", path)
+}
+
+// sniffFormat reads far enough to tell a codex rollout from a claude transcript.
+//
+// Bounded to the first few lines: a rollout's session_meta is line one, and a
+// file that has not said what it is by then is read as claude's — the format
+// this package was written against, and the one whose reader treats an
+// unrecognised line as skippable rather than fatal.
+func sniffFormat(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return FormatClaudeJSONL
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for i := 0; i < 4 && sc.Scan(); i++ {
+		var probe struct {
+			Type    string `json:"type"`
+			Payload *struct {
+				SessionID string `json:"session_id"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(sc.Bytes(), &probe) != nil {
+			continue
+		}
+		if probe.Type == "session_meta" && probe.Payload != nil {
+			return FormatCodexRollout
+		}
+	}
+	return FormatClaudeJSONL
 }

@@ -266,17 +266,35 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 
 	req := w.req
 	req.Agent, req.Fallback = next, w.remaining[1:]
+	// The *request's* handoff is spent. It was applied when this episode's first
+	// container was built, and leaving it set makes buildRunOptions do the whole
+	// thing again — resolve the source session, write a second export, prepend a
+	// second preamble — on top of the briefing this failover just wrote. Two
+	// mounts then land on /sandbox/context, docker refuses the duplicate mount
+	// point, and the retry never starts: the failover fails in exactly the case
+	// where the run it is rescuing began as a handoff.
+	//
+	// What carries work across from here is `brief`, built from the failed run's
+	// own transcript, which is the conversation that matters now.
+	req.HandoffFrom = nil
 	if brief != nil {
 		req.Prompt = brief.Prompt(w.req.Prompt)
 	}
 
 	opts, err := sv.s.buildRunOptions(ctx, req)
 	if err != nil {
+		// Nothing else knows this directory, and it holds a copy of a
+		// conversation.
+		if brief != nil {
+			os.RemoveAll(brief.Dir)
+		}
 		return err
 	}
-	if brief != nil {
-		opts.ExtraMounts = append(opts.ExtraMounts, brief.Dir+":"+handoff.GuestDir+":ro")
-	}
+	// The mount and the record of whose conversation it was. RoutedFrom below says
+	// the same agent's name for a different reason — this run took over from it —
+	// and both are stamped: a reader asking "why is codex doing claude's work"
+	// wants the outage, and one asking "what is it reading" wants the briefing.
+	applyBriefing(&opts, brief, w.agent, "")
 
 	// The record. buildRunOptions may have skipped further agents on its own
 	// probe, and its reason is kept alongside this one — both are true, and a
@@ -374,16 +392,7 @@ func (sv *supervisor) briefing(w *watch) *handoff.Export {
 	// would be confidently wrong in a file the next agent is told to trust.
 	path, _, _ := sv.s.transcriptFor(c)
 
-	dir, err := os.MkdirTemp("", "sandbox-handoff-*")
-	if err != nil {
-		return nil
-	}
-	ex, err := handoff.Write(dir, w.agent, path, w.workspace, w.req.Base)
-	if err != nil {
-		os.RemoveAll(dir)
-		return nil
-	}
-	return ex
+	return writeBriefing(w.agent, path, w.workspace, w.req.Base)
 }
 
 // fingerprint is the workspace as it stands, or "" when it cannot be read.

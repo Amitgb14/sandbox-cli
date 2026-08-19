@@ -140,6 +140,68 @@ export interface AgentInfo {
   name: string;
   persistDir: string;
   envAllow: string[];
+  /**
+   * Whether a conversation of this agent's can be reopened by its native session
+   * id (`claude --resume`, `codex resume`, `opencode --session`). False for
+   * gemini and droid, which declare none — for those, "carry this conversation
+   * on" is not expressible and a client must not offer it.
+   */
+  canResume: boolean;
+}
+
+/** One conversation, as `/agents/{agent}/sessions` lists it. */
+export interface SessionSummary {
+  id: string;
+  /** Absent when unknown — see `partial`; never an empty string standing in. */
+  title?: string;
+  turns: number;
+  /** RFC3339. `started` is when the first line was written. */
+  modified: string;
+  started?: string;
+  /**
+   * Listed from the file alone, because sandbox-cli has no verified reader for
+   * this agent's format. The id and the dates are real; the title and the turn
+   * count are unknown and are reported as unknown rather than as zero. A partial
+   * session can be read and cannot be handed over: a briefing built from a
+   * transcript nothing could parse would carry no conversation at all.
+   */
+  partial?: boolean;
+  /** The working directory the transcript recorded — always `/workspace` for a
+   *  session a container wrote, which is what tells it from a host one. */
+  project?: string;
+  /** Where the file is. Reported so a raw view can say what it is showing, and
+   *  never accepted back: a request names a session by id. */
+  path?: string;
+  size?: number;
+  store?: "sandbox" | "host";
+  /**
+   * Whether this conversation can be reopened, which needs **both** the
+   * sandbox-owned store and an agent whose CLI can resume by id (`canResume` on
+   * AgentInfo). Gemini and droid have no resume argv, so their sessions are
+   * readable and not resumable — reporting otherwise offers an action the launch
+   * refuses.
+   */
+  resumable?: boolean;
+  /** Which repository it belongs to, or absent when it cannot be attributed —
+   *  a pooled session records only `/workspace`. */
+  repoId?: string;
+}
+
+/**
+ * The conversation a run is briefed with — the agent that held it and its
+ * session id, by id and never by path.
+ *
+ * This is **not** a resume and the two are refused together. A session id is a
+ * primary key into one vendor's private store, so claude's cannot be handed to
+ * codex; what crosses is internal/handoff's export (HANDOFF.md, a
+ * vendor-neutral transcript.jsonl, a git-derived files.md), mounted read-only
+ * at /sandbox/context, with a prompt that tells the target it is reading a
+ * briefing rather than its own history. Requires an agent and a prompt: the
+ * briefing says what happened before, the prompt says what to do now.
+ */
+export interface HandoffRef {
+  agent: string;
+  sessionId: string;
 }
 
 export interface AgentsResponse {
@@ -165,6 +227,14 @@ export interface Run {
   containerId: string;
   name: string;
   kind: RunKind;
+  /**
+   * The agent whose conversation this run was briefed with, and the session it
+   * came from — set when a person handed the work over. Distinct from
+   * `routedFrom`, which means a provider stopped answering: both read "codex,
+   * after claude" and answer different questions.
+   */
+  handoffFrom?: string;
+  handoffSession?: string;
   state: RunState;
   /** Set once state is "exited". */
   exitCode?: number;
@@ -231,6 +301,14 @@ export interface RunCreateRequest {
   worktree?: string;
 
   agent?: string;
+  /**
+   * Start this run with a briefing built from another agent's conversation.
+   * Refused with `resume` (opposites), without an agent (nothing would read it)
+   * and without a prompt (the briefing says what happened, the prompt says what
+   * to do). The source agent may be the same one — that is the only way to
+   * carry on a gemini or droid conversation, since neither can reopen by id.
+   */
+  handoffFrom?: HandoffRef;
   prompt?: string;
   command?: string[];
 

@@ -348,7 +348,14 @@ purpose: only the **sandbox-owned** store, because that listing feeds a resume
 picker and a session that cannot be reopened is an action that fails. `?scope=all`
 answers the *reading* question instead — it includes the user's own `~/.claude`
 history, and every row reports its `store` (`sandbox` | `host`), whether it is
-`resumable`, and the `project` (working directory) the transcript recorded. That
+`resumable`, and the `project` (working directory) the transcript recorded.
+
+`resumable` needs **both** facts and used to carry only the first: the
+sandbox-owned store, *and* an agent whose CLI can reopen a session by id.
+Gemini and droid declare no resume argv, so a run asking to reopen one of their
+sessions is refused with "no verified resume flag" — reporting those rows
+resumable offered an action that could only 400, after somebody had chosen it.
+`GET /v1/agents` reports the agent half as `canResume`. That
 last field is what tells the two apart at a glance: a container's cwd is always
 `/workspace`, a host session's is the real path.
 
@@ -359,6 +366,12 @@ project history bucket the file sits in, matched forwards from each registered
 repository's root rather than by decoding a bucket name back into a path, which
 is lossy. A session pooled in the shared bucket is genuinely unattributable, and
 absent says so rather than guessing.
+
+Two formats are parsed against a confirmed shape — claude's jsonl and codex's
+rollout — and a session in any other lists `partial`: its id and dates are real,
+its title and turn count are reported unknown rather than as zero. A partial
+session can be read and cannot be handed over, since a briefing built from a
+transcript nothing could parse would carry no conversation at all.
 
 `{id}` returns the parsed turns; `{id}/raw` returns the file. Raw exists because
 parsing is an interpretation — the claude jsonl carries a dozen line kinds and
@@ -374,7 +387,6 @@ back.
 
 ### Running the daemon on another machine
 
-Supported, in three shapes ranked below by how much new trust each asks for.
 Binding a routable address requires `-token` — the daemon **refuses to
 start without one**, because it holds the docker socket and an unauthenticated
 routable port is root on that host — plus `-allow-host` for the name the browser
@@ -383,8 +395,8 @@ dials and `-cors-origin` for the page's origin.
 The daemon speaks **plain HTTP and has no TLS flags**. That is not an oversight
 to work around with a bare `--bind` on an untrusted network: off loopback, the
 bearer token, every prompt and every diff cross in cleartext, and a token on the
-wire is a token you have published to whoever shares that network. There are
-three shapes that hold, ranked by how much new trust each asks for.
+wire is a token you have published to whoever shares that network. Three shapes
+hold, ranked below by how much new trust each asks for.
 
 #### 1. A tunnel — nothing new to trust
 
@@ -767,6 +779,49 @@ is *known* rather than inferred, so it is stamped as `sandbox.session`. That is
 load-bearing: every correlation filter assumes a session began around the time
 its container did, and a resumed one began before — without the label a resumed
 run reports no conversation at all.
+
+### Carrying a conversation to another agent
+
+`"handoffFrom": {"agent": "claude", "sessionId": "…"}` starts a run **briefed
+with** somebody else's conversation, which is the answer to "my claude
+conversation, run it via codex". It is not a resume and the two are refused
+together.
+
+The reason is the design decision in `docs/proposals/shared-context.md`: a
+session id is a primary key into one vendor's private store and the schemas
+differ entirely, so transcribing claude's history into codex's would make the
+target believe a fabricated history — confidently, with file-writing tools.
+What crosses instead is `internal/handoff`'s export — `HANDOFF.md`, a
+vendor-neutral `transcript.jsonl` with no tool ids, and a `files.md` derived
+from git rather than from anything the agent said about itself — mounted
+**read-only** at `/sandbox/context`, with a prompt that tells the target it is
+reading a briefing rather than its own history.
+
+Four refusals, each closing a way of asking for a briefing that could only fail
+inside the container: it needs an **agent** (a plain command would never read
+it), it needs a **prompt** (the briefing says what happened before, the prompt
+says what to do now), it needs **both halves** of the reference, and a
+conversation it cannot find is refused rather than launched without one — the
+caller asked for a handoff, and a run with only its prompt is a different job.
+
+A conversation with **no verified reader** is refused too, and that refusal was
+added rather than assumed: `internal/handoff` treats an unparseable transcript as
+normal and still writes an export — right for a failover, where a crashed agent's
+file ledger is the useful part, and wrong when somebody picked *this
+conversation*, who would otherwise get a prompt announcing "0 prompts of that
+conversation" over an empty `transcript.jsonl`.
+
+The source agent may be the **same** agent, and that is not degenerate: gemini
+and droid declare no resume argv, so a briefing from itself is the only way to
+carry one of their conversations on. `GET /v1/agents` reports `canResume` so a
+client knows which case it is in, and a session's `resumable` now accounts for
+both facts — the sandbox-owned store *and* an agent that can reopen by id.
+
+The run records it as `sandbox.handoff_from` / `sandbox.handoff_session`, and
+the audit line as `handoff_from` / `handoff_session` — deliberately **not**
+`routed_from`, though a failover sets both. Routing says a provider stopped
+answering; a handoff says a person chose. In a listing they are the same two
+words, codex after claude, and only these fields say which story it was.
 
 **Resizing is not cosmetic.** A full-screen agent renders *nothing* until it
 knows its terminal size, so `POST /console/resize` is what turns an attached

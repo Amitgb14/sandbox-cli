@@ -654,6 +654,39 @@ export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchP
     refusals.push("Nothing to run: pick an agent or give a command.");
   }
 
+  // The daemon's handoff rules, said before the launch rather than after it.
+  // Each is a request it refuses outright, so showing them here is the
+  // difference between a control that explains itself and a 400.
+  if (req.resume && !req.console) {
+    // The daemon refuses a headless resume, and the form drops the field rather
+    // than sending one — so without this the run launches as a brand-new
+    // conversation with whatever prompt is in the box, and nothing on screen
+    // says the conversation was dropped. Arriving from a row's Continue makes
+    // that one click away: the link ticks the console, and unticking it is an
+    // ordinary thing to try.
+    refusals.push(
+      "Resuming a conversation needs the console: a headless resume would replay one prompt into an old conversation and exit. Keep the console ticked, or clear the conversation to start a new one.",
+    );
+  }
+
+  if (req.handoffFrom) {
+    if (!req.agent) {
+      refusals.push(
+        "A briefing is something an agent reads: pick one, or drop the conversation you are handing over.",
+      );
+    }
+    if (!req.prompt.trim()) {
+      refusals.push(
+        "A handoff needs a prompt: the briefing says what happened before, and the prompt says what to do now. Without one the agent is handed evidence and no instruction.",
+      );
+    }
+    if (req.resume) {
+      refusals.push(
+        "Resume and handoff are opposites: one reopens a conversation with the agent that wrote it, the other starts a new one carrying a briefing about it. Pick one.",
+      );
+    }
+  }
+
   if (req.detach && !req.worktree) {
     warnings.push(
       "A detached run is named sandbox-<repo>-<branch>, and docker's duplicate-name refusal is what enforces one agent per branch. Without a worktree this will collide with another run on the same branch.",
@@ -843,6 +876,14 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   // otherwise — so the form does not send a pair it knows will 400.
   if (req.console && req.agent && req.skipPermissions) body.skipPermissions = true;
   if (req.console && req.agent && req.resume) body.resume = req.resume;
+  // A briefing, and only where the daemon accepts one: an agent to read it, no
+  // resume alongside it (refused together), and a prompt, since the briefing
+  // says what happened before and the prompt says what to do now. Unlike resume
+  // it is not console-only — a handoff starts a *new* conversation, so running
+  // it headless is a legitimate thing to want.
+  if (req.agent && req.handoffFrom && !req.resume && req.prompt.trim()) {
+    body.handoffFrom = req.handoffFrom;
+  }
   // Refused together by the daemon, so the form does not send a pair it knows
   // will 400. Verify decides the exit code; an interactive session's exit code
   // is whenever you quit.

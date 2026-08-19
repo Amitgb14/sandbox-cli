@@ -115,8 +115,11 @@ func List(f Finding, o ListOpts) (sessions []Session, scoped bool, err error) {
 					Size:     info.Size(),
 					Partial:  true,
 				}
-				if f.Format == FormatClaudeJSONL {
+				switch f.Format {
+				case FormatClaudeJSONL:
 					readClaudeSession(path, &s)
+				case FormatCodexRollout:
+					readCodexSession(path, &s)
 				}
 				sessions = append(sessions, s)
 			})
@@ -147,7 +150,18 @@ func isDir(p string) bool {
 // session file after its id, with an optional prefix and the extension around it
 // (`<uuid>.jsonl`, `rollout-<timestamp>-<uuid>.jsonl`), so the name is the one
 // piece of a session that can be read without understanding the format.
-func sessionID(path string) string {
+func sessionID(path string) string { return SessionIDFromPath(path) }
+
+// SessionIDFromPath is that rule, exported because more than one package needs
+// it and a second copy is how it goes wrong.
+//
+// It already did: internal/studioapi carried its own basename-minus-extension
+// version, which is correct for claude (`<uuid>.jsonl`) and wrong for every
+// store that prefixes the file. A codex run's conversation therefore reported
+// its id as `rollout-2026-08-18T15-48-43-<uuid>` and offered a resume command
+// built from it, which codex would refuse — a wrong answer that looks like a
+// right one, which is the failure mode a duplicated rule always has.
+func SessionIDFromPath(path string) string {
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if u, ok := trailingUUID(name); ok {
 		return u

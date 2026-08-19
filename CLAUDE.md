@@ -225,9 +225,19 @@ rather than merely passing.
   deliberately **sticky** — a probe that finds nothing never erases a store verified
   earlier, because an agent HOME that is not mounted today is not the same as a store that
   never existed. `sessions.go` reads a verified store into `Session` values —
-  the claude-jsonl reader is the only one written against a confirmed format, so
-  everything else lists `Partial` (id and dates real, title and turn count shown as
-  `?`). Surfaced by the single command `sandbox-cli context list` — where a store
+  two formats have readers written against a confirmed shape, claude-jsonl and
+  codex's rollout JSONL, and everything else lists `Partial` (id and dates real,
+  title and turn count shown as `?`). The rule each reader keeps is the same one
+  wearing different clothes: **a user turn is a prompt somebody typed**. In
+  claude's transcripts the impostors are tool results arriving as user messages;
+  in codex's they are the `developer` messages it ships with and an injected
+  `<environment_context>` block written as the first user turn of every session
+  — counting those made a one-prompt session report two and titled every
+  conversation `<environment_context>`. A file a reader does not recognise stays
+  `Partial` rather than coming back as an empty conversation: no answer, never a
+  zero. Which reader runs is the store descriptor's `Format`, and
+  `agentctx.TranscriptOf` takes it from callers that know the agent — the sniff
+  in `Transcript` is for the ones holding only a path. Surfaced by the single command `sandbox-cli context list` — where a store
   lives is reported *inside* that listing (inline when it is empty, under `--verbose`
   when it is not) rather than by a second command, which read as two overlapping
   things to learn. First step of

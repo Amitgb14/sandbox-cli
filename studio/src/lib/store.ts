@@ -27,6 +27,7 @@ type PersistedUi = Pick<
   | "usageCollapsed"
   | "usageHidden"
   | "connections"
+  | "recentRepos"
   | "routingPrefs"
   | "recentRuns"
 >;
@@ -86,6 +87,29 @@ interface UiState {
   connections: SavedConnection[];
   saveConnection: (c: SavedConnection) => void;
   forgetConnection: (url: string) => void;
+
+  /**
+   * Which repositories were worked on recently, newest first, **per daemon**.
+   *
+   * Keyed by connection URL, and that key is the whole point: `projects.json`
+   * is the *machine's* registry — the set of repositories that daemon will
+   * touch — while recency is one person's fact about their own browsing. Mixing
+   * them would put a laptop's history in front of a shared box's list, and a
+   * repo id from one machine means nothing on another anyway.
+   *
+   * Ids, never paths. That is the same rule the daemon keeps on the wire, and
+   * it matters here for a second reason: a path stored in a browser would be
+   * the one piece of this state that says something about a machine the browser
+   * cannot see.
+   *
+   * Persisted because "carry on where I left off" is worthless if it lasts
+   * until the tab closes. The stale-id hazard that keeps `repoFilter` itself out
+   * of the persisted slice is handled by *when* this is applied rather than by
+   * forgetting it: a remembered id is only ever selected after the daemon has
+   * listed its repositories, and only if it is in that list.
+   */
+  recentRepos: Record<string, string[]>;
+  noteRepoUse: (connection: string, repoId: string) => void;
 
   routingPrefs: Record<string, string[]>;
   setRoutingPref: (primary: string, fallback: string[]) => void;
@@ -187,6 +211,16 @@ export const useUi = create<UiState>()(
       setRoutingPref: (primary, fallback) =>
         set((s) => ({ routingPrefs: { ...s.routingPrefs, [primary]: fallback } })),
 
+      recentRepos: {},
+      noteRepoUse: (connection, repoId) =>
+        set((s) => {
+          const prev = s.recentRepos[connection] ?? [];
+          // Capped, and the cap is small on purpose: this drives an ordering,
+          // not a history. Eight is what the sidebar can show without the list
+          // becoming the thing you have to read.
+          const next = [repoId, ...prev.filter((id) => id !== repoId)].slice(0, 8);
+          return { recentRepos: { ...s.recentRepos, [connection]: next } };
+        }),
       recentRuns: [],
       pushRecentRun: (id) =>
         set((s) => ({ recentRuns: [id, ...s.recentRuns.filter((r) => r !== id)].slice(0, 8) })),
@@ -218,6 +252,7 @@ export const useUi = create<UiState>()(
         usageHidden: s.usageHidden,
         connections: s.connections,
         routingPrefs: s.routingPrefs,
+        recentRepos: s.recentRepos,
         recentRuns: s.recentRuns,
       }),
     },

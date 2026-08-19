@@ -13,6 +13,68 @@ version is tagged.
 
 ### Added
 
+- **Studio remembers where you were working, and which machine runs it.** The
+  repository picker lifts the ones you have actually worked in to the top and
+  reopens on the last one — after the daemon lists its repositories, only if the
+  id is in that list, so a remembered scope can never leave every screen reading
+  empty. Recency is kept **per daemon**: `projects.json` is the machine's
+  registry, while which of them you looked at last is a fact about you, and a
+  repo id from one box means nothing on another.
+
+  A machine switcher sits in the header, because switching is something you do
+  while working rather than while configuring — Settings still owns adding and
+  forgetting. Each entry is probed on `/v1/health`, the one route that needs no
+  token, so a machine whose token may be wrong is not reported down for it. A
+  daemon nobody has heard back from yet shows *checking*, never down: reading
+  silence as failure is how a closed laptop becomes an incident.
+
+- **Codex conversations are readable, and the Conversations panel is no longer
+  claude-only.** sandbox-cli now understands codex's rollout transcripts, so its
+  sessions carry real titles and turn counts instead of listing as `partial`,
+  its runs show their conversation on the run page, and a briefing handed *from*
+  a codex conversation carries what was actually said. The panel picks among the
+  agents whose store this machine has verified; formats with no reader still
+  list honestly, with the id and dates real and the rest shown as unknown.
+
+  Two impostors are dropped, both confirmed against a real rollout, and both are
+  the same rule claude's reader already keeps — a user turn is a prompt somebody
+  typed. Codex's `developer` messages are its own shipped instructions, and it
+  injects an `<environment_context>` block as the first user turn of every
+  session: counting them made a one-prompt session report two and titled every
+  conversation `<environment_context>`.
+
+  Fixes a session id that was wrong wherever a store prefixes its file names: a
+  codex run reported `rollout-<timestamp>-<uuid>` as its conversation id and
+  offered a resume command built from it, which the agent refuses. The rule for
+  reading an id out of a path now lives in one place.
+
+
+- **Carry a conversation on, or hand it to another agent, from the row it is
+  on.** Reading a conversation in Studio and continuing it were two screens
+  apart; every conversation now offers **Continue**, which opens Launch with the
+  agent, the session and a console already set. The console is not a
+  convenience — a headless resume replays one prompt into an old conversation
+  and exits, so the daemon refuses it, and a link that set the session alone
+  would land on a form that cannot be submitted.
+
+  A different agent can pick the work up instead: `handoffFrom` on
+  `POST /v1/runs` starts a run **briefed with** another agent's conversation.
+  It is deliberately not a resume — a session id is a primary key into one
+  vendor's private store, so what crosses is a briefing (`HANDOFF.md`, a
+  vendor-neutral transcript, and a file ledger derived from git), mounted
+  read-only, with a prompt that tells the target it is reading a briefing rather
+  than its own history. The same mechanism a failover has always used, now
+  something a person can ask for. Recorded as `handoff_from` rather than
+  `routed_from`: routing means a provider stopped answering, a handoff means
+  somebody chose, and the two look identical in a listing.
+
+  The source agent may be the same one, which is the only way to continue a
+  **gemini** or **droid** conversation: neither has a resume flag. Studio says
+  so once above the list rather than offering a button that could only fail —
+  `GET /v1/agents` now reports `canResume`, and a session's `resumable` accounts
+  for the agent as well as the store, where before it promised any sandbox-owned
+  session could be reopened.
+
 - **How to reach a remote daemon safely, written down properly.** The daemon
   speaks plain HTTP and has no TLS flags, and the docs now rank the three shapes
   that hold rather than leaving it at "there is no TLS": a tunnel (nothing new to

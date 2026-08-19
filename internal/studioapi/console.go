@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -69,7 +68,11 @@ func (s *Server) handleRunConversation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ConversationResponse{Messages: []agentctx.Message{}})
 		return
 	}
-	msgs, err := agentctx.Transcript(path, maxConversationTurns)
+	format := ""
+	if store, ok := agentctx.Lookup(c.Labels[sandbox.LabelAgent]); ok {
+		format = store.Format
+	}
+	msgs, err := agentctx.TranscriptOf(format, path, maxConversationTurns)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -190,7 +193,12 @@ func resumeCommand(f agentctx.Finding, id string) string {
 // Whole, never abbreviated: the listing prints ids short for reading, and
 // Claude Code rejects anything that is not a complete UUID.
 func sessionIDFromPath(path string) string {
-	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	// Delegated rather than reimplemented. Which part of a file name is the id is
+	// a fact about each agent's store, which is agentctx's job — and the copy
+	// that used to live here was the claude-shaped half of it, so a codex run
+	// reported `rollout-<timestamp>-<uuid>` as its session id and built a resume
+	// command the agent would refuse.
+	return agentctx.SessionIDFromPath(path)
 }
 
 // sandboxStore narrows a Finding to the location under the sandbox-owned agent
