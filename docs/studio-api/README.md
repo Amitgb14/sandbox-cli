@@ -149,6 +149,14 @@ maintained version could not do: `AgentInfo` had drifted to three fields against
 ten, and `SessionSummary` was missing entirely, so the one shape whose meaning
 had just changed was the one a client could not read the contract for.
 
+### A typed client
+
+`sdk/typescript` is a published client for this API — `Studio.connect()` finds
+the local daemon from what `studio.sh` writes, and `Workspace.run()` launches a
+container and waits for it. It imports the same generated contract this document
+mirrors, so the two cannot describe different servers. Everything below is what
+it speaks; the endpoints are equally usable with curl.
+
 ### Endpoints
 
 | Method | Path | What it does |

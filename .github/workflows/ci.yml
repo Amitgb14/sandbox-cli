@@ -51,6 +51,48 @@ jobs:
       - name: test -race
         run: go test -race ./internal/sandbox/ ./internal/egressproxy/ ./internal/studioapi/ ./internal/fleet/
 
+  # The TypeScript SDK, which is a published package rather than a folder of
+  # examples: it compiles under the same strict settings a consumer would use,
+  # and its tests run a stub daemon over real HTTP so what is asserted is what
+  # crossed the wire.
+  #
+  # Separate from `check` because the verdicts are different sentences: "the Go
+  # tests failed" and "the client no longer matches the contract" send you to
+  # different files.
+  sdk-typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The contract the package ships is generated from the Go types. Running
+      # the generator here and failing on a diff is what stops a published SDK
+      # from describing an API the daemon does not have — the same guard
+      # TestContractMirrorIsInSync gives the docs copy.
+      - name: contract is generated, not written
+        run: |
+          make contract
+          if ! git diff --quiet -- sdk/typescript/src/contract.ts docs/studio-api/types.ts; then
+            echo "the checked-in contract differs from what the generator produces:"
+            git --no-pager diff -- sdk/typescript/src/contract.ts docs/studio-api/types.ts
+            exit 1
+          fi
+
+      - name: build and test
+        working-directory: sdk/typescript
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm test
+
   # Compile every target the release actually ships. Kept a separate job so its
   # verdict is legible on its own: "the release would not build" is a different
   # sentence from "a test failed".
