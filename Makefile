@@ -4,7 +4,7 @@ PKG := github.com/Amitgb14/sandbox-cli
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build build-studio-api install test test-integration lint fmt clean snapshot release docker-build image
+.PHONY: build build-studio-api install test test-integration lint fmt clean snapshot release docker-build image contract
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
@@ -51,6 +51,12 @@ test-integration:
 
 fmt:
 	gofmt -w .
+
+# The TypeScript mirror of the API's wire shapes, generated from the Go types
+# that define them. Checked in because a client author reads it; kept honest by
+# TestContractMirrorIsInSync, which fails when it and types.go disagree.
+contract:
+	go run ./cmd/gen-contract .
 
 clean:
 	rm -rf bin dist bin-docker

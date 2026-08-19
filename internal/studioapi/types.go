@@ -9,9 +9,20 @@ import (
 
 // This file is the wire contract: every type here is what actually crosses the
 // HTTP boundary, JSON-tagged the way a TypeScript client wants it (camelCase,
-// omitempty on anything optional, no Go-only types). docs/studio-api/types.ts is
-// a hand-maintained mirror for the frontend — keep the two in sync when this
-// file changes.
+// omitempty on anything optional, no Go-only types).
+//
+// docs/studio-api/types.ts is **generated from this file** by `make contract`,
+// so the comments here are the contract's documentation as well as its
+// definition — a client author reads them in TypeScript. Nothing needs keeping
+// in sync by hand, and TestContractMirrorIsInSync fails when the checked-in
+// mirror and these types disagree.
+//
+// Two habits follow from that. `omitempty` is a statement about the wire, not a
+// preference: it becomes an optional field in the mirror, and absent means
+// absent throughout this API rather than a zero standing in for an answer. And a
+// named string type with declared values becomes a union, so a client switching
+// on it exhaustively is checked by its own compiler — which is worth the type
+// even where a bare string would compile.
 
 // ErrorResponse is the body of every non-2xx response.
 type ErrorResponse struct {

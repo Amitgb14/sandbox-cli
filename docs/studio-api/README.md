@@ -136,9 +136,18 @@ variables, and `persist_auth` is re-checked here for the same reason
 ## Contract
 
 `internal/studioapi/types.go` is the source of truth for every request/response
-shape; `types.ts` in this directory is a hand-maintained TypeScript mirror for
-a frontend to import directly. Keep the two in sync when the Go types change —
-there is no code generation step (yet) tying them together.
+shape, and `types.ts` in this directory is **generated from it** by
+`make contract` — the Go types are the contract and their doc comments are its
+documentation, so a client author reads the same prose the server was written
+against.
+
+It is checked in rather than built on demand, because it is documentation as
+much as it is a declaration and a file nobody can read without a Go toolchain is
+neither. `TestContractMirrorIsInSync` regenerates and compares, naming the first
+line that differs and the command that fixes it — which is what the hand-
+maintained version could not do: `AgentInfo` had drifted to three fields against
+ten, and `SessionSummary` was missing entirely, so the one shape whose meaning
+had just changed was the one a client could not read the contract for.
 
 ### Endpoints
 
