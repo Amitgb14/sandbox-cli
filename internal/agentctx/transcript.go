@@ -44,23 +44,39 @@ func Transcript(path string, n int) ([]Message, error) {
 	if !fi.Mode().IsRegular() {
 		return nil, errNotRegular(path)
 	}
-	// Which reader, decided by the file rather than by the caller.
-	//
-	// Every caller has a path and only some have an agent — the console
-	// correlates one, a briefing is asked for by id — so a format *parameter*
-	// would be a fact reconstructed at three call sites, and a caller that
-	// reconstructed it wrongly would get zero messages with nothing to say why.
-	// The file answers for itself: a rollout opens with a session_meta line that
-	// a claude transcript has no shape for.
-	if sniffFormat(path) == FormatCodexRollout {
+	// Which reader, decided by the file: this entry point is for callers holding
+	// only a path. One that knows the agent should call TranscriptOf, so the
+	// registry's recorded format decides rather than a guess at the first lines.
+	return TranscriptOf("", path, n)
+}
+
+// TranscriptOf is Transcript for a caller that already knows the format.
+//
+// Two ways of deciding which reader runs is one too many: `List` dispatches on
+// the registry's `Finding.Format` while `Transcript` sniffs the file, and a
+// rollout whose `session_meta` is not in the first few lines would list with a
+// correct title and turn count and then render as an empty conversation — and
+// brief the next agent with an empty transcript, since handoff.Write treats a
+// parse miss as normal. Where the agent is known, its recorded format decides;
+// the sniff stays for the callers that hold only a path.
+func TranscriptOf(format, path string, n int) ([]Message, error) {
+	if format == "" {
+		format = sniffFormat(path)
+	}
+	if format == FormatCodexRollout {
 		return codexTranscript(path, n)
 	}
+	return claudeMessages(path, n)
+}
+
+// claudeMessages reads a claude-jsonl transcript. Named for the format rather
+// than for the agent, because the pairing is the store descriptor's to make.
+func claudeMessages(path string, n int) ([]Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-
 	sc := bufio.NewScanner(f)
 	// Same limit List uses, and for the same reason: one tool result can be
 	// megabytes, and the default 64KB would stop the scan partway through.

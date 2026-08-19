@@ -191,7 +191,13 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 5000 {
 		limit = v
 	}
-	msgs, err := agentctx.Transcript(sess.Path, limit)
+	// The agent is in the path of this request, so its format decides rather
+	// than the first lines of the file.
+	format := ""
+	if store, ok := agentctx.Lookup(agent); ok {
+		format = store.Format
+	}
+	msgs, err := agentctx.TranscriptOf(format, sess.Path, limit)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

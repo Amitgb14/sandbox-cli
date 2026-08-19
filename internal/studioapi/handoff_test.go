@@ -1,6 +1,7 @@
 package studioapi
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -197,4 +198,100 @@ func TestSessionResumableRequiresAResumeArgv(t *testing.T) {
 // depends on.
 func sessionFixture() agentctx.Session {
 	return agentctx.Session{ID: handoffSessionID, Turns: 2}
+}
+
+// A handoff run that fails over must not carry its request's handoff into the
+// retry.
+//
+// The request is what the supervisor rebuilds from, so a `handoffFrom` left set
+// makes buildRunOptions resolve the source session again, write a second export
+// and prepend a second preamble — on top of the briefing the failover itself
+// just wrote. Two mounts land on /sandbox/context, docker refuses a duplicate
+// mount point, and the retry never starts: the failover breaks in exactly the
+// case where the run it is rescuing began as a handoff.
+//
+// Asserted through buildRunOptions rather than by starting a supervisor, because
+// what has to hold is a property of the options: one briefing mount, one
+// preamble, however many times a request is rebuilt.
+func TestARebuiltHandoffRequestMountsOneBriefing(t *testing.T) {
+	s, _ := newTestServer(t)
+	writeSandboxSession(t)
+
+	req := RunCreateRequest{
+		Agent:       "codex",
+		Prompt:      "finish the pagination work",
+		Branch:      "handoff-failover",
+		HandoffFrom: &HandoffRef{Agent: "claude", SessionID: handoffSessionID},
+	}
+
+	first, err := s.buildRunOptions(context.Background(), req)
+	if err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+	if got := countBriefingMounts(first.ExtraMounts); got != 1 {
+		t.Fatalf("first build produced %d briefing mounts, want 1", got)
+	}
+
+	// What the supervisor does: the same request, re-targeted. It clears
+	// HandoffFrom, so the rebuild carries no briefing of its own and the one the
+	// failover wrote is the only one.
+	retry := req
+	retry.Agent = "claude"
+	retry.HandoffFrom = nil
+	second, err := s.buildRunOptions(context.Background(), retry)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if got := countBriefingMounts(second.ExtraMounts); got != 0 {
+		t.Errorf("a rebuilt request wrote %d briefings of its own; the failover's is the one that counts", got)
+	}
+	if strings.Count(strings.Join(second.Command, " "), "A previous agent") > 1 {
+		t.Error("the briefing preamble was prepended twice")
+	}
+}
+
+func countBriefingMounts(mounts []string) int {
+	n := 0
+	for _, m := range mounts {
+		if strings.Contains(m, handoff.GuestDir) {
+			n++
+		}
+	}
+	return n
+}
+
+// A conversation sandbox-cli cannot read is refused rather than exported empty.
+//
+// handoff.Write is happy to produce a briefing from a transcript it could not
+// parse — correct for the supervisor, where the file ledger is the useful part —
+// but here somebody picked *this conversation*, and an empty transcript.jsonl
+// under a prompt announcing "0 prompts of that conversation" is a claim that it
+// crossed when it did not.
+func TestHandoffRefusesASourceWithNoVerifiedReader(t *testing.T) {
+	s, _ := newTestServer(t)
+	dir := config.AgentStateDir("gemini")
+	if dir == "" {
+		t.Skip("no agent state dir resolvable in this environment")
+	}
+	// A gemini session: listed, with real dates, and `partial` because no reader
+	// exists for the format.
+	bucket := filepath.Join(dir, ".gemini", "tmp", "abc123")
+	if err := os.MkdirAll(bucket, 0o755); err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bucket, "logs.json"), []byte("[]"), 0o644); err != nil {
+		t.Fatalf("writing log: %v", err)
+	}
+
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
+		Agent:       "codex",
+		Prompt:      "carry on",
+		HandoffFrom: &HandoffRef{Agent: "gemini", SessionID: "abc123"},
+	})
+	if rec.Code == http.StatusCreated {
+		t.Fatal("a handoff from an unreadable conversation was launched; the briefing would carry nothing")
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
 }

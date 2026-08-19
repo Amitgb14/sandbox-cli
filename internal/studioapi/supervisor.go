@@ -266,12 +266,28 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 
 	req := w.req
 	req.Agent, req.Fallback = next, w.remaining[1:]
+	// The *request's* handoff is spent. It was applied when this episode's first
+	// container was built, and leaving it set makes buildRunOptions do the whole
+	// thing again — resolve the source session, write a second export, prepend a
+	// second preamble — on top of the briefing this failover just wrote. Two
+	// mounts then land on /sandbox/context, docker refuses the duplicate mount
+	// point, and the retry never starts: the failover fails in exactly the case
+	// where the run it is rescuing began as a handoff.
+	//
+	// What carries work across from here is `brief`, built from the failed run's
+	// own transcript, which is the conversation that matters now.
+	req.HandoffFrom = nil
 	if brief != nil {
 		req.Prompt = brief.Prompt(w.req.Prompt)
 	}
 
 	opts, err := sv.s.buildRunOptions(ctx, req)
 	if err != nil {
+		// Nothing else knows this directory, and it holds a copy of a
+		// conversation.
+		if brief != nil {
+			os.RemoveAll(brief.Dir)
+		}
 		return err
 	}
 	// The mount and the record of whose conversation it was. RoutedFrom below says

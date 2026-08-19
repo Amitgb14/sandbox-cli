@@ -208,7 +208,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // created if needed), the agent descriptor supplies its env allowlist and
 // autonomous argv, and the login persistence gate is re-checked here because it
 // is a property of every path that builds Options, not of the config alone.
-func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (sandbox.Options, error) {
+func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (built sandbox.Options, err error) {
 	// Which repository this run is about, before anything else is decided: a
 	// worktree is resolved inside it, and with no worktree it *is* the workspace.
 	// An unregistered id refuses here rather than silently falling back to the
@@ -358,6 +358,19 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 				"no conversation %s for %s: it is listed by GET /v1/agents/%s/sessions, and only a verified store is searched",
 				req.HandoffFrom.SessionID, req.HandoffFrom.Agent, req.HandoffFrom.Agent)
 		}
+		// A session sandbox-cli has no verified reader for is refused rather than
+		// exported. handoff.Write treats an unparseable transcript as normal and
+		// still produces a briefing — right for the supervisor, where a crashed
+		// agent's file ledger is the useful part, and wrong here: somebody picked
+		// *this conversation*, and what they would get is a prompt announcing
+		// "0 prompts of that conversation" over an empty transcript.jsonl. The
+		// listing already reports the same fact as `partial`.
+		if sess.Partial {
+			return sandbox.Options{}, fmt.Errorf(
+				"conversation %s cannot be handed over: sandbox-cli has no verified reader for %s's transcript format, "+
+					"so the briefing would carry no conversation at all — its id and dates are real, which is why it is listed",
+				req.HandoffFrom.SessionID, req.HandoffFrom.Agent)
+		}
 		brief = writeBriefing(req.HandoffFrom.Agent, sess.Path, project, req.Base)
 		if brief == nil {
 			return sandbox.Options{}, fmt.Errorf(
@@ -367,6 +380,14 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 		// Says three things, and the third is the one that keeps this honest:
 		// where the briefing is, what it holds, and that it *is* a briefing.
 		req.Prompt = brief.Prompt(req.Prompt)
+		// Every refusal below this point would otherwise leave the export with
+		// nobody holding its path: a copy of a conversation in /tmp that nothing
+		// removes. Said once here rather than at each `return`.
+		defer func() {
+			if err != nil {
+				os.RemoveAll(brief.Dir)
+			}
+		}()
 	}
 
 	opts := sandbox.Options{

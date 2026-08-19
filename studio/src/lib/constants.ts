@@ -58,13 +58,15 @@ export function setStoredApiBase(url: string) {
   else window.localStorage.removeItem(API_STORAGE_KEY);
 }
 
-export function apiBase(): string {
-  // A typed endpoint first. Read only in the browser: this function also runs
-  // during SSR, where localStorage does not exist and where returning a
-  // different value than the client would produce a hydration mismatch on every
-  // screen that prints the endpoint.
-  const stored = storedApiBase();
-  if (stored) return stored;
+/**
+ * The daemon this Studio was *served beside*, ignoring any endpoint typed since.
+ *
+ * apiBase() answers "where do requests go", which is the stored endpoint once
+ * one is set — so a switcher offering "this machine" beside saved connections
+ * cannot use it to describe that row, or the row reports the remote's host and
+ * the remote's health while claiming to be local.
+ */
+export function defaultApiBase(): string {
   if (typeof window !== "undefined" && window.__SANDBOX_API__) {
     return window.__SANDBOX_API__;
   }
@@ -73,6 +75,17 @@ export function apiBase(): string {
   }
   return process.env.NEXT_PUBLIC_SANDBOX_API ?? "http://localhost:8787";
 }
+
+export function apiBase(): string {
+  // A typed endpoint first. Read only in the browser: this function also runs
+  // during SSR, where localStorage does not exist and where returning a
+  // different value than the client would produce a hydration mismatch on every
+  // screen that prints the endpoint.
+  const stored = storedApiBase();
+  if (stored) return stored;
+  return defaultApiBase();
+}
+
 
 /**
  * `config.baselineEgress` — the always-permitted domain set in allowlist mode.

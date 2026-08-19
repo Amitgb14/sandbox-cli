@@ -68,7 +68,11 @@ func (s *Server) handleRunConversation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ConversationResponse{Messages: []agentctx.Message{}})
 		return
 	}
-	msgs, err := agentctx.Transcript(path, maxConversationTurns)
+	format := ""
+	if store, ok := agentctx.Lookup(c.Labels[sandbox.LabelAgent]); ok {
+		format = store.Format
+	}
+	msgs, err := agentctx.TranscriptOf(format, path, maxConversationTurns)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

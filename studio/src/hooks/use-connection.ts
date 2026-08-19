@@ -20,6 +20,21 @@ import { useUi, type SavedConnection } from "@/lib/store";
 /** "" is the daemon this Studio was served beside — always offered, never saved. */
 export type ConnectionKey = string;
 
+/**
+ * Switching writes localStorage, which React cannot see.
+ *
+ * Without a signal, everything that read the active connection at mount keeps
+ * its old answer: the header label and its check mark stay on the machine you
+ * just left, and — worse, because it is silent — the sidebar keeps filing
+ * recents under the previous daemon's key until a reload. The Settings card only
+ * looked right because it updates its own local state inline.
+ */
+const listeners = new Set<() => void>();
+
+function notifyConnectionChange() {
+  listeners.forEach((fn) => fn());
+}
+
 export function useActiveConnection(): { key: ConnectionKey; url: string; ready: boolean } {
   // Resolved after mount: localStorage does not exist during a server render,
   // and a first client render that disagreed with the server's is a hydration
@@ -28,9 +43,16 @@ export function useActiveConnection(): { key: ConnectionKey; url: string; ready:
   const [url, setUrl] = useState("");
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    setKey(storedApiBase());
-    setUrl(apiBase());
-    setReady(true);
+    const read = () => {
+      setKey(storedApiBase());
+      setUrl(apiBase());
+      setReady(true);
+    };
+    read();
+    listeners.add(read);
+    return () => {
+      listeners.delete(read);
+    };
   }, []);
   return { key, url, ready };
 }
@@ -51,6 +73,10 @@ export function useSwitchConnection() {
       // daemon clears the stored one so the injected token takes over again.
       setApiToken(c?.token ?? "");
       reconnect();
+      // Before the refetch, so anything keyed on the active connection — the
+      // sidebar's recents above all — is already recording under the machine
+      // whose answers are about to arrive.
+      notifyConnectionChange();
       qc.invalidateQueries();
     },
     [qc],

@@ -472,6 +472,13 @@ export const MOCK_AGENTS: Agent[] = AGENT_SEEDS.map((seed, i) => {
     // disabled without these: it keys off canSkipPermissions, which only the
     // daemon was answering.
     canSkipPermissions: (seed.skipPermissionArgs ?? []).length > 0,
+    // The same gap the comment above describes, one field over: without this the
+    // conversations panel reads canResume as false for every agent offline, says
+    // "claude has no way to reopen a conversation by id", and offers only
+    // "brief and start" on rows that would resume perfectly against a daemon.
+    // The three that can are the three whose stores declare a resume argv
+    // (agentctx/stores.go): claude --resume, codex resume, opencode --session.
+    canResume: ["claude", "codex", "opencode"].includes(seed.name),
     skipPermissionArgs: seed.skipPermissionArgs,
     autonomousInvocation: seed.headlessVerified
       ? autonomousArgv(seed.name)

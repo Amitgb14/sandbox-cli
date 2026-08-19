@@ -657,6 +657,18 @@ export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchP
   // The daemon's handoff rules, said before the launch rather than after it.
   // Each is a request it refuses outright, so showing them here is the
   // difference between a control that explains itself and a 400.
+  if (req.resume && !req.console) {
+    // The daemon refuses a headless resume, and the form drops the field rather
+    // than sending one — so without this the run launches as a brand-new
+    // conversation with whatever prompt is in the box, and nothing on screen
+    // says the conversation was dropped. Arriving from a row's Continue makes
+    // that one click away: the link ticks the console, and unticking it is an
+    // ordinary thing to try.
+    refusals.push(
+      "Resuming a conversation needs the console: a headless resume would replay one prompt into an old conversation and exit. Keep the console ticked, or clear the conversation to start a new one.",
+    );
+  }
+
   if (req.handoffFrom) {
     if (!req.agent) {
       refusals.push(

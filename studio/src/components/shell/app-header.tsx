@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
-import { apiBase } from "@/lib/constants";
+import { apiBase, defaultApiBase } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { crumbsFor } from "@/lib/nav";
 import { useDaemon, useTransportMode } from "@/lib/api/queries";
@@ -116,10 +116,14 @@ function ConnectionSwitcher() {
   const saved = useConnections();
   const { key, url, ready } = useActiveConnection();
   const switchTo = useSwitchConnection();
-  // The built-in daemon is probed too: "this machine" is exactly as capable of
-  // being down as any other, and finding out by watching every panel fail is
-  // the experience this replaces.
-  const health = useConnectionHealth(ready ? [url, ...saved.map((c) => c.url)] : []);
+  // The *built-in* daemon's own URL, not the active one. apiBase() answers
+  // "where do requests go", which is the remote once you have switched — so a
+  // row labelled "This machine" would otherwise print the remote's host and the
+  // remote's health, and the local daemon would never be probed at all.
+  const builtIn = defaultApiBase();
+  // Both are probed: "this machine" is exactly as capable of being down as any
+  // other, and finding out by watching every panel fail is what this replaces.
+  const health = useConnectionHealth(ready ? [builtIn, url, ...saved.map((c) => c.url)] : []);
 
   if (!ready || saved.length === 0) return null;
 
@@ -143,9 +147,9 @@ function ConnectionSwitcher() {
         <ConnectionRow
           icon={<Laptop className="size-3.5 shrink-0" />}
           label="This machine"
-          detail={hostOf(apiBase())}
+          detail={hostOf(builtIn)}
           active={!key}
-          state={health[apiBase()]}
+          state={health[builtIn]}
           onSelect={() => switchTo(null)}
         />
         {saved.map((c) => (
