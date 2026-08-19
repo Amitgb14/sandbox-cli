@@ -19,9 +19,20 @@
 //      exception is the WebSocket log stream, where the browser API cannot set
 //      headers: pass `?token=<token>` on that URL only.
 //
-// Timestamps are ISO-8601 (Go renders time.Time as RFC3339). A field marked
-// optional here is one the server omits when empty — absent means absent, and
-// never a zero standing in for an answer.
+//      Three endpoints go further and require the *server* to have been started
+//      with a token at all, answering 403 otherwise: `POST /runs/:id/console/input`,
+//      `POST /runs/:id/console/resize` and `POST /projects/clone`. A keyboard on
+//      a running agent and a clone that writes to the host are not capabilities
+//      to hand out because somebody forgot a flag.
+//
+// Timestamps are ISO-8601 (Go renders time.Time as RFC3339).
+//
+// Optional and nullable are different claims here, and the difference is worth
+// reading before writing a check against either. `field?: T` is a key the server
+// omits when empty — absent means absent, never a zero standing in for an
+// answer. `field: T | null` is a key that is always sent and may be null, which
+// is what a Go pointer without `omitempty` produces: `Worktree.verified` is
+// documented as null when nothing checked the branch, and null is not false.
 
 /**
  * ErrorResponse is the body of every non-2xx response.
@@ -520,8 +531,8 @@ export interface AgentInfo {
 export interface UsageWindow {
   kind: string;  // "five_hour" | "seven_day"
   label: string;  // for display: "5-hour", "Weekly"
-  utilization?: number;
-  resetsAt?: string;
+  utilization: number | null;
+  resetsAt: string | null;
   scope?: string;  // the model a per-model allowance covers
   /**
    * Active is whether the agent reported this window as the one currently in
@@ -529,7 +540,7 @@ export interface UsageWindow {
    * five_hour/seven_day fields carries no such flag, and rendering "not in
    * force" from a missing one would state the absence of a field as a fact.
    */
-  active?: boolean;
+  active: boolean | null;
 }
 
 /**
@@ -551,8 +562,8 @@ export interface UsageSnapshot {
    * cannot perform would be answering the second with the first.
    */
   canRefresh: boolean;
-  fetchedAt?: string;
-  path?: string;
+  fetchedAt: string | null;
+  path: string | null;
   /**
    * Source is which kind of file answered: "statusline" for the recording
    * sandbox-statusline writes from the hook payload, "cache" for Claude Code's
@@ -743,7 +754,7 @@ export interface Run {
   workdir: string;
   workspace: string;  // the host path mounted at /workspace
   engine: string;
-  durationMs?: number;
+  durationMs: number | null;
   mounts: RunMount[];
   network: RunNetwork;
   security: RunSecurity;
@@ -788,7 +799,7 @@ export interface RunNetwork {
    * hostname; "address" would mean IP rules alone, which cannot tell two hosts
    * sharing an address apart.
    */
-  enforcement?: string;
+  enforcement: string | null;
   ingressPorts?: number[];
 }
 
@@ -924,8 +935,8 @@ export interface AuditRecord {
   image: string;
   workspace: string;
   workdir: string;
-  agent?: string;
-  branch?: string;
+  agent: string | null;
+  branch: string | null;
   command: string[];
   engine: string;
   network: string;
@@ -935,7 +946,7 @@ export interface AuditRecord {
    * outcome, because that is all the host can honestly know: the container
    * programs its own firewall, and this says what it was asked to do.
    */
-  egressEnforcementRequested?: string;
+  egressEnforcementRequested: string | null;
   egressAllow: string[];
   envNames: string[];
   exitCode: number;
@@ -990,8 +1001,8 @@ export interface DiffHunk {
  */
 export interface DiffLine {
   kind: string;  // "add" | "del" | "ctx" | "meta"
-  oldNo?: number;
-  newNo?: number;
+  oldNo: number | null;
+  newNo: number | null;
   content: string;
 }
 
@@ -1427,11 +1438,11 @@ export interface Worktree {
    * label is the intent, and `land` treats a disagreement between the two as a
    * refusal rather than a preference. Null when nothing recorded one.
    */
-  base?: string;
+  base: string | null;
   /**
    * RunID is the run currently working this branch, if one is live.
    */
-  runId?: string;
+  runId: string | null;
   /**
    * Verified is what the branch's last run said about its own definition of
    * done: true if it passed, false if it failed or died before reaching its
@@ -1440,7 +1451,7 @@ export interface Worktree {
    * branch that never passed, so a client showing "unverified" and "failed" the
    * same way would be misreporting the one distinction that decides the merge.
    */
-  verified?: boolean;
+  verified: boolean | null;
   /**
    * CreatedAt is when the checkout appeared on disk. git records no creation
    * time for a worktree, so this is the directory's own — accurate for the
@@ -1620,7 +1631,30 @@ export interface Stats {
   total: number;
   decided: number;
   passed: number;
-  passRate?: number;  // percent; null when nothing decided
-  medianDurationMs?: number;
+  passRate: number | null;  // percent; null when nothing decided
+  medianDurationMs: number | null;
   finishedToday: number;
+}
+
+// ---------------------------------------------------------------------------
+// Hand-written, because these have no Go struct to be generated from.
+//
+// Query parameters are read off the URL rather than decoded into a type, so
+// nothing in types.go describes them — and the first version of this generator
+// silently dropped `RunListQuery` when it replaced the hand-maintained mirror,
+// taking the typed shape of the most-used listing endpoint with it. Anything
+// added here is a shape the server really has and the Go types really do not
+// carry; everything else belongs in types.go, where it is generated and checked.
+// ---------------------------------------------------------------------------
+
+/** Query parameters for `GET /v1/runs`, read at internal/studioapi/runs.go. */
+export interface RunListQuery {
+  /** Include runs that have exited; the default lists only live ones. */
+  all?: boolean;
+  /** Scope to one repository, by id from `GET /v1/projects`. */
+  repo?: string;
+  branch?: string;
+  agent?: string;
+  /** Fleet runs only, or interactive only when false. */
+  fleet?: boolean;
 }

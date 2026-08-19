@@ -19,6 +19,17 @@
 //      exception is the WebSocket log stream, where the browser API cannot set
 //      headers: pass `?token=<token>` on that URL only.
 //
-// Timestamps are ISO-8601 (Go renders time.Time as RFC3339). A field marked
-// optional here is one the server omits when empty — absent means absent, and
-// never a zero standing in for an answer.
+//      Three endpoints go further and require the *server* to have been started
+//      with a token at all, answering 403 otherwise: `POST /runs/:id/console/input`,
+//      `POST /runs/:id/console/resize` and `POST /projects/clone`. A keyboard on
+//      a running agent and a clone that writes to the host are not capabilities
+//      to hand out because somebody forgot a flag.
+//
+// Timestamps are ISO-8601 (Go renders time.Time as RFC3339).
+//
+// Optional and nullable are different claims here, and the difference is worth
+// reading before writing a check against either. `field?: T` is a key the server
+// omits when empty — absent means absent, never a zero standing in for an
+// answer. `field: T | null` is a key that is always sent and may be null, which
+// is what a Go pointer without `omitempty` produces: `Worktree.verified` is
+// documented as null when nothing checked the branch, and null is not false.

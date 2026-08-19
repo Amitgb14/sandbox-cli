@@ -35,6 +35,13 @@ import (
 //go:embed preamble.ts
 var Preamble string
 
+// Extras is the hand-written tail: shapes the server has that the Go types do
+// not carry, query parameters above all — they are read off the URL rather than
+// decoded into a struct, so there is nothing for the generator to walk.
+//
+//go:embed extras.ts
+var Extras string
+
 // Source is one package to read types from.
 type Source struct {
 	Dir string // directory to parse
@@ -102,6 +109,7 @@ func Generate(rootFile string, deps []Source, preamble string) (string, error) {
 			b.WriteString(out)
 		}
 	}
+	b.WriteString(Extras)
 	return b.String(), nil
 }
 
@@ -164,7 +172,14 @@ func (g *generator) collect(f *ast.File, qualifier string) {
 				if !ok {
 					continue
 				}
-				typeName := lastType
+				// Go's implicit repetition applies only to a spec that omits
+				// *both* type and value, and such a spec has nothing to
+				// contribute to a union anyway — so a spec carrying its own
+				// value must carry its own type or be left alone. Reusing the
+				// previous one put untyped constants declared inside a typed
+				// block into that block's union: an arm a client would switch
+				// on and the server would never send.
+				typeName := ""
 				if vs.Type != nil {
 					if id, ok := vs.Type.(*ast.Ident); ok {
 						typeName = id.Name
@@ -174,6 +189,7 @@ func (g *generator) collect(f *ast.File, qualifier string) {
 				if typeName == "" || len(vs.Values) == 0 {
 					continue
 				}
+				_ = lastType
 				lit, ok := vs.Values[0].(*ast.BasicLit)
 				if !ok || lit.Kind != token.STRING {
 					continue
@@ -210,7 +226,10 @@ func (g *generator) render(key string, ts *ast.TypeSpec) (string, error) {
 	case *ast.StructType:
 		fmt.Fprintf(&b, "export interface %s {\n", name)
 		for _, field := range t.Fields.List {
-			line, ok := g.renderField(field)
+			line, ok, err := g.renderField(field)
+			if err != nil {
+				return "", fmt.Errorf("%s: %w", name, err)
+			}
 			if !ok {
 				continue
 			}
@@ -233,8 +252,16 @@ func (g *generator) render(key string, ts *ast.TypeSpec) (string, error) {
 				}
 				fmt.Fprintf(&b, "  %q%s\n", v.val, sep)
 			}
+		} else if p := tsPrimitive(t.Name); p != "" {
+			fmt.Fprintf(&b, "export type %s = %s;\n", name, p)
+		} else if _, known := g.types[t.Name]; known {
+			g.reachLocal(t.Name)
+			fmt.Fprintf(&b, "export type %s = %s;\n", name, t.Name)
 		} else {
-			fmt.Fprintf(&b, "export type %s = %s;\n", name, tsPrimitive(t.Name))
+			// Emitting `export type X = ;` would be an unparseable file that the
+			// drift test still calls in sync, because it compares this output to
+			// itself. A generator's failure has to be louder than its success.
+			return "", fmt.Errorf("%s: cannot render a named type over %q — add a mapping or a Deps entry", name, t.Name)
 		}
 	default:
 		return "", fmt.Errorf("%s: unsupported type declaration %T", name, ts.Type)
@@ -242,9 +269,19 @@ func (g *generator) render(key string, ts *ast.TypeSpec) (string, error) {
 	return b.String(), nil
 }
 
-func (g *generator) renderField(field *ast.Field) (string, bool) {
-	if len(field.Names) == 0 || !field.Names[0].IsExported() {
-		return "", false // embedded or unexported: not on the wire
+func (g *generator) renderField(field *ast.Field) (string, bool, error) {
+	if len(field.Names) == 0 {
+		// An embedded struct is not "not on the wire": encoding/json promotes
+		// its exported fields into the same object. None exist in types.go
+		// today, and the first one must not disappear from the contract
+		// silently.
+		return "", false, fmt.Errorf("embedded field %s: promoted fields are on the wire and are not rendered — declare it explicitly or teach the generator", exprName(field.Type))
+	}
+	if len(field.Names) > 1 {
+		return "", false, fmt.Errorf("field %s: several names share one json tag, which the emitter would render once", field.Names[0].Name)
+	}
+	if !field.Names[0].IsExported() {
+		return "", false, nil // unexported: genuinely not on the wire
 	}
 	tag := ""
 	if field.Tag != nil {
@@ -252,75 +289,120 @@ func (g *generator) renderField(field *ast.Field) (string, bool) {
 	}
 	jsonName, omitempty, skip := jsonTag(tag, field.Names[0].Name)
 	if skip {
-		return "", false
+		return "", false, nil
 	}
-	tsType, optional := g.tsType(field.Type)
-	if tsType == "" {
-		return "", false
+	tsType, nullable, err := g.tsType(field.Type)
+	if err != nil {
+		return "", false, fmt.Errorf("field %s: %w", field.Names[0].Name, err)
 	}
 	var b strings.Builder
 	if doc := field.Doc.Text(); doc != "" {
 		b.WriteString(comment(doc, "  "))
 	}
+	// Optional and nullable are different claims, and conflating them is how a
+	// client writes a check that never fires.
+	//
+	// `omitempty` says the key may be absent, which is `?`. A pointer *without*
+	// omitempty says the key is always sent and may be `null` — encoding/json
+	// writes nil as null rather than omitting it — which is `T | null`. The
+	// distinction is load-bearing here rather than pedantic: Worktree.Verified
+	// is documented as "null when nothing checked it… Null is not false", and a
+	// client that tested `=== undefined` for that would render a branch nobody
+	// verified exactly like one that failed, which is the difference `land`
+	// refuses on.
 	q := ""
-	if omitempty || optional {
+	if omitempty {
 		q = "?"
+	}
+	if nullable && !omitempty {
+		tsType += " | null"
 	}
 	fmt.Fprintf(&b, "  %s%s: %s;\n", jsonName, q, tsType)
 	if c := field.Comment.Text(); c != "" {
 		// A trailing comment carries the enumeration often enough to be worth
 		// keeping: `// "docker" | "podman"` is the field's real domain.
-		return strings.TrimSuffix(b.String(), "\n") + "  // " + strings.TrimSpace(c) + "\n", true
+		return strings.TrimSuffix(b.String(), "\n") + "  // " + strings.TrimSpace(c) + "\n", true, nil
 	}
-	return b.String(), true
+	return b.String(), true, nil
 }
 
-// tsType maps a Go type to TypeScript, and reports whether a pointer made the
-// field optional.
-func (g *generator) tsType(expr ast.Expr) (string, bool) {
+// exprName is a best-effort name for an expression, for an error message.
+func exprName(e ast.Expr) string {
+	switch t := e.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.SelectorExpr:
+		return exprName(t.X) + "." + t.Sel.Name
+	case *ast.StarExpr:
+		return "*" + exprName(t.X)
+	}
+	return fmt.Sprintf("%T", e)
+}
+
+// tsType maps a Go type to TypeScript, reporting whether a pointer makes the
+// value nullable.
+//
+// Every path either resolves or errors. The version that returned "" for the
+// unknown cases was fail-open in the one tool whose whole purpose is stopping
+// the contract from drifting: an unresolvable type emitted a dangling name, a
+// field it could not map vanished from the interface, and `make contract` exited
+// 0 with the drift test green — because the test compares the output to itself.
+func (g *generator) tsType(expr ast.Expr) (string, bool, error) {
 	switch t := expr.(type) {
 	case *ast.Ident:
 		if p := tsPrimitive(t.Name); p != "" {
-			return p, false
+			return p, false, nil
+		}
+		if _, known := g.types[t.Name]; !known {
+			return "", false, fmt.Errorf("unresolved type %q — it is not declared in the root file or any Deps package", t.Name)
 		}
 		g.reachLocal(t.Name)
-		return t.Name, false
+		return t.Name, false, nil
 	case *ast.StarExpr:
-		inner, _ := g.tsType(t.X)
-		return inner, true
+		inner, _, err := g.tsType(t.X)
+		return inner, true, err
 	case *ast.ArrayType:
-		inner, _ := g.tsType(t.Elt)
-		if inner == "" {
-			return "", false
+		inner, _, err := g.tsType(t.Elt)
+		if err != nil {
+			return "", false, err
 		}
-		return inner + "[]", false
+		return inner + "[]", false, nil
 	case *ast.MapType:
-		k, _ := g.tsType(t.Key)
-		v, _ := g.tsType(t.Value)
-		if k == "" || v == "" {
-			return "", false
+		k, _, err := g.tsType(t.Key)
+		if err != nil {
+			return "", false, err
 		}
-		return fmt.Sprintf("Record<%s, %s>", k, v), false
+		v, _, err := g.tsType(t.Value)
+		if err != nil {
+			return "", false, err
+		}
+		return fmt.Sprintf("Record<%s, %s>", k, v), false, nil
 	case *ast.SelectorExpr:
 		pkg, ok := t.X.(*ast.Ident)
 		if !ok {
-			return "", false
+			return "", false, fmt.Errorf("unsupported qualified type %s", exprName(expr))
 		}
 		qualified := pkg.Name + "." + t.Sel.Name
 		// A timestamp crosses as an RFC3339 string, because that is what
 		// encoding/json does with a time.Time and what a client actually parses.
-		if qualified == "time.Time" {
-			return "string", false
+		switch qualified {
+		case "time.Time":
+			return "string", false, nil
+		case "time.Duration":
+			return "number", false, nil
 		}
-		if qualified == "time.Duration" {
-			return "number", false
+		if _, known := g.types[qualified]; !known {
+			return "", false, fmt.Errorf("unresolved type %q — add its package to Deps, or map it like time.Time", qualified)
 		}
 		g.reach(qualified)
-		return t.Sel.Name, false
+		return t.Sel.Name, false, nil
 	case *ast.InterfaceType:
-		return "unknown", false
+		if t.Methods != nil && len(t.Methods.List) > 0 {
+			return "", false, fmt.Errorf("a non-empty interface has no wire shape")
+		}
+		return "unknown", false, nil
 	}
-	return "", false
+	return "", false, fmt.Errorf("unsupported type %s", exprName(expr))
 }
 
 func (g *generator) reachLocal(name string) {
@@ -347,7 +429,9 @@ func (g *generator) reach(key string) {
 	// Reaching a type reaches whatever it holds.
 	if st, ok := g.types[key].Type.(*ast.StructType); ok {
 		for _, f := range st.Fields.List {
-			g.tsType(f.Type)
+			// Errors surface when the type is rendered; this walk exists only to
+			// pull in what it references.
+			_, _, _ = g.tsType(f.Type)
 		}
 	}
 }

@@ -79,6 +79,59 @@ func TestOptionalityFollowsOmitempty(t *testing.T) {
 	}
 }
 
+// Optional and nullable are different claims, and the emitter must not conflate
+// them.
+//
+// `omitempty` says the key may be absent. A pointer *without* it says the key is
+// always sent and may be null, because encoding/json writes nil as null rather
+// than omitting it. The first version of this generator marked both `?`, which
+// erased null from seventeen fields — including Worktree.verified, whose own Go
+// comment says "null when nothing checked it… Null is not false", and which
+// `land` refuses on. A client testing `=== undefined` for that would have
+// rendered an unverified branch exactly like a failed one.
+func TestNullableIsNotOptional(t *testing.T) {
+	out, err := Generate(RootFile(repoRoot), Deps(repoRoot), Preamble)
+	if err != nil {
+		t.Fatalf("generating: %v", err)
+	}
+	for _, want := range []string{
+		"  verified: boolean | null;",   // *bool, no omitempty
+		"  utilization: number | null;", // *float64, no omitempty
+		"  exitCode?: number;",          // *int with omitempty: absent, not null
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("generated mirror is missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{
+		"  verified?: boolean;",
+		"  utilization?: number;",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("%q renders a null the server always sends as an absent key", unwanted)
+		}
+	}
+}
+
+// The generator must refuse what it cannot render rather than emit a name with
+// no declaration behind it.
+//
+// It used to fail open: an unresolvable type became a dangling reference, an
+// unmappable field vanished from the interface, and `make contract` exited 0
+// with the drift test green — because that test compares the output to itself.
+// A generator whose failures are quieter than its successes is worse than no
+// generator.
+func TestGenerateRefusesWhatItCannotRender(t *testing.T) {
+	if _, err := Generate(filepath.Join("testdata", "dangling.go"), nil, ""); err == nil {
+		t.Error("a field referencing an undeclared type generated without error")
+	} else if !strings.Contains(err.Error(), "unresolved type") {
+		t.Errorf("unhelpful error for a dangling reference: %v", err)
+	}
+	if _, err := Generate(filepath.Join("testdata", "embedded.go"), nil, ""); err == nil {
+		t.Error("an embedded struct generated without error; encoding/json promotes its fields onto the wire")
+	}
+}
+
 // A named string type with declared values becomes a union, because a client
 // switching on it exhaustively should be checked by its own compiler rather
 // than by hope.
