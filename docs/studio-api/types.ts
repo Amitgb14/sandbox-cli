@@ -149,6 +149,44 @@ export interface AgentInfo {
   canResume: boolean;
 }
 
+/** One conversation, as `/agents/{agent}/sessions` lists it. */
+export interface SessionSummary {
+  id: string;
+  /** Absent when unknown — see `partial`; never an empty string standing in. */
+  title?: string;
+  turns: number;
+  /** RFC3339. `started` is when the first line was written. */
+  modified: string;
+  started?: string;
+  /**
+   * Listed from the file alone, because sandbox-cli has no verified reader for
+   * this agent's format. The id and the dates are real; the title and the turn
+   * count are unknown and are reported as unknown rather than as zero. A partial
+   * session can be read and cannot be handed over: a briefing built from a
+   * transcript nothing could parse would carry no conversation at all.
+   */
+  partial?: boolean;
+  /** The working directory the transcript recorded — always `/workspace` for a
+   *  session a container wrote, which is what tells it from a host one. */
+  project?: string;
+  /** Where the file is. Reported so a raw view can say what it is showing, and
+   *  never accepted back: a request names a session by id. */
+  path?: string;
+  size?: number;
+  store?: "sandbox" | "host";
+  /**
+   * Whether this conversation can be reopened, which needs **both** the
+   * sandbox-owned store and an agent whose CLI can resume by id (`canResume` on
+   * AgentInfo). Gemini and droid have no resume argv, so their sessions are
+   * readable and not resumable — reporting otherwise offers an action the launch
+   * refuses.
+   */
+  resumable?: boolean;
+  /** Which repository it belongs to, or absent when it cannot be attributed —
+   *  a pooled session records only `/workspace`. */
+  repoId?: string;
+}
+
 /**
  * The conversation a run is briefed with — the agent that held it and its
  * session id, by id and never by path.

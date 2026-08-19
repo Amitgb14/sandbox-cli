@@ -348,7 +348,14 @@ purpose: only the **sandbox-owned** store, because that listing feeds a resume
 picker and a session that cannot be reopened is an action that fails. `?scope=all`
 answers the *reading* question instead — it includes the user's own `~/.claude`
 history, and every row reports its `store` (`sandbox` | `host`), whether it is
-`resumable`, and the `project` (working directory) the transcript recorded. That
+`resumable`, and the `project` (working directory) the transcript recorded.
+
+`resumable` needs **both** facts and used to carry only the first: the
+sandbox-owned store, *and* an agent whose CLI can reopen a session by id.
+Gemini and droid declare no resume argv, so a run asking to reopen one of their
+sessions is refused with "no verified resume flag" — reporting those rows
+resumable offered an action that could only 400, after somebody had chosen it.
+`GET /v1/agents` reports the agent half as `canResume`. That
 last field is what tells the two apart at a glance: a container's cwd is always
 `/workspace`, a host session's is the real path.
 
@@ -359,6 +366,12 @@ project history bucket the file sits in, matched forwards from each registered
 repository's root rather than by decoding a bucket name back into a path, which
 is lossy. A session pooled in the shared bucket is genuinely unattributable, and
 absent says so rather than guessing.
+
+Two formats are parsed against a confirmed shape — claude's jsonl and codex's
+rollout — and a session in any other lists `partial`: its id and dates are real,
+its title and turn count are reported unknown rather than as zero. A partial
+session can be read and cannot be handed over, since a briefing built from a
+transcript nothing could parse would carry no conversation at all.
 
 `{id}` returns the parsed turns; `{id}/raw` returns the file. Raw exists because
 parsing is an interpretation — the claude jsonl carries a dozen line kinds and
@@ -715,6 +728,13 @@ it), it needs a **prompt** (the briefing says what happened before, the prompt
 says what to do now), it needs **both halves** of the reference, and a
 conversation it cannot find is refused rather than launched without one — the
 caller asked for a handoff, and a run with only its prompt is a different job.
+
+A conversation with **no verified reader** is refused too, and that refusal was
+added rather than assumed: `internal/handoff` treats an unparseable transcript as
+normal and still writes an export — right for a failover, where a crashed agent's
+file ledger is the useful part, and wrong when somebody picked *this
+conversation*, who would otherwise get a prompt announcing "0 prompts of that
+conversation" over an empty `transcript.jsonl`.
 
 The source agent may be the **same** agent, and that is not degenerate: gemini
 and droid declare no resume argv, so a briefing from itself is the only way to

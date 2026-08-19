@@ -13,6 +13,21 @@ version is tagged.
 
 ### Added
 
+- **Studio remembers where you were working, and which machine runs it.** The
+  repository picker lifts the ones you have actually worked in to the top and
+  reopens on the last one — after the daemon lists its repositories, only if the
+  id is in that list, so a remembered scope can never leave every screen reading
+  empty. Recency is kept **per daemon**: `projects.json` is the machine's
+  registry, while which of them you looked at last is a fact about you, and a
+  repo id from one box means nothing on another.
+
+  A machine switcher sits in the header, because switching is something you do
+  while working rather than while configuring — Settings still owns adding and
+  forgetting. Each entry is probed on `/v1/health`, the one route that needs no
+  token, so a machine whose token may be wrong is not reported down for it. A
+  daemon nobody has heard back from yet shows *checking*, never down: reading
+  silence as failure is how a closed laptop becomes an incident.
+
 - **Codex conversations are readable, and the Conversations panel is no longer
   claude-only.** sandbox-cli now understands codex's rollout transcripts, so its
   sessions carry real titles and turn counts instead of listing as `partial`,

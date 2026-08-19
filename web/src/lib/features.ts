@@ -71,6 +71,13 @@ export const FEATURES: Feature[] = [
     state: "default",
   },
   {
+    title: "Carry a conversation on, or hand it to another agent",
+    group: "workflow",
+    flag: "Studio → Agents → Conversations",
+    body: "Every conversation Studio lists offers Continue with: pick the agent that held it and it reopens, pick another and that one starts with a briefing about it. The second is deliberately not a resume — a session id is a primary key into one vendor's private store, so what crosses is HANDOFF.md, a vendor-neutral transcript and a file ledger derived from git, mounted read-only, with a prompt that tells the target it is reading a briefing rather than its own history. Two transcript formats are parsed against a confirmed shape, claude's and codex's; a conversation in any other is listed with its id and dates and marked unknown rather than guessed at, and cannot be handed over, because a briefing carrying nothing would claim a conversation crossed when it did not.",
+    state: "default",
+  },
+  {
     title: "Containers you left behind, found and reaped",
     group: "workflow",
     flag: "clean",
