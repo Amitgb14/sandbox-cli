@@ -367,17 +367,16 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
       "studio.example.com { reverse_proxy 127.0.0.1:3100 }",
       "api.example.com    { reverse_proxy 127.0.0.1:8787 }",
       "",
-      "# on the box",
+      "# on the box: the daemon, then the UI beside it on 127.0.0.1:3100",
       "sh studio.sh up --api-only \\",
       "  --allow-host api.example.com --cors-origin https://studio.example.com",
       "",
-      "# your machine: the browser half only",
       "sh studio.sh up --ui-only --api-url https://api.example.com",
     ].join("\n"),
     body:
-      "For a machine more than one person reaches, or one you want to open by name rather than through a tunnel. The daemon stays on 127.0.0.1 so the proxy is the only way in — binding it routable as well would leave the cleartext port open beside the encrypted one. Both flags add to what the script works out for itself, which is what a proxied deployment needs: neither name is derivable from --bind or --port, because the browser dials one name and the page is served from another. -allow-host takes the public name, because a proxy forwards the original Host and the daemon otherwise answers to loopback names only.",
+      "For a machine more than one person reaches, or one you want to open by name rather than through a tunnel. Both commands run on the box: --api-only starts the daemon and says so — \"no UI on this machine\" — so the browser half has to be started there too, or the name the proxy serves has nothing behind it. --ui-only does not stop the daemon, so the two compose, and your own machine runs nothing but the browser. The daemon stays on 127.0.0.1 so the proxy is the only way in — binding it routable as well would leave the cleartext port open beside the encrypted one. Both flags add to what the script works out for itself, which is what a proxied deployment needs: neither name is derivable from --bind or --port, because the browser dials one name and the page is served from another. -allow-host takes the public name, because a proxy forwards the original Host and the daemon otherwise answers to loopback names only.",
     expect:
-      "https://studio.example.com loading Studio, and https://api.example.com/v1/health answering without a token.",
+      "https://studio.example.com loading Studio — served from the box, not from your machine — and https://api.example.com/v1/health answering without a token.",
     warn:
       "Both halves must be TLS or neither: a page served over https cannot call an http daemon — the browser blocks it as mixed content, with no request on the wire and nothing in the daemon's log, which reads exactly like the daemon being down. And -cors-origin takes the *page's* origin, https:// and not the API's; get the scheme wrong and the network works while every request is refused on the origin check.",
   },

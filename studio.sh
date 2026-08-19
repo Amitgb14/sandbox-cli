@@ -715,7 +715,20 @@ do_up_api_only() {
   info "  Daemon URL   http://${advertise}:${API_PORT}"
   info "  Token        ${TOKEN}"
   info ""
-  if [ "$BIND" = "127.0.0.1" ]; then
+  if [ -n "$EXTRA_HOSTS" ] && [ "$BIND" = "127.0.0.1" ]; then
+    # A name was given, so a proxy is in front and the tunnel advice below is
+    # about a URL nobody will dial. Printing it anyway is how an operator who
+    # chose one shape is talked back into another.
+    for h in $EXTRA_HOSTS; do
+      info "Behind your proxy, the Daemon URL is https://${h} — this process stays"
+      info "on 127.0.0.1:${API_PORT}, so the proxy is the only way in."
+      break
+    done
+    info ""
+    info "The UI half has to run somewhere too. On this machine, beside the daemon:"
+    info "  sh studio.sh up --ui-only --api-url https://${h}"
+    info "which publishes it on 127.0.0.1:${UI_PORT} for the proxy to serve."
+  elif [ "$BIND" = "127.0.0.1" ]; then
     info "This daemon is on loopback, which is the safe default — reach it with a tunnel:"
     info "  ssh -N -L ${API_PORT}:127.0.0.1:${API_PORT} $(id -un)@$(hostname)"
     info "then use http://localhost:${API_PORT} as the Daemon URL."
@@ -731,6 +744,14 @@ do_up_api_only() {
 # container and a URL.
 do_up_ui_only() {
   require_docker
+  # These configure a daemon, and this path starts none. Silence would leave the
+  # operator watching every request refused on the origin check with nothing to
+  # connect it to — the failure mode the flags exist to prevent, arriving through
+  # the flags themselves.
+  if [ -n "$EXTRA_HOSTS" ] || [ -n "$EXTRA_ORIGINS" ]; then
+    warn "--allow-host and --cors-origin configure the daemon, and this starts only the
+  UI. Pass them on the machine running the daemon (sh studio.sh up --api-only …)."
+  fi
   target="${API_URL:-http://localhost:${API_PORT}}"
   docker rm -f "$UI_NAME" >/dev/null 2>&1 || true
   [ "$NO_PULL" = 1 ] || { info "  pulling ${UI_REF}"; docker pull -q "$UI_REF" >/dev/null; }

@@ -374,15 +374,8 @@ back.
 
 ### Running the daemon on another machine
 
-Supported, and the shape that needs no new trust is a tunnel: the daemon keeps
-binding loopback, so the `Host` it sees is a loopback name, the rebinding defence
-holds and the token still governs.
-
-```sh
-ssh -N -L 8787:127.0.0.1:8787 you@box
-```
-
-Binding a routable address instead requires `-token` — the daemon **refuses to
+Supported, in three shapes ranked below by how much new trust each asks for.
+Binding a routable address requires `-token` — the daemon **refuses to
 start without one**, because it holds the docker socket and an unauthenticated
 routable port is root on that host — plus `-allow-host` for the name the browser
 dials and `-cors-origin` for the page's origin.
@@ -403,8 +396,12 @@ sh studio.sh up --api-url http://localhost:8787
 The daemon keeps binding loopback, so the `Host` it sees is a loopback name, the
 rebinding defence in `guard.go` still holds, and the token still governs. The
 transport is SSH's — better than any TLS this repository would grow — and the
-credential is one you already manage. Tailscale and WireGuard are the same shape
-with a different tunnel; both need `-allow-host` for the name the browser dials.
+credential is one you already manage. 
+Tailscale and WireGuard are **not** this shape, though they are described as
+tunnels too: the daemon has to bind the tailnet or WireGuard address for anything
+on that network to reach it, which is a routable address — so it needs a token,
+`-allow-host` for the name the browser dials, and the reasoning of shape 3 rather
+than this one.
 
 #### 2. A reverse proxy — a real certificate, no new code here
 
@@ -425,15 +422,23 @@ api.example.com {
 to what the script works out for itself, the same direction the daemon's own
 `-allow-host` takes with loopback.
 
+**Both commands run on the box.** `--api-only` starts the daemon and says so —
+"no UI on this machine" — so the UI half has to be started there too, or the name
+the proxy serves has nothing behind it. `--ui-only` does not stop the daemon, so
+the two compose:
+
 ```sh
-# on the box
+# on the box: the daemon, then the UI beside it on 127.0.0.1:3100
 sh studio.sh up --api-only \
   --allow-host api.example.com \
   --cors-origin https://studio.example.com
 
-# on your machine
 sh studio.sh up --ui-only --api-url https://api.example.com
 ```
+
+Your own machine runs nothing — you open `https://studio.example.com`. That is
+what makes the origin the daemon is told to accept the one the browser actually
+sends, and what keeps both halves on TLS, which the third point below requires.
 
 Three things decide whether this works, and each fails in a way that looks like
 something else:
