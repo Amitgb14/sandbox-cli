@@ -14,8 +14,10 @@ version is tagged.
 ### Added
 
 - **The TypeScript SDK finds the repository you are standing in.**
-  `studio.project()` with no argument walks up from the current directory to the
-  git root and matches it against the repositories the daemon knows; a path —
+  `studio.project()` with no argument asks git which repository the current
+  directory belongs to — `rev-parse --git-common-dir`, the same question the
+  daemon asks, so a **linked worktree resolves to its main repository** rather
+  than to itself — and matches it against the repositories the daemon knows; a path —
   `"."`, `"../api"`, an absolute one — works the same way. It stays a *lookup*:
   a directory nobody registered is refused, and told which roots the daemon does
   have. Registering is never implicit, because the registry is the list of

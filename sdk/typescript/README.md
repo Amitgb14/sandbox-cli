@@ -52,9 +52,13 @@ const named = await studio.project("my-app"); // or by name, or by id
 const there = await studio.project("../api"); // or by path, relative to here
 ```
 
-The no-argument form walks up from `process.cwd()` to the git root, so running
-from `scripts/` finds the repository rather than the subdirectory. It is a
-**lookup**: the root is matched against the repositories the daemon has been told
+The no-argument form asks git — `rev-parse --git-common-dir`, the same question
+the daemon asks of the path it is given — so running from `scripts/` finds the
+repository rather than the subdirectory, and running from a **linked worktree**
+finds the main repository rather than the worktree. That second one is the reason
+git answers rather than a search for `.git`: Studio addresses work by branch
+within a repository, so a worktree that resolved to itself would look
+unregistered while sitting inside a repository that is. It is a **lookup**: the root is matched against the repositories the daemon has been told
 about, and a directory nobody registered is refused, saying which roots the
 daemon does know. That is also what makes the answer honest against a remote
 daemon — the path is resolved here, so the daemon on another machine correctly

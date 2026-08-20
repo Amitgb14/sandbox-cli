@@ -87,7 +87,7 @@ export const SDK_STEPS: SdkStep[] = [
       "const ws = await repo.workspace(\"agent-42\");",
     ].join("\n"),
     body:
-      "A Project is a repository the daemon has been told about — by id, by name when only one repository has it, by path, or with no argument at all, which walks up from the current directory to the git root. That last form is a lookup rather than a shortcut: the root is matched against what the daemon already knows, so a directory nobody registered is refused and told which roots exist. Run the script from anywhere, including a machine that is not the daemon's — in which case a local path correctly finds nothing there. A Workspace is that branch's git worktree, created if it is not there, and it is the isolation unit: two agents in one tree is a data race with a filesystem in the middle.",
+      "A Project is a repository the daemon has been told about — by id, by name when only one repository has it, by path, or with no argument at all, which asks git which repository the current directory belongs to — the same question the daemon asks, so a linked worktree resolves to its main repository rather than to itself. That last form is a lookup rather than a shortcut: the root is matched against what the daemon already knows, so a directory nobody registered is refused and told which roots exist. Run the script from anywhere, including a machine that is not the daemon's — in which case a local path correctly finds nothing there. A Workspace is that branch's git worktree, created if it is not there, and it is the isolation unit: two agents in one tree is a data race with a filesystem in the middle.",
   },
   {
     title: "Run something, and get back what happened",

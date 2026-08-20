@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { FakeDaemon } from "./daemon.js";
 import { Studio, ApiError, ConnectionError, TimeoutError, WaitError } from "../src/index.js";
+import { gitRootOf } from "../src/local.js";
 
 async function connected(opts: ConstructorParameters<typeof FakeDaemon>[0] = {}) {
   const daemon = new FakeDaemon(opts);
@@ -547,4 +549,47 @@ test("addProject expands a relative path against the current directory", async (
     process.chdir(cwd);
     await daemon.stop();
   }
+});
+
+test("inside a linked worktree, the repository is the main one — as the daemon resolves it", async () => {
+  // The bug this pins: a `.git` walk answers with the worktree, while the daemon
+  // resolves the same path through --git-common-dir to the main repository. A
+  // lookup would then miss a registry entry that is there, and addProject would
+  // register something other than what was asked for. Worktrees are where agents
+  // work, so the two have to agree.
+  const main = realpathSync(mkdtempSync(join(tmpdir(), "sdk-wt-")));
+  const git = (args: string[], cwd: string) =>
+    execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  git(["init", "-q", "-b", "main"], main);
+  writeFileSync(join(main, "README.md"), "x\n");
+  git(["-c", "user.email=a@b", "-c", "user.name=a", "add", "README.md"], main);
+  git(["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "init"], main);
+  const linked = join(main, "..", `${basename(main)}-wt`);
+  git(["worktree", "add", "-q", "-b", "feature", linked], main);
+
+  assert.equal(gitRootOf(linked), main, "a linked worktree resolves to the main repository");
+  assert.equal(gitRootOf(join(main, ".git")), main, "the git directory resolves to its repository");
+
+  // And end to end: standing in the worktree finds the registered main repo.
+  const { daemon, studio } = await connected({ projectRoot: main });
+  const cwd = process.cwd();
+  try {
+    process.chdir(linked);
+    assert.equal((await studio.project()).root, main);
+  } finally {
+    process.chdir(cwd);
+    git(["worktree", "remove", "--force", linked], main);
+    await daemon.stop();
+  }
+});
+
+test("a directory that is not a repository is not one, whatever is lying around", async () => {
+  // The walk's failure mode, and why git answers instead: a stray `.git` makes
+  // any directory look like a repository, and the daemon would refuse the path
+  // this client had just called a root.
+  const bare = realpathSync(mkdtempSync(join(tmpdir(), "sdk-stray-")));
+  writeFileSync(join(bare, ".git"), "gitdir: /nowhere\n");
+  assert.equal(gitRootOf(bare), bare, "the fallback still answers when git cannot");
+  const empty = realpathSync(mkdtempSync(join(tmpdir(), "sdk-empty-")));
+  assert.equal(gitRootOf(empty), null);
 });
