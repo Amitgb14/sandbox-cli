@@ -21,24 +21,54 @@ import { cn } from "@/lib/utils";
  * distinction that matters in these snippets — what the command is, and what
  * someone wrote next to it to explain why.
  */
+/**
+ * The window buttons and the label above a code surface.
+ *
+ * Exported because the site has code in more than one component — the install
+ * card, the config reference, every walkthrough step — and three copies of a
+ * traffic light is how they end up three different sizes.
+ *
+ * The buttons are decoration and say so: aria-hidden, rather than three
+ * unlabelled circles announced to somebody who cannot see them.
+ */
+export function WindowChrome({ label }: { label?: string }) {
+  return (
+    // Its own dark surface rather than a translucent tint: this bar is used
+    // outside CodeBlock too — the install card, where the parent is a white
+    // card — and a 4% white overlay on white renders as a title bar floating
+    // above the window it belongs to.
+    <div className="flex items-center gap-2 border-b border-white/10 bg-[#141416] px-4 py-2.5">
+      <span aria-hidden className="flex items-center gap-1.5">
+        <span className="size-2.5 rounded-full bg-[#ff5f57]" />
+        <span className="size-2.5 rounded-full bg-[#febc2e]" />
+        <span className="size-2.5 rounded-full bg-[#28c840]" />
+      </span>
+      {label ? (
+        <span className="truncate font-mono text-[0.7rem] text-[#8a8a94]">{label}</span>
+      ) : null}
+    </div>
+  );
+}
+
 export function CodeBlock({
   code,
   lang = "sh",
   title,
+  chrome = true,
   className,
 }: {
   code: string;
   lang?: "sh" | "yaml" | "ts";
   /**
-   * What this block *is*, shown in a title bar with the window buttons: a file
-   * name for a file, or where you are typing for a shell.
-   *
-   * Opt-in rather than automatic. The chrome earns its two rems on a block you
-   * are meant to recognise — the file you will copy, the terminal you will type
-   * in — and spends them for nothing on the one-line snippets that sit inside a
-   * sentence.
+   * What this block *is*, shown in the title bar: a file name for a file, or
+   * where you are typing for a shell. Without one the bar still draws — a window
+   * with no title is a window, and inventing a file name for a snippet that has
+   * none would be worse than leaving it blank.
    */
   title?: string;
+  /** Off for a snippet inside a table cell or a card footer, where a title bar
+   *  is taller than the code it introduces. */
+  chrome?: boolean;
   className?: string;
 }) {
   const lines = code.split("\n");
@@ -79,24 +109,21 @@ export function CodeBlock({
     </div>
   );
 
-  if (!title) {
-    return <div className={cn("overflow-hidden rounded-xl bg-[#0b0b0d]", className)}>{body}</div>;
-  }
-
   return (
     <div className={cn("overflow-hidden rounded-xl bg-[#0b0b0d]", className)}>
-      {/* The window buttons are decoration and are told so: they are not
-          controls, so they are hidden from assistive technology rather than
-          announced as three unlabelled somethings. */}
-      <div className="flex items-center gap-2 border-b border-white/10 bg-white/[0.04] px-4 py-2.5">
-        <span aria-hidden className="flex items-center gap-1.5">
-          <span className="size-2.5 rounded-full bg-[#ff5f57]" />
-          <span className="size-2.5 rounded-full bg-[#febc2e]" />
-          <span className="size-2.5 rounded-full bg-[#28c840]" />
-        </span>
-        <span className="truncate font-mono text-[0.7rem] text-[#8a8a94]">{title}</span>
-      </div>
+      {chrome ? <WindowChrome label={title ?? defaultLabel(lang)} /> : null}
       {body}
     </div>
   );
+}
+
+/**
+ * What to call a block nobody named.
+ *
+ * A shell block is a terminal, which is true wherever it appears. A file is
+ * whichever file it is, and this cannot know — so it says nothing rather than
+ * guessing at a name somebody would then look for.
+ */
+function defaultLabel(lang: "sh" | "yaml" | "ts"): string | undefined {
+  return lang === "sh" ? "Terminal" : undefined;
 }
