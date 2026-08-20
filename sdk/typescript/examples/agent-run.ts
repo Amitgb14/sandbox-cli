@@ -10,11 +10,12 @@
  * published one is the whole point. `tsconfig.test.json` maps the name to
  * `src/`, so what is checked here is what a consumer would write.
  *
- * Before it runs, on the machine the daemon is on:
+ * Before it runs, from the repository the agent should work in:
  *
- *   curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh
- *   cd ~/code/my-app && sh studio.sh up      # daemon + UI, and registers this repo
- *   npm install @sandbox-cli/sdk
+ *   curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh
+ *
+ * which installs what is missing, starts the daemon, and registers that
+ * repository. Then `npm install @sandbox-cli/sdk` in your own project.
  */
 import { Studio, WaitError, type Outcome } from "@sandbox-cli/sdk";
 

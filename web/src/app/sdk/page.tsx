@@ -93,11 +93,11 @@ export default function SdkPage() {
         <Section id="before" tinted>
           <SectionHead
             eyebrow="before it works"
-            title="Three steps, and only the third is this package"
+            title="Two steps, and only the second is this package"
             lead={
               <>
                 The client talks to a daemon; it does not start one, and it cannot. Without the
-                first two,{" "}
+                first,{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
                   Studio.connect()
                 </code>{" "}

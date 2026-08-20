@@ -21,24 +21,24 @@ export interface SdkStep {
  *
  * The package talks to a daemon; it does not start one, and it cannot. Leaving
  * this out left `Studio.connect()` looking like the first step when it is the
- * fourth — and its failure ("cannot reach the sandbox daemon") reads as a bug in
+ * last — and its failure ("cannot reach the sandbox daemon") reads as a bug in
  * the library rather than as a daemon nobody started.
+ *
+ * Two steps, not three: `studio.sh` installs the binaries it needs, so telling
+ * people to install sandbox-cli first is a step that does nothing. And it is
+ * fetched rather than run from the project directory — `sh studio.sh up` in
+ * ~/code/my-app assumes a file nothing put there.
  */
 export const SDK_PREREQS = [
   {
-    label: "Install sandbox-cli, on the machine that will run the containers",
-    code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh",
-    note: "Docker is the one dependency it does not bring: the daemon holds its socket and every run is a container.",
-  },
-  {
-    label: "Start the control plane from the repository you want to work in",
-    code: "cd ~/code/my-app && sh studio.sh up",
-    note: "It writes the API port and a generated token into ~/.config/sandbox/studio — which is what lets Studio.connect() take no arguments — and registers the repository it was started in, so studio.project(\"my-app\") has something to find.",
+    label: "From the repository you want to work in, start the control plane",
+    code: "cd ~/code/my-app\ncurl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh",
+    note: "It installs sandbox-cli and the daemon if they are missing, starts both halves, and registers the repository it was run in — which is what gives studio.project(\"my-app\") something to find. It also writes the API port and a generated token into ~/.config/sandbox/studio, which is what lets Studio.connect() take no arguments. Docker is the one thing it will not install for you: the daemon holds its socket, and every run is a container.",
   },
   {
     label: "Then add the client to your own project",
     code: "npm install @sandbox-cli/sdk",
-    note: "Node 20 or newer. It is a client and nothing else: no docker socket, no binaries, nothing to configure.",
+    note: "Node 20 or newer, and this half needs nothing else — no docker socket, no binaries, nothing to configure. Save studio.sh beside your repository if you want `sh studio.sh status` and `sh studio.sh down` later; the one-liner above starts it, and the file is how you manage it.",
   },
 ];
 

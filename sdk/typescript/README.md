@@ -4,16 +4,18 @@ A typed client for the [sandbox-cli](https://github.com/Amitgb14/sandbox-cli)
 control plane: run agents and commands in isolated containers, from a program
 instead of a terminal.
 
-It talks to a daemon and does not start one, so two things come first — on the
-machine that will run the containers:
+It talks to a daemon and does not start one, so the daemon comes first — on the
+machine that will run the containers, from the repository you want to work in:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh
-cd ~/code/my-app && sh studio.sh up   # daemon + UI, and registers this repository
+cd ~/code/my-app
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh
 ```
 
-That writes the port and a token into `~/.config/sandbox/studio`, which is what
-lets `connect()` take no arguments. Then, in your own project:
+That installs sandbox-cli and the daemon if they are missing, starts both halves,
+and registers *that* repository. It also writes the port and a token into
+`~/.config/sandbox/studio`, which is what lets `connect()` take no arguments.
+Docker is the one thing it will not install for you. Then, in your own project:
 
 ```sh
 npm install @sandbox-cli/sdk
