@@ -27,12 +27,13 @@ version is tagged.
   `{ replaceFinished: true }` says the evidence is spent, and `clearFinished()`
   reaps the holder and reports what went. Both refuse a run that is still going.
 
-- **The SDK's install instructions did not work.** `npm install
-  @sandbox-cli/sdk` 404s because the package is not published; the docs now
-  install it from a checkout, and `prepare` builds it during that install rather
-  than leaving a package whose `dist/` does not exist. They also say that a
-  script using top-level `await` needs an ES module — `"type": "module"` or an
-  `.mts` file — which is the first thing anybody hits and was nowhere.
+- **The client is on npm: `npm install sandbox-cli-sdk`.** It was documented
+  before it was published, so the install line 404'd for anybody who followed it.
+  Publishing is the fix; the packaging work that made it installable from a
+  checkout stays, because that is still how you use an unreleased change. The
+  docs also say that a script using top-level `await` needs an ES module —
+  `"type": "module"` or an `.mts` file — which is the first thing anybody hits
+  and was nowhere.
 
 - **Agent interfaces look the same inside the sandbox as outside it.** Docker
   tells a container it is a bare `xterm`, so a TUI drew for eight colours while
@@ -53,7 +54,7 @@ version is tagged.
 ### Added
 
 - **A TypeScript client, so a program can drive sandbox-cli the way a terminal
-  does.** `@sandbox-cli/sdk` connects to the daemon `studio.sh` started with no
+  does.** `sandbox-cli-sdk` connects to the daemon `studio.sh` started with no
   arguments at all — it reads the port and token that script already writes —
   and gives three nouns that are the daemon's rather than the package's: a
   Studio is a daemon, a Project is a repository it knows about, a Workspace is a

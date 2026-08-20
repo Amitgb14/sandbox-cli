@@ -48,14 +48,14 @@ export const SDK_PREREQS: {
     label: "Then add the client to your own project",
     where: "Terminal — wherever your code lives",
     lang: "sh",
-    code: "git clone https://github.com/Amitgb14/sandbox-cli.git ~/code/sandbox-cli\nnpm --prefix ~/code/sandbox-cli/sdk/typescript install\nnpm install ~/code/sandbox-cli/sdk/typescript",
-    note: "It is not on npm yet, so it installs from a checkout. The middle line is not optional: npm runs a directory dependency\u2019s prepare script but installs none of its devDependencies, so without it the build fails with \"tsc: command not found\". Node 20 or newer, and this half needs nothing else: no docker socket, no binaries, nothing to configure.",
+    code: "npm install sandbox-cli-sdk",
+    note: "Node 20 or newer, and this half needs nothing else: no docker socket, no binaries, nothing to configure. The package is the client only \u2014 the daemon from step one is what holds the socket and starts the containers.",
   },
   {
     label: "Write your script as an ES module",
     where: "agent.mts",
     lang: "ts",
-    code: "import { Studio } from \"@sandbox-cli/sdk\";\n\nconst studio = await Studio.connect();\nfor (const p of await studio.projects()) console.log(p.id, p.name);",
+    code: "import { Studio } from \"sandbox-cli-sdk\";\n\nconst studio = await Studio.connect();\nfor (const p of await studio.projects()) console.log(p.id, p.name);",
     note: "Everything here uses top-level await, which needs an ES module: either \"type\": \"module\" in your package.json, or the .mts extension as above. Without one, tsx compiles the file as CommonJS and stops at \"Top-level await is currently not supported\" — a fact about your project rather than about the client.",
   },
   {
@@ -71,7 +71,7 @@ export const SDK_STEPS: SdkStep[] = [
   {
     title: "Connect to the daemon you already have",
     code: [
-      "import { Studio } from \"@sandbox-cli/sdk\";",
+      "import { Studio } from \"sandbox-cli-sdk\";",
       "",
       "const studio = await Studio.connect();   // no arguments",
     ].join("\n"),
@@ -139,7 +139,7 @@ export const SDK_STEPS: SdkStep[] = [
  * rather than by a path inside the repository. An example checked in a shape
  * nobody types is not checked.
  */
-export const SDK_EXAMPLE = "import { Studio, WaitError, type Outcome } from \"@sandbox-cli/sdk\";\n\nconst studio = await Studio.connect(); // port and token from ~/.config/sandbox/studio\nconst repo = await studio.project(\"my-app\");\nconst ws = await repo.workspace(\"agent-42\"); // a git worktree on that branch\n\ntry {\n  // npm rather than pnpm: the base image is node:22-bookworm-slim and carries\n  // npm only, so an example reaching for pnpm would exit 127 on its first line \u2014\n  // in a script whose whole claim is that it was checked.\n  const install = await ws.run([\"npm\", \"ci\"], { timeoutMs: 10 * 60_000 });\n  if (install.exitCode !== 0) {\n    console.error(install.stderr);\n    // `process.exitCode` rather than `process.exit()`: writes to a pipe \u2014 CI\n    // logs, `| tee`, a parent capturing output \u2014 are asynchronous, and exiting\n    // discards whatever is still buffered. That truncates hardest on the runs\n    // with the most to say.\n    process.exitCode = install.exitCode;\n    throw new Error(\"install failed\");\n  }\n\n  const fix: Outcome = await ws.agent(\"claude\", \"make the failing test pass\", {\n    fallback: [\"codex\"],\n    timeoutMs: 20 * 60_000,\n  });\n\n  // Reported on every outcome, not on request: a script that cannot see the\n  // failover credits the wrong agent \u2014 and bills the wrong account.\n  if (fix.routedFrom) {\n    console.warn(`${fix.routedFrom} was unavailable \u2014 ${fix.agent} did the work`);\n  }\n  // A stopped run is not a failed one. The exit code of a container somebody\n  // interrupted is not a verdict on the work.\n  if (fix.stopped) {\n    console.error(`${fix.agent} outlived its deadline and was stopped`);\n    process.exitCode = 1;\n    throw new Error(\"the agent was stopped\");\n  }\n  // The verdict itself, which `stopped` is not: an agent that exited non-zero\n  // has finished and failed. Falling through to the tests would blame them for\n  // work the agent never completed.\n  if (fix.exitCode !== 0) {\n    console.error(fix.stderr);\n    process.exitCode = fix.exitCode;\n    throw new Error(`${fix.agent} exited ${fix.exitCode}`);\n  }\n\n  // node_modules survived the first container because it was written to the\n  // worktree, not because anything stayed alive.\n  const tests = await ws.run([\"npm\", \"test\"], { env: { CI: \"true\" } });\n  console.log(tests.stdout);\n  process.exitCode = tests.exitCode;\n} catch (err) {\n  // The launch succeeded and the wait did not, so the container is still out\n  // there holding this branch's name \u2014 which docker will not let anything else\n  // take until it is gone.\n  if (err instanceof WaitError) await ws.stop(err.run.id);\n  throw err;\n}";
+export const SDK_EXAMPLE = "import { Studio, WaitError, type Outcome } from \"sandbox-cli-sdk\";\n\nconst studio = await Studio.connect(); // port and token from ~/.config/sandbox/studio\nconst repo = await studio.project(\"my-app\");\nconst ws = await repo.workspace(\"agent-42\"); // a git worktree on that branch\n\ntry {\n  // npm rather than pnpm: the base image is node:22-bookworm-slim and carries\n  // npm only, so an example reaching for pnpm would exit 127 on its first line \u2014\n  // in a script whose whole claim is that it was checked.\n  const install = await ws.run([\"npm\", \"ci\"], { timeoutMs: 10 * 60_000 });\n  if (install.exitCode !== 0) {\n    console.error(install.stderr);\n    // `process.exitCode` rather than `process.exit()`: writes to a pipe \u2014 CI\n    // logs, `| tee`, a parent capturing output \u2014 are asynchronous, and exiting\n    // discards whatever is still buffered. That truncates hardest on the runs\n    // with the most to say.\n    process.exitCode = install.exitCode;\n    throw new Error(\"install failed\");\n  }\n\n  const fix: Outcome = await ws.agent(\"claude\", \"make the failing test pass\", {\n    fallback: [\"codex\"],\n    timeoutMs: 20 * 60_000,\n  });\n\n  // Reported on every outcome, not on request: a script that cannot see the\n  // failover credits the wrong agent \u2014 and bills the wrong account.\n  if (fix.routedFrom) {\n    console.warn(`${fix.routedFrom} was unavailable \u2014 ${fix.agent} did the work`);\n  }\n  // A stopped run is not a failed one. The exit code of a container somebody\n  // interrupted is not a verdict on the work.\n  if (fix.stopped) {\n    console.error(`${fix.agent} outlived its deadline and was stopped`);\n    process.exitCode = 1;\n    throw new Error(\"the agent was stopped\");\n  }\n  // The verdict itself, which `stopped` is not: an agent that exited non-zero\n  // has finished and failed. Falling through to the tests would blame them for\n  // work the agent never completed.\n  if (fix.exitCode !== 0) {\n    console.error(fix.stderr);\n    process.exitCode = fix.exitCode;\n    throw new Error(`${fix.agent} exited ${fix.exitCode}`);\n  }\n\n  // node_modules survived the first container because it was written to the\n  // worktree, not because anything stayed alive.\n  const tests = await ws.run([\"npm\", \"test\"], { env: { CI: \"true\" } });\n  console.log(tests.stdout);\n  process.exitCode = tests.exitCode;\n} catch (err) {\n  // The launch succeeded and the wait did not, so the container is still out\n  // there holding this branch's name \u2014 which docker will not let anything else\n  // take until it is gone.\n  if (err instanceof WaitError) await ws.stop(err.run.id);\n  throw err;\n}";
 
 /**
  * Talking to a daemon on another machine.
@@ -182,7 +182,7 @@ export const SDK_REMOTE_STEPS: {
     label: "In your script: the URL and the token, and nothing else",
     where: "agent.mts",
     lang: "ts",
-    code: 'import { Studio } from "@sandbox-cli/sdk";\n\nconst studio = await Studio.connect({\n  url: "http://10.0.0.5:8787",\n  token: process.env.SANDBOX_STUDIO_TOKEN,\n});\n\nconsole.log(await studio.health());',
+    code: 'import { Studio } from "sandbox-cli-sdk";\n\nconst studio = await Studio.connect({\n  url: "http://10.0.0.5:8787",\n  token: process.env.SANDBOX_STUDIO_TOKEN,\n});\n\nconsole.log(await studio.health());',
     note: "Keep the token in the environment rather than in the file — it is a credential for a machine that can start containers. No CORS origin and no Host flag are involved: those checks fire on an Origin header, which browsers send and scripts do not, so a script is governed by the token alone.",
   },
 ];
