@@ -481,9 +481,24 @@ func GitCommonDir(dir string) (path string, ok bool) {
 			}
 		}
 	}
-	// Fall back to the conventional layout: .git/worktrees/<name> -> .git
-	if parent := filepath.Dir(filepath.Dir(gitDir)); isGitCommonDir(parent) {
-		return filepath.Clean(parent), true
+	// Fall back to the conventional layout: .git/worktrees/<name> -> .git.
+	//
+	// Restricted to a gitdir actually under `worktrees/`, because `.git/modules/
+	// <name>` — a **submodule** — has exactly the same depth, and `<super>/.git`
+	// is a real common directory, so the unrestricted version answered that a
+	// submodule was a worktree of its superproject. Everything downstream then
+	// took the superproject's identity for it: `RepoID` gave super's id while
+	// `rescue.MainRepoRoot` gave the submodule's tree, so registering one in
+	// Studio recorded an entry under an id belonging to a different repository.
+	//
+	// A linked worktree is not affected: it carries a `commondir` file, which the
+	// branch above reads first. This fallback exists for the case where that file
+	// is missing, and a missing `commondir` is not a reason to start reading
+	// other layouts as worktrees.
+	if filepath.Base(filepath.Dir(gitDir)) == "worktrees" {
+		if parent := filepath.Dir(filepath.Dir(gitDir)); isGitCommonDir(parent) {
+			return filepath.Clean(parent), true
+		}
 	}
 	return "", false
 }

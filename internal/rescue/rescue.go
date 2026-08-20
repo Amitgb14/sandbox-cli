@@ -132,10 +132,24 @@ func Available() bool {
 // package exists for is precisely the one where git refuses to answer.
 func MainRepoRoot(dir string) (string, error) {
 	if out, err := run(context.Background(), dir, nil, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && out != "" {
-		// <main>/.git -> <main>; a bare repo answers with itself.
+		// <main>/.git -> <main>. This is the linked-worktree case and the reason
+		// the common dir is asked for at all: every worktree of a repository
+		// answers with the main checkout.
 		if filepath.Base(out) == ".git" {
 			return filepath.Dir(out), nil
 		}
+		// Anything else means the git directory is not beside the tree it
+		// belongs to — a submodule (<super>/.git/modules/<name>) or a repository
+		// created with --separate-git-dir. Returning it would name git's internal
+		// storage as the repository, and this answer becomes a project root that
+		// gets bind-mounted at /workspace: the agent would be handed an object
+		// store instead of the source, and a snapshot would be taken of the
+		// wrong tree. The working tree is the answer in both cases, and git will
+		// name it.
+		if top, err := run(context.Background(), dir, nil, "rev-parse", "--path-format=absolute", "--show-toplevel"); err == nil && top != "" {
+			return top, nil
+		}
+		// No working tree: a bare repository, which genuinely is its own root.
 		return out, nil
 	}
 	if common, ok := worktree.GitCommonDir(dir); ok {

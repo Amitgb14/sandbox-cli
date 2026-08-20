@@ -40,6 +40,46 @@ const tests = await ws.run(["npm", "test"], { env: { CI: "true" } });
 console.log(tests.exitCode, tests.stdout);
 ```
 
+## Where you run this, and what it works on
+
+Anywhere. This is an HTTP client, so the script's own directory and the
+repository the agent works in are two different things — often on two different
+machines. With no argument, it assumes they are the same one:
+
+```ts
+const repo = await studio.project();          // the repository this script is in
+const named = await studio.project("my-app"); // or by name, or by id
+const there = await studio.project("../api"); // or by path, relative to here
+```
+
+The no-argument form asks git — `rev-parse --git-common-dir`, the same question
+the daemon asks of the path it is given — so running from `scripts/` finds the
+repository rather than the subdirectory, and running from a **linked worktree**
+finds the main repository rather than the worktree. That second one is the reason
+git answers rather than a search for `.git`: Studio addresses work by branch
+within a repository, so a worktree that resolved to itself would look
+unregistered while sitting inside a repository that is. It is a **lookup**: the root is matched against the repositories the daemon has been told
+about, and a directory nobody registered is refused, saying which roots the
+daemon does know. That is also what makes the answer honest against a remote
+daemon — the path is resolved here, so the daemon on another machine correctly
+reports it has nothing at it, instead of this package pretending distance does
+not exist.
+
+To register a directory **on the daemon's machine**:
+
+```ts
+await studio.addProject();                      // the repository this script is in
+await studio.addProject("/home/you/code/api");  // or any path there
+```
+
+That is the only call here that hands over a path, mirroring the one endpoint
+that accepts one: the checks a directory has to pass — absolute, on disk, a git
+repository, not your home or an ancestor of it — are applied there, once, by the
+daemon. Adding a repository that is already registered returns the existing row,
+so it is safe on every start. Registering is never implicit: a lookup that
+quietly added what it failed to find would turn a typo into a permanent entry in
+the list of directories that daemon will touch.
+
 ## What this is, and what it is not
 
 It is a **client**. Every gate that makes a sandbox a sandbox — the workspace
@@ -188,12 +228,20 @@ this tool is built around is the other direction: `secrets:` in the *daemon's*
 config, resolved on that host and forwarded by name, so a value never crosses
 the wire and has nowhere to land in a log.
 
-## A whole script
+## Two whole scripts
 
-`examples/agent-run.ts` is the end-to-end version — install, hand the work to an
-agent, run the tests, and check what the outcome claims. It imports by package
-name and is compiled by `npm test`, so it is checked in the shape you would type
-rather than in one only this repository can use.
+`examples/agent-run.ts` is the end-to-end version of one task — install, hand the
+work to an agent, run the tests, and check what the outcome claims.
+
+`examples/workflow.ts` is the same idea widened: three tasks on three branches in
+three containers, in parallel, then one gate deciding which are worth a human's
+attention. It answers the question people ask before writing anything — whether
+orchestrating agents means building an agent. It does not: the control flow is
+`Promise.all` and an `if`, and the only model involved is the one working inside
+each container.
+
+Both import by package name and are compiled by `npm test`, so they are checked
+in the shape you would type rather than in one only this repository can use.
 
 ## Running the same script twice
 

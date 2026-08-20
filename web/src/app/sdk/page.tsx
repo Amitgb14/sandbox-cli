@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowLeft, ArrowUpRight, Boxes, FileCode, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Boxes, FileCode, GitBranch, ShieldCheck } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
@@ -12,6 +12,7 @@ import { REPO_URL, STUDIO_PATH } from "@/lib/site";
 import {
   SDK_ERRORS,
   SDK_EXAMPLE,
+  SDK_WORKFLOW,
   SDK_PREREQS,
   SDK_REMOTE_STEPS,
   SDK_RULES,
@@ -81,9 +82,14 @@ const NAV: NavEntry[] = [
         hint: "install, hand the work to an agent, run the tests",
       },
       {
+        href: "#workflow",
+        label: "A workflow, in parallel",
+        hint: "three branches, three containers, one gate",
+      },
+      {
         href: "#rules",
         label: "What it promises",
-        hint: "seven claims, most of them enforced by a test",
+        hint: "eight claims, most of them enforced by a test",
       },
       {
         href: "#errors",
@@ -324,6 +330,54 @@ export default function SdkPage() {
                 the exit code, and <code className="font-mono text-[0.85em]">WaitError</code> carries
                 the run — a container that outlived its deadline is still holding the branch&apos;s
                 name until something stops it.
+              </p>
+            </div>
+          </div>
+        </Section>
+
+        {/* -------------------------------------------------------- workflow */}
+        <Section id="workflow">
+          <SectionHead
+            eyebrow="many at once"
+            title="A workflow, without writing an agent"
+            lead={
+              <>
+                Three tasks, three branches, three containers, in parallel — then one gate deciding
+                which of them is worth a human&apos;s attention. The orchestration is{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">Promise.all</code>{" "}
+                and an <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">if</code>:
+                the only model involved is the one working inside each container. It is{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  examples/workflow.ts
+                </code>
+                , compiled by the same test run as the script above.
+              </>
+            }
+          />
+
+          <CodeBlock code={SDK_WORKFLOW} lang="ts" title="examples/workflow.ts" />
+
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border bg-card p-5">
+              <GitBranch className="mb-3 size-4 text-muted-foreground" />
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                Parallel because the isolation unit is the{" "}
+                <strong className="font-medium text-foreground">branch</strong>: one worktree, one
+                container, one agent. Two agents in one tree is a data race with a filesystem in the
+                middle; three agents in three trees are simply three runs.
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-card p-5">
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                The gate asks <strong className="font-medium text-foreground">git</strong> whether
+                anything changed, rather than the agent. An agent reporting success having written
+                nothing is the commonest thing this catches — and the one it cannot be told about.
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-card p-5">
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                The verification runs <strong className="font-medium text-foreground">in the sandbox</strong>.
+                On the host it would be host code selected by files the agent had just written.
               </p>
             </div>
           </div>

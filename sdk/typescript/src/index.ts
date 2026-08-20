@@ -1,6 +1,7 @@
 import { Transport } from "./transport.js";
 import { ApiError, ConnectionError, WaitError, abortError } from "./errors.js";
 import { discoverToken, discoverUrl } from "./discover.js";
+import { localRepo, samePath, wirePath, type LocalRepo } from "./local.js";
 import type {
   AgentInfo,
   HealthResponse,
@@ -168,9 +169,34 @@ export class Studio {
     return (res.projects ?? []).map((p) => new Project(this.t, p));
   }
 
-  /** One repository, by id or by name. Refuses an ambiguous name rather than
-   *  picking: two clones of a same-named repo share a name and not an id. */
-  async project(idOrName: string): Promise<Project> {
+  /**
+   * One repository, by id or by name — or, with no argument, the one this
+   * script is standing in.
+   *
+   * The no-argument form walks up from `process.cwd()` to the git root and
+   * matches it against the registry **by path**, which is a lookup rather than a
+   * new way to name things: the daemon is still asked about repositories it
+   * already knows, and a directory nobody registered is still refused. It is
+   * therefore only meaningful when the daemon is on this machine, and says so
+   * when the roots do not match instead of pretending the repository vanished.
+   *
+   * Refuses an ambiguous name rather than picking: two clones of a same-named
+   * repo share a name and not an id.
+   */
+  async project(...args: [] | [string]): Promise<Project> {
+    // `args.length`, not `=== undefined`: the two are different requests.
+    // `project()` asks for the repository this script is in, while `project(x)`
+    // with x undefined is a forgotten argument — `process.argv[2]` that was
+    // never passed — and resolving *that* to whatever repository the script file
+    // happens to sit in would launch agents somewhere nobody named.
+    if (args.length === 0) return this.projectHere();
+    const [idOrName] = args;
+    if (idOrName === undefined || idOrName === "") {
+      throw new Error(
+        "project() was given an empty repository name — a missing argument rather than a request. " +
+          "Call project() with no arguments to mean the repository this script is in.",
+      );
+    }
     const all = await this.projects();
     const byId = all.find((p) => p.id === idOrName);
     if (byId) return byId;
@@ -181,9 +207,106 @@ export class Studio {
         `${named.length} repositories are called ${idOrName}; use an id: ${named.map((p) => p.id).join(", ")}`,
       );
     }
+    // A path-shaped argument is answered as a path rather than reported as a
+    // missing name: resolved on this machine and matched against the registry,
+    // so nothing new is reachable — the daemon is still only asked about
+    // repositories somebody added. Anything else is a name, and the list of
+    // registered ones separates a typo from a repository nobody added without
+    // needing a second call.
+    if (looksLikePath(idOrName)) return this.projectAt(idOrName, all);
+    const known = all.map((p) => p.name).join(", ") || "none";
     throw new Error(
-      `no repository ${idOrName} is registered with the daemon at ${this.t.url}; add it in Studio, or POST /v1/projects`,
+      `no repository ${idOrName} is registered with the daemon at ${this.t.url}. Registered: ${known}. ` +
+        `Add one with studio.addProject("/abs/path"), or in Studio.`,
     );
+  }
+
+  /** The repository this script is standing in. */
+  private async projectHere(): Promise<Project> {
+    const cwd = process.cwd();
+    const here = await localRepo(cwd);
+    if (!here) {
+      throw new Error(
+        `${cwd} is not inside a git repository, so there is nothing here to work on. ` +
+          `Name one — studio.project("my-app") — or add a directory on the daemon's machine ` +
+          `with studio.addProject("/abs/path").`,
+      );
+    }
+    return this.match(here, await this.projects());
+  }
+
+  /**
+   * The registered repository at a path on this machine.
+   *
+   * Matched by root, and *not* registered if it is missing: adding a repository
+   * is a change to what this daemon will touch, and a lookup that quietly made
+   * one would turn a typo into a permanent entry. `addProject` is the sentence
+   * that asks for it.
+   */
+  private async projectAt(path: string, all: Project[]): Promise<Project> {
+    const here = await localRepo(path);
+    return this.match(here ?? { root: wirePath(path, process.cwd()), tree: "" }, all);
+  }
+
+  /**
+   * The registry row for a local repository, or an error saying which of the two
+   * reasons it is missing for.
+   *
+   * Both forms are compared, and the second is not redundant: a daemon started
+   * *inside* a linked worktree registers its default project as that worktree
+   * (`studio.sh` resolves `-project` with `--show-toplevel`), while every added
+   * repository carries the main root. Matching the root alone would refuse the
+   * one repository that cannot be removed.
+   */
+  private match(here: LocalRepo, all: Project[]): Project {
+    const hit = all.find(
+      (p) => samePath(p.root, here.root) || (here.tree !== "" && samePath(p.root, here.tree)),
+    );
+    if (hit) return hit;
+    const known = all.map((p) => p.root).join(", ") || "none";
+    throw new Error(
+      `the daemon at ${this.t.url} lists no repository at ${here.root}. Either it has not been added — ` +
+        `studio.addProject(${JSON.stringify(here.root)}) — or that daemon is on another machine, where this ` +
+        `path means nothing. It knows: ${known}.`,
+    );
+  }
+
+  /**
+   * Register a directory on the **daemon's** machine as a repository.
+   *
+   * The one call in this SDK that hands over a path, mirroring the one endpoint
+   * that accepts one: everything else names a repository by id, so the checks a
+   * directory has to pass — absolute, on disk, a git repository, not your home
+   * or an ancestor of it — are applied here, once, by the daemon.
+   *
+   * The path is resolved on that machine, not this one: what crosses is the
+   * string, expanded but never symlink-resolved, since that resolution is a fact
+   * about *this* disk and would rewrite `/tmp/api` into `/private/tmp/api` for a
+   * daemon that has neither. With no argument this does read `process.cwd()`,
+   * which is a local answer and therefore only meaningful for a daemon on this
+   * machine — a remote one will say it has no such directory, which is honest.
+   *
+   * Adding a repository that is already registered is a no-op that returns the
+   * existing row, so this is safe to call on every start.
+   */
+  async addProject(path?: string): Promise<Project> {
+    // No argument means "the repository I am in", and a relative path or a `~`
+    // is expanded the way a shell would. Both are conveniences of *expression*:
+    // what crosses is one absolute path, to a daemon that applies every check
+    // before it agrees to touch the directory.
+    const cwd = process.cwd();
+    let asked: string;
+    if (path === undefined) {
+      const here = await localRepo(cwd);
+      if (!here) throw new Error(`${cwd} is not inside a git repository; give addProject a path instead`);
+      asked = here.root;
+    } else {
+      const typed = path.trim();
+      if (!typed) throw new Error("addProject needs a path on the daemon's machine");
+      asked = wirePath(typed, cwd);
+    }
+    const rec = await this.t.request<ProjectRecord>("POST", "/v1/projects", { path: asked });
+    return new Project(this.t, rec);
   }
 
   /** Clone a repository onto the daemon's machine and register it. */
@@ -620,4 +743,16 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/**
+ * Whether a repository argument was meant as a location.
+ *
+ * Deliberately narrow — a leading `.`, `/`, `~`, a Windows drive, or an embedded
+ * separator. A repository name with a slash in it would be caught, and that is
+ * the right trade: the daemon's names come from a directory basename, which
+ * cannot contain one.
+ */
+function looksLikePath(s: string): boolean {
+  return /^[./~]|^[A-Za-z]:[\\/]|[/\\]/.test(s);
 }

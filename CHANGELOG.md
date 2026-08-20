@@ -11,7 +11,60 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **A second SDK example: a workflow, without writing an agent.**
+  `examples/workflow.ts` runs three tasks on three branches in three containers
+  in parallel, then gates on two things that catch different lies — whether git
+  says anything changed, and whether the tests agree. The orchestration is
+  `Promise.all` and an `if`; the only model involved is the one inside each
+  container. Compiled by `npm test` like the first example, and on the site's SDK
+  page.
+- **The TypeScript SDK finds the repository you are standing in.**
+  `studio.project()` with no argument asks git which repository the current
+  directory belongs to — `rev-parse --git-common-dir`, the same question the
+  daemon asks, so a **linked worktree resolves to its main repository** rather
+  than to itself — and matches it against the repositories the daemon knows; a path —
+  `"."`, `"../api"`, an absolute one — works the same way. It stays a *lookup*:
+  a directory nobody registered is refused, and told which roots the daemon does
+  have. Registering is never implicit, because the registry is the list of
+  directories that daemon will touch.
+- **The TypeScript SDK can register a repository** — `studio.addProject()` for the
+  repository the script is in, or `studio.addProject("/abs/path")`,
+  the one call that hands over a path, mirroring the one endpoint that accepts
+  one. Until now the error for an unregistered repository told you to
+  `POST /v1/projects` and the SDK gave you no way to do it. Adding a repository
+  that is already registered returns the existing row, so it is safe on every
+  start. A path names a directory on the *daemon's* machine, so what crosses is
+  expanded (`~`, a relative path) but never symlink-resolved — that resolution
+  describes this disk, not the one the daemon will look on.
+
 ### Fixed
+
+- **A submodule is registered as itself, not as its superproject's git directory.**
+  Adding a submodule to Studio — from the UI, the API or the SDK — recorded
+  `<super>/.git/modules/<name>` as the repository root, which is what gets
+  bind-mounted at `/workspace`: the agent would have been handed git's object
+  store instead of the source. `--git-common-dir` names a *git directory* rather
+  than a working tree for a submodule and for `--separate-git-dir`, so the tree
+  is now asked for by name, and only a bare repository — which has none — is its
+  own root.
+- **A submodule no longer inherits its superproject's identity.**
+  `.git/modules/<name>` and `.git/worktrees/<name>` sit at the same depth, so the
+  pointer-file fallback read a submodule as a linked worktree of its
+  superproject: `RepoID` answered with the super's id while the path resolved to
+  the submodule. A registry entry then carried one repository's id and another's
+  path, and container labels — how every later command finds a run — belonged to
+  the wrong repository. The fallback now fires only for a gitdir actually under
+  `worktrees/`. Linked worktrees are unaffected: they carry a `commondir` file,
+  which is read first, and every worktree of a repository still shares one id.
+
+- **`studio.project(".")` works, instead of reporting a missing repository.**
+  It used to fail with "no repository . is registered", which reads as though
+  something had been lost; a path is now resolved on the machine running the
+  script and looked up by root. A name that matches nothing still fails, but now
+  lists what *is* registered, so a typo and an unregistered directory stop
+  looking identical.
 
 - **A daemon that refuses to start says so, instead of looking slow.**
   `studio.sh` reported "the API did not answer within 20s" for a daemon that had

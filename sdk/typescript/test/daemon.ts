@@ -28,6 +28,10 @@ export interface FakeDaemonOptions {
   /** Refuse the first launch with 409, the way a finished run holding the
    *  branch's container name does. Cleared by DELETE, as on the real daemon. */
   nameHeldBy?: string;
+  /** The root of the first listed repository. A real daemon's roots are
+   *  directories on its own machine; a test that looks one up by path needs a
+   *  root that exists here. */
+  projectRoot?: string;
   /** The branch and state GET /runs reports, for the reaping rules. */
   listedBranch?: string;
   listedState?: string;
@@ -111,11 +115,22 @@ export class FakeDaemon {
     if (url.pathname === "/v1/projects" && req.method === "GET") {
       return json(200, {
         projects: [
-          { id: "repo-1", name: "app", root: "/repo/app" },
+          { id: "repo-1", name: "app", root: this.opts.projectRoot ?? "/repo/app" },
           { id: "repo-2", name: "twin", root: "/a/twin" },
           { id: "repo-3", name: "twin", root: "/b/twin" },
         ],
       });
+    }
+    if (url.pathname === "/v1/projects" && req.method === "POST") {
+      const path = (raw ? (JSON.parse(raw) as { path?: string }).path : "") ?? "";
+      // The daemon refuses a directory it cannot use; the stub refuses the one
+      // shape a caller can produce without asking this machine anything.
+      // What a real daemon refuses: a directory it cannot use. The client
+      // cannot know this without asking, which is why it is a 422 and not a 400.
+      if (!path.startsWith("/") || path.endsWith("/not-a-repo")) {
+        return json(422, { error: `${path} is not a git repository on this machine` });
+      }
+      return json(201, { id: "repo-4", name: path.split("/").pop(), root: path });
     }
     if (url.pathname === "/v1/worktrees" && req.method === "POST") {
       return json(201, { branch: "feature", path: "/repo/app-feature", repoId: "repo-1" });
