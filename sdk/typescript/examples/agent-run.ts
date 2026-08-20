@@ -15,9 +15,9 @@
  *   curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh
  *
  * which installs what is missing, starts the daemon, and registers that
- * repository. Then `npm install sandbox-cli-sdk` in your own project.
+ * repository. Then `npm install @sandbox-cli/sdk` in your own project.
  */
-import { Studio, WaitError, type Outcome } from "sandbox-cli-sdk";
+import { Studio, WaitError, type Outcome } from "@sandbox-cli/sdk";
 
 const studio = await Studio.connect(); // port and token from ~/.config/sandbox/studio
 const repo = await studio.project("my-app");

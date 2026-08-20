@@ -6,7 +6,7 @@
     "declaration": false,
     "baseUrl": ".",
     "paths": {
-      "sandbox-cli-sdk": [
+      "@sandbox-cli/sdk": [
         "src/index.ts"
       ]
     }
