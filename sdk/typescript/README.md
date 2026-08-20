@@ -1,4 +1,4 @@
-# sandbox-cli-sdk
+# @sandbox-cli/sdk
 
 A typed client for the [sandbox-cli](https://github.com/Amitgb14/sandbox-cli)
 control plane: run agents and commands in isolated containers, from a program
@@ -18,7 +18,7 @@ and registers *that* repository. It also writes the port and a token into
 Docker is the one thing it will not install for you. Then, in your own project:
 
 ```sh
-npm install sandbox-cli-sdk
+npm install @sandbox-cli/sdk
 ```
 
 Your file needs to be an ES module, because the examples use top-level `await`:
@@ -28,7 +28,7 @@ and stops at *"Top-level await is currently not supported"*, which is a fact
 about your project rather than about this package.
 
 ```ts
-import { Studio } from "sandbox-cli-sdk";
+import { Studio } from "@sandbox-cli/sdk";
 
 const studio = await Studio.connect();            // finds the local daemon
 const repo = await studio.project("my-app");

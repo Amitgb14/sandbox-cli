@@ -27,7 +27,7 @@ version is tagged.
   `{ replaceFinished: true }` says the evidence is spent, and `clearFinished()`
   reaps the holder and reports what went. Both refuse a run that is still going.
 
-- **The client is on npm: `npm install sandbox-cli-sdk`.** It was documented
+- **The client is on npm: `npm install @sandbox-cli/sdk`.** It was documented
   before it was published, so the install line 404'd for anybody who followed it.
   Publishing is the fix; the packaging work that made it installable from a
   checkout stays, because that is still how you use an unreleased change. The
@@ -54,7 +54,7 @@ version is tagged.
 ### Added
 
 - **A TypeScript client, so a program can drive sandbox-cli the way a terminal
-  does.** `sandbox-cli-sdk` connects to the daemon `studio.sh` started with no
+  does.** `@sandbox-cli/sdk` connects to the daemon `studio.sh` started with no
   arguments at all — it reads the port and token that script already writes —
   and gives three nouns that are the daemon's rather than the package's: a
   Studio is a daemon, a Project is a repository it knows about, a Workspace is a
