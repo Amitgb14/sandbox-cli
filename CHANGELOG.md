@@ -13,6 +13,27 @@ version is tagged.
 
 ### Fixed
 
+- **A daemon that refuses to start says so, instead of looking slow.**
+  `studio.sh` reported "the API did not answer within 20s" for a daemon that had
+  exited in milliseconds — and then printed the last twenty lines of a log that
+  is appended to across restarts, so the one sentence that mattered sat under six
+  previous startups. It now notices the process is gone, says it refused rather
+  than stalled, and prints only what this run wrote.
+
+- **Running the same script twice.** A finished run keeps its branch's container
+  name until somebody reaps it — that is the refusal docker's duplicate-name
+  check provides, and it is what enforces one agent per branch — so a second
+  launch from the SDK failed with a 409 and no way through it except curl.
+  `{ replaceFinished: true }` says the evidence is spent, and `clearFinished()`
+  reaps the holder and reports what went. Both refuse a run that is still going.
+
+- **The SDK's install instructions did not work.** `npm install
+  @sandbox-cli/sdk` 404s because the package is not published; the docs now
+  install it from a checkout, and `prepare` builds it during that install rather
+  than leaving a package whose `dist/` does not exist. They also say that a
+  script using top-level `await` needs an ES module — `"type": "module"` or an
+  `.mts` file — which is the first thing anybody hits and was nowhere.
+
 - **Agent interfaces look the same inside the sandbox as outside it.** Docker
   tells a container it is a bare `xterm`, so a TUI drew for eight colours while
   the terminal it was drawing on had 256 — goose's start-up banner vanished

@@ -93,11 +93,11 @@ export default function SdkPage() {
         <Section id="before" tinted>
           <SectionHead
             eyebrow="before it works"
-            title="Two steps, and only the second is this package"
+            title="Three steps, and only the last two are this package"
             lead={
               <>
                 The client talks to a daemon; it does not start one, and it cannot. Without the
-                first,{" "}
+                first step,{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
                   Studio.connect()
                 </code>{" "}
@@ -207,7 +207,7 @@ export default function SdkPage() {
         <Section id="rules">
           <SectionHead
             eyebrow="what it promises"
-            title="Six claims you can check"
+            title="Seven claims you can check"
             lead="Each of these is a decision with a reason, and most of them are enforced by a test rather than by intent."
           />
 

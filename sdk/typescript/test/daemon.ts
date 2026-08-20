@@ -25,6 +25,9 @@ export interface FakeDaemonOptions {
   exitCode?: number;
   /** Refuse POST /runs/:id/stop, the way a daemon that cannot reach docker does. */
   stopFails?: boolean;
+  /** Refuse the first launch with 409, the way a finished run holding the
+   *  branch's container name does. Cleared by DELETE, as on the real daemon. */
+  nameHeldBy?: string;
 }
 
 export class FakeDaemon {
@@ -114,6 +117,12 @@ export class FakeDaemon {
     if (url.pathname === "/v1/worktrees" && req.method === "POST") {
       return json(201, { branch: "feature", path: "/repo/app-feature", repoId: "repo-1" });
     }
+    if (url.pathname === "/v1/runs" && req.method === "POST" && this.opts.nameHeldBy) {
+      return json(409, {
+        error: `a finished run (${this.opts.nameHeldBy}, exit 0) still holds "feature"'s container name; ` +
+          `read it with GET /v1/runs/${this.opts.nameHeldBy}/logs, then DELETE /v1/runs/${this.opts.nameHeldBy} to run again`,
+      });
+    }
     if (url.pathname === "/v1/runs" && req.method === "POST") {
       return json(201, { id: "run-1", containerId: "c1", name: "sandbox-app-feature", kind: "interactive", state: "running", detached: true, createdAt: new Date(0).toISOString() });
     }
@@ -153,6 +162,22 @@ export class FakeDaemon {
       // Deliberately left open after `end`: a client that only stopped when the
       // connection closed would hang here, which is the bug this shape catches.
       return;
+    }
+    if (url.pathname === `/v1/runs/${this.opts.nameHeldBy}` && req.method === "DELETE") {
+      // Reaping the holder frees the name, exactly as it does on the daemon.
+      this.opts.nameHeldBy = undefined;
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (url.pathname === "/v1/runs" && req.method === "GET") {
+      return json(200, {
+        runs: [
+          { id: "old-run", containerId: "c0", name: "sandbox-app-feature", kind: "interactive",
+            state: "exited", exitCode: 0, detached: true, branch: "feature",
+            createdAt: new Date(0).toISOString() },
+        ],
+      });
     }
     if (url.pathname === "/v1/runs/run-1" && req.method === "DELETE") {
       res.writeHead(204);

@@ -328,3 +328,52 @@ test("waiting does not accumulate listeners on the caller's signal", async () =>
     await daemon.stop();
   }
 });
+
+// Running the same script twice is the commonest thing anybody does with this,
+// and it was refused: docker will not duplicate a container name, and a finished
+// run keeps its branch's name until somebody reaps it. That refusal is right —
+// the logs are the evidence for what the run did — so the way through is a
+// caller saying the evidence is spent, not a helper deciding it for them.
+test("a finished run holding the branch's name can be replaced on request", async () => {
+  const { daemon, studio } = await connected({ nameHeldBy: "old-run" });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+
+    // Without the flag: the daemon's refusal, verbatim, with its remedy in it.
+    await assert.rejects(
+      () => ws.run(["true"]),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError);
+        assert.equal(err.status, 409);
+        assert.match(err.message, /still holds "feature"'s container name/);
+        return true;
+      },
+    );
+
+    // With it: the holder is removed and the run goes ahead.
+    const out = await ws.run(["true"], { replaceFinished: true });
+    assert.equal(out.exitCode, 0);
+    assert.ok(
+      daemon.pathsHit("DELETE").includes("/v1/runs/old-run"),
+      `the holder was never reaped: ${daemon.pathsHit("DELETE").join(", ")}`,
+    );
+  } finally {
+    await daemon.stop();
+  }
+});
+
+// "Finished" is the whole of the claim. Reaping a live run would stop somebody
+// else's agent, which is not a side effect a convenience flag may have.
+test("clearFinished refuses a run that is still going", async () => {
+  const daemon = new FakeDaemon({});
+  await daemon.start();
+  try {
+    const studio = await Studio.connect({ url: daemon.url, token: "" });
+    const ws = await (await studio.project("app")).workspace("running-branch");
+    // The stub's listing reports an exited run on `feature`; this workspace is a
+    // different branch, so there is nothing of its own to clear.
+    assert.equal(await ws.clearFinished(), null);
+  } finally {
+    await daemon.stop();
+  }
+});

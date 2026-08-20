@@ -17,9 +17,19 @@ and registers *that* repository. It also writes the port and a token into
 `~/.config/sandbox/studio`, which is what lets `connect()` take no arguments.
 Docker is the one thing it will not install for you. Then, in your own project:
 
+**Not on npm yet.** Install it from a checkout — `prepare` builds it as part of
+the install, so there is no separate build step:
+
 ```sh
-npm install @sandbox-cli/sdk
+git clone https://github.com/Amitgb14/sandbox-cli.git ~/code/sandbox-cli
+npm install ~/code/sandbox-cli/sdk/typescript
 ```
+
+Your file needs to be an ES module, because the examples use top-level `await`:
+either `"type": "module"` in your package.json, or name the file `.mts` and run
+it with `npx tsx agent.mts`. Without one of those, tsx compiles it as CommonJS
+and stops at *"Top-level await is currently not supported"*, which is a fact
+about your project rather than about this package.
 
 ```ts
 import { Studio } from "@sandbox-cli/sdk";
@@ -160,6 +170,34 @@ the wire and has nowhere to land in a log.
 agent, run the tests, and check what the outcome claims. It imports by package
 name and is compiled by `npm test`, so it is checked in the shape you would type
 rather than in one only this repository can use.
+
+## Running the same script twice
+
+Docker refuses a duplicate container name, and that refusal is what enforces one
+agent per branch — so a run that has *finished* keeps its branch's name until
+somebody reaps it, and a second launch is refused:
+
+```
+ApiError: a finished run (8998cd4c631f, exit 0) still holds "docs/readme-changelog"'s
+container name; read it with GET /v1/runs/8998cd4c631f/logs, then DELETE … to run again
+```
+
+That default is deliberate: the logs are the evidence for what the run did, and
+removing them for you would discard that on every second run. When the evidence
+is spent, say so:
+
+```ts
+await ws.run(["npm", "test"], { replaceFinished: true });
+```
+
+or reap it yourself, which also tells you what was removed:
+
+```ts
+const gone = await ws.clearFinished();   // null when nothing was holding the name
+```
+
+Both refuse a run that is still going. Stopping somebody else's agent is not a
+side effect a convenience flag may have.
 
 ## Types
 

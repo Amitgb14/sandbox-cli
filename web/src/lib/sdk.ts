@@ -39,8 +39,14 @@ export const SDK_PREREQS: { label: string; where: string; code: string; note: st
   {
     label: "Then add the client to your own project",
     where: "Terminal — wherever your code lives",
-    code: "npm install @sandbox-cli/sdk",
-    note: "Node 20 or newer, and this half needs nothing else — no docker socket, no binaries, nothing to configure. Save studio.sh beside your repository if you want `sh studio.sh status` and `sh studio.sh down` later; the one-liner above starts it, and the file is how you manage it.",
+    code: "git clone https://github.com/Amitgb14/sandbox-cli.git ~/code/sandbox-cli\nnpm install ~/code/sandbox-cli/sdk/typescript",
+    note: "It is not on npm yet, so it installs from a checkout — `prepare` builds it during the install, so there is no separate build step. Node 20 or newer, and this half needs nothing else: no docker socket, no binaries, nothing to configure.",
+  },
+  {
+    label: "Write your script as an ES module",
+    where: "agent.mts",
+    code: "import { Studio } from \"@sandbox-cli/sdk\";\n\nconst studio = await Studio.connect();\nfor (const p of await studio.projects()) console.log(p.id, p.name);",
+    note: "Everything here uses top-level await, which needs an ES module: either \"type\": \"module\" in your package.json, or the .mts extension as above. Without one, tsx compiles the file as CommonJS and stops at \"Top-level await is currently not supported\" — a fact about your project rather than about the client. Run it with `npx tsx agent.mts`.",
   },
 ];
 
@@ -144,6 +150,11 @@ export const SDK_RULES = [
     title: "stop and remove are different, and neither is implicit",
     body:
       "A finished run's logs are the evidence for what it did. Tidying up on the way out would discard that on every happy path, so nothing is removed unless you ask.",
+  },
+  {
+    title: "Running it twice needs you to say so",
+    body:
+      "Docker refuses a duplicate container name, and that refusal is what enforces one agent per branch — so a finished run keeps its branch's name until somebody reaps it, and a second launch is refused with the run id and how to read its logs. Removing it for you would discard the evidence for what the first run did, on every second run. `{ replaceFinished: true }` says the evidence is spent; `clearFinished()` reaps it and tells you what went. Both refuse a run that is still going.",
   },
   {
     title: "The types are generated, not written",

@@ -45,6 +45,20 @@ export interface ConnectOptions {
 }
 
 export interface RunOptions {
+  /**
+   * Remove a **finished** run still holding this branch's container name, and
+   * launch anyway.
+   *
+   * Docker refuses a duplicate name, and that refusal is what enforces one agent
+   * per branch — so a run that has exited keeps its name until somebody reaps
+   * it, and running the same script twice is refused with a 409. That is the
+   * right default: a finished run's logs are the evidence for what it did, and
+   * removing them for you would discard that on every second run.
+   *
+   * This is how a caller says the evidence is spent. It refuses a run that is
+   * still going: "finished" is the whole of the claim.
+   */
+  replaceFinished?: boolean;
   env?: Record<string, string>;
   /** Extra egress domains for this run. It can add to the daemon's posture and
    *  never loosen it — the same tighten-only rule a project file gets. */
@@ -304,6 +318,51 @@ export class Workspace {
     await this.t.request("DELETE", `/v1/runs/${encodeURIComponent(id)}`);
   }
 
+  /**
+   * Free this branch's container name by removing the finished run that holds
+   * it, and report what was removed.
+   *
+   * Null when nothing was holding it. Refuses when the holder is still running —
+   * stopping somebody else's agent is not a side effect a helper should have.
+   */
+  async clearFinished(): Promise<Run | null> {
+    const branch = await this.branchName();
+    const res = await this.t.request<RunsResponse>(
+      "GET",
+      `/v1/runs?all=1&repo=${encodeURIComponent(this.project.id)}`,
+    );
+    const holder = (res.runs ?? []).find((r) => r.branch === branch);
+    if (!holder) return null;
+    if (holder.state === "running" || holder.state === "created" || holder.state === "restarting") {
+      throw new Error(
+        `run ${holder.id} is still going on ${branch}; stop it first — two agents in one checkout overwrite each other's work`,
+      );
+    }
+    await this.remove(holder.id);
+    return holder;
+  }
+
+  /**
+   * The branch this workspace's runs are named after.
+   *
+   * A worktree knows its own; the repository's root does not, so it is asked —
+   * the container name is derived from whatever is checked out there, and
+   * guessing "main" would free the wrong name on a repository that is on
+   * anything else.
+   */
+  private async branchName(): Promise<string> {
+    if (this.branch) return this.branch;
+    const res = await this.t.request<{ worktrees: { branch: string; primary?: boolean }[] }>(
+      "GET",
+      `/v1/worktrees?repo=${encodeURIComponent(this.project.id)}`,
+    );
+    const primary = (res.worktrees ?? []).find((w) => w.primary);
+    if (!primary) {
+      throw new Error(`cannot tell which branch ${this.project.name} has checked out`);
+    }
+    return primary.branch;
+  }
+
   /** The output of a finished run, as a document. */
   async logs(id: string): Promise<LogLine[]> {
     return this.t.request<LogLine[]>("GET", `/v1/runs/${encodeURIComponent(id)}/logs`);
@@ -388,7 +447,18 @@ export class Workspace {
   }
 
   private async launchAndWait(body: RunCreateRequest, opts: RunOptions): Promise<Outcome> {
-    const started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
+    let started: Run;
+    try {
+      started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
+    } catch (err) {
+      // 409 is the branch's name being held, which is the one refusal a caller
+      // can clear without deciding anything: the holder has finished. Retried
+      // once, and only once — a second conflict means something else took the
+      // name, and looping would be a race with whatever that is.
+      if (!opts.replaceFinished || !(err instanceof ApiError) || err.status !== 409) throw err;
+      await this.clearFinished();
+      started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
+    }
     try {
       return await this.wait(started.id, opts);
     } catch (cause) {
