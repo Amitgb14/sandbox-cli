@@ -82,6 +82,16 @@ export const SDK_STEPS: SdkStep[] = [
   },
 ];
 
+/**
+ * The whole thing, as one script.
+ *
+ * Taken from sdk/typescript/examples/agent-run.ts, which `npm test` compiles —
+ * so this is a file that builds against the published types rather than prose
+ * shaped like code. The one edit is the import, which names the package a
+ * reader would install rather than a path inside the repository.
+ */
+export const SDK_EXAMPLE = "import { Studio, WaitError, type Outcome } from \"@sandbox-cli/sdk\";\n\nconst studio = await Studio.connect(); // port and token from ~/.config/sandbox/studio\nconst repo = await studio.project(\"my-app\");\nconst ws = await repo.workspace(\"agent-42\"); // a git worktree on that branch\n\ntry {\n  const install = await ws.run([\"pnpm\", \"install\", \"--frozen-lockfile\"], {\n    timeoutMs: 10 * 60_000,\n  });\n  if (install.exitCode !== 0) {\n    console.error(install.stderr);\n    process.exit(install.exitCode);\n  }\n\n  const fix: Outcome = await ws.agent(\"claude\", \"make the failing test pass\", {\n    fallback: [\"codex\"],\n    timeoutMs: 20 * 60_000,\n  });\n\n  // Reported on every outcome, not on request: a script that cannot see the\n  // failover credits the wrong agent \u2014 and bills the wrong account.\n  if (fix.routedFrom) {\n    console.warn(`${fix.routedFrom} was unavailable \u2014 ${fix.agent} did the work`);\n  }\n  // A stopped run is not a failed one. The exit code of a container somebody\n  // interrupted is not a verdict on the work.\n  if (fix.stopped) {\n    console.error(`${fix.agent} outlived its deadline and was stopped`);\n    process.exit(1);\n  }\n\n  // node_modules survived the first container because it was written to the\n  // worktree, not because anything stayed alive.\n  const tests = await ws.run([\"pnpm\", \"test\"], { env: { CI: \"true\" } });\n  console.log(tests.stdout);\n  process.exit(tests.exitCode);\n} catch (err) {\n  // The launch succeeded and the wait did not, so the container is still out\n  // there holding this branch's name \u2014 which docker will not let anything else\n  // take until it is gone.\n  if (err instanceof WaitError) await ws.stop(err.run.id);\n  throw err;\n}";
+
 /** The claims a reader should be able to check, rather than take on trust. */
 export const SDK_RULES = [
   {

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowLeft, ArrowUpRight, Boxes, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Boxes, FileCode, ShieldCheck } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { type NavEntry } from "@/lib/nav";
 import { REPO_URL, STUDIO_PATH } from "@/lib/site";
-import { SDK_ERRORS, SDK_INSTALL, SDK_RULES, SDK_STEPS } from "@/lib/sdk";
+import { SDK_ERRORS, SDK_EXAMPLE, SDK_INSTALL, SDK_RULES, SDK_STEPS } from "@/lib/sdk";
 import { cn } from "@/lib/utils";
 
 const TITLE = "TypeScript SDK — sandbox-cli";
@@ -26,6 +26,7 @@ export const metadata: Metadata = {
 const NAV: NavEntry[] = [
   { kind: "link", href: "#what", label: "What it is" },
   { kind: "link", href: "#use", label: "Using it" },
+  { kind: "link", href: "#example", label: "A whole script" },
   { kind: "link", href: "#rules", label: "What it promises" },
   { kind: "link", href: "#errors", label: "When it fails" },
 ];
@@ -120,8 +121,54 @@ export default function SdkPage() {
           </ol>
         </Section>
 
+        {/* --------------------------------------------------------- example */}
+        <Section id="example">
+          <SectionHead
+            eyebrow="a whole script"
+            title="Install, hand the work to an agent, run the tests"
+            lead={
+              <>
+                Everything above in one file — bounded, and checking each claim the outcome makes.
+                It is <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  examples/agent-run.ts
+                </code>{" "}
+                in the package, compiled by its test run, so an example that stopped matching the
+                API fails a build rather than misleading somebody who typed it.
+              </>
+            }
+          />
+
+          <CodeBlock code={SDK_EXAMPLE} lang="sh" />
+
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border bg-card p-5">
+              <FileCode className="mb-3 size-4 text-muted-foreground" />
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                The second command finds <code className="font-mono text-[0.85em]">node_modules</code>{" "}
+                because the first wrote it to the <strong className="font-medium text-foreground">worktree</strong>,
+                not because a process stayed alive. Each run is its own container.
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-card p-5">
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                <code className="font-mono text-[0.85em]">routedFrom</code> is checked because a
+                fallback is invisible otherwise: the work gets done by an agent you did not name,
+                under its login and its bill.
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-card p-5">
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                <code className="font-mono text-[0.85em]">stopped</code> is checked separately from
+                the exit code, and <code className="font-mono text-[0.85em]">WaitError</code> carries
+                the run — a container that outlived its deadline is still holding the branch&apos;s
+                name until something stops it.
+              </p>
+            </div>
+          </div>
+        </Section>
+
         {/* ----------------------------------------------------------- rules */}
-        <Section id="rules">
+        <Section id="rules" tinted>
           <SectionHead
             eyebrow="what it promises"
             title="Six claims you can check"
@@ -139,7 +186,7 @@ export default function SdkPage() {
         </Section>
 
         {/* ---------------------------------------------------------- errors */}
-        <Section id="errors" tinted>
+        <Section id="errors">
           <SectionHead
             eyebrow="when it fails"
             title="Five failures, five different next steps"
