@@ -31,15 +31,67 @@ export const metadata: Metadata = {
   twitter: { card: "summary_large_image", title: TITLE, description: DESCRIPTION },
 };
 
+/**
+ * This page's own nav.
+ *
+ * Grouped rather than flat, unlike the first version: eight destinations in a
+ * row crowd the wordmark out of the header at any width somebody actually uses,
+ * and "A box that is not this one" is a long label to lose a page title to. Two
+ * groups, in the order the questions arrive — get it running, then do more with
+ * it — with the one link somebody clicks before either kept flat.
+ *
+ * Every item carries a hint, which is what makes opening a menu worth the click:
+ * a dropdown of bare labels is a worse flat list.
+ */
 const NAV: NavEntry[] = [
   { kind: "link", href: "#what", label: "What it is" },
-  { kind: "link", href: "#before", label: "Before it works" },
-  { kind: "link", href: "#use", label: "Using it" },
-  { kind: "link", href: "#snippets", label: "Small examples" },
-  { kind: "link", href: "#remote", label: "A box that is not this one" },
-  { kind: "link", href: "#example", label: "A whole script" },
-  { kind: "link", href: "#rules", label: "What it promises" },
-  { kind: "link", href: "#errors", label: "When it fails" },
+  {
+    kind: "group",
+    label: "Getting started",
+    items: [
+      {
+        href: "#before",
+        label: "Before it works",
+        hint: "the daemon comes first — this package cannot start one",
+      },
+      {
+        href: "#use",
+        label: "Using it",
+        hint: "connect, pick a repository, run something, read the outcome",
+      },
+      {
+        href: "#snippets",
+        label: "Small examples",
+        hint: "six whole scripts to paste on the first day",
+      },
+    ],
+  },
+  {
+    kind: "group",
+    label: "Going further",
+    items: [
+      {
+        href: "#remote",
+        label: "A remote Linux box",
+        hint: "a URL and a token, no tunnel and no CORS",
+      },
+      {
+        href: "#example",
+        label: "A whole script",
+        hint: "install, hand the work to an agent, run the tests",
+      },
+      {
+        href: "#rules",
+        label: "What it promises",
+        hint: "seven claims, most of them enforced by a test",
+      },
+      {
+        href: "#errors",
+        label: "When it fails",
+        hint: "five failures, five different next steps",
+      },
+    ],
+  },
 ];
 
 export default function SdkPage() {
