@@ -13,6 +13,7 @@
   },
   "files": [
     "dist",
+    "examples",
     "README.md"
   ],
   "scripts": {

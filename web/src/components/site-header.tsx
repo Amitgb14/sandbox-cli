@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { Menu } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -52,6 +53,38 @@ function isRoute(href: string) {
   return href.startsWith("/");
 }
 
+/**
+ * A link that is a `next/link` for a route and an anchor for an anchor.
+ *
+ * Extracted rather than inlined at the wordmark, because the first version of
+ * this fix did exactly that and left the two Install links raw — which is the
+ * bug `isRoute` above documents, introduced by the change that was about it:
+ * once a sub-page's Install points at `/#install`, a bare `<a>` is a route the
+ * framework never sees, and `basePath` is applied by Link and by nothing else.
+ */
+function RouteAware({
+  href,
+  className,
+  children,
+}: {
+  href: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  if (isRoute(href)) {
+    return (
+      <Link href={href} className={className}>
+        {children}
+      </Link>
+    );
+  }
+  return (
+    <a href={href} className={className}>
+      {children}
+    </a>
+  );
+}
+
 /** One row of the mobile sheet, a Link for routes and an anchor for anchors. */
 function MobileNavLink({
   href,
@@ -84,14 +117,23 @@ function MobileNavLink({
 
 /**
  * The nav, home link and install link are parameters so a second route can pass
- * its own. Every default is the landing page's, so `<SiteHeader />` is unchanged
- * — but a sub-page inheriting `#threat` and `#install` would render links that
- * silently do nothing, since it has no such sections.
+ * its own — but the *defaults* are derived from the route rather than fixed,
+ * and that is a fix rather than a flourish.
+ *
+ * They used to default to the landing page's own anchors, `#top` and
+ * `#install`, which are right on `/` and silently wrong everywhere else: on a
+ * sub-page the wordmark scrolled to the top of the page you were already on
+ * instead of going home, and Install pointed at a section that page does not
+ * have. Two of the three sub-pages had the bug — one had remembered to pass
+ * both props, which is precisely the kind of thing a person remembers once.
+ *
+ * So the default asks where it is: an anchor on the landing page, and a route
+ * anywhere else. A page may still override either.
  */
 export function SiteHeader({
   nav = NAV,
-  homeHref = "#top",
-  installHref = "#install",
+  homeHref,
+  installHref,
 }: {
   nav?: NavEntry[];
   homeHref?: string;
@@ -107,6 +149,13 @@ export function SiteHeader({
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  // `usePathname` returns the route with the trailing slash this site exports
+  // with, so `/sdk/` and `/sdk` both have to read as "not the landing page".
+  const pathname = usePathname();
+  const onLanding = pathname === "/" || pathname === "";
+  const home = homeHref ?? (onLanding ? "#top" : "/");
+  const install = installHref ?? (onLanding ? "#install" : "/#install");
+
   return (
     <header
       className={cn(
@@ -115,9 +164,9 @@ export function SiteHeader({
       )}
     >
       <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-4 px-5 sm:px-6">
-        <a href={homeHref} className="flex items-center gap-2 text-[0.95rem]">
+        <RouteAware href={home} className="flex items-center gap-2 text-[0.95rem]">
           <Wordmark />
-        </a>
+        </RouteAware>
         <span className="hidden rounded-full border px-2 py-0.5 font-mono text-[0.65rem] text-muted-foreground sm:inline">
           v{VERSION}
         </span>
@@ -194,9 +243,12 @@ export function SiteHeader({
             <GithubMark className="size-3.5" />
             <span className="hidden sm:inline">GitHub</span>
           </a>
-          <a href={installHref} className={cn(buttonVariants({ size: "sm" }), "hidden sm:inline-flex")}>
+          <RouteAware
+            href={install}
+            className={cn(buttonVariants({ size: "sm" }), "hidden sm:inline-flex")}
+          >
             Install
-          </a>
+          </RouteAware>
 
           <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger
@@ -248,13 +300,15 @@ export function SiteHeader({
                 >
                   Docs
                 </a>
-                <a
-                  href={installHref}
-                  onClick={() => setOpen(false)}
-                  className={cn(buttonVariants({ size: "sm" }))}
-                >
-                  Install v{VERSION}
-                </a>
+                {/* The version rides along here and nowhere else, so the label
+                    is built rather than passed: the sheet is where somebody
+                    checks what they are about to install. */}
+                <MobileNavLink
+                  href={install}
+                  label={`Install v${VERSION}`}
+                  onNavigate={() => setOpen(false)}
+                  className={cn(buttonVariants({ size: "sm" }), "justify-center")}
+                />
               </nav>
             </SheetContent>
           </Sheet>

@@ -4,6 +4,23 @@ A typed client for the [sandbox-cli](https://github.com/Amitgb14/sandbox-cli)
 control plane: run agents and commands in isolated containers, from a program
 instead of a terminal.
 
+It talks to a daemon and does not start one, so the daemon comes first — on the
+machine that will run the containers, from the repository you want to work in:
+
+```sh
+cd ~/code/my-app
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh
+```
+
+That installs sandbox-cli and the daemon if they are missing, starts both halves,
+and registers *that* repository. It also writes the port and a token into
+`~/.config/sandbox/studio`, which is what lets `connect()` take no arguments.
+Docker is the one thing it will not install for you. Then, in your own project:
+
+```sh
+npm install @sandbox-cli/sdk
+```
+
 ```ts
 import { Studio } from "@sandbox-cli/sdk";
 
@@ -11,8 +28,8 @@ const studio = await Studio.connect();            // finds the local daemon
 const repo = await studio.project("my-app");
 const ws = await repo.workspace("agent-42");      // a branch's worktree
 
-await ws.run(["pnpm", "install"]);
-const tests = await ws.run(["pnpm", "test"], { env: { CI: "true" } });
+await ws.run(["npm", "ci"]);
+const tests = await ws.run(["npm", "test"], { env: { CI: "true" } });
 
 console.log(tests.exitCode, tests.stdout);
 ```
@@ -41,7 +58,7 @@ Three nouns, and they are the daemon's rather than this package's.
 | **Workspace** | a branch's worktree inside one, and the isolation unit |
 
 A run is a **container**, not a session you exec into repeatedly, and the
-**worktree is what persists**: `pnpm install` then `pnpm test` works because
+**worktree is what persists**: `npm ci` then `npm test` works because
 `node_modules` was written to disk, not because a process stayed alive. Two
 agents in one tree is a data race with a filesystem in the middle, which is why
 a workspace is the only way to get somewhere to run.
@@ -90,7 +107,7 @@ you cannot name:
 
 ```ts
 try {
-  await ws.run(["pnpm", "test"], { timeoutMs: 60_000, signal });
+  await ws.run(["npm", "test"], { timeoutMs: 60_000, signal });
 } catch (err) {
   if (err instanceof WaitError) await ws.stop(err.run.id);
 }
@@ -136,6 +153,13 @@ request body to the daemon, and off loopback there is no TLS yet. The posture
 this tool is built around is the other direction: `secrets:` in the *daemon's*
 config, resolved on that host and forwarded by name, so a value never crosses
 the wire and has nowhere to land in a log.
+
+## A whole script
+
+`examples/agent-run.ts` is the end-to-end version — install, hand the work to an
+agent, run the tests, and check what the outcome claims. It imports by package
+name and is compiled by `npm test`, so it is checked in the shape you would type
+rather than in one only this repository can use.
 
 ## Types
 

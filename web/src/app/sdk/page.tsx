@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowLeft, ArrowUpRight, Boxes, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Boxes, FileCode, ShieldCheck } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { type NavEntry } from "@/lib/nav";
 import { REPO_URL, STUDIO_PATH } from "@/lib/site";
-import { SDK_ERRORS, SDK_INSTALL, SDK_RULES, SDK_STEPS } from "@/lib/sdk";
+import { SDK_ERRORS, SDK_EXAMPLE, SDK_PREREQS, SDK_RULES, SDK_STEPS } from "@/lib/sdk";
 import { cn } from "@/lib/utils";
 
 const TITLE = "TypeScript SDK — sandbox-cli";
@@ -25,7 +25,9 @@ export const metadata: Metadata = {
 
 const NAV: NavEntry[] = [
   { kind: "link", href: "#what", label: "What it is" },
+  { kind: "link", href: "#before", label: "Before it works" },
   { kind: "link", href: "#use", label: "Using it" },
+  { kind: "link", href: "#example", label: "A whole script" },
   { kind: "link", href: "#rules", label: "What it promises" },
   { kind: "link", href: "#errors", label: "When it fails" },
 ];
@@ -59,7 +61,6 @@ export default function SdkPage() {
             }
           />
 
-          <CodeBlock code={SDK_INSTALL} />
 
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="rounded-2xl border bg-card p-5">
@@ -88,8 +89,44 @@ export default function SdkPage() {
           </div>
         </Section>
 
+        {/* ---------------------------------------------------------- before */}
+        <Section id="before" tinted>
+          <SectionHead
+            eyebrow="before it works"
+            title="Two steps, and only the second is this package"
+            lead={
+              <>
+                The client talks to a daemon; it does not start one, and it cannot. Without the
+                first,{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  Studio.connect()
+                </code>{" "}
+                fails with “cannot reach the sandbox daemon”, which reads as a broken library rather
+                than as a daemon nobody started.
+              </>
+            }
+          />
+
+          <ol className="space-y-3">
+            {SDK_PREREQS.map((step, i) => (
+              <li key={step.label} className="rounded-2xl border bg-card p-5">
+                <div className="mb-2 flex items-baseline gap-2">
+                  <span className="font-mono text-[0.7rem] text-muted-foreground">
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <h3 className="text-[0.95rem] font-medium">{step.label}</h3>
+                </div>
+                <CodeBlock code={step.code} title={step.where} />
+                <p className="mt-3 text-[0.85rem] leading-relaxed text-muted-foreground">
+                  {step.note}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </Section>
+
         {/* ------------------------------------------------------------- use */}
-        <Section id="use" tinted>
+        <Section id="use">
           <SectionHead
             eyebrow="using it"
             title="Zero configuration, then five lines"
@@ -105,7 +142,7 @@ export default function SdkPage() {
                   </span>
                   <h3 className="text-[0.95rem] font-medium">{step.title}</h3>
                 </div>
-                {step.code && <CodeBlock code={step.code} />}
+                {step.code && <CodeBlock code={step.code} lang="ts" />}
                 <p className="mt-3 text-[0.85rem] leading-relaxed text-muted-foreground">
                   {step.body}
                 </p>
@@ -118,6 +155,52 @@ export default function SdkPage() {
               </li>
             ))}
           </ol>
+        </Section>
+
+        {/* --------------------------------------------------------- example */}
+        <Section id="example" tinted>
+          <SectionHead
+            eyebrow="a whole script"
+            title="Install, hand the work to an agent, run the tests"
+            lead={
+              <>
+                Everything above in one file — bounded, and checking each claim the outcome makes.
+                It is <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  examples/agent-run.ts
+                </code>{" "}
+                in the package, compiled by its test run, so an example that stopped matching the
+                API fails a build rather than misleading somebody who typed it.
+              </>
+            }
+          />
+
+          <CodeBlock code={SDK_EXAMPLE} lang="ts" title="examples/agent-run.ts" />
+
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border bg-card p-5">
+              <FileCode className="mb-3 size-4 text-muted-foreground" />
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                The second command finds <code className="font-mono text-[0.85em]">node_modules</code>{" "}
+                because the first wrote it to the <strong className="font-medium text-foreground">worktree</strong>,
+                not because a process stayed alive. Each run is its own container.
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-card p-5">
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                <code className="font-mono text-[0.85em]">routedFrom</code> is checked because a
+                fallback is invisible otherwise: the work gets done by an agent you did not name,
+                under its login and its bill.
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-card p-5">
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                <code className="font-mono text-[0.85em]">stopped</code> is checked separately from
+                the exit code, and <code className="font-mono text-[0.85em]">WaitError</code> carries
+                the run — a container that outlived its deadline is still holding the branch&apos;s
+                name until something stops it.
+              </p>
+            </div>
+          </div>
         </Section>
 
         {/* ----------------------------------------------------------- rules */}

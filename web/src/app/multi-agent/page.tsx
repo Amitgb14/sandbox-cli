@@ -194,7 +194,7 @@ export default function MultiAgentPage() {
             }
           />
 
-          <CodeBlock code={FLEET_YAML} lang="yaml" />
+          <CodeBlock code={FLEET_YAML} lang="yaml" title="fleet.yaml" />
 
           <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
             Then the whole cycle, all of it from your normal checkout.{" "}
@@ -254,7 +254,7 @@ export default function MultiAgentPage() {
             }
           />
 
-          <CodeBlock code={MIXED_YAML} lang="yaml" />
+          <CodeBlock code={MIXED_YAML} lang="yaml" title="fleet.yaml" />
 
           <p className="mt-4 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             The fleet-wide{" "}
@@ -469,7 +469,7 @@ export default function MultiAgentPage() {
             lead="Two sandboxes are blind to each other by design. When one agent produces something another needs — an API contract, a schema, a generated client — --share gives them one directory in common. Files in a shared directory, or nothing: there is no messaging protocol here and none is planned."
           />
 
-          <CodeBlock code={SHARE_YAML} lang="yaml" />
+          <CodeBlock code={SHARE_YAML} lang="yaml" title="fleet.yaml" />
 
           <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
             {SHARE_RULES.map((r) => (
