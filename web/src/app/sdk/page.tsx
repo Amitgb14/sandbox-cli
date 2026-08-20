@@ -116,7 +116,7 @@ export default function SdkPage() {
                   </span>
                   <h3 className="text-[0.95rem] font-medium">{step.label}</h3>
                 </div>
-                <CodeBlock code={step.code} />
+                <CodeBlock code={step.code} title={step.where} />
                 <p className="mt-3 text-[0.85rem] leading-relaxed text-muted-foreground">
                   {step.note}
                 </p>
@@ -174,7 +174,7 @@ export default function SdkPage() {
             }
           />
 
-          <CodeBlock code={SDK_EXAMPLE} lang="ts" />
+          <CodeBlock code={SDK_EXAMPLE} lang="ts" title="examples/agent-run.ts" />
 
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="rounded-2xl border bg-card p-5">

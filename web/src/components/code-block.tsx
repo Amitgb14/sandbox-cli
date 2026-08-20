@@ -24,10 +24,21 @@ import { cn } from "@/lib/utils";
 export function CodeBlock({
   code,
   lang = "sh",
+  title,
   className,
 }: {
   code: string;
   lang?: "sh" | "yaml" | "ts";
+  /**
+   * What this block *is*, shown in a title bar with the window buttons: a file
+   * name for a file, or where you are typing for a shell.
+   *
+   * Opt-in rather than automatic. The chrome earns its two rems on a block you
+   * are meant to recognise — the file you will copy, the terminal you will type
+   * in — and spends them for nothing on the one-line snippets that sit inside a
+   * sentence.
+   */
+  title?: string;
   className?: string;
 }) {
   const lines = code.split("\n");
@@ -38,13 +49,8 @@ export function CodeBlock({
   const copyable =
     lang === "sh" ? lines.filter((l) => !l.trimStart().startsWith("#")).join("\n") : code;
 
-  return (
-    <div
-      className={cn(
-        "group relative flex items-start gap-3 overflow-hidden rounded-xl bg-[#0b0b0d] px-4 py-4",
-        className,
-      )}
-    >
+  const body = (
+    <div className="group relative flex items-start gap-3 px-4 py-4">
       <pre className="no-scrollbar min-w-0 flex-1 overflow-x-auto font-mono text-[0.78rem] leading-relaxed text-[#e7e7ea]">
         {lines.map((line, i) => {
           const comment =
@@ -58,12 +64,39 @@ export function CodeBlock({
               {lang === "sh" ? (
                 <span className="pr-2 text-[#6ee7b7] select-none">{prompt ? "$" : " "}</span>
               ) : null}
-              <span className={comment ? "text-[#8a8a94]" : undefined}>{line}</span>
+              {/* A blank line is a line. Rendered as an empty span it collapses
+                  to nothing, which silently reflows a file into something denser
+                  than the one you would copy — the paragraphs a reader uses to
+                  find their place disappear. */}
+              <span className={comment ? "text-[#8a8a94]" : undefined}>
+                {line === "" ? "\u00A0" : line}
+              </span>
             </div>
           );
         })}
       </pre>
       <CopyButton value={copyable} className="text-[#a1a1aa] hover:bg-white/10 hover:text-white" />
+    </div>
+  );
+
+  if (!title) {
+    return <div className={cn("overflow-hidden rounded-xl bg-[#0b0b0d]", className)}>{body}</div>;
+  }
+
+  return (
+    <div className={cn("overflow-hidden rounded-xl bg-[#0b0b0d]", className)}>
+      {/* The window buttons are decoration and are told so: they are not
+          controls, so they are hidden from assistive technology rather than
+          announced as three unlabelled somethings. */}
+      <div className="flex items-center gap-2 border-b border-white/10 bg-white/[0.04] px-4 py-2.5">
+        <span aria-hidden className="flex items-center gap-1.5">
+          <span className="size-2.5 rounded-full bg-[#ff5f57]" />
+          <span className="size-2.5 rounded-full bg-[#febc2e]" />
+          <span className="size-2.5 rounded-full bg-[#28c840]" />
+        </span>
+        <span className="truncate font-mono text-[0.7rem] text-[#8a8a94]">{title}</span>
+      </div>
+      {body}
     </div>
   );
 }

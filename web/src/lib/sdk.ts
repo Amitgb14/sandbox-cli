@@ -29,14 +29,16 @@ export interface SdkStep {
  * fetched rather than run from the project directory — `sh studio.sh up` in
  * ~/code/my-app assumes a file nothing put there.
  */
-export const SDK_PREREQS = [
+export const SDK_PREREQS: { label: string; where: string; code: string; note: string }[] = [
   {
     label: "From the repository you want to work in, start the control plane",
+    where: "Terminal — the machine that will run the containers",
     code: "cd ~/code/my-app\ncurl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh",
     note: "It installs sandbox-cli and the daemon if they are missing, starts both halves, and registers the repository it was run in — which is what gives studio.project(\"my-app\") something to find. It also writes the API port and a generated token into ~/.config/sandbox/studio, which is what lets Studio.connect() take no arguments. Docker is the one thing it will not install for you: the daemon holds its socket, and every run is a container.",
   },
   {
     label: "Then add the client to your own project",
+    where: "Terminal — wherever your code lives",
     code: "npm install @sandbox-cli/sdk",
     note: "Node 20 or newer, and this half needs nothing else — no docker socket, no binaries, nothing to configure. Save studio.sh beside your repository if you want `sh studio.sh status` and `sh studio.sh down` later; the one-liner above starts it, and the file is how you manage it.",
   },
