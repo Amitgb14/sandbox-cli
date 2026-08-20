@@ -92,6 +92,34 @@ const studio = await Studio.connect({ url: "https://api.example.com", token });
 Connecting makes one round trip to `/v1/health`, so a wrong URL or a missing
 token is reported there rather than as a failure of whatever you ran first.
 
+### A daemon on another machine
+
+The containers run where the daemon runs, so a Linux box is often the point.
+Start it there, bound to an address you can reach:
+
+```sh
+cd ~/code/your-repo
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh -o studio.sh
+sh studio.sh up --api-only --bind 10.0.0.5
+```
+
+It prints a **Daemon URL** and a **Token** — the token belongs to that machine,
+not to you. Open the port (`firewall-cmd --add-port=8787/tcp`, or `ufw allow`),
+check it with `curl http://10.0.0.5:8787/v1/health`, which needs no token, then:
+
+```ts
+const studio = await Studio.connect({
+  url: "http://10.0.0.5:8787",
+  token: process.env.SANDBOX_STUDIO_TOKEN,
+});
+```
+
+No tunnel, and none of the CORS or Host flags the browser needs: those checks
+fire on an `Origin` header, which browsers send and scripts do not, so a script
+is governed by the token alone. There is no TLS yet — on a bound address the
+token crosses in cleartext, so this is for a network you already trust, or put a
+reverse proxy in front and dial its name (the daemon needs `-allow-host` for it).
+
 ## Running things
 
 ```ts

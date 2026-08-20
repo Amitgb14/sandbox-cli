@@ -7,7 +7,9 @@ import { cn } from "@/lib/utils";
  * markup and the same comment-dimming rule.
  *
  * `lang` decides one thing only: whether a leading `$` is drawn. A shell block
- * gets a prompt on each command; a YAML or TypeScript block gets none, because a
+ * gets a prompt on each command; a YAML, TypeScript or `text` block gets none —
+ * `text` being what a program *printed*, which is the other half of the same
+ * mistake: a `$` in front of output tells the reader to type it back. Because a
  * `$` in front of a file is a lie about what you do with it — a forty-line
  * example rendered as shell reads as forty commands to run, which is how the SDK
  * page shipped its flagship snippet looking like a terminal session.
@@ -58,7 +60,7 @@ export function CodeBlock({
   className,
 }: {
   code: string;
-  lang?: "sh" | "yaml" | "ts";
+  lang?: "sh" | "yaml" | "ts" | "text";
   /**
    * What this block *is*, shown in the title bar: a file name for a file, or
    * where you are typing for a shell. Without one the bar still draws — a window
@@ -124,6 +126,6 @@ export function CodeBlock({
  * whichever file it is, and this cannot know — so it says nothing rather than
  * guessing at a name somebody would then look for.
  */
-function defaultLabel(lang: "sh" | "yaml" | "ts"): string | undefined {
+function defaultLabel(lang: "sh" | "yaml" | "ts" | "text"): string | undefined {
   return lang === "sh" ? "Terminal" : undefined;
 }

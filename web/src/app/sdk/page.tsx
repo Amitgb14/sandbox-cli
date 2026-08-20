@@ -9,7 +9,15 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { type NavEntry } from "@/lib/nav";
 import { REPO_URL, STUDIO_PATH } from "@/lib/site";
-import { SDK_ERRORS, SDK_EXAMPLE, SDK_PREREQS, SDK_RULES, SDK_STEPS } from "@/lib/sdk";
+import {
+  SDK_ERRORS,
+  SDK_EXAMPLE,
+  SDK_PREREQS,
+  SDK_REMOTE_STEPS,
+  SDK_RULES,
+  SDK_SNIPPETS,
+  SDK_STEPS,
+} from "@/lib/sdk";
 import { cn } from "@/lib/utils";
 
 const TITLE = "TypeScript SDK — sandbox-cli";
@@ -27,6 +35,8 @@ const NAV: NavEntry[] = [
   { kind: "link", href: "#what", label: "What it is" },
   { kind: "link", href: "#before", label: "Before it works" },
   { kind: "link", href: "#use", label: "Using it" },
+  { kind: "link", href: "#snippets", label: "Small examples" },
+  { kind: "link", href: "#remote", label: "A box that is not this one" },
   { kind: "link", href: "#example", label: "A whole script" },
   { kind: "link", href: "#rules", label: "What it promises" },
   { kind: "link", href: "#errors", label: "When it fails" },
@@ -157,8 +167,72 @@ export default function SdkPage() {
           </ol>
         </Section>
 
+        {/* -------------------------------------------------------- snippets */}
+        <Section id="snippets">
+          <SectionHead
+            eyebrow="small examples"
+            title="Six things worth doing on the first day"
+            lead="Each is a whole script rather than a fragment, because the first thing anybody does with a new client is paste one and run it."
+          />
+
+          <div className="space-y-3">
+            {SDK_SNIPPETS.map((s) => (
+              <div key={s.title} className="rounded-2xl border bg-card p-5">
+                <h3 className="mb-3 text-[0.9rem] font-medium">{s.title}</h3>
+                <CodeBlock code={s.code} lang="ts" title="agent.mts" />
+                <p className="mt-3 text-[0.85rem] leading-relaxed text-muted-foreground">{s.note}</p>
+              </div>
+            ))}
+          </div>
+        </Section>
+
+        {/* ---------------------------------------------------------- remote */}
+        <Section id="remote" tinted>
+          <SectionHead
+            eyebrow="a box that is not this one"
+            title="Point it at a Linux machine, with a URL and a token"
+            lead={
+              <>
+                The containers run where the daemon runs, so a beefy Linux box is the whole point.
+                A script needs two values from it and nothing else — no tunnel, and none of the CORS
+                or Host flags the browser needs, because those checks fire on an{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">Origin</code>{" "}
+                header that a browser sends and a script does not.
+              </>
+            }
+          />
+
+          <ol className="space-y-3">
+            {SDK_REMOTE_STEPS.map((step, i) => (
+              <li key={step.label} className="rounded-2xl border bg-card p-5">
+                <div className="mb-2 flex items-baseline gap-2">
+                  <span className="font-mono text-[0.7rem] text-muted-foreground">
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <h3 className="text-[0.95rem] font-medium">{step.label}</h3>
+                </div>
+                <CodeBlock code={step.code} lang={step.lang} title={step.where} />
+                <p className="mt-3 text-[0.85rem] leading-relaxed text-muted-foreground">
+                  {step.note}
+                </p>
+              </li>
+            ))}
+          </ol>
+
+          <div className="mt-4 rounded-2xl border border-caution/40 bg-caution/5 p-5">
+            <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+              <strong className="font-medium text-foreground">There is no TLS yet.</strong> On a
+              bound address the token and everything it protects cross the network in cleartext, so
+              this is for a network you already trust. For anything wider, put a reverse proxy in
+              front and dial its name — the daemon needs{" "}
+              <code className="font-mono text-[0.85em]">-allow-host</code> for that name, and your
+              script changes by one string.
+            </p>
+          </div>
+        </Section>
+
         {/* --------------------------------------------------------- example */}
-        <Section id="example" tinted>
+        <Section id="example">
           <SectionHead
             eyebrow="a whole script"
             title="Install, hand the work to an agent, run the tests"
@@ -204,7 +278,7 @@ export default function SdkPage() {
         </Section>
 
         {/* ----------------------------------------------------------- rules */}
-        <Section id="rules">
+        <Section id="rules" tinted>
           <SectionHead
             eyebrow="what it promises"
             title="Seven claims you can check"
@@ -222,7 +296,7 @@ export default function SdkPage() {
         </Section>
 
         {/* ---------------------------------------------------------- errors */}
-        <Section id="errors" tinted>
+        <Section id="errors">
           <SectionHead
             eyebrow="when it fails"
             title="Five failures, five different next steps"
