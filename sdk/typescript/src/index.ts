@@ -1,6 +1,7 @@
 import { Transport } from "./transport.js";
 import { ApiError, ConnectionError, WaitError, abortError } from "./errors.js";
 import { discoverToken, discoverUrl } from "./discover.js";
+import { absolutePath, gitRootOf } from "./local.js";
 import type {
   AgentInfo,
   HealthResponse,
@@ -168,9 +169,22 @@ export class Studio {
     return (res.projects ?? []).map((p) => new Project(this.t, p));
   }
 
-  /** One repository, by id or by name. Refuses an ambiguous name rather than
-   *  picking: two clones of a same-named repo share a name and not an id. */
-  async project(idOrName: string): Promise<Project> {
+  /**
+   * One repository, by id or by name — or, with no argument, the one this
+   * script is standing in.
+   *
+   * The no-argument form walks up from `process.cwd()` to the git root and
+   * matches it against the registry **by path**, which is a lookup rather than a
+   * new way to name things: the daemon is still asked about repositories it
+   * already knows, and a directory nobody registered is still refused. It is
+   * therefore only meaningful when the daemon is on this machine, and says so
+   * when the roots do not match instead of pretending the repository vanished.
+   *
+   * Refuses an ambiguous name rather than picking: two clones of a same-named
+   * repo share a name and not an id.
+   */
+  async project(idOrName?: string): Promise<Project> {
+    if (idOrName === undefined) return this.projectHere();
     const all = await this.projects();
     const byId = all.find((p) => p.id === idOrName);
     if (byId) return byId;
@@ -188,15 +202,49 @@ export class Studio {
     // runs: the daemon may be on another machine, so a directory here means
     // nothing to it. `addProject` is the one place a path crosses, which is
     // exactly the shape of the daemon's own rule.
+    // A path-shaped argument is answered as a path rather than reported as a
+    // missing name. It is still resolved on this machine and matched against the
+    // registry — the daemon is never handed a path to *use* here — so the reach
+    // is unchanged and only the guessing is gone.
+    if (looksLikePath(idOrName)) return this.projectAt(idOrName, all);
     const known = all.map((p) => p.name).join(", ") || "none";
-    const pathish = idOrName === "." || idOrName === ".." || /^[./~]|^[A-Za-z]:[\\/]/.test(idOrName);
     throw new Error(
-      pathish
-        ? `${idOrName} is a path, and repositories are named rather than located: this script's own directory ` +
-          `is not what the agent works on, and the daemon at ${this.t.url} may not even be on this machine. ` +
-          `Registered: ${known}. To add a directory on the daemon's machine, call studio.addProject("/abs/path").`
-        : `no repository ${idOrName} is registered with the daemon at ${this.t.url}. Registered: ${known}. ` +
-          `Add one with studio.addProject("/abs/path"), or in Studio.`,
+      `no repository ${idOrName} is registered with the daemon at ${this.t.url}. Registered: ${known}. ` +
+        `Add one with studio.addProject("/abs/path"), or in Studio.`,
+    );
+  }
+
+  /** The repository this script is standing in. */
+  private async projectHere(): Promise<Project> {
+    const cwd = process.cwd();
+    const root = gitRootOf(cwd);
+    if (!root) {
+      throw new Error(
+        `${cwd} is not inside a git repository, so there is nothing here to work on. ` +
+          `Name one — studio.project("my-app") — or add a directory on the daemon's machine ` +
+          `with studio.addProject("/abs/path").`,
+      );
+    }
+    return this.projectAt(root, await this.projects());
+  }
+
+  /**
+   * The registered repository at a path on this machine.
+   *
+   * Matched by root, and *not* registered if it is missing: adding a repository
+   * is a change to what this daemon will touch, and a lookup that quietly made
+   * one would turn a typo into a permanent entry. `addProject` is the sentence
+   * that asks for it.
+   */
+  private async projectAt(path: string, all: Project[]): Promise<Project> {
+    const root = gitRootOf(path) ?? absolutePath(path, process.cwd());
+    const hit = all.find((p) => absolutePath(p.root, process.cwd()) === root);
+    if (hit) return hit;
+    const known = all.map((p) => p.root).join(", ") || "none";
+    throw new Error(
+      `the daemon at ${this.t.url} lists no repository at ${root}. Either it has not been added — ` +
+        `studio.addProject(${JSON.stringify(root)}) — or that daemon is on another machine, where this ` +
+        `path means nothing. It knows: ${known}.`,
     );
   }
 
@@ -215,9 +263,20 @@ export class Studio {
    * Adding a repository that is already registered is a no-op that returns the
    * existing row, so this is safe to call on every start.
    */
-  async addProject(path: string): Promise<Project> {
-    if (!path.trim()) throw new Error("addProject needs a path on the daemon's machine");
-    const rec = await this.t.request<ProjectRecord>("POST", "/v1/projects", { path });
+  async addProject(path?: string): Promise<Project> {
+    // No argument means "the repository I am in", and a relative path is
+    // expanded the way a shell would. Both are conveniences of *expression*: the
+    // result is still one absolute path, sent to a daemon that applies every
+    // check before it agrees to touch it.
+    const cwd = process.cwd();
+    const asked = path === undefined ? (gitRootOf(cwd) ?? cwd) : path.trim();
+    if (!asked) throw new Error("addProject needs a path on the daemon's machine");
+    if (path === undefined && !gitRootOf(cwd)) {
+      throw new Error(`${cwd} is not inside a git repository; give addProject a path instead`);
+    }
+    const rec = await this.t.request<ProjectRecord>("POST", "/v1/projects", {
+      path: absolutePath(asked, cwd),
+    });
     return new Project(this.t, rec);
   }
 
@@ -655,4 +714,16 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/**
+ * Whether a repository argument was meant as a location.
+ *
+ * Deliberately narrow — a leading `.`, `/`, `~`, a Windows drive, or an embedded
+ * separator. A repository name with a slash in it would be caught, and that is
+ * the right trade: the daemon's names come from a directory basename, which
+ * cannot contain one.
+ */
+function looksLikePath(s: string): boolean {
+  return /^[./~]|^[A-Za-z]:[\\/]|[/\\]/.test(s);
 }

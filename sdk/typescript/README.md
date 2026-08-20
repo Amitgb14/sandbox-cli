@@ -42,28 +42,39 @@ console.log(tests.exitCode, tests.stdout);
 
 ## Where you run this, and what it works on
 
-Anywhere. This is an HTTP client, so the script's own directory has nothing to do
-with the repository the agent works in — the two are usually different, and may
-be on different machines. A repository is therefore **named, never located**:
+Anywhere. This is an HTTP client, so the script's own directory and the
+repository the agent works in are two different things — often on two different
+machines. With no argument, it assumes they are the same one:
 
 ```ts
-await studio.project("my-app");   // a name, or an id
-await studio.project(".");        // asks for a repository called "." — there isn't one
+const repo = await studio.project();          // the repository this script is in
+const named = await studio.project("my-app"); // or by name, or by id
+const there = await studio.project("../api"); // or by path, relative to here
 ```
 
-`studio.projects()` lists what the daemon has been told about. To add a directory
-**on the daemon's machine**:
+The no-argument form walks up from `process.cwd()` to the git root, so running
+from `scripts/` finds the repository rather than the subdirectory. It is a
+**lookup**: the root is matched against the repositories the daemon has been told
+about, and a directory nobody registered is refused, saying which roots the
+daemon does know. That is also what makes the answer honest against a remote
+daemon — the path is resolved here, so the daemon on another machine correctly
+reports it has nothing at it, instead of this package pretending distance does
+not exist.
+
+To register a directory **on the daemon's machine**:
 
 ```ts
-const repo = await studio.addProject("/home/you/code/my-app");
+await studio.addProject();                      // the repository this script is in
+await studio.addProject("/home/you/code/api");  // or any path there
 ```
 
 That is the only call here that hands over a path, mirroring the one endpoint
 that accepts one: the checks a directory has to pass — absolute, on disk, a git
 repository, not your home or an ancestor of it — are applied there, once, by the
 daemon. Adding a repository that is already registered returns the existing row,
-so it is safe on every start. Nothing defaults to `process.cwd()`, because
-against a remote daemon that is a local answer to a question about somewhere else.
+so it is safe on every start. Registering is never implicit: a lookup that
+quietly added what it failed to find would turn a typo into a permanent entry in
+the list of directories that daemon will touch.
 
 ## What this is, and what it is not
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeDaemon } from "./daemon.js";
@@ -456,30 +456,95 @@ test("addProject registers a directory on the daemon's machine", async () => {
 test("addProject surfaces the daemon's refusal rather than a generic failure", async () => {
   const { daemon, studio } = await connected();
   try {
-    await assert.rejects(() => studio.addProject("relative/path"), /not an absolute path/);
+    // The daemon decides what it will touch. This client expands a path; it
+    // never vouches for one.
+    await assert.rejects(() => studio.addProject("/repo/not-a-repo"), /not a git repository/);
     await assert.rejects(() => studio.addProject("  "), /needs a path/);
   } finally {
     await daemon.stop();
   }
 });
 
-test("a path-shaped repository name is explained rather than reported missing", async () => {
+test("a path is resolved here and looked up, never invented", async () => {
   const { daemon, studio } = await connected();
+  const cwd = process.cwd();
   try {
-    // The failure this replaces: `.project(".")` from a script's own directory,
-    // which reads as "the daemon lost my repo" when it means "a directory here
-    // is not how the daemon names one".
-    for (const arg of [".", "./sub", "/abs/path", "~/code/app"]) {
-      await assert.rejects(() => studio.project(arg), (e: Error) => {
-        assert.match(e.message, /is a path, and repositories are named/);
-        assert.match(e.message, /Registered: app, twin, twin/);
-        assert.match(e.message, /addProject/);
-        return true;
-      });
-    }
-    // A plain typo still reads as a typo — and now says what to compare against.
+    // The failure this replaces: `.project(".")` reported as a missing repo.
+    // The daemon lists /repo/app, and this test process is not in it, so the
+    // answer is about *paths* rather than about a name nobody registered.
+    await assert.rejects(() => studio.project("."), (e: Error) => {
+      assert.match(e.message, /lists no repository at/);
+      assert.match(e.message, /It knows: \/repo\/app/);
+      assert.match(e.message, /addProject/);
+      return true;
+    });
+    // A lookup and nothing more: no repository was added on the way past.
+    assert.equal(daemon.requests.some((r) => r.method === "POST" && r.path === "/v1/projects"), false);
+    // A name still reads as a name, and now says what to compare against.
     await assert.rejects(() => studio.project("ap"), /Registered: app, twin, twin/);
   } finally {
+    process.chdir(cwd);
+    await daemon.stop();
+  }
+});
+
+test("the current repository is found by root, with no argument", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sdk-cwd-"));
+  const repo = realpathSync(dir);
+  mkdirSync(join(repo, ".git"));
+  mkdirSync(join(repo, "scripts"));
+  const { daemon, studio } = await connected({ projectRoot: repo });
+  const cwd = process.cwd();
+  try {
+    // Standing in a subdirectory, as a script normally is: the walk up to the
+    // git root is what makes "no argument" mean the repository rather than
+    // whichever directory the file happens to live in.
+    process.chdir(join(repo, "scripts"));
+    const p = await studio.project();
+    assert.equal(p.root, repo);
+    // And the same path spelled by hand resolves to the same repository.
+    assert.equal((await studio.project("..")).id, p.id);
+  } finally {
+    process.chdir(cwd);
+    await daemon.stop();
+  }
+});
+
+test("outside a repository, no argument says so rather than guessing", async () => {
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), "sdk-bare-")));
+  const { daemon, studio } = await connected();
+  const cwd = process.cwd();
+  try {
+    process.chdir(outside);
+    await assert.rejects(() => studio.project(), /is not inside a git repository/);
+    await assert.rejects(() => studio.addProject(), /is not inside a git repository/);
+  } finally {
+    process.chdir(cwd);
+    await daemon.stop();
+  }
+});
+
+test("addProject expands a relative path against the current directory", async () => {
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "sdk-rel-")));
+  mkdirSync(join(repo, ".git"));
+  mkdirSync(join(repo, "sub"));
+  const { daemon, studio } = await connected();
+  const cwd = process.cwd();
+  try {
+    process.chdir(repo);
+    await studio.addProject("sub");
+    const sent = daemon.requests.find((r) => r.method === "POST" && r.path === "/v1/projects");
+    // Absolute on the wire: the daemon resolves against its own disk, so a
+    // relative path would name whatever its working directory happened to be.
+    assert.deepEqual(sent?.body, { path: join(repo, "sub") });
+
+    // No argument sends the repository root, not the directory we stand in.
+    process.chdir(join(repo, "sub"));
+    await studio.addProject();
+    const bare = daemon.requests.filter((r) => r.method === "POST" && r.path === "/v1/projects").pop();
+    assert.deepEqual(bare?.body, { path: repo });
+  } finally {
+    process.chdir(cwd);
     await daemon.stop();
   }
 });

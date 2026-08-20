@@ -13,7 +13,15 @@ version is tagged.
 
 ### Added
 
-- **The TypeScript SDK can register a repository** — `studio.addProject("/abs/path")`,
+- **The TypeScript SDK finds the repository you are standing in.**
+  `studio.project()` with no argument walks up from the current directory to the
+  git root and matches it against the repositories the daemon knows; a path —
+  `"."`, `"../api"`, an absolute one — works the same way. It stays a *lookup*:
+  a directory nobody registered is refused, and told which roots the daemon does
+  have. Registering is never implicit, because the registry is the list of
+  directories that daemon will touch.
+- **The TypeScript SDK can register a repository** — `studio.addProject()` for the
+  repository the script is in, or `studio.addProject("/abs/path")`,
   the one call that hands over a path, mirroring the one endpoint that accepts
   one. Until now the error for an unregistered repository told you to
   `POST /v1/projects` and the SDK gave you no way to do it. Adding a repository
@@ -23,13 +31,12 @@ version is tagged.
 
 ### Fixed
 
-- **`studio.project(".")` explains itself instead of reporting a missing repo.**
-  A script talking to the daemon is an HTTP client, so its own directory has
-  nothing to do with the repository the agent works in — but "no repository . is
-  registered" reads as though something was lost. A path-shaped argument now says
-  a repository is named rather than located, and every failure lists the
-  repositories that *are* registered, so a typo and an unregistered directory
-  stop looking identical.
+- **`studio.project(".")` works, instead of reporting a missing repository.**
+  It used to fail with "no repository . is registered", which reads as though
+  something had been lost; a path is now resolved on the machine running the
+  script and looked up by root. A name that matches nothing still fails, but now
+  lists what *is* registered, so a typo and an unregistered directory stop
+  looking identical.
 
 - **A daemon that refuses to start says so, instead of looking slow.**
   `studio.sh` reported "the API did not answer within 20s" for a daemon that had

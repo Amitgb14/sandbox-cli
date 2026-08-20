@@ -83,11 +83,11 @@ export const SDK_STEPS: SdkStep[] = [
   {
     title: "Pick a repository, and a branch to work in",
     code: [
-      "const repo = await studio.project(\"my-app\");",
+      "const repo = await studio.project();          // or (\"my-app\"), or a path",
       "const ws = await repo.workspace(\"agent-42\");",
     ].join("\n"),
     body:
-      "A Project is a repository the daemon has been told about — named by id, or by name when only one repository has it, because two clones share a name and never an id. Named, never located: this script is an HTTP client and its own directory means nothing, so studio.project(\".\") asks for a repository called \".\" and there is not one. Run the script from anywhere, including a machine that is not the daemon's. A Workspace is that branch's git worktree, created if it is not there, and it is the isolation unit: two agents in one tree is a data race with a filesystem in the middle.",
+      "A Project is a repository the daemon has been told about — by id, by name when only one repository has it, by path, or with no argument at all, which walks up from the current directory to the git root. That last form is a lookup rather than a shortcut: the root is matched against what the daemon already knows, so a directory nobody registered is refused and told which roots exist. Run the script from anywhere, including a machine that is not the daemon's — in which case a local path correctly finds nothing there. A Workspace is that branch's git worktree, created if it is not there, and it is the isolation unit: two agents in one tree is a data race with a filesystem in the middle.",
   },
   {
     title: "Run something, and get back what happened",
@@ -201,8 +201,8 @@ export const SDK_SNIPPETS: { title: string; code: string; note: string }[] = [
   },
   {
     title: "Work on a repository the daemon has never heard of",
-    code: 'const repo = await studio.addProject("/home/you/code/my-app");\nconst ws = await repo.workspace("agent-1");\n\nconsole.log(await ws.run(["git", "log", "--oneline", "-1"]));',
-    note: "The path is on the daemon's machine, not on this one — which is why nothing defaults to process.cwd(). Adding a repository that is already registered returns the same row, so this is safe to run every time.",
+    code: 'const repo = await studio.addProject();   // this script\'s own repository\n// ...or a path on the daemon\'s machine:\n// const repo = await studio.addProject("/home/you/code/my-app");\n\nconst ws = await repo.workspace("agent-1");\nconsole.log(await ws.run(["git", "log", "--oneline", "-1"]));',
+    note: "A path is resolved on the machine running the script, then sent absolute — so the no-argument form is for a daemon on this machine, and a remote one will say it has no such directory rather than guess. Adding a repository that is already registered returns the same row, so this is safe to run every time.",
   },
   {
     title: "Run one command and read its output",
@@ -239,9 +239,9 @@ export const SDK_RULES = [
       "No docker socket, no shelling out to sandbox-cli, no argv assembled here. Every gate that makes a sandbox a sandbox — the workspace refusals, the fake HOME, default-deny environment, the egress allowlist — is applied where the container is built, on the machine running the daemon. When this package wants a capability the daemon does not expose, the daemon grows an endpoint and the gate is written once, in Go, with a test.",
   },
   {
-    title: "The script's directory is not the repository",
+    title: "Finding a repository is a lookup, never a registration",
     body:
-      "Two different machines' worth of confusion collapse into one line here. The script runs wherever you started it; the agent runs on the daemon's machine, in a worktree of a repository that machine has been told about. So a repository is named, never located — and studio.addProject(\"/abs/path\") is the one call that hands over a path, mirroring the one endpoint that accepts one, where the checks a directory must pass are applied. It is a no-op for a repository already registered, so it is safe on every start.",
+      "studio.project() with no argument walks up to the git root and matches it against the repositories the daemon has been told about. What it will not do is add the one it fails to find: the registry is the list of directories that daemon will touch, and a lookup that quietly grew it would turn a typo into a permanent entry. studio.addProject() is the sentence that asks — the only call that hands over a path, mirroring the one endpoint that accepts one, where every check on a directory is applied by the daemon. It is a no-op for a repository already registered, so it is safe on every start.",
   },
   {
     title: "There is no mock mode",
