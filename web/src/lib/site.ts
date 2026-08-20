@@ -19,6 +19,7 @@ export const RAW_INSTALL_URL =
  */
 export const MULTI_AGENT_PATH = "/multi-agent/";
 export const STUDIO_PATH = "/studio/";
+export const SDK_PATH = "/sdk/";
 
 export const DOC_URL = {
   docs: `${REPO_URL}/blob/main/docs/README.md`,
