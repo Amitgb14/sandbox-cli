@@ -55,7 +55,10 @@ async function attempt(task: (typeof TASKS)[number]): Promise<Result> {
       return { branch: task.branch, agent, changed: false, verified: false, note: "outlived its deadline" };
     }
     if (fix.exitCode !== 0) {
-      return { branch: task.branch, agent, changed: false, verified: false, note: fix.stderr.trim().split("\n").pop() ?? `exit ${fix.exitCode}` };
+      // `||` rather than `??`: an empty stderr splits to [""], which is not
+      // nullish, so a nullish fallback never fires — and an agent that failed
+      // silently is exactly when the exit code is the only thing worth printing.
+      return { branch: task.branch, agent, changed: false, verified: false, note: fix.stderr.trim().split("\n").at(-1) || `exit ${fix.exitCode}` };
     }
 
     // Did it actually change anything? Asked of git rather than of the agent:

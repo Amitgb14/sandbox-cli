@@ -40,6 +40,24 @@ version is tagged.
 
 ### Fixed
 
+- **A submodule is registered as itself, not as its superproject's git directory.**
+  Adding a submodule to Studio — from the UI, the API or the SDK — recorded
+  `<super>/.git/modules/<name>` as the repository root, which is what gets
+  bind-mounted at `/workspace`: the agent would have been handed git's object
+  store instead of the source. `--git-common-dir` names a *git directory* rather
+  than a working tree for a submodule and for `--separate-git-dir`, so the tree
+  is now asked for by name, and only a bare repository — which has none — is its
+  own root.
+- **A submodule no longer inherits its superproject's identity.**
+  `.git/modules/<name>` and `.git/worktrees/<name>` sit at the same depth, so the
+  pointer-file fallback read a submodule as a linked worktree of its
+  superproject: `RepoID` answered with the super's id while the path resolved to
+  the submodule. A registry entry then carried one repository's id and another's
+  path, and container labels — how every later command finds a run — belonged to
+  the wrong repository. The fallback now fires only for a gitdir actually under
+  `worktrees/`. Linked worktrees are unaffected: they carry a `commondir` file,
+  which is read first, and every worktree of a repository still shares one id.
+
 - **`studio.project(".")` works, instead of reporting a missing repository.**
   It used to fail with "no repository . is registered", which reads as though
   something had been lost; a path is now resolved on the machine running the

@@ -2,11 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { FakeDaemon } from "./daemon.js";
 import { Studio, ApiError, ConnectionError, TimeoutError, WaitError } from "../src/index.js";
-import { gitRootOf } from "../src/local.js";
+import { gitRootOf, localRepo, wirePath } from "../src/local.js";
 
 async function connected(opts: ConstructorParameters<typeof FakeDaemon>[0] = {}) {
   const daemon = new FakeDaemon(opts);
@@ -560,15 +560,19 @@ test("inside a linked worktree, the repository is the main one — as the daemon
   const main = realpathSync(mkdtempSync(join(tmpdir(), "sdk-wt-")));
   const git = (args: string[], cwd: string) =>
     execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-  git(["init", "-q", "-b", "main"], main);
+  // -c init.templateDir=: a templated hooks directory on the developer's
+  // machine would run during init. -c commit.gpgsign=false below: global signing
+  // with no key available to a non-tty process fails the commit, and the test
+  // would report a bug in code it never reached.
+  git(["-c", "init.templateDir=", "init", "-q", "-b", "main"], main);
   writeFileSync(join(main, "README.md"), "x\n");
-  git(["-c", "user.email=a@b", "-c", "user.name=a", "add", "README.md"], main);
-  git(["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "init"], main);
+  git(["add", "README.md"], main);
+  git(["-c", "user.email=a@b", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-qm", "init"], main);
   const linked = join(main, "..", `${basename(main)}-wt`);
   git(["worktree", "add", "-q", "-b", "feature", linked], main);
 
-  assert.equal(gitRootOf(linked), main, "a linked worktree resolves to the main repository");
-  assert.equal(gitRootOf(join(main, ".git")), main, "the git directory resolves to its repository");
+  assert.equal(await gitRootOf(linked), main, "a linked worktree resolves to the main repository");
+  assert.equal(await gitRootOf(join(main, ".git")), main, "the git directory resolves to its repository");
 
   // And end to end: standing in the worktree finds the registered main repo.
   const { daemon, studio } = await connected({ projectRoot: main });
@@ -589,7 +593,87 @@ test("a directory that is not a repository is not one, whatever is lying around"
   // this client had just called a root.
   const bare = realpathSync(mkdtempSync(join(tmpdir(), "sdk-stray-")));
   writeFileSync(join(bare, ".git"), "gitdir: /nowhere\n");
-  assert.equal(gitRootOf(bare), bare, "the fallback still answers when git cannot");
+  assert.equal(await gitRootOf(bare), bare, "the fallback still answers when git cannot");
   const empty = realpathSync(mkdtempSync(join(tmpdir(), "sdk-empty-")));
-  assert.equal(gitRootOf(empty), null);
+  assert.equal(await gitRootOf(empty), null);
+});
+
+test("a submodule is its own tree, never the superproject's git directory", async () => {
+  // The bug this pins: --git-common-dir names <super>/.git/modules/<name> for a
+  // submodule, and that answer becomes a project root — which is bind-mounted at
+  // /workspace. An agent would be handed an object store instead of the source.
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sdk-sub-")));
+  const git = (args: string[], cwd: string) =>
+    execFileSync("git", ["-c", "init.templateDir=", "-c", "commit.gpgsign=false",
+      "-c", "user.email=a@b", "-c", "user.name=a", ...args],
+      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  const mod = join(base, "mod");
+  const sup = join(base, "super");
+  for (const d of [mod, sup]) {
+    mkdirSync(d);
+    git(["init", "-q", "-b", "main"], d);
+    writeFileSync(join(d, "f"), "x\n");
+    git(["add", "f"], d);
+    git(["commit", "-qm", "init"], d);
+  }
+  try {
+    // protocol.file.allow: git refuses local-path submodules by default since
+    // CVE-2022-39253. This is a fixture on disk, not a clone of anything named
+    // by a repository.
+    git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", mod, "mod"], sup);
+  } catch {
+    return; // this git refuses local submodules outright; nothing to assert
+  }
+  const inside = join(sup, "mod");
+  assert.equal(await gitRootOf(inside), realpathSync(inside), "the submodule tree, not .git/modules");
+  const info = await localRepo(inside);
+  assert.equal(info?.tree, realpathSync(inside));
+});
+
+test("a bare repository is its own root, and the second question's failure is not an error", async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sdk-bare2-")));
+  execFileSync("git", ["-c", "init.templateDir=", "init", "-q", "--bare", "b.git"],
+    { cwd: base, stdio: ["ignore", "ignore", "ignore"] });
+  const bare = join(base, "b.git");
+  const info = await localRepo(bare);
+  assert.equal(info?.root, realpathSync(bare));
+  // No working tree to name. Reporting one would be worse than reporting none.
+  assert.equal(info?.tree, "");
+});
+
+test("what crosses the wire is expanded, never symlink-resolved", async () => {
+  const { daemon, studio } = await connected();
+  const cwd = process.cwd();
+  try {
+    // /tmp is a symlink to /private/tmp on macOS. Resolving it here would post a
+    // path the user never typed — and against a Linux daemon, one that does not
+    // exist. The daemon resolves against its own disk; that is its job.
+    await studio.addProject("/tmp/some-api").catch(() => {});
+    const sent = daemon.requests.filter((r) => r.method === "POST" && r.path === "/v1/projects").pop();
+    assert.deepEqual(sent?.body, { path: "/tmp/some-api" });
+
+    // `~` is expanded, because a shell would have done it before argv and a
+    // string literal is the one place it survives into a path.
+    await studio.addProject("~/code/api").catch(() => {});
+    const tilde = daemon.requests.filter((r) => r.method === "POST" && r.path === "/v1/projects").pop();
+    assert.equal((tilde?.body as { path: string }).path, join(homedir(), "code", "api"));
+    assert.equal(wirePath("~", cwd), homedir());
+  } finally {
+    process.chdir(cwd);
+    await daemon.stop();
+  }
+});
+
+test("a forgotten argument is not a request for the current repository", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    // `studio.project(process.argv[2])` with nothing passed used to fail loudly.
+    // Silently resolving it to wherever the script sits would launch agents in a
+    // repository nobody named.
+    const missing = undefined as unknown as string;
+    await assert.rejects(() => studio.project(missing), /missing argument rather than a request/);
+    await assert.rejects(() => studio.project(""), /missing argument rather than a request/);
+  } finally {
+    await daemon.stop();
+  }
 });
