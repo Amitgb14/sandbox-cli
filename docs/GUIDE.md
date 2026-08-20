@@ -1100,6 +1100,15 @@ zone is forwarded as `TZ` (read from `$TZ`, `/etc/localtime` or `/etc/timezone`;
 nothing extra is mounted). To run on a different clock, say so — `--env TZ=UTC`,
 or any zone name — and that wins.
 
+Your terminal comes along on the same terms. Docker tells a container it is a
+bare `xterm` — eight colours — so an agent's interface inside the sandbox is
+drawn for a poorer terminal than the one you are looking at: banners disappear,
+diffs lose their colour, and nothing says why. `TERM` and `COLORTERM` are
+forwarded by name whenever the run has a terminal at all, so `tput colors`
+reports the same number inside as out. A piped run gets neither, because there is
+no terminal to describe and escape codes in a captured log are noise; `--env
+TERM=dumb` opts out.
+
 ### Seeing a web app the agent is running
 The sandbox publishes no ports, so a dev server started inside it is invisible
 from your browser — the container is on Docker's own network, and on Docker

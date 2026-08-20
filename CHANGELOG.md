@@ -11,6 +11,17 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **Agent interfaces look the same inside the sandbox as outside it.** Docker
+  tells a container it is a bare `xterm`, so a TUI drew for eight colours while
+  the terminal it was drawing on had 256 — goose's start-up banner vanished
+  entirely through `sandbox-cli`, and every colourised diff and progress bar was
+  quietly poorer. `TERM` and `COLORTERM` now cross as names, on the same terms
+  the timezone does: only when the run has a terminal at all, and never over
+  anything you set yourself. A piped run is unchanged, because a `TERM` with no
+  terminal behind it only puts escape codes into a log somebody reads as text.
+
 ### Added
 
 - **A TypeScript client, so a program can drive sandbox-cli the way a terminal

@@ -48,6 +48,16 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   mount of `/etc/localtime`, since a name is a string and a mount is another host path. It
   yields to any `TZ` the user set themselves, and an unresolvable zone forwards nothing rather
   than guessing. `hostTimezone` is a var so tests can pin the one input that differs per machine.
+  `terminal.go` does the same for the **terminal**: `docker run -t` says `TERM=xterm` and
+  nothing else, so an agent's TUI inside the sandbox draws for eight colours while the same
+  agent on the host has 256 and truecolor — goose's banner is the visible case, and every
+  colourised diff the quiet one. `TERM` and `COLORTERM` are forwarded **by name**, **only when
+  a pty exists** (without one there is no terminal to describe, and a `TERM` in a pipe invites
+  escape codes into a log read as text), and they yield both to `--env` and to forwarding by
+  name. A **console** run is the exception that proves the rule: its container is created by a
+  daemon with no terminal of its own, and what attaches later is xterm.js, so it is told
+  `xterm-256color` — the terminal that will be there rather than the one that happens to be
+  here. Neither name is privileged: both are read by the agent long after the drop.
 - **`internal/runtime`** — `BuildArgs(RunSpec) []string` is a **pure, deterministic function** that
   produces the `docker` argv. `engine.go` holds the **podman dialect**: the engines differ in only
   three places — how they answer questions about the host, how they isolate containers from each

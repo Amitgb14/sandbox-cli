@@ -671,6 +671,13 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		tty = opts.Console
 	}
 
+	// The terminal the container is drawing on, which docker otherwise describes
+	// as a bare `xterm` — eight colours, where the host that started the run has
+	// 256 (terminal.go). Applied here rather than beside TZ above because it is
+	// the first point at which the answer is known: a run with no pty has no
+	// terminal to describe.
+	applyTerminal(env, seen, tty, opts.Console)
+
 	// Metrics require a terminal to report to. The live gauge is drawn only for
 	// non-interactive runs (an interactive agent TUI owns the terminal); the
 	// post-run summary is printed for all runs, including interactive ones, since
