@@ -1,0 +1,126 @@
+/**
+ * The SDK page's content, kept out of the component for the same reason the
+ * Studio walkthrough is: prose and code that someone will correct later should
+ * be editable without reading JSX.
+ *
+ * Everything here is checked against sdk/typescript — the snippets are the ones
+ * in its README and its tests, not invented for the page. A marketing example
+ * that does not compile is worse than none, because somebody types it.
+ */
+
+export interface SdkStep {
+  title: string;
+  body: string;
+  code?: string;
+  /** What you should see, so a reader can tell working from nearly-working. */
+  expect?: string;
+}
+
+export const SDK_INSTALL = "npm install @sandbox-cli/sdk";
+
+export const SDK_STEPS: SdkStep[] = [
+  {
+    title: "Connect to the daemon you already have",
+    code: [
+      "import { Studio } from \"@sandbox-cli/sdk\";",
+      "",
+      "const studio = await Studio.connect();   // no arguments",
+    ].join("\n"),
+    body:
+      "studio.sh writes the API port and a generated token into ~/.config/sandbox/studio, so a script on that machine has no reason to ask you for either. Explicit arguments win, then SANDBOX_API_URL and SANDBOX_STUDIO_TOKEN, then those files. Connecting makes one round trip to /v1/health, which is the only route that answers without a token — so a missing credential is reported as a missing credential rather than as a failure of whatever you ran first.",
+    expect:
+      "A Studio bound to http://127.0.0.1:<the port studio.sh is using>, or a typed error saying which half is wrong.",
+  },
+  {
+    title: "Pick a repository, and a branch to work in",
+    code: [
+      "const repo = await studio.project(\"my-app\");",
+      "const ws = await repo.workspace(\"agent-42\");",
+    ].join("\n"),
+    body:
+      "A Project is a repository the daemon has been told about — named by id, or by name when only one repository has it, because two clones share a name and never an id. A Workspace is that branch's git worktree, created if it is not there, and it is the isolation unit: two agents in one tree is a data race with a filesystem in the middle.",
+  },
+  {
+    title: "Run something, and get back what happened",
+    code: [
+      "await ws.run([\"pnpm\", \"install\"]);",
+      "",
+      "const tests = await ws.run([\"pnpm\", \"test\"], {",
+      "  env: { CI: \"true\" },",
+      "  timeoutMs: 10 * 60_000,",
+      "});",
+      "",
+      "console.log(tests.exitCode, tests.stdout, tests.stderr);",
+    ].join("\n"),
+    body:
+      "Each run is its own container over that worktree, and the worktree is what persists: the second command finds node_modules because the first wrote it to disk, not because anything stayed alive. stdout and stderr come back separated, and the exit code is the container's.",
+    expect: "The command's real exit code — 0, or whatever it actually returned.",
+  },
+  {
+    title: "Or hand the work to an agent",
+    code: [
+      "const done = await ws.agent(\"claude\", \"make the failing test pass\", {",
+      "  fallback: [\"codex\"],",
+      "});",
+      "",
+      "if (done.routedFrom) {",
+      "  console.warn(`${done.routedFrom} was down; ${done.agent} did the work`);",
+      "}",
+    ].join("\n"),
+    body:
+      "Every outcome carries agent, routedFrom and routeReason whether or not you ask for them. A script that cannot see a failover attributes one agent's work to another — under the wrong login, and the wrong bill.",
+  },
+  {
+    title: "Follow a run while it happens",
+    code: [
+      "for await (const event of ws.follow(run.id)) {",
+      "  if (event.type === \"log\") process.stdout.write(event.data + \"\\n\");",
+      "}",
+    ].join("\n"),
+    body:
+      "Server-sent events, because the daemon offers SSE and WebSocket carrying the identical payload and SSE needs nothing a Node runtime does not already have. The loop ends on the daemon's own end event; leaving early closes the connection, which is what stops the docker logs --follow behind it.",
+  },
+];
+
+/** The claims a reader should be able to check, rather than take on trust. */
+export const SDK_RULES = [
+  {
+    title: "It is a client, and only a client",
+    body:
+      "No docker socket, no shelling out to sandbox-cli, no argv assembled here. Every gate that makes a sandbox a sandbox — the workspace refusals, the fake HOME, default-deny environment, the egress allowlist — is applied where the container is built, on the machine running the daemon. When this package wants a capability the daemon does not expose, the daemon grows an endpoint and the gate is written once, in Go, with a test.",
+  },
+  {
+    title: "There is no mock mode",
+    body:
+      "A fake run() returning exitCode 0 is the worst possible default for a library whose entire job is telling you what happened. A test double belongs in your test suite, where you can see it.",
+  },
+  {
+    title: "A deadline stops the run, and says so",
+    body:
+      "The wait is bounded — thirty minutes by default. When it expires the run is stopped and the outcome reports stopped: true, rather than putting a verdict on a container that was interrupted. If the stop itself is refused, that surfaces: claiming a run was stopped while it is still running would announce the outcome the deadline exists to prevent as though it had been prevented.",
+  },
+  {
+    title: "A launched run is never lost",
+    body:
+      "If anything goes wrong after the launch — a daemon restart mid-poll, a cancel — you get a WaitError carrying the run. The container exists whatever happened, and a detached run holds sandbox-<repo>-<branch>, which docker will not duplicate, so an error without the id would leave the branch blocked by something you cannot name.",
+  },
+  {
+    title: "stop and remove are different, and neither is implicit",
+    body:
+      "A finished run's logs are the evidence for what it did. Tidying up on the way out would discard that on every happy path, so nothing is removed unless you ask.",
+  },
+  {
+    title: "The types are generated, not written",
+    body:
+      "src/contract.ts comes from internal/studioapi/types.go, the same pass that writes the documentation mirror, and CI fails when the checked-in copy differs from what the generator produces. A published client describing an API the daemon does not have is the failure that would be hardest to notice.",
+  },
+];
+
+/** Errors are typed and distinct on purpose; each sends you somewhere different. */
+export const SDK_ERRORS = [
+  { name: "ApiError", meaning: "the daemon refused, and its own message is carried verbatim" },
+  { name: "ConnectionError", meaning: "nothing answered at that address" },
+  { name: "TimeoutError", meaning: "it answered too slowly — reachable, not down" },
+  { name: "WaitError", meaning: "the run started; waiting for it did not finish. Carries the run" },
+  { name: "AbortError", meaning: "you cancelled it — err.name, the check callers already write" },
+];
