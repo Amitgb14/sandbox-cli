@@ -29,24 +29,41 @@ export interface SdkStep {
  * fetched rather than run from the project directory — `sh studio.sh up` in
  * ~/code/my-app assumes a file nothing put there.
  */
-export const SDK_PREREQS: { label: string; where: string; code: string; note: string }[] = [
+export const SDK_PREREQS: {
+  label: string;
+  where: string;
+  /** What the block is, which decides whether a `$` is drawn in front of it. */
+  lang: "sh" | "ts";
+  code: string;
+  note: string;
+}[] = [
   {
     label: "From the repository you want to work in, start the control plane",
     where: "Terminal — the machine that will run the containers",
+    lang: "sh",
     code: "cd ~/code/my-app\ncurl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh",
     note: "It installs sandbox-cli and the daemon if they are missing, starts both halves, and registers the repository it was run in — which is what gives studio.project(\"my-app\") something to find. It also writes the API port and a generated token into ~/.config/sandbox/studio, which is what lets Studio.connect() take no arguments. Docker is the one thing it will not install for you: the daemon holds its socket, and every run is a container.",
   },
   {
     label: "Then add the client to your own project",
     where: "Terminal — wherever your code lives",
+    lang: "sh",
     code: "git clone https://github.com/Amitgb14/sandbox-cli.git ~/code/sandbox-cli\nnpm --prefix ~/code/sandbox-cli/sdk/typescript install\nnpm install ~/code/sandbox-cli/sdk/typescript",
     note: "It is not on npm yet, so it installs from a checkout. The middle line is not optional: npm runs a directory dependency\u2019s prepare script but installs none of its devDependencies, so without it the build fails with \"tsc: command not found\". Node 20 or newer, and this half needs nothing else: no docker socket, no binaries, nothing to configure.",
   },
   {
     label: "Write your script as an ES module",
     where: "agent.mts",
+    lang: "ts",
     code: "import { Studio } from \"@sandbox-cli/sdk\";\n\nconst studio = await Studio.connect();\nfor (const p of await studio.projects()) console.log(p.id, p.name);",
-    note: "Everything here uses top-level await, which needs an ES module: either \"type\": \"module\" in your package.json, or the .mts extension as above. Without one, tsx compiles the file as CommonJS and stops at \"Top-level await is currently not supported\" — a fact about your project rather than about the client. Run it with `npx tsx agent.mts`.",
+    note: "Everything here uses top-level await, which needs an ES module: either \"type\": \"module\" in your package.json, or the .mts extension as above. Without one, tsx compiles the file as CommonJS and stops at \"Top-level await is currently not supported\" — a fact about your project rather than about the client.",
+  },
+  {
+    label: "Run it",
+    where: "Terminal — wherever your code lives",
+    lang: "sh",
+    code: "npx tsx agent.mts",
+    note: "tsx runs TypeScript directly, so there is no build step for a script. Node 20 or newer runs the same file as JavaScript if you would rather: rename it .mjs and drop the types. What you should see is the daemon answering — the repositories it knows about, or a typed error naming which half is wrong.",
   },
 ];
 
