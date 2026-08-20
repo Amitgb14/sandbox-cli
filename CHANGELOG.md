@@ -35,8 +35,9 @@ version is tagged.
   one. Until now the error for an unregistered repository told you to
   `POST /v1/projects` and the SDK gave you no way to do it. Adding a repository
   that is already registered returns the existing row, so it is safe on every
-  start. The path is on the *daemon's* machine, which is why nothing defaults to
-  `process.cwd()`.
+  start. A path names a directory on the *daemon's* machine, so what crosses is
+  expanded (`~`, a relative path) but never symlink-resolved — that resolution
+  describes this disk, not the one the daemon will look on.
 
 ### Fixed
 
