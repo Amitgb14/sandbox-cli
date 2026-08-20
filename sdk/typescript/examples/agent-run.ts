@@ -1,12 +1,22 @@
 /**
  * One branch, one agent, one bounded run — and every claim it makes checked.
  *
- * Runnable: `npx tsx examples/agent-run.ts` against a daemon started by
- * `studio.sh`, with a repository called "my-app" registered. It is also compiled
- * by `npm test`, so an example that stopped matching the API fails the build
- * rather than misleading somebody who typed it.
+ * Compiled by `npm test`, so an example that stopped matching the API fails the
+ * build rather than misleading somebody who typed it.
+ *
+ * It imports by **package name**, which is what a reader copying this file
+ * writes — the relative path a file inside the repository could use would make
+ * the compiled example a different file from the published one, and the
+ * published one is the whole point. `tsconfig.test.json` maps the name to
+ * `src/`, so what is checked here is what a consumer would write.
+ *
+ * Before it runs, on the machine the daemon is on:
+ *
+ *   curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh
+ *   cd ~/code/my-app && sh studio.sh up      # daemon + UI, and registers this repo
+ *   npm install @sandbox-cli/sdk
  */
-import { Studio, WaitError, type Outcome } from "../src/index.js";
+import { Studio, WaitError, type Outcome } from "@sandbox-cli/sdk";
 
 const studio = await Studio.connect(); // port and token from ~/.config/sandbox/studio
 const repo = await studio.project("my-app");

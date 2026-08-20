@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { type NavEntry } from "@/lib/nav";
 import { REPO_URL, STUDIO_PATH } from "@/lib/site";
-import { SDK_ERRORS, SDK_EXAMPLE, SDK_INSTALL, SDK_RULES, SDK_STEPS } from "@/lib/sdk";
+import { SDK_ERRORS, SDK_EXAMPLE, SDK_PREREQS, SDK_RULES, SDK_STEPS } from "@/lib/sdk";
 import { cn } from "@/lib/utils";
 
 const TITLE = "TypeScript SDK — sandbox-cli";
@@ -25,6 +25,7 @@ export const metadata: Metadata = {
 
 const NAV: NavEntry[] = [
   { kind: "link", href: "#what", label: "What it is" },
+  { kind: "link", href: "#before", label: "Before it works" },
   { kind: "link", href: "#use", label: "Using it" },
   { kind: "link", href: "#example", label: "A whole script" },
   { kind: "link", href: "#rules", label: "What it promises" },
@@ -60,7 +61,6 @@ export default function SdkPage() {
             }
           />
 
-          <CodeBlock code={SDK_INSTALL} />
 
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="rounded-2xl border bg-card p-5">
@@ -89,8 +89,44 @@ export default function SdkPage() {
           </div>
         </Section>
 
+        {/* ---------------------------------------------------------- before */}
+        <Section id="before" tinted>
+          <SectionHead
+            eyebrow="before it works"
+            title="Three steps, and only the third is this package"
+            lead={
+              <>
+                The client talks to a daemon; it does not start one, and it cannot. Without the
+                first two,{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  Studio.connect()
+                </code>{" "}
+                fails with “cannot reach the sandbox daemon”, which reads as a broken library rather
+                than as a daemon nobody started.
+              </>
+            }
+          />
+
+          <ol className="space-y-3">
+            {SDK_PREREQS.map((step, i) => (
+              <li key={step.label} className="rounded-2xl border bg-card p-5">
+                <div className="mb-2 flex items-baseline gap-2">
+                  <span className="font-mono text-[0.7rem] text-muted-foreground">
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <h3 className="text-[0.95rem] font-medium">{step.label}</h3>
+                </div>
+                <CodeBlock code={step.code} />
+                <p className="mt-3 text-[0.85rem] leading-relaxed text-muted-foreground">
+                  {step.note}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </Section>
+
         {/* ------------------------------------------------------------- use */}
-        <Section id="use" tinted>
+        <Section id="use">
           <SectionHead
             eyebrow="using it"
             title="Zero configuration, then five lines"
@@ -122,7 +158,7 @@ export default function SdkPage() {
         </Section>
 
         {/* --------------------------------------------------------- example */}
-        <Section id="example">
+        <Section id="example" tinted>
           <SectionHead
             eyebrow="a whole script"
             title="Install, hand the work to an agent, run the tests"
@@ -168,7 +204,7 @@ export default function SdkPage() {
         </Section>
 
         {/* ----------------------------------------------------------- rules */}
-        <Section id="rules" tinted>
+        <Section id="rules">
           <SectionHead
             eyebrow="what it promises"
             title="Six claims you can check"
@@ -186,7 +222,7 @@ export default function SdkPage() {
         </Section>
 
         {/* ---------------------------------------------------------- errors */}
-        <Section id="errors">
+        <Section id="errors" tinted>
           <SectionHead
             eyebrow="when it fails"
             title="Five failures, five different next steps"

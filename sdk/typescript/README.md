@@ -4,6 +4,21 @@ A typed client for the [sandbox-cli](https://github.com/Amitgb14/sandbox-cli)
 control plane: run agents and commands in isolated containers, from a program
 instead of a terminal.
 
+It talks to a daemon and does not start one, so two things come first — on the
+machine that will run the containers:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh
+cd ~/code/my-app && sh studio.sh up   # daemon + UI, and registers this repository
+```
+
+That writes the port and a token into `~/.config/sandbox/studio`, which is what
+lets `connect()` take no arguments. Then, in your own project:
+
+```sh
+npm install @sandbox-cli/sdk
+```
+
 ```ts
 import { Studio } from "@sandbox-cli/sdk";
 
@@ -136,6 +151,13 @@ request body to the daemon, and off loopback there is no TLS yet. The posture
 this tool is built around is the other direction: `secrets:` in the *daemon's*
 config, resolved on that host and forwarded by name, so a value never crosses
 the wire and has nowhere to land in a log.
+
+## A whole script
+
+`examples/agent-run.ts` is the end-to-end version — install, hand the work to an
+agent, run the tests, and check what the outcome claims. It imports by package
+name and is compiled by `npm test`, so it is checked in the shape you would type
+rather than in one only this repository can use.
 
 ## Types
 

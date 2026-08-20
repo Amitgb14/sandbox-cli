@@ -3,7 +3,13 @@
   "compilerOptions": {
     "rootDir": ".",
     "outDir": "dist-test",
-    "declaration": false
+    "declaration": false,
+    "baseUrl": ".",
+    "paths": {
+      "@sandbox-cli/sdk": [
+        "src/index.ts"
+      ]
+    }
   },
   "include": [
     "src/**/*.ts",
