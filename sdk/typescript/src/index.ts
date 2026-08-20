@@ -11,6 +11,7 @@ import type {
   Run,
   RunCreateRequest,
   RunsResponse,
+  WorktreesResponse,
   SessionSummary,
   SessionListResponse,
 } from "./contract.js";
@@ -333,9 +334,14 @@ export class Workspace {
     );
     const holder = (res.runs ?? []).find((r) => r.branch === branch);
     if (!holder) return null;
-    if (holder.state === "running" || holder.state === "created" || holder.state === "restarting") {
+    // Finished is the *positive* claim, and it is made about two states only.
+    // Listing the live ones instead fails open on the states nobody thought
+    // about: `paused` holds the name and holds unwritten work, and `unknown`
+    // means the engine would not say — both of which would have been reaped.
+    if (holder.state !== "exited" && holder.state !== "dead") {
       throw new Error(
-        `run ${holder.id} is still going on ${branch}; stop it first — two agents in one checkout overwrite each other's work`,
+        `run ${holder.id} on ${branch} is ${holder.state}, not finished; stop it first — ` +
+          `two agents in one checkout overwrite each other's work`,
       );
     }
     await this.remove(holder.id);
@@ -352,7 +358,11 @@ export class Workspace {
    */
   private async branchName(): Promise<string> {
     if (this.branch) return this.branch;
-    const res = await this.t.request<{ worktrees: { branch: string; primary?: boolean }[] }>(
+    // The generated shape, not a hand-written one: a rename of `primary` in
+    // types.go would then be a compile error here rather than a runtime "cannot
+    // tell which branch" — and this is the one place the claim that the types
+    // are generated has to hold for itself.
+    const res = await this.t.request<WorktreesResponse>(
       "GET",
       `/v1/worktrees?repo=${encodeURIComponent(this.project.id)}`,
     );
@@ -468,7 +478,18 @@ export class Workspace {
       }
       // Retried once, and only once: a second conflict means something else took
       // the name, and looping would be a race with whatever that is.
-      await this.clearFinished();
+      //
+      // The daemon answers 409 for two different things — a finished run holding
+      // the name, and *an agent still running on this branch*. Only the first is
+      // clearable, and when clearFinished refuses the second the caller must
+      // still get the ApiError it would have got without the flag: a `catch (e)
+      // { if (e instanceof ApiError && e.status === 409) }` that stops matching
+      // the moment you pass an option is worse than no option.
+      try {
+        await this.clearFinished();
+      } catch (clearErr) {
+        throw new ApiError(err.status, err.endpoint, `${err.message}\n  ${String(clearErr)}`);
+      }
       started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
     }
     try {

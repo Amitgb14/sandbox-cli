@@ -28,6 +28,9 @@ export interface FakeDaemonOptions {
   /** Refuse the first launch with 409, the way a finished run holding the
    *  branch's container name does. Cleared by DELETE, as on the real daemon. */
   nameHeldBy?: string;
+  /** The branch and state GET /runs reports, for the reaping rules. */
+  listedBranch?: string;
+  listedState?: string;
 }
 
 export class FakeDaemon {
@@ -174,7 +177,8 @@ export class FakeDaemon {
       return json(200, {
         runs: [
           { id: "old-run", containerId: "c0", name: "sandbox-app-feature", kind: "interactive",
-            state: "exited", exitCode: 0, detached: true, branch: "feature",
+            state: this.opts.listedState ?? "exited", exitCode: 0, detached: true,
+            branch: this.opts.listedBranch ?? "feature",
             createdAt: new Date(0).toISOString() },
         ],
       });

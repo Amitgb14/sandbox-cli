@@ -360,8 +360,11 @@ api_log_this_run() {
     return
   fi
   offset=${API_LOG_OFFSET:-0}
-  # +1 because tail counts from the byte after the offset.
-  tail -c "+$((offset + 1))" "$LOGFILE" 2>/dev/null | head -n 20
+  # This run's bytes (+1 because tail counts from the byte after the offset),
+  # then the *last* twenty of them. A refusal writes two lines and exits, so
+  # either end shows it; a daemon that has been alive and logging for twenty
+  # seconds has its reason at the end, under a startup banner that is not it.
+  tail -c "+$((offset + 1))" "$LOGFILE" 2>/dev/null | tail -n 20
 }
 
 # wait_for_api URL — like wait_for, but gives up the moment the daemon is gone.
@@ -370,11 +373,24 @@ api_log_this_run() {
 # seconds for a process that is not there says "did not answer" when the truth is
 # "would not start". They send a reader to different places: one to the network,
 # the other to the file it was told about.
+# Whether the daemon is still there, whichever way it was started. The container
+# path writes no pidfile — do_down even deletes it — so a `kill -0` on an empty
+# string skips the check entirely and a containerised daemon that refused its
+# config still waits out the full twenty seconds and reports a timeout, which is
+# the one sentence this was written to remove.
+api_alive() { # api_alive PID
+  if [ "$API_IN_DOCKER" = 1 ]; then
+    [ "$(docker container inspect -f '{{.State.Running}}' "$API_NAME" 2>/dev/null)" = "true" ]
+    return
+  fi
+  [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+}
+
 wait_for_api() { # wait_for_api URL PID
   i=0
   while [ "$i" -lt 20 ]; do
     if http_ok "$1"; then return 0; fi
-    if [ -n "${2:-}" ] && ! kill -0 "$2" 2>/dev/null; then return 2; fi
+    if ! api_alive "${2:-}"; then return 2; fi
     i=$((i + 1))
     sleep 1
   done
@@ -637,7 +653,11 @@ start_api_host() {
   # plain `tail` on failure shows six previous startups and buries the one
   # sentence that matters — which is exactly how a config refusal read as a
   # mystery timeout.
-  API_LOG_OFFSET=$(wc -c < "$LOGFILE" 2>/dev/null || echo 0)
+  # Guarded with -f rather than 2>/dev/null: the input redirect is processed
+  # before the redirection of stderr applies, so on a first run the *shell*
+  # prints "No such file or directory" before `|| echo 0` can recover.
+  API_LOG_OFFSET=0
+  [ -f "$LOGFILE" ] && API_LOG_OFFSET=$(wc -c < "$LOGFILE")
 
   # shellcheck disable=SC2086  # allow_args and origin_args are deliberately word-split lists
   nohup "$API_BIN" \

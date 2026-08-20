@@ -39,8 +39,8 @@ export const SDK_PREREQS: { label: string; where: string; code: string; note: st
   {
     label: "Then add the client to your own project",
     where: "Terminal — wherever your code lives",
-    code: "git clone https://github.com/Amitgb14/sandbox-cli.git ~/code/sandbox-cli\nnpm install ~/code/sandbox-cli/sdk/typescript",
-    note: "It is not on npm yet, so it installs from a checkout — `prepare` builds it during the install, so there is no separate build step. Node 20 or newer, and this half needs nothing else: no docker socket, no binaries, nothing to configure.",
+    code: "git clone https://github.com/Amitgb14/sandbox-cli.git ~/code/sandbox-cli\nnpm --prefix ~/code/sandbox-cli/sdk/typescript install\nnpm install ~/code/sandbox-cli/sdk/typescript",
+    note: "It is not on npm yet, so it installs from a checkout. The middle line is not optional: npm runs a directory dependency\u2019s prepare script but installs none of its devDependencies, so without it the build fails with \"tsc: command not found\". Node 20 or newer, and this half needs nothing else: no docker socket, no binaries, nothing to configure.",
   },
   {
     label: "Write your script as an ES module",
