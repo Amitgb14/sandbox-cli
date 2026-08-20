@@ -1,5 +1,5 @@
 import { Transport } from "./transport.js";
-import { ApiError, WaitError, abortError } from "./errors.js";
+import { ApiError, ConnectionError, WaitError, abortError } from "./errors.js";
 import { discoverToken, discoverUrl } from "./discover.js";
 import type {
   AgentInfo,
@@ -121,7 +121,25 @@ export class Studio {
     // reported here rather than as a failure of whatever ran first. /health is
     // the only route that answers without a token, which is what makes it able
     // to say that a token is what is missing.
-    const health = await studio.health();
+    let health: HealthResponse;
+    try {
+      health = await studio.health();
+    } catch (err) {
+      // "fetch failed" is true and useless. Nothing answering on a loopback port
+      // that this package *discovered from a file* almost always means the daemon
+      // is not running — and a caller who never started one has no reason to
+      // connect that to studio.sh.
+      if (err instanceof ConnectionError) {
+        throw new ConnectionError(
+          t.url,
+          "nothing is listening",
+          `no daemon is running there. Start one from the repository you want to work in: ` +
+            `curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh — ` +
+            `or pass { url } if yours is somewhere else.`,
+        );
+      }
+      throw err;
+    }
     if (health.authRequired && !t.token) {
       throw new ApiError(
         401,

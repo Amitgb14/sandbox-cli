@@ -133,6 +133,11 @@ test("an unreachable daemon is a different failure from a refused request", asyn
     () => Studio.connect({ url: "http://127.0.0.1:1", token: "" }),
     (err: unknown) => {
       assert.ok(err instanceof ConnectionError, `wanted ConnectionError, got ${String(err)}`);
+      // "fetch failed" is true and useless. Somebody who never started a daemon
+      // has no reason to connect a network error to studio.sh, and connect() is
+      // the one place that cause is overwhelmingly likely.
+      assert.match(err.message, /no daemon is running there/);
+      assert.match(err.message, /studio\.sh/);
       return true;
     },
   );

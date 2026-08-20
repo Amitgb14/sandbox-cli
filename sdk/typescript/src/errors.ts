@@ -28,8 +28,13 @@ export class ApiError extends Error {
 export class ConnectionError extends Error {
   readonly url: string;
 
-  constructor(url: string, cause: unknown) {
-    super(`cannot reach the sandbox daemon at ${url}: ${String(cause)}`);
+  /**
+   * `hint` is for the caller that knows *why* this is likely — `connect()` does,
+   * because a daemon that was never started is the overwhelming cause there, and
+   * "fetch failed" is a true sentence that helps nobody.
+   */
+  constructor(url: string, cause: unknown, hint?: string) {
+    super(`cannot reach the sandbox daemon at ${url}: ${String(cause)}${hint ? `\n  ${hint}` : ""}`);
     this.name = "ConnectionError";
     this.url = url;
   }
