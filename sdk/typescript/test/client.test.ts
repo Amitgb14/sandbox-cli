@@ -345,7 +345,13 @@ test("a finished run holding the branch's name can be replaced on request", asyn
       (err: unknown) => {
         assert.ok(err instanceof ApiError);
         assert.equal(err.status, 409);
+        // The daemon's sentence, kept whole…
         assert.match(err.message, /still holds "feature"'s container name/);
+        // …and the one it cannot know to write. Being told to reach for curl
+        // from inside a typed client is how a library teaches people to work
+        // around it.
+        assert.match(err.message, /replaceFinished/);
+        assert.match(err.message, /clearFinished/);
         return true;
       },
     );

@@ -190,10 +190,12 @@ is spent, say so:
 await ws.run(["npm", "test"], { replaceFinished: true });
 ```
 
-or reap it yourself, which also tells you what was removed:
+or reap it yourself, which also tells you what was removed — **before** the run,
+not after, since the launch is what fails:
 
 ```ts
-const gone = await ws.clearFinished();   // null when nothing was holding the name
+await ws.clearFinished();                // null when nothing was holding the name
+const out = await ws.run(["npm", "test"]);
 ```
 
 Both refuse a run that is still going. Stopping somebody else's agent is not a

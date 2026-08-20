@@ -451,11 +451,23 @@ export class Workspace {
     try {
       started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
     } catch (err) {
-      // 409 is the branch's name being held, which is the one refusal a caller
-      // can clear without deciding anything: the holder has finished. Retried
-      // once, and only once — a second conflict means something else took the
-      // name, and looping would be a race with whatever that is.
-      if (!opts.replaceFinished || !(err instanceof ApiError) || err.status !== 409) throw err;
+      if (!(err instanceof ApiError) || err.status !== 409) throw err;
+      if (!opts.replaceFinished) {
+        // The daemon's own remedy is "GET /v1/runs/<id>/logs, then DELETE
+        // /v1/runs/<id>" — correct, and addressed to a client holding a URL.
+        // Somebody holding *this* client has two better moves, and being told
+        // to reach for curl from inside a typed API is how a library teaches
+        // people to work around it. The daemon's sentence is kept whole; this
+        // adds the sentence it cannot know to write.
+        throw new ApiError(
+          err.status,
+          err.endpoint,
+          `${err.message}\n  From here: pass { replaceFinished: true } to run this anyway, ` +
+            `or call workspace.clearFinished() first — both refuse a run that is still going.`,
+        );
+      }
+      // Retried once, and only once: a second conflict means something else took
+      // the name, and looping would be a race with whatever that is.
       await this.clearFinished();
       started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
     }
