@@ -228,12 +228,20 @@ this tool is built around is the other direction: `secrets:` in the *daemon's*
 config, resolved on that host and forwarded by name, so a value never crosses
 the wire and has nowhere to land in a log.
 
-## A whole script
+## Two whole scripts
 
-`examples/agent-run.ts` is the end-to-end version — install, hand the work to an
-agent, run the tests, and check what the outcome claims. It imports by package
-name and is compiled by `npm test`, so it is checked in the shape you would type
-rather than in one only this repository can use.
+`examples/agent-run.ts` is the end-to-end version of one task — install, hand the
+work to an agent, run the tests, and check what the outcome claims.
+
+`examples/workflow.ts` is the same idea widened: three tasks on three branches in
+three containers, in parallel, then one gate deciding which are worth a human's
+attention. It answers the question people ask before writing anything — whether
+orchestrating agents means building an agent. It does not: the control flow is
+`Promise.all` and an `if`, and the only model involved is the one working inside
+each container.
+
+Both import by package name and are compiled by `npm test`, so they are checked
+in the shape you would type rather than in one only this repository can use.
 
 ## Running the same script twice
 

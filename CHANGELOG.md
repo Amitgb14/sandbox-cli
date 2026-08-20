@@ -13,6 +13,13 @@ version is tagged.
 
 ### Added
 
+- **A second SDK example: a workflow, without writing an agent.**
+  `examples/workflow.ts` runs three tasks on three branches in three containers
+  in parallel, then gates on two things that catch different lies — whether git
+  says anything changed, and whether the tests agree. The orchestration is
+  `Promise.all` and an `if`; the only model involved is the one inside each
+  container. Compiled by `npm test` like the first example, and on the site's SDK
+  page.
 - **The TypeScript SDK finds the repository you are standing in.**
   `studio.project()` with no argument asks git which repository the current
   directory belongs to — `rev-parse --git-common-dir`, the same question the
