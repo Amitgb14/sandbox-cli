@@ -142,7 +142,7 @@ export default function SdkPage() {
                   </span>
                   <h3 className="text-[0.95rem] font-medium">{step.title}</h3>
                 </div>
-                {step.code && <CodeBlock code={step.code} />}
+                {step.code && <CodeBlock code={step.code} lang="ts" />}
                 <p className="mt-3 text-[0.85rem] leading-relaxed text-muted-foreground">
                   {step.body}
                 </p>
@@ -174,7 +174,7 @@ export default function SdkPage() {
             }
           />
 
-          <CodeBlock code={SDK_EXAMPLE} lang="sh" />
+          <CodeBlock code={SDK_EXAMPLE} lang="ts" />
 
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="rounded-2xl border bg-card p-5">

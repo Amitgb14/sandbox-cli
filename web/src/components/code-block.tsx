@@ -7,8 +7,10 @@ import { cn } from "@/lib/utils";
  * markup and the same comment-dimming rule.
  *
  * `lang` decides one thing only: whether a leading `$` is drawn. A shell block
- * gets a prompt on each command; a YAML block gets none, because a `$` in front
- * of a config file is a lie about what you do with it.
+ * gets a prompt on each command; a YAML or TypeScript block gets none, because a
+ * `$` in front of a file is a lie about what you do with it — a forty-line
+ * example rendered as shell reads as forty commands to run, which is how the SDK
+ * page shipped its flagship snippet looking like a terminal session.
  *
  * "Each command" is not "each line": a line following one that ends in `\` is
  * the same command continued, and a second `$` there would render a command
@@ -25,13 +27,16 @@ export function CodeBlock({
   className,
 }: {
   code: string;
-  lang?: "sh" | "yaml";
+  lang?: "sh" | "yaml" | "ts";
   className?: string;
 }) {
   const lines = code.split("\n");
   // Copy what you would actually run or paste: the comments go too for YAML
   // (they are part of the file) but never the rendered `$` prompt.
-  const copyable = lang === "yaml" ? code : lines.filter((l) => !l.trimStart().startsWith("#")).join("\n");
+  // Only a shell block drops its comments on copy — they are annotations on a
+  // command you are about to run. A file's comments are part of the file.
+  const copyable =
+    lang === "sh" ? lines.filter((l) => !l.trimStart().startsWith("#")).join("\n") : code;
 
   return (
     <div
@@ -42,7 +47,10 @@ export function CodeBlock({
     >
       <pre className="no-scrollbar min-w-0 flex-1 overflow-x-auto font-mono text-[0.78rem] leading-relaxed text-[#e7e7ea]">
         {lines.map((line, i) => {
-          const comment = line.trimStart().startsWith("#");
+          const comment =
+            lang === "ts"
+              ? line.trimStart().startsWith("//") || line.trimStart().startsWith("*") || line.trimStart().startsWith("/*")
+              : line.trimStart().startsWith("#");
           const continued = i > 0 && lines[i - 1].trimEnd().endsWith("\\");
           const prompt = lang === "sh" && !comment && !continued && line.trim() !== "";
           return (

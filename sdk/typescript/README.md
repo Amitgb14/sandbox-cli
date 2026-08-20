@@ -28,8 +28,8 @@ const studio = await Studio.connect();            // finds the local daemon
 const repo = await studio.project("my-app");
 const ws = await repo.workspace("agent-42");      // a branch's worktree
 
-await ws.run(["pnpm", "install"]);
-const tests = await ws.run(["pnpm", "test"], { env: { CI: "true" } });
+await ws.run(["npm", "ci"]);
+const tests = await ws.run(["npm", "test"], { env: { CI: "true" } });
 
 console.log(tests.exitCode, tests.stdout);
 ```
@@ -58,7 +58,7 @@ Three nouns, and they are the daemon's rather than this package's.
 | **Workspace** | a branch's worktree inside one, and the isolation unit |
 
 A run is a **container**, not a session you exec into repeatedly, and the
-**worktree is what persists**: `pnpm install` then `pnpm test` works because
+**worktree is what persists**: `npm ci` then `npm test` works because
 `node_modules` was written to disk, not because a process stayed alive. Two
 agents in one tree is a data race with a filesystem in the middle, which is why
 a workspace is the only way to get somewhere to run.
@@ -107,7 +107,7 @@ you cannot name:
 
 ```ts
 try {
-  await ws.run(["pnpm", "test"], { timeoutMs: 60_000, signal });
+  await ws.run(["npm", "test"], { timeoutMs: 60_000, signal });
 } catch (err) {
   if (err instanceof WaitError) await ws.stop(err.run.id);
 }

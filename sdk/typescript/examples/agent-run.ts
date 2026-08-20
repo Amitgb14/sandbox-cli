@@ -24,12 +24,18 @@ const repo = await studio.project("my-app");
 const ws = await repo.workspace("agent-42"); // a git worktree on that branch
 
 try {
-  const install = await ws.run(["pnpm", "install", "--frozen-lockfile"], {
-    timeoutMs: 10 * 60_000,
-  });
+  // npm rather than pnpm: the base image is node:22-bookworm-slim and carries
+  // npm only, so an example reaching for pnpm would exit 127 on its first line —
+  // in a script whose whole claim is that it was checked.
+  const install = await ws.run(["npm", "ci"], { timeoutMs: 10 * 60_000 });
   if (install.exitCode !== 0) {
     console.error(install.stderr);
-    process.exit(install.exitCode);
+    // `process.exitCode` rather than `process.exit()`: writes to a pipe — CI
+    // logs, `| tee`, a parent capturing output — are asynchronous, and exiting
+    // discards whatever is still buffered. That truncates hardest on the runs
+    // with the most to say.
+    process.exitCode = install.exitCode;
+    throw new Error("install failed");
   }
 
   const fix: Outcome = await ws.agent("claude", "make the failing test pass", {
@@ -46,14 +52,23 @@ try {
   // interrupted is not a verdict on the work.
   if (fix.stopped) {
     console.error(`${fix.agent} outlived its deadline and was stopped`);
-    process.exit(1);
+    process.exitCode = 1;
+    throw new Error("the agent was stopped");
+  }
+  // The verdict itself, which `stopped` is not: an agent that exited non-zero
+  // has finished and failed. Falling through to the tests would blame them for
+  // work the agent never completed.
+  if (fix.exitCode !== 0) {
+    console.error(fix.stderr);
+    process.exitCode = fix.exitCode;
+    throw new Error(`${fix.agent} exited ${fix.exitCode}`);
   }
 
   // node_modules survived the first container because it was written to the
   // worktree, not because anything stayed alive.
-  const tests = await ws.run(["pnpm", "test"], { env: { CI: "true" } });
+  const tests = await ws.run(["npm", "test"], { env: { CI: "true" } });
   console.log(tests.stdout);
-  process.exit(tests.exitCode);
+  process.exitCode = tests.exitCode;
 } catch (err) {
   // The launch succeeded and the wait did not, so the container is still out
   // there holding this branch's name — which docker will not let anything else

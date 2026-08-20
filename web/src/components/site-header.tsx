@@ -53,6 +53,38 @@ function isRoute(href: string) {
   return href.startsWith("/");
 }
 
+/**
+ * A link that is a `next/link` for a route and an anchor for an anchor.
+ *
+ * Extracted rather than inlined at the wordmark, because the first version of
+ * this fix did exactly that and left the two Install links raw — which is the
+ * bug `isRoute` above documents, introduced by the change that was about it:
+ * once a sub-page's Install points at `/#install`, a bare `<a>` is a route the
+ * framework never sees, and `basePath` is applied by Link and by nothing else.
+ */
+function RouteAware({
+  href,
+  className,
+  children,
+}: {
+  href: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  if (isRoute(href)) {
+    return (
+      <Link href={href} className={className}>
+        {children}
+      </Link>
+    );
+  }
+  return (
+    <a href={href} className={className}>
+      {children}
+    </a>
+  );
+}
+
 /** One row of the mobile sheet, a Link for routes and an anchor for anchors. */
 function MobileNavLink({
   href,
@@ -132,15 +164,9 @@ export function SiteHeader({
       )}
     >
       <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-4 px-5 sm:px-6">
-        {isRoute(home) ? (
-          <Link href={home} className="flex items-center gap-2 text-[0.95rem]">
-            <Wordmark />
-          </Link>
-        ) : (
-          <a href={home} className="flex items-center gap-2 text-[0.95rem]">
-            <Wordmark />
-          </a>
-        )}
+        <RouteAware href={home} className="flex items-center gap-2 text-[0.95rem]">
+          <Wordmark />
+        </RouteAware>
         <span className="hidden rounded-full border px-2 py-0.5 font-mono text-[0.65rem] text-muted-foreground sm:inline">
           v{VERSION}
         </span>
@@ -217,9 +243,12 @@ export function SiteHeader({
             <GithubMark className="size-3.5" />
             <span className="hidden sm:inline">GitHub</span>
           </a>
-          <a href={install} className={cn(buttonVariants({ size: "sm" }), "hidden sm:inline-flex")}>
+          <RouteAware
+            href={install}
+            className={cn(buttonVariants({ size: "sm" }), "hidden sm:inline-flex")}
+          >
             Install
-          </a>
+          </RouteAware>
 
           <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger
@@ -271,13 +300,15 @@ export function SiteHeader({
                 >
                   Docs
                 </a>
-                <a
+                {/* The version rides along here and nowhere else, so the label
+                    is built rather than passed: the sheet is where somebody
+                    checks what they are about to install. */}
+                <MobileNavLink
                   href={install}
-                  onClick={() => setOpen(false)}
-                  className={cn(buttonVariants({ size: "sm" }))}
-                >
-                  Install v{VERSION}
-                </a>
+                  label={`Install v${VERSION}`}
+                  onNavigate={() => setOpen(false)}
+                  className={cn(buttonVariants({ size: "sm" }), "justify-center")}
+                />
               </nav>
             </SheetContent>
           </Sheet>
