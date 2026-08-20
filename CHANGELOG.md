@@ -13,6 +13,31 @@ version is tagged.
 
 ### Added
 
+- **A TypeScript client, so a program can drive sandbox-cli the way a terminal
+  does.** `@sandbox-cli/sdk` connects to the daemon `studio.sh` started with no
+  arguments at all — it reads the port and token that script already writes —
+  and gives three nouns that are the daemon's rather than the package's: a
+  Studio is a daemon, a Project is a repository it knows about, a Workspace is a
+  branch's worktree, and a run is a container over that worktree.
+
+  It is a client and nothing more: no docker socket, no shelling out, no argv
+  assembled here, because every gate that makes a sandbox a sandbox is applied
+  where the container is built. There is no mock mode either — a fake run
+  returning success is the worst default a library like this could have.
+
+  Three behaviours are worth knowing before you rely on them. Every outcome
+  carries `routedFrom` and `handoffFrom`, because a script that cannot see a
+  failover attributes one agent's work to another. A bounded wait **stops** the
+  run when it expires and says `stopped: true`, rather than putting a verdict on
+  a container that was interrupted. And `stop` and `remove` are separate calls
+  that never happen implicitly, since a finished run's logs are the evidence for
+  what it did.
+
+  Its types are generated from the Go contract, and CI fails if the checked-in
+  copy differs from what the generator produces — a published client describing
+  an API the daemon does not have is the failure that would be hardest to
+  notice.
+
 - **Studio remembers where you were working, and which machine runs it.** The
   repository picker lifts the ones you have actually worked in to the top and
   reopens on the last one — after the daemon lists its repositories, only if the

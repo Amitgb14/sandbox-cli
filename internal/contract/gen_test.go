@@ -23,9 +23,21 @@ func TestContractMirrorIsInSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generating: %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(repoRoot, "docs", "studio-api", "types.ts"))
+	// Both copies, because the SDK ships its own and a package that drifted from
+	// the documentation would be the same failure one directory over.
+	for _, rel := range [][]string{
+		{"docs", "studio-api", "types.ts"},
+		{"sdk", "typescript", "src", "contract.ts"},
+	} {
+		checkMirror(t, filepath.Join(append([]string{repoRoot}, rel...)...), want)
+	}
+}
+
+func checkMirror(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reading the mirror: %v", err)
+		t.Fatalf("reading %s: %v", path, err)
 	}
 	if string(got) == want {
 		return
@@ -44,15 +56,15 @@ func TestContractMirrorIsInSync(t *testing.T) {
 			w = wantLines[i]
 		}
 		if g != w {
-			t.Fatalf("docs/studio-api/types.ts is out of date with internal/studioapi/types.go\n"+
+			t.Fatalf("%s is out of date with internal/studioapi/types.go\n"+
 				"  first difference at line %d\n"+
 				"    checked in: %q\n"+
 				"    generated:  %q\n"+
 				"  run `make contract` to regenerate it",
-				i+1, g, w)
+				path, i+1, g, w)
 		}
 	}
-	t.Fatal("the mirror and the generated output differ in length but not in any line")
+	t.Fatalf("%s and the generated output differ in length but not in any line", path)
 }
 
 // A field the server omits when empty must be optional in the mirror, and a

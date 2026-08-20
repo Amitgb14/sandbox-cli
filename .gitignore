@@ -27,3 +27,8 @@ docs/proposals/
 # own file, and would then also ignore any source directory that happened to
 # be called dist or build.
 node_modules
+
+# The SDK's build outputs. `dist/` is what npm publishes and `dist-test/` is the
+# test build beside it; both are produced by tsc and neither is source.
+/sdk/typescript/dist/
+/sdk/typescript/dist-test/
