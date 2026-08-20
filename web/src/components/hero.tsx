@@ -76,7 +76,11 @@ export function Hero() {
                 <Package className="size-3.5" /> Needs Docker. Nothing else.
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <Terminal className="size-3.5" /> macOS · Linux · Windows
+                {/* Windows is reachable through WSL2 and the setup guide says how,
+                    but a one-line summary listing it beside macOS and Linux
+                    claims a parity that is not there: sandbox-cli runs inside
+                    the Linux distribution, not on Windows itself. */}
+                <Terminal className="size-3.5" /> macOS · Linux
               </span>
               <span>MIT licensed · written in Go</span>
             </p>
