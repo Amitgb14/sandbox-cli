@@ -1103,11 +1103,19 @@ or any zone name — and that wins.
 Your terminal comes along on the same terms. Docker tells a container it is a
 bare `xterm` — eight colours — so an agent's interface inside the sandbox is
 drawn for a poorer terminal than the one you are looking at: banners disappear,
-diffs lose their colour, and nothing says why. `TERM` and `COLORTERM` are
-forwarded by name whenever the run has a terminal at all, so `tput colors`
-reports the same number inside as out. A piped run gets neither, because there is
-no terminal to describe and escape codes in a captured log are noise; `--env
-TERM=dumb` opts out.
+diffs lose their colour, and nothing says why. `TERM` and `COLORTERM` cross by
+name whenever the run has a terminal at all, so `tput colors` reports the same
+number inside as out.
+
+If your terminal reports a name the sandbox image has never heard of — Ghostty's
+`xterm-ghostty`, kitty's `xterm-kitty`, `alacritty` — you get `xterm-256color`
+instead of that name. The image carries the common terminfo entries and not the
+exotic ones, and a `TERM` nothing can look up is worse than a plain one: `tput`
+fails and `less` stops to tell you the terminal is not fully functional. The
+colour survives the translation, which is the part you were after.
+
+A piped run gets neither, because there is no terminal to describe and escape
+codes in a captured log are noise; `--env TERM=dumb` opts out.
 
 ### Seeing a web app the agent is running
 The sandbox publishes no ports, so a dev server started inside it is invisible

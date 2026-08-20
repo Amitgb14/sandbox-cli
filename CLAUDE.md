@@ -51,13 +51,22 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   `terminal.go` does the same for the **terminal**: `docker run -t` says `TERM=xterm` and
   nothing else, so an agent's TUI inside the sandbox draws for eight colours while the same
   agent on the host has 256 and truecolor — goose's banner is the visible case, and every
-  colourised diff the quiet one. `TERM` and `COLORTERM` are forwarded **by name**, **only when
-  a pty exists** (without one there is no terminal to describe, and a `TERM` in a pipe invites
-  escape codes into a log read as text), and they yield both to `--env` and to forwarding by
-  name. A **console** run is the exception that proves the rule: its container is created by a
-  daemon with no terminal of its own, and what attaches later is xterm.js, so it is told
-  `xterm-256color` — the terminal that will be there rather than the one that happens to be
-  here. Neither name is privileged: both are read by the agent long after the drop.
+  colourised diff the quiet one. `TERM` and `COLORTERM` cross **by name**, **only when a pty
+  exists** (without one there is no terminal to describe, and a `TERM` in a pipe invites escape
+  codes into a log read as text), and they yield both to `--env` and to forwarding by name.
+  The half that is easy to get wrong is that **a name is only useful if the container can
+  resolve it**: the image ships `ncurses-base`, which knows `xterm`, `screen`, `tmux` and
+  friends and not `xterm-ghostty` or `alacritty`. Forwarded verbatim, those leave `tput`
+  answering "unknown terminal" and `less` — git's pager — printing "not fully functional" and
+  **waiting for a keystroke**, which is worse than the eight colours this fixes. So a name the
+  image knows passes through, and anything else becomes `xterm-256color` when the host can
+  prove it has the colour (`256color` in the name, or a `COLORTERM`), else nothing at all —
+  leaving docker's own `xterm`, which is where this started. `knownTerminfo` is that list, kept
+  small on purpose: a missing name costs a downgrade, a wrongly-assumed one costs a hung pager.
+  A **console** run ignores the host entirely and is told `xterm-256color` + `truecolor`, because
+  what attaches is xterm.js — and the daemon inherits the shell that started it, so "the host
+  has no terminal" is exactly the assumption that does not hold. Neither name is privileged:
+  both are read by the agent long after the drop.
 - **`internal/runtime`** — `BuildArgs(RunSpec) []string` is a **pure, deterministic function** that
   produces the `docker` argv. `engine.go` holds the **podman dialect**: the engines differ in only
   three places — how they answer questions about the host, how they isolate containers from each

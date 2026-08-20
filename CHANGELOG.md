@@ -22,6 +22,13 @@ version is tagged.
   anything you set yourself. A piped run is unchanged, because a `TERM` with no
   terminal behind it only puts escape codes into a log somebody reads as text.
 
+  If your terminal calls itself something the image has never heard of —
+  Ghostty, kitty, alacritty — you get `xterm-256color` rather than that name.
+  The image carries the common terminfo entries and not the exotic ones, and a
+  name nothing can look up is worse than a plain one: `tput` fails, and `less`
+  stops to say the terminal is not fully functional and waits for a keystroke.
+  The colour survives the translation, which is the part you wanted.
+
 ### Added
 
 - **A TypeScript client, so a program can drive sandbox-cli the way a terminal

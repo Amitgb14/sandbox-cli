@@ -1,43 +1,67 @@
 package sandbox
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 // What a container knows about the terminal it is drawing on, which by default
 // is almost nothing.
 //
 // `docker run -t` sets TERM=xterm and stops there, so an agent's TUI inside the
-// sandbox is drawing for an eight-colour terminal while the same agent on the
-// host has xterm-256color and COLORTERM=truecolor. Programs that ask before they
-// draw then take their plain path. goose's start-up banner is the visible case —
-// present in a terminal, absent through sandbox-cli, with nothing in the output
-// to say why — and the quieter cost is every colourised diff, progress bar and
-// highlight looking worse inside the sandbox than outside it. Measured: `tput
-// colors` reports 8 in the container and 256 on the host that started it.
+// sandbox draws for an eight-colour terminal while the same agent on the host
+// has 256 and truecolor. goose's start-up banner is the visible case — present
+// in a terminal, absent through sandbox-cli — and every colourised diff and
+// progress bar is the quiet one. Measured: `tput colors` reports 8 inside and
+// 256 on the host that started the run.
 //
-// Forwarded as **names**, which is the bargain timezone.go already makes for TZ:
-// a name is a short string the host publishes to every program it starts, not a
-// path and not a capability. The container's own terminfo interprets it, and a
-// name it does not recognise degrades to something drawable rather than to
-// nothing.
+// Forwarded as **names**, the bargain timezone.go makes for TZ: a name is a
+// short string the host publishes to everything it starts, not a path and not a
+// capability.
 //
-// Neither name is privileged. Both are read long after the privilege drop by the
-// agent itself, so they are settings rather than instructions and do not belong
-// on config.IsReservedEnv — unlike SANDBOX_UMASK, which is reserved for reach
-// even though it too is read after the drop.
+// The catch, and the reason this is not simply `-e TERM=$TERM`: a name is only
+// useful if the container can resolve it. The image ships ncurses-base, which
+// carries xterm, screen, tmux, rxvt, vt100 and friends — and *not* the names
+// modern terminals report for themselves. Forwarding `xterm-ghostty` verbatim
+// leaves `tput` answering "unknown terminal", and `less` — git's default pager —
+// printing "WARNING: terminal is not fully functional / Press RETURN" and then
+// **waiting for a keystroke**. That is worse than the eight colours this exists
+// to fix, so an unresolvable name is translated rather than passed on.
 //
 // hostTerminal is a var for the reason hostTimezone is: BuildSpec must produce
 // the same spec on every machine, and this is one of the two inputs that
 // genuinely differ per machine.
 var hostTerminal = resolveHostTerminal
 
-// consoleTerm describes the terminal that will attach to a console run, rather
-// than the one that started it.
+// consoleTerm describes the terminal that will attach to a console run rather
+// than the one that started it: a Studio console container is created by a
+// daemon, and what attaches later is xterm.js, which emulates a 256-colour
+// xterm and speaks 24-bit colour.
+const (
+	consoleTerm      = "xterm-256color"
+	consoleColorterm = "truecolor"
+)
+
+// knownTerminfo is what the base image can actually resolve — `ls /lib/terminfo`
+// on it, which is ncurses-base and nothing more.
 //
-// A Studio console container is created by a daemon with no terminal of its own,
-// so there is nothing on the host to copy — and what eventually attaches is
-// xterm.js in a browser, which emulates a 256-colour xterm. Naming what will be
-// there beats forwarding what happens to be here.
-const consoleTerm = "xterm-256color"
+// A list rather than a probe because BuildSpec is pure: it renders an argv and
+// does not start containers to ask them questions. It is deliberately the *small*
+// set: a name that is missing costs a downgrade to xterm-256color, while a name
+// wrongly assumed present costs a pager that hangs.
+//
+// A user-supplied `image:` may carry less than this, but that was equally true of
+// the `xterm` docker set before any of this — so the floor is unchanged.
+var knownTerminfo = map[string]bool{
+	"ansi": true, "dumb": true, "linux": true, "pcansi": true, "sun": true,
+	"vt100": true, "vt102": true, "vt220": true, "vt52": true,
+	"rxvt": true, "rxvt-basic": true, "rxvt-unicode": true, "rxvt-unicode-256color": true,
+	"screen": true, "screen-256color": true, "screen-bce": true, "screen.xterm-256color": true,
+	"tmux": true, "tmux-256color": true,
+	"xterm": true, "xterm-256color": true, "xterm-color": true, "xterm-debian": true,
+	"xterm-mono": true, "xterm-vt220": true, "xterm-xfree86": true,
+	"Eterm": true, "Eterm-color": true, "cygwin": true, "hurd": true,
+}
 
 // resolveHostTerminal reports the names to forward, empty when the host does not
 // say. Empty is an answer: a wrong TERM is worse than a plain one, because it
@@ -49,7 +73,7 @@ func resolveHostTerminal() (term, colorterm string) {
 // sanitizeTermName keeps a value that looks like a terminal name and drops
 // anything else. These are read from the host environment and rendered into a
 // `docker run -e` argument, so they are checked at the point of use — the rule
-// validZoneName keeps for a zone name read off the filesystem.
+// validZoneName keeps for a zone read off the filesystem.
 func sanitizeTermName(s string) string {
 	if s == "" || len(s) > 64 {
 		return ""
@@ -65,6 +89,27 @@ func sanitizeTermName(s string) string {
 	return s
 }
 
+// containerTerm translates the host's terminal into one the container can look
+// up, preserving what the translation is for: colour.
+//
+// A name the image knows is passed through — a tmux or screen user keeps the
+// entry describing their actual terminal. Anything else becomes xterm-256color
+// when the host looks 256-capable, which is the whole point of the exercise, and
+// otherwise "" — leaving docker's own `xterm`, which is exactly where this
+// started and therefore not a regression for anybody.
+func containerTerm(term, colorterm string) string {
+	if knownTerminfo[term] {
+		return term
+	}
+	if term == "" {
+		return ""
+	}
+	if strings.Contains(term, "256color") || colorterm != "" {
+		return consoleTerm
+	}
+	return ""
+}
+
 // applyTerminal fills in TERM and COLORTERM for a run that has a pty, leaving
 // anything the user said alone.
 //
@@ -72,17 +117,30 @@ func sanitizeTermName(s string) string {
 // pipe invites escape codes into a log somebody will read as text — which is why
 // docker itself only sets it with -t.
 //
-// `seen` carries the names already being forwarded by EnvNames. Those are read
-// from the host environment at exec time, so a run forwarding TERM by name has
-// answered this question and must not be answered again here.
+// `seen` carries names already forwarded by EnvNames, resolved on the host at
+// exec time: a run forwarding TERM by name has answered this question, and
+// answering it again would render the name twice and let the two disagree.
 func applyTerminal(env map[string]string, seen map[string]bool, tty, console bool) {
-	if !tty && !console {
+	// One condition, not two. Console implies a pty today — BuildSpec sets
+	// `tty = opts.Console` for a detached run — and a second source of truth for
+	// that is how a later caller ends up with TERM on a container started without
+	// -t, which is the outcome this whole file is careful to avoid.
+	if !tty {
 		return
 	}
+
 	term, colorterm := hostTerminal()
-	if console && term == "" {
-		term = consoleTerm
+	if console {
+		// Unconditionally, not only when the daemon has no terminal of its own.
+		// studio.sh starts the daemon with `nohup … &` from an interactive shell,
+		// so it inherits that shell's TERM — and a console container told
+		// `xterm-ghostty` because a developer happened to launch Studio from
+		// Ghostty is describing a terminal that will never be attached to it.
+		term, colorterm = consoleTerm, consoleColorterm
+	} else {
+		term = containerTerm(term, colorterm)
 	}
+
 	set := func(name, value string) {
 		if value == "" {
 			return

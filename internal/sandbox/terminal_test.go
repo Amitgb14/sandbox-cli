@@ -101,11 +101,15 @@ func TestBuildSpecTerminalYieldsToForwardingByName(t *testing.T) {
 	}
 }
 
-// A console container is created by a daemon that has no terminal of its own,
-// and what attaches later is xterm.js — which emulates a 256-colour xterm. The
-// terminal that will be there beats the one that happens to be here.
+// A console container is told about the terminal that will attach to it, not the
+// one that started it.
+//
+// Pinned with a host terminal *present*, because that is the case that occurs:
+// studio.sh starts the daemon with `nohup … &` from an interactive shell, so it
+// inherits that shell's TERM. The earlier version of this test pinned the host to
+// nothing and so only exercised the branch that never happens in production.
 func TestBuildSpecNamesTheTerminalAConsoleWillGet(t *testing.T) {
-	pinTerminal(t, "", "")
+	pinTerminal(t, "xterm-ghostty", "truecolor")
 	spec, err := BuildSpec(baseCfg(), Options{
 		Project: t.TempDir(),
 		Command: []string{"sh"},
@@ -117,6 +121,11 @@ func TestBuildSpecNamesTheTerminalAConsoleWillGet(t *testing.T) {
 	}
 	if spec.Env["TERM"] != consoleTerm {
 		t.Errorf("Env[TERM] = %q on a console run, want %q", spec.Env["TERM"], consoleTerm)
+	}
+	// Both names or neither: xterm.js speaks 24-bit colour, and a console told
+	// about its 256-colour terminfo and nothing about truecolor is half an answer.
+	if spec.Env["COLORTERM"] != consoleColorterm {
+		t.Errorf("Env[COLORTERM] = %q on a console run, want %q", spec.Env["COLORTERM"], consoleColorterm)
 	}
 }
 
@@ -156,5 +165,74 @@ func TestTerminalNamesAreCheckedBeforeTheyReachTheArgv(t *testing.T) {
 		if got := sanitizeTermName(good); got != good {
 			t.Errorf("sanitizeTermName(%q) = %q, want it kept", good, got)
 		}
+	}
+}
+
+// The finding that made this whole feature a regression rather than an
+// improvement, for anybody on a modern terminal.
+//
+// The image ships ncurses-base, which knows xterm and screen and tmux and not
+// `xterm-ghostty`, `xterm-kitty` or `alacritty`. Forwarded verbatim, `tput`
+// answers "unknown terminal" and `less` — git's default pager — prints
+// "WARNING: terminal is not fully functional / Press RETURN" and waits for a
+// keystroke. Measured against the real image: a `git log` inside the sandbox
+// blocks where before it paged.
+//
+// So an unresolvable name is translated to one that is present and keeps the
+// colour, which is what the forwarding was for.
+func TestBuildSpecTranslatesATerminalTheImageCannotResolve(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		term      string
+		colorterm string
+		want      string
+	}{
+		{"ghostty", "xterm-ghostty", "truecolor", "xterm-256color"},
+		{"kitty", "xterm-kitty", "truecolor", "xterm-256color"},
+		{"alacritty", "alacritty", "", ""},
+		{"alacritty with colorterm", "alacritty", "truecolor", "xterm-256color"},
+		{"foot", "foot-extra", "24bit", "xterm-256color"},
+		// Names the image really has are passed through: a tmux user keeps the
+		// entry that describes their actual terminal.
+		{"tmux", "tmux-256color", "truecolor", "tmux-256color"},
+		{"screen", "screen-256color", "", "screen-256color"},
+		{"plain xterm", "xterm", "", "xterm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pinTerminal(t, tc.term, tc.colorterm)
+			spec, err := BuildSpec(baseCfg(), Options{
+				Project: t.TempDir(),
+				Command: []string{"sh"},
+				TTY:     yes(true),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := spec.Env["TERM"]
+			if got != tc.want {
+				t.Errorf("TERM=%q on the host became %q in the container, want %q", tc.term, got, tc.want)
+			}
+			if got != "" && !knownTerminfo[got] {
+				t.Errorf("forwarded %q, which the image cannot look up — tput fails and less blocks", got)
+			}
+		})
+	}
+}
+
+// An unresolvable name with nothing to say about colour leaves docker's own
+// `xterm` in place. That is where this started, so it cannot be a regression for
+// anybody — the improvement is for terminals that can prove they deserve it.
+func TestBuildSpecLeavesDockersDefaultWhenItCannotDoBetter(t *testing.T) {
+	pinTerminal(t, "some-unknown-terminal", "")
+	spec, err := BuildSpec(baseCfg(), Options{
+		Project: t.TempDir(),
+		Command: []string{"sh"},
+		TTY:     yes(true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := spec.Env["TERM"]; ok {
+		t.Errorf("Env[TERM] = %q, want it absent so docker's own xterm stands", v)
 	}
 }
