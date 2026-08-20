@@ -11,7 +11,25 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **The TypeScript SDK can register a repository** — `studio.addProject("/abs/path")`,
+  the one call that hands over a path, mirroring the one endpoint that accepts
+  one. Until now the error for an unregistered repository told you to
+  `POST /v1/projects` and the SDK gave you no way to do it. Adding a repository
+  that is already registered returns the existing row, so it is safe on every
+  start. The path is on the *daemon's* machine, which is why nothing defaults to
+  `process.cwd()`.
+
 ### Fixed
+
+- **`studio.project(".")` explains itself instead of reporting a missing repo.**
+  A script talking to the daemon is an HTTP client, so its own directory has
+  nothing to do with the repository the agent works in — but "no repository . is
+  registered" reads as though something was lost. A path-shaped argument now says
+  a repository is named rather than located, and every failure lists the
+  repositories that *are* registered, so a typo and an unregistered directory
+  stop looking identical.
 
 - **A daemon that refuses to start says so, instead of looking slow.**
   `studio.sh` reported "the API did not answer within 20s" for a daemon that had

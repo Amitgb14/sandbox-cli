@@ -181,9 +181,44 @@ export class Studio {
         `${named.length} repositories are called ${idOrName}; use an id: ${named.map((p) => p.id).join(", ")}`,
       );
     }
+    // Name what *is* registered. This throws for two different mistakes — a
+    // typo, and asking for a repository nobody added — and the list separates
+    // them without a second call. A path-shaped argument gets its own sentence
+    // because it is not a typo at all but a wrong model of where this script
+    // runs: the daemon may be on another machine, so a directory here means
+    // nothing to it. `addProject` is the one place a path crosses, which is
+    // exactly the shape of the daemon's own rule.
+    const known = all.map((p) => p.name).join(", ") || "none";
+    const pathish = idOrName === "." || idOrName === ".." || /^[./~]|^[A-Za-z]:[\\/]/.test(idOrName);
     throw new Error(
-      `no repository ${idOrName} is registered with the daemon at ${this.t.url}; add it in Studio, or POST /v1/projects`,
+      pathish
+        ? `${idOrName} is a path, and repositories are named rather than located: this script's own directory ` +
+          `is not what the agent works on, and the daemon at ${this.t.url} may not even be on this machine. ` +
+          `Registered: ${known}. To add a directory on the daemon's machine, call studio.addProject("/abs/path").`
+        : `no repository ${idOrName} is registered with the daemon at ${this.t.url}. Registered: ${known}. ` +
+          `Add one with studio.addProject("/abs/path"), or in Studio.`,
     );
+  }
+
+  /**
+   * Register a directory on the **daemon's** machine as a repository.
+   *
+   * The one call in this SDK that hands over a path, mirroring the one endpoint
+   * that accepts one: everything else names a repository by id, so the checks a
+   * directory has to pass — absolute, on disk, a git repository, not your home
+   * or an ancestor of it — are applied here, once, by the daemon.
+   *
+   * The path is resolved on that machine, not this one. Against a remote daemon
+   * `process.cwd()` is a local answer to a question about somewhere else, which
+   * is why nothing here defaults to it.
+   *
+   * Adding a repository that is already registered is a no-op that returns the
+   * existing row, so this is safe to call on every start.
+   */
+  async addProject(path: string): Promise<Project> {
+    if (!path.trim()) throw new Error("addProject needs a path on the daemon's machine");
+    const rec = await this.t.request<ProjectRecord>("POST", "/v1/projects", { path });
+    return new Project(this.t, rec);
   }
 
   /** Clone a repository onto the daemon's machine and register it. */

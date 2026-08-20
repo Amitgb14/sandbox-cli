@@ -87,7 +87,7 @@ export const SDK_STEPS: SdkStep[] = [
       "const ws = await repo.workspace(\"agent-42\");",
     ].join("\n"),
     body:
-      "A Project is a repository the daemon has been told about — named by id, or by name when only one repository has it, because two clones share a name and never an id. A Workspace is that branch's git worktree, created if it is not there, and it is the isolation unit: two agents in one tree is a data race with a filesystem in the middle.",
+      "A Project is a repository the daemon has been told about — named by id, or by name when only one repository has it, because two clones share a name and never an id. Named, never located: this script is an HTTP client and its own directory means nothing, so studio.project(\".\") asks for a repository called \".\" and there is not one. Run the script from anywhere, including a machine that is not the daemon's. A Workspace is that branch's git worktree, created if it is not there, and it is the isolation unit: two agents in one tree is a data race with a filesystem in the middle.",
   },
   {
     title: "Run something, and get back what happened",
@@ -200,6 +200,11 @@ export const SDK_SNIPPETS: { title: string; code: string; note: string }[] = [
     note: "Names come from the daemon's registry — what somebody added in Studio, plus the repository it was started in.",
   },
   {
+    title: "Work on a repository the daemon has never heard of",
+    code: 'const repo = await studio.addProject("/home/you/code/my-app");\nconst ws = await repo.workspace("agent-1");\n\nconsole.log(await ws.run(["git", "log", "--oneline", "-1"]));',
+    note: "The path is on the daemon's machine, not on this one — which is why nothing defaults to process.cwd(). Adding a repository that is already registered returns the same row, so this is safe to run every time.",
+  },
+  {
     title: "Run one command and read its output",
     code: 'const repo = await studio.project("your-repo");\nconst ws = await repo.workspace("scratch");\n\nconst out = await ws.run(["sh", "-c", "ls -la; git status --short"]);\nconsole.log(out.exitCode, out.stdout, out.stderr);',
     note: "A workspace is a branch's worktree, created if it is not there. The container mounts that tree at /workspace and nothing else of yours.",
@@ -232,6 +237,11 @@ export const SDK_RULES = [
     title: "It is a client, and only a client",
     body:
       "No docker socket, no shelling out to sandbox-cli, no argv assembled here. Every gate that makes a sandbox a sandbox — the workspace refusals, the fake HOME, default-deny environment, the egress allowlist — is applied where the container is built, on the machine running the daemon. When this package wants a capability the daemon does not expose, the daemon grows an endpoint and the gate is written once, in Go, with a test.",
+  },
+  {
+    title: "The script's directory is not the repository",
+    body:
+      "Two different machines' worth of confusion collapse into one line here. The script runs wherever you started it; the agent runs on the daemon's machine, in a worktree of a repository that machine has been told about. So a repository is named, never located — and studio.addProject(\"/abs/path\") is the one call that hands over a path, mirroring the one endpoint that accepts one, where the checks a directory must pass are applied. It is a no-op for a repository already registered, so it is safe on every start.",
   },
   {
     title: "There is no mock mode",

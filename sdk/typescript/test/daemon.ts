@@ -117,6 +117,15 @@ export class FakeDaemon {
         ],
       });
     }
+    if (url.pathname === "/v1/projects" && req.method === "POST") {
+      const path = (raw ? (JSON.parse(raw) as { path?: string }).path : "") ?? "";
+      // The daemon refuses a directory it cannot use; the stub refuses the one
+      // shape a caller can produce without asking this machine anything.
+      if (!path.startsWith("/")) {
+        return json(422, { error: `${path} is not an absolute path on this machine` });
+      }
+      return json(201, { id: "repo-4", name: path.split("/").pop(), root: path });
+    }
     if (url.pathname === "/v1/worktrees" && req.method === "POST") {
       return json(201, { branch: "feature", path: "/repo/app-feature", repoId: "repo-1" });
     }

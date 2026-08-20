@@ -437,3 +437,49 @@ test("a live agent's 409 stays an ApiError even with replaceFinished", async () 
     await daemon.stop();
   }
 });
+
+test("addProject registers a directory on the daemon's machine", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    const p = await studio.addProject("/repo/new");
+    assert.equal(p.name, "new");
+    assert.equal(p.root, "/repo/new");
+    // The path crosses in the body, never in the path or a query string: it is
+    // the daemon's job to decide what it will touch, and a POST is where it does.
+    const sent = daemon.requests.find((r) => r.method === "POST" && r.path === "/v1/projects");
+    assert.deepEqual(sent?.body, { path: "/repo/new" });
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("addProject surfaces the daemon's refusal rather than a generic failure", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    await assert.rejects(() => studio.addProject("relative/path"), /not an absolute path/);
+    await assert.rejects(() => studio.addProject("  "), /needs a path/);
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("a path-shaped repository name is explained rather than reported missing", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    // The failure this replaces: `.project(".")` from a script's own directory,
+    // which reads as "the daemon lost my repo" when it means "a directory here
+    // is not how the daemon names one".
+    for (const arg of [".", "./sub", "/abs/path", "~/code/app"]) {
+      await assert.rejects(() => studio.project(arg), (e: Error) => {
+        assert.match(e.message, /is a path, and repositories are named/);
+        assert.match(e.message, /Registered: app, twin, twin/);
+        assert.match(e.message, /addProject/);
+        return true;
+      });
+    }
+    // A plain typo still reads as a typo — and now says what to compare against.
+    await assert.rejects(() => studio.project("ap"), /Registered: app, twin, twin/);
+  } finally {
+    await daemon.stop();
+  }
+});
