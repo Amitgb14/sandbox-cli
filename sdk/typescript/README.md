@@ -1,4 +1,4 @@
-# @sandbox-cli/sdk
+# sandbox-cli-sdk
 
 A typed client for the [sandbox-cli](https://github.com/Amitgb14/sandbox-cli)
 control plane: run agents and commands in isolated containers, from a program
@@ -18,11 +18,17 @@ and registers *that* repository. It also writes the port and a token into
 Docker is the one thing it will not install for you. Then, in your own project:
 
 ```sh
-npm install @sandbox-cli/sdk
+npm install sandbox-cli-sdk
 ```
 
+Your file needs to be an ES module, because the examples use top-level `await`:
+either `"type": "module"` in your package.json, or name the file `.mts` and run
+it with `npx tsx agent.mts`. Without one of those, tsx compiles it as CommonJS
+and stops at *"Top-level await is currently not supported"*, which is a fact
+about your project rather than about this package.
+
 ```ts
-import { Studio } from "@sandbox-cli/sdk";
+import { Studio } from "sandbox-cli-sdk";
 
 const studio = await Studio.connect();            // finds the local daemon
 const repo = await studio.project("my-app");
@@ -76,6 +82,34 @@ const studio = await Studio.connect({ url: "https://api.example.com", token });
 
 Connecting makes one round trip to `/v1/health`, so a wrong URL or a missing
 token is reported there rather than as a failure of whatever you ran first.
+
+### A daemon on another machine
+
+The containers run where the daemon runs, so a Linux box is often the point.
+Start it there, bound to an address you can reach:
+
+```sh
+cd ~/code/your-repo
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh -o studio.sh
+sh studio.sh up --api-only --bind 10.0.0.5
+```
+
+It prints a **Daemon URL** and a **Token** — the token belongs to that machine,
+not to you. Open the port (`firewall-cmd --add-port=8787/tcp`, or `ufw allow`),
+check it with `curl http://10.0.0.5:8787/v1/health`, which needs no token, then:
+
+```ts
+const studio = await Studio.connect({
+  url: "http://10.0.0.5:8787",
+  token: process.env.SANDBOX_STUDIO_TOKEN,
+});
+```
+
+No tunnel, and none of the CORS or Host flags the browser needs: those checks
+fire on an `Origin` header, which browsers send and scripts do not, so a script
+is governed by the token alone. There is no TLS yet — on a bound address the
+token crosses in cleartext, so this is for a network you already trust, or put a
+reverse proxy in front and dial its name (the daemon needs `-allow-host` for it).
 
 ## Running things
 
@@ -160,6 +194,36 @@ the wire and has nowhere to land in a log.
 agent, run the tests, and check what the outcome claims. It imports by package
 name and is compiled by `npm test`, so it is checked in the shape you would type
 rather than in one only this repository can use.
+
+## Running the same script twice
+
+Docker refuses a duplicate container name, and that refusal is what enforces one
+agent per branch — so a run that has *finished* keeps its branch's name until
+somebody reaps it, and a second launch is refused:
+
+```
+ApiError: a finished run (8998cd4c631f, exit 0) still holds "docs/readme-changelog"'s
+container name; read it with GET /v1/runs/8998cd4c631f/logs, then DELETE … to run again
+```
+
+That default is deliberate: the logs are the evidence for what the run did, and
+removing them for you would discard that on every second run. When the evidence
+is spent, say so:
+
+```ts
+await ws.run(["npm", "test"], { replaceFinished: true });
+```
+
+or reap it yourself, which also tells you what was removed — **before** the run,
+not after, since the launch is what fails:
+
+```ts
+await ws.clearFinished();                // null when nothing was holding the name
+const out = await ws.run(["npm", "test"]);
+```
+
+Both refuse a run that is still going. Stopping somebody else's agent is not a
+side effect a convenience flag may have.
 
 ## Types
 

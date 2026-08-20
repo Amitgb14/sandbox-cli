@@ -353,6 +353,50 @@ container_exists() { docker container inspect "$1" >/dev/null 2>&1; }
 
 # Whole seconds: a fractional `sleep` is a GNU/BSD extension, and this script
 # should not be the reason it fails on a smaller shell.
+# What this run wrote, and nothing earlier.
+api_log_this_run() {
+  if [ "$API_IN_DOCKER" = 1 ]; then
+    docker logs --tail 20 "$API_NAME" 2>&1
+    return
+  fi
+  offset=${API_LOG_OFFSET:-0}
+  # This run's bytes (+1 because tail counts from the byte after the offset),
+  # then the *last* twenty of them. A refusal writes two lines and exits, so
+  # either end shows it; a daemon that has been alive and logging for twenty
+  # seconds has its reason at the end, under a startup banner that is not it.
+  tail -c "+$((offset + 1))" "$LOGFILE" 2>/dev/null | tail -n 20
+}
+
+# wait_for_api URL — like wait_for, but gives up the moment the daemon is gone.
+#
+# A daemon that refuses its config exits in milliseconds, and waiting twenty
+# seconds for a process that is not there says "did not answer" when the truth is
+# "would not start". They send a reader to different places: one to the network,
+# the other to the file it was told about.
+# Whether the daemon is still there, whichever way it was started. The container
+# path writes no pidfile — do_down even deletes it — so a `kill -0` on an empty
+# string skips the check entirely and a containerised daemon that refused its
+# config still waits out the full twenty seconds and reports a timeout, which is
+# the one sentence this was written to remove.
+api_alive() { # api_alive PID
+  if [ "$API_IN_DOCKER" = 1 ]; then
+    [ "$(docker container inspect -f '{{.State.Running}}' "$API_NAME" 2>/dev/null)" = "true" ]
+    return
+  fi
+  [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+}
+
+wait_for_api() { # wait_for_api URL PID
+  i=0
+  while [ "$i" -lt 20 ]; do
+    if http_ok "$1"; then return 0; fi
+    if ! api_alive "${2:-}"; then return 2; fi
+    i=$((i + 1))
+    sleep 1
+  done
+  return 1
+}
+
 wait_for() { # wait_for URL
   i=0
   while [ "$i" -lt 20 ]; do
@@ -605,6 +649,16 @@ start_api_host() {
     origin_args="$origin_args -cors-origin $o"
   done
 
+  # Where this run's lines begin. The log is appended to across restarts, so a
+  # plain `tail` on failure shows six previous startups and buries the one
+  # sentence that matters — which is exactly how a config refusal read as a
+  # mystery timeout.
+  # Guarded with -f rather than 2>/dev/null: the input redirect is processed
+  # before the redirection of stderr applies, so on a first run the *shell*
+  # prints "No such file or directory" before `|| echo 0` can recover.
+  API_LOG_OFFSET=0
+  [ -f "$LOGFILE" ] && API_LOG_OFFSET=$(wc -c < "$LOGFILE")
+
   # shellcheck disable=SC2086  # allow_args and origin_args are deliberately word-split lists
   nohup "$API_BIN" \
     -addr "${BIND}:${API_PORT}" \
@@ -696,10 +750,16 @@ do_up_api_only() {
   # Probed where it actually listens. A --bind daemon is not on 127.0.0.1, so a
   # hardcoded loopback check reported "did not come up" for a daemon that had
   # come up perfectly — on exactly the flag combination this mode exists for.
-  if wait_for "http://${BIND}:${API_PORT}/v1/health"; then
+  api_pid=$(cat "$PIDFILE" 2>/dev/null || true)
+  api_status=0
+  wait_for_api "http://${BIND}:${API_PORT}/v1/health" "$api_pid" || api_status=$?
+  if [ "$api_status" = 0 ]; then
     info "  api  ${BIND}:${API_PORT}"
   else
-    tail -n 20 "$LOGFILE" 2>/dev/null | sed 's/^/    /' || true
+    if [ "$api_status" = 2 ]; then
+      warn "the daemon exited without answering — it refused to start, rather than being slow"
+    fi
+    api_log_this_run | sed 's/^/    /' || true
     die "the daemon did not come up. The lines above are its own account of why."
   fi
 
@@ -790,17 +850,26 @@ do_up() {
     start_api_host
   fi
 
-  if wait_for "http://127.0.0.1:${API_PORT}/v1/health"; then
-    info "  api  http://127.0.0.1:${API_PORT}"
-  else
-    warn "the API did not answer on ${API_PORT} within 20s"
-    if [ "$API_IN_DOCKER" = 1 ]; then
-      docker logs --tail 20 "$API_NAME" 2>&1 | sed 's/^/    /' || true
-    else
-      tail -n 20 "$LOGFILE" 2>/dev/null | sed 's/^/    /' || true
-    fi
-    die "Studio did not come up. The lines above are the API's own account of why."
-  fi
+  api_pid=$(cat "$PIDFILE" 2>/dev/null || true)
+  # Captured with `|| status=$?` rather than read from `$?` after the call: this
+  # script runs under `set -e`, so a bare command returning non-zero ends it
+  # there and then — silently, with the daemon's status as the script's, which
+  # is precisely the mystery this block exists to remove.
+  api_status=0
+  wait_for_api "http://127.0.0.1:${API_PORT}/v1/health" "$api_pid" || api_status=$?
+  case "$api_status" in
+    0) info "  api  http://127.0.0.1:${API_PORT}" ;;
+    2)
+      warn "the daemon exited without answering — it refused to start, rather than being slow"
+      api_log_this_run | sed 's/^/    /' || true
+      die "Studio did not come up. The lines above are the daemon's own account of why."
+      ;;
+    *)
+      warn "the API did not answer on ${API_PORT} within 20s"
+      api_log_this_run | sed 's/^/    /' || true
+      die "Studio did not come up. The lines above are the daemon's own account of why."
+      ;;
+  esac
 
   start_ui
   if wait_for "http://127.0.0.1:${UI_PORT}"; then

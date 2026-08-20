@@ -1,5 +1,5 @@
 import { Transport } from "./transport.js";
-import { ApiError, WaitError, abortError } from "./errors.js";
+import { ApiError, ConnectionError, WaitError, abortError } from "./errors.js";
 import { discoverToken, discoverUrl } from "./discover.js";
 import type {
   AgentInfo,
@@ -11,6 +11,7 @@ import type {
   Run,
   RunCreateRequest,
   RunsResponse,
+  WorktreesResponse,
   SessionSummary,
   SessionListResponse,
 } from "./contract.js";
@@ -45,6 +46,20 @@ export interface ConnectOptions {
 }
 
 export interface RunOptions {
+  /**
+   * Remove a **finished** run still holding this branch's container name, and
+   * launch anyway.
+   *
+   * Docker refuses a duplicate name, and that refusal is what enforces one agent
+   * per branch — so a run that has exited keeps its name until somebody reaps
+   * it, and running the same script twice is refused with a 409. That is the
+   * right default: a finished run's logs are the evidence for what it did, and
+   * removing them for you would discard that on every second run.
+   *
+   * This is how a caller says the evidence is spent. It refuses a run that is
+   * still going: "finished" is the whole of the claim.
+   */
+  replaceFinished?: boolean;
   env?: Record<string, string>;
   /** Extra egress domains for this run. It can add to the daemon's posture and
    *  never loosen it — the same tighten-only rule a project file gets. */
@@ -106,7 +121,25 @@ export class Studio {
     // reported here rather than as a failure of whatever ran first. /health is
     // the only route that answers without a token, which is what makes it able
     // to say that a token is what is missing.
-    const health = await studio.health();
+    let health: HealthResponse;
+    try {
+      health = await studio.health();
+    } catch (err) {
+      // "fetch failed" is true and useless. Nothing answering on a loopback port
+      // that this package *discovered from a file* almost always means the daemon
+      // is not running — and a caller who never started one has no reason to
+      // connect that to studio.sh.
+      if (err instanceof ConnectionError) {
+        throw new ConnectionError(
+          t.url,
+          "nothing is listening",
+          `no daemon is running there. Start one from the repository you want to work in: ` +
+            `curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh — ` +
+            `or pass { url } if yours is somewhere else.`,
+        );
+      }
+      throw err;
+    }
     if (health.authRequired && !t.token) {
       throw new ApiError(
         401,
@@ -304,6 +337,60 @@ export class Workspace {
     await this.t.request("DELETE", `/v1/runs/${encodeURIComponent(id)}`);
   }
 
+  /**
+   * Free this branch's container name by removing the finished run that holds
+   * it, and report what was removed.
+   *
+   * Null when nothing was holding it. Refuses when the holder is still running —
+   * stopping somebody else's agent is not a side effect a helper should have.
+   */
+  async clearFinished(): Promise<Run | null> {
+    const branch = await this.branchName();
+    const res = await this.t.request<RunsResponse>(
+      "GET",
+      `/v1/runs?all=1&repo=${encodeURIComponent(this.project.id)}`,
+    );
+    const holder = (res.runs ?? []).find((r) => r.branch === branch);
+    if (!holder) return null;
+    // Finished is the *positive* claim, and it is made about two states only.
+    // Listing the live ones instead fails open on the states nobody thought
+    // about: `paused` holds the name and holds unwritten work, and `unknown`
+    // means the engine would not say — both of which would have been reaped.
+    if (holder.state !== "exited" && holder.state !== "dead") {
+      throw new Error(
+        `run ${holder.id} on ${branch} is ${holder.state}, not finished; stop it first — ` +
+          `two agents in one checkout overwrite each other's work`,
+      );
+    }
+    await this.remove(holder.id);
+    return holder;
+  }
+
+  /**
+   * The branch this workspace's runs are named after.
+   *
+   * A worktree knows its own; the repository's root does not, so it is asked —
+   * the container name is derived from whatever is checked out there, and
+   * guessing "main" would free the wrong name on a repository that is on
+   * anything else.
+   */
+  private async branchName(): Promise<string> {
+    if (this.branch) return this.branch;
+    // The generated shape, not a hand-written one: a rename of `primary` in
+    // types.go would then be a compile error here rather than a runtime "cannot
+    // tell which branch" — and this is the one place the claim that the types
+    // are generated has to hold for itself.
+    const res = await this.t.request<WorktreesResponse>(
+      "GET",
+      `/v1/worktrees?repo=${encodeURIComponent(this.project.id)}`,
+    );
+    const primary = (res.worktrees ?? []).find((w) => w.primary);
+    if (!primary) {
+      throw new Error(`cannot tell which branch ${this.project.name} has checked out`);
+    }
+    return primary.branch;
+  }
+
   /** The output of a finished run, as a document. */
   async logs(id: string): Promise<LogLine[]> {
     return this.t.request<LogLine[]>("GET", `/v1/runs/${encodeURIComponent(id)}/logs`);
@@ -388,7 +475,41 @@ export class Workspace {
   }
 
   private async launchAndWait(body: RunCreateRequest, opts: RunOptions): Promise<Outcome> {
-    const started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
+    let started: Run;
+    try {
+      started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.status !== 409) throw err;
+      if (!opts.replaceFinished) {
+        // The daemon's own remedy is "GET /v1/runs/<id>/logs, then DELETE
+        // /v1/runs/<id>" — correct, and addressed to a client holding a URL.
+        // Somebody holding *this* client has two better moves, and being told
+        // to reach for curl from inside a typed API is how a library teaches
+        // people to work around it. The daemon's sentence is kept whole; this
+        // adds the sentence it cannot know to write.
+        throw new ApiError(
+          err.status,
+          err.endpoint,
+          `${err.message}\n  From here: pass { replaceFinished: true } to run this anyway, ` +
+            `or call workspace.clearFinished() first — both refuse a run that is still going.`,
+        );
+      }
+      // Retried once, and only once: a second conflict means something else took
+      // the name, and looping would be a race with whatever that is.
+      //
+      // The daemon answers 409 for two different things — a finished run holding
+      // the name, and *an agent still running on this branch*. Only the first is
+      // clearable, and when clearFinished refuses the second the caller must
+      // still get the ApiError it would have got without the flag: a `catch (e)
+      // { if (e instanceof ApiError && e.status === 409) }` that stops matching
+      // the moment you pass an option is worse than no option.
+      try {
+        await this.clearFinished();
+      } catch (clearErr) {
+        throw new ApiError(err.status, err.endpoint, `${err.message}\n  ${String(clearErr)}`);
+      }
+      started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
+    }
     try {
       return await this.wait(started.id, opts);
     } catch (cause) {

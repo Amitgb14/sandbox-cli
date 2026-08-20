@@ -29,18 +29,41 @@ export interface SdkStep {
  * fetched rather than run from the project directory — `sh studio.sh up` in
  * ~/code/my-app assumes a file nothing put there.
  */
-export const SDK_PREREQS: { label: string; where: string; code: string; note: string }[] = [
+export const SDK_PREREQS: {
+  label: string;
+  where: string;
+  /** What the block is, which decides whether a `$` is drawn in front of it. */
+  lang: "sh" | "ts";
+  code: string;
+  note: string;
+}[] = [
   {
     label: "From the repository you want to work in, start the control plane",
     where: "Terminal — the machine that will run the containers",
+    lang: "sh",
     code: "cd ~/code/my-app\ncurl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh | sh",
     note: "It installs sandbox-cli and the daemon if they are missing, starts both halves, and registers the repository it was run in — which is what gives studio.project(\"my-app\") something to find. It also writes the API port and a generated token into ~/.config/sandbox/studio, which is what lets Studio.connect() take no arguments. Docker is the one thing it will not install for you: the daemon holds its socket, and every run is a container.",
   },
   {
     label: "Then add the client to your own project",
     where: "Terminal — wherever your code lives",
-    code: "npm install @sandbox-cli/sdk",
-    note: "Node 20 or newer, and this half needs nothing else — no docker socket, no binaries, nothing to configure. Save studio.sh beside your repository if you want `sh studio.sh status` and `sh studio.sh down` later; the one-liner above starts it, and the file is how you manage it.",
+    lang: "sh",
+    code: "npm install sandbox-cli-sdk",
+    note: "Node 20 or newer, and this half needs nothing else: no docker socket, no binaries, nothing to configure. The package is the client only \u2014 the daemon from step one is what holds the socket and starts the containers.",
+  },
+  {
+    label: "Write your script as an ES module",
+    where: "agent.mts",
+    lang: "ts",
+    code: "import { Studio } from \"sandbox-cli-sdk\";\n\nconst studio = await Studio.connect();\nfor (const p of await studio.projects()) console.log(p.id, p.name);",
+    note: "Everything here uses top-level await, which needs an ES module: either \"type\": \"module\" in your package.json, or the .mts extension as above. Without one, tsx compiles the file as CommonJS and stops at \"Top-level await is currently not supported\" — a fact about your project rather than about the client.",
+  },
+  {
+    label: "Run it",
+    where: "Terminal — wherever your code lives",
+    lang: "sh",
+    code: "npx tsx agent.mts",
+    note: "tsx runs TypeScript directly, so there is no build step for a script. Node 20 or newer runs the same file as JavaScript if you would rather: rename it .mjs and drop the types. What you should see is the daemon answering — the repositories it knows about, or a typed error naming which half is wrong.",
   },
 ];
 
@@ -48,7 +71,7 @@ export const SDK_STEPS: SdkStep[] = [
   {
     title: "Connect to the daemon you already have",
     code: [
-      "import { Studio } from \"@sandbox-cli/sdk\";",
+      "import { Studio } from \"sandbox-cli-sdk\";",
       "",
       "const studio = await Studio.connect();   // no arguments",
     ].join("\n"),
@@ -116,7 +139,92 @@ export const SDK_STEPS: SdkStep[] = [
  * rather than by a path inside the repository. An example checked in a shape
  * nobody types is not checked.
  */
-export const SDK_EXAMPLE = "import { Studio, WaitError, type Outcome } from \"@sandbox-cli/sdk\";\n\nconst studio = await Studio.connect(); // port and token from ~/.config/sandbox/studio\nconst repo = await studio.project(\"my-app\");\nconst ws = await repo.workspace(\"agent-42\"); // a git worktree on that branch\n\ntry {\n  // npm rather than pnpm: the base image is node:22-bookworm-slim and carries\n  // npm only, so an example reaching for pnpm would exit 127 on its first line \u2014\n  // in a script whose whole claim is that it was checked.\n  const install = await ws.run([\"npm\", \"ci\"], { timeoutMs: 10 * 60_000 });\n  if (install.exitCode !== 0) {\n    console.error(install.stderr);\n    // `process.exitCode` rather than `process.exit()`: writes to a pipe \u2014 CI\n    // logs, `| tee`, a parent capturing output \u2014 are asynchronous, and exiting\n    // discards whatever is still buffered. That truncates hardest on the runs\n    // with the most to say.\n    process.exitCode = install.exitCode;\n    throw new Error(\"install failed\");\n  }\n\n  const fix: Outcome = await ws.agent(\"claude\", \"make the failing test pass\", {\n    fallback: [\"codex\"],\n    timeoutMs: 20 * 60_000,\n  });\n\n  // Reported on every outcome, not on request: a script that cannot see the\n  // failover credits the wrong agent \u2014 and bills the wrong account.\n  if (fix.routedFrom) {\n    console.warn(`${fix.routedFrom} was unavailable \u2014 ${fix.agent} did the work`);\n  }\n  // A stopped run is not a failed one. The exit code of a container somebody\n  // interrupted is not a verdict on the work.\n  if (fix.stopped) {\n    console.error(`${fix.agent} outlived its deadline and was stopped`);\n    process.exitCode = 1;\n    throw new Error(\"the agent was stopped\");\n  }\n  // The verdict itself, which `stopped` is not: an agent that exited non-zero\n  // has finished and failed. Falling through to the tests would blame them for\n  // work the agent never completed.\n  if (fix.exitCode !== 0) {\n    console.error(fix.stderr);\n    process.exitCode = fix.exitCode;\n    throw new Error(`${fix.agent} exited ${fix.exitCode}`);\n  }\n\n  // node_modules survived the first container because it was written to the\n  // worktree, not because anything stayed alive.\n  const tests = await ws.run([\"npm\", \"test\"], { env: { CI: \"true\" } });\n  console.log(tests.stdout);\n  process.exitCode = tests.exitCode;\n} catch (err) {\n  // The launch succeeded and the wait did not, so the container is still out\n  // there holding this branch's name \u2014 which docker will not let anything else\n  // take until it is gone.\n  if (err instanceof WaitError) await ws.stop(err.run.id);\n  throw err;\n}";
+export const SDK_EXAMPLE = "import { Studio, WaitError, type Outcome } from \"sandbox-cli-sdk\";\n\nconst studio = await Studio.connect(); // port and token from ~/.config/sandbox/studio\nconst repo = await studio.project(\"my-app\");\nconst ws = await repo.workspace(\"agent-42\"); // a git worktree on that branch\n\ntry {\n  // npm rather than pnpm: the base image is node:22-bookworm-slim and carries\n  // npm only, so an example reaching for pnpm would exit 127 on its first line \u2014\n  // in a script whose whole claim is that it was checked.\n  const install = await ws.run([\"npm\", \"ci\"], { timeoutMs: 10 * 60_000 });\n  if (install.exitCode !== 0) {\n    console.error(install.stderr);\n    // `process.exitCode` rather than `process.exit()`: writes to a pipe \u2014 CI\n    // logs, `| tee`, a parent capturing output \u2014 are asynchronous, and exiting\n    // discards whatever is still buffered. That truncates hardest on the runs\n    // with the most to say.\n    process.exitCode = install.exitCode;\n    throw new Error(\"install failed\");\n  }\n\n  const fix: Outcome = await ws.agent(\"claude\", \"make the failing test pass\", {\n    fallback: [\"codex\"],\n    timeoutMs: 20 * 60_000,\n  });\n\n  // Reported on every outcome, not on request: a script that cannot see the\n  // failover credits the wrong agent \u2014 and bills the wrong account.\n  if (fix.routedFrom) {\n    console.warn(`${fix.routedFrom} was unavailable \u2014 ${fix.agent} did the work`);\n  }\n  // A stopped run is not a failed one. The exit code of a container somebody\n  // interrupted is not a verdict on the work.\n  if (fix.stopped) {\n    console.error(`${fix.agent} outlived its deadline and was stopped`);\n    process.exitCode = 1;\n    throw new Error(\"the agent was stopped\");\n  }\n  // The verdict itself, which `stopped` is not: an agent that exited non-zero\n  // has finished and failed. Falling through to the tests would blame them for\n  // work the agent never completed.\n  if (fix.exitCode !== 0) {\n    console.error(fix.stderr);\n    process.exitCode = fix.exitCode;\n    throw new Error(`${fix.agent} exited ${fix.exitCode}`);\n  }\n\n  // node_modules survived the first container because it was written to the\n  // worktree, not because anything stayed alive.\n  const tests = await ws.run([\"npm\", \"test\"], { env: { CI: \"true\" } });\n  console.log(tests.stdout);\n  process.exitCode = tests.exitCode;\n} catch (err) {\n  // The launch succeeded and the wait did not, so the container is still out\n  // there holding this branch's name \u2014 which docker will not let anything else\n  // take until it is gone.\n  if (err instanceof WaitError) await ws.stop(err.run.id);\n  throw err;\n}";
+
+/**
+ * Talking to a daemon on another machine.
+ *
+ * The browser docs make a lot of CORS and Host headers, and a script needs
+ * neither: those checks fire on an `Origin`, which a browser sends and Node does
+ * not. What a script needs is the URL and that machine's token — two values the
+ * box prints when you start the daemon there.
+ */
+export const SDK_REMOTE_STEPS: {
+  label: string;
+  where: string;
+  /** What the block is, which decides whether a `$` is drawn in front of it. */
+  lang: "sh" | "ts" | "text";
+  code: string;
+  note: string;
+}[] = [
+  {
+    label: "On the Linux box: start the daemon, bound to an address your machine can reach",
+    where: "Terminal — the Linux box",
+    lang: "sh",
+    code: "cd ~/code/your-repo\ncurl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/studio.sh -o studio.sh\nsh studio.sh up --api-only --bind 10.0.0.5",
+    note: "--api-only starts the daemon without the browser half, which a script does not need. --bind is the address to dial; the daemon refuses a routable one without a token, so the script generates one and prints it. It also tells the daemon to answer to that name — it answers to loopback names by default and refuses everything else, which looks exactly like the daemon being down.",
+  },
+  {
+    label: "It prints the two values your script needs",
+    where: "What it prints",
+    lang: "text",
+    code: "On the machine with the browser, open Studio → Settings → Connection:\n  Daemon URL   http://10.0.0.5:8787\n  Token        3f9c1e7a…",
+    note: "The token belongs to that machine, not to you: every daemon generates its own. Copy both. `sh studio.sh status` prints them again later.",
+  },
+  {
+    label: "Open the port, and check it before you touch any code",
+    where: "Terminal — the Linux box",
+    lang: "sh",
+    code: "sudo firewall-cmd --permanent --add-port=8787/tcp && sudo firewall-cmd --reload\n# Debian and Ubuntu: sudo ufw allow from 10.0.0.0/24 to any port 8787 proto tcp",
+    note: "A server distribution denies inbound by default, and the failure is silent from the other side. Check it with curl from your own machine: /v1/health is the one route that answers without a token, so a JSON reply means the network, the bind and the firewall are all correct and anything left is authentication.",
+  },
+  {
+    label: "In your script: the URL and the token, and nothing else",
+    where: "agent.mts",
+    lang: "ts",
+    code: 'import { Studio } from "sandbox-cli-sdk";\n\nconst studio = await Studio.connect({\n  url: "http://10.0.0.5:8787",\n  token: process.env.SANDBOX_STUDIO_TOKEN,\n});\n\nconsole.log(await studio.health());',
+    note: "Keep the token in the environment rather than in the file — it is a credential for a machine that can start containers. No CORS origin and no Host flag are involved: those checks fire on an Origin header, which browsers send and scripts do not, so a script is governed by the token alone.",
+  },
+];
+
+/**
+ * The smallest useful things, for somebody who has just connected.
+ *
+ * Each is a whole script rather than a fragment: the first thing anybody does
+ * with a new client is paste one and run it.
+ */
+export const SDK_SNIPPETS: { title: string; code: string; note: string }[] = [
+  {
+    title: "What repositories does this daemon know?",
+    code: 'const studio = await Studio.connect();\nfor (const p of await studio.projects()) {\n  console.log(p.id, p.name, p.root);\n}',
+    note: "Names come from the daemon's registry — what somebody added in Studio, plus the repository it was started in.",
+  },
+  {
+    title: "Run one command and read its output",
+    code: 'const repo = await studio.project("your-repo");\nconst ws = await repo.workspace("scratch");\n\nconst out = await ws.run(["sh", "-c", "ls -la; git status --short"]);\nconsole.log(out.exitCode, out.stdout, out.stderr);',
+    note: "A workspace is a branch's worktree, created if it is not there. The container mounts that tree at /workspace and nothing else of yours.",
+  },
+  {
+    title: "Run the same thing twice without them colliding",
+    code: 'for (const name of ["one", "two"]) {\n  const ws = await repo.workspace(`try-${name}`);\n  console.log(await ws.run(["sh", "-c", `echo ${name}`]));\n}',
+    note: "A branch per run. Docker refuses a duplicate container name, which is what stops two agents sharing one checkout — so two runs on one branch collide, and two branches do not. Both keep their logs.",
+  },
+  {
+    title: "Hand a task to an agent",
+    code: 'const done = await ws.agent("claude", "add a test for the parser", {\n  fallback: ["codex"],\n  timeoutMs: 15 * 60_000,\n});\n\nif (done.routedFrom) console.warn(`${done.routedFrom} was down; ${done.agent} did it`);\nconsole.log(done.exitCode, done.stopped);',
+    note: "The agent needs a login inside the sandbox first — run it once interactively with `sandbox-cli claude` on that machine. routedFrom is how you notice a fallback fired; stopped is how you tell an interrupted run from a failed one.",
+  },
+  {
+    title: "Watch a long run as it happens",
+    code: 'const run = await ws.start({ agent: "claude", prompt: "explain this repository" });\n\nfor await (const event of ws.follow(run.id)) {\n  if (event.type === "log") console.log(event.data);\n}',
+    note: "start() launches without waiting; follow() streams until the daemon says the output has ended. Leaving the loop early closes the stream, which is what stops the log tail behind it.",
+  },
+  {
+    title: "Clean up when you are done with a run",
+    code: 'await ws.stop(run.id);        // ask it to exit\nawait ws.remove(run.id);      // then discard the container and its logs',
+    note: "Two calls, and neither happens for you: a finished run's logs are the evidence for what it did. remove() is also what frees the branch's name for the next run.",
+  },
+];
 
 /** The claims a reader should be able to check, rather than take on trust. */
 export const SDK_RULES = [
@@ -144,6 +252,11 @@ export const SDK_RULES = [
     title: "stop and remove are different, and neither is implicit",
     body:
       "A finished run's logs are the evidence for what it did. Tidying up on the way out would discard that on every happy path, so nothing is removed unless you ask.",
+  },
+  {
+    title: "Running it twice needs you to say so",
+    body:
+      "Docker refuses a duplicate container name, and that refusal is what enforces one agent per branch — so a finished run keeps its branch's name until somebody reaps it, and a second launch is refused with the run id and how to read its logs. Removing it for you would discard the evidence for what the first run did, on every second run. `{ replaceFinished: true }` says the evidence is spent; `clearFinished()` reaps it and tells you what went. Both refuse a run that is still going.",
   },
   {
     title: "The types are generated, not written",

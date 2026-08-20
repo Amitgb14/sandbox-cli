@@ -32,3 +32,6 @@ node_modules
 # test build beside it; both are produced by tsc and neither is source.
 /sdk/typescript/dist/
 /sdk/typescript/dist-test/
+
+# npm pack output, which is a build artifact and not source.
+/sdk/typescript/*.tgz

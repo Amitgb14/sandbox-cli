@@ -133,6 +133,11 @@ test("an unreachable daemon is a different failure from a refused request", asyn
     () => Studio.connect({ url: "http://127.0.0.1:1", token: "" }),
     (err: unknown) => {
       assert.ok(err instanceof ConnectionError, `wanted ConnectionError, got ${String(err)}`);
+      // "fetch failed" is true and useless. Somebody who never started a daemon
+      // has no reason to connect a network error to studio.sh, and connect() is
+      // the one place that cause is overwhelmingly likely.
+      assert.match(err.message, /no daemon is running there/);
+      assert.match(err.message, /studio\.sh/);
       return true;
     },
   );
@@ -324,6 +329,110 @@ test("waiting does not accumulate listeners on the caller's signal", async () =>
     if (typeof listeners === "number") {
       assert.equal(listeners, 0, `${listeners} abort listeners survived the wait`);
     }
+  } finally {
+    await daemon.stop();
+  }
+});
+
+// Running the same script twice is the commonest thing anybody does with this,
+// and it was refused: docker will not duplicate a container name, and a finished
+// run keeps its branch's name until somebody reaps it. That refusal is right —
+// the logs are the evidence for what the run did — so the way through is a
+// caller saying the evidence is spent, not a helper deciding it for them.
+test("a finished run holding the branch's name can be replaced on request", async () => {
+  const { daemon, studio } = await connected({ nameHeldBy: "old-run" });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+
+    // Without the flag: the daemon's refusal, verbatim, with its remedy in it.
+    await assert.rejects(
+      () => ws.run(["true"]),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError);
+        assert.equal(err.status, 409);
+        // The daemon's sentence, kept whole…
+        assert.match(err.message, /still holds "feature"'s container name/);
+        // …and the one it cannot know to write. Being told to reach for curl
+        // from inside a typed client is how a library teaches people to work
+        // around it.
+        assert.match(err.message, /replaceFinished/);
+        assert.match(err.message, /clearFinished/);
+        return true;
+      },
+    );
+
+    // With it: the holder is removed and the run goes ahead.
+    const out = await ws.run(["true"], { replaceFinished: true });
+    assert.equal(out.exitCode, 0);
+    assert.ok(
+      daemon.pathsHit("DELETE").includes("/v1/runs/old-run"),
+      `the holder was never reaped: ${daemon.pathsHit("DELETE").join(", ")}`,
+    );
+  } finally {
+    await daemon.stop();
+  }
+});
+
+// "Finished" is the whole of the claim. Reaping a live run would stop somebody
+// else's agent, which is not a side effect a convenience flag may have.
+//
+// Every state that is not exited or dead, because the first version of this test
+// pointed at a branch the stub reported nothing for — so it asserted null and
+// never reached the refusal it was named after. `paused` is the case that made
+// the guard wrong as well as untested: it holds the name and holds unwritten
+// work, and a list of "live" states nobody had thought to include it in reaped
+// it.
+test("clearFinished refuses a run that is not finished", async () => {
+  for (const state of ["running", "created", "restarting", "paused", "unknown"]) {
+    const daemon = new FakeDaemon({ listedBranch: "feature", listedState: state });
+    await daemon.start();
+    try {
+      const studio = await Studio.connect({ url: daemon.url, token: "" });
+      const ws = await (await studio.project("app")).workspace("feature");
+      await assert.rejects(
+        () => ws.clearFinished(),
+        new RegExp(`is ${state}, not finished`),
+        `a ${state} run was reaped`,
+      );
+      assert.deepEqual(daemon.pathsHit("DELETE"), [], `a ${state} run was removed`);
+    } finally {
+      await daemon.stop();
+    }
+  }
+});
+
+// Nothing of this branch's to clear is not an error; it is null.
+test("clearFinished reports nothing when the name is free", async () => {
+  const { daemon, studio } = await connected({ listedBranch: "someone-else" });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    assert.equal(await ws.clearFinished(), null);
+  } finally {
+    await daemon.stop();
+  }
+});
+
+// A 409 the flag cannot clear must still arrive as the ApiError it was, or a
+// caller's `e instanceof ApiError && e.status === 409` stops matching the moment
+// they pass an option.
+test("a live agent's 409 stays an ApiError even with replaceFinished", async () => {
+  const { daemon, studio } = await connected({
+    nameHeldBy: "old-run",
+    listedBranch: "feature",
+    listedState: "running",
+  });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    await assert.rejects(
+      () => ws.run(["true"], { replaceFinished: true }),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError, `wanted ApiError, got ${String(err)}`);
+        assert.equal(err.status, 409);
+        assert.match(err.message, /still holds "feature"'s container name/);
+        assert.match(err.message, /is running, not finished/);
+        return true;
+      },
+    );
   } finally {
     await daemon.stop();
   }
