@@ -4,7 +4,7 @@
  * page has exactly one place to update when the CLI changes.
  */
 
-export const VERSION = "0.0.1beta.15";
+export const VERSION = "0.0.1beta.16";
 
 export const REPO_URL = "https://github.com/Amitgb14/sandbox-cli";
 export const RELEASES_URL = `${REPO_URL}/releases`;

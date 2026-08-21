@@ -13,6 +13,45 @@ version is tagged.
 
 ### Added
 
+- **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
+  sandbox-cli never supplies the key.** `gateway:` in your own config names the
+  agents, the endpoint, and the *variable* the credential lives in — a name, not
+  a value. There is no bundled account and no fallback: a run configured for a
+  gateway with nothing to read is **refused**, because the alternatives are both
+  silent and both wrong, reaching the gateway unauthenticated or falling through
+  to the vendor on the agent's own credential.
+
+  Four things have to agree or the run is worse than unconfigured, so they are
+  resolved together: the base URL, the key variable (forwarded by name, exactly
+  like every other credential — its value never reaches the rendered argv), the
+  probe host, and the egress allowlist, which gains the gateway's domain because
+  otherwise the run cannot reach the thing it was configured to use and fails as
+  a connection error naming nothing.
+
+  Two refusals carry the design. An agent that speaks its **vendor's own API
+  shape** — claude, gemini, droid — is refused rather than pointed at an
+  OpenAI-shaped endpoint, since that failure lands inside a container as a parse
+  error blamed on the model; the table lists only agents where the wiring is
+  known, and marks codex unverified rather than claiming it. And a plaintext
+  `base_url` is refused: the credential and every prompt cross that connection.
+
+  `gateway:` is **user-config only**. It names the host every prompt travels
+  through and the credential that pays for it — `providers:`'s three objections
+  at once, plus one of its own, since a gateway reads the work.
+
+  Studio's Routing screen draws it. A gateway is a node the traffic passes
+  *through* rather than another agent in the ring, because that is what it is:
+  agents sharing one are sharing a credential, a bill and a single point of
+  failure no chain can route around — putting it beside claude in the ring would
+  say the opposite, that it is one more thing to fall through to. Their nodes
+  carry a dashed ring, the providers list says *via <host>*, and the gateway's own
+  probe result is what is shown, since the vendor behind it being down is the case
+  a gateway survives.
+
+## 0.0.1beta.16 — 2026-08-20
+
+### Added
+
 - **A second SDK example: a workflow, without writing an agent.**
   `examples/workflow.ts` runs three tasks on three branches in three containers
   in parallel, then gates on two things that catch different lies — whether git
@@ -39,72 +78,6 @@ version is tagged.
   expanded (`~`, a relative path) but never symlink-resolved — that resolution
   describes this disk, not the one the daemon will look on.
 
-### Fixed
-
-- **A submodule is registered as itself, not as its superproject's git directory.**
-  Adding a submodule to Studio — from the UI, the API or the SDK — recorded
-  `<super>/.git/modules/<name>` as the repository root, which is what gets
-  bind-mounted at `/workspace`: the agent would have been handed git's object
-  store instead of the source. `--git-common-dir` names a *git directory* rather
-  than a working tree for a submodule and for `--separate-git-dir`, so the tree
-  is now asked for by name, and only a bare repository — which has none — is its
-  own root.
-- **A submodule no longer inherits its superproject's identity.**
-  `.git/modules/<name>` and `.git/worktrees/<name>` sit at the same depth, so the
-  pointer-file fallback read a submodule as a linked worktree of its
-  superproject: `RepoID` answered with the super's id while the path resolved to
-  the submodule. A registry entry then carried one repository's id and another's
-  path, and container labels — how every later command finds a run — belonged to
-  the wrong repository. The fallback now fires only for a gitdir actually under
-  `worktrees/`. Linked worktrees are unaffected: they carry a `commondir` file,
-  which is read first, and every worktree of a repository still shares one id.
-
-- **`studio.project(".")` works, instead of reporting a missing repository.**
-  It used to fail with "no repository . is registered", which reads as though
-  something had been lost; a path is now resolved on the machine running the
-  script and looked up by root. A name that matches nothing still fails, but now
-  lists what *is* registered, so a typo and an unregistered directory stop
-  looking identical.
-
-- **A daemon that refuses to start says so, instead of looking slow.**
-  `studio.sh` reported "the API did not answer within 20s" for a daemon that had
-  exited in milliseconds — and then printed the last twenty lines of a log that
-  is appended to across restarts, so the one sentence that mattered sat under six
-  previous startups. It now notices the process is gone, says it refused rather
-  than stalled, and prints only what this run wrote.
-
-- **Running the same script twice.** A finished run keeps its branch's container
-  name until somebody reaps it — that is the refusal docker's duplicate-name
-  check provides, and it is what enforces one agent per branch — so a second
-  launch from the SDK failed with a 409 and no way through it except curl.
-  `{ replaceFinished: true }` says the evidence is spent, and `clearFinished()`
-  reaps the holder and reports what went. Both refuse a run that is still going.
-
-- **The client is on npm: `npm install @sandbox-cli/sdk`.** It was documented
-  before it was published, so the install line 404'd for anybody who followed it.
-  Publishing is the fix; the packaging work that made it installable from a
-  checkout stays, because that is still how you use an unreleased change. The
-  docs also say that a script using top-level `await` needs an ES module —
-  `"type": "module"` or an `.mts` file — which is the first thing anybody hits
-  and was nowhere.
-
-- **Agent interfaces look the same inside the sandbox as outside it.** Docker
-  tells a container it is a bare `xterm`, so a TUI drew for eight colours while
-  the terminal it was drawing on had 256 — goose's start-up banner vanished
-  entirely through `sandbox-cli`, and every colourised diff and progress bar was
-  quietly poorer. `TERM` and `COLORTERM` now cross as names, on the same terms
-  the timezone does: only when the run has a terminal at all, and never over
-  anything you set yourself. A piped run is unchanged, because a `TERM` with no
-  terminal behind it only puts escape codes into a log somebody reads as text.
-
-  If your terminal calls itself something the image has never heard of —
-  Ghostty, kitty, alacritty — you get `xterm-256color` rather than that name.
-  The image carries the common terminfo entries and not the exotic ones, and a
-  name nothing can look up is worse than a plain one: `tput` fails, and `less`
-  stops to say the terminal is not fully functional and waits for a keystroke.
-  The colour survives the translation, which is the part you wanted.
-
-### Added
 
 - **A TypeScript client, so a program can drive sandbox-cli the way a terminal
   does.** `@sandbox-cli/sdk` connects to the daemon `studio.sh` started with no
@@ -247,42 +220,71 @@ version is tagged.
   only direct measure of what routing is doing to a setup, and an agent running
   work it was never asked for is doing it under its own login and its own bill.
 
-- **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
-  sandbox-cli never supplies the key.** `gateway:` in your own config names the
-  agents, the endpoint, and the *variable* the credential lives in — a name, not
-  a value. There is no bundled account and no fallback: a run configured for a
-  gateway with nothing to read is **refused**, because the alternatives are both
-  silent and both wrong, reaching the gateway unauthenticated or falling through
-  to the vendor on the agent's own credential.
-
-  Four things have to agree or the run is worse than unconfigured, so they are
-  resolved together: the base URL, the key variable (forwarded by name, exactly
-  like every other credential — its value never reaches the rendered argv), the
-  probe host, and the egress allowlist, which gains the gateway's domain because
-  otherwise the run cannot reach the thing it was configured to use and fails as
-  a connection error naming nothing.
-
-  Two refusals carry the design. An agent that speaks its **vendor's own API
-  shape** — claude, gemini, droid — is refused rather than pointed at an
-  OpenAI-shaped endpoint, since that failure lands inside a container as a parse
-  error blamed on the model; the table lists only agents where the wiring is
-  known, and marks codex unverified rather than claiming it. And a plaintext
-  `base_url` is refused: the credential and every prompt cross that connection.
-
-  `gateway:` is **user-config only**. It names the host every prompt travels
-  through and the credential that pays for it — `providers:`'s three objections
-  at once, plus one of its own, since a gateway reads the work.
-
-  Studio's Routing screen draws it. A gateway is a node the traffic passes
-  *through* rather than another agent in the ring, because that is what it is:
-  agents sharing one are sharing a credential, a bill and a single point of
-  failure no chain can route around — putting it beside claude in the ring would
-  say the opposite, that it is one more thing to fall through to. Their nodes
-  carry a dashed ring, the providers list says *via <host>*, and the gateway's own
-  probe result is what is shown, since the vendor behind it being down is the case
-  a gateway survives.
-
 ### Fixed
+
+- **A submodule is registered as itself, not as its superproject's git directory.**
+  Adding a submodule to Studio — from the UI, the API or the SDK — recorded
+  `<super>/.git/modules/<name>` as the repository root, which is what gets
+  bind-mounted at `/workspace`: the agent would have been handed git's object
+  store instead of the source. `--git-common-dir` names a *git directory* rather
+  than a working tree for a submodule and for `--separate-git-dir`, so the tree
+  is now asked for by name, and only a bare repository — which has none — is its
+  own root.
+- **A submodule no longer inherits its superproject's identity.**
+  `.git/modules/<name>` and `.git/worktrees/<name>` sit at the same depth, so the
+  pointer-file fallback read a submodule as a linked worktree of its
+  superproject: `RepoID` answered with the super's id while the path resolved to
+  the submodule. A registry entry then carried one repository's id and another's
+  path, and container labels — how every later command finds a run — belonged to
+  the wrong repository. The fallback now fires only for a gitdir actually under
+  `worktrees/`. Linked worktrees are unaffected: they carry a `commondir` file,
+  which is read first, and every worktree of a repository still shares one id.
+
+- **`studio.project(".")` works, instead of reporting a missing repository.**
+  It used to fail with "no repository . is registered", which reads as though
+  something had been lost; a path is now resolved on the machine running the
+  script and looked up by root. A name that matches nothing still fails, but now
+  lists what *is* registered, so a typo and an unregistered directory stop
+  looking identical.
+
+- **A daemon that refuses to start says so, instead of looking slow.**
+  `studio.sh` reported "the API did not answer within 20s" for a daemon that had
+  exited in milliseconds — and then printed the last twenty lines of a log that
+  is appended to across restarts, so the one sentence that mattered sat under six
+  previous startups. It now notices the process is gone, says it refused rather
+  than stalled, and prints only what this run wrote.
+
+- **Running the same script twice.** A finished run keeps its branch's container
+  name until somebody reaps it — that is the refusal docker's duplicate-name
+  check provides, and it is what enforces one agent per branch — so a second
+  launch from the SDK failed with a 409 and no way through it except curl.
+  `{ replaceFinished: true }` says the evidence is spent, and `clearFinished()`
+  reaps the holder and reports what went. Both refuse a run that is still going.
+
+- **The client is on npm: `npm install @sandbox-cli/sdk`.** It was documented
+  before it was published, so the install line 404'd for anybody who followed it.
+  Publishing is the fix; the packaging work that made it installable from a
+  checkout stays, because that is still how you use an unreleased change. The
+  docs also say that a script using top-level `await` needs an ES module —
+  `"type": "module"` or an `.mts` file — which is the first thing anybody hits
+  and was nowhere.
+
+- **Agent interfaces look the same inside the sandbox as outside it.** Docker
+  tells a container it is a bare `xterm`, so a TUI drew for eight colours while
+  the terminal it was drawing on had 256 — goose's start-up banner vanished
+  entirely through `sandbox-cli`, and every colourised diff and progress bar was
+  quietly poorer. `TERM` and `COLORTERM` now cross as names, on the same terms
+  the timezone does: only when the run has a terminal at all, and never over
+  anything you set yourself. A piped run is unchanged, because a `TERM` with no
+  terminal behind it only puts escape codes into a log somebody reads as text.
+
+  If your terminal calls itself something the image has never heard of —
+  Ghostty, kitty, alacritty — you get `xterm-256color` rather than that name.
+  The image carries the common terminfo entries and not the exotic ones, and a
+  name nothing can look up is worse than a plain one: `tput` fails, and `less`
+  stops to say the terminal is not fully functional and waits for a keystroke.
+  The colour survives the translation, which is the part you wanted.
+
 
 - **A detached run's outcome is now recorded, so "did it pass" has an answer.**
   Its audit line is written when the container *launches* — there is no exit code
