@@ -32,8 +32,18 @@ func (f fakeHost) SeccompUnavailable(context.Context) (bool, bool) {
 	return f.seccompOff, f.seccompKnow
 }
 func (f fakeHost) Runtimes(context.Context) ([]string, error) { return f.runtimes, f.runtimesErr }
-func (f fakeHost) FirewallProgrammable(context.Context, string, string) (runtime.FirewallProbe, string) {
-	return f.firewall, f.firewallWhy
+func (f fakeHost) FirewallProgrammable(context.Context, string, string) runtime.FirewallReport {
+	// Cause follows the verdict: these fixtures predate the enum, and the only
+	// blocked path they model is a container that ran and could not program the
+	// rules.
+	cause := runtime.CauseUnspecified
+	switch f.firewall {
+	case runtime.FirewallBlocked:
+		cause = runtime.CauseRules
+	case runtime.FirewallUnknown:
+		cause = runtime.CauseNoImage
+	}
+	return runtime.FirewallReport{Probe: f.firewall, Cause: cause, Reason: f.firewallWhy}
 }
 func (f fakeHost) ImagePresent(context.Context, string) (bool, bool) {
 	return f.imageThere, f.imageKnown

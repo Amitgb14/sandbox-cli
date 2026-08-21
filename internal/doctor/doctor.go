@@ -20,6 +20,7 @@ package doctor
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,7 +79,7 @@ type Runtime interface {
 	Available(context.Context) error
 	SeccompUnavailable(context.Context) (bool, bool)
 	Runtimes(context.Context) ([]string, error)
-	FirewallProgrammable(ctx context.Context, image, runtimeName string) (runtime.FirewallProbe, string)
+	FirewallProgrammable(ctx context.Context, image, runtimeName string) runtime.FirewallReport
 	ImagePresent(context.Context, string) (bool, bool)
 }
 
@@ -105,8 +106,16 @@ func RunChecks(ctx context.Context, profile, engine, selectedRuntime string) []C
 	out := []Check{{Name: engine + " daemon", Status: StatusOK, Detail: "reachable"}}
 	out = append(out, checkBaseImage(ctx, d))
 	out = append(out, checkSeccomp(ctx, d))
-	out = append(out, checkFirewall(ctx, d, selectedRuntime))
-	out = append(out, checkRuntimes(ctx, d, profile, selectedRuntime))
+	// Asked once, and asked *before* the probe. It is one `info` call that both
+	// remaining checks need, and the order is what keeps the expensive check from
+	// starving the cheap one: the firewall probe starts a container — under a
+	// stronger runtime, a micro-VM — so whatever it spends, the runtime verdict
+	// has already been read. That replaces giving the slowest check the smallest
+	// slice of the budget, which made a loaded Kata host fail a preflight it
+	// would otherwise pass.
+	support := runtimeSupport(ctx, d)
+	out = append(out, checkFirewall(ctx, d, selectedRuntime, support))
+	out = append(out, checkRuntimes(profile, selectedRuntime, support))
 	return out
 }
 
@@ -166,45 +175,80 @@ func checkSeccomp(ctx context.Context, d Runtime) Check {
 // gVisor reported a healthy firewall from a runc probe while a runsc run could
 // not program a single rule — the preflight passing and the launch failing,
 // which is the disagreement ClassifyRuntimeGap was centralised to prevent.
-func checkFirewall(ctx context.Context, d Runtime, selectedRuntime string) Check {
+func checkFirewall(ctx context.Context, d Runtime, selectedRuntime string, support runtime.RuntimeSupport) Check {
 	c := Check{Name: "egress firewall"}
-	// Its own slice of the budget. This is the only check that starts a
-	// container, and under a stronger runtime that means booting a micro-VM or a
-	// userspace kernel rather than a runc container. Sharing one deadline with
-	// everything after it meant a slow probe expired the context and turned
-	// checkRuntimes into a second "could not be asked" — two prod failures on a
-	// host that was merely slow.
-	ctx, cancel := context.WithTimeout(ctx, Timeout/2)
-	defer cancel()
-	switch probe, reason := d.FirewallProgrammable(ctx, image.Ref(), selectedRuntime); probe {
+	// The runtime the container will actually get, which is not always the one a
+	// flag named: a daemon whose default-runtime is runsc selects gVisor for a
+	// run that asked for nothing. Advice keyed on the *selected* name told that
+	// host its daemon could not grant NET_ADMIN, and offered `--network default`
+	// — dropping the egress allowlist — as the fix for a problem it had
+	// mis-identified.
+	effective := support.EffectiveRuntime(selectedRuntime)
+	report := d.FirewallProgrammable(ctx, image.Ref(), selectedRuntime)
+	switch report.Probe {
 	case runtime.FirewallOK:
 		c.Status = StatusOK
 		c.Detail = "a container here can program the nat, redirect, owner and conntrack rules the firewall needs"
 	case runtime.FirewallUnknown:
-		// Not the host's fault, and not an answer either.
+		// Not the host's fault, and not an answer either. The remedy names the
+		// cause the probe reported rather than the commonest one: this branch
+		// covers an unbuilt image, a host too busy to answer, and a runtime the
+		// engine does not have, and "build the image" is unactionable for two of
+		// the three — under prod, unactionable advice attached to a failure.
 		c.Status = StatusUnknown
-		c.Detail = reason
-		c.Remedy = "run any sandbox command once to build the image, then try again"
+		c.Detail = report.Reason
+		c.Remedy = unknownRemedy(report.Cause, selectedRuntime, support)
 	default:
 		c.Status = StatusWeak
-		c.Detail = "a container here cannot program the firewall: " + reason
-		// The remedy has to name the cause the probe actually found. Once this is
-		// probed under the selected runtime, the daemon is no longer the only
-		// suspect: gVisor gates iptables behind `runsc install -- --net-raw` and
-		// serves only the legacy backend, so "rootless or userns-remapped" is
-		// simply untrue there — and the fix on offer, dropping the egress
-		// allowlist, is the one thing a prod operator must not be told to do by a
-		// check that has mis-identified the problem.
-		c.Remedy = "on a stronger runtime, iptables may be gated: gVisor needs " +
-			"`runsc install -- --net-raw`. Otherwise rootless or userns-remapped daemons " +
-			"often cannot grant NET_ADMIN — run on a daemon that can, or select a runtime " +
-			"whose kernel serves iptables"
-		if selectedRuntime == "" {
-			c.Remedy = "rootless or userns-remapped daemons often cannot; use --network default, " +
-				"or run on a daemon that can grant NET_ADMIN"
-		}
+		c.Detail = "a container here cannot program the firewall: " + report.Reason
+		c.Remedy = blockedRemedy(effective)
 	}
 	return c
+}
+
+// unknownRemedy is the next step for a question that could not be answered.
+func unknownRemedy(cause runtime.FirewallCause, selected string, support runtime.RuntimeSupport) string {
+	switch cause {
+	case runtime.CauseNoImage:
+		return "run any sandbox command once to build the image, then try again"
+	case runtime.CauseTimedOut:
+		return "the host did not answer in time — re-run when it is less busy, since a " +
+			"micro-VM or userspace kernel takes longer to boot than runc"
+	case runtime.CauseRuntimeUnregistered, runtime.CauseRuntimeRefused:
+		r := "register " + strconv.Quote(selected) + " with the engine, or select one it has"
+		if len(support.All) > 0 {
+			r += ": " + strings.Join(support.All, ", ")
+		}
+		return r
+	default:
+		// No cause was established, so there is no step to name. Silence beats a
+		// guess here: this is the branch prod fails on, and advice that does not
+		// fit sends an operator to change something that was never wrong.
+		return ""
+	}
+}
+
+// blockedRemedy is the next step for a container that ran and could not program
+// the rules — the one case that is actually about the firewall.
+//
+// Keyed on the runtime the container got, because the causes are different in
+// kind. gVisor's netstack has no connection tracking at all, so `-m conntrack`
+// — which the entrypoint needs and the probe therefore uses — cannot work there
+// even with `runsc install -- --net-raw`. Leading with that install command sent
+// an operator away to run it and back to a byte-identical failure.
+func blockedRemedy(effective string) string {
+	if strings.Contains(effective, "runsc") || strings.Contains(effective, "gvisor") {
+		return "gVisor's netstack has no connection tracking, so the allowlist cannot be " +
+			"enforced under it even with `runsc install -- --net-raw` — select a runtime whose " +
+			"kernel serves iptables, or run this workload on a daemon that can grant NET_ADMIN"
+	}
+	if effective != "" {
+		return "under " + strconv.Quote(effective) + " iptables may be gated by the runtime — check " +
+			"its documentation, or select a runtime whose kernel serves iptables; otherwise " +
+			"rootless and userns-remapped daemons often cannot grant NET_ADMIN"
+	}
+	return "rootless or userns-remapped daemons often cannot; use --network default, " +
+		"or run on a daemon that can grant NET_ADMIN"
 }
 
 // checkRuntimes reports whether a stronger-isolation runtime is registered.
@@ -223,9 +267,8 @@ func checkFirewall(ctx context.Context, d Runtime, selectedRuntime string) Check
 // selected is the runtime the run would actually use, not merely the configured
 // one: `doctor --runtime X` preflights the command you are about to type, since
 // --runtime on the run would otherwise change the answer after the check passed.
-func checkRuntimes(ctx context.Context, d Runtime, profile, selected string) Check {
+func checkRuntimes(profile, selected string, support runtime.RuntimeSupport) Check {
 	c := Check{Name: "isolation runtime"}
-	support := runtimeSupport(ctx, d)
 	prod := profile == config.ProfileProd
 	effective := support.EffectiveRuntime(selected)
 	reported := strings.Join(support.All, ", ")

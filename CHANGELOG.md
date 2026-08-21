@@ -13,6 +13,30 @@ version is tagged.
 
 ### Fixed
 
+- **`doctor` names the cause it actually found, rather than the commonest one.**
+  Three different things make the egress-firewall check unanswerable — an unbuilt
+  image, a host too busy to answer, a runtime the engine does not have — and all
+  three were answered with "run any sandbox command once to build the image",
+  which is unactionable for two of them and, under prod, attached to a failure.
+  Each now gets the step that fits.
+- **A gVisor host is no longer told to switch its egress allowlist off.** The
+  blocked-firewall remedy keyed on the runtime a *flag* named, so a daemon whose
+  `default-runtime` is `runsc` — where nothing is selected and gVisor is
+  nonetheless what runs — got "rootless or userns-remapped daemons often cannot;
+  use `--network default`". It keys on the runtime the container actually gets,
+  and says why `runsc install -- --net-raw` is not the fix there: gVisor's
+  netstack has no connection tracking, which the rules need.
+- **An engine refusing a runtime name is no longer reported as a broken
+  firewall.** The name still reaches the launch in two paths that are non-fatal
+  by design, and the refusal was read as "this container cannot program
+  iptables" — blaming the daemon, and contradicting the runtime check on the very
+  next line.
+- **The firewall probe no longer runs on half a stopwatch.** It was capped at
+  half the budget because a slow probe used to starve the runtime check; the
+  runtime facts are now read *before* it, so the expensive check can take the
+  time a micro-VM needs without a loaded host failing a preflight it would
+  otherwise pass.
+
 - **The egress allowlist could not be programmed under gVisor**, so
   `--runtime runsc` with `--allow` (or `--profile prod`, which requires one)
   refused to start:

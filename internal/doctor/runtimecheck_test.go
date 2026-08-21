@@ -24,8 +24,8 @@ type runtimeStub struct {
 func (r runtimeStub) Available(context.Context) error                 { return nil }
 func (r runtimeStub) SeccompUnavailable(context.Context) (bool, bool) { return false, true }
 func (r runtimeStub) Runtimes(context.Context) ([]string, error)      { return r.support.All, nil }
-func (r runtimeStub) FirewallProgrammable(context.Context, string, string) (runtime.FirewallProbe, string) {
-	return runtime.FirewallUnknown, ""
+func (r runtimeStub) FirewallProgrammable(context.Context, string, string) runtime.FirewallReport {
+	return runtime.FirewallReport{Probe: runtime.FirewallUnknown}
 }
 func (r runtimeStub) ImagePresent(context.Context, string) (bool, bool) { return true, true }
 
@@ -46,7 +46,6 @@ func dockerHost(def string, all ...string) runtime.RuntimeSupport {
 }
 
 func TestRuntimeCheckUnderProd(t *testing.T) {
-	ctx := context.Background()
 	cases := []struct {
 		name     string
 		support  runtime.RuntimeSupport
@@ -107,7 +106,7 @@ func TestRuntimeCheckUnderProd(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := checkRuntimes(ctx, runtimeStub{support: tc.support}, config.ProfileProd, tc.selected)
+			c := checkRuntimes(config.ProfileProd, tc.selected, tc.support)
 			if _, fatal := Verdict(c.Status, true); fatal != tc.fatal {
 				t.Errorf("prod fatal = %v, want %v: %+v", fatal, tc.fatal, c)
 			}
@@ -127,7 +126,6 @@ func TestRuntimeCheckUnderProd(t *testing.T) {
 // two exceptions are configurations that cannot work at all: a runtime the
 // engine does not have, and an engine that could not be asked.
 func TestRuntimeCheckUnderDev(t *testing.T) {
-	ctx := context.Background()
 	for _, tc := range []struct {
 		name     string
 		support  runtime.RuntimeSupport
@@ -145,7 +143,7 @@ func TestRuntimeCheckUnderDev(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := checkRuntimes(ctx, runtimeStub{support: tc.support}, config.ProfileDev, tc.selected)
+			c := checkRuntimes(config.ProfileDev, tc.selected, tc.support)
 			if _, fatal := Verdict(c.Status, false); fatal != tc.fatal {
 				t.Errorf("dev fatal = %v, want %v: %+v", fatal, tc.fatal, c)
 			}
@@ -156,7 +154,7 @@ func TestRuntimeCheckUnderDev(t *testing.T) {
 // The fallback for a backend without the interface upgrade reports unverified
 // rather than assembling a passing verdict out of what it can see.
 func TestRuntimeSupportFallbackIsNotPermissive(t *testing.T) {
-	c := checkRuntimes(context.Background(), bareStub{}, config.ProfileProd, "")
+	c := checkRuntimes(config.ProfileProd, "", runtimeSupport(context.Background(), bareStub{}))
 	if _, fatal := Verdict(c.Status, true); !fatal {
 		t.Errorf("a backend that cannot be asked produced a passing verdict: %+v", c)
 	}
@@ -168,7 +166,7 @@ type bareStub struct{}
 func (bareStub) Available(context.Context) error                 { return nil }
 func (bareStub) SeccompUnavailable(context.Context) (bool, bool) { return false, true }
 func (bareStub) Runtimes(context.Context) ([]string, error)      { return nil, errors.New("nope") }
-func (bareStub) FirewallProgrammable(context.Context, string, string) (runtime.FirewallProbe, string) {
-	return runtime.FirewallUnknown, ""
+func (bareStub) FirewallProgrammable(context.Context, string, string) runtime.FirewallReport {
+	return runtime.FirewallReport{Probe: runtime.FirewallUnknown}
 }
 func (bareStub) ImagePresent(context.Context, string) (bool, bool) { return true, true }
