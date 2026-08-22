@@ -76,7 +76,19 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   allowlist needs no weaker mode. And netavark has no `enable_icc`: its `isolate=true` blocks traffic
   between *different* networks while leaving same-network peers reachable — confirmed by reading one
   container's data from another — so podman gets **one isolated network per sandbox**, where docker
-  shares one. Podman answers `info` with different shapes too, and via JSON keys rather than template
+  shares one. That per-sandbox network is the one thing in the podman dialect with an upkeep cost,
+  and `netreap.go` is it: a **detached** run deliberately leaves its network with machine lifetime,
+  so `clean` is the only collector, and an uncollected one is not merely untidy — a network holding
+  a dead container's IPAM entry makes `podman network reload --all` fail for *every* network on the
+  host, which is the documented repair after firewalld drops netavark's rules. Reaping is therefore
+  three cases rather than one, all measured on podman 6.0.2: nothing attached is a plain `network
+  rm`, **an exited container still holds a network** (plain `rm` refuses — the assumption that only
+  a *running* container does is what let the leak survive a `clean` that reported success) and needs
+  `-f`, and anything live, or any container this command does not own, is left alone and **named**
+  in the output. `-f` removes containers along with the network, which is why ownership is decided
+  by the `sandbox.cli` label filter rather than by parsing the label column: a label value
+  containing `,sandbox.cli=` would otherwise make somebody else's container look like ours, and that
+  is the one mistake that would delete it. Issue #77. Podman answers `info` with different shapes too, and via JSON keys rather than template
   field names, because its Go struct names and JSON keys disagree. A **fourth** difference showed up
 later and only on native Linux, which is why the first version looked complete: rootless podman maps
 the host user to container **uid 0**, so a bind-mounted workspace appears root-owned and the sandbox

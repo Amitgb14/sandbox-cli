@@ -11,6 +11,20 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **`sandbox-cli clean` now actually reaps podman's leaked per-run networks — and
+  says what it could not.** A network with an *exited* container still attached
+  refuses a plain `network rm`; the reaper assumed only a running container held
+  one, and swallowed the failure, so `clean` reported success and left the
+  network behind. That is worse than untidiness: a leaked network with a dead
+  container in its IPAM makes `podman network reload --all` fail for **every**
+  network on the host — the documented repair after firewalld drops netavark's
+  rules — so an unrelated, host-wide problem became unfixable. Networks nothing
+  is on are removed, ones holding only sandbox-cli's own finished containers are
+  removed with them, and anything live, or anything owned by a container this
+  command did not create, is kept and named. Issue #77.
+
 ### Added
 
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
