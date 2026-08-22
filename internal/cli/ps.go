@@ -11,6 +11,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
@@ -160,7 +161,7 @@ func removeSandboxNetworkIfUnused(ctx context.Context, rt sessionRuntime, bin st
 	// short-circuited on a mixed one by any docker container. Since a detached
 	// run deliberately leaves its network with machine lifetime, that was a leak
 	// with no collector.
-	removeStaleSandboxNetworks(bin)
+	reapPerRunNetworks(ctx, rt)
 
 	infos, err := sandboxSessions(ctx, rt, bin, true)
 	if err != nil || len(infos) > 0 {
@@ -178,31 +179,28 @@ func removeSandboxNetworkIfUnused(ctx context.Context, rt sessionRuntime, bin st
 	fmt.Printf("removed network %s\n", runtime.SandboxNetwork)
 }
 
-// removeStaleSandboxNetworks removes the per-run networks podman leaves behind.
+// reapPerRunNetworks removes the per-run networks podman leaves behind, and says
+// what it could not remove.
 //
-// Scoped to the engine actually in use rather than sweeping both: deleting
-// sandbox-cli-* networks on an engine this run was never configured for is a
-// broader licence than the docker path takes.
-//
-// Best-effort and quiet on failure: a leaked network is untidy, and a `clean`
-// that fails because of one is worse. Anything carrying the per-run prefix is
-// unattached by the time it is reachable — a running container holds its network
-// open, so `network rm` simply refuses and this moves on.
-func removeStaleSandboxNetworks(bin string) {
-	if _, err := exec.LookPath(bin); err != nil {
+// The silence was the bug. A leaked network with a dead container in its IPAM
+// makes `podman network reload --all` fail for *every* network on the host — the
+// documented repair after firewalld drops netavark's rules — so `clean`
+// reporting success while leaving one turns a five-minute fix into a long
+// detour. Issue #77.
+func reapPerRunNetworks(ctx context.Context, rt sessionRuntime) {
+	reaper, ok := rt.(runtime.NetworkReaper)
+	if !ok {
 		return
 	}
-	out, err := exec.Command(bin, "network", "ls", "--format", "{{.Name}}").Output()
-	if err != nil {
-		return
-	}
-	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		name = strings.TrimSpace(name)
-		if !strings.HasPrefix(name, runtime.SandboxNetwork+"-") {
+	for _, r := range reaper.ReapPerRunNetworks(ctx, sandbox.LabelCLI+"=1") {
+		if r.Removed {
+			fmt.Printf("removed network %s\n", termsafe.Clean(r.Name))
 			continue
 		}
-		if err := exec.Command(bin, "network", "rm", name).Run(); err == nil {
-			fmt.Printf("removed network %s\n", name)
-		}
+		// Not an error: a network still carrying a live sandbox is the normal
+		// state, and `clean` has no business failing over it. It is printed
+		// because an uncollected one has a host-wide cost nobody would attribute
+		// to sandbox-cli.
+		fmt.Printf("kept network %s (%s)\n", termsafe.Clean(r.Name), termsafe.Clean(r.Reason))
 	}
 }
