@@ -1,12 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { FakeDaemon } from "./daemon.js";
 import { Studio, ApiError, ConnectionError, TimeoutError, WaitError } from "../src/index.js";
 import { gitRootOf, localRepo, wirePath } from "../src/local.js";
+
+
+/** A real repository: init plus one commit.
+ *
+ * The commit is not ceremony. A repository with files and no commits makes empty
+ * worktrees, which addProject refuses — so a fixture without one is testing a
+ * state no working setup is in. */
+function initRepoWithCommit(dir: string): void {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "init.templateDir=", "-c", "user.email=a@b", "-c", "user.name=a",
+      "-c", "commit.gpgsign=false", ...args], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(dir, "README.md"), "x\n");
+  git("add", "README.md");
+  git("commit", "-qm", "init");
+}
 
 async function connected(opts: ConstructorParameters<typeof FakeDaemon>[0] = {}) {
   const daemon = new FakeDaemon(opts);
@@ -528,7 +544,7 @@ test("outside a repository, no argument says so rather than guessing", async () 
 
 test("addProject expands a relative path against the current directory", async () => {
   const repo = realpathSync(mkdtempSync(join(tmpdir(), "sdk-rel-")));
-  mkdirSync(join(repo, ".git"));
+  initRepoWithCommit(repo);
   mkdirSync(join(repo, "sub"));
   const { daemon, studio } = await connected();
   const cwd = process.cwd();
@@ -712,6 +728,84 @@ test("somebody else's finished run is still refused", async () => {
     });
     assert.deepEqual(daemon.removed, []);
   } finally {
+    await daemon.stop();
+  }
+});
+
+test("addProject can initialise a directory that is not a repository yet", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "sdk-init-")));
+  const { daemon, studio } = await connected();
+  const cwd = process.cwd();
+  try {
+    // Without the flag it refuses and says what to do — creating a repository is
+    // a bigger side effect than registering one, and a mistyped path would
+    // otherwise leave an empty repository somewhere nobody meant.
+    process.chdir(dir);
+    await assert.rejects(() => studio.addProject(), /Pass \{ init: true \}/);
+    assert.equal(existsSync(join(dir, ".git")), false, "the refusal must not have created anything");
+
+    await studio.addProject({ init: true } as never).catch(() => {}); // wrong shape: path is first
+    assert.equal(existsSync(join(dir, ".git")), false, "an options object in the path slot is not a path");
+
+    await studio.addProject(undefined, { init: true });
+    assert.ok(existsSync(join(dir, ".git")), "git init should have run here");
+    const sent = daemon.requests.filter((r) => r.method === "POST" && r.path === "/v1/projects").pop();
+    assert.deepEqual(sent?.body, { path: dir });
+  } finally {
+    process.chdir(cwd);
+    await daemon.stop();
+  }
+});
+
+test("init is a no-op inside a repository that already exists", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "sdk-noinit-")));
+  initRepoWithCommit(dir);
+  const sub = join(dir, "scripts");
+  mkdirSync(sub);
+  const { daemon, studio } = await connected();
+  const cwd = process.cwd();
+  try {
+    process.chdir(sub);
+    await studio.addProject(undefined, { init: true });
+    // The subdirectory must not become its own repository: the walk found one,
+    // so there is nothing to create, and the root is what gets registered.
+    assert.equal(existsSync(join(sub, ".git")), false);
+    const sent = daemon.requests.filter((r) => r.method === "POST" && r.path === "/v1/projects").pop();
+    assert.deepEqual(sent?.body, { path: dir });
+  } finally {
+    process.chdir(cwd);
+    await daemon.stop();
+  }
+});
+
+test("a repository with files and no commits is refused, with what to run", async () => {
+  // The trap `git init` leaves: registerable, and every worktree Studio makes
+  // from it is empty — the agent starts in a /workspace with none of this code
+  // in it, and nothing says so. Measured before this check existed: a directory
+  // with main.py in it, init, one run, and `ls` printed nothing.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "sdk-unborn-")));
+  writeFileSync(join(dir, "main.py"), "print('hi')\n");
+  const { daemon, studio } = await connected();
+  const cwd = process.cwd();
+  try {
+    process.chdir(dir);
+    await assert.rejects(() => studio.addProject(undefined, { init: true }), (e: Error) => {
+      assert.match(e.message, /no commits yet/);
+      assert.match(e.message, /every worktree it makes would be empty/);
+      assert.match(e.message, /git add -A && git commit/);
+      return true;
+    });
+    // Refused before the daemon was asked: registering it would have produced a
+    // project whose every run starts empty.
+    assert.equal(daemon.requests.some((r) => r.method === "POST" && r.path === "/v1/projects"), false);
+    // And an *empty* new directory is fine — there is nothing to lose.
+    const empty = realpathSync(mkdtempSync(join(tmpdir(), "sdk-fresh-")));
+    process.chdir(empty);
+    await studio.addProject(undefined, { init: true });
+    const sent = daemon.requests.filter((r) => r.method === "POST" && r.path === "/v1/projects").pop();
+    assert.deepEqual(sent?.body, { path: empty });
+  } finally {
+    process.chdir(cwd);
     await daemon.stop();
   }
 });

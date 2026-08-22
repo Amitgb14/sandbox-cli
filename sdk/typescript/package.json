@@ -1,6 +1,6 @@
 {
   "name": "@sandbox-cli/sdk",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Typed client for the sandbox-cli control plane — run agents and commands in isolated containers, from a program.",
   "keywords": [
     "sandbox",

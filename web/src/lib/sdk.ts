@@ -227,7 +227,7 @@ export const SDK_SNIPPETS: { title: string; code: string; note: string }[] = [
   {
     title: "Work on a repository the daemon has never heard of",
     code: 'const repo = await studio.addProject();   // this script\'s own repository\n// ...or a path on the daemon\'s machine:\n// const repo = await studio.addProject("/home/you/code/my-app");\n\nconst ws = await repo.workspace("agent-1");\nconsole.log(await ws.run(["git", "log", "--oneline", "-1"]));',
-    note: "A path is resolved on the machine running the script, then sent absolute — so the no-argument form is for a daemon on this machine, and a remote one will say it has no such directory rather than guess. Adding a repository that is already registered returns the same row, so this is safe to run every time.",
+    note: "A path is resolved on the machine running the script, then sent absolute — so the no-argument form is for a daemon on this machine, and a remote one will say it has no such directory rather than guess. Adding a repository that is already registered returns the same row, so this is safe to run every time. Not a repository yet? Pass { init: true } to run git init first — and commit something, because Studio works from committed state and a repository with no commits makes empty worktrees.",
   },
   {
     title: "Run one command and read its output",

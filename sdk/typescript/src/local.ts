@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -75,6 +75,55 @@ export async function localRepo(from: string): Promise<LocalRepo | null> {
 
   const walked = walkUp(dir);
   return walked ? { root: walked, tree: walked } : null;
+}
+
+/**
+ * `git init` in a directory that is not in a repository yet.
+ *
+ * On **this** machine, which is the whole reason the caller has to ask for it:
+ * a path names a directory on the daemon's host, and against a remote daemon
+ * initialising here creates a repository nobody will ever see while the
+ * registration still fails. There is no way to tell the two apart — an SSH
+ * tunnel makes a remote daemon answer on loopback — so this stays something you
+ * type rather than something that happens to you.
+ *
+ * `init.templateDir=` for the same reason the read path pins its config: a
+ * template directory can carry hooks, and this is the one git command here that
+ * *writes*. No initial commit is made and none is needed — git creates an orphan
+ * worktree from a commitless repository, and a run in one works (measured).
+ */
+export async function initRepo(dir: string): Promise<void> {
+  if (!existsSync(dir)) throw new Error(`${dir} does not exist, so there is nothing to initialise`);
+  await run("git", ["-c", "init.templateDir=", "init", "-q"], { cwd: dir, timeout: 30_000 });
+}
+
+/**
+ * Whether a repository has files but no commits — the state in which every
+ * worktree Studio makes is **empty**.
+ *
+ * This is the trap `git init` leaves behind, and it is silent: git creates an
+ * orphan worktree from a commitless repository, the daemon registers it happily,
+ * the run starts, and the agent finds nothing in /workspace. Measured — a
+ * directory with `main.py` in it, `git init`, one run: `ls` printed nothing.
+ * Nobody would connect the missing code to a missing commit.
+ *
+ * Reported rather than fixed. `git add -A && git commit` is one line to type and
+ * a bad thing to do *for* somebody: in a directory that has never been a
+ * repository there is usually no .gitignore yet, so it is exactly where
+ * node_modules, a .env and a stray key get committed.
+ */
+export async function unbornWithFiles(dir: string): Promise<boolean> {
+  try {
+    await run("git", ["rev-parse", "--verify", "--quiet", "HEAD"], { cwd: dir, timeout: 10_000 });
+    return false; // there is a commit, so a worktree has something in it
+  } catch {
+    // Unborn HEAD. Only a problem if there is something here that would be lost.
+  }
+  try {
+    return readdirSync(dir).some((entry) => entry !== ".git");
+  } catch {
+    return false;
+  }
 }
 
 /** Just the repository, for callers that do not care where inside it they are. */
