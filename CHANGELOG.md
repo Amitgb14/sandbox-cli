@@ -13,6 +13,24 @@ version is tagged.
 
 ### Added
 
+- **`studio.addProject(path, { init: true })`** runs `git init` when the
+  directory is not a repository yet. Opt-in, because creating a repository is a
+  larger side effect than registering one — and because the path belongs to the
+  *daemon's* machine while `git init` runs on this one, so doing it
+  automatically would silently make a repository in the wrong place against a
+  remote daemon.
+
+### Fixed
+
+- **A repository with files and no commits is refused, instead of producing
+  empty workspaces.** Studio works from committed state, so `git init` alone is
+  a trap: git makes an orphan worktree, the daemon registers it, the run starts,
+  and the agent finds nothing in `/workspace` — with nothing anywhere saying
+  why. `addProject` now catches it while the person is still at the keyboard and
+  prints the commit to run. It does not commit for you: a directory that was
+  never a repository usually has no `.gitignore`, which is where a helpful tool
+  would commit `node_modules` and a `.env`.
+
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
   sandbox-cli never supplies the key.** `gateway:` in your own config names the
   agents, the endpoint, and the *variable* the credential lives in — a name, not

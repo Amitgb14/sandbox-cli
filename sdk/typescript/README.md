@@ -72,6 +72,29 @@ await studio.addProject();                      // the repository this script is
 await studio.addProject("/home/you/code/api");  // or any path there
 ```
 
+If the directory is not a repository yet, `addProject` says so rather than
+guessing. `{ init: true }` runs `git init` there first:
+
+```ts
+await studio.addProject(undefined, { init: true });   // this directory
+```
+
+It is opt-in and stays that way, for two reasons. Creating a repository is a
+larger side effect than registering one, and a mistyped path would otherwise
+leave an empty repository somewhere nobody meant. And the path belongs to the
+**daemon's** machine while `git init` necessarily runs on this one — against a
+remote daemon, doing it automatically would create a repository here, silently,
+and still fail to register there.
+
+`git init` alone is also not enough to be useful, and this is the part worth
+knowing: Studio works from **committed** state. A repository with files and no
+commits makes *empty* worktrees — git creates an orphan worktree, the daemon
+registers it happily, the run starts, and the agent finds nothing in
+`/workspace`. So `addProject` refuses that state and tells you what to run. It
+does not commit for you: a directory that has never been a repository usually has
+no `.gitignore`, which is exactly where `node_modules`, a `.env` and a stray key
+get committed by a helpful tool.
+
 That is the only call here that hands over a path, mirroring the one endpoint
 that accepts one: the checks a directory has to pass — absolute, on disk, a git
 repository, not your home or an ancestor of it — are applied there, once, by the

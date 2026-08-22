@@ -1,7 +1,7 @@
 import { Transport } from "./transport.js";
 import { ApiError, ConnectionError, WaitError, abortError } from "./errors.js";
 import { discoverToken, discoverUrl } from "./discover.js";
-import { localRepo, samePath, wirePath, type LocalRepo } from "./local.js";
+import { initRepo, localRepo, samePath, unbornWithFiles, wirePath, type LocalRepo } from "./local.js";
 import type {
   AgentInfo,
   HealthResponse,
@@ -44,6 +44,25 @@ export interface ConnectOptions {
   token?: string;
   timeoutMs?: number;
   fetch?: typeof globalThis.fetch;
+}
+
+export interface AddProjectOptions {
+  /**
+   * Run `git init` in the directory when it is not in a repository yet.
+   *
+   * Opt-in, and it stays that way. Two reasons, and the second is the one that
+   * cannot be designed around. Creating a repository is a larger side effect
+   * than registering one, and this SDK already refuses to register what a lookup
+   * failed to find — a mistyped path would otherwise leave an empty repository
+   * somewhere nobody meant. And the path belongs to the **daemon's** machine
+   * while `git init` necessarily runs on this one: against a remote daemon,
+   * doing it automatically would create a repository here, silently, and still
+   * fail to register there.
+   *
+   * No initial commit is made. Git creates an orphan worktree from a commitless
+   * repository, so branch-addressed runs work immediately.
+   */
+  init?: boolean;
 }
 
 export interface RunOptions {
@@ -289,7 +308,7 @@ export class Studio {
    * Adding a repository that is already registered is a no-op that returns the
    * existing row, so this is safe to call on every start.
    */
-  async addProject(path?: string): Promise<Project> {
+  async addProject(path?: string, opts: AddProjectOptions = {}): Promise<Project> {
     // No argument means "the repository I am in", and a relative path or a `~`
     // is expanded the way a shell would. Both are conveniences of *expression*:
     // what crosses is one absolute path, to a daemon that applies every check
@@ -297,13 +316,37 @@ export class Studio {
     const cwd = process.cwd();
     let asked: string;
     if (path === undefined) {
-      const here = await localRepo(cwd);
-      if (!here) throw new Error(`${cwd} is not inside a git repository; give addProject a path instead`);
+      let here = await localRepo(cwd);
+      if (!here && opts.init) {
+        await initRepo(cwd);
+        here = await localRepo(cwd);
+      }
+      if (!here) {
+        throw new Error(
+          `${cwd} is not inside a git repository — Studio addresses work by branch, so there has to ` +
+            `be one. Pass { init: true } to run \`git init\` here first, or give addProject a path.`,
+        );
+      }
       asked = here.root;
     } else {
       const typed = path.trim();
       if (!typed) throw new Error("addProject needs a path on the daemon's machine");
       asked = wirePath(typed, cwd);
+      if (opts.init && !(await localRepo(asked))) await initRepo(asked);
+    }
+    // A repository with files and no commits is registerable and useless: every
+    // worktree Studio makes from it is empty, so the agent starts in a
+    // /workspace with none of this code in it and nothing says so. Caught here,
+    // where the person is still at the keyboard, rather than in a run whose
+    // output is "no such file".
+    if (await unbornWithFiles(asked)) {
+      throw new Error(
+        `${asked} is a git repository with no commits yet, and Studio works from committed ` +
+          `state — every worktree it makes would be empty, so an agent would see none of these ` +
+          `files. Commit first (check what you are adding: a directory that was never a ` +
+          `repository usually has no .gitignore), then add it:\n` +
+          `  git add -A && git commit -m "initial commit"`,
+      );
     }
     const rec = await this.t.request<ProjectRecord>("POST", "/v1/projects", { path: asked });
     return new Project(this.t, rec);

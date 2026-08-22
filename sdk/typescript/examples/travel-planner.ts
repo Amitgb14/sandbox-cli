@@ -41,7 +41,13 @@ const BRIEF = `# Trip Brief
 `;
 
 const studio = await Studio.connect();
-const repo = await studio.addProject(); // the repository this script is in
+// The repository this script is in. `{ init: true }` would `git init` a
+// directory that is not one yet — opt-in, because the path belongs to the
+// daemon's machine and `git init` would run on this one. Studio works from
+// committed state either way: a repository with no commits makes empty
+// worktrees, and addProject refuses that rather than letting an agent start in
+// a /workspace with none of your files in it.
+const repo = await studio.addProject();
 const AGENT = "claude";
 
 /** Write a file into a workspace from the host.
