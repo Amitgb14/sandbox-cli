@@ -188,13 +188,11 @@ func removeSandboxNetworkIfUnused(ctx context.Context, rt sessionRuntime, bin st
 // reporting success while leaving one turns a five-minute fix into a long
 // detour. Issue #77.
 func reapPerRunNetworks(ctx context.Context, rt sessionRuntime) {
-	reaper, ok := rt.(interface {
-		ReapPerRunNetworks(context.Context, string) []runtime.NetworkReap
-	})
+	reaper, ok := rt.(runtime.NetworkReaper)
 	if !ok {
 		return
 	}
-	for _, r := range reaper.ReapPerRunNetworks(ctx, sandbox.LabelCLI) {
+	for _, r := range reaper.ReapPerRunNetworks(ctx, sandbox.LabelCLI+"=1") {
 		if r.Removed {
 			fmt.Printf("removed network %s\n", termsafe.Clean(r.Name))
 			continue

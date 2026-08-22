@@ -62,3 +62,20 @@ func TestForeignContainersAreNeverForced(t *testing.T) {
 		t.Errorf("planForNetwork(one foreign among ours) = %v, want planSkip", got)
 	}
 }
+
+// TestRefusalReasonIsNeverEmpty: "kept network sandbox-cli-x ()" reads as a
+// truncated bug. An engine that fails silently is exactly when the person
+// reading has least to go on.
+func TestRefusalReasonIsNeverEmpty(t *testing.T) {
+	for _, in := range []string{"", "   ", "\n\n"} {
+		if got := refusalReason(in); got != "the engine refused and gave no reason" {
+			t.Errorf("refusalReason(%q) = %q, want the fallback sentence", in, got)
+		}
+	}
+	// When it does say something, the last line is the specific one — engine
+	// errors put the general complaint first.
+	got := refusalReason("Error: something\n\"sandbox-cli-x\" has associated containers with it")
+	if got != `"sandbox-cli-x" has associated containers with it` {
+		t.Errorf("refusalReason kept the wrong line: %q", got)
+	}
+}

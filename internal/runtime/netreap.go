@@ -25,6 +25,24 @@ import (
 // so a leaked sandbox network blocks the fix for an unrelated, host-wide problem.
 // Issue #77.
 
+// NetworkReaper is the optional capability of collecting the per-run networks an
+// engine leaves behind. Named rather than asserted inline at the call site: an
+// unchecked assertion turns a signature change into a silent no-op — `clean`
+// reporting success while leaving the network, which is the exact failure this
+// file exists to remove — and it leaves the wiring untestable, since a fake that
+// does not implement it simply takes the "not supported" path.
+type NetworkReaper interface {
+	// ownerFilter is a `label=value` selector for the containers this tool owns,
+	// passed in rather than named here: it is defined in internal/sandbox, which
+	// imports this package, and a second copy of the constant that decides what
+	// may be force-removed is the kind of duplication that drifts quietly.
+	ReapPerRunNetworks(ctx context.Context, ownerFilter string) []NetworkReap
+}
+
+// The engine implements it; asserted here so a signature drift is a build
+// failure rather than a `clean` that silently stops reaping.
+var _ NetworkReaper = (*DockerCLI)(nil)
+
 // NetworkReap is what happened to one network, so a caller can say so. A reaper
 // that fails silently is how the leak survived a `clean` that reported success.
 type NetworkReap struct {
@@ -101,11 +119,6 @@ func planForNetwork(on []attachment) networkPlan {
 // each container's networks, so a host with twenty sandboxes costs the same as
 // one with a single sandbox rather than a query per network.
 //
-// ownerLabel is the label marking a container as sandbox-cli's, passed in rather
-// than named here: it is defined in internal/sandbox, which imports this package,
-// and a second copy of a constant that decides what may be force-removed is the
-// kind of duplication that drifts quietly.
-//
 // Scoped to the per-run prefix and to engines that use per-run networks at all.
 // Docker shares one network, so nothing there can be attributed to a finished
 // run, and sweeping `sandbox-cli-*` names on an engine this run was never
@@ -118,7 +131,7 @@ func planForNetwork(on []attachment) networkPlan {
 // location, so an age guard here would be a guess dressed as a measurement. The
 // window is milliseconds inside an explicit `clean`, and the loser gets a run
 // that refuses to start rather than one that runs unisolated.
-func (d *DockerCLI) ReapPerRunNetworks(ctx context.Context, ownerLabel string) []NetworkReap {
+func (d *DockerCLI) ReapPerRunNetworks(ctx context.Context, ownerFilter string) []NetworkReap {
 	if !d.PerRunNetwork() {
 		return nil
 	}
@@ -126,7 +139,7 @@ func (d *DockerCLI) ReapPerRunNetworks(ctx context.Context, ownerLabel string) [
 	if err != nil {
 		return nil
 	}
-	attached, known := d.networkAttachments(ctx, ownerLabel)
+	attached, known := d.networkAttachments(ctx, ownerFilter)
 	if !known {
 		// Unknown attachments must not read as "nothing is attached": every
 		// network would look unused and a live sandbox would lose its networking
@@ -149,12 +162,25 @@ func (d *DockerCLI) ReapPerRunNetworks(ctx context.Context, ownerLabel string) [
 			args = []string{"network", "rm", "-f", name}
 		}
 		if msg, err := exec.CommandContext(ctx, d.bin(), args...).CombinedOutput(); err != nil {
-			reaped = append(reaped, NetworkReap{Name: name, Reason: lastLine(string(msg))})
+			reaped = append(reaped, NetworkReap{Name: name, Reason: refusalReason(string(msg))})
 			continue
 		}
 		reaped = append(reaped, NetworkReap{Name: name, Removed: true})
 	}
 	return reaped
+}
+
+// refusalReason is what to print when the engine refused to remove a network.
+//
+// An engine that exits non-zero having said nothing still has to produce a
+// sentence: `lastLine("")` is `""`, so the output became "kept network x ()",
+// which reads as a truncated bug rather than an explanation — and saying what
+// could not be reaped is the whole promise of this reaper.
+func refusalReason(engineOutput string) string {
+	if why := lastLine(engineOutput); strings.TrimSpace(why) != "" {
+		return why
+	}
+	return "the engine refused and gave no reason"
 }
 
 // skipReason says which container is holding a network, because "still in use"
@@ -180,7 +206,7 @@ func skipReason(on []attachment) string {
 // Every container, not only sandbox-cli's: whether a network can be removed is a
 // question about what is attached to it, and something else attached to a
 // sandbox network is exactly the case where this must not force anything.
-func (d *DockerCLI) networkAttachments(ctx context.Context, ownerLabel string) (byNetwork map[string][]attachment, known bool) {
+func (d *DockerCLI) networkAttachments(ctx context.Context, ownerFilter string) (byNetwork map[string][]attachment, known bool) {
 	out, err := exec.CommandContext(ctx, d.bin(), "ps", "-a", "--format", "{{.Names}}|{{.State}}|{{.Networks}}").Output()
 	if err != nil {
 		// Reported as *unknown* rather than as an empty map, because the two mean
@@ -188,13 +214,15 @@ func (d *DockerCLI) networkAttachments(ctx context.Context, ownerLabel string) (
 		// reading. See the bail-out above.
 		return nil, false
 	}
-	// Whose containers are whose, asked with the same label filter every other
-	// command uses rather than by parsing the label column: label values are
-	// comma-separated in that column and a value containing `,sandbox.cli=`
+	// Whose containers are whose, asked with the same `label=value` filter every
+	// other command uses rather than by parsing the label column: label values
+	// are comma-separated in that column and a value containing `,sandbox.cli=`
 	// would make somebody else's container look like ours — which is the one
-	// mistake that would let this delete it.
+	// mistake that would let this delete it. The *value* is part of the filter
+	// for the same reason: a bare key matches any value, so a container carrying
+	// `sandbox.cli=someone-elses` would be counted as ours.
 	ours := map[string]bool{}
-	if mine, err := exec.CommandContext(ctx, d.bin(), "ps", "-a", "--filter", "label="+ownerLabel, "--format", "{{.Names}}").Output(); err == nil {
+	if mine, err := exec.CommandContext(ctx, d.bin(), "ps", "-a", "--filter", "label="+ownerFilter, "--format", "{{.Names}}").Output(); err == nil {
 		for _, n := range strings.Split(strings.TrimSpace(string(mine)), "\n") {
 			if n = strings.TrimSpace(n); n != "" {
 				ours[n] = true
