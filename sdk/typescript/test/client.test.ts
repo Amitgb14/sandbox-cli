@@ -677,3 +677,41 @@ test("a forgotten argument is not a request for the current repository", async (
     await daemon.stop();
   }
 });
+
+test("a second step on one workspace clears only the run this object delivered", async () => {
+  // The real daemon keeps a finished run's container name, so `ws.run()` twice —
+  // or a run then an agent — was refused with a 409. That rule protects *another*
+  // script's evidence; applied to the next line of your own it makes sequential
+  // work impossible, and both published examples had the shape that hit it.
+  const { daemon, studio } = await connected({ holdsNameAfterRun: true });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    const first = await ws.run(["echo", "one"]);
+    const second = await ws.run(["echo", "two"]);
+    assert.equal(first.exitCode, 0);
+    assert.equal(second.exitCode, 0);
+    // Cleared by id — the run whose outcome was already handed back — rather
+    // than by sweeping whatever holds the name.
+    assert.deepEqual(daemon.removed, ["run-1"]);
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("somebody else's finished run is still refused", async () => {
+  // Nothing was delivered by this object, so there is nothing it may clear: the
+  // holder belongs to an earlier session and its logs are evidence this client
+  // never received.
+  const { daemon, studio } = await connected({ nameHeldBy: "abc123" });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    await assert.rejects(() => ws.run(["echo", "hi"]), (e: Error) => {
+      assert.match(e.message, /still holds "feature"'s container name/);
+      assert.match(e.message, /replaceFinished/);
+      return true;
+    });
+    assert.deepEqual(daemon.removed, []);
+  } finally {
+    await daemon.stop();
+  }
+});

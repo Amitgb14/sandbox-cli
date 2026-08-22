@@ -11,7 +11,27 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **A third SDK example: agents that hand work to each other.**
+  `examples/travel-planner.ts` runs two research agents in parallel and gives a
+  third what they produced. The gap it exists to show is that each agent has its
+  own worktree, so the coordinator cannot see the others' files — artifacts cross
+  through the host, base64-encoded in both directions, and a specialist that
+  produced nothing is named as missing rather than quietly skipped. Telling the
+  coordinator to assume the files exist is the natural thing to write and it
+  fails silently: the agent invents plausible inputs and the report reads exactly
+  like a real one.
+
 ### Fixed
+
+- **Two steps on one workspace no longer collide.** `ws.run(...)` twice — or a
+  `run` then an `agent` — was refused with a 409, because the first run keeps the
+  branch's container name until something clears it. That is the right rule for
+  *another* script's run, and wrong for the next line of your own: the SDK now
+  clears the run whose outcome it already handed back, and only that one.
+  Anything else holding the name still refuses. Both published examples had the
+  shape that hit this.
 
 - **`sandbox-cli clean` now actually reaps podman's leaked per-run networks — and
   says what it could not.** A network with an *exited* container still attached

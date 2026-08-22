@@ -377,6 +377,17 @@ export class Workspace {
   private readonly t: Transport;
   readonly project: Project;
   readonly branch?: string;
+  /**
+   * The run this object last returned an Outcome for.
+   *
+   * A finished run keeps its branch's container name — docker refuses a
+   * duplicate, which is what enforces one agent per branch — so a second step on
+   * the same workspace is refused until something clears the first. This is the
+   * one run that can be cleared without discarding anything: its exit code,
+   * stdout and stderr were handed to the caller before it was recorded here.
+   * Anything else holding the name belongs to somebody else and still refuses.
+   */
+  private delivered?: string;
 
   constructor(t: Transport, project: Project, branch?: string) {
     this.t = t;
@@ -603,6 +614,29 @@ export class Workspace {
       started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
     } catch (err) {
       if (!(err instanceof ApiError) || err.status !== 409) throw err;
+      // Held separately because the retry below may replace it, and a reassigned
+      // `err` loses the narrowing that proved it was an ApiError.
+      let conflict: ApiError = err;
+      // A second step in the same script is not a second script. The name is
+      // held by the run *this object already returned an Outcome for* — its
+      // exit code, stdout and stderr are in the caller's hands — so clearing it
+      // discards no evidence anybody is still waiting for, and the alternative
+      // is that `run()` twice on one workspace cannot work at all.
+      //
+      // Scoped to this object's own delivered run and nothing else: a run
+      // launched by another script, an earlier session, or one still going is
+      // somebody else's, and those still get the 409 and the sentence below.
+      if (this.delivered && !opts.replaceFinished) {
+        try {
+          await this.remove(this.delivered);
+          this.delivered = undefined;
+          started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
+          return await this.awaitOutcome(started, opts);
+        } catch (retryErr) {
+          if (!(retryErr instanceof ApiError) || retryErr.status !== 409) throw retryErr;
+          conflict = retryErr;
+        }
+      }
       if (!opts.replaceFinished) {
         // The daemon's own remedy is "GET /v1/runs/<id>/logs, then DELETE
         // /v1/runs/<id>" — correct, and addressed to a client holding a URL.
@@ -611,9 +645,9 @@ export class Workspace {
         // people to work around it. The daemon's sentence is kept whole; this
         // adds the sentence it cannot know to write.
         throw new ApiError(
-          err.status,
-          err.endpoint,
-          `${err.message}\n  From here: pass { replaceFinished: true } to run this anyway, ` +
+          conflict.status,
+          conflict.endpoint,
+          `${conflict.message}\n  From here: pass { replaceFinished: true } to run this anyway, ` +
             `or call workspace.clearFinished() first — both refuse a run that is still going.`,
         );
       }
@@ -629,12 +663,25 @@ export class Workspace {
       try {
         await this.clearFinished();
       } catch (clearErr) {
-        throw new ApiError(err.status, err.endpoint, `${err.message}\n  ${String(clearErr)}`);
+        throw new ApiError(conflict.status, conflict.endpoint, `${conflict.message}\n  ${String(clearErr)}`);
       }
       started = await this.t.request<Run>("POST", "/v1/runs", body, opts.signal);
     }
+    return this.awaitOutcome(started, opts);
+  }
+
+  /**
+   * Wait for a launched run and hand back its outcome, remembering that this
+   * object delivered it.
+   *
+   * That memory is what lets the *next* step on this workspace clear the name —
+   * see launchAndWait. It is set only after the outcome is returned, so a run
+   * whose result nobody received is never treated as spent.
+   */
+  private async awaitOutcome(started: Run, opts: RunOptions): Promise<Outcome> {
+    let out: Outcome;
     try {
-      return await this.wait(started.id, opts);
+      out = await this.wait(started.id, opts);
     } catch (cause) {
       // The launch already succeeded, so the container exists whatever went
       // wrong here — a daemon restart mid-poll, a 502, an abort. Rejecting with
@@ -643,6 +690,8 @@ export class Workspace {
       // duplicate: the branch would be blocked by something nobody can name.
       throw new WaitError(started, cause);
     }
+    this.delivered = started.id;
+    return out;
   }
 
   /**

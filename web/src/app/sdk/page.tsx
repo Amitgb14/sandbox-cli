@@ -12,6 +12,7 @@ import { REPO_URL, STUDIO_PATH } from "@/lib/site";
 import {
   SDK_ERRORS,
   SDK_EXAMPLE,
+  SDK_HANDOFF,
   SDK_WORKFLOW,
   SDK_PREREQS,
   SDK_REMOTE_STEPS,
@@ -85,6 +86,11 @@ const NAV: NavEntry[] = [
         href: "#workflow",
         label: "A workflow, in parallel",
         hint: "three branches, three containers, one gate",
+      },
+      {
+        href: "#handoff",
+        label: "Passing work between agents",
+        hint: "artifacts cross through the host, on purpose",
       },
       {
         href: "#rules",
@@ -378,6 +384,57 @@ export default function SdkPage() {
               <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
                 The verification runs <strong className="font-medium text-foreground">in the sandbox</strong>.
                 On the host it would be host code selected by files the agent had just written.
+              </p>
+            </div>
+          </div>
+        </Section>
+
+        {/* -------------------------------------------------------- handoff */}
+        <Section id="handoff">
+          <SectionHead
+            eyebrow="agents that need each other"
+            title="Passing work between agents"
+            lead={
+              <>
+                Two specialists research in parallel and a coordinator combines what they produced.
+                The interesting part is not the fan-out but the gap in the middle: each agent has its
+                own worktree, so the coordinator <strong className="font-medium text-foreground">cannot see</strong>{" "}
+                what the others wrote. Artifacts cross through the host, deliberately. It is{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  examples/travel-planner.ts
+                </code>
+                .
+              </>
+            }
+          />
+
+          <CodeBlock code={SDK_HANDOFF} lang="ts" title="examples/travel-planner.ts" />
+
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border bg-card p-5">
+              <ShieldCheck className="mb-3 size-4 text-muted-foreground" />
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                Files cross <strong className="font-medium text-foreground">base64-encoded</strong>, not
+                through a heredoc. An artifact written by an agent is attacker-controlled, and an
+                interpolated heredoc is one <code className="font-mono text-[0.85em]">EOF</code> line
+                away from being the next command.
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-card p-5">
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                Reads are base64 too, because{" "}
+                <code className="font-mono text-[0.85em]">stdout</code> is the run&apos;s log{" "}
+                <em>lines</em> joined — a file&apos;s trailing newline cannot survive{" "}
+                <code className="font-mono text-[0.85em]">cat</code>. Measured: 64 bytes back for 65
+                written.
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-card p-5">
+              <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
+                A specialist that produced nothing is <strong className="font-medium text-foreground">named as missing</strong>,
+                not quietly skipped. Telling the coordinator to assume the file exists is the natural
+                thing to write, and it fails silently — the agent invents plausible inputs and the
+                report reads exactly like a real one.
               </p>
             </div>
           </div>
