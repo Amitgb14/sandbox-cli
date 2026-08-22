@@ -228,10 +228,29 @@ this tool is built around is the other direction: `secrets:` in the *daemon's*
 config, resolved on that host and forwarded by name, so a value never crosses
 the wire and has nowhere to land in a log.
 
-## Two whole scripts
+## Reading output, and moving files
+
+`Outcome.stdout` is the run's log **lines**, joined with newlines. That makes it
+the right thing for reading what a command said and the wrong thing for copying a
+file: a trailing newline cannot survive it (measured — 64 bytes back for 65
+written). When an artifact has to move between workspaces, send it base64-encoded
+in both directions, as `examples/travel-planner.ts` does. That also removes the
+quoting hazard, which matters more than the byte: a file written by an agent is
+attacker-controlled, and a heredoc built by string interpolation is one `EOF`
+line away from being the next command.
+
+Each run is a **new container**, so nothing outside the worktree survives between
+steps — `/tmp` is gone, `/workspace` is not.
+
+## Three whole scripts
 
 `examples/agent-run.ts` is the end-to-end version of one task — install, hand the
 work to an agent, run the tests, and check what the outcome claims.
+
+`examples/travel-planner.ts` is three agents that need each other: two
+specialists in parallel, then a coordinator that gets their artifacts handed to
+it through the host, because worktrees are isolated and it cannot see them
+otherwise.
 
 `examples/workflow.ts` is the same idea widened: three tasks on three branches in
 three containers, in parallel, then one gate deciding which are worth a human's
@@ -240,7 +259,7 @@ orchestrating agents means building an agent. It does not: the control flow is
 `Promise.all` and an `if`, and the only model involved is the one working inside
 each container.
 
-Both import by package name and are compiled by `npm test`, so they are checked
+All three import by package name and are compiled by `npm test`, so they are checked
 in the shape you would type rather than in one only this repository can use.
 
 ## Running the same script twice

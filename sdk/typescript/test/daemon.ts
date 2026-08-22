@@ -28,6 +28,11 @@ export interface FakeDaemonOptions {
   /** Refuse the first launch with 409, the way a finished run holding the
    *  branch's container name does. Cleared by DELETE, as on the real daemon. */
   nameHeldBy?: string;
+  /** Model the real daemon's lifecycle: a finished run keeps the branch's
+   *  container name, so the *next* launch is refused until it is removed. This
+   *  is what every sequential script hits, and what nameHeldBy (a run from some
+   *  earlier session) deliberately is not. */
+  holdsNameAfterRun?: boolean;
   /** The root of the first listed repository. A real daemon's roots are
    *  directories on its own machine; a test that looks one up by path needs a
    *  root that exists here. */
@@ -39,10 +44,15 @@ export interface FakeDaemonOptions {
 
 export class FakeDaemon {
   readonly requests: Recorded[] = [];
+  /** Ids this daemon was asked to remove, so a test can say which one. */
+  readonly removed: string[] = [];
   private server!: Server;
   private port = 0;
   private stateIndex = 0;
   private stoppedRuns: string[] = [];
+  /** The run currently holding the branch's container name, when the daemon is
+   *  modelling that lifecycle. */
+  private heldBy = "";
 
   constructor(private opts: FakeDaemonOptions = {}) {}
 
@@ -141,7 +151,15 @@ export class FakeDaemon {
           `read it with GET /v1/runs/${this.opts.nameHeldBy}/logs, then DELETE /v1/runs/${this.opts.nameHeldBy} to run again`,
       });
     }
+    if (url.pathname === "/v1/runs" && req.method === "POST" && this.heldBy) {
+      const held = this.heldBy;
+      return json(409, {
+        error: `a finished run (${held}, exit 0) still holds "feature"'s container name; ` +
+          `read it with GET /v1/runs/${held}/logs, then DELETE /v1/runs/${held} to run again`,
+      });
+    }
     if (url.pathname === "/v1/runs" && req.method === "POST") {
+      if (this.opts.holdsNameAfterRun) this.heldBy = "run-1";
       return json(201, { id: "run-1", containerId: "c1", name: "sandbox-app-feature", kind: "interactive", state: "running", detached: true, createdAt: new Date(0).toISOString() });
     }
     if (url.pathname === "/v1/runs/run-1" && req.method === "GET") {
@@ -179,6 +197,13 @@ export class FakeDaemon {
       res.write(`event: end\ndata: ${JSON.stringify({ type: "end", data: "" })}\n\n`);
       // Deliberately left open after `end`: a client that only stopped when the
       // connection closed would hang here, which is the bug this shape catches.
+      return;
+    }
+    if (url.pathname === "/v1/runs/run-1" && req.method === "DELETE" && this.heldBy === "run-1") {
+      this.heldBy = "";
+      this.removed.push("run-1");
+      res.writeHead(204);
+      res.end();
       return;
     }
     if (url.pathname === `/v1/runs/${this.opts.nameHeldBy}` && req.method === "DELETE") {
