@@ -13,40 +13,6 @@ version is tagged.
 
 ### Added
 
-- **A third SDK example: agents that hand work to each other.**
-  `examples/travel-planner.ts` runs two research agents in parallel and gives a
-  third what they produced. The gap it exists to show is that each agent has its
-  own worktree, so the coordinator cannot see the others' files — artifacts cross
-  through the host, base64-encoded in both directions, and a specialist that
-  produced nothing is named as missing rather than quietly skipped. Telling the
-  coordinator to assume the files exist is the natural thing to write and it
-  fails silently: the agent invents plausible inputs and the report reads exactly
-  like a real one.
-
-### Fixed
-
-- **Two steps on one workspace no longer collide.** `ws.run(...)` twice — or a
-  `run` then an `agent` — was refused with a 409, because the first run keeps the
-  branch's container name until something clears it. That is the right rule for
-  *another* script's run, and wrong for the next line of your own: the SDK now
-  clears the run whose outcome it already handed back, and only that one.
-  Anything else holding the name still refuses. Both published examples had the
-  shape that hit this.
-
-- **`sandbox-cli clean` now actually reaps podman's leaked per-run networks — and
-  says what it could not.** A network with an *exited* container still attached
-  refuses a plain `network rm`; the reaper assumed only a running container held
-  one, and swallowed the failure, so `clean` reported success and left the
-  network behind. That is worse than untidiness: a leaked network with a dead
-  container in its IPAM makes `podman network reload --all` fail for **every**
-  network on the host — the documented repair after firewalld drops netavark's
-  rules — so an unrelated, host-wide problem became unfixable. Networks nothing
-  is on are removed, ones holding only sandbox-cli's own finished containers are
-  removed with them, and anything live, or anything owned by a container this
-  command did not create, is kept and named. Issue #77.
-
-### Added
-
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
   sandbox-cli never supplies the key.** `gateway:` in your own config names the
   agents, the endpoint, and the *variable* the credential lives in — a name, not
@@ -81,6 +47,42 @@ version is tagged.
   carry a dashed ring, the providers list says *via <host>*, and the gateway's own
   probe result is what is shown, since the vendor behind it being down is the case
   a gateway survives.
+
+## 0.0.1beta.17 — 2026-08-22
+
+### Added
+
+- **A third SDK example: agents that hand work to each other.**
+  `examples/travel-planner.ts` runs two research agents in parallel and gives a
+  third what they produced. The gap it exists to show is that each agent has its
+  own worktree, so the coordinator cannot see the others' files — artifacts cross
+  through the host, base64-encoded in both directions, and a specialist that
+  produced nothing is named as missing rather than quietly skipped. Telling the
+  coordinator to assume the files exist is the natural thing to write and it
+  fails silently: the agent invents plausible inputs and the report reads exactly
+  like a real one.
+
+### Fixed
+
+- **Two steps on one workspace no longer collide.** `ws.run(...)` twice — or a
+  `run` then an `agent` — was refused with a 409, because the first run keeps the
+  branch's container name until something clears it. That is the right rule for
+  *another* script's run, and wrong for the next line of your own: the SDK now
+  clears the run whose outcome it already handed back, and only that one.
+  Anything else holding the name still refuses. Both published examples had the
+  shape that hit this.
+
+- **`sandbox-cli clean` now actually reaps podman's leaked per-run networks — and
+  says what it could not.** A network with an *exited* container still attached
+  refuses a plain `network rm`; the reaper assumed only a running container held
+  one, and swallowed the failure, so `clean` reported success and left the
+  network behind. That is worse than untidiness: a leaked network with a dead
+  container in its IPAM makes `podman network reload --all` fail for **every**
+  network on the host — the documented repair after firewalld drops netavark's
+  rules — so an unrelated, host-wide problem became unfixable. Networks nothing
+  is on are removed, ones holding only sandbox-cli's own finished containers are
+  removed with them, and anything live, or anything owned by a container this
+  command did not create, is kept and named. Issue #77.
 
 ## 0.0.1beta.16 — 2026-08-20
 
