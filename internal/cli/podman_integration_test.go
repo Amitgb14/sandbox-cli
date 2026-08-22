@@ -50,7 +50,7 @@ func podmanAvailable(t *testing.T) *runtime.DockerCLI {
 func TestPodmanCanProgramTheEgressFirewall(t *testing.T) {
 	d := podmanAvailable(t)
 	ref := podmanImage(t, d)
-	if probe, reason := d.FirewallProgrammable(context.Background(), ref); probe != runtime.FirewallOK {
+	if probe, reason := d.FirewallProgrammable(context.Background(), ref, ""); probe != runtime.FirewallOK {
 		t.Fatalf("rootless podman cannot program the firewall (%v): %s\n"+
 			"if this is now true, the egress allowlist needs a podman-specific design", probe, reason)
 	}

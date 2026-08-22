@@ -39,7 +39,7 @@ func TestFirewallProbeExercisesWhatTheEntrypointNeeds(t *testing.T) {
 	d := runtime.NewDockerCLI()
 	ref := probeImage(t, d)
 
-	probe, reason := d.FirewallProgrammable(context.Background(), ref)
+	probe, reason := d.FirewallProgrammable(context.Background(), ref, "")
 	if probe != runtime.FirewallOK {
 		t.Fatalf("probe = %v (%s); this daemon can run the allowlist, so it should pass", probe, reason)
 	}
@@ -52,11 +52,11 @@ func TestFirewallProbeReportsAMissingImageAsUnknown(t *testing.T) {
 		t.Skip("docker daemon not available")
 	}
 	d := runtime.NewDockerCLI()
-	probe, reason := d.FirewallProgrammable(context.Background(), "sandbox-cli-no-such-image:0")
+	probe, reason := d.FirewallProgrammable(context.Background(), "sandbox-cli-no-such-image:0", "")
 	if probe != runtime.FirewallUnknown {
 		t.Errorf("probe = %v (%s), want FirewallUnknown", probe, reason)
 	}
-	if probe, _ := d.FirewallProgrammable(context.Background(), ""); probe != runtime.FirewallUnknown {
+	if probe, _ := d.FirewallProgrammable(context.Background(), "", ""); probe != runtime.FirewallUnknown {
 		t.Errorf("an empty image ref = %v, want FirewallUnknown", probe)
 	}
 }
@@ -72,7 +72,7 @@ func TestFirewallProbeReportsATimeoutAsUnknown(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
-	probe, reason := d.FirewallProgrammable(ctx, ref)
+	probe, reason := d.FirewallProgrammable(ctx, ref, "")
 	if probe == runtime.FirewallBlocked {
 		t.Errorf("a timed-out probe reported the host as blocked: %s", reason)
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -707,6 +708,45 @@ const (
 	FirewallBlocked
 )
 
+// FirewallCause is *why* the probe answered as it did, as a value.
+//
+// The verdict alone is not enough to advise anybody: "unknown" covers an unbuilt
+// image, a host too busy to answer, and a runtime this engine does not have, and
+// the three have nothing in common but the operator's next step being different
+// in each. The alternative is the caller matching on the reason prose, which is
+// exactly the substring-across-a-package-boundary this enum's neighbour was
+// introduced to remove.
+type FirewallCause int
+
+const (
+	// CauseUnspecified is the zero value, for the same reason FirewallUnknown is:
+	// a path that returns without deciding should produce no advice rather than
+	// confident advice about a cause nobody established.
+	CauseUnspecified FirewallCause = iota
+	// CauseNoImage: there is no base image to probe with yet.
+	CauseNoImage
+	// CauseTimedOut: the deadline expired before the host answered.
+	CauseTimedOut
+	// CauseRuntimeUnregistered: the engine does not list the selected runtime, so
+	// nothing was probed on it.
+	CauseRuntimeUnregistered
+	// CauseRuntimeRefused: the engine refused to *start* a container with that
+	// runtime. The container never ran, so this says nothing about iptables —
+	// reporting it as blocked blames the daemon for a name it rejected.
+	CauseRuntimeRefused
+	// CauseRules: the container ran and could not program the rules. This is the
+	// only cause that is actually about the firewall.
+	CauseRules
+)
+
+// FirewallReport is what the probe found: the verdict, why, and prose for a
+// human. Its zero value is an undecided probe with no cause, which fails closed.
+type FirewallReport struct {
+	Probe  FirewallProbe
+	Cause  FirewallCause
+	Reason string
+}
+
 // FirewallProgrammable reports whether a container on this daemon can actually
 // program the egress firewall.
 //
@@ -729,39 +769,125 @@ const (
 // command exists to prevent, so the probe programs the same kinds of rule the
 // entrypoint does. The container is --rm and its netns is its own, so the rules
 // go away with it.
-func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image string) (FirewallProbe, string) {
+func (d *DockerCLI) FirewallProgrammable(ctx context.Context, image, runtimeName string) FirewallReport {
 	if image == "" {
-		return FirewallUnknown, "no base image to test with"
+		return FirewallReport{FirewallUnknown, CauseNoImage, "no base image to test with"}
 	}
 	if err := exec.CommandContext(ctx, d.bin(), "image", "inspect", image).Run(); err != nil {
 		// The deadline can land here too, and reporting an unbuilt image for one
 		// that exists sends the user to build something they already have.
 		if ctx.Err() != nil {
-			return FirewallUnknown, "the probe timed out"
+			return FirewallReport{FirewallUnknown, CauseTimedOut, "the probe timed out"}
 		}
-		return FirewallUnknown, "the base image is not built yet"
+		return FirewallReport{FirewallUnknown, CauseNoImage, "the base image is not built yet"}
 	}
 	// `--entrypoint sh` rather than an absolute path: where iptables lives is the
 	// Dockerfile's business, and hardcoding /usr/sbin/iptables here would turn a
 	// packaging change into a reported host defect. This is a diagnostic, not a
 	// privilege boundary, so resolving through the image's PATH is fine.
+	//
+	// Through sandbox-iptables for the backend, because the entrypoint chooses the
+	// same way and a preflight that answers differently from the launch is worse
+	// than no preflight. Asking bare `iptables` here reported "this host cannot
+	// program the firewall" on exactly the gVisor hosts where the run works, and
+	// advised turning the allowlist off to fix it.
 	const probe = `set -e
-iptables -t nat -N SANDBOX_DOCTOR
-iptables -A OUTPUT -m owner --uid-owner 0 -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
-iptables -t nat -A SANDBOX_DOCTOR -p tcp --dport 443 -j REDIRECT --to-ports 3128`
-	out, err := exec.CommandContext(ctx, d.bin(), "run", "--rm",
-		"--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--user", "0",
-		"--network", "none", "--entrypoint", "sh", image, "-c", probe).CombinedOutput()
+IPT="$(sandbox-iptables)"
+"$IPT" -t nat -N SANDBOX_DOCTOR
+"$IPT" -A OUTPUT -m owner --uid-owner 0 -j ACCEPT
+"$IPT" -A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT
+"$IPT" -t nat -A SANDBOX_DOCTOR -p tcp --dport 443 -j REDIRECT --to-ports 3128`
+	// Under the runtime the run will actually use, not the engine's default.
+	// Whether a container can program iptables is a property of the *kernel* it
+	// gets, and those differ: gVisor serves only the legacy backend, and only
+	// when installed with --net-raw. Probing the default runtime on a host whose
+	// runs select runsc answers a question nobody asked, and answers it "fine".
+	resolvedRuntime := ""
+	if runtimeName != "" {
+		// Through resolveRuntime, the same translation the run path makes. A
+		// containerd-backed daemon lists `io.containerd.runc.v2` while a config
+		// says `runtime: runc`, so sending the user's spelling verbatim made the
+		// probe die on "unknown or invalid runtime name" and report that a host
+		// whose runs program the firewall perfectly well cannot — the very
+		// disagreement this probe was scoped to a runtime to prevent, inverted.
+		resolved, rerr := d.resolveRuntime(ctx, runtimeName)
+		if rerr != nil {
+			// The engine does not have it. That is a fact about the *runtime*, not
+			// about whether this host can filter, and checkRuntimes reports it
+			// properly one line below. Answering "unknown" keeps this check from
+			// blaming the daemon — and from advising that the egress allowlist be
+			// switched off to fix a misspelled flag.
+			return FirewallReport{FirewallUnknown, CauseRuntimeUnregistered,
+				"the runtime " + strconv.Quote(runtimeName) + " is not registered, so nothing could be probed on it"}
+		}
+		resolvedRuntime = resolved
+	}
+	out, err := exec.CommandContext(ctx, d.bin(),
+		firewallProbeArgs(image, resolvedRuntime, probe)...).CombinedOutput()
 	if err != nil {
 		// A cancelled or timed-out probe answered nothing. Reporting it as
 		// "cannot program iptables" would fail prod for a question never asked.
 		if ctx.Err() != nil {
-			return FirewallUnknown, "the probe timed out"
+			return FirewallReport{FirewallUnknown, CauseTimedOut, "the probe timed out"}
 		}
-		return FirewallBlocked, strings.TrimSpace(lastLine(string(out)))
+		last := strings.TrimSpace(lastLine(string(out)))
+		// The engine refusing the *name* is not the container failing to program
+		// rules — the container never started. resolveRuntime is deliberately
+		// non-fatal in two places (podman reports only the runtime it is using,
+		// and an `info` that cannot be read returns the name unchanged), so an
+		// unaccepted spelling still reaches this launch. Read as "blocked" it
+		// blamed the daemon and contradicted the runtime check one line below,
+		// which was busy reporting that same runtime as fine.
+		if runtimeRefused(string(out)) {
+			return FirewallReport{FirewallUnknown, CauseRuntimeRefused,
+				"the engine refused to start a container with runtime " + strconv.Quote(runtimeName) + ": " + last}
+		}
+		return FirewallReport{FirewallBlocked, CauseRules, last}
 	}
-	return FirewallOK, ""
+	return FirewallReport{FirewallOK, CauseUnspecified, ""}
+}
+
+// runtimeRefused reports whether the engine rejected the runtime name rather
+// than running anything.
+//
+// Matching engine prose is not something to do lightly, and it is confined to
+// this one function for that reason. There is no status code to read: docker and
+// podman both exit 125 for "could not start" generally, so the message is the
+// only thing that separates a rejected name from a container that ran and
+// failed. The markers are the ones both engines have used for years, and the
+// cost of a miss is the previous behaviour rather than a wrong answer.
+func runtimeRefused(out string) bool {
+	low := strings.ToLower(out)
+	for _, marker := range []string{
+		"unknown or invalid runtime name", // docker
+		"invalid runtime name",            // podman
+		"unknown runtime",
+		"no such runtime",
+		"failed to find runtime",
+	} {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// firewallProbeArgs is the probe's argv, pure so it can be asserted without a
+// daemon.
+//
+// It is built here rather than by BuildArgs, so the --dry-run golden test does
+// not cover it and nothing else would notice if the runtime stopped being sent —
+// or if it were appended after the image, where docker hands it to the container
+// as a command argument instead of using it.
+func firewallProbeArgs(image, resolvedRuntime, probe string) []string {
+	args := []string{"run", "--rm",
+		"--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--user", "0",
+		"--network", "none", "--entrypoint", "sh"}
+	if resolvedRuntime != "" {
+		args = append(args, "--runtime", resolvedRuntime)
+	}
+	// Every flag before the image reference; everything after it is the guest's.
+	return append(args, image, "-c", probe)
 }
 
 // lastLine is the most useful part of a docker error, which is usually verbose

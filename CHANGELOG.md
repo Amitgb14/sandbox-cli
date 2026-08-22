@@ -9,6 +9,66 @@ changed default, a behavior that used to work differently.
 Entries land under `Unreleased` and are moved under a version heading when that
 version is tagged.
 
+## Unreleased
+
+### Fixed
+
+- **`doctor` names the cause it actually found, rather than the commonest one.**
+  Three different things make the egress-firewall check unanswerable — an unbuilt
+  image, a host too busy to answer, a runtime the engine does not have — and all
+  three were answered with "run any sandbox command once to build the image",
+  which is unactionable for two of them and, under prod, attached to a failure.
+  Each now gets the step that fits.
+- **A gVisor host is no longer told to switch its egress allowlist off.** The
+  blocked-firewall remedy keyed on the runtime a *flag* named, so a daemon whose
+  `default-runtime` is `runsc` — where nothing is selected and gVisor is
+  nonetheless what runs — got "rootless or userns-remapped daemons often cannot;
+  use `--network default`". It keys on the runtime the container actually gets,
+  and says why `runsc install -- --net-raw` is not the fix there: gVisor's
+  netstack has no connection tracking, which the rules need.
+- **An engine refusing a runtime name is no longer reported as a broken
+  firewall.** The name still reaches the launch in two paths that are non-fatal
+  by design, and the refusal was read as "this container cannot program
+  iptables" — blaming the daemon, and contradicting the runtime check on the very
+  next line.
+- **The firewall probe no longer runs on half a stopwatch.** It was capped at
+  half the budget because a slow probe used to starve the runtime check; the
+  runtime facts are now read *before* it, so the expensive check can take the
+  time a micro-VM needs without a loaded host failing a preflight it would
+  otherwise pass.
+
+- **The egress allowlist could not be programmed under gVisor**, so
+  `--runtime runsc` with `--allow` (or `--profile prod`, which requires one)
+  refused to start:
+
+  ```
+  ip6tables: Failed to initialize nft: Protocol not supported
+  sandbox-cli: egress firewall setup failed; refusing to run without the requested allowlist
+  ```
+
+  Debian points `iptables` at the nft variant, which is right on an ordinary
+  host. gVisor implements only the older setsockopt interface, so the nft
+  binaries fail before touching a rule while the `-legacy` ones work. The
+  container now picks the backend the kernel will actually serve — trying nft
+  first, so nothing changes on an ordinary runc host — and `doctor` and the test
+  suite ask the same question the same way, so the preflight and the launch
+  cannot disagree about a host.
+
+  Two things to know if you are running gVisor:
+
+  - **`runsc install -- --net-raw` is a prerequisite.** gVisor gates iptables
+    behind that flag and leaves it off by default; without it no backend works
+    and the run refuses, naming the flag.
+  - **The allowlist still cannot be enforced there**, because gVisor provides no
+    connection tracking: `-m conntrack` and `-m state` are both unavailable, and
+    the allowlist's "accept replies" rules have no equivalent. This change
+    removes one barrier, not the last one.
+
+  A container that can serve no backend still refuses rather than running
+  unfiltered, and the kernel's own error — "Permission denied (you must be
+  root)" on a rootless daemon, say — is printed rather than swallowed, so the
+  cause is named rather than guessed at.
+
 ## 0.0.1beta.12 — 2026-08-09
 
 ### Changed

@@ -338,8 +338,63 @@ RUN chmod +x /usr/local/bin/sandbox-clipboard \
 # allowlist` / `--allow`). sandbox-egress-setup programs a default-deny OUTPUT
 # firewall that permits loopback, DNS, established flows, and the resolved IPs of
 # the allowlisted domains (passed as SANDBOX_EGRESS_ALLOW). It needs to run as
+# sandbox-iptables prints the path of an iptables backend this kernel will
+# actually serve, or fails with the kernel's own error.
+#
+# One definition, three callers: sandbox-egress-setup programs the firewall with
+# it, `doctor`'s host probe asks the same question before a run, and the
+# integration suite reads rules back through it. Three copies of "which binary
+# works" would drift, and the drift is not cosmetic — a preflight that answers
+# differently from the launch is the disagreement CLAUDE.md names as the failure
+# to avoid.
+#
+# Why there is a choice at all: Debian points `iptables` at the nft variant,
+# which is right on an ordinary host, while gVisor implements only the older
+# setsockopt interface and fails nft outright. nft is tried first so an ordinary
+# runc host keeps the backend its distribution chose.
+#
+# It **writes** rather than lists. `-L` only proves the table can be read, and a
+# backend that lists perfectly well can still be unable to touch a rule — the
+# same argument internal/runtime/docker_cli.go makes for why the host-side probe
+# creates rules instead of reading them. Creating and deleting one empty chain is
+# the cheapest thing that proves the kernel will accept a write.
+#
+# On total failure the last candidate's stderr goes to ours, unswallowed: on a
+# rootless or userns-remapped daemon that line is "Permission denied (you must be
+# root)", which names the real cause. A caller that printed only its own remedy
+# would send those users chasing the wrong one.
+RUN cat > /usr/local/bin/sandbox-iptables <<'PICK'
+#!/bin/bash
+# Absolute interpreter and a fixed PATH: this is called from the root phase, so
+# every name it resolves must come from the image. See sandbox-egress-setup.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+set -uo pipefail
+
+case "${1:-}" in
+  -6) candidates="ip6tables ip6tables-legacy" ;;
+  "") candidates="iptables iptables-legacy" ;;
+  *)  echo "usage: sandbox-iptables [-6]" >&2; exit 2 ;;
+esac
+
+chain="SANDBOX_BACKEND_PROBE"
+last=""
+for name in $candidates; do
+  resolved="$(command -v "$name" 2>/dev/null)" || continue
+  if last="$("$resolved" -N "$chain" 2>&1)"; then
+    "$resolved" -X "$chain" >/dev/null 2>&1 || true
+    printf '%s\n' "$resolved"
+    exit 0
+  fi
+done
+[ -n "$last" ] && printf '%s\n' "$last" >&2
+exit 1
+PICK
+RUN chmod +x /usr/local/bin/sandbox-iptables
+
 # root with NET_ADMIN, before the agent starts. Uses plain iptables (no ipset) so
-# it works on the common iptables-nft backend without extra kernel modules.
+# it needs no extra kernel modules, and picks the backend the kernel will serve
+# rather than assuming one — see sandbox-iptables.
 RUN cat > /usr/local/bin/sandbox-egress-setup <<'FW'
 #!/bin/bash
 # Absolute interpreter and a fixed PATH, both deliberate: this runs as root
@@ -353,6 +408,21 @@ set -euo pipefail
 allow="${SANDBOX_EGRESS_ALLOW:-}"
 ingress="${SANDBOX_INGRESS_PORTS:-}"
 
+# Which iptables backend this kernel will serve. See sandbox-iptables; the
+# choice is made there so `doctor` and the integration suite ask it the same way.
+if ! IPTABLES="$(/usr/local/bin/sandbox-iptables)"; then
+  echo "sandbox-cli: no working iptables backend in this container, so the egress" >&2
+  echo "sandbox-cli: allowlist cannot be programmed; refusing to run without it" >&2
+  echo "sandbox-cli: the line above is the kernel's own error and names the cause;" >&2
+  echo "sandbox-cli: under gVisor, iptables needs \`runsc install -- --net-raw\`" >&2
+  exit 1
+fi
+# Recoverable from `docker logs`: IPv4 and IPv6 are chosen independently, so a
+# container can hold its v4 rules in one store and its v6 rules in the other, and
+# an operator reading back with the wrong binary sees an empty chain and concludes
+# nothing was programmed.
+echo "sandbox-cli: firewall backend $IPTABLES" >&2
+
 # No IPv6 allowlist yet: reject all IPv6 traffic so it can't be used to bypass the
 # IPv4 rules, inbound or outbound.
 #
@@ -362,34 +432,34 @@ ingress="${SANDBOX_INGRESS_PORTS:-}"
 # script is careful not to do. Now: if the container has IPv6 at all, the rules
 # are required; if it has none, there is nothing to filter and nothing to fail.
 if ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
-  if ! command -v ip6tables >/dev/null 2>&1; then
-    echo "sandbox-cli: this container has IPv6 but no ip6tables, so the allowlist cannot be" >&2
-    echo "sandbox-cli: enforced on it; refusing rather than filtering only IPv4" >&2
+  if ! IP6TABLES="$(/usr/local/bin/sandbox-iptables -6)"; then
+    echo "sandbox-cli: this container has IPv6 but no working ip6tables backend, so the" >&2
+    echo "sandbox-cli: allowlist cannot be enforced on it; refusing rather than filtering only IPv4" >&2
     exit 1
   fi
-  ip6tables -F OUTPUT
-  ip6tables -A OUTPUT -o lo -j ACCEPT
-  ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  ip6tables -A OUTPUT -j REJECT
-  ip6tables -F INPUT
-  ip6tables -A INPUT -i lo -j ACCEPT
-  ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  ip6tables -A INPUT -j REJECT
-elif command -v ip6tables >/dev/null 2>&1; then
+  "$IP6TABLES" -F OUTPUT
+  "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT
+  "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  "$IP6TABLES" -A OUTPUT -j REJECT
+  "$IP6TABLES" -F INPUT
+  "$IP6TABLES" -A INPUT -i lo -j ACCEPT
+  "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  "$IP6TABLES" -A INPUT -j REJECT
+elif IP6TABLES="$(/usr/local/bin/sandbox-iptables -6)"; then
   # No global IPv6 address, but keep the rules if we can: an address could be
   # configured later, and a default-deny chain costs nothing.
-  ip6tables -F OUTPUT 2>/dev/null || true
-  ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
-  ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-  ip6tables -A OUTPUT -j REJECT 2>/dev/null || true
-  ip6tables -F INPUT 2>/dev/null || true
-  ip6tables -A INPUT -i lo -j ACCEPT 2>/dev/null || true
-  ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-  ip6tables -A INPUT -j REJECT 2>/dev/null || true
+  "$IP6TABLES" -F OUTPUT 2>/dev/null || true
+  "$IP6TABLES" -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+  "$IP6TABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  "$IP6TABLES" -A OUTPUT -j REJECT 2>/dev/null || true
+  "$IP6TABLES" -F INPUT 2>/dev/null || true
+  "$IP6TABLES" -A INPUT -i lo -j ACCEPT 2>/dev/null || true
+  "$IP6TABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+  "$IP6TABLES" -A INPUT -j REJECT 2>/dev/null || true
 fi
 
-iptables -F OUTPUT
-iptables -A OUTPUT -o lo -j ACCEPT
+"$IPTABLES" -F OUTPUT
+"$IPTABLES" -A OUTPUT -o lo -j ACCEPT
 # A packet redirected into the local proxy has its destination rewritten to
 # 127.0.0.1, but does NOT necessarily leave via `lo` — the routing decision was
 # already made before the nat OUTPUT chain ran. Matching on the destination
@@ -397,8 +467,8 @@ iptables -A OUTPUT -o lo -j ACCEPT
 # rewritten packet was then rejected by the rule at the bottom of this chain, so
 # every connection failed with the proxy sitting idle and logging nothing.
 # 127.0.0.0/8 is this container's own loopback, so this widens nothing.
-iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+"$IPTABLES" -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
+"$IPTABLES" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # DNS, so the allowlist below (and the agent's own runtime lookups) can resolve —
 # but only to the resolvers this container was actually given.
 #
@@ -413,8 +483,8 @@ for ns in $(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null); do
   case "$ns" in
     *:*) continue ;;  # IPv6 resolver; IPv6 egress is rejected wholesale above
   esac
-  iptables -A OUTPUT -p udp -d "$ns" --dport 53 -j ACCEPT
-  iptables -A OUTPUT -p tcp -d "$ns" --dport 53 -j ACCEPT
+  "$IPTABLES" -A OUTPUT -p udp -d "$ns" --dport 53 -j ACCEPT
+  "$IPTABLES" -A OUTPUT -p tcp -d "$ns" --dport 53 -j ACCEPT
 done
 
 # Name-based enforcement, when the proxy is available.
@@ -432,20 +502,20 @@ done
 if [ -n "${SANDBOX_PROXY_PORT:-}" ] && command -v sandbox-egress-proxy >/dev/null 2>&1; then
   proxy_uid="$(id -u sandbox-proxy 2>/dev/null || echo)"
   if [ -n "$proxy_uid" ]; then
-    iptables -t nat -N SANDBOX_EGRESS 2>/dev/null || iptables -t nat -F SANDBOX_EGRESS
+    "$IPTABLES" -t nat -N SANDBOX_EGRESS 2>/dev/null || "$IPTABLES" -t nat -F SANDBOX_EGRESS
     # The proxy's own connections must not be redirected back into itself.
-    iptables -t nat -A SANDBOX_EGRESS -m owner --uid-owner "$proxy_uid" -j RETURN
-    iptables -t nat -A SANDBOX_EGRESS -p tcp --dport 80 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
-    iptables -t nat -A SANDBOX_EGRESS -p tcp --dport 443 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
+    "$IPTABLES" -t nat -A SANDBOX_EGRESS -m owner --uid-owner "$proxy_uid" -j RETURN
+    "$IPTABLES" -t nat -A SANDBOX_EGRESS -p tcp --dport 80 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
+    "$IPTABLES" -t nat -A SANDBOX_EGRESS -p tcp --dport 443 -j REDIRECT --to-ports "$SANDBOX_PROXY_PORT"
     # -C then -A: the chain above is created-or-flushed, but the jump into it
     # lives in OUTPUT and would stack a duplicate every time this ran. One run
     # per container makes that harmless today, which is exactly why it would go
     # unnoticed the first time the setup is re-run.
-    iptables -t nat -C OUTPUT -j SANDBOX_EGRESS 2>/dev/null \
-      || iptables -t nat -A OUTPUT -j SANDBOX_EGRESS
+    "$IPTABLES" -t nat -C OUTPUT -j SANDBOX_EGRESS 2>/dev/null \
+      || "$IPTABLES" -t nat -A OUTPUT -j SANDBOX_EGRESS
     # Loopback must be reachable so the redirect has somewhere to land, and the
     # proxy itself is allowed out — it is the thing enforcing the allowlist.
-    iptables -A OUTPUT -m owner --uid-owner "$proxy_uid" -j ACCEPT
+    "$IPTABLES" -A OUTPUT -m owner --uid-owner "$proxy_uid" -j ACCEPT
     echo "sandbox-cli: egress enforced by name (proxy on 127.0.0.1:$SANDBOX_PROXY_PORT)" >&2
   fi
 fi
@@ -457,7 +527,7 @@ fi
 for d in $(printf '%s' "$allow" | tr ',' ' '); do
   [ -z "$d" ] && continue
   for ip in $(getent ahostsv4 "$d" | awk '{print $1}' | sort -u); do
-    iptables -A OUTPUT -d "$ip" -j ACCEPT
+    "$IPTABLES" -A OUTPUT -d "$ip" -j ACCEPT
   done
 done
 
@@ -470,9 +540,9 @@ done
 # --log-prefix is what makes it greppable; the rate limit is what stops a busy
 # agent filling the kernel ring buffer (and the host's syslog on Linux, where the
 # container shares it) with one line per retry.
-iptables -A OUTPUT -m limit --limit 12/min --limit-burst 20 \
+"$IPTABLES" -A OUTPUT -m limit --limit 12/min --limit-burst 20 \
   -j LOG --log-prefix "sandbox-cli DENY-OUT " --log-level 4
-iptables -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
+"$IPTABLES" -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
 
 # Ingress. An egress allowlist that ignores inbound traffic is not a boundary:
 # the OUTPUT chain accepts ESTABLISHED,RELATED, so a connection someone else
@@ -488,9 +558,9 @@ iptables -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
 #
 # FORWARD is deliberately untouched: a container network namespace has one
 # interface and routes nothing, so the chain is unreachable.
-iptables -F INPUT
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+"$IPTABLES" -F INPUT
+"$IPTABLES" -A INPUT -i lo -j ACCEPT
+"$IPTABLES" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 # Published ports are the one deliberate exception: `--publish` is an explicit
 # request for ingress, so the container ports it names stay reachable. Entries
@@ -536,20 +606,20 @@ for p in $(printf '%s' "$ingress" | tr ',' ' '); do
   proto="${p%%:*}"
   port="$(printf '%s' "${p#*:}" | tr '-' ':')"
   # The gateway is inside the subnet, so it is admitted before peers are denied.
-  [ -n "$gw" ] && iptables -A INPUT -s "$gw" -p "$proto" --dport "$port" -j ACCEPT
+  [ -n "$gw" ] && "$IPTABLES" -A INPUT -s "$gw" -p "$proto" --dport "$port" -j ACCEPT
   # Pure DNAT of a loopback-bound publish arrives on eth0 with a 127/8 source
   # (route_localnet), so the `-i lo` rule above does not cover it.
-  iptables -A INPUT -s 127.0.0.0/8 -p "$proto" --dport "$port" -j ACCEPT
+  "$IPTABLES" -A INPUT -s 127.0.0.0/8 -p "$proto" --dport "$port" -j ACCEPT
   if [ -n "$subnet" ]; then
-    iptables -A INPUT -s "$subnet" -p "$proto" --dport "$port" -j DROP
+    "$IPTABLES" -A INPUT -s "$subnet" -p "$proto" --dport "$port" -j DROP
   fi
   # Everyone else: publishing is an explicit request for ingress.
-  iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
+  "$IPTABLES" -A INPUT -p "$proto" --dport "$port" -j ACCEPT
 done
 
-iptables -A INPUT -m limit --limit 12/min --limit-burst 20 \
+"$IPTABLES" -A INPUT -m limit --limit 12/min --limit-burst 20 \
   -j LOG --log-prefix "sandbox-cli DENY-IN " --log-level 4
-iptables -A INPUT -j REJECT --reject-with icmp-port-unreachable
+"$IPTABLES" -A INPUT -j REJECT --reject-with icmp-port-unreachable
 FW
 RUN chmod +x /usr/local/bin/sandbox-egress-setup
 
