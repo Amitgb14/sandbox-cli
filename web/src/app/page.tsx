@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowUpRight, Check, FileCode2, Lock, ShieldCheck, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Check, FileCode2, Lock, ShieldCheck, X } from "lucide-react";
 import { GithubMark } from "@/components/logo";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
@@ -30,7 +30,15 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { AGENTS, BAKED_COUNT } from "@/lib/agents";
 import { HISTORY_NOTE } from "@/lib/features";
-import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, STUDIO_PATH, VERSION } from "@/lib/site";
+import {
+  DOC_URL,
+  MULTI_AGENT_PATH,
+  PYTHON_SDK_PATH,
+  REPO_URL,
+  SDK_PATH,
+  STUDIO_PATH,
+  VERSION,
+} from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const EXPOSED = [
@@ -318,6 +326,64 @@ export default function Home() {
             }
           />
           <AgentExplorer />
+        </Section>
+
+        {/* ------------------------------------------------------------ sdks */}
+        <Section id="sdks">
+          <SectionHead
+            eyebrow="from a program"
+            title="Two clients, one daemon"
+            lead={
+              <>
+                Everything the CLI does happens on the machine running the daemon, so driving it
+                from code is a client rather than a second implementation. Both speak the same
+                endpoints and keep the same rules; they differ in the language they are read in.
+              </>
+            }
+          />
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="flex flex-col rounded-2xl border bg-card p-6">
+              <Badge variant="outline" className="mb-3 w-fit border-border text-muted-foreground">
+                typescript
+              </Badge>
+              <h3 className="mb-2 text-[0.95rem] font-medium">@sandbox-cli/sdk</h3>
+              <p className="mb-4 flex-1 text-[0.85rem] leading-relaxed text-muted-foreground">
+                For an agent, a CI step, or a workflow that fans out across branches.{" "}
+                <code className="font-mono text-[0.85em]">npm install @sandbox-cli/sdk</code> —
+                typed against a contract generated from the daemon&apos;s own Go types, so a client
+                that describes an endpoint the daemon does not have fails a build.
+              </p>
+              <Link
+                href={SDK_PATH}
+                className={cn(buttonVariants({ variant: "outline", size: "sm" }), "w-fit")}
+              >
+                The TypeScript client
+                <ArrowRight className="size-3.5" />
+              </Link>
+            </div>
+
+            <div className="flex flex-col rounded-2xl border bg-card p-6">
+              <Badge variant="outline" className="mb-3 w-fit border-border text-muted-foreground">
+                python
+              </Badge>
+              <h3 className="mb-2 text-[0.95rem] font-medium">sandbox-cli-sdk</h3>
+              <p className="mb-4 flex-1 text-[0.85rem] leading-relaxed text-muted-foreground">
+                For a LangGraph node, a FastAPI handler, or untrusted code a model just wrote.{" "}
+                <code className="font-mono text-[0.85em]">pip install sandbox-cli-sdk</code>, then{" "}
+                <code className="font-mono text-[0.85em]">import sandbox_cli</code> — sync and async
+                from one implementation, and no dependencies, because it is imported into somebody
+                else&apos;s agent process.
+              </p>
+              <Link
+                href={PYTHON_SDK_PATH}
+                className={cn(buttonVariants({ variant: "outline", size: "sm" }), "w-fit")}
+              >
+                The Python client
+                <ArrowRight className="size-3.5" />
+              </Link>
+            </div>
+          </div>
         </Section>
 
         {/* -------------------------------------------------------- compare */}
