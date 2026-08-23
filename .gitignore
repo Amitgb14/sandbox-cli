@@ -3,6 +3,11 @@
 /dist/
 /.claude/
 __pycache__/
+# Python build artifacts. `python -m build` writes here, and a published wheel
+# committed by accident is a file nobody looks at and everybody trusts.
+sdk/python/dist/
+sdk/python/*.egg-info/
+.pytest_cache/
 docs/proposals/
 
 # docker compose reads this automatically. It names a config file you have

@@ -162,6 +162,25 @@ SKIP agent-hotels    claude  finished without writing hotels.json
 handed over: flights.json
 ```
 
+## Publishing
+
+```sh
+cd sdk/python
+python3 -m pip install --upgrade build twine     # once
+python3 -m build                                 # -> dist/*.whl and *.tar.gz
+python3 -m twine check dist/*
+python3 -m twine upload dist/*                   # asks for a PyPI API token
+```
+
+The distribution is `sandbox-cli-sdk`; the plain name belongs to somebody else.
+Use `__token__` as the username and a PyPI API token as the password, scoped to
+this project once it exists. `twine upload --repository testpypi dist/*` publishes
+to TestPyPI first, which is worth doing once: a version number cannot be reused,
+so the first upload is the one that has to be right.
+
+Delete `dist/` between builds — `twine upload dist/*` uploads whatever is there,
+including artifacts from an older version you did not mean to ship.
+
 ## Status
 
 Early. The surface above is stable enough to build on; `run_code`, artifacts and
