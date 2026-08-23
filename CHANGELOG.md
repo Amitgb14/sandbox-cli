@@ -11,7 +11,8 @@ version is tagged.
 
 ## Unreleased
 
-### Fixed
+### Added
+
 
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
   sandbox-cli never supplies the key.** `gateway:` in your own config names the
@@ -47,6 +48,14 @@ version is tagged.
   carry a dashed ring, the providers list says *via <host>*, and the gateway's own
   probe result is what is shown, since the vendor behind it being down is the case
   a gateway survives.
+
+### Changed
+
+- **The Python distribution is `sandbox-cli-sdk`**, while the import stays
+  `sandbox_cli`. `sandbox-cli` on PyPI belongs to an unrelated project, so the
+  distribution takes the same shape as the npm package (`@sandbox-cli/sdk`)
+  instead. The two names differing is worth one line at the top of the README
+  rather than a wrong `pip install` as somebody's first minute.
 
 ## 0.0.1beta.18 — 2026-08-23
 
