@@ -1,5 +1,17 @@
 # sandbox-cli for Python
 
+```
+pip install sandbox-cli-sdk      # the distribution
+```
+```python
+from sandbox_cli import Studio   # the import
+```
+
+Those two names differ on purpose: `sandbox-cli` on PyPI belongs to an unrelated
+project, so the distribution takes the same shape as the npm package
+(`@sandbox-cli/sdk`) while the module keeps the name you would guess.
+
+
 Drive [sandbox-cli](https://github.com/Amitgb14/sandbox-cli) from a program: run
 commands and agents in isolated containers, and get back the exit code, the
 output, and which agent actually did the work.

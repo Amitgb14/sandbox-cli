@@ -3,8 +3,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sandbox-cli"
+name = "sandbox-cli-sdk"
 version = "0.0.1"
+# The distribution is `sandbox-cli-sdk` and the import is `sandbox_cli`: the
+# plain name is taken on PyPI by an unrelated project, and this one matches the
+# npm package (@sandbox-cli/sdk) instead. The mismatch is stated in the README,
+# because a wrong `pip install` is a worse first minute than a long name.
 description = "Drive sandbox-cli from Python: run commands and agents in isolated containers, and get back what happened."
 readme = "README.md"
 requires-python = ">=3.9"
