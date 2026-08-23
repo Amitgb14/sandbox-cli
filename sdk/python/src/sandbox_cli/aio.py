@@ -54,6 +54,9 @@ class AsyncStudio:
     async def add_project(self, path: str | None = None, *, init: bool = False) -> "AsyncProject":
         return AsyncProject(await _off_thread(self._sync.add_project, path, init=init))
 
+    async def clone(self, url: str, parent: str, name: str | None = None) -> "AsyncProject":
+        return AsyncProject(await _off_thread(self._sync.clone, url, parent, name))
+
     async def runs(self, *, all: bool = False, repo: str | None = None) -> list[dict[str, Any]]:
         return await _off_thread(self._sync.runs, all=all, repo=repo)
 
@@ -69,8 +72,8 @@ class AsyncProject:
     def __repr__(self) -> str:
         return f"AsyncProject(id={self.id!r}, name={self.name!r})"
 
-    async def workspace(self, branch: str) -> "AsyncWorkspace":
-        return AsyncWorkspace(await _off_thread(self._sync.workspace, branch))
+    async def workspace(self, branch: str, *, env: dict[str, str] | None = None) -> "AsyncWorkspace":
+        return AsyncWorkspace(await _off_thread(self._sync.workspace, branch, env=env))
 
 
 class AsyncWorkspace:
@@ -78,6 +81,7 @@ class AsyncWorkspace:
         self._sync = sync
         self.project = sync.project
         self.branch = sync.branch
+        self.env = sync.env
 
     def __repr__(self) -> str:
         return f"AsyncWorkspace(project={self.project.name!r}, branch={self.branch!r})"
@@ -87,6 +91,17 @@ class AsyncWorkspace:
 
     async def agent(self, name: str, prompt: str, **opts: Any) -> Outcome:
         return await self._guarded(self._sync.agent, name, prompt, **opts)
+
+    async def steps(self, commands: list[list[str]], **opts: Any) -> list[Outcome]:
+        """Run commands in order, stopping at the first failure. See the sync
+        docstring — the stopping rule is the whole point."""
+        done: list[Outcome] = []
+        for argv in commands:
+            out = await self.run(argv, **opts)
+            done.append(out)
+            if out.exit_code != 0 or out.stopped:
+                break
+        return done
 
     async def clear_finished(self) -> list[str]:
         return await _off_thread(self._sync.clear_finished)

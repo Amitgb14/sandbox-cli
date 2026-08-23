@@ -8,6 +8,7 @@ that makes a sandbox a sandbox is applied where the container is built.
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator
@@ -150,6 +151,30 @@ class Studio:
             )
         return Project(self._t, self._t.request("POST", "/v1/projects", {"path": asked}))
 
+    def clone(self, url: str, parent: str, name: str | None = None) -> "Project":
+        """Clone a repository onto the **daemon's** machine and register it.
+
+        `url` may be a full git URL or the GitHub shorthand `owner/repo`, which
+        expands to `https://github.com/owner/repo.git`. The expansion is spelled
+        out rather than clever: exactly one host is assumed, and anything with a
+        scheme or a colon is left alone.
+
+        `parent` is the directory to clone *into*, on that machine — the clone is
+        the daemon writing to its own disk and running git, which is why its
+        refusals are the substance of the endpoint: only https, ssh and
+        `git@host:path` URLs, never `ext::` (which executes a command rather than
+        fetching a repository), and the parent must pass the same checks a typed
+        project path does.
+
+        Private repositories are the daemon's business, not this client's: it
+        uses whatever credentials that machine's git has. Putting a token in the
+        URL would write it into the daemon's remote config and this SDK's logs.
+        """
+        body = {"url": _expand_repo_url(url), "parent": wire_path(parent, os.getcwd())}
+        if name:
+            body["name"] = name
+        return Project(self._t, self._t.request("POST", "/v1/projects/clone", body))
+
     def runs(self, *, all: bool = False, repo: str | None = None) -> list[dict[str, Any]]:
         query = []
         if all:
@@ -207,7 +232,7 @@ class Project:
     def __repr__(self) -> str:
         return f"Project(id={self.id!r}, name={self.name!r})"
 
-    def workspace(self, branch: str) -> "Workspace":
+    def workspace(self, branch: str, *, env: dict[str, str] | None = None) -> "Workspace":
         """A branch's worktree, created if it does not exist.
 
         The isolation unit: one branch, one tree, many runs. Two agents working in
@@ -215,16 +240,22 @@ class Project:
         is the only way to get somewhere to run.
         """
         self._t.request("POST", "/v1/worktrees", {"repo": self.id, "branch": branch})
-        return Workspace(self._t, self, branch)
+        return Workspace(self._t, self, branch, env=env)
 
 
 class Workspace:
     """A branch's worktree on a repository: where runs happen."""
 
-    def __init__(self, transport: Transport, project: Project, branch: str) -> None:
+    def __init__(self, transport: Transport, project: Project, branch: str,
+                 *, env: dict[str, str] | None = None) -> None:
         self._t = transport
         self.project = project
         self.branch = branch
+        self.env: dict[str, str] = dict(env or {})
+        """Environment applied to every run here, with a run's own `env=` winning
+        per key. Configuration usually belongs to the *workspace* rather than to
+        one command — `CI=true` is true of the whole sequence — and repeating it
+        on each step is how one step ends up different from the others."""
         self._delivered: str | None = None
         """The run this object last returned an Outcome for — the one run that can
         be cleared without discarding anything, because its exit code, stdout and
@@ -246,6 +277,26 @@ class Workspace:
         if fallback:
             body["fallback"] = list(fallback)
         return self._launch_and_wait(body, opts)
+
+    def steps(self, commands: list[list[str]], **opts: Any) -> list[Outcome]:
+        """Run commands in order, stopping at the first one that fails.
+
+        The shape almost every setup wants — install, build, test — and the
+        reason it is here rather than left to a `for` loop is the stopping rule:
+        a loop that runs all of them reports the *last* exit code, so a failed
+        install followed by a passing lint looks like success.
+
+        Returns what actually ran, so the caller can see where it stopped. Each
+        step is a separate container, and only the worktree survives between
+        them: `/tmp` does not, `/workspace` does.
+        """
+        done: list[Outcome] = []
+        for argv in commands:
+            out = self.run(argv, **opts)
+            done.append(out)
+            if out.exit_code != 0 or out.stopped:
+                break
+        return done
 
     def clear_finished(self) -> list[str]:
         """Remove finished runs holding this branch's container name.
@@ -287,7 +338,11 @@ class Workspace:
     def _common(self, opts: dict[str, Any]) -> dict[str, Any]:
         body: dict[str, Any] = {"repo": self.project.id, "worktree": self.branch,
                                 "branch": self.branch}
-        for key, wire in (("env", "env"), ("allow", "allow"), ("memory", "memory"),
+        if self.env or opts.get("env"):
+            # The workspace's environment is the base and the run's wins per key,
+            # which is the merge people expect from "defaults".
+            body["env"] = {**self.env, **(opts.get("env") or {})}
+        for key, wire in (("allow", "allow"), ("memory", "memory"),
                           ("cpus", "cpus"), ("base", "base"), ("publish", "publish"),
                           ("verify", "verify"), ("image", "image")):
             if opts.get(key) is not None:
@@ -368,6 +423,23 @@ class Workspace:
             route_reason=run.get("routeReason"),
             run=run,
         )
+
+
+# What GitHub actually allows in an owner or repository name. Narrow on purpose:
+# the shorthand exists to save typing a known URL, and anything it does not
+# recognise is passed through for the daemon to accept or refuse. `./local` is
+# the case that made this a regex — as a prefix test it became
+# `https://github.com/./local.git`, which is a URL nobody typed.
+_GITHUB_SHORTHAND = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/"
+                               r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
+
+
+def _expand_repo_url(url: str) -> str:
+    """`owner/repo` means GitHub; everything else is passed through untouched."""
+    trimmed = url.strip()
+    if _GITHUB_SHORTHAND.match(trimmed):
+        return f"https://github.com/{trimmed}.git"
+    return trimmed
 
 
 def _looks_like_path(value: str) -> bool:

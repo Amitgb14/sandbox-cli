@@ -13,10 +13,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 class FakeDaemon:
-    def __init__(self, *, holds_name_after_run: bool = False, project_root: str = "/repo/app"):
+    def __init__(self, *, holds_name_after_run: bool = False, project_root: str = "/repo/app",
+                 fail_after: int | None = None):
         self.requests: list[dict] = []
         self.removed: list[str] = []
         self.holds_name_after_run = holds_name_after_run
+        self._fail_after = fail_after
+        self._launches = 0
         self.project_root = project_root
         self._held = ""
         self._server = HTTPServer(("127.0.0.1", 0), _handler(self))
@@ -72,7 +75,10 @@ def _handler(state: FakeDaemon):
             if self.path.startswith("/v1/runs/") and self.path.endswith("/logs"):
                 return self._send(200, [{"seq": 0, "ts": "", "stream": "stdout", "text": "hi"}])
             if self.path.startswith("/v1/runs/"):
-                return self._send(200, {"id": "run-1", "state": "exited", "exitCode": 0,
+                failing = (state._fail_after is not None
+                           and state._launches > state._fail_after)
+                return self._send(200, {"id": "run-1", "state": "exited",
+                                        "exitCode": 1 if failing else 0,
                                         "branch": "feature", "repoId": "repo-1"})
             if self.path.startswith("/v1/runs"):
                 return self._send(200, {"runs": []})
@@ -88,7 +94,12 @@ def _handler(state: FakeDaemon):
                     return self._send(422, {"error": f"{path} is not an absolute path"})
                 return self._send(201, {"id": "repo-4", "name": path.rstrip("/").split("/")[-1],
                                         "root": path})
+            if self.path == "/v1/projects/clone":
+                url = (body or {}).get("url", "")
+                return self._send(201, {"id": "repo-9", "name": url.rstrip("/").split("/")[-1],
+                                        "root": "/cloned/here"})
             if self.path == "/v1/runs":
+                state._launches += 1
                 if state._held:
                     return self._send(409, {"error": (
                         f'a finished run ({state._held}, exit 0) still holds "feature"\'s '

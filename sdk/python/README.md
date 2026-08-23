@@ -70,6 +70,52 @@ steps: `/tmp` is gone, `/workspace` is not.
 Python's own, so this package raises `RunTimeout` and `DaemonUnreachable`
 instead; `ApiError` and `WaitError` mean what they do in the TypeScript client.
 
+## Adding a repository
+
+Three ways, and the difference is who owns the directory:
+
+```python
+studio.project("my-app")                        # already registered
+studio.add_project("/home/you/code/my-app")     # a directory on the daemon's machine
+studio.add_project(init=True)                   # this one, `git init` first
+studio.clone("Amitgb14/sandbox-cli", "/home/you/code")   # clone it there, then register
+```
+
+`clone` takes a full git URL or the GitHub shorthand `owner/repo`. Everything else
+is passed through untouched for the daemon to accept or refuse — including
+`ext::`, which it refuses, because deciding that here would put the refusal in
+two places and let them disagree. Private repositories use whatever credentials
+the **daemon's** git has; putting a token in the URL would write it into that
+machine's remote config.
+
+## Steps and environment
+
+```python
+ws = repo.workspace("ci", env={"CI": "true"})     # applies to every run here
+ws.steps([
+    ["npm", "ci"],
+    ["npm", "test"],
+    ["npm", "run", "build"],
+], env={"NODE_ENV": "test"})                      # merged over the workspace's, per key
+```
+
+`steps` stops at the first failure and returns what actually ran. That rule is
+the reason it exists rather than a `for` loop: a loop that runs everything
+reports the *last* exit code, so a failed install followed by a passing lint
+looks like success.
+
+Environment from a file, explicitly:
+
+```python
+from sandbox_cli.env import read_env_file
+ws.run(["python3", "app.py"], env=read_env_file(".env.local"))
+```
+
+Nothing is read unless you name a file, and a malformed line raises with its
+number rather than being skipped — a silently ignored line in a credentials file
+is how a run goes out without the key it needed. Values travel in the request
+body, so against a remote daemon without TLS they cross the network in cleartext.
+
 ## Examples
 
 `examples/stock_price.py` — untrusted code fetching a quote, and the two lines

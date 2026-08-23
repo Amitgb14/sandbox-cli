@@ -146,3 +146,55 @@ def test_an_agent_run_needs_a_prompt():
         ws = Studio.connect(url=d.url, token="t").project("app").workspace("feature")
         with pytest.raises(ValueError, match="the whole instruction"):
             ws.agent("claude", "   ")
+
+
+def test_clone_expands_the_github_shorthand_and_nothing_else():
+    with FakeDaemon() as d:
+        studio = Studio.connect(url=d.url, token="t")
+        studio.clone("Amitgb14/sandbox-cli", "/home/you/code")
+        assert d.posted("/v1/projects/clone")[-1]["body"] == {
+            "url": "https://github.com/Amitgb14/sandbox-cli.git", "parent": "/home/you/code"}
+        # A URL is passed through untouched — including one the daemon must
+        # refuse. Deciding that here would put the refusal in two places and let
+        # them disagree.
+        studio.clone("ext::sh -c whoami", "/home/you/code", name="evil")
+        assert d.posted("/v1/projects/clone")[-1]["body"] == {
+            "url": "ext::sh -c whoami", "parent": "/home/you/code", "name": "evil"}
+
+
+def test_steps_stop_at_the_first_failure():
+    # A loop that runs everything reports the *last* exit code, so a failed
+    # install followed by a passing lint looks like success.
+    with FakeDaemon() as d:
+        ws = Studio.connect(url=d.url, token="t").project("app").workspace("feature")
+        d._fail_after = 1  # the stand-in exits non-zero from the second run on
+        done = ws.steps([["a"], ["b"], ["c"]])
+        assert [o.exit_code for o in done] == [0, 1]
+        assert len(d.posted("/v1/runs")) == 2, "the third step must not have run"
+
+
+def test_workspace_env_is_the_base_and_a_run_wins_per_key():
+    with FakeDaemon() as d:
+        repo = Studio.connect(url=d.url, token="t").project("app")
+        ws = repo.workspace("feature", env={"CI": "true", "LOG": "info"})
+        ws.run(["pytest"], env={"LOG": "debug"})
+        assert d.posted("/v1/runs")[-1]["body"]["env"] == {"CI": "true", "LOG": "debug"}
+
+
+def test_env_files_are_parsed_strictly(tmp_path):
+    from sandbox_cli.env import read_env_file
+
+    good = tmp_path / ".env"
+    good.write_text('# comment\nexport TOKEN="abc"\nPLAIN=v\nQ=\'x y\'\n\n')
+    assert read_env_file(good) == {"TOKEN": "abc", "PLAIN": "v", "Q": "x y"}
+
+    # A silently skipped line in a credentials file is how a run goes out without
+    # the key it needed.
+    bad = tmp_path / "bad.env"
+    bad.write_text("NOT A PAIR\n")
+    with pytest.raises(ValueError, match="expected KEY=value"):
+        read_env_file(bad)
+
+    with pytest.raises(FileNotFoundError):
+        read_env_file(tmp_path / "absent.env")
+    assert read_env_file(tmp_path / "absent.env", missing_ok=True) == {}
