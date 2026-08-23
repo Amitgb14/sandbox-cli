@@ -8,7 +8,7 @@ import { CodeBlock } from "@/components/code-block";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { type NavEntry } from "@/lib/nav";
-import { REPO_URL, STUDIO_PATH } from "@/lib/site";
+import { PYTHON_SDK_PATH, REPO_URL, STUDIO_PATH } from "@/lib/site";
 import {
   SDK_ERRORS,
   SDK_EXAMPLE,
@@ -135,6 +135,14 @@ export default function SdkPage() {
             }
           />
 
+
+          <p className="mt-6 text-[0.85rem] leading-relaxed text-muted-foreground">
+            Working in Python?{" "}
+            <Link href={PYTHON_SDK_PATH} className="underline underline-offset-4">
+              The same client for Python
+            </Link>{" "}
+            — same nouns, same rules, sync or async.
+          </p>
 
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="rounded-2xl border bg-card p-5">
