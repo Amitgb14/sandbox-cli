@@ -1,0 +1,133 @@
+"""The async face.
+
+One implementation, not two. Every method here is the sync one run in a thread,
+because two hand-written clients of one protocol drift — which is the failure
+`internal/contract` exists to prevent across languages, and it would be strange
+to solve it there and reintroduce it inside one.
+
+The stdlib has no async HTTP client (`urllib` and `http.client` block; `asyncio`
+gives sockets, not HTTP), so a *native* async client would mean a dependency
+while the sync one needs none. A code-execution SDK that drags an HTTP stack into
+somebody's agent process is a worse neighbour than one that does not.
+
+What it costs, said plainly: a thread per in-flight call. For this workload that
+is the right trade — a run spends its life *waiting* on a container, and an agent
+orchestrating tens of sandboxes is nowhere near where threads hurt. If
+single-threaded async at scale is ever wanted, an httpx-backed transport goes
+behind the same interface and this API does not move.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from ._client import Outcome, Project, Studio, Workspace
+from .errors import RunCancelled
+
+
+async def _off_thread(fn, /, *args, **kwargs):
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+class AsyncStudio:
+    def __init__(self, sync: Studio) -> None:
+        self._sync = sync
+
+    @classmethod
+    async def connect(cls, url: str | None = None, token: str | None = None) -> "AsyncStudio":
+        return cls(await _off_thread(Studio.connect, url, token))
+
+    @property
+    def url(self) -> str:
+        return self._sync.url
+
+    async def health(self) -> dict[str, Any]:
+        return await _off_thread(self._sync.health)
+
+    async def projects(self) -> list["AsyncProject"]:
+        return [AsyncProject(p) for p in await _off_thread(self._sync.projects)]
+
+    async def project(self, id_or_name: str | None = None) -> "AsyncProject":
+        return AsyncProject(await _off_thread(self._sync.project, id_or_name))
+
+    async def add_project(self, path: str | None = None, *, init: bool = False) -> "AsyncProject":
+        return AsyncProject(await _off_thread(self._sync.add_project, path, init=init))
+
+    async def runs(self, *, all: bool = False, repo: str | None = None) -> list[dict[str, Any]]:
+        return await _off_thread(self._sync.runs, all=all, repo=repo)
+
+
+class AsyncProject:
+    def __init__(self, sync: Project) -> None:
+        self._sync = sync
+        self.id = sync.id
+        self.name = sync.name
+        self.root = sync.root
+        self.missing = sync.missing
+
+    def __repr__(self) -> str:
+        return f"AsyncProject(id={self.id!r}, name={self.name!r})"
+
+    async def workspace(self, branch: str) -> "AsyncWorkspace":
+        return AsyncWorkspace(await _off_thread(self._sync.workspace, branch))
+
+
+class AsyncWorkspace:
+    def __init__(self, sync: Workspace) -> None:
+        self._sync = sync
+        self.project = sync.project
+        self.branch = sync.branch
+
+    def __repr__(self) -> str:
+        return f"AsyncWorkspace(project={self.project.name!r}, branch={self.branch!r})"
+
+    async def run(self, argv: list[str], **opts: Any) -> Outcome:
+        return await self._guarded(self._sync.run, argv, **opts)
+
+    async def agent(self, name: str, prompt: str, **opts: Any) -> Outcome:
+        return await self._guarded(self._sync.agent, name, prompt, **opts)
+
+    async def clear_finished(self) -> list[str]:
+        return await _off_thread(self._sync.clear_finished)
+
+    async def stop(self, run_id: str, force: bool = False) -> None:
+        await _off_thread(self._sync.stop, run_id, force)
+
+    async def remove(self, run_id: str) -> None:
+        await _off_thread(self._sync.remove, run_id)
+
+    async def logs(self, run_id: str) -> list[dict[str, Any]]:
+        return await _off_thread(self._sync.logs, run_id)
+
+    async def _guarded(self, fn, /, *args, **kwargs) -> Outcome:
+        """Run a launch-and-wait, and never leave a container behind on cancel.
+
+        `asyncio.CancelledError` mid-wait is the same situation as WaitError: the
+        launch already succeeded, so the container exists and holds its branch's
+        name — nothing else can take it, including the next run of this script.
+        The thread cannot be interrupted, so this stops the run *by name* and
+        re-raises something that carries it. An await that is cancelled and leaves
+        an agent working is the worst version of this API.
+        """
+        task = asyncio.create_task(_off_thread(fn, *args, **kwargs))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            run = await _off_thread(self._find_live_run)
+            if run:
+                await _off_thread(self._sync.stop, run["id"], False)
+                task.cancel()
+                raise RunCancelled(run) from None
+            raise
+
+    def _find_live_run(self) -> dict[str, Any] | None:
+        for r in self._sync.project and self._runs_for_branch():
+            if r.get("state") not in ("exited", "dead"):
+                return r
+        return None
+
+    def _runs_for_branch(self) -> list[dict[str, Any]]:
+        studio = Studio(self._sync._t)  # noqa: SLF001 — same package, one implementation
+        return [r for r in studio.runs(all=True, repo=self.project.id)
+                if r.get("branch") == self.branch]
