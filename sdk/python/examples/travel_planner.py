@@ -132,7 +132,11 @@ Write the file and stop."""
 
 async def main() -> int:
     studio = await AsyncStudio.connect()
-    repo = await studio.add_project()      # the repository this script is standing in
+    # A lookup, not a registration: `add_project` would permanently add this
+    # directory to the daemon's registry as a side effect of running an example,
+    # and against a remote daemon it would post a local path that daemon cannot
+    # resolve.
+    repo = await studio.project()          # the repository this script is standing in
 
     # In parallel, because the isolation unit is the branch: two agents in one
     # tree would be a data race with a filesystem in the middle; two agents in

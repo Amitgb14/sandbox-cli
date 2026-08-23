@@ -198,3 +198,93 @@ def test_env_files_are_parsed_strictly(tmp_path):
     with pytest.raises(FileNotFoundError):
         read_env_file(tmp_path / "absent.env")
     assert read_env_file(tmp_path / "absent.env", missing_ok=True) == {}
+
+
+def test_a_plain_directory_is_not_called_a_repository_without_commits(tmp_path):
+    # "git could not answer" is not "unborn". The first version conflated them,
+    # so a directory that was never a repository was refused as one with no
+    # commits — advice that cannot be followed.
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "file.txt").write_text("hi\n")
+    with FakeDaemon() as d:
+        studio = Studio.connect(url=d.url, token="t")
+        studio.add_project(str(plain))          # the daemon decides, not this client
+        assert d.posted("/v1/projects")[-1]["body"] == {"path": str(plain)}
+
+
+def test_an_unknown_run_option_is_a_typo_not_a_preference():
+    # One of these names is a security control: `alow=[...]` would launch with
+    # the daemon's default egress posture and report success.
+    with FakeDaemon() as d:
+        ws = Studio.connect(url=d.url, token="t").project("app").workspace("feature")
+        with pytest.raises(TypeError, match="unknown run option"):
+            ws.run(["echo", "hi"], alow=["api.example.com"])
+        assert d.posted("/v1/runs") == []
+
+
+def test_timeout_zero_means_do_not_wait():
+    # Read as truthiness, `timeout=0` became the 30-minute default — the opposite
+    # of what it asks for.
+    with FakeDaemon(never_finishes=True) as d:
+        ws = Studio.connect(url=d.url, token="t").project("app").workspace("feature")
+        out = ws.run(["sleep", "long"], timeout=0)
+        assert out.stopped is True
+        assert any(r["path"].endswith("/stop") for r in d.requests)
+
+
+def test_the_token_env_var_matches_the_typescript_rule(monkeypatch):
+    from sandbox_cli._discover import discover_token
+
+    # An unset passthrough in a shell wrapper produces "", and treating that as a
+    # token means every request 401s where the TypeScript client works.
+    monkeypatch.setenv("SANDBOX_STUDIO_TOKEN", "")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent")
+    assert discover_token() == ""
+    monkeypatch.setenv("SANDBOX_STUDIO_TOKEN", "real")
+    assert discover_token() == "real"
+
+
+def test_a_failover_is_followed_rather_than_reported_as_the_failure():
+    # The daemon renames the failed container and starts a new one. Returning the
+    # first attempt would credit the agent that failed and leave the retry
+    # running — and the next run on the branch would 409 on a live container.
+    with FakeDaemon(failover=True) as d:
+        ws = Studio.connect(url=d.url, token="t").project("app").workspace("feature")
+        out = ws.agent("claude", "do the thing", fallback=["codex"])
+        assert out.id == "run-2", "the outcome should be the retry's"
+        assert out.exit_code == 0
+        assert out.agent == "codex"
+
+
+def test_cancelling_an_async_run_stops_that_run_and_nothing_else():
+    # Two failures the first version had, both reproduced by the review: it
+    # searched for a live run on the branch — which on a busy branch is another
+    # process's agent — and it left the worker thread polling to the deadline,
+    # so a cancelled await held the interpreter open for up to thirty minutes.
+    import asyncio
+
+    from sandbox_cli import RunCancelled
+    from sandbox_cli.aio import AsyncStudio
+
+    async def scenario():
+        with FakeDaemon(never_finishes=True) as d:
+            studio = await AsyncStudio.connect(url=d.url, token="t")
+            ws = await (await studio.project("app")).workspace("feature")
+            task = asyncio.create_task(ws.run(["sleep", "long"], timeout=600))
+            await asyncio.sleep(0.4)          # let the launch land
+            task.cancel()
+            started = asyncio.get_event_loop().time()
+            try:
+                await task
+                raise AssertionError("the cancel should surface")
+            except RunCancelled as cancelled:
+                elapsed = asyncio.get_event_loop().time() - started
+                stops = [r["path"] for r in d.requests if r["path"].endswith("/stop")]
+                return cancelled.run["id"], stops, elapsed
+
+    run_id, stops, elapsed = asyncio.run(scenario())
+    assert run_id == "run-1", "it must name the run this call launched"
+    assert stops == ["/v1/runs/run-1/stop"], f"it stopped the wrong thing: {stops}"
+    # Promptly: one poll interval, not the 600s deadline the run was given.
+    assert elapsed < 10, f"the cancel took {elapsed:.1f}s — the worker kept polling"

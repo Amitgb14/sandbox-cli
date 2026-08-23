@@ -66,7 +66,13 @@ def discover_url(explicit: str | None = None) -> str:
 def discover_token(explicit: str | None = None) -> str:
     if explicit is not None:
         return explicit
+    # Truthiness, not `is not None`, because the TypeScript client tests
+    # truthiness and this module claims to be identical to it. The difference is
+    # not academic: `SANDBOX_STUDIO_TOKEN=""` is what an unset passthrough in a
+    # shell wrapper produces, and treating that as "the token is empty" skips the
+    # file and sends no Authorization header — every request 401s where the other
+    # client works.
     from_env = os.environ.get("SANDBOX_STUDIO_TOKEN")
-    if from_env is not None:
+    if from_env:
         return from_env
     return _read_trimmed(_state_dir() / "token") or ""

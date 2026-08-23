@@ -9,15 +9,21 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from ._local import init_repo, local_repo, same_path, unborn_with_files, wire_path
 from ._transport import Transport
-from .errors import ApiError, RunTimeout, WaitError
+from .errors import ApiError, RequestTimeout, WaitError
 
 DEFAULT_RUN_TIMEOUT_S = 30 * 60
+_LAUNCH_TIMEOUT_S = 10 * 60
+"""How long `POST /v1/runs` may take. Generous on purpose: the daemon builds the
+base image lazily, so a first launch on a fresh machine is minutes rather than
+seconds, and the 30-second default made that look like a daemon that was not
+running."""
 _POLL_MIN_S = 0.25
 _POLL_MAX_S = 2.0
 
@@ -251,6 +257,16 @@ class Workspace:
         self._t = transport
         self.project = project
         self.branch = branch
+        self._in_flight: str | None = None
+        """The run this workspace launched and is still waiting on.
+
+        The async face needs it: `asyncio.to_thread` cannot be interrupted, so on
+        cancellation it has to stop the run *by id*. Searching for a live run on
+        this branch instead would find — and kill — another process's agent."""
+        self._abort = threading.Event()
+        """Set by the async face on cancellation, so the polling loop in the
+        abandoned thread stops promptly instead of running to the deadline and
+        holding up interpreter shutdown."""
         self.env: dict[str, str] = dict(env or {})
         """Environment applied to every run here, with a run's own `env=` winning
         per key. Configuration usually belongs to the *workspace* rather than to
@@ -335,7 +351,19 @@ class Workspace:
 
     # -- internals -------------------------------------------------------
 
+    _RUN_OPTIONS = frozenset({"env", "allow", "memory", "cpus", "base", "publish",
+                              "verify", "image", "timeout", "replace_finished", "fallback"})
+
     def _common(self, opts: dict[str, Any]) -> dict[str, Any]:
+        # A typo here is silent otherwise, and one of these names is a security
+        # control: `alow=["api.example.com"]` would launch with the daemon's
+        # default egress posture and report success.
+        unknown = sorted(set(opts) - self._RUN_OPTIONS)
+        if unknown:
+            raise TypeError(
+                f"unknown run option(s): {', '.join(unknown)}. "
+                f"Known: {', '.join(sorted(self._RUN_OPTIONS))}"
+            )
         body: dict[str, Any] = {"repo": self.project.id, "worktree": self.branch,
                                 "branch": self.branch}
         if self.env or opts.get("env"):
@@ -351,7 +379,7 @@ class Workspace:
 
     def _launch_and_wait(self, body: dict[str, Any], opts: dict[str, Any]) -> Outcome:
         try:
-            started = self._t.request("POST", "/v1/runs", body)
+            started = self._t.request("POST", "/v1/runs", body, timeout=_LAUNCH_TIMEOUT_S)
         except ApiError as err:
             if err.status != 409:
                 raise
@@ -362,8 +390,14 @@ class Workspace:
             if self._delivered and not opts.get("replace_finished"):
                 spent, self._delivered = self._delivered, None
                 try:
-                    self.remove(spent)
-                    started = self._t.request("POST", "/v1/runs", body)
+                    try:
+                        self.remove(spent)
+                    except ApiError as gone:
+                        # Already removed — by the caller, or by clear_finished.
+                        # That is not the conflict the user needs to hear about.
+                        if gone.status != 404:
+                            raise
+                    started = self._t.request("POST", "/v1/runs", body, timeout=_LAUNCH_TIMEOUT_S)
                     return self._await_outcome(started, opts)
                 except ApiError as retry_err:
                     if retry_err.status != 409:
@@ -375,7 +409,7 @@ class Workspace:
                                "or call workspace.clear_finished() first — both refuse a run "
                                "that is still going.") from None
             self.clear_finished()
-            started = self._t.request("POST", "/v1/runs", body)
+            started = self._t.request("POST", "/v1/runs", body, timeout=_LAUNCH_TIMEOUT_S)
         return self._await_outcome(started, opts)
 
     def _await_outcome(self, started: dict[str, Any], opts: dict[str, Any]) -> Outcome:
@@ -390,23 +424,68 @@ class Workspace:
 
     def _wait(self, started: dict[str, Any], opts: dict[str, Any]) -> Outcome:
         run_id = started["id"]
-        deadline = time.monotonic() + float(opts.get("timeout") or DEFAULT_RUN_TIMEOUT_S)
+        self._in_flight = run_id
+        self._abort.clear()
+        asked = opts.get("timeout")
+        # `is None`, not truthiness: timeout=0 means "do not wait", and reading it
+        # as unset made that the 30-minute default.
+        budget = DEFAULT_RUN_TIMEOUT_S if asked is None else float(asked)
+        deadline = time.monotonic() + budget
         delay = _POLL_MIN_S
         stopped = False
-        while True:
-            run = self._t.request("GET", f"/v1/runs/{run_id}")
-            if run.get("state") in _FINISHED:
-                return self._outcome(run, stopped)
-            if time.monotonic() >= deadline:
-                if stopped:
+        try:
+            while True:
+                run = self._t.request("GET", f"/v1/runs/{run_id}")
+                if run.get("state") in _FINISHED:
+                    successor = self._failover_of(run_id, run)
+                    if successor is not None:
+                        # The daemon routed to another agent: it renamed the
+                        # failed container and started a new one. Returning the
+                        # first attempt's outcome would credit the agent that
+                        # failed and leave the retry running — and the next run
+                        # on this branch would then 409 on a live container this
+                        # object cannot clear.
+                        run_id = successor
+                        self._in_flight = run_id
+                        continue
+                    return self._outcome(run, stopped)
+                if self._abort.is_set():
+                    # The async face was cancelled. It has stopped the run; this
+                    # thread stops polling rather than holding the interpreter
+                    # open until the deadline.
                     return self._outcome(run, True)
-                # The stop is what makes a deadline mean something, so its failure
-                # cannot be swallowed: reporting stopped after a refused stop would
-                # claim the container ended while it is still holding its name.
-                self.stop(run_id)
-                stopped = True
-            time.sleep(delay)
-            delay = min(delay * 1.6, _POLL_MAX_S)
+                if time.monotonic() >= deadline:
+                    if stopped:
+                        return self._outcome(run, True)
+                    # The stop is what makes a deadline mean something, so its
+                    # failure cannot be swallowed: reporting stopped after a
+                    # refused stop would claim the container ended while it is
+                    # still holding its name.
+                    self.stop(run_id)
+                    stopped = True
+                self._abort.wait(delay)
+                delay = min(delay * 1.6, _POLL_MAX_S)
+        finally:
+            self._in_flight = None
+
+    def _failover_of(self, run_id: str, finished: dict[str, Any]) -> str | None:
+        """The run the daemon started to replace this one, if it did.
+
+        Only asked when a run ends non-zero and a fallback was possible, because
+        it costs a listing. The link is `routedFrom`, which the daemon stamps on
+        the replacement — the same field the audit line and the container label
+        carry, so this reads the record rather than guessing from timing.
+        """
+        if finished.get("exitCode") in (0, None):
+            return None
+        try:
+            runs = (self._t.request("GET", f"/v1/runs?all=1&repo={self.project.id}") or {}).get("runs") or []
+        except ApiError:
+            return None
+        for r in runs:
+            if r.get("routedFrom") == run_id or r.get("routed_from") == run_id:
+                return r.get("id")
+        return None
 
     def _outcome(self, run: dict[str, Any], stopped: bool) -> Outcome:
         lines = self.logs(run["id"])

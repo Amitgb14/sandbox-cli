@@ -10,6 +10,7 @@ and refuses, which is the correct outcome.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,16 +109,29 @@ def init_repo(directory: str) -> None:
 
 
 def unborn_with_files(directory: str) -> bool:
-    """Whether a repository has files but no commits — the state in which every
+    """Whether a *repository* has files but no commits — the state in which every
     worktree Studio makes is **empty**.
 
-    This is the trap `git init` leaves behind, and it is silent: git creates an
-    orphan worktree, the daemon registers it happily, the run starts, and the
-    agent finds nothing in /workspace. Reported rather than fixed: `git add -A &&
-    git commit` is one line to type and a bad thing to do *for* somebody, since a
-    directory that has never been a repository usually has no .gitignore — which
-    is exactly where node_modules, a .env and a stray key get committed.
+    Three questions in order, because collapsing them produces a false sentence.
+    Is git here at all? If not this cannot be asked, and the daemon will answer
+    it on its own machine. Is this a repository? If not, "no commits yet" is not
+    the problem and saying so sends somebody to run `git commit` in a directory
+    with nothing to commit to. Only then: does HEAD resolve?
+
+    The first version asked only the last question, and `_git` returns None for
+    "git failed" and "git is missing" alike — so a plain directory with a file in
+    it was refused as "a git repository with no commits yet", advice that cannot
+    be followed.
+
+    Reported rather than fixed. `git add -A && git commit` is one line to type and
+    a bad thing to do *for* somebody: a directory that has never been a repository
+    usually has no .gitignore, which is exactly where node_modules, a .env and a
+    stray key get committed.
     """
+    if shutil.which("git") is None:
+        return False
+    if local_repo(directory) is None:
+        return False
     if _git(directory, "rev-parse", "--verify", "--quiet", "HEAD") is not None:
         return False
     try:

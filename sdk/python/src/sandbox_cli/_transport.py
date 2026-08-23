@@ -9,12 +9,13 @@ rather than duplicating them against a second stack.
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
 from typing import Any
 
 from ._discover import discover_token, discover_url
-from .errors import ApiError, DaemonUnreachable
+from .errors import ApiError, DaemonUnreachable, RequestTimeout
 
 DEFAULT_TIMEOUT_S = 30.0
 
@@ -45,9 +46,26 @@ class Transport:
             detail = _error_text(e.read())
             raise ApiError(e.code, f"{method} {path}", detail) from None
         except urllib.error.URLError as e:
+            # A socket timeout arrives here too, and it means the opposite of an
+            # absent daemon: something *is* listening and taking its time —
+            # commonly a first launch, where the daemon builds the base image
+            # before the container starts. Telling that user to run `studio.sh
+            # up` describes the reverse of what is happening.
+            if isinstance(e.reason, TimeoutError) or isinstance(e, socket.timeout):
+                raise RequestTimeout(
+                    f"{method} {path} did not answer within {timeout or self.timeout:.0f}s. "
+                    f"The daemon may be building the base image, which takes minutes on a "
+                    f"fresh machine; nothing is known about the run either way."
+                ) from None
             raise DaemonUnreachable(
                 f"no Studio daemon answered at {self.url} ({e.reason}). "
                 f"Start one with `studio.sh up`, or pass url= if it runs elsewhere."
+            ) from None
+        except socket.timeout:
+            # Python 3.9 raises this bare from resp.read() rather than wrapping it.
+            raise RequestTimeout(
+                f"{method} {path} began answering and then stalled; nothing is known "
+                f"about the run."
             ) from None
         return json.loads(raw) if raw else None
 

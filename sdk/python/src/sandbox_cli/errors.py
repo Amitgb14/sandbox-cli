@@ -41,19 +41,18 @@ class DaemonUnreachable(SandboxError):
     """
 
 
-class RunTimeout(SandboxError):
-    """The wait gave up. Carries the run, because it still exists.
+class RequestTimeout(SandboxError):
+    """One HTTP request took too long. Nothing is claimed about the run.
 
     Named rather than `TimeoutError` (a builtin, and an alias of OSError) for the
-    same reason as above. The run is attached for the reason `WaitError` attaches
-    it: a detached container holds `sandbox-<repo>-<branch>`, which docker will
-    not duplicate, so an error without the id leaves the branch blocked by
-    something the caller cannot name.
-    """
+    same reason `DaemonUnreachable` is not `ConnectionError`.
 
-    def __init__(self, run: dict[str, Any], message: str) -> None:
-        super().__init__(message)
-        self.run = run
+    Distinct from a *run* outliving its deadline, which is not an error at all:
+    that returns an `Outcome` with `stopped=True`, because the container was
+    stopped deliberately and its exit code is not a verdict. Conflating the two
+    would make "the daemon was slow to answer" and "the work took too long" the
+    same event, and they need opposite responses.
+    """
 
 
 class WaitError(SandboxError):

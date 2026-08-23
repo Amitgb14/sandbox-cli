@@ -14,11 +14,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 class FakeDaemon:
     def __init__(self, *, holds_name_after_run: bool = False, project_root: str = "/repo/app",
-                 fail_after: int | None = None):
+                 fail_after: int | None = None, never_finishes: bool = False,
+                 failover: bool = False):
         self.requests: list[dict] = []
         self.removed: list[str] = []
         self.holds_name_after_run = holds_name_after_run
         self._fail_after = fail_after
+        self.never_finishes = never_finishes
+        self.failover = failover
         self._launches = 0
         self.project_root = project_root
         self._held = ""
@@ -74,11 +77,24 @@ def _handler(state: FakeDaemon):
                     {"id": "repo-3", "name": "twin", "root": "/b/twin"}]})
             if self.path.startswith("/v1/runs/") and self.path.endswith("/logs"):
                 return self._send(200, [{"seq": 0, "ts": "", "stream": "stdout", "text": "hi"}])
+            if state.failover and self.path == "/v1/runs?all=1&repo=repo-1":
+                # The daemon stamps routedFrom on the replacement it started.
+                return self._send(200, {"runs": [
+                    {"id": "run-2", "state": "exited", "exitCode": 0, "agent": "codex",
+                     "routedFrom": "run-1", "branch": "feature", "repoId": "repo-1"}]})
+            if state.failover and self.path == "/v1/runs/run-2":
+                return self._send(200, {"id": "run-2", "state": "exited", "exitCode": 0,
+                                        "agent": "codex", "routedFrom": "run-1",
+                                        "branch": "feature", "repoId": "repo-1"})
+            if state.never_finishes and self.path.startswith("/v1/runs/") and \
+                    not self.path.endswith("/logs"):
+                return self._send(200, {"id": "run-1", "state": "running", "branch": "feature"})
             if self.path.startswith("/v1/runs/"):
                 failing = (state._fail_after is not None
                            and state._launches > state._fail_after)
                 return self._send(200, {"id": "run-1", "state": "exited",
-                                        "exitCode": 1 if failing else 0,
+                                        "exitCode": 1 if (failing or state.failover) else 0,
+                                        "agent": "claude" if state.failover else None,
                                         "branch": "feature", "repoId": "repo-1"})
             if self.path.startswith("/v1/runs"):
                 return self._send(200, {"runs": []})

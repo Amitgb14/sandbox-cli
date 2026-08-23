@@ -67,8 +67,13 @@ base64-encoded in both directions.
 steps: `/tmp` is gone, `/workspace` is not.
 
 **Error names avoid the builtins.** `TimeoutError` and `ConnectionError` are
-Python's own, so this package raises `RunTimeout` and `DaemonUnreachable`
+Python's own, so this package raises `RequestTimeout` and `DaemonUnreachable`
 instead; `ApiError` and `WaitError` mean what they do in the TypeScript client.
+
+**A run outliving its deadline is not an error.** `RequestTimeout` means one HTTP
+request was slow. A `timeout=` that expires stops the container and returns an
+`Outcome` with `stopped=True` — check that before you read `exit_code`, because
+the exit code of a container somebody stopped is not a verdict on the work.
 
 ## Adding a repository
 

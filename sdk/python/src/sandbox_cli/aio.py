@@ -121,28 +121,31 @@ class AsyncWorkspace:
         `asyncio.CancelledError` mid-wait is the same situation as WaitError: the
         launch already succeeded, so the container exists and holds its branch's
         name — nothing else can take it, including the next run of this script.
-        The thread cannot be interrupted, so this stops the run *by name* and
-        re-raises something that carries it. An await that is cancelled and leaves
-        an agent working is the worst version of this API.
+
+        Two things this has to get right, and the first version got both wrong.
+        It stops **the run this call launched**, read from the workspace rather
+        than searched for by branch: a search finds whatever live run carries the
+        label, which on a busy branch is another process's agent, and killing
+        that is the exact opposite of the promise above.
+
+        And it tells the worker to stop polling. `asyncio.to_thread` cannot be
+        interrupted, so a cancelled await used to leave a thread polling until
+        the run deadline — up to thirty minutes — with `asyncio.run` blocking on
+        executor shutdown behind it. The abort flag turns that into one poll
+        interval.
         """
         task = asyncio.create_task(_off_thread(fn, *args, **kwargs))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
-            run = await _off_thread(self._find_live_run)
-            if run:
-                await _off_thread(self._sync.stop, run["id"], False)
+            run_id = self._sync._in_flight  # noqa: SLF001 — same package
+            self._sync._abort.set()  # noqa: SLF001
+            if run_id is None:
+                # Cancelled before anything was launched, or after it finished:
+                # there is nothing out there to stop.
+                raise
+            try:
+                await _off_thread(self._sync.stop, run_id, False)
+            finally:
                 task.cancel()
-                raise RunCancelled(run) from None
-            raise
-
-    def _find_live_run(self) -> dict[str, Any] | None:
-        for r in self._sync.project and self._runs_for_branch():
-            if r.get("state") not in ("exited", "dead"):
-                return r
-        return None
-
-    def _runs_for_branch(self) -> list[dict[str, Any]]:
-        studio = Studio(self._sync._t)  # noqa: SLF001 — same package, one implementation
-        return [r for r in studio.runs(all=True, repo=self.project.id)
-                if r.get("branch") == self.branch]
+            raise RunCancelled({"id": run_id}) from None

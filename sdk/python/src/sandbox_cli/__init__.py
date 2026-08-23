@@ -5,13 +5,13 @@ from .errors import (
     ApiError,
     DaemonUnreachable,
     RunCancelled,
-    RunTimeout,
+    RequestTimeout,
     SandboxError,
     WaitError,
 )
 
 __all__ = [
     "Studio", "Project", "Workspace", "Outcome", "DEFAULT_RUN_TIMEOUT_S",
-    "SandboxError", "ApiError", "DaemonUnreachable", "RunTimeout", "WaitError", "RunCancelled",
+    "SandboxError", "ApiError", "DaemonUnreachable", "RequestTimeout", "WaitError", "RunCancelled",
 ]
 __version__ = "0.0.1"
