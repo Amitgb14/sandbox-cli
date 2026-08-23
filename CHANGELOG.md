@@ -13,52 +13,6 @@ version is tagged.
 
 ### Fixed
 
-- **A failover no longer looks like a failure** (both SDKs). With `fallback` set,
-  the daemon renames the container of the agent that failed and starts a
-  replacement — but the clients polled the first run's id, so they returned that
-  attempt's non-zero outcome, credited the agent that failed, and left the retry
-  running. The next run on the branch then conflicted with a live container the
-  client could not clear. Both now follow `routedFrom` to the replacement.
-- **A misspelled run option is refused rather than ignored** (both SDKs).
-  `alow: [...]` launched with the daemon's default egress posture and reported
-  success — a typo in the one option that is a security control. TypeScript's
-  type checker caught it in a literal; the JavaScript this package also ships did
-  not.
-
-### Added
-
-- **A Python SDK** (`sdk/python`, `import sandbox_cli`), sync and async from one
-  implementation. Zero dependencies — it is imported into somebody's agent
-  process, and an HTTP stack is a bad thing to drag in behind them; the async
-  face runs the same calls in a thread rather than duplicating them against a
-  second stack, with a test that fails when the two surfaces drift. It ships
-  with the four rules the TypeScript client learned the hard way: a second step
-  on one workspace clears only the run whose outcome was already returned, a
-  repository with files and no commits is refused rather than producing empty
-  worktrees, paths are expanded but never symlink-resolved, and a submodule
-  resolves to its own tree. Error names avoid the Python builtins
-  (`RunTimeout`, `DaemonUnreachable`) because shadowing `ConnectionError` in a
-  library people write `except` around is how a caller stops matching socket
-  errors.
-
-- **`studio.addProject(path, { init: true })`** runs `git init` when the
-  directory is not a repository yet. Opt-in, because creating a repository is a
-  larger side effect than registering one — and because the path belongs to the
-  *daemon's* machine while `git init` runs on this one, so doing it
-  automatically would silently make a repository in the wrong place against a
-  remote daemon.
-
-### Fixed
-
-- **A repository with files and no commits is refused, instead of producing
-  empty workspaces.** Studio works from committed state, so `git init` alone is
-  a trap: git makes an orphan worktree, the daemon registers it, the run starts,
-  and the agent finds nothing in `/workspace` — with nothing anywhere saying
-  why. `addProject` now catches it while the person is still at the keyboard and
-  prints the commit to run. It does not commit for you: a directory that was
-  never a repository usually has no `.gitignore`, which is where a helpful tool
-  would commit `node_modules` and a `.env`.
-
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
   sandbox-cli never supplies the key.** `gateway:` in your own config names the
   agents, the endpoint, and the *variable* the credential lives in — a name, not
@@ -93,6 +47,55 @@ version is tagged.
   carry a dashed ring, the providers list says *via <host>*, and the gateway's own
   probe result is what is shown, since the vendor behind it being down is the case
   a gateway survives.
+
+## 0.0.1beta.18 — 2026-08-23
+
+### Added
+
+- **A Python SDK** (`sdk/python`, `import sandbox_cli`), sync and async from one
+  implementation. Zero dependencies — it is imported into somebody's agent
+  process, and an HTTP stack is a bad thing to drag in behind them; the async
+  face runs the same calls in a thread rather than duplicating them against a
+  second stack, with a test that fails when the two surfaces drift. It ships
+  with the four rules the TypeScript client learned the hard way: a second step
+  on one workspace clears only the run whose outcome was already returned, a
+  repository with files and no commits is refused rather than producing empty
+  worktrees, paths are expanded but never symlink-resolved, and a submodule
+  resolves to its own tree. Error names avoid the Python builtins
+  (`RunTimeout`, `DaemonUnreachable`) because shadowing `ConnectionError` in a
+  library people write `except` around is how a caller stops matching socket
+  errors.
+
+- **`studio.addProject(path, { init: true })`** runs `git init` when the
+  directory is not a repository yet. Opt-in, because creating a repository is a
+  larger side effect than registering one — and because the path belongs to the
+  *daemon's* machine while `git init` runs on this one, so doing it
+  automatically would silently make a repository in the wrong place against a
+  remote daemon.
+
+### Fixed
+
+- **A failover no longer looks like a failure** (both SDKs). With `fallback` set,
+  the daemon renames the container of the agent that failed and starts a
+  replacement — but the clients polled the first run's id, so they returned that
+  attempt's non-zero outcome, credited the agent that failed, and left the retry
+  running. The next run on the branch then conflicted with a live container the
+  client could not clear. Both now follow `routedFrom` to the replacement.
+
+- **A misspelled run option is refused rather than ignored** (both SDKs).
+  `alow: [...]` launched with the daemon's default egress posture and reported
+  success — a typo in the one option that is a security control. TypeScript's
+  type checker caught it in a literal; the JavaScript this package also ships did
+  not.
+
+- **A repository with files and no commits is refused, instead of producing
+  empty workspaces.** Studio works from committed state, so `git init` alone is
+  a trap: git makes an orphan worktree, the daemon registers it, the run starts,
+  and the agent finds nothing in `/workspace` — with nothing anywhere saying
+  why. `addProject` now catches it while the person is still at the keyboard and
+  prints the commit to run. It does not commit for you: a directory that was
+  never a repository usually has no `.gitignore`, which is where a helpful tool
+  would commit `node_modules` and a `.env`.
 
 ## 0.0.1beta.17 — 2026-08-22
 
