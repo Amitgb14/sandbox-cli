@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sandbox-cli"
+version = "0.0.1"
+description = "Drive sandbox-cli from Python: run commands and agents in isolated containers, and get back what happened."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Amit Ghadge" }]
+keywords = ["sandbox", "agents", "docker", "isolation", "claude", "codex"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Testing",
+]
+# No dependencies, deliberately: this is imported into somebody's agent process,
+# and an HTTP stack is a bad thing to drag in behind them. The async face runs
+# the same calls in a thread rather than duplicating them against a second one.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://sandbox-cli.vercel.app"
+Repository = "https://github.com/Amitgb14/sandbox-cli"
+Issues = "https://github.com/Amitgb14/sandbox-cli/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sandbox_cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

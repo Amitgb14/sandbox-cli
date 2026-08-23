@@ -13,6 +13,20 @@ version is tagged.
 
 ### Added
 
+- **A Python SDK** (`sdk/python`, `import sandbox_cli`), sync and async from one
+  implementation. Zero dependencies — it is imported into somebody's agent
+  process, and an HTTP stack is a bad thing to drag in behind them; the async
+  face runs the same calls in a thread rather than duplicating them against a
+  second stack, with a test that fails when the two surfaces drift. It ships
+  with the four rules the TypeScript client learned the hard way: a second step
+  on one workspace clears only the run whose outcome was already returned, a
+  repository with files and no commits is refused rather than producing empty
+  worktrees, paths are expanded but never symlink-resolved, and a submodule
+  resolves to its own tree. Error names avoid the Python builtins
+  (`RunTimeout`, `DaemonUnreachable`) because shadowing `ConnectionError` in a
+  library people write `except` around is how a caller stops matching socket
+  errors.
+
 - **`studio.addProject(path, { init: true })`** runs `git init` when the
   directory is not a repository yet. Opt-in, because creating a repository is a
   larger side effect than registering one — and because the path belongs to the
