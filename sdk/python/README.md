@@ -86,6 +86,19 @@ unrestricted egress, `example.com` answers 200 without `allow` and is refused
 with it. Asking for one host means giving up the rest of the internet, which is
 usually what you want for code you did not write.
 
+`examples/travel_planner.py` — three agents that hand work to each other, and a
+gate that decides. Two specialists research in parallel, each in its own
+worktree, so the coordinator **cannot see** what they wrote: the artifacts cross
+through this process, base64-encoded in both directions. The gate asks the
+filesystem rather than the agent, because an agent that reports success having
+written nothing is the failure it cannot be asked about:
+
+```
+OK   agent-flights   claude  ok
+SKIP agent-hotels    claude  finished without writing hotels.json
+handed over: flights.json
+```
+
 ## Status
 
 Early. The surface above is stable enough to build on; `run_code`, artifacts and
