@@ -70,6 +70,22 @@ steps: `/tmp` is gone, `/workspace` is not.
 Python's own, so this package raises `RunTimeout` and `DaemonUnreachable`
 instead; `ApiError` and `WaitError` mean what they do in the TypeScript client.
 
+## Examples
+
+`examples/stock_price.py` — untrusted code fetching a quote, and the two lines
+that decide what it can do:
+
+```
+$ python3 examples/stock_price.py TSLA
+TSLA  362.86 USD  (NasdaqGS)
+```
+
+It is worth reading for `allow=` rather than for the price. Naming a host turns
+the egress allowlist **on** for that run: measured against a daemon with
+unrestricted egress, `example.com` answers 200 without `allow` and is refused
+with it. Asking for one host means giving up the rest of the internet, which is
+usually what you want for code you did not write.
+
 ## Status
 
 Early. The surface above is stable enough to build on; `run_code`, artifacts and
