@@ -37,6 +37,9 @@ export interface FakeDaemonOptions {
    *  directories on its own machine; a test that looks one up by path needs a
    *  root that exists here. */
   projectRoot?: string;
+  /** Model a failover: the first run exits non-zero and the daemon starts a
+   *  replacement stamped with routedFrom. */
+  failover?: boolean;
   /** The branch and state GET /runs reports, for the reaping rules. */
   listedBranch?: string;
   listedState?: string;
@@ -161,6 +164,19 @@ export class FakeDaemon {
     if (url.pathname === "/v1/runs" && req.method === "POST") {
       if (this.opts.holdsNameAfterRun) this.heldBy = "run-1";
       return json(201, { id: "run-1", containerId: "c1", name: "sandbox-app-feature", kind: "interactive", state: "running", detached: true, createdAt: new Date(0).toISOString() });
+    }
+    if (this.opts.failover && url.pathname === "/v1/runs" && req.method === "GET"
+        && url.searchParams.get("all") === "1") {
+      return json(200, { runs: [{ id: "run-2", state: "exited", exitCode: 0, agent: "codex",
+        routedFrom: "run-1", branch: "feature" }] });
+    }
+    if (this.opts.failover && url.pathname === "/v1/runs/run-2" && req.method === "GET") {
+      return json(200, { id: "run-2", state: "exited", exitCode: 0, agent: "codex",
+        routedFrom: "run-1", branch: "feature" });
+    }
+    if (this.opts.failover && url.pathname === "/v1/runs/run-1" && req.method === "GET") {
+      return json(200, { id: "run-1", state: "exited", exitCode: 1, agent: "claude",
+        branch: "feature" });
     }
     if (url.pathname === "/v1/runs/run-1" && req.method === "GET") {
       const states = this.opts.runStates ?? ["running", "exited"];

@@ -809,3 +809,37 @@ test("a repository with files and no commits is refused, with what to run", asyn
     await daemon.stop();
   }
 });
+
+test("a failover is followed, not reported as the failure", async () => {
+  // The daemon renames the failed container and starts a replacement stamped
+  // with routedFrom. Returning the first attempt credits the agent that failed
+  // and leaves the retry running — and the next run on this branch then
+  // conflicts with a live container this object cannot clear.
+  const { daemon, studio } = await connected({ failover: true });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    const out = await ws.agent("claude", "do the thing", { fallback: ["codex"] });
+    assert.equal(out.id, "run-2", "the outcome should be the retry's");
+    assert.equal(out.exitCode, 0);
+    assert.equal(out.agent, "codex");
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("an unknown run option is a typo, not a preference", async () => {
+  // TypeScript catches this in an object literal; JavaScript consumers — which
+  // this package ships for — got a silent launch with the daemon's default
+  // egress posture, from a misspelling of a security control.
+  const { daemon, studio } = await connected();
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    await assert.rejects(
+      () => ws.run(["echo", "hi"], { alow: ["api.example.com"] } as never),
+      /unknown run option\(s\): alow/,
+    );
+    assert.equal(daemon.requests.some((r) => r.method === "POST" && r.path === "/v1/runs"), false);
+  } finally {
+    await daemon.stop();
+  }
+});

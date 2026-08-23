@@ -285,6 +285,15 @@ each container.
 All three import by package name and are compiled by `npm test`, so they are checked
 in the shape you would type rather than in one only this repository can use.
 
+## When an agent is unavailable
+
+`fallback: ["codex"]` lets the daemon route the work when the first agent's
+provider is down. The outcome you get back is the run that **finished the work**,
+not the attempt that failed: the daemon stamps `routedFrom` on the replacement
+and this client follows it, so `agent` and `routedFrom` describe who actually did
+it. Reported on every outcome rather than behind an option — a script that cannot
+see a failover credits the wrong agent, and bills the wrong account.
+
 ## Running the same script twice
 
 Docker refuses a duplicate container name, and that refusal is what enforces one

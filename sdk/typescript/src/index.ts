@@ -638,7 +638,28 @@ export class Workspace {
     }
   }
 
+  /**
+   * Every option `run` and `agent` accept.
+   *
+   * TypeScript's excess-property check catches a typo in an object literal, but
+   * this package ships JavaScript too, and there a misspelling is silent —
+   * `{ alow: ["api.example.com"] }` launches with the daemon's default egress
+   * posture and reports success. That is a misspelling of the one option that is
+   * a security control, so it is worth a runtime check rather than a type.
+   */
+  private static readonly KNOWN_OPTIONS = new Set([
+    "env", "allow", "memory", "cpus", "base", "publish", "verify",
+    "timeoutMs", "replaceFinished", "signal", "fallback",
+  ]);
+
   private common(opts: RunOptions): Partial<RunCreateRequest> {
+    const unknown = Object.keys(opts).filter((k) => !Workspace.KNOWN_OPTIONS.has(k));
+    if (unknown.length > 0) {
+      throw new Error(
+        `unknown run option(s): ${unknown.join(", ")}. Known: ` +
+          [...Workspace.KNOWN_OPTIONS].sort().join(", "),
+      );
+    }
     const body: Partial<RunCreateRequest> = { repo: this.project.id };
     if (this.branch) body.worktree = this.branch;
     if (opts.env) body.env = opts.env;
@@ -759,6 +780,16 @@ export class Workspace {
         opts.signal,
       );
       if (run.state === "exited" || run.state === "dead") {
+        // The daemon may have routed this to another agent: on failover it
+        // renames the failed container and starts a new one. Returning here
+        // would credit the agent that *failed* and leave the retry running —
+        // and the next run on this branch would then conflict with a live
+        // container this object cannot clear.
+        const successor = await this.failoverOf(id, run);
+        if (successor) {
+          id = successor;
+          continue;
+        }
         return this.outcome(run, stopped);
       }
       if (Date.now() >= deadline) {
@@ -774,6 +805,30 @@ export class Workspace {
       }
       await sleep(Math.min(delay, Math.max(0, deadline - Date.now())), opts.signal);
       delay = Math.min(delay * 2, POLL_MAX_MS);
+    }
+  }
+
+  /**
+   * The run the daemon started to replace this one, if it did.
+   *
+   * Asked only when a run ended non-zero, because it costs a listing. The link
+   * is `routedFrom`, which the daemon stamps on the replacement — the same field
+   * the audit line and the container label carry, so this reads the record
+   * rather than inferring from timing.
+   */
+  private async failoverOf(id: string, finished: Run): Promise<string | null> {
+    if (!finished.exitCode) return null;
+    try {
+      const res = await this.t.request<RunsResponse>(
+        "GET",
+        `/v1/runs?all=1&repo=${encodeURIComponent(this.project.id)}`,
+      );
+      const next = (res.runs ?? []).find((r) => r.routedFrom === id);
+      return next?.id ?? null;
+    } catch {
+      // A listing that fails says nothing about a failover, and the outcome in
+      // hand is real. Reporting it beats throwing away a finished run.
+      return null;
     }
   }
 

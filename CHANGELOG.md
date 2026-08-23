@@ -11,6 +11,20 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **A failover no longer looks like a failure** (both SDKs). With `fallback` set,
+  the daemon renames the container of the agent that failed and starts a
+  replacement — but the clients polled the first run's id, so they returned that
+  attempt's non-zero outcome, credited the agent that failed, and left the retry
+  running. The next run on the branch then conflicted with a live container the
+  client could not clear. Both now follow `routedFrom` to the replacement.
+- **A misspelled run option is refused rather than ignored** (both SDKs).
+  `alow: [...]` launched with the daemon's default egress posture and reported
+  success — a typo in the one option that is a security control. TypeScript's
+  type checker caught it in a literal; the JavaScript this package also ships did
+  not.
+
 ### Added
 
 - **A Python SDK** (`sdk/python`, `import sandbox_cli`), sync and async from one
