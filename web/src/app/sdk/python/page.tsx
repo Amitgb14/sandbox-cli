@@ -5,6 +5,7 @@ import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
 import { CodeBlock } from "@/components/code-block";
+import { LanguageToggle } from "@/components/language-toggle";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { type NavEntry } from "@/lib/nav";
@@ -63,12 +64,16 @@ export default function PythonSdkPage() {
         {/* ------------------------------------------------------------ what */}
         <Section id="what">
           <Link
-            href={SDK_PATH}
+            href="/"
             className="mb-6 inline-flex items-center gap-1.5 text-[0.8rem] text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft className="size-3.5" />
-            TypeScript SDK
+            sandbox-cli
           </Link>
+
+          <div className="mb-6">
+            <LanguageToggle active="python" />
+          </div>
 
           <SectionHead
             eyebrow="python sdk"

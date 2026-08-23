@@ -5,10 +5,11 @@ import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
 import { CodeBlock } from "@/components/code-block";
+import { LanguageToggle } from "@/components/language-toggle";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { type NavEntry } from "@/lib/nav";
-import { PYTHON_SDK_PATH, REPO_URL, STUDIO_PATH } from "@/lib/site";
+import { REPO_URL, STUDIO_PATH } from "@/lib/site";
 import {
   SDK_ERRORS,
   SDK_EXAMPLE,
@@ -122,6 +123,10 @@ export default function SdkPage() {
             sandbox-cli
           </Link>
 
+          <div className="mb-6">
+            <LanguageToggle active="typescript" />
+          </div>
+
           <SectionHead
             eyebrow="typescript sdk"
             title="The same boundary, driven from a program"
@@ -134,15 +139,6 @@ export default function SdkPage() {
               </>
             }
           />
-
-
-          <p className="mt-6 text-[0.85rem] leading-relaxed text-muted-foreground">
-            Working in Python?{" "}
-            <Link href={PYTHON_SDK_PATH} className="underline underline-offset-4">
-              The same client for Python
-            </Link>{" "}
-            — same nouns, same rules, sync or async.
-          </p>
 
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="rounded-2xl border bg-card p-5">
