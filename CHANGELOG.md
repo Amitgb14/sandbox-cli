@@ -26,9 +26,9 @@ version is tagged.
   is installed editable, without which its own scripts fail with `No module named
   <the repo>`. Verified against a real repository: 236 of its tests ran in the
   sandbox.
-- **`examples/fastapi_service.py`** — clone a repository, configure it from a
-  `.env`, build a virtualenv, serve FastAPI on a published port, and health-check
-  it from the host. Run end to end rather than compiled: it also documents what
+- **`examples/fastapi_service.py`** — serve a repository's **own** FastAPI app on
+  a published port and health-check it from the host: it finds the app, installs
+  the repository's requirements, and starts it with `start()`. Run end to end rather than compiled: it also documents what
   the sandbox costs today, since the image has python3 and no pip, so the setup
   bootstraps pip inside a `--without-pip` venv with three hosts named on the
   allowlist.

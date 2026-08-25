@@ -183,12 +183,17 @@ $ python3 examples/python_project.py my-repo            # again
 dependencies already present in the worktree — skipping setup
 ```
 
-`examples/fastapi_service.py` — the whole shape of a real setup: clone a
-repository onto the daemon's machine, give it configuration from a `.env`, build
-a virtualenv, and start a FastAPI server on a published port, then health-check
-it from here. It is also the honest tour of what the sandbox costs today: the
-image has python3 and **no pip**, so the setup builds a venv *without* pip and
-bootstraps pip inside it, which needs three hosts named on the egress allowlist.
+`examples/fastapi_service.py` — serve **a repository's own FastAPI app** in a
+sandbox and health-check it from here. It finds the app (`app.py`, `main.py`,
+`src/main.py`…), installs the repository's requirements, starts it with
+`start()` on a published port, and stops it. If the repository has no app it
+scaffolds one and says so — a fallback that looked like the real thing was the
+flaw in this example's first version, which cloned a repository, ignored it, and
+served code it had written itself.
+
+It is also the honest tour of what the sandbox costs today: the image has python3
+and **no pip**, so the setup builds a venv *without* pip and bootstraps pip
+inside it, which needs three hosts named on the egress allowlist.
 
 `examples/travel_planner.py` — three agents that hand work to each other, and a
 gate that decides. Two specialists research in parallel, each in its own
