@@ -411,6 +411,33 @@ sandbox-cli droid exec 'run the tests'
 
 ---
 
+## devin — Devin CLI (Cognition)
+
+- **Prerequisites:** a Devin account. It is a paid product, and the CLI needs one.
+- **Setup:** `/login` inside a session is the documented route. A container cannot
+  open a browser, so a flow that wants one prints a URL for you to visit on the
+  host rather than launching it.
+- **Forwarded if set:** `DEVIN_API_KEY`, `DEVIN_API_BASE_URL`. Cognition documents
+  no environment variable for CLI auth, so these are the API's names — if the CLI
+  ignores them the cost is a variable that crosses and is not read.
+- **Install is unpinned.** The top-level installer takes the latest promoted
+  version and offers no switch; pinning means fetching `cli/<version>/setup.sh`,
+  and no index of versions is published. Recorded in `internal/agents/pins.go`
+  rather than guessed.
+- **Not fleet-eligible yet.** `devin -p PROMPT` is single-turn mode and
+  `--permission-mode bypass` auto-approves tool calls — both documented, neither
+  verified here, because nobody has an account to run one with. A descriptor is
+  earned by running the agent, so Studio, a `fleet.yaml` and the SDKs do not
+  offer Devin until somebody does.
+
+```sh
+sandbox-cli devin
+sandbox-cli devin -p 'explain this repository'
+sandbox-cli devin -- -p 'fix the failing test' --permission-mode bypass
+```
+
+---
+
 ## Seeing an agent's past conversations
 
 Every wrapper persists the agent's `HOME`, so the sessions it records outlive the

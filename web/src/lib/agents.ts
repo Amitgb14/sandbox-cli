@@ -179,6 +179,18 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli cursor -- --sandbox disabled",
   },
   {
+    id: "devin",
+    name: "Devin CLI",
+    vendor: "Cognition",
+    delivery: "first-run",
+    size: "~90 MB",
+    login: "`/login` inside a session. Devin is a paid product; the CLI needs an account.",
+    env: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
+    gotcha:
+      "Its headless mode (devin -p PROMPT) and auto-approval (--permission-mode bypass) are documented but unverified here, so Devin cannot be named in a fleet or launched from Studio yet — a descriptor is earned by running the agent, not by reading its docs.",
+    example: "sandbox-cli devin -p 'explain this repository'",
+  },
+  {
     id: "droid",
     name: "Droid",
     vendor: "Factory",

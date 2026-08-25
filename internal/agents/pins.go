@@ -125,6 +125,16 @@ var installPins = map[string]InstallPin{
 	"goose":     {Version: "1.45.0"}, // GOOSE_VERSION=v<v> on the vendor script
 	"openhands": {Version: "1.16.0"}, // release asset URL
 
+	// Devin's top-level installer takes no version: it reads PINNED_VERSION,
+	// which its own comment says the *versioned* setup scripts set
+	// (`cli/<version>/setup.sh`) and the top-level one leaves empty to get "the
+	// latest promoted version". So pinning means knowing a version and fetching a
+	// different URL, and Cognition publishes no index of them that this could
+	// read. Recorded rather than guessed: naming a version from an example in a
+	// comment would pin every sandbox to whatever that example happened to be.
+	"devin": {Unpinned: "cli.devin.ai/install.sh installs the latest promoted version and offers " +
+		"no version switch; pinning means fetching cli/<version>/setup.sh, and no index of " +
+		"versions is published"},
 	"cursor-agent": {Unpinned: "cursor.com/install regenerates the script per release with the " +
 		"version baked into it, and documents no way to ask for a different one; there is " +
 		"nothing to pass"},

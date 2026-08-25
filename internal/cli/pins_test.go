@@ -42,6 +42,7 @@ var wrapperInstalls = map[string]string{
 	"continue":  "cn",
 	"openhands": "openhands",
 	"droid":     "droid",
+	"devin":     "devin",
 }
 
 // TestEveryLazyInstalledAgentIsPinnedOrSaysWhy is where the pin table stops being
