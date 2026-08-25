@@ -67,13 +67,14 @@ func TestUnpinnedAgentsReadExactlyAsBefore(t *testing.T) {
 	}
 }
 
-// TestRegistryAgentsThatInstallLazilyArePinned covers the five descriptors this
+// TestRegistryAgentsThatInstallLazilyArePinned covers the descriptors this
 // package owns. codex is deliberately absent from the pin table: it is baked into
 // the base image and its Command is the bare binary, so there is no install to
 // pin.
 func TestRegistryAgentsThatInstallLazilyArePinned(t *testing.T) {
 	// agent -> the binary its bootstrap installs, or "" when it does not install.
 	installs := map[string]string{
+		"cline":    "cline",
 		"claude":   "claude",
 		"codex":    "",
 		"gemini":   "gemini",

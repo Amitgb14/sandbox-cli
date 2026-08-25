@@ -213,7 +213,7 @@ export const AGENTS: Agent[] = [
     ],
     gotcha:
       "With an OAuth provider and no stored credentials it fails with an auth message rather than opening a browser. That's intended, not a crash.",
-    example: "sandbox-cli cline task 'run the tests'",
+    example: "sandbox-cli cline 'run the tests'",
   },
   {
     id: "amp",

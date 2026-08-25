@@ -231,7 +231,7 @@ repointable, served inside the container where your host browser cannot reach it
 
 ```sh
 sandbox-cli cline
-sandbox-cli cline task 'run the tests'
+sandbox-cli cline 'run the tests'
 ```
 
 ## goose — Goose
@@ -490,13 +490,14 @@ for approval in a fleet does not fail; it hangs until you notice, holding a slot
 | `agent:` | What the fleet runs | Notes |
 |---|---|---|
 | `claude` | `claude -p PROMPT --dangerously-skip-permissions` | baked into the image |
+| `cline` | `cline PROMPT --auto-approve true` | installed on first run; the prompt is a bare positional and the TUI is the opt-in (`-i`), which is the inverse of the others |
 | `codex` | `codex exec PROMPT` | baked into the image; Codex applies its own approval policy on top — relax it through the task's `args:` |
 | `gemini` | `gemini --yolo -p PROMPT` | baked into the image; `-p` alone still stops for tool approval, which is why `--yolo` is not optional here |
 | `opencode` | `opencode run PROMPT` | baked into the image |
 | `droid` | `droid exec PROMPT` | installed on first use (~148MB) |
 
 Anything else is rejected when the file is parsed, before a single container
-starts. The other ten adapters are perfectly usable interactively — they are
+starts. The other nine adapters are perfectly usable interactively — they are
 simply not ones we have confirmed will never stop and wait.
 
 Two things to do before an unattended run, and they are per agent rather than per

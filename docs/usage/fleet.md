@@ -46,7 +46,7 @@ a conflict itself.
 A fleet can **mix agents**: `agent:` at the top is the default, and a task that
 names its own overrides it — put Claude on one branch and Codex on another and
 compare. Only agents with a verified headless mode may appear (`claude`, `codex`,
-`gemini`, `opencode`, `droid`), because an unattended agent that stops to ask
+`gemini`, `opencode`, `droid`, `cline`), because an unattended agent that stops to ask
 permission hangs rather than fails, and each one you name needs its own login
 before the run. Add `--profile prod` for an unattended run: it refuses where dev
 warns, which is what you want when nobody is watching.

@@ -12,14 +12,11 @@ import "github.com/spf13/cobra"
 // mounted; forwarding one would point Cline's state at a path that does not
 // exist in the container, and CLINE_DATA_DIR in particular would move the login
 // out of the persisted HOME, quietly costing you the session on every run.
-var clineEnvAllow = []string{
-	"ANTHROPIC_API_KEY",
-	"CLINE_API_KEY",
-	"OPENAI_API_KEY",
-	"OPENROUTER_API_KEY",
-	"AI_GATEWAY_API_KEY",
-	"V0_API_KEY",
-}
+// Cline's env allowlist lives in the descriptor (internal/agents), which the
+// fleet and Studio read as well. Its path-valued variables are deliberately
+// absent there — CLINE_DATA_DIR and friends name host directories that are not
+// mounted, and CLINE_DATA_DIR in particular would move the login out of the
+// persisted HOME, quietly costing the session on every run.
 
 func newClineCmd() *cobra.Command {
 	rf := &runFlags{}
@@ -43,14 +40,16 @@ func newClineCmd() *cobra.Command {
 			"environment only if they are set. No other host files are mounted unless you\n" +
 			"pass --mount.",
 		Example: "  sandbox-cli cline\n" +
-			"  sandbox-cli cline task 'run the tests'\n" +
-			"  sandbox-cli cline --project ~/app -- task 'fix the failing test'",
+			"  sandbox-cli cline 'run the tests'\n" +
+			"  sandbox-cli cline --project ~/app -- 'fix the failing test'",
 		// Forward unknown agent flags instead of rejecting them; sandbox flags are
 		// parsed manually from the pre-`--` portion in runWrapper.
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentCmd := npmAgentBootstrap("cline", "cline")
-			return runWrapper(cmd, rf, args, agentCmd, clineEnvAllow, nil)
+			// From the descriptor rather than assembled here: the table exists
+			// because a second copy of a bootstrap drifts from the first, and the
+			// fleet and Studio now start cline from it too.
+			return runWrapper(cmd, rf, args, clineAgent.Command, clineAgent.EnvAllow, nil)
 		},
 	}
 	// Persists Cline's login in a sandbox-owned host dir (~/.config/sandbox/

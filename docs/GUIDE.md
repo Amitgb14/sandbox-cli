@@ -651,8 +651,8 @@ task needs credentials from the environment instead (`ANTHROPIC_API_KEY`).
 
 **Three constraints worth knowing before you write a fleet file:**
 
-- **Only agents with a verified headless mode may appear** — `claude`, `codex`,
-  `gemini`, `opencode` and `droid` today. Anything else is rejected when the file
+- **Only agents with a verified headless mode may appear** — `claude`, `cline`,
+  `codex`, `gemini`, `opencode` and `droid` today. Anything else is rejected when the file
   is parsed, before a single container starts, because the alternative is an
   unattended agent waiting forever on a keystroke.
 - **One agent per branch**, enforced by docker's own refusal to reuse a container

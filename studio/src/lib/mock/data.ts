@@ -284,7 +284,7 @@ function buildRuns(): Run[] {
     // to render that case.
     const agentPool: Array<AgentName | null> =
       kind === "fleet"
-        ? ["claude", "codex", "gemini", "droid", "opencode"]
+        ? ["claude", "cline", "codex", "gemini", "droid", "opencode"]
         : ["claude", "claude", "codex", "aider", "cursor", null];
     const agent = rng.pick(agentPool);
     const profile: Profile = kind === "fleet" ? "prod" : "dev";
@@ -458,7 +458,7 @@ export const MOCK_WORKTREES: Worktree[] = (() => {
 
 export const MOCK_AGENTS: Agent[] = AGENT_SEEDS.map((seed, i) => {
   const rng = rngFor(0x5150 + i);
-  const persisted = ["claude", "codex", "gemini", "droid", "opencode"].includes(seed.name);
+  const persisted = ["claude", "cline", "codex", "gemini", "droid", "opencode"].includes(seed.name);
   const sessionCount = persisted ? rng.int(3, 148) : 0;
   return {
     name: seed.name,

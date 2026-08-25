@@ -313,7 +313,7 @@ rather than merely passing.
   run is what the user asked for, the record is a courtesy.
 - **`internal/agents`** — the agents the fleet knows how to start, as data: guest argv,
   `EnvAllow`, container `Env`, persisted-HOME name, and `Autonomous(prompt)`. Only agents with
-  a **verified headless mode** are in it (claude, codex, gemini, opencode, droid), because a
+  a **verified headless mode** are in it (claude, cline, codex, gemini, opencode, droid), because a
   fleet is unattended and an agent that stops to ask permission does not fail — it hangs.
   `TestEveryAgentHasAVerifiedHeadlessArgv` is where that stops being a convention: a new
   descriptor with no recorded non-interactive argv fails the test rather than quietly widening
