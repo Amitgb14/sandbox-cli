@@ -322,6 +322,46 @@ var registry = map[string]Descriptor{
 			return []string{"run", prompt}
 		},
 	},
+	"cline": {
+		Name:       "cline",
+		PersistDir: "cline",
+		// Empty for the reason opencode's is: Cline drives several providers and
+		// its default one is its own, so there is no single host whose silence
+		// means "this agent cannot work". Routing reports it unprobed rather than
+		// down, which is the honest answer — guessing api.anthropic.com would fail
+		// over an agent configured against OpenRouter for an outage it never had.
+		ProviderHost: "",
+		EnvAllow: []string{
+			"ANTHROPIC_API_KEY",
+			"CLINE_API_KEY",
+			"OPENAI_API_KEY",
+			"OPENROUTER_API_KEY",
+			"AI_GATEWAY_API_KEY",
+			"V0_API_KEY",
+		},
+		Command: NpmBootstrap("cline", "cline"),
+		AutonomousArgs: func(prompt string) []string {
+			// Verified by running it, 2026-08-24: `cline <prompt>` is the
+			// non-interactive mode — a bare positional runs in act mode and the TUI
+			// is opt-in behind `-i/--tui`, which is the inverse of claude's `-p`.
+			// One real run wrote its file and exited 0 in sixteen seconds with
+			// nothing attached.
+			return []string{prompt}
+		},
+		// `--auto-approve` defaults to true, and this passes it anyway. A default
+		// is a decision upstream can revisit; an unattended run that starts asking
+		// does not fail, it hangs, and the flag costs two tokens. Verified accepted
+		// in the same session.
+		SkipPermissionArgs: []string{"--auto-approve", "true"},
+		// Not seeded: `-i` opens the TUI and whether a positional reaches it as a
+		// first turn was not verified. nil means Studio refuses the combination
+		// rather than building an argv that dies inside the container.
+		ConsolePromptArgs: nil,
+		// Resuming lives in internal/agentctx rather than here, and needs the
+		// transcript store's location *and* format verified before a reader can
+		// claim to understand it. Cline's help documents `--id <session-id>`, so
+		// the capability exists; it is not claimed until somebody has read one.
+	},
 	"droid": {
 		Name: "droid",
 		// Unverified, and kept as it was.

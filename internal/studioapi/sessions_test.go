@@ -100,8 +100,14 @@ func TestRouteAgentChoosesWithoutProbingWhatItCannotProbe(t *testing.T) {
 		// A Studio run is detached, so an agent that stops to ask permission
 		// hangs with nobody to answer — and it would hang in the fallback slot,
 		// where nobody is looking at all.
+		//
+		// `goose` rather than `cline`: cline was the example here until it got a
+		// descriptor, and an example that quietly becomes supported turns this
+		// into a test that passes for the wrong reason. Any adapter without a
+		// verified headless argv will do; when goose gains one, move this to the
+		// next.
 		if _, _, _, err := s.routeAgent(context.Background(),
-			RunCreateRequest{Agent: "opencode", Fallback: []string{"cline"}}); err == nil {
+			RunCreateRequest{Agent: "opencode", Fallback: []string{"goose"}}); err == nil {
 			t.Error("an agent with no verified headless argv was accepted as a fallback for a detached run")
 		}
 	})

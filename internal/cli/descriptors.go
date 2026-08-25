@@ -27,6 +27,7 @@ var (
 	geminiAgent   = mustAgent("gemini")
 	opencodeAgent = mustAgent("opencode")
 	droidAgent    = mustAgent("droid")
+	clineAgent    = mustAgent("cline")
 )
 
 func mustAgent(name string) agents.Descriptor {

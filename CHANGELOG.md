@@ -13,6 +13,15 @@ version is tagged.
 
 ### Added
 
+- **Cline can be used from Studio, a fleet, and both SDKs.** The adapter has
+  shipped for a while, but only agents with a *verified* headless mode get a
+  descriptor — and without one, Studio and the SDKs could not see it. Verified by
+  running it: `cline <prompt>` is the non-interactive mode, with the TUI behind
+  `-i`, which is the inverse of the others. `--auto-approve true` is passed
+  explicitly rather than relying on the upstream default, because an unattended
+  run that starts asking does not fail, it hangs.
+
+
 
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
   sandbox-cli never supplies the key.** `gateway:` in your own config names the
