@@ -166,6 +166,23 @@ unrestricted egress, `example.com` answers 200 without `allow` and is refused
 with it. Asking for one host means giving up the rest of the internet, which is
 usually what you want for code you did not write.
 
+`examples/python_project.py` — the everyday one: install a repository's
+`requirements.txt` (and the repository itself, if it is a package), then run one
+of its scripts. The install happens on the first run and is skipped afterwards,
+because the virtualenv lives in the **worktree** — which survives between
+containers when nothing else does.
+
+```
+$ python3 examples/python_project.py my-repo
+installing dependencies (first run only)…
+  installed
+Ran 236 tests in 0.09s
+OK (skipped=81)
+
+$ python3 examples/python_project.py my-repo            # again
+dependencies already present in the worktree — skipping setup
+```
+
 `examples/fastapi_service.py` — the whole shape of a real setup: clone a
 repository onto the daemon's machine, give it configuration from a `.env`, build
 a virtualenv, and start a FastAPI server on a published port, then health-check

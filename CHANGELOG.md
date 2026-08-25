@@ -20,6 +20,12 @@ version is tagged.
   shares `run()`'s conflict recovery, because the commonest sequence there is —
   set up, then serve — otherwise fails on its last line, with the final setup
   step still holding the branch's container name.
+- **`examples/python_project.py`** — install a repository's requirements once
+  and then run its scripts. The virtualenv lives in the worktree, so the setup is
+  skipped on every run after the first; if the repository is itself a package it
+  is installed editable, without which its own scripts fail with `No module named
+  <the repo>`. Verified against a real repository: 236 of its tests ran in the
+  sandbox.
 - **`examples/fastapi_service.py`** — clone a repository, configure it from a
   `.env`, build a virtualenv, serve FastAPI on a published port, and health-check
   it from the host. Run end to end rather than compiled: it also documents what
