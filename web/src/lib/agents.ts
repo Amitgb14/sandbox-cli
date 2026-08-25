@@ -183,9 +183,10 @@ export const AGENTS: Agent[] = [
     name: "Devin CLI",
     vendor: "Cognition",
     delivery: "first-run",
-    size: "~90 MB",
-    login: "`/login` inside a session. Devin is a paid product; the CLI needs an account.",
+    size: "158 MB",
+    login: "`/login` inside a session, unverified here. Devin is a paid product; the CLI needs an account.",
     env: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
+    allow: ["cli.devin.ai", "static.devin.ai"],
     gotcha:
       "Its headless mode (devin -p PROMPT) and auto-approval (--permission-mode bypass) are documented but unverified here, so Devin cannot be named in a fleet or launched from Studio yet — a descriptor is earned by running the agent, not by reading its docs.",
     example: "sandbox-cli devin -p 'explain this repository'",
@@ -346,7 +347,7 @@ export const BAKED_COUNT = AGENTS.filter((a) => a.delivery === "baked").length;
  */
 export const FIRST_RUN_NOTE = {
   line: "sandbox-cli: installing qwen 0.21.3 into the sandbox agent home (first run only)...",
-  body: "An agent the base image does not carry is downloaded the first time you run it, into the sandbox-owned home that persists between runs — so it happens once, and it needs network at that moment. The version is pinned rather than resolved to whatever the vendor published that morning, and it is printed as it installs: a pin's cost is going stale, and staleness nobody can see is the kind that lasts. Two agents are deliberately unpinned, because one offers no version to ask for and the other replaces the first install itself.",
+  body: "An agent the base image does not carry is downloaded the first time you run it, into the sandbox-owned home that persists between runs — so it happens once, and it needs network at that moment. The version is pinned rather than resolved to whatever the vendor published that morning, and it is printed as it installs: a pin's cost is going stale, and staleness nobody can see is the kind that lasts. Three agents are deliberately unpinned: one offers no version to ask for, one replaces the first install itself, and Devin publishes no index of versions to pin to.",
   buys: "A hijacked or typosquatted release does not reach a sandbox until the pin is bumped.",
   doesNotBuy:
     "A compromised registry can still serve different bytes for a version it already published — that needs integrity hashes a global install has no lockfile for.",

@@ -26,10 +26,13 @@ var devinEnvAllow = []string{
 // HOME the container gives it, which is the persisted one, so a first-run
 // install survives the container.
 //
-// Pinned by nothing: the installer fetches whatever is current, and it offers no
-// version switch to hold. That is a real difference from the npm adapters and
-// the reason `installPins` has no entry — see internal/agents/pins.go, where an
-// absent pin means "the vendor decides".
+// Unpinned, and recorded as such. The installer takes the latest promoted
+// version and offers no switch; pinning would mean fetching a versioned
+// `cli/<version>/setup.sh`, and no index of versions is published. That is a real
+// difference from the npm adapters, and it is written down in
+// internal/agents/pins.go as an `Unpinned` entry with the reason — *not* as an
+// absent one, which fails TestEveryLazyInstalledAgentIsPinnedOrSaysWhy rather
+// than meaning "the vendor decides".
 const devinInstall = `curl -fsSL https://cli.devin.ai/install.sh | bash`
 
 func newDevinCmd() *cobra.Command {
@@ -47,8 +50,9 @@ func newDevinCmd() *cobra.Command {
 			"(~/.config/sandbox/agents/devin, separate from any host install), so you log\n" +
 			"in once. Use --no-persist-auth for a throwaway session.\n\n" +
 			"Devin is a paid product: the CLI needs an account, and `/login` inside a\n" +
-			"session is the documented route. A container cannot open a browser, so if\n" +
-			"the flow needs one it will print a URL to visit rather than launching it.\n\n" +
+			"session is the documented route — which nobody has run here. If it completes\n" +
+			"through a printed URL or a device code it works in the sandbox; if it needs a\n" +
+			"loopback callback it does not, the same as the other browser-callback logins.\n\n" +
 			"`devin -p PROMPT` is single-turn mode, and `--permission-mode bypass`\n" +
 			"auto-approves tool calls. sandbox-cli does not add either for you: the\n" +
 			"second is a decision about what an agent may do unattended, and typing it\n" +

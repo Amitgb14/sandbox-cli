@@ -313,15 +313,6 @@ export const AGENT_SEEDS: AgentSeed[] = [
     note: "Python; the heaviest adapter, which is why nothing is baked.",
   },
   {
-    name: "devin",
-    label: "Devin CLI",
-    delivery: "installer",
-    headlessVerified: false,
-    envAllow: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
-    env: [],
-    note: "Installed lazily from Cognition's installer. Paid product; headless mode documented but not yet verified here.",
-  },
-  {
     name: "droid",
     label: "Droid",
     delivery: "npm",
@@ -329,6 +320,15 @@ export const AGENT_SEEDS: AgentSeed[] = [
     envAllow: ["FACTORY_API_KEY"],
     env: ["FACTORY_DISABLE_KEYRING=1"],
     note: "The keyring opt-out lives in the descriptor, not the wrapper — a fleet gets no wrapper, and would otherwise look for a keyring the container does not have with nobody there to log in again.",
+  },
+  {
+    name: "devin",
+    label: "Devin CLI",
+    delivery: "installer",
+    headlessVerified: false,
+    envAllow: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
+    env: [],
+    note: "Installed lazily from Cognition's installer. Paid product; headless mode documented but not yet verified here.",
   },
 ];
 

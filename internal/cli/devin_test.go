@@ -52,9 +52,22 @@ func TestDevinAddsNoApprovalFlagOfItsOwn(t *testing.T) {
 	// nobody watching. The wrapper forwards it if you type it and never adds it:
 	// the CLI is where a person is present to make that call, which is the same
 	// reason no wrapper adds --dangerously-skip-permissions.
-	for _, s := range []string{devinInstall} {
-		if strings.Contains(s, "permission-mode") || strings.Contains(s, "bypass") {
-			t.Errorf("the devin bootstrap carries an approval decision: %s", s)
+	//
+	// Asserted over the **rendered docker argv**, not over the install string.
+	// The first version of this test inspected `devinInstall`, which could never
+	// contain an approval flag — so it would have passed while somebody added one
+	// to the guest argv or to an afterParse env, which is exactly where the other
+	// adapters put such things (see cursor.go's NO_OPEN_BROWSER).
+	line := renderDryRun(t, newDevinCmd(), nil)
+	for _, forbidden := range []string{"permission-mode", "bypass", "--dangerously"} {
+		if strings.Contains(line, forbidden) {
+			t.Errorf("the rendered run carries an approval decision (%s):\n%s", forbidden, line)
 		}
+	}
+	// And what a user types does reach the agent, which is the other half of
+	// "forwards it if you type it".
+	typed := renderDryRun(t, newDevinCmd(), []string{"--", "-p", "hi", "--permission-mode", "bypass"})
+	if !strings.Contains(typed, "--permission-mode") {
+		t.Errorf("a typed approval flag did not reach the agent:\n%s", typed)
 	}
 }

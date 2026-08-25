@@ -3,7 +3,7 @@ package agents
 // Where the first-run version of every lazily-installed agent is decided, in one
 // table.
 //
-// Eleven of the fifteen wrappers install their agent on first run, from a vendor
+// Twelve of the sixteen wrappers install their agent on first run, from a vendor
 // host, into the persisted agent HOME. Until this table existed each of those
 // installs resolved *whatever the vendor served that day*: `npm install -g <pkg>`
 // with no version, a `curl | bash` whose script is regenerated per release, a
