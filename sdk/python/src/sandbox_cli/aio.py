@@ -103,6 +103,10 @@ class AsyncWorkspace:
                 break
         return done
 
+    async def start(self, argv: list[str], **opts: Any) -> dict[str, Any]:
+        """Launch without waiting. See the sync docstring."""
+        return await _off_thread(self._sync.start, argv, **opts)
+
     async def clear_finished(self) -> list[str]:
         return await _off_thread(self._sync.clear_finished)
 

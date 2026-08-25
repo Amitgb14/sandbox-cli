@@ -288,3 +288,29 @@ def test_cancelling_an_async_run_stops_that_run_and_nothing_else():
     assert stops == ["/v1/runs/run-1/stop"], f"it stopped the wrong thing: {stops}"
     # Promptly: one poll interval, not the 600s deadline the run was given.
     assert elapsed < 10, f"the cancel took {elapsed:.1f}s — the worker kept polling"
+
+
+def test_start_returns_without_waiting():
+    # For work that is not supposed to finish. `run()` would wait for the
+    # deadline and then report a container somebody stopped, which is a verdict
+    # on nothing.
+    with FakeDaemon(never_finishes=True) as d:
+        ws = Studio.connect(url=d.url, token="t").project("app").workspace("feature")
+        started = ws.start(["uvicorn", "app:app"], publish=["8000:8000"])
+        assert started["id"] == "run-1"
+        assert d.posted("/v1/runs")[-1]["body"]["publish"] == ["8000:8000"]
+        # Nothing was polled: no GET on the run, because nothing was waited for.
+        assert not any(r["method"] == "GET" and r["path"].startswith("/v1/runs/run-1")
+                       for r in d.requests)
+
+
+def test_start_clears_the_setup_run_that_holds_the_name():
+    # The commonest sequence there is — set up, then serve — and it failed on its
+    # last line until `start` shared `run`'s recovery: the final setup step still
+    # held the branch's container name.
+    with FakeDaemon(holds_name_after_run=True) as d:
+        ws = Studio.connect(url=d.url, token="t").project("app").workspace("feature")
+        assert ws.run(["pip", "install", "-r", "requirements.txt"]).exit_code == 0
+        started = ws.start(["uvicorn", "app:app"])
+        assert started["id"] == "run-1"
+        assert d.removed == ["run-1"], "the spent setup run should have been cleared"

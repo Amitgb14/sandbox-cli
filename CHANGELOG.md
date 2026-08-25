@@ -13,6 +13,21 @@ version is tagged.
 
 ### Added
 
+- **`Workspace.start()` in the Python SDK** — launch without waiting, for work
+  that is not supposed to finish: a dev server, a watcher, a queue consumer.
+  `run()` waits, so pointing it at a server means reaching the deadline and then
+  reporting a container somebody stopped, which is a verdict on nothing. It
+  shares `run()`'s conflict recovery, because the commonest sequence there is —
+  set up, then serve — otherwise fails on its last line, with the final setup
+  step still holding the branch's container name.
+- **`examples/fastapi_service.py`** — clone a repository, configure it from a
+  `.env`, build a virtualenv, serve FastAPI on a published port, and health-check
+  it from the host. Run end to end rather than compiled: it also documents what
+  the sandbox costs today, since the image has python3 and no pip, so the setup
+  bootstraps pip inside a `--without-pip` venv with three hosts named on the
+  allowlist.
+
+
 - **A Devin CLI adapter** — `sandbox-cli devin`, installed from Cognition's
   installer into the persisted agent home on first use. It is an *adapter*, not
   a descriptor: `devin -p PROMPT` and `--permission-mode bypass` are documented

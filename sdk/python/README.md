@@ -133,6 +133,23 @@ number rather than being skipped — a silently ignored line in a credentials fi
 is how a run goes out without the key it needed. Values travel in the request
 body, so against a remote daemon without TLS they cross the network in cleartext.
 
+## Work that is not supposed to finish
+
+`run()` waits. A dev server never exits, so waiting means reaching the deadline
+and then reporting a container somebody stopped — a verdict on nothing. Use
+`start()`:
+
+```python
+run = ws.start(["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"],
+               publish=["8000:8000"])
+# ... reach it at http://127.0.0.1:8000 on the daemon's host ...
+ws.stop(run["id"])
+```
+
+Nothing reaps a started run for you: the container outlives the call by design,
+and it holds its branch's container name until it is stopped, so a server and its
+tests belong on different branches.
+
 ## Examples
 
 `examples/stock_price.py` — untrusted code fetching a quote, and the two lines
@@ -148,6 +165,13 @@ the egress allowlist **on** for that run: measured against a daemon with
 unrestricted egress, `example.com` answers 200 without `allow` and is refused
 with it. Asking for one host means giving up the rest of the internet, which is
 usually what you want for code you did not write.
+
+`examples/fastapi_service.py` — the whole shape of a real setup: clone a
+repository onto the daemon's machine, give it configuration from a `.env`, build
+a virtualenv, and start a FastAPI server on a published port, then health-check
+it from here. It is also the honest tour of what the sandbox costs today: the
+image has python3 and **no pip**, so the setup builds a venv *without* pip and
+bootstraps pip inside it, which needs three hosts named on the egress allowlist.
 
 `examples/travel_planner.py` — three agents that hand work to each other, and a
 gate that decides. Two specialists research in parallel, each in its own
