@@ -12,11 +12,11 @@ import "github.com/spf13/cobra"
 // mounted; forwarding one would point Cline's state at a path that does not
 // exist in the container, and CLINE_DATA_DIR in particular would move the login
 // out of the persisted HOME, quietly costing you the session on every run.
-// clineEnvAllow moved into the descriptor (internal/agents), which the fleet and
-// Studio read as well. The reasoning that kept Cline's path-valued variables out
-// of it — CLINE_DATA_DIR and friends name host directories that are not mounted,
-// and CLINE_DATA_DIR in particular would move the login out of the persisted HOME
-// — is recorded there.
+// Cline's env allowlist lives in the descriptor (internal/agents), which the
+// fleet and Studio read as well. Its path-valued variables are deliberately
+// absent there — CLINE_DATA_DIR and friends name host directories that are not
+// mounted, and CLINE_DATA_DIR in particular would move the login out of the
+// persisted HOME, quietly costing the session on every run.
 
 func newClineCmd() *cobra.Command {
 	rf := &runFlags{}
@@ -41,7 +41,7 @@ func newClineCmd() *cobra.Command {
 			"pass --mount.",
 		Example: "  sandbox-cli cline\n" +
 			"  sandbox-cli cline 'run the tests'\n" +
-			"  sandbox-cli cline --project ~/app -- task 'fix the failing test'",
+			"  sandbox-cli cline --project ~/app -- 'fix the failing test'",
 		// Forward unknown agent flags instead of rejecting them; sandbox flags are
 		// parsed manually from the pre-`--` portion in runWrapper.
 		DisableFlagParsing: true,

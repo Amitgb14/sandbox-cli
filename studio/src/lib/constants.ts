@@ -173,8 +173,11 @@ interface AgentSeed {
 
 /**
  * The fifteen adapters in `cli.agentCmds()`, in that order — newest-supported
- * last. `headlessVerified` is the gate that matters: only those five may be
- * named in a `fleet.yaml`, because a fleet is unattended.
+ * last. `headlessVerified` is the gate that matters: only the agents it marks
+ * may be named in a `fleet.yaml`, because a fleet is unattended. It is a
+ * *fixture*: the daemon answers for real, and this is what offline mode shows —
+ * so a descriptor added in Go has to be reflected here too, or Studio's mock
+ * mode hides an agent live mode offers.
  */
 export const AGENT_SEEDS: AgentSeed[] = [
   {
@@ -221,10 +224,12 @@ export const AGENT_SEEDS: AgentSeed[] = [
     name: "cline",
     label: "Cline",
     delivery: "npm",
-    headlessVerified: false,
+    headlessVerified: true,
+    skipPermissionArgs: ["--auto-approve", "true"],
     envAllow: ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"],
     env: [],
-    note: "Installed lazily into the persisted HOME on first run.",
+    note:
+      "Installed lazily into the persisted HOME on first run. Its prompt is a bare positional and the TUI is behind -i, the inverse of the others.",
   },
   {
     name: "goose",

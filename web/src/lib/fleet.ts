@@ -71,6 +71,13 @@ export type FleetAgent = {
 
 export const FLEET_AGENTS: FleetAgent[] = [
   {
+    name: "cline",
+    argv: "cline PROMPT --auto-approve true",
+    delivery: "first-run",
+    note:
+      "The prompt is a bare positional and the TUI is the opt-in (-i), which is the inverse of the others. --auto-approve is passed explicitly rather than relying on its default, because an unattended run that starts asking does not fail — it hangs.",
+  },
+  {
     name: "claude",
     argv: "claude -p PROMPT --dangerously-skip-permissions",
     delivery: "baked",
@@ -101,7 +108,7 @@ export const FLEET_AGENTS: FleetAgent[] = [
 ];
 
 /** Everything else is refused when the file is parsed, before a container starts. */
-export const UNSUPPORTED_AGENT_COUNT = 10;
+export const UNSUPPORTED_AGENT_COUNT = 9;
 
 /** The commented file the page leads with. Kept in sync with docs/examples/fleet.yaml. */
 export const FLEET_YAML = `agent: claude          # the default for tasks that name no agent

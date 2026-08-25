@@ -862,7 +862,7 @@ cannot explain.
 ### Agent selection
 
 `GET /agents` mirrors `internal/agents`, which only registers adapters with a
-*verified* headless mode (`claude`, `codex`, `gemini`, `opencode`, `droid` at
+*verified* headless mode (`claude`, `cline`, `codex`, `gemini`, `opencode`, `droid` at
 the time of writing). That is not an arbitrary subset — a detached container
 has no terminal, so an agent that stops to ask permission would simply hang
 with nobody able to answer it. `POST /runs` refuses any other agent name.

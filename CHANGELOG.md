@@ -21,8 +21,6 @@ version is tagged.
   explicitly rather than relying on the upstream default, because an unattended
   run that starts asking does not fail, it hangs.
 
-
-
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
   sandbox-cli never supplies the key.** `gateway:` in your own config names the
   agents, the endpoint, and the *variable* the credential lives in — a name, not

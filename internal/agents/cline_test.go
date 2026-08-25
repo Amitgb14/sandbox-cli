@@ -92,3 +92,37 @@ func TestClineForwardsNoPathValuedVariables(t *testing.T) {
 		t.Error("EnvAllow does not carry CLINE_API_KEY, so a key on the host cannot reach the agent")
 	}
 }
+
+func TestClineConsoleAsksForItsUI(t *testing.T) {
+	d, _ := Lookup("cline")
+	argv := d.Console("", false)
+	// Every other agent's bare argv *is* its UI, which is why Console used
+	// Command alone until cline arrived. Here a bare invocation is the headless
+	// mode: without `-i` a console run starts an agent with no prompt and no UI,
+	// and the attached terminal watches a container print usage and exit.
+	// Verified with a pty on 2026-08-24 — `cline -i` starts the full-screen UI.
+	if !slices.Contains(argv, "-i") {
+		t.Errorf("console argv does not ask for the TUI: %v", argv)
+	}
+	// And the headless argv must not: a TUI in a fleet is a UI nobody is
+	// watching, which does not fail — it hangs.
+	if slices.Contains(d.Autonomous("do the thing", nil), "-i") {
+		t.Error("the autonomous argv opens the TUI")
+	}
+}
+
+func TestOnlyClineNeedsAFlagToBeInteractive(t *testing.T) {
+	// The field exists for one agent and should stay that way until another is
+	// verified to need it. A descriptor that quietly acquires ConsoleArgs is
+	// claiming its bare binary is not its UI, which is a fact about that agent
+	// rather than a default worth inheriting.
+	for _, name := range Names() {
+		if name == "cline" {
+			continue
+		}
+		d, _ := Lookup(name)
+		if len(d.ConsoleArgs) != 0 {
+			t.Errorf("%s declares ConsoleArgs %v; verify its bare argv is not already its UI", name, d.ConsoleArgs)
+		}
+	}
+}

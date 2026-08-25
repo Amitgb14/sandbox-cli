@@ -497,7 +497,7 @@ for approval in a fleet does not fail; it hangs until you notice, holding a slot
 | `droid` | `droid exec PROMPT` | installed on first use (~148MB) |
 
 Anything else is rejected when the file is parsed, before a single container
-starts. The other ten adapters are perfectly usable interactively — they are
+starts. The other nine adapters are perfectly usable interactively — they are
 simply not ones we have confirmed will never stop and wait.
 
 Two things to do before an unattended run, and they are per agent rather than per

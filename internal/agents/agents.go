@@ -59,6 +59,19 @@ type Descriptor struct {
 	// autonomous are the same decision; see docs/GUIDE.md.
 	AutonomousArgs func(prompt string) []string
 
+	// ConsoleArgs are the arguments that make the agent start its interactive UI.
+	//
+	// Empty for almost every agent, because the bare binary *is* the UI — which is
+	// why Console used Command alone until cline arrived. Cline inverts it: a bare
+	// invocation is the headless mode and the TUI is opt-in behind `-i`, so
+	// without this a console run started an agent with no prompt and no UI, and
+	// the attached terminal got a container that printed usage and exited.
+	//
+	// A separate field rather than a second Command, because everything else about
+	// starting the agent — the bootstrap, the install, the PATH — is identical in
+	// both modes, and two argvs differing by one flag drift.
+	ConsoleArgs []string
+
 	// SkipPermissionArgs turns off the agent's approval prompts.
 	//
 	// Held apart from AutonomousArgs, and appended by Autonomous, so the flag
@@ -131,7 +144,9 @@ func (d Descriptor) Autonomous(prompt string, extra []string) []string {
 // the caller is expected to have refused already, and quietly doing something
 // other than what was asked is worse than doing nothing.
 func (d Descriptor) Console(prompt string, skipPermissions bool) []string {
-	argv := d.Command
+	// ConsoleArgs first: where an agent has any, they are what selects the UI at
+	// all, and a flag that changes the mode belongs before ones that configure it.
+	argv := concat(d.Command, d.ConsoleArgs)
 	if skipPermissions {
 		argv = concat(argv, d.SkipPermissionArgs)
 	}
@@ -353,9 +368,13 @@ var registry = map[string]Descriptor{
 		// does not fail, it hangs, and the flag costs two tokens. Verified accepted
 		// in the same session.
 		SkipPermissionArgs: []string{"--auto-approve", "true"},
-		// Not seeded: `-i` opens the TUI and whether a positional reaches it as a
-		// first turn was not verified. nil means Studio refuses the combination
-		// rather than building an argv that dies inside the container.
+		// Verified with a pty on 2026-08-24: `cline -i` starts the full-screen UI.
+		// Without it a console run gets the headless mode with no prompt, which
+		// prints usage and exits — an attached terminal watching a dead container.
+		ConsoleArgs: []string{"-i"},
+		// Not seeded: whether a positional reaches the TUI as a first turn was not
+		// verified. nil means Studio refuses the combination rather than building
+		// an argv that dies inside the container.
 		ConsolePromptArgs: nil,
 		// Resuming lives in internal/agentctx rather than here, and needs the
 		// transcript store's location *and* format verified before a reader can
