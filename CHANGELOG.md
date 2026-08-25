@@ -33,14 +33,12 @@ version is tagged.
   bootstraps pip inside a `--without-pip` venv with three hosts named on the
   allowlist.
 
-
 - **A Devin CLI adapter** — `sandbox-cli devin`, installed from Cognition's
   installer into the persisted agent home on first use. It is an *adapter*, not
   a descriptor: `devin -p PROMPT` and `--permission-mode bypass` are documented
   but unverified here, so Devin cannot yet be named in a `fleet.yaml` or launched
   from Studio. A descriptor is earned by running the agent rather than by reading
   its documentation.
-
 
 - **Cline can be used from Studio, a fleet, and both SDKs.** The adapter has
   shipped for a while, but only agents with a *verified* headless mode get a

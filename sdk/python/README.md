@@ -146,9 +146,17 @@ run = ws.start(["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"],
 ws.stop(run["id"])
 ```
 
-Nothing reaps a started run for you: the container outlives the call by design,
-and it holds its branch's container name until it is stopped, so a server and its
-tests belong on different branches.
+Nothing reaps a started run for you: the container outlives the call by design.
+It holds its branch's container name until it is stopped **and cleared** —
+stopping alone is not enough, because a finished run keeps the name until
+something removes it, which is what `clear_finished()` is for:
+
+```python
+ws.stop(run["id"])
+ws.clear_finished()          # now the branch is free for the next run
+```
+
+So a server and its tests belong on different branches.
 
 ## Examples
 

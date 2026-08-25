@@ -9,19 +9,21 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 class FakeDaemon:
     def __init__(self, *, holds_name_after_run: bool = False, project_root: str = "/repo/app",
                  fail_after: int | None = None, never_finishes: bool = False,
-                 failover: bool = False):
+                 failover: bool = False, launch_delay: float = 0.0):
         self.requests: list[dict] = []
         self.removed: list[str] = []
         self.holds_name_after_run = holds_name_after_run
         self._fail_after = fail_after
         self.never_finishes = never_finishes
         self.failover = failover
+        self.launch_delay = launch_delay
         self._launches = 0
         self.project_root = project_root
         self._held = ""
@@ -115,6 +117,9 @@ def _handler(state: FakeDaemon):
                 return self._send(201, {"id": "repo-9", "name": url.rstrip("/").split("/")[-1],
                                         "root": "/cloned/here"})
             if self.path == "/v1/runs":
+                if state.launch_delay:
+                    # A launch that takes a moment, so a test can cancel during it.
+                    time.sleep(state.launch_delay)
                 state._launches += 1
                 if state._held:
                     return self._send(409, {"error": (

@@ -314,3 +314,41 @@ def test_start_clears_the_setup_run_that_holds_the_name():
         started = ws.start(["uvicorn", "app:app"])
         assert started["id"] == "run-1"
         assert d.removed == ["run-1"], "the spent setup run should have been cleared"
+
+
+def test_start_refuses_a_timeout_it_could_not_honour():
+    # Accepted-and-ignored is the failure the option validator exists to prevent,
+    # arriving with the spelling correct: start() does not wait, so a deadline
+    # has nothing to bound.
+    with FakeDaemon(never_finishes=True) as d:
+        ws = Studio.connect(url=d.url, token="t").project("app").workspace("feature")
+        with pytest.raises(TypeError, match="takes no timeout"):
+            ws.start(["uvicorn", "app:app"], timeout=60)
+        assert d.posted("/v1/runs") == [], "it must refuse before launching"
+
+
+def test_cancelling_an_async_start_stops_the_container_it_created():
+    # asyncio.to_thread cannot be interrupted, so a cancel during the POST does
+    # not prevent the launch: it lands afterwards, in a thread nobody is
+    # watching. Without the done-callback the run exists, holds its branch's
+    # name, and no caller ever saw its id.
+    import asyncio
+
+    from sandbox_cli.aio import AsyncStudio
+
+    async def scenario():
+        with FakeDaemon(never_finishes=True, launch_delay=0.6) as d:
+            studio = await AsyncStudio.connect(url=d.url, token="t")
+            ws = await (await studio.project("app")).workspace("feature")
+            task = asyncio.create_task(ws.start(["uvicorn", "app:app"]))
+            await asyncio.sleep(0.2)          # cancel while the POST is in flight
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass                          # prompt, as a cancel should be
+            await asyncio.sleep(1.5)          # let the launch land and be stopped
+            return [r["path"] for r in d.requests if r["path"].endswith("/stop")]
+
+    stops = asyncio.run(scenario())
+    assert stops == ["/v1/runs/run-1/stop"], f"the late launch was not stopped: {stops}"

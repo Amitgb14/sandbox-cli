@@ -45,13 +45,16 @@ SETUP = [
     # only the worktree crosses that boundary.
     ["sh", "-c", "curl -fsSL https://bootstrap.pypa.io/get-pip.py -o get-pip.py"],
     ["sh", "-c", ".venv/bin/python3 get-pip.py -q && rm -f get-pip.py"],
-    ["sh", "-c", ".venv/bin/pip install -q -r requirements.txt"],
+    # Guarded, and with the install's own status preserved: `A && B || true`
+    # binds as `(A && B) || true`, so it swallows a *pip* failure as well as an
+    # absent file, and the first symptom is an import error much later.
+    ["sh", "-c", "if [ -f requirements.txt ]; then .venv/bin/pip install -q -r requirements.txt; fi"],
     # If the repository is itself a package, install it too. Without this, its
     # own scripts fail with `No module named <the repo>` — they import the
     # package they live beside, which only resolves when it is on the path.
     # `|| true` because plenty of repositories are a folder of scripts with no
     # setup.py, and that is not a failure.
-    ["sh", "-c", "test -f setup.py -o -f pyproject.toml && .venv/bin/pip install -q -e . || true"],
+    ["sh", "-c", "if [ -f setup.py ] || [ -f pyproject.toml ]; then .venv/bin/pip install -q -e .; fi"],
 ]
 
 
@@ -90,12 +93,26 @@ def main() -> int:
     # the code ran, the network was reachable because this daemon allows it, and
     # the only thing missing was a credential. On an allowlist daemon the same
     # script fails earlier and more clearly, at the connection.
+    # Not piped through `tail`. POSIX sh has no pipefail, so a pipeline's status
+    # is the *last* command's — `tail` always succeeds, and a red test suite
+    # would have been reported as exit 0 by an example whose whole job is saying
+    # what happened. The output is trimmed here instead, where trimming cannot
+    # change a verdict.
     argv = ([".venv/bin/python3", script] if script
-            else ["sh", "-c", ".venv/bin/python3 -m unittest discover -s . -t . 2>&1 | tail -5"])
+            else [".venv/bin/python3", "-m", "unittest", "discover", "-s", ".", "-t", "."])
     out = ws.run(argv, timeout=900, **({"allow": SCRIPT_ALLOW} if SCRIPT_ALLOW else {}))
-    print(out.stdout.rstrip() or out.stderr.rstrip())
+    # unittest writes its report to stderr, and a script may use either.
+    report = (out.stdout.rstrip() + "\n" + out.stderr.rstrip()).strip()
+    print(tail(report, 12))
     print(f"exit {out.exit_code}")
     return out.exit_code
+
+
+def tail(text: str, lines: int) -> str:
+    """The last few lines, trimmed here rather than in the container — where a
+    pipe would have replaced the run's exit code with `tail`'s."""
+    kept = text.splitlines()[-lines:]
+    return "\n".join(kept)
 
 
 def venv_present(ws) -> bool:

@@ -332,12 +332,24 @@ class Workspace:
         """
         if not argv:
             raise ValueError("a run needs a command")
+        if "timeout" in opts:
+            # Accepted-and-ignored is the failure the option validator exists to
+            # prevent, arriving with the spelling correct: nothing here waits, so
+            # a deadline has nothing to bound.
+            raise TypeError(
+                "start() takes no timeout: it does not wait, so there is no wait to bound. "
+                "Use run() for a command that finishes, or stop(id) when you are done with "
+                "this one."
+            )
         body = {"command": list(argv), **self._common(opts)}
         started = self._launch(body, opts)
-        # Not recorded as delivered: nothing was waited for and no outcome was
-        # handed back, so this run's evidence is still owed to somebody. The next
-        # launch on this workspace will be refused until it is stopped and
-        # cleared, which is correct — it is still running.
+        # Not recorded as *delivered*: nothing was waited for and no outcome was
+        # handed back, so this run's evidence is still owed to somebody. It is
+        # recorded as in flight, which is what lets a cancelled `await
+        # AsyncWorkspace.start(...)` stop the container it just created — the
+        # POST completes in a thread that cannot be interrupted, so without this
+        # the run exists, holds the branch's name, and nobody has its id.
+        self._in_flight = started.get("id")
         return started
 
     def clear_finished(self) -> list[str]:

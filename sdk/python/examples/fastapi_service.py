@@ -68,8 +68,11 @@ SETUP = [
     # The repository's own dependencies, when it has any. Serving its app means
     # its imports have to resolve, which is the whole difference between running
     # a repository's code and running code written into a repository.
-    ["sh", "-c", "test -f requirements.txt && .venv/bin/pip install -q -r requirements.txt || true"],
-    ["sh", "-c", "test -f setup.py -o -f pyproject.toml && .venv/bin/pip install -q -e . || true"],
+    # `if`, not `A && B || true`: the latter binds as `(A && B) || true` and
+    # swallows a *pip* failure as well as an absent file — after which uvicorn
+    # dies on an import and the only symptom is a health check that times out.
+    ["sh", "-c", "if [ -f requirements.txt ]; then .venv/bin/pip install -q -r requirements.txt; fi"],
+    ["sh", "-c", "if [ -f setup.py ] || [ -f pyproject.toml ]; then .venv/bin/pip install -q -e .; fi"],
     # And the server itself, which the repository may not list because it is not
     # the repository's business how you run it.
     ["sh", "-c", ".venv/bin/pip install -q fastapi uvicorn"],
@@ -125,7 +128,7 @@ def main() -> int:
     print(f"  {len(setup)} steps ok")
 
     # `start`, not `run`: this is not meant to finish.
-    target = module[:-3].replace("/", ".") + ":app"
+    target = uvicorn_target(module)
     run = ws.start(
         [".venv/bin/uvicorn", target, "--host", "0.0.0.0", "--port", str(PORT)],
         publish=[f"{PORT}:{PORT}"],
@@ -141,6 +144,20 @@ def main() -> int:
         # than removed: the logs are the evidence for what it did.
         print("stopping…")
         ws.stop(run["id"])
+
+
+def uvicorn_target(module: str) -> str:
+    """`app/main.py` -> `app.main:app`, and `app.main:api` -> itself.
+
+    Blindly stripping three characters turned `main` into `n:app` and
+    `app:app` into `a:app`, and the only symptom either way was a health check
+    timing out twenty seconds later — a user typing what uvicorn itself takes
+    got the least useful failure available.
+    """
+    if ":" in module:            # already a uvicorn target
+        return module
+    path = module[:-3] if module.endswith(".py") else module
+    return path.strip("/").replace("/", ".") + ":app"
 
 
 def find_app(ws) -> str | None:
