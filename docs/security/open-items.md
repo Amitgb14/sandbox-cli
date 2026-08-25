@@ -756,12 +756,15 @@ does not reach a sandbox until someone bumps a line here.
   from a lockfile and a `-g` install has none of. No cheap fix; recorded rather
   than solved.
 - **`curl | bash` installers** (`aider` via astral.sh, `cursor`, `goose`,
-  `claude`) execute arbitrary remote shell inside the container. The blast radius
-  is the sandbox and the persisted HOME, which is the radius item 8 already
-  describes — but the code is fetched fresh each first run and is not pinnable for
-  two of them.
-- **`cursor` and `claude` are deliberately unpinned**, with the reason recorded in
-  the table rather than left implicit.
+  `claude`, `devin`) execute arbitrary remote shell inside the container. The
+  blast radius is the sandbox and the persisted HOME, which is the radius item 8
+  already describes — but the code is fetched fresh each first run and is not
+  pinnable for three of them.
+- **`cursor`, `claude` and `devin` are deliberately unpinned**, with the reason
+  recorded in the table rather than left implicit. Devin's is the newest and the
+  most recoverable: its installer *does* honour a pinned version, but only through
+  a versioned `cli/<version>/setup.sh` URL, and Cognition publishes no index of
+  versions to choose one from. If such an index appears, this becomes pinnable.
 
 ---
 

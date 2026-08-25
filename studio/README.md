@@ -367,7 +367,7 @@ front.
 | `/runs` | Every run. TanStack Table: one free-text field, five faceted filters with live counts, column visibility, pagination, row selection, bulk stop/kill |
 | `/runs/[id]` | Terminal · Metrics · Changes · Logs · Config. The tab lives in the URL so a link can point at one |
 | `/launch` | Start a run, with the boundary spelled out and a dry-run preview that recomputes as you type |
-| `/agents` | The fifteen adapters, their logins, what crosses the boundary, and which five are fleet-eligible |
+| `/agents` | The sixteen adapters, their logins, what crosses the boundary, and which are fleet-eligible |
 | `/worktrees` | One branch per agent, with the two facts `land` refuses on |
 | `/settings` · `/settings/doctor` | What Studio remembers, what the CLI decides, and whether this host can deliver it |
 

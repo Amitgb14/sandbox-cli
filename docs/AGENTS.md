@@ -64,6 +64,7 @@ network; later runs start immediately.
 | `copilot` | on first use | 350 MB |
 | `goose` | on first use | 273 MB |
 | `cursor` | on first use | 219 MB |
+| `devin` | on first use | 158 MB |
 | `droid` | on first use | 148 MB |
 | `cline` | on first use | 130 MB |
 | `amp` | on first use | 107 MB |
@@ -118,11 +119,13 @@ Two consequences worth knowing:
   an agent that updates itself keeps doing so; the pin only decides where it
   starts.
 
-Two agents are deliberately **not** pinned, and the table says why in each case:
+Three agents are deliberately **not** pinned, and the table says why in each case:
 `cursor`, because `cursor.com/install` regenerates its script per release with the
-version baked in and offers no way to ask for another; and `claude`, because
+version baked in and offers no way to ask for another; `claude`, because
 Claude Code updates itself into the persisted home — which is why that home exists
-— so a pin would govern only a first install it immediately replaces.
+— so a pin would govern only a first install it immediately replaces; and `devin`,
+because its installer takes the latest promoted version and pinning means fetching
+a versioned `cli/<version>/setup.sh` for which no index of versions is published.
 
 ---
 
@@ -411,6 +414,36 @@ sandbox-cli droid exec 'run the tests'
 
 ---
 
+## devin — Devin CLI (Cognition)
+
+- **Prerequisites:** a Devin account. It is a paid product, and the CLI needs one.
+- **Setup:** `/login` inside a session is the documented route, and **nobody here
+  has run it**. If it completes through a printed URL or a device code it will
+  work in the sandbox; if it completes through a **loopback callback** it cannot,
+  for the reason described under "Browser-callback logins are not supported"
+  below. `DEVIN_API_KEY` is the fallback, and is itself unverified — Cognition
+  documents that name for its HTTP API rather than for the CLI.
+- **Forwarded if set:** `DEVIN_API_KEY`, `DEVIN_API_BASE_URL`. Cognition documents
+  no environment variable for CLI auth, so these are the API's names — if the CLI
+  ignores them the cost is a variable that crosses and is not read.
+- **Install is unpinned.** The top-level installer takes the latest promoted
+  version and offers no switch; pinning means fetching `cli/<version>/setup.sh`,
+  and no index of versions is published. Recorded in `internal/agents/pins.go`
+  rather than guessed.
+- **Not fleet-eligible yet.** `devin -p PROMPT` is single-turn mode and
+  `--permission-mode bypass` auto-approves tool calls — both documented, neither
+  verified here, because nobody has an account to run one with. A descriptor is
+  earned by running the agent, so Studio, a `fleet.yaml` and the SDKs do not
+  offer Devin until somebody does.
+
+```sh
+sandbox-cli devin
+sandbox-cli devin -p 'explain this repository'
+sandbox-cli devin -- -p 'fix the failing test' --permission-mode bypass
+```
+
+---
+
 ## Seeing an agent's past conversations
 
 Every wrapper persists the agent's `HOME`, so the sessions it records outlive the
@@ -464,7 +497,7 @@ one terminal can launch several agents (see
 things decide whether an adapter can be used that way:
 
 1. **It needs a non-interactive mode**, because nothing is attached to answer a
-   prompt. The five with a verified one are in the table below; for any other
+   prompt. The six with a verified one are in the table below; for any other
    adapter, check its own `--help` before detaching it.
 2. **Log in — and, for an adapter installed on first use, install — before
    detaching.** Both are interactive by nature and both persist afterwards, so
@@ -497,7 +530,7 @@ for approval in a fleet does not fail; it hangs until you notice, holding a slot
 | `droid` | `droid exec PROMPT` | installed on first use (~148MB) |
 
 Anything else is rejected when the file is parsed, before a single container
-starts. The other nine adapters are perfectly usable interactively — they are
+starts. The other ten adapters are perfectly usable interactively — they are
 simply not ones we have confirmed will never stop and wait.
 
 Two things to do before an unattended run, and they are per agent rather than per
@@ -536,6 +569,7 @@ baseline alone. These need more:
 | Agent | Add to `--allow` | Why |
 |---|---|---|
 | `cursor` | `cursor.com`, `downloads.cursor.com` | vendor installer + payload |
+| `devin` | `cli.devin.ai`, `static.devin.ai` | vendor installer + payload; the script host alone is not enough — measured |
 | `aider` | `astral.sh` | fetches uv before installing Aider |
 | `continue` | `api.continue.dev` | fetches its default config |
 | `claude` | `claude.ai`, `downloads.claude.ai` | installer script + release payload, for the self-updating install — see below |

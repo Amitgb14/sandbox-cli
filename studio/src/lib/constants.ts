@@ -172,7 +172,7 @@ interface AgentSeed {
 }
 
 /**
- * The fifteen adapters in `cli.agentCmds()`, in that order — newest-supported
+ * The sixteen adapters in `cli.agentCmds()`, in that order — newest-supported
  * last. `headlessVerified` is the gate that matters: only the agents it marks
  * may be named in a `fleet.yaml`, because a fleet is unattended. It is a
  * *fixture*: the daemon answers for real, and this is what offline mode shows —
@@ -320,6 +320,15 @@ export const AGENT_SEEDS: AgentSeed[] = [
     envAllow: ["FACTORY_API_KEY"],
     env: ["FACTORY_DISABLE_KEYRING=1"],
     note: "The keyring opt-out lives in the descriptor, not the wrapper — a fleet gets no wrapper, and would otherwise look for a keyring the container does not have with nobody there to log in again.",
+  },
+  {
+    name: "devin",
+    label: "Devin CLI",
+    delivery: "installer",
+    headlessVerified: false,
+    envAllow: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
+    env: [],
+    note: "Installed lazily from Cognition's installer. Paid product; headless mode documented but not yet verified here.",
   },
 ];
 
