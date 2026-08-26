@@ -84,7 +84,7 @@ export const NAV: NavEntry[] = [
       {
         href: "#agents",
         label: "Agents",
-        hint: "eighteen adapters, one prefix, your flags forwarded verbatim",
+        hint: "thirteen adapters, one prefix, your flags forwarded verbatim",
       },
 
     ],

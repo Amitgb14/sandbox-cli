@@ -5,8 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 `sandbox-cli` runs AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose, Crush, Aider,
-Copilot CLI, Cursor, Qwen, Amp, Continue, OpenHands, Droid, Devin, Codebuff,
-Kilo Code) or any command inside a disposable,
+Copilot CLI, Cursor, Qwen, OpenHands, Droid, Devin, Kilo Code) or any command inside a disposable,
 isolated Docker container. Only the chosen project is bind-mounted at `/workspace`; `HOME` is a
 fake ephemeral path (`/sandbox/home`) and the container is `--rm` (the single exception is
 `--detach`, below). The goal is to give an agent "Allow All" autonomy while limiting the blast
@@ -823,7 +822,7 @@ had, a keyboard on a live session is not.
 
 ### Agent wrappers
 
-Each wrapper is one file in `internal/cli` (`claude.go`, `gemini.go`, `aider.go`, …), listed in
+Each wrapper is one file in `internal/cli` (`claude.go`, `gemini.go`, `cline.go`, …), listed in
 `agentCmds()`, carrying a suggested opt-in env allowlist (e.g. `ANTHROPIC_API_KEY`, applied only if set) and ending
 in `finishAgentCmd(cmd, rf, "<agent>")` (`agents.go`), which adds the shared sandbox flags and
 **persists the agent login by default** by bind-mounting a sandbox-owned host dir

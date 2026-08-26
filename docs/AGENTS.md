@@ -66,23 +66,16 @@ network; later runs start immediately.
 | `kilocode` | on first use | 372 MB |
 | `cursor` | on first use | 219 MB |
 | `devin` | on first use | 158 MB |
-| `codebuff` | on first use | 133 MB |
 | `droid` | on first use | 148 MB |
 | `cline` | on first use | 130 MB |
-| `amp` | on first use | 107 MB |
 | `qwen` | on first use | 88 MB |
 | `openhands` | on first use | 82 MB |
-| `crush` | on first use | 81 MB |
-| `continue` | on first use | 65 MB |
-| `aider` | on first use | ~300 MB (uv + Aider's Python deps; not measured) |
 
 These are the **on-disk installed** sizes for the arm64 build, measured in July
 2026 — not the compressed download, which is roughly half. x64 is within a few
-percent. Every figure except `aider` was verified by installing the artifact and
-measuring it: the npm agents from the platform payload the stub package pulls,
-and `goose`/`cursor`/`openhands`/`crush` by downloading and extracting the
-release. `aider` installs a chain of Python wheels through uv whose total is hard
-to pin without running it, so its number is an estimate and flagged as such.
+percent. Every figure was verified by installing the artifact and measuring it:
+the npm agents from the platform payload the stub package pulls, and
+`goose`/`cursor`/`openhands` by downloading and extracting the release.
 
 Two notes on the larger ones. `goose` ships a glibc ("standard", 273 MB) and a
 smaller musl (136 MB) build; on the glibc base image the installer picks the
@@ -257,37 +250,6 @@ sandbox-cli goose
 sandbox-cli goose run -t 'run the tests'
 ```
 
-## crush — Crush
-
-- **Prerequisites:** a Charm account, or any supported provider key.
-- **Setup:** `crush login` shows a short code — open the page on your **host** and
-  paste it. No browser or localhost callback needed in the container.
-- **Forwarded if set:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-  `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `HYPER_API_KEY`, plus AWS/Azure keys.
-  Crush supports ~25 providers; add any other with `--env-allow`.
-
-```sh
-sandbox-cli crush
-sandbox-cli crush --env-allow CEREBRAS_API_KEY
-```
-
-## aider — Aider
-
-- **Prerequisites:** a provider API key, **and the workspace must be a git repo**.
-- **Setup:** none — Aider has no login at all. Export a key on your host.
-- **Forwarded if set:** `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
-  `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_BASE`,
-  `ANTHROPIC_API_BASE`.
-- **It writes into your project.** On first run Aider creates
-  `.aider.chat.history.md` and a tags cache, and **appends `.aider*` to your
-  repo's `.gitignore`**. Pass `--no-gitignore` if you'd rather it didn't.
-- Because there is no login, `--no-persist-auth` costs you almost nothing here
-  (only the cached install and chat history).
-
-```sh
-OPENAI_API_KEY=... sandbox-cli aider
-sandbox-cli aider --no-gitignore
-```
 
 ## copilot — GitHub Copilot CLI
 
@@ -343,39 +305,7 @@ sandbox-cli cursor --project ~/app -- --sandbox disabled
 DASHSCOPE_API_KEY=... sandbox-cli qwen
 ```
 
-## amp — Amp
 
-- **Prerequisites:** an Amp account, or `AMP_API_KEY` from ampcode.com.
-- **Setup:** `amp login` prints a URL to open on your **host** and takes the code
-  back in the terminal. `AMP_API_KEY` skips it.
-- **Forwarded if set:** `AMP_API_KEY`, `AMP_URL`, `AMP_LOG_LEVEL`,
-  `AMP_SKIP_UPDATE_CHECK`.
-- **Leave the native-keyring setting off.** Turning it on migrates Amp's token
-  file into a keyring and deletes the file — in a container that trades a working
-  login for none. The default (file store) is correct here.
-
-```sh
-sandbox-cli amp
-sandbox-cli amp -x 'run the tests'
-```
-
-## continue — Continue CLI
-
-- **Prerequisites:** `ANTHROPIC_API_KEY`.
-- **Setup:** none. **There is no login** — hub authentication was removed
-  upstream, so `cn login` and `CONTINUE_API_KEY` in the published docs are both
-  stale and do nothing. The key is written into the config in the agent home on
-  first use.
-- **Forwarded if set:** `ANTHROPIC_API_KEY`, `CONTINUE_API_BASE`, AWS keys,
-  `GOOGLE_CLOUD_PROJECT`.
-- **With `--allow`, permit `api.continue.dev`** — with no config yet, Continue
-  fetches a default one from there and otherwise has nothing to configure itself
-  from.
-
-```sh
-ANTHROPIC_API_KEY=... sandbox-cli continue
-sandbox-cli continue --allow api.continue.dev
-```
 
 ## openhands — OpenHands CLI
 
@@ -446,23 +376,6 @@ sandbox-cli devin -- -p 'fix the failing test' --permission-mode bypass
 
 ---
 
-## codebuff — Codebuff
-
-- **Prerequisites:** a Codebuff account. `codebuff login` inside a session.
-- **Setup:** it installs in two stages, both into the persisted home: the npm
-  package is a launcher, and its first start downloads a ~46 MB binary.
-- **Forwarded if set:** nothing. Codebuff documents no environment variable for
-  credentials — not in `--help`, not in its npm README — so this adapter forwards
-  none rather than implying a route that may not exist.
-- **Not fleet-eligible.** A prompt is a bare positional and no flag for a
-  non-interactive run is documented, so there is nothing to verify yet.
-
-```sh
-sandbox-cli codebuff
-sandbox-cli codebuff 'explain this repository'
-```
-
----
 
 ## kilocode — Kilo Code CLI
 
@@ -544,7 +457,7 @@ things decide whether an adapter can be used that way:
    one foreground run per agent is enough:
 
    ```sh
-   sandbox-cli aider            # logs in, and installs on the first run
+   sandbox-cli copilot          # logs in, and installs on the first run
    sandbox-cli claude --worktree feature-a --detach -- -p "implement A"
    ```
 
@@ -570,7 +483,7 @@ for approval in a fleet does not fail; it hangs until you notice, holding a slot
 | `droid` | `droid exec PROMPT` | installed on first use (~148MB) |
 
 Anything else is rejected when the file is parsed, before a single container
-starts. The other twelve adapters are perfectly usable interactively — they are
+starts. The other seven adapters are perfectly usable interactively — they are
 simply not ones we have confirmed will never stop and wait.
 
 Two things to do before an unattended run, and they are per agent rather than per
@@ -602,16 +515,14 @@ files.pythonhosted.org  github.com  codeload.github.com
 objects.githubusercontent.com  raw.githubusercontent.com
 ```
 
-So npm-installed agents (`cline`, `crush`, `copilot`, `qwen`, `amp`, `continue`,
-`droid`) and the GitHub-released ones (`goose`, `openhands`) can install with the
-baseline alone. These need more:
+So npm-installed agents (`cline`, `copilot`, `qwen`, `droid`, `kilocode`) and the
+GitHub-released ones (`goose`, `openhands`) can install with the baseline alone.
+These need more:
 
 | Agent | Add to `--allow` | Why |
 |---|---|---|
 | `cursor` | `cursor.com`, `downloads.cursor.com` | vendor installer + payload |
 | `devin` | `cli.devin.ai`, `static.devin.ai` | vendor installer + payload; the script host alone is not enough — measured |
-| `aider` | `astral.sh` | fetches uv before installing Aider |
-| `continue` | `api.continue.dev` | fetches its default config |
 | `claude` | `claude.ai`, `downloads.claude.ai` | installer script + release payload, for the self-updating install — see below |
 
 `claude` is the one row that is about **staying current** rather than installing.
@@ -686,11 +597,10 @@ themselves: browser launch is suppressed when Linux has no `DISPLAY`,
 `WAYLAND_DISPLAY` or `MIR_SOCKET`, and the sandbox sets none, so they take their
 paste-the-code path on their own (`qwen` is additionally forced with
 `NO_BROWSER=1`, and `cursor` with `NO_OPEN_BROWSER=1`). `claude` offers a pasted
-code and a device code. `copilot`, `droid`, `openhands`, `crush` and `amp` are
-device-code or poll-for-result flows to begin with. `cline` has loopback
-callbacks but refuses them with an auth message rather than opening a browser —
-use `cline auth --provider … --apikey …`, as its section says. `aider` and
-`continue` have no login at all.
+code and a device code. `copilot`, `droid` and `openhands` are device-code or
+poll-for-result flows to begin with. `cline` has loopback callbacks but refuses
+them with an auth message rather than opening a browser — use
+`cline auth --provider … --apikey …`, as its section says.
 
 ## Troubleshooting
 

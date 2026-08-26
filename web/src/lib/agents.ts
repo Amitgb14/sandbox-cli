@@ -192,18 +192,6 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli kilocode run 'explain this repository'",
   },
   {
-    id: "codebuff",
-    name: "Codebuff",
-    vendor: "Codebuff",
-    delivery: "first-run",
-    size: "133 MB",
-    login: "`codebuff login` inside a session.",
-    env: [],
-    gotcha:
-      "It installs in two stages: the npm package is a launcher that downloads a ~46 MB binary on first start. It documents no environment variable for credentials, so nothing is forwarded — the login persists in the sandbox-owned home instead.",
-    example: "sandbox-cli codebuff 'explain this repository'",
-  },
-  {
     id: "devin",
     name: "Devin CLI",
     vendor: "Cognition",
@@ -254,18 +242,6 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli cline 'run the tests'",
   },
   {
-    id: "amp",
-    name: "Amp",
-    vendor: "Sourcegraph",
-    delivery: "first-run",
-    size: "107 MB",
-    login: "`amp login` prints a URL for your host and takes the code back in the terminal.",
-    env: ["AMP_API_KEY", "AMP_URL", "AMP_LOG_LEVEL", "AMP_SKIP_UPDATE_CHECK"],
-    gotcha:
-      "Leave the native-keyring setting off. Turning it on migrates the token into a keyring and deletes the file — in a container that trades a working login for none.",
-    example: "sandbox-cli amp -x 'run the tests'",
-  },
-  {
     id: "qwen",
     name: "Qwen Code",
     vendor: "Alibaba",
@@ -308,59 +284,6 @@ export const AGENTS: Agent[] = [
     gotcha:
       "LLM_* only take effect if you also pass --override-with-envs — that's OpenHands' rule, and it's why an exported key can look ignored.",
     example: "sandbox-cli openhands -- --override-with-envs",
-  },
-  {
-    id: "crush",
-    name: "Crush",
-    vendor: "Charm",
-    delivery: "first-run",
-    size: "81 MB",
-    login: "`crush login` shows a short code — open the page on your host and paste it.",
-    env: [
-      "ANTHROPIC_API_KEY",
-      "OPENAI_API_KEY",
-      "GEMINI_API_KEY",
-      "OPENROUTER_API_KEY",
-      "GROQ_API_KEY",
-      "HYPER_API_KEY",
-    ],
-    gotcha:
-      "Crush speaks to roughly 25 providers; add any other key with --env-allow NAME rather than editing the wrapper.",
-    example: "sandbox-cli crush --env-allow CEREBRAS_API_KEY",
-  },
-  {
-    id: "continue",
-    name: "Continue CLI",
-    vendor: "Continue",
-    delivery: "first-run",
-    size: "65 MB",
-    login: "None. Hub auth was removed upstream — the key is written into the agent home.",
-    env: ["ANTHROPIC_API_KEY", "CONTINUE_API_BASE", "GOOGLE_CLOUD_PROJECT"],
-    allow: ["api.continue.dev"],
-    gotcha:
-      "`cn login` and CONTINUE_API_KEY in the published docs are stale and do nothing. With --allow, permit api.continue.dev or it has no config to start from.",
-    example: "sandbox-cli continue --allow api.continue.dev",
-  },
-  {
-    id: "aider",
-    name: "Aider",
-    vendor: "Aider AI",
-    delivery: "first-run",
-    size: "~300 MB",
-    login: "None at all — export a provider key on your host.",
-    env: [
-      "OPENAI_API_KEY",
-      "ANTHROPIC_API_KEY",
-      "GEMINI_API_KEY",
-      "DEEPSEEK_API_KEY",
-      "OPENROUTER_API_KEY",
-      "OPENAI_API_BASE",
-      "ANTHROPIC_API_BASE",
-    ],
-    allow: ["astral.sh"],
-    gotcha:
-      "The workspace must be a git repo, and Aider writes into your project: a chat history file, a tags cache, and an appended `.aider*` line in .gitignore. Pass --no-gitignore to stop the last one.",
-    example: "OPENAI_API_KEY=… sandbox-cli aider",
   },
 ];
 

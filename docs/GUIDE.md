@@ -1358,13 +1358,9 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli opencode [args]` | Run OpenCode |
 | `sandbox-cli cline [args]` | Run Cline (installed on first use) |
 | `sandbox-cli goose [args]` | Run Goose (installed on first use) |
-| `sandbox-cli crush [args]` | Run Crush (installed on first use) |
-| `sandbox-cli aider [args]` | Run Aider (installed on first use, via uv) |
 | `sandbox-cli copilot [args]` | Run GitHub Copilot CLI (installed on first use) |
 | `sandbox-cli cursor [args]` | Run Cursor CLI (installed on first use) |
 | `sandbox-cli qwen [args]` | Run Qwen Code (installed on first use) |
-| `sandbox-cli amp [args]` | Run Amp (installed on first use) |
-| `sandbox-cli continue [args]` | Run Continue CLI (installed on first use) |
 | `sandbox-cli openhands [args]` | Run OpenHands CLI (installed on first use) |
 | `sandbox-cli droid [args]` | Run Droid (installed on first use) |
 | `sandbox-cli init` | Scaffold a `.sandbox.yaml` |

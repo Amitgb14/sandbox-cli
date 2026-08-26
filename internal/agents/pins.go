@@ -3,7 +3,7 @@ package agents
 // Where the first-run version of every lazily-installed agent is decided, in one
 // table.
 //
-// Fourteen of the eighteen wrappers install their agent on first run, from a vendor
+// Nine of the thirteen wrappers install their agent on first run, from a vendor
 // host, into the persisted agent HOME. Until this table existed each of those
 // installs resolved *whatever the vendor served that day*: `npm install -g <pkg>`
 // with no version, a `curl | bash` whose script is regenerated per release, a
@@ -110,20 +110,15 @@ var installPins = map[string]InstallPin{
 	"opencode": {Version: "1.18.11", SelfUpdates: selfUpdateYes}, // opencode-ai
 	"droid":    {Version: "0.186.0"},                             // droid
 	"cline":    {Version: "3.0.49"},                              // cline
-	"codebuff": {Version: "1.0.685"},                             // codebuff (a launcher; it downloads a ~46MB binary on first start)
 	"kilocode": {Version: "7.4.23"},                              // @kilocode/cli
-	"crush":    {Version: "0.88.0"},                              // @charmland/crush
 	"copilot":  {Version: "1.0.77"},                              // @github/copilot
-	"cn":       {Version: "1.5.47"},                              // @continuedev/cli
 	"qwen":     {Version: "0.21.3"},                              // @qwen-code/qwen-code
 	// Amp publishes a continuously-generated version rather than semver, so this
 	// line goes stale faster than the others by design rather than by neglect.
-	"amp": {Version: "0.0.1785646934-g35813b"}, // @ampcode/cli
 
 	// Installed by their own routes; the version reaches each installer
 	// differently, which is why the install strings live with their wrappers and
 	// only the number lives here.
-	"aider":     {Version: "0.86.2"}, // uv tool install aider-chat==<v>
 	"goose":     {Version: "1.45.0"}, // GOOSE_VERSION=v<v> on the vendor script
 	"openhands": {Version: "1.16.0"}, // release asset URL
 

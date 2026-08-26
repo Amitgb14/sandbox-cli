@@ -11,17 +11,25 @@ version is tagged.
 
 ## Unreleased
 
+### Removed
+
+- **Five agent adapters: `aider`, `amp`, `crush`, `continue` and `codebuff`.**
+  The roster is thirteen. Nothing else changes: the remaining wrappers, the
+  descriptors and the boundary are untouched.
+
+  Logins already on disk are **left alone** — `~/.config/sandbox/agents/aider`
+  and its siblings are yours, and removing an adapter is not a reason for this
+  tool to delete a credential you put somewhere. Delete those directories
+  yourself if you want the disk back.
+
 ### Added
 
-- **Two more agent adapters: Codebuff and Kilo Code.** `sandbox-cli codebuff` and
-  `sandbox-cli kilocode`, installed from npm into the persisted agent home on
-  first use, bringing the roster to eighteen. Adapters, not descriptors: neither
-  agent's non-interactive mode has been verified here, so Studio, a `fleet.yaml`
-  and the SDKs do not offer them. Codebuff forwards **no** environment variables,
-  because it documents none for credentials and implying a route that may not
-  exist is worse than a short list; Kilo Code's CLI is an opencode fork — its own
-  logs say so — so it forwards opencode's provider keys for that reason rather
-  than by assumption.
+- **A Kilo Code adapter** — `sandbox-cli kilocode`, installed from npm into the
+  persisted agent home on first use. An adapter, not a descriptor: its
+  non-interactive mode (`kilocode run <message>`) has not been verified here, so
+  Studio, a `fleet.yaml` and the SDKs do not offer it. Its CLI is an opencode
+  fork — its own logs say so — so it forwards opencode's provider keys for that
+  reason rather than by assumption.
 
 
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and

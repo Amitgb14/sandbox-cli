@@ -1,8 +1,7 @@
 # sandbox-cli
 
 Run AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose, Crush,
-Aider, Copilot CLI, Cursor, Qwen, Amp, Continue, OpenHands, Droid, Devin,
-Codebuff, Kilo Code) — or any
+Copilot CLI, Cursor, Qwen, OpenHands, Droid, Devin, Kilo Code) — or any
 command — inside a **disposable, isolated Docker container**. Only the project
 you choose is mounted at `/workspace`; `HOME` is a fake, ephemeral directory. A
 mistaken `rm -rf ~` or a prompt-injected command can't touch the rest of your
@@ -116,7 +115,7 @@ Start at the **[documentation index](docs/README.md)**, or jump to:
 | | |
 |---|---|
 | [User guide](docs/GUIDE.md) | The walkthrough: first run, everyday use, every feature |
-| [Agent reference](docs/AGENTS.md) | All 18 agents, their prerequisites and login flows |
+| [Agent reference](docs/AGENTS.md) | All 13 agents, their prerequisites and login flows |
 | [Commands and flags](docs/usage/flags.md) | Every sandbox flag, and how flags reach the agent |
 | [Sessions](docs/usage/sessions.md) | `list`, `attach`, `logs`, `kill`, `clean` |
 | [Worktrees](docs/usage/worktrees.md) · [Fleet](docs/usage/fleet.md) | One agent per branch, and many at once |

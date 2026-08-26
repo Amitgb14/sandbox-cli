@@ -66,7 +66,7 @@ throughout.
 | `parallel-agents.tsx` | Three branches, three containers, one repo — the `--worktree` story as a diagram. Used on both routes. |
 | `code-block.tsx` | The dark terminal block, extracted so the multi-agent doc can use it six times. `lang` decides one thing: whether a `$` is drawn, and it is drawn per *command* — a line after one ending in `\` is the same command continued. |
 | `live-gauge.tsx` | The three places sandbox-cli reports usage (footer gauge, Claude status line, peak summary), with numbers that walk client-side only. |
-| `agent-explorer.tsx` | All eighteen adapters: install route, forwarded env, `--allow` domains, and the per-agent gotcha. |
+| `agent-explorer.tsx` | All thirteen adapters: install route, forwarded env, `--allow` domains, and the per-agent gotcha. |
 | `deploy-guide.tsx` | Local development and production as two step-by-step paths, over a matrix of what `--profile` changes — the selected column stays lit while you read, because the section is about the difference. The prod path ends with the invariants re-checked on the fully-merged config. |
 | `capability-chart.tsx` | Recharts. An **emphasis** bar chart (accent + two grays), not a rainbow — palette validated for the light surface: every adjacent pair clears the CVD and normal-vision separation floors and all three clear 3:1 contrast. |
 
@@ -76,7 +76,7 @@ Copy and data mirror the repository — `README.md`, `CLAUDE.md`,
 `docs/AGENTS.md`, `docs/GUIDE.md`. The typed data lives in `src/lib`:
 
 - `site.ts` — version, install routes, repo and doc URLs
-- `agents.ts` — the eighteen adapters, delivery, sizes, forwarded env, baseline domains
+- `agents.ts` — the thirteen adapters, delivery, sizes, forwarded env, baseline domains
 - `features.ts` — every shipped capability, grouped
 - `setup.ts` — per-platform setup, every path ending in `doctor`
 - `deploy.ts` — the dev and prod paths, and what `--profile` changes between

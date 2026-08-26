@@ -24,17 +24,12 @@ func agentCmds() []*cobra.Command {
 		newOpencodeCmd(),
 		newClineCmd(),
 		newGooseCmd(),
-		newCrushCmd(),
-		newAiderCmd(),
 		newCopilotCmd(),
 		newCursorCmd(),
 		newQwenCmd(),
-		newAmpCmd(),
-		newContinueCmd(),
 		newOpenhandsCmd(),
 		newDroidCmd(),
 		newDevinCmd(),
-		newCodebuffCmd(),
 		newKilocodeCmd(),
 	}
 }

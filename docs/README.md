@@ -9,7 +9,7 @@ with. Each page stands on its own; nothing here needs to be read in order.
 |---|---|
 | [Install](install.md) | Requirements, the one-line install, what config it writes, every other route, uninstall |
 | [User guide](GUIDE.md) | The narrative walkthrough: first run, everyday use, a tour of every feature |
-| [Agent reference](AGENTS.md) | All 18 agents — prerequisites, how to log in without a browser, forwarded variables, `--allow` domains |
+| [Agent reference](AGENTS.md) | All 13 agents — prerequisites, how to log in without a browser, forwarded variables, `--allow` domains |
 
 ## Using it
 

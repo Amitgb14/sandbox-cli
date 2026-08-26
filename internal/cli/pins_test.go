@@ -24,7 +24,7 @@ import (
 // installs: get that wrong and the test happily checks a pin for a binary nobody
 // bootstraps while the real one goes unpinned. Closing that means reaching into
 // each wrapper's rendered argv, which is a bigger test than the risk justifies
-// while these eighteen entries are right; recorded so the guarantee is not read as
+// while these thirteen entries are right; recorded so the guarantee is not read as
 // stronger than it is.
 var wrapperInstalls = map[string]string{
 	"claude":    "claude",
@@ -33,24 +33,19 @@ var wrapperInstalls = map[string]string{
 	"opencode":  "opencode",
 	"cline":     "cline",
 	"goose":     "goose",
-	"crush":     "crush",
-	"aider":     "aider",
 	"copilot":   "copilot",
 	"cursor":    "cursor-agent",
 	"qwen":      "qwen",
-	"amp":       "amp",
-	"continue":  "cn",
 	"openhands": "openhands",
 	"droid":     "droid",
 	"devin":     "devin",
-	"codebuff":  "codebuff",
 	"kilocode":  "kilocode",
 }
 
 // TestEveryLazyInstalledAgentIsPinnedOrSaysWhy is where the pin table stops being
 // a convention.
 //
-// Fourteen of the eighteen wrappers download their agent from a vendor host on first
+// Nine of the thirteen wrappers download their agent from a vendor host on first
 // run, into a HOME that persists across every project. A new adapter added by
 // copying an existing file is exactly how one of those goes back to resolving
 // whatever the registry serves that day — so a wrapper with no recorded pin fails
@@ -87,8 +82,8 @@ func TestEveryLazyInstalledAgentIsPinnedOrSaysWhy(t *testing.T) {
 	}
 }
 
-// TestSelfRoutedInstallersCarryTheirPin checks the three agents whose install
-// strings are assembled by hand rather than by agents.NpmBootstrap. Each spells
+// TestSelfRoutedInstallersCarryTheirPin checks the agents whose install strings
+// are assembled by hand rather than by agents.NpmBootstrap. Each spells
 // its version differently, so each is a separate chance to drop it — and dropping
 // it in openhands' case would leave `oh_ver=` empty and build a release URL with
 // a hole in it, which is a broken install rather than an unpinned one.
@@ -98,7 +93,6 @@ func TestSelfRoutedInstallersCarryTheirPin(t *testing.T) {
 		install string
 		want    func(v string) string
 	}{
-		{"aider", aiderInstall, func(v string) string { return "aider-chat==" + v }},
 		{"goose", gooseInstall, func(v string) string { return "GOOSE_VERSION=v" + v }},
 		{"openhands", openhandsInstall, func(v string) string { return "oh_ver=" + v }},
 	}

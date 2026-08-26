@@ -86,7 +86,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     body:
       "The wrapper consumes a leading run of sandbox flags and forwards everything else to the agent verbatim, so the agent's own flags never collide with sandbox-cli's. That second line is the point of the whole project: 'Allow All' is the mode that makes an agent useful, and it is safe here because the blast radius is a directory that dies on exit. The first run builds the base image, which takes a few minutes once.",
     expect:
-      "Claude Code starts, with a status line showing the container's memory and CPU. Eighteen agents have a wrapper; four are baked into the image and the rest install themselves on first use.",
+      "Claude Code starts, with a status line showing the container's memory and CPU. Thirteen agents have a wrapper; four are baked into the image and the rest install themselves on first use.",
   },
   {
     title: "Log in once — the login outlives the container",
@@ -489,7 +489,7 @@ export const CHALLENGES: Challenge[] = [
   {
     symptom: "A new agent's first run fails with exit 127",
     cause:
-      "Fourteen of the eighteen agents are not baked into the image — they install themselves into the persisted HOME on first use, which keeps hundreds of megabytes of adapters you will never run out of the image. That install needs the vendor's download host reachable at that moment.",
+      "Nine of the thirteen agents are not baked into the image — they install themselves into the persisted HOME on first use, which keeps hundreds of megabytes of adapters you will never run out of the image. That install needs the vendor's download host reachable at that moment.",
     fix: "Allow the agent's install host. docs/AGENTS.md has the per-agent list; cursor, aider, openhands and continue each need one.",
     fixCode: "sandbox-cli cursor --allow cursor.com --allow downloads.cursor.com",
     scope: "both",

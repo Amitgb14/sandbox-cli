@@ -285,7 +285,7 @@ function buildRuns(): Run[] {
     const agentPool: Array<AgentName | null> =
       kind === "fleet"
         ? ["claude", "cline", "codex", "gemini", "droid", "opencode"]
-        : ["claude", "claude", "codex", "aider", "cursor", null];
+        : ["claude", "claude", "codex", "qwen", "cursor", null];
     const agent = rng.pick(agentPool);
     const profile: Profile = kind === "fleet" ? "prod" : "dev";
     const duration = rng.int(45, 5400) * 1000;
