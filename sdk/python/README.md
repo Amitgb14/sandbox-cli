@@ -133,6 +133,31 @@ number rather than being skipped — a silently ignored line in a credentials fi
 is how a run goes out without the key it needed. Values travel in the request
 body, so against a remote daemon without TLS they cross the network in cleartext.
 
+## Work that is not supposed to finish
+
+`run()` waits. A dev server never exits, so waiting means reaching the deadline
+and then reporting a container somebody stopped — a verdict on nothing. Use
+`start()`:
+
+```python
+run = ws.start(["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"],
+               publish=["8000:8000"])
+# ... reach it at http://127.0.0.1:8000 on the daemon's host ...
+ws.stop(run["id"])
+```
+
+Nothing reaps a started run for you: the container outlives the call by design.
+It holds its branch's container name until it is stopped **and cleared** —
+stopping alone is not enough, because a finished run keeps the name until
+something removes it, which is what `clear_finished()` is for:
+
+```python
+ws.stop(run["id"])
+ws.clear_finished()          # now the branch is free for the next run
+```
+
+So a server and its tests belong on different branches.
+
 ## Examples
 
 `examples/stock_price.py` — untrusted code fetching a quote, and the two lines
@@ -148,6 +173,35 @@ the egress allowlist **on** for that run: measured against a daemon with
 unrestricted egress, `example.com` answers 200 without `allow` and is refused
 with it. Asking for one host means giving up the rest of the internet, which is
 usually what you want for code you did not write.
+
+`examples/python_project.py` — the everyday one: install a repository's
+`requirements.txt` (and the repository itself, if it is a package), then run one
+of its scripts. The install happens on the first run and is skipped afterwards,
+because the virtualenv lives in the **worktree** — which survives between
+containers when nothing else does.
+
+```
+$ python3 examples/python_project.py my-repo
+installing dependencies (first run only)…
+  installed
+Ran 236 tests in 0.09s
+OK (skipped=81)
+
+$ python3 examples/python_project.py my-repo            # again
+dependencies already present in the worktree — skipping setup
+```
+
+`examples/fastapi_service.py` — serve **a repository's own FastAPI app** in a
+sandbox and health-check it from here. It finds the app (`app.py`, `main.py`,
+`src/main.py`…), installs the repository's requirements, starts it with
+`start()` on a published port, and stops it. If the repository has no app it
+scaffolds one and says so — a fallback that looked like the real thing was the
+flaw in this example's first version, which cloned a repository, ignored it, and
+served code it had written itself.
+
+It is also the honest tour of what the sandbox costs today: the image has python3
+and **no pip**, so the setup builds a venv *without* pip and bootstraps pip
+inside it, which needs three hosts named on the egress allowlist.
 
 `examples/travel_planner.py` — three agents that hand work to each other, and a
 gate that decides. Two specialists research in parallel, each in its own

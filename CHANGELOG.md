@@ -13,13 +13,32 @@ version is tagged.
 
 ### Added
 
+- **`Workspace.start()` in the Python SDK** — launch without waiting, for work
+  that is not supposed to finish: a dev server, a watcher, a queue consumer.
+  `run()` waits, so pointing it at a server means reaching the deadline and then
+  reporting a container somebody stopped, which is a verdict on nothing. It
+  shares `run()`'s conflict recovery, because the commonest sequence there is —
+  set up, then serve — otherwise fails on its last line, with the final setup
+  step still holding the branch's container name.
+- **`examples/python_project.py`** — install a repository's requirements once
+  and then run its scripts. The virtualenv lives in the worktree, so the setup is
+  skipped on every run after the first; if the repository is itself a package it
+  is installed editable, without which its own scripts fail with `No module named
+  <the repo>`. Verified against a real repository: 236 of its tests ran in the
+  sandbox.
+- **`examples/fastapi_service.py`** — serve a repository's **own** FastAPI app on
+  a published port and health-check it from the host: it finds the app, installs
+  the repository's requirements, and starts it with `start()`. Run end to end rather than compiled: it also documents what
+  the sandbox costs today, since the image has python3 and no pip, so the setup
+  bootstraps pip inside a `--without-pip` venv with three hosts named on the
+  allowlist.
+
 - **A Devin CLI adapter** — `sandbox-cli devin`, installed from Cognition's
   installer into the persisted agent home on first use. It is an *adapter*, not
   a descriptor: `devin -p PROMPT` and `--permission-mode bypass` are documented
   but unverified here, so Devin cannot yet be named in a `fleet.yaml` or launched
   from Studio. A descriptor is earned by running the agent rather than by reading
   its documentation.
-
 
 - **Cline can be used from Studio, a fleet, and both SDKs.** The adapter has
   shipped for a while, but only agents with a *verified* headless mode get a

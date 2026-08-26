@@ -20,6 +20,7 @@ behind the same interface and this API does not move.
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
 
 from ._client import Outcome, Project, Studio, Workspace
@@ -102,6 +103,50 @@ class AsyncWorkspace:
             if out.exit_code != 0 or out.stopped:
                 break
         return done
+
+    async def start(self, argv: list[str], **opts: Any) -> dict[str, Any]:
+        """Launch without waiting. See the sync docstring.
+
+        Guarded like `run` and `agent`, and for the same reason rather than for
+        symmetry: `asyncio.to_thread` cannot be interrupted, so a cancelled await
+        still completes its POST in the abandoned thread. Without the guard that
+        container exists, holds its branch's name, and no caller ever saw its id.
+        The launch budget is ten minutes — a first run builds the base image — so
+        the window is real rather than theoretical.
+        """
+        task = asyncio.create_task(_off_thread(self._sync.start, argv, **opts))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            run_id = self._sync._in_flight  # noqa: SLF001 — same package
+            if run_id is not None:
+                try:
+                    await _off_thread(self._sync.stop, run_id, False)
+                finally:
+                    task.cancel()
+                raise RunCancelled({"id": run_id}) from None
+            # Cancelled *during* the POST, which is the harder half: the request
+            # is in a thread nothing can interrupt, so it will land and create a
+            # container after this coroutine is gone. Arrange to stop it when it
+            # does, rather than raise promptly and leave a container running that
+            # nobody holds the id of.
+            task.add_done_callback(self._stop_when_it_lands)
+            raise
+
+    def _stop_when_it_lands(self, task: "asyncio.Task[dict[str, Any]]") -> None:
+        """Stop a run whose launch outlived the caller who asked for it.
+
+        In a plain thread rather than on the loop: this fires from a done
+        callback, the loop may be closing, and the stop is a courtesy that must
+        not depend on anything still running.
+        """
+        if task.cancelled() or task.exception() is not None:
+            return
+        started = task.result()
+        run_id = started.get("id")
+        if not run_id:
+            return
+        threading.Thread(target=self._sync.stop, args=(run_id, False), daemon=True).start()
 
     async def clear_finished(self) -> list[str]:
         return await _off_thread(self._sync.clear_finished)

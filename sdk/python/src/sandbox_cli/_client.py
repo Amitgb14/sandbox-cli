@@ -314,6 +314,44 @@ class Workspace:
                 break
         return done
 
+    def start(self, argv: list[str], **opts: Any) -> dict[str, Any]:
+        """Launch and return immediately, without waiting for the run to end.
+
+        For work that is not supposed to finish — a dev server, a watcher, a
+        queue consumer. `run()` waits, so pointing it at a server means waiting
+        for the deadline and then reporting a container somebody stopped, which
+        is a verdict on nothing.
+
+        Returns the daemon's run record; `logs(id)`, `stop(id)` and `remove(id)`
+        take it from there. Nothing is cleaned up for you: the container outlives
+        this call by design, and a helper that reaped it would defeat the point.
+
+        The run still holds its branch's container name, so a workspace has one
+        long-lived run at a time — the same rule as everywhere else, and the
+        reason a server and its tests belong on different branches.
+        """
+        if not argv:
+            raise ValueError("a run needs a command")
+        if "timeout" in opts:
+            # Accepted-and-ignored is the failure the option validator exists to
+            # prevent, arriving with the spelling correct: nothing here waits, so
+            # a deadline has nothing to bound.
+            raise TypeError(
+                "start() takes no timeout: it does not wait, so there is no wait to bound. "
+                "Use run() for a command that finishes, or stop(id) when you are done with "
+                "this one."
+            )
+        body = {"command": list(argv), **self._common(opts)}
+        started = self._launch(body, opts)
+        # Not recorded as *delivered*: nothing was waited for and no outcome was
+        # handed back, so this run's evidence is still owed to somebody. It is
+        # recorded as in flight, which is what lets a cancelled `await
+        # AsyncWorkspace.start(...)` stop the container it just created — the
+        # POST completes in a thread that cannot be interrupted, so without this
+        # the run exists, holds the branch's name, and nobody has its id.
+        self._in_flight = started.get("id")
+        return started
+
     def clear_finished(self) -> list[str]:
         """Remove finished runs holding this branch's container name.
 
@@ -378,6 +416,17 @@ class Workspace:
         return body
 
     def _launch_and_wait(self, body: dict[str, Any], opts: dict[str, Any]) -> Outcome:
+        return self._await_outcome(self._launch(body, opts), opts)
+
+    def _launch(self, body: dict[str, Any], opts: dict[str, Any]) -> dict[str, Any]:
+        """POST the run, recovering from the one conflict this object may clear.
+
+        Shared by `run` and `start`, because the conflict is the same for both: a
+        setup step this workspace already reported on still holds the branch's
+        container name, and the next launch — waiting or not — has to get past
+        it. `start` without this made the commonest sequence there is (set up,
+        then serve) fail on its last line.
+        """
         try:
             started = self._t.request("POST", "/v1/runs", body, timeout=_LAUNCH_TIMEOUT_S)
         except ApiError as err:
@@ -397,8 +446,7 @@ class Workspace:
                         # That is not the conflict the user needs to hear about.
                         if gone.status != 404:
                             raise
-                    started = self._t.request("POST", "/v1/runs", body, timeout=_LAUNCH_TIMEOUT_S)
-                    return self._await_outcome(started, opts)
+                    return self._t.request("POST", "/v1/runs", body, timeout=_LAUNCH_TIMEOUT_S)
                 except ApiError as retry_err:
                     if retry_err.status != 409:
                         raise
@@ -410,7 +458,7 @@ class Workspace:
                                "that is still going.") from None
             self.clear_finished()
             started = self._t.request("POST", "/v1/runs", body, timeout=_LAUNCH_TIMEOUT_S)
-        return self._await_outcome(started, opts)
+        return started
 
     def _await_outcome(self, started: dict[str, Any], opts: dict[str, Any]) -> Outcome:
         try:

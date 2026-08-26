@@ -17,6 +17,8 @@ import {
   PY_INSTALL,
   PY_RULES,
   PY_STEPS,
+  PY_PROJECT,
+  PY_SERVICE,
   PY_STOCK,
   PY_TRAVEL,
 } from "@/lib/sdk-python";
@@ -48,6 +50,8 @@ const NAV: NavEntry[] = [
     kind: "group",
     label: "Examples",
     items: [
+      { href: "#project", label: "Install once, run scripts", hint: "the venv lives in the worktree" },
+      { href: "#service", label: "Serve an app", hint: "start(), publish, and a health check" },
       { href: "#stock", label: "Untrusted code, one host", hint: "what allow= actually does" },
       { href: "#multi", label: "Agents that need each other", hint: "handover, then a decision" },
     ],
@@ -171,6 +175,48 @@ export default function PythonSdkPage() {
           </div>
         </Section>
 
+        {/* --------------------------------------------------------- project */}
+        <Section id="project">
+          <SectionHead
+            eyebrow="the everyday one"
+            title="Install once, then run the scripts you already have"
+            lead={
+              <>
+                A repository with several Python scripts and a{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  requirements.txt
+                </code>
+                . The virtualenv lives in the <strong className="font-medium text-foreground">worktree</strong>,
+                which is the only thing that survives between containers — so the install happens on
+                the first run and is skipped after it.
+              </>
+            }
+          />
+
+          <CodeBlock code={PY_PROJECT} lang="text" title="examples/python_project.py" />
+        </Section>
+
+        {/* --------------------------------------------------------- service */}
+        <Section id="service">
+          <SectionHead
+            eyebrow="work that does not finish"
+            title="Serve a repository's app, and reach it from here"
+            lead={
+              <>
+                A server never exits, so{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">run()</code>{" "}
+                is the wrong verb — waiting on one means reaching the deadline and then reporting a
+                container somebody stopped.{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">start()</code>{" "}
+                launches and returns; <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">publish</code>{" "}
+                binds the port on the daemon&apos;s host.
+              </>
+            }
+          />
+
+          <CodeBlock code={PY_SERVICE} lang="text" title="examples/fastapi_service.py" />
+        </Section>
+
         {/* ----------------------------------------------------------- stock */}
         <Section id="stock">
           <SectionHead
@@ -242,7 +288,7 @@ export default function PythonSdkPage() {
         <Section id="rules">
           <SectionHead
             eyebrow="what it promises"
-            title="Six claims, most of them enforced by a test"
+            title="Seven claims, most of them enforced by a test"
             lead="Everything here is checkable. Where a claim is a trade rather than a guarantee, it says which."
           />
 
