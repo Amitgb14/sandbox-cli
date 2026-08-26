@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sandbox-cli-sdk"
-version = "0.0.1"
+version = "0.0.2"
 # The distribution is `sandbox-cli-sdk` and the import is `sandbox_cli`: the
 # plain name is taken on PyPI by an unrelated project, and this one matches the
 # npm package (@sandbox-cli/sdk) instead. The mismatch is stated in the README,
