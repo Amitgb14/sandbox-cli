@@ -329,7 +329,7 @@ type AgentInfo struct {
 	EnvAllow   []string `json:"envAllow"`
 
 	// Env is what sandbox-cli itself sets in the container for this agent — the
-	// keyring droid must not look for, and so on. Distinct from EnvAllow, which
+	// keyring the container has no daemon for, and so on. Distinct from EnvAllow, which
 	// is host values forwarded by *name* only if the host has them.
 	Env []string `json:"env"`
 
@@ -345,7 +345,7 @@ type AgentInfo struct {
 	// CanSkipPermissions is whether this agent's approval prompts can be turned
 	// off with a *flag*, which is what an interactive run would need. False for
 	// the agents whose non-interactive mode is a subcommand instead (`codex
-	// exec`, `opencode run`, `droid exec`): there is nothing to add to a console
+	// exec`, `opencode run`): there is nothing to add to a console
 	// session, and a control that silently did nothing would be worse than one
 	// that is not offered.
 	CanSkipPermissions bool `json:"canSkipPermissions"`
@@ -360,7 +360,7 @@ type AgentInfo struct {
 
 	// CanResume is whether a conversation of this agent's can be reopened by its
 	// native session id — `claude --resume`, `codex resume`, `opencode --session`.
-	// **Gemini and droid declare none**, so for them "carry this conversation on"
+	// **Gemini declares none**, so for them "carry this conversation on"
 	// is not expressible at all, and the only honest continuation is a fresh run
 	// with a briefing.
 	//
@@ -975,7 +975,7 @@ type RunCreateRequest struct {
 	// history were its own, confidently, with file-writing tools.
 	//
 	// The source agent may be the *same* agent, and that is not a degenerate
-	// case: gemini and droid declare no resume argv, so a briefing from itself is
+	// case: gemini declares no resume argv, so a briefing from itself is
 	// the only way to carry one of their conversations on.
 	HandoffFrom *HandoffRef `json:"handoffFrom,omitempty"`
 

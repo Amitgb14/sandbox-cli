@@ -205,24 +205,6 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli devin -p 'explain this repository'",
   },
   {
-    id: "droid",
-    name: "Droid",
-    vendor: "Factory",
-    delivery: "first-run",
-    size: "148 MB",
-    login: "Device-code flow — code and URL printed, opened on your host.",
-    env: [
-      "FACTORY_API_KEY",
-      "FACTORY_API_BASE_URL",
-      "FACTORY_APP_BASE_URL",
-      "FACTORY_AIRGAP_ENABLED",
-      "FACTORY_ENV",
-    ],
-    gotcha:
-      "The sandbox sets FACTORY_DISABLE_KEYRING=1 so credentials stay in a file in the persisted home even if the upstream default changes.",
-    example: "sandbox-cli droid exec 'run the tests'",
-  },
-  {
     id: "cline",
     name: "Cline",
     vendor: "Cline",

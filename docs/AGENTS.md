@@ -66,7 +66,6 @@ network; later runs start immediately.
 | `kilocode` | on first use | 372 MB |
 | `cursor` | on first use | 219 MB |
 | `devin` | on first use | 158 MB |
-| `droid` | on first use | 148 MB |
 | `cline` | on first use | 130 MB |
 | `qwen` | on first use | 88 MB |
 | `openhands` | on first use | 82 MB |
@@ -328,24 +327,6 @@ sandbox-cli openhands
 LLM_API_KEY=... LLM_MODEL=... sandbox-cli openhands -- --override-with-envs
 ```
 
-## droid — Droid (Factory)
-
-- **Prerequisites:** a Factory account, or `FACTORY_API_KEY`.
-- **Setup:** login is a device-code flow — code and URL printed, opened on your
-  **host**. `FACTORY_API_KEY` skips it, which is the usual choice for
-  `droid exec`.
-- **Forwarded if set:** `FACTORY_API_KEY`, `FACTORY_API_BASE_URL`,
-  `FACTORY_APP_BASE_URL`, `FACTORY_AIRGAP_ENABLED`, `FACTORY_ENV`.
-- **The sandbox sets `FACTORY_DISABLE_KEYRING=1`** so credentials stay in a file
-  in the persisted home, even if the upstream default changes.
-
-```sh
-sandbox-cli droid
-sandbox-cli droid exec 'run the tests'
-```
-
----
-
 ## devin — Devin CLI (Cognition)
 
 - **Prerequisites:** a Devin account. It is a paid product, and the CLI needs one.
@@ -480,7 +461,6 @@ for approval in a fleet does not fail; it hangs until you notice, holding a slot
 | `codex` | `codex exec PROMPT` | baked into the image; Codex applies its own approval policy on top — relax it through the task's `args:` |
 | `gemini` | `gemini --yolo -p PROMPT` | baked into the image; `-p` alone still stops for tool approval, which is why `--yolo` is not optional here |
 | `opencode` | `opencode run PROMPT` | baked into the image |
-| `droid` | `droid exec PROMPT` | installed on first use (~148MB) |
 
 Anything else is rejected when the file is parsed, before a single container
 starts. The other seven adapters are perfectly usable interactively — they are
@@ -515,7 +495,7 @@ files.pythonhosted.org  github.com  codeload.github.com
 objects.githubusercontent.com  raw.githubusercontent.com
 ```
 
-So npm-installed agents (`cline`, `copilot`, `qwen`, `droid`, `kilocode`) and the
+So npm-installed agents (`cline`, `copilot`, `qwen`, `kilocode`) and the
 GitHub-released ones (`goose`, `openhands`) can install with the baseline alone.
 These need more:
 
@@ -597,7 +577,7 @@ themselves: browser launch is suppressed when Linux has no `DISPLAY`,
 `WAYLAND_DISPLAY` or `MIR_SOCKET`, and the sandbox sets none, so they take their
 paste-the-code path on their own (`qwen` is additionally forced with
 `NO_BROWSER=1`, and `cursor` with `NO_OPEN_BROWSER=1`). `claude` offers a pasted
-code and a device code. `copilot`, `droid` and `openhands` are device-code or
+code and a device code. `copilot` and `openhands` are device-code or
 poll-for-result flows to begin with. `cline` has loopback callbacks but refuses
 them with an auth message rather than opening a browser — use
 `cline auth --provider … --apikey …`, as its section says.
@@ -610,8 +590,8 @@ or you're using `--allow` without the domains above.
 
 **The agent asks me to log in every time.**
 You're either passing `--no-persist-auth`, or forwarding a path-valued variable
-that moved the agent's state directory (see the list at the top). For Goose and
-Droid, check you haven't overridden the keyring switch the sandbox sets.
+that moved the agent's state directory (see the list at the top). For Goose,
+check you haven't overridden the keyring switch the sandbox sets.
 
 On **native Linux** this also had a cause of its own, fixed in the version that
 carries this note: bind mounts there carry real uids, the container user is uid

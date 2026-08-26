@@ -69,8 +69,9 @@ type userInputs struct {
 //     somebody else's;
 //   - the env allowlist, so its own host variables are forwarded and the
 //     primary's are not;
-//   - the container env the descriptor sets — droid's FACTORY_DISABLE_KEYRING is
-//     exactly the unattended-login failure internal/agents documents;
+//   - the container env the descriptor sets — a keyring the container has no
+//     daemon for is the standing example, and the unattended-login failure
+//     internal/agents documents;
 //   - the mounts, reset to the user's own so the primary wrapper's
 //     agent-specific reach does not travel. Without this a claude → codex
 //     failover bind-mounts the host's Claude history into a codex container that
@@ -102,7 +103,7 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string, user 
 		return err
 	}
 
-	// Seven of the thirteen wrappers have no descriptor: they are adapters whose
+	// Seven of the twelve wrappers have no descriptor: they are adapters whose
 	// non-interactive mode was never verified, so internal/agents does not admit
 	// them. A fallback has to be re-targeted — its command, its persisted HOME,
 	// its env allowlist — and only a descriptor says how, so routing simply is

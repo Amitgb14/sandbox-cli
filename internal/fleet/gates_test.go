@@ -198,20 +198,24 @@ func TestFleetNeverWidensTheBoundary(t *testing.T) {
 }
 
 // The descriptor's container settings must reach a fleet container. The
-// interactive wrapper applies them (droid's FACTORY_DISABLE_KEYRING is the
-// standing example); a fleet that dropped them would send the agent looking for
-// a keyring that is not there and, unattended, there is nobody to log in again.
+// interactive wrapper applies them; a fleet that dropped them would send the
+// agent looking for something the container does not have — a keyring was the
+// standing example — and, unattended, there is nobody to log in again.
+//
+// The Env is set on a *copy* of a real descriptor rather than taken from one
+// that ships with it, because as of droid's removal no agent in the table sets
+// the field. Reading it from the table would leave this test skipping quietly on
+// a roster change, which is how plumbing that four call sites depend on ends up
+// with no coverage at all. What is being pinned is the wiring, not the roster.
 func TestOptionsCarryTheDescriptorEnv(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	agent, ok := lookupOrSkip(t, "droid")
+	agent, ok := lookupOrSkip(t, "claude")
 	if !ok {
 		return
 	}
-	if len(agent.Env) == 0 {
-		t.Skip("droid no longer sets container env; nothing to check here")
-	}
+	agent.Env = []string{"SOME_AGENT_SETTING=1"}
 	r := &Runner{Session: sandbox.New(config.Default()), Repo: "/repo", RepoID: testRepoID}
-	spec := Spec{Agent: "droid", Tasks: []Task{{Branch: "b", Prompt: "p"}}}
+	spec := Spec{Agent: "claude", Tasks: []Task{{Branch: "b", Prompt: "p"}}}
 	opts, err := r.options(spec, LaunchOptions{}, agent, spec.Tasks[0], t.TempDir(), "main")
 	if err != nil {
 		t.Fatalf("options: %v", err)

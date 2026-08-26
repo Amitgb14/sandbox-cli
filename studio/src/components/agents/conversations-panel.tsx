@@ -62,7 +62,7 @@ import type { SessionSummary } from "@/lib/types";
  * ~/.claude history is exactly what "my claude conversation, run it via codex"
  * means. Only *resume* is narrower, because reopening a host session would mean
  * mounting the host's history into a container that was not asked to have it —
- * and because gemini and droid have no resume argv at all, which is what
+ * and because gemini has no resume argv at all, which is what
  * `canResume` reports.
  */
 export function ConversationsPanel({ defaultAgent = "claude" }: { defaultAgent?: string }) {

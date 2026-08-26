@@ -39,8 +39,15 @@ type Descriptor struct {
 	// are constants compiled in here, never anything read from the host.
 	//
 	// In the descriptor rather than in the wrapper because a fleet gets no
-	// wrapper: `agent: droid` with FACTORY_DISABLE_KEYRING left behind is an agent
-	// that logs in every run and, unattended, cannot.
+	// wrapper: a setting left behind there — a keyring the container has no daemon
+	// for is the standing example — is an agent that logs in every run and,
+	// unattended, cannot.
+	//
+	// No agent in the table sets it today; droid, which did, was removed. The
+	// field stays because the wiring behind it does: four call sites carry it to a
+	// container, and the goose, cursor and qwen wrappers do the same job in the
+	// place a fleet cannot reach, so the next agent needing it needs the mechanism
+	// and not a rediscovery of why it exists.
 	Env []string
 
 	// Command is the container argv that starts the agent, to which caller
@@ -81,7 +88,7 @@ type Descriptor struct {
 	// how a security-relevant argv drifts.
 	//
 	// Empty for the agents whose non-interactive mode is a *subcommand* rather
-	// than a flag (`codex exec`, `opencode run`, `droid exec`): there is nothing
+	// than a flag (`codex exec`, `opencode run`): there is nothing
 	// to add to an interactive session, so those simply cannot be launched this
 	// way, which is the honest answer rather than a flag that does nothing.
 	SkipPermissionArgs []string
@@ -120,7 +127,7 @@ type Descriptor struct {
 	// container.
 	//
 	// Only claude's positional is *verified* here — it is the agent the console
-	// feature was built and attached against. codex, gemini and droid keep the
+	// feature was built and attached against. codex and gemini keep the
 	// behaviour they had, marked unverified, because changing them on a hunch
 	// would regress runs that may be working; opencode is the one this was
 	// written for.
@@ -380,31 +387,6 @@ var registry = map[string]Descriptor{
 		// transcript store's location *and* format verified before a reader can
 		// claim to understand it. Cline's help documents `--id <session-id>`, so
 		// the capability exists; it is not claimed until somebody has read one.
-	},
-	"droid": {
-		Name: "droid",
-		// Unverified, and kept as it was.
-		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
-		PersistDir:        "droid",
-		ProviderHost:      "api.factory.ai",
-		EnvAllow: []string{
-			"FACTORY_API_KEY",
-			"FACTORY_API_BASE_URL",
-			"FACTORY_APP_BASE_URL",
-			"FACTORY_AIRGAP_ENABLED",
-			"FACTORY_ENV",
-		},
-		// Droid stores credentials in a file today, which persists correctly in the
-		// agent HOME; this keeps that true if the upstream default ever flips to a
-		// keyring, which a container has no daemon for. Goose demonstrated how
-		// easily that ships unnoticed.
-		Env:     []string{"FACTORY_DISABLE_KEYRING=1"},
-		Command: NpmBootstrap("droid", "droid"),
-		AutonomousArgs: func(prompt string) []string {
-			// `droid exec` is Factory's documented headless mode — the one the
-			// FACTORY_API_KEY path exists for.
-			return []string{"exec", prompt}
-		},
 	},
 }
 

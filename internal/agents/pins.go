@@ -3,7 +3,7 @@ package agents
 // Where the first-run version of every lazily-installed agent is decided, in one
 // table.
 //
-// Nine of the thirteen wrappers install their agent on first run, from a vendor
+// Eight of the twelve wrappers install their agent on first run, from a vendor
 // host, into the persisted agent HOME. Until this table existed each of those
 // installs resolved *whatever the vendor served that day*: `npm install -g <pkg>`
 // with no version, a `curl | bash` whose script is regenerated per release, a
@@ -108,7 +108,6 @@ var installPins = map[string]InstallPin{
 	// opencode ships OPENCODE_DISABLE_AUTOUPDATE (see its EnvAllow), which is only
 	// a knob worth having if the thing updates itself.
 	"opencode": {Version: "1.18.11", SelfUpdates: selfUpdateYes}, // opencode-ai
-	"droid":    {Version: "0.186.0"},                             // droid
 	"cline":    {Version: "3.0.49"},                              // cline
 	"kilocode": {Version: "7.4.23"},                              // @kilocode/cli
 	"copilot":  {Version: "1.0.77"},                              // @github/copilot

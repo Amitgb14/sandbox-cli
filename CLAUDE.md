@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 `sandbox-cli` runs AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose, Crush, Aider,
-Copilot CLI, Cursor, Qwen, OpenHands, Droid, Devin, Kilo Code) or any command inside a disposable,
+Copilot CLI, Cursor, Qwen, OpenHands, Devin, Kilo Code) or any command inside a disposable,
 isolated Docker container. Only the chosen project is bind-mounted at `/workspace`; `HOME` is a
 fake ephemeral path (`/sandbox/home`) and the container is `--rm` (the single exception is
 `--detach`, below). The goal is to give an agent "Allow All" autonomy while limiting the blast
@@ -313,7 +313,7 @@ rather than merely passing.
   run is what the user asked for, the record is a courtesy.
 - **`internal/agents`** — the agents the fleet knows how to start, as data: guest argv,
   `EnvAllow`, container `Env`, persisted-HOME name, and `Autonomous(prompt)`. Only agents with
-  a **verified headless mode** are in it (claude, cline, codex, gemini, opencode, droid), because a
+  a **verified headless mode** are in it (claude, cline, codex, gemini, opencode), because a
   fleet is unattended and an agent that stops to ask permission does not fail — it hangs.
   `TestEveryAgentHasAVerifiedHeadlessArgv` is where that stops being a convention: a new
   descriptor with no recorded non-interactive argv fails the test rather than quietly widening
@@ -322,9 +322,13 @@ rather than merely passing.
   second copy of Claude's bootstrap script and the two had already diverged, one *prepending*
   the agent-writable HOME to `PATH` where the other appended. Two copies of a
   security-relevant script drift silently — which is also why `Bootstrap`/`NpmBootstrap` live
-  here rather than in `cli`, and why `Env` does: droid's `FACTORY_DISABLE_KEYRING` sat in the
-  wrapper, so a fleet running droid would have got an agent looking for a keyring the
-  container does not have, with nobody there to log in again. Deliberately **not** in a
+  here rather than in `cli`, and why `Env` does: a keyring opt-out that sat in the
+  wrapper meant a fleet running that agent got one looking for a keyring the
+  container does not have, with nobody there to log in again. No descriptor sets
+  `Env` today — droid, the one that did, was removed — so the tests that pin the
+  field set it on a copy rather than reading it from the table, which is what
+  keeps four call sites' worth of wiring from losing its coverage to a roster
+  change. Deliberately **not** in a
   descriptor: anything producing host paths — the status-line mount, the history mount, the
   persisted HOME itself. A descriptor says what runs inside the container and which host
   variable *names* may cross.
@@ -855,7 +859,7 @@ dies inside the container.
 deliberately the one that does not.** A *headless* run gets it from
 `Descriptor.Autonomous`, which appends `SkipPermissionArgs` — for the agents that have such a
 flag, because an agent that stops to ask with nobody attached does not fail, it hangs, holding
-a `max_parallel` slot. For codex, opencode and droid that list is **empty**: their
+a `max_parallel` slot. For codex and opencode that list is **empty**: their
 non-interactive mode is a subcommand, and codex "applies its own approval policy on top" which
 sandbox-cli does not relax. So "headless means no approvals" is true of claude and gemini and
 an assumption about the other three — Studio's toggle is keyed on `CanSkipPermissions` for

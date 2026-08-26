@@ -99,12 +99,6 @@ export const FLEET_AGENTS: FleetAgent[] = [
     argv: "opencode run PROMPT",
     delivery: "baked",
   },
-  {
-    name: "droid",
-    argv: "droid exec PROMPT",
-    delivery: "first-run",
-    note: "Installed into the persisted agent home on first use (~148MB).",
-  },
 ];
 
 /** Everything else is refused when the file is parsed, before a container starts. */

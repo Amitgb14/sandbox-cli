@@ -13,12 +13,21 @@ version is tagged.
 
 ### Removed
 
-- **Five agent adapters: `aider`, `amp`, `crush`, `continue` and `codebuff`.**
-  The roster is thirteen. Nothing else changes: the remaining wrappers, the
-  descriptors and the boundary are untouched.
+- **Six agents: `aider`, `amp`, `crush`, `continue`, `codebuff` and `droid`.**
+  The roster is twelve. The boundary is untouched, and so is every remaining
+  wrapper.
 
-  Logins already on disk are **left alone** — `~/.config/sandbox/agents/aider`
-  and its siblings are yours, and removing an adapter is not a reason for this
+  **`droid` is the one that can break a file you already have.** The other five
+  were adapters — a `sandbox-cli <agent>` command and nothing more — but droid
+  also had a *descriptor*, which is what made it nameable outside the CLI. So
+  `agent: droid` in a `fleet.yaml` is now refused when the file is parsed,
+  before any container starts; a Studio launch cannot select it; and the
+  TypeScript and Python SDKs no longer list it. Five agents keep a verified
+  headless mode and remain eligible everywhere: `claude`, `codex`, `gemini`,
+  `opencode` and `cline`.
+
+  Logins already on disk are **left alone** — `~/.config/sandbox/agents/droid`
+  and its siblings are yours, and removing an agent is not a reason for this
   tool to delete a credential you put somewhere. Delete those directories
   yourself if you want the disk back.
 

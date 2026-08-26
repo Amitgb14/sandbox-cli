@@ -267,7 +267,7 @@ func TestRemainingAfter(t *testing.T) {
 		{"gemini", nil},
 		// Not in the chain at all: nothing follows an agent that is not there,
 		// which is the honest answer rather than the whole chain.
-		{"droid", nil},
+		{"opencode", nil},
 	} {
 		got := remainingAfter(chain, tc.agent)
 		if len(got) != len(tc.want) {

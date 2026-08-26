@@ -99,7 +99,7 @@ export function LaunchForm() {
   /**
    * `?handoffAgent=` + `?handoffSession=` arrive from a conversation row when
    * the agent picked is **not** the one that held it — or is, but cannot reopen
-   * a session by id (gemini and droid have no resume argv, so a briefing from
+   * a session by id (gemini has no resume argv, so a briefing from
    * itself is the only way to carry one of theirs on).
    *
    * Unlike a resume this does not set the console: a handoff starts a new
@@ -239,8 +239,8 @@ export function LaunchForm() {
 
   // An agent run with no console skips permissions whatever this form says —
   // *for the agents that have a flag to skip with*. `Descriptor.Autonomous`
-  // appends `SkipPermissionArgs`, and that is empty for codex, opencode and
-  // droid, whose non-interactive mode is a subcommand. Codex in particular
+  // appends `SkipPermissionArgs`, and that is empty for codex and opencode,
+  // whose non-interactive mode is a subcommand. Codex in particular
   // "applies its own approval policy on top" (its descriptor says so) and
   // sandbox-cli deliberately does not relax it, so claiming the run works
   // without asking would be the same false statement this control was fixed to

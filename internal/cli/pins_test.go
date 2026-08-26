@@ -24,7 +24,7 @@ import (
 // installs: get that wrong and the test happily checks a pin for a binary nobody
 // bootstraps while the real one goes unpinned. Closing that means reaching into
 // each wrapper's rendered argv, which is a bigger test than the risk justifies
-// while these thirteen entries are right; recorded so the guarantee is not read as
+// while these twelve entries are right; recorded so the guarantee is not read as
 // stronger than it is.
 var wrapperInstalls = map[string]string{
 	"claude":    "claude",
@@ -37,7 +37,6 @@ var wrapperInstalls = map[string]string{
 	"cursor":    "cursor-agent",
 	"qwen":      "qwen",
 	"openhands": "openhands",
-	"droid":     "droid",
 	"devin":     "devin",
 	"kilocode":  "kilocode",
 }
@@ -45,7 +44,7 @@ var wrapperInstalls = map[string]string{
 // TestEveryLazyInstalledAgentIsPinnedOrSaysWhy is where the pin table stops being
 // a convention.
 //
-// Nine of the thirteen wrappers download their agent from a vendor host on first
+// Eight of the twelve wrappers download their agent from a vendor host on first
 // run, into a HOME that persists across every project. A new adapter added by
 // copying an existing file is exactly how one of those goes back to resolving
 // whatever the registry serves that day — so a wrapper with no recorded pin fails

@@ -55,7 +55,7 @@ export type Profile = "dev" | "prod";
 
 export type Engine = "docker" | "podman";
 
-/** The thirteen adapters in `cli.agentCmds()`. */
+/** The twelve adapters in `cli.agentCmds()`. */
 export type AgentName =
   | "claude"
   | "codex"
@@ -67,7 +67,6 @@ export type AgentName =
   | "cursor"
   | "qwen"
   | "openhands"
-  | "droid"
   | "devin"
   | "kilocode";
 
@@ -343,7 +342,7 @@ export interface Agent {
   canSkipPermissions?: boolean;
   /**
    * Whether a conversation of this agent's can be reopened by id. False for
-   * gemini and droid, whose CLIs have no resume argv — the conversations panel
+   * gemini, whose CLI has no resume argv — the conversations panel
    * reads this before offering to carry one on, rather than offering a control
    * the launch would refuse.
    */

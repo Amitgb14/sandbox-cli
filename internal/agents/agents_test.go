@@ -136,7 +136,6 @@ func TestEveryAgentHasAVerifiedHeadlessArgv(t *testing.T) {
 		"codex":    {"exec"},
 		"gemini":   {"-p", "--yolo"},
 		"opencode": {"run"},
-		"droid":    {"exec"},
 	}
 	for _, name := range Names() {
 		want, ok := headless[name]
