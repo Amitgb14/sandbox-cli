@@ -179,6 +179,31 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli cursor -- --sandbox disabled",
   },
   {
+    id: "kilocode",
+    name: "Kilo Code",
+    vendor: "Kilo",
+    delivery: "first-run",
+    size: "372 MB",
+    login: "`kilocode auth`, or forward a provider key.",
+    env: ["KILOCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+          "GROQ_API_KEY", "OPENROUTER_API_KEY"],
+    gotcha:
+      "Its CLI is an opencode fork — the same command surface, and the same provider keys. `kilocode run <message>` is its non-interactive mode, unverified here, so it is not fleet-eligible yet.",
+    example: "sandbox-cli kilocode run 'explain this repository'",
+  },
+  {
+    id: "codebuff",
+    name: "Codebuff",
+    vendor: "Codebuff",
+    delivery: "first-run",
+    size: "133 MB",
+    login: "`codebuff login` inside a session.",
+    env: [],
+    gotcha:
+      "It installs in two stages: the npm package is a launcher that downloads a ~46 MB binary on first start. It documents no environment variable for credentials, so nothing is forwarded — the login persists in the sandbox-owned home instead.",
+    example: "sandbox-cli codebuff 'explain this repository'",
+  },
+  {
     id: "devin",
     name: "Devin CLI",
     vendor: "Cognition",

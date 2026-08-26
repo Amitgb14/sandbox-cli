@@ -3,7 +3,7 @@ package agents
 // Where the first-run version of every lazily-installed agent is decided, in one
 // table.
 //
-// Twelve of the sixteen wrappers install their agent on first run, from a vendor
+// Fourteen of the eighteen wrappers install their agent on first run, from a vendor
 // host, into the persisted agent HOME. Until this table existed each of those
 // installs resolved *whatever the vendor served that day*: `npm install -g <pkg>`
 // with no version, a `curl | bash` whose script is regenerated per release, a
@@ -110,6 +110,8 @@ var installPins = map[string]InstallPin{
 	"opencode": {Version: "1.18.11", SelfUpdates: selfUpdateYes}, // opencode-ai
 	"droid":    {Version: "0.186.0"},                             // droid
 	"cline":    {Version: "3.0.49"},                              // cline
+	"codebuff": {Version: "1.0.685"},                             // codebuff (a launcher; it downloads a ~46MB binary on first start)
+	"kilocode": {Version: "7.4.23"},                              // @kilocode/cli
 	"crush":    {Version: "0.88.0"},                              // @charmland/crush
 	"copilot":  {Version: "1.0.77"},                              // @github/copilot
 	"cn":       {Version: "1.5.47"},                              // @continuedev/cli

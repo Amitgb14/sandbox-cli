@@ -63,8 +63,10 @@ network; later runs start immediately.
 | `claude`, `codex`, `gemini`, `opencode` | baked into the base image | — |
 | `copilot` | on first use | 350 MB |
 | `goose` | on first use | 273 MB |
+| `kilocode` | on first use | 372 MB |
 | `cursor` | on first use | 219 MB |
 | `devin` | on first use | 158 MB |
+| `codebuff` | on first use | 133 MB |
 | `droid` | on first use | 148 MB |
 | `cline` | on first use | 130 MB |
 | `amp` | on first use | 107 MB |
@@ -444,6 +446,44 @@ sandbox-cli devin -- -p 'fix the failing test' --permission-mode bypass
 
 ---
 
+## codebuff — Codebuff
+
+- **Prerequisites:** a Codebuff account. `codebuff login` inside a session.
+- **Setup:** it installs in two stages, both into the persisted home: the npm
+  package is a launcher, and its first start downloads a ~46 MB binary.
+- **Forwarded if set:** nothing. Codebuff documents no environment variable for
+  credentials — not in `--help`, not in its npm README — so this adapter forwards
+  none rather than implying a route that may not exist.
+- **Not fleet-eligible.** A prompt is a bare positional and no flag for a
+  non-interactive run is documented, so there is nothing to verify yet.
+
+```sh
+sandbox-cli codebuff
+sandbox-cli codebuff 'explain this repository'
+```
+
+---
+
+## kilocode — Kilo Code CLI
+
+- **Prerequisites:** a provider, configured with `kilocode auth`, or one of the
+  forwarded keys.
+- **Setup:** installed from npm on first use. Kilo Code's CLI is an **opencode
+  fork** — its own logs say so — which is why the forwarded list is opencode's.
+- **Forwarded if set:** `KILOCODE_API_KEY`, `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`. The
+  first is their own gateway's name and is the one entry not verified here.
+- **Not fleet-eligible yet.** `kilocode run <message>` is its non-interactive
+  mode, the same shape as opencode's, but nobody here has an account to run one
+  with — and a descriptor is earned by running the agent.
+
+```sh
+sandbox-cli kilocode
+sandbox-cli kilocode run 'explain this repository'
+```
+
+---
+
 ## Seeing an agent's past conversations
 
 Every wrapper persists the agent's `HOME`, so the sessions it records outlive the
@@ -530,7 +570,7 @@ for approval in a fleet does not fail; it hangs until you notice, holding a slot
 | `droid` | `droid exec PROMPT` | installed on first use (~148MB) |
 
 Anything else is rejected when the file is parsed, before a single container
-starts. The other ten adapters are perfectly usable interactively — they are
+starts. The other twelve adapters are perfectly usable interactively — they are
 simply not ones we have confirmed will never stop and wait.
 
 Two things to do before an unattended run, and they are per agent rather than per

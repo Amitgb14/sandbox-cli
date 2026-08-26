@@ -34,6 +34,8 @@ func agentCmds() []*cobra.Command {
 		newOpenhandsCmd(),
 		newDroidCmd(),
 		newDevinCmd(),
+		newCodebuffCmd(),
+		newKilocodeCmd(),
 	}
 }
 

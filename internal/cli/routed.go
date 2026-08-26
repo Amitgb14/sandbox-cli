@@ -102,7 +102,7 @@ func routedRun(rf *runFlags, primary string, guestArgs, unrouted []string, user 
 		return err
 	}
 
-	// Ten of the sixteen wrappers have no descriptor: they are adapters whose
+	// Twelve of the eighteen wrappers have no descriptor: they are adapters whose
 	// non-interactive mode was never verified, so internal/agents does not admit
 	// them. A fallback has to be re-targeted — its command, its persisted HOME,
 	// its env allowlist — and only a descriptor says how, so routing simply is

@@ -55,7 +55,7 @@ export type Profile = "dev" | "prod";
 
 export type Engine = "docker" | "podman";
 
-/** The sixteen adapters in `cli.agentCmds()`. */
+/** The eighteen adapters in `cli.agentCmds()`. */
 export type AgentName =
   | "claude"
   | "codex"
@@ -72,7 +72,9 @@ export type AgentName =
   | "continue"
   | "openhands"
   | "droid"
-  | "devin";
+  | "devin"
+  | "codebuff"
+  | "kilocode";
 
 /** `config.MountSpec`. */
 export interface MountSpec {

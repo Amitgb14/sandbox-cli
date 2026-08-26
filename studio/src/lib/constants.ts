@@ -172,7 +172,7 @@ interface AgentSeed {
 }
 
 /**
- * The sixteen adapters in `cli.agentCmds()`, in that order — newest-supported
+ * The eighteen adapters in `cli.agentCmds()`, in that order — newest-supported
  * last. `headlessVerified` is the gate that matters: only the agents it marks
  * may be named in a `fleet.yaml`, because a fleet is unattended. It is a
  * *fixture*: the daemon answers for real, and this is what offline mode shows —
@@ -329,6 +329,24 @@ export const AGENT_SEEDS: AgentSeed[] = [
     envAllow: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
     env: [],
     note: "Installed lazily from Cognition's installer. Paid product; headless mode documented but not yet verified here.",
+  },
+  {
+    name: "codebuff",
+    label: "Codebuff",
+    delivery: "npm",
+    headlessVerified: false,
+    envAllow: [],
+    env: [],
+    note: "Launcher on npm; downloads its binary on first start. No documented credential variable.",
+  },
+  {
+    name: "kilocode",
+    label: "Kilo Code",
+    delivery: "npm",
+    headlessVerified: false,
+    envAllow: ["KILOCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+    env: [],
+    note: "An opencode fork; `kilocode run <message>` is its non-interactive mode, unverified here.",
   },
 ];
 
