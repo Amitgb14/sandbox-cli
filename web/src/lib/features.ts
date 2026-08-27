@@ -102,7 +102,7 @@ export const FEATURES: Feature[] = [
   {
     title: "Agents install a version somebody chose",
     group: "boundary",
-    body: "Twelve of the sixteen wrappers download their agent from a vendor host the first time you run it. Each one installs a version recorded in the tool, announced as it installs, rather than whatever the vendor published that morning — so a hijacked or typosquatted release does not reach a sandbox until someone bumps that line. It does not defend against a compromised registry serving different bytes for a version it already published; that needs integrity hashes a global install has no lockfile for. Self-updating agents are unaffected after the first run.",
+    body: "Eight of the twelve wrappers download their agent from a vendor host the first time you run it. Each one installs a version recorded in the tool, announced as it installs, rather than whatever the vendor published that morning — so a hijacked or typosquatted release does not reach a sandbox until someone bumps that line. It does not defend against a compromised registry serving different bytes for a version it already published; that needs integrity hashes a global install has no lockfile for. Self-updating agents are unaffected after the first run.",
     code: "sandbox-cli: installing qwen 0.21.3 into the sandbox agent home (first run only)...",
     state: "default",
   },

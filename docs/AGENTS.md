@@ -61,26 +61,20 @@ network; later runs start immediately.
 | Agent | Availability | Installed size (approx.) |
 |---|---|---|
 | `claude`, `codex`, `gemini`, `opencode` | baked into the base image | — |
+| `kilocode` | on first use | 372 MB |
 | `copilot` | on first use | 350 MB |
 | `goose` | on first use | 273 MB |
 | `cursor` | on first use | 219 MB |
 | `devin` | on first use | 158 MB |
-| `droid` | on first use | 148 MB |
 | `cline` | on first use | 130 MB |
-| `amp` | on first use | 107 MB |
 | `qwen` | on first use | 88 MB |
 | `openhands` | on first use | 82 MB |
-| `crush` | on first use | 81 MB |
-| `continue` | on first use | 65 MB |
-| `aider` | on first use | ~300 MB (uv + Aider's Python deps; not measured) |
 
 These are the **on-disk installed** sizes for the arm64 build, measured in July
 2026 — not the compressed download, which is roughly half. x64 is within a few
-percent. Every figure except `aider` was verified by installing the artifact and
-measuring it: the npm agents from the platform payload the stub package pulls,
-and `goose`/`cursor`/`openhands`/`crush` by downloading and extracting the
-release. `aider` installs a chain of Python wheels through uv whose total is hard
-to pin without running it, so its number is an estimate and flagged as such.
+percent. Every figure was verified by installing the artifact and measuring it:
+the npm agents from the platform payload the stub package pulls, and
+`goose`/`cursor`/`openhands` by downloading and extracting the release.
 
 Two notes on the larger ones. `goose` ships a glibc ("standard", 273 MB) and a
 smaller musl (136 MB) build; on the glibc base image the installer picks the
@@ -255,37 +249,6 @@ sandbox-cli goose
 sandbox-cli goose run -t 'run the tests'
 ```
 
-## crush — Crush
-
-- **Prerequisites:** a Charm account, or any supported provider key.
-- **Setup:** `crush login` shows a short code — open the page on your **host** and
-  paste it. No browser or localhost callback needed in the container.
-- **Forwarded if set:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-  `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `HYPER_API_KEY`, plus AWS/Azure keys.
-  Crush supports ~25 providers; add any other with `--env-allow`.
-
-```sh
-sandbox-cli crush
-sandbox-cli crush --env-allow CEREBRAS_API_KEY
-```
-
-## aider — Aider
-
-- **Prerequisites:** a provider API key, **and the workspace must be a git repo**.
-- **Setup:** none — Aider has no login at all. Export a key on your host.
-- **Forwarded if set:** `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
-  `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_BASE`,
-  `ANTHROPIC_API_BASE`.
-- **It writes into your project.** On first run Aider creates
-  `.aider.chat.history.md` and a tags cache, and **appends `.aider*` to your
-  repo's `.gitignore`**. Pass `--no-gitignore` if you'd rather it didn't.
-- Because there is no login, `--no-persist-auth` costs you almost nothing here
-  (only the cached install and chat history).
-
-```sh
-OPENAI_API_KEY=... sandbox-cli aider
-sandbox-cli aider --no-gitignore
-```
 
 ## copilot — GitHub Copilot CLI
 
@@ -341,39 +304,7 @@ sandbox-cli cursor --project ~/app -- --sandbox disabled
 DASHSCOPE_API_KEY=... sandbox-cli qwen
 ```
 
-## amp — Amp
 
-- **Prerequisites:** an Amp account, or `AMP_API_KEY` from ampcode.com.
-- **Setup:** `amp login` prints a URL to open on your **host** and takes the code
-  back in the terminal. `AMP_API_KEY` skips it.
-- **Forwarded if set:** `AMP_API_KEY`, `AMP_URL`, `AMP_LOG_LEVEL`,
-  `AMP_SKIP_UPDATE_CHECK`.
-- **Leave the native-keyring setting off.** Turning it on migrates Amp's token
-  file into a keyring and deletes the file — in a container that trades a working
-  login for none. The default (file store) is correct here.
-
-```sh
-sandbox-cli amp
-sandbox-cli amp -x 'run the tests'
-```
-
-## continue — Continue CLI
-
-- **Prerequisites:** `ANTHROPIC_API_KEY`.
-- **Setup:** none. **There is no login** — hub authentication was removed
-  upstream, so `cn login` and `CONTINUE_API_KEY` in the published docs are both
-  stale and do nothing. The key is written into the config in the agent home on
-  first use.
-- **Forwarded if set:** `ANTHROPIC_API_KEY`, `CONTINUE_API_BASE`, AWS keys,
-  `GOOGLE_CLOUD_PROJECT`.
-- **With `--allow`, permit `api.continue.dev`** — with no config yet, Continue
-  fetches a default one from there and otherwise has nothing to configure itself
-  from.
-
-```sh
-ANTHROPIC_API_KEY=... sandbox-cli continue
-sandbox-cli continue --allow api.continue.dev
-```
 
 ## openhands — OpenHands CLI
 
@@ -395,24 +326,6 @@ sandbox-cli continue --allow api.continue.dev
 sandbox-cli openhands
 LLM_API_KEY=... LLM_MODEL=... sandbox-cli openhands -- --override-with-envs
 ```
-
-## droid — Droid (Factory)
-
-- **Prerequisites:** a Factory account, or `FACTORY_API_KEY`.
-- **Setup:** login is a device-code flow — code and URL printed, opened on your
-  **host**. `FACTORY_API_KEY` skips it, which is the usual choice for
-  `droid exec`.
-- **Forwarded if set:** `FACTORY_API_KEY`, `FACTORY_API_BASE_URL`,
-  `FACTORY_APP_BASE_URL`, `FACTORY_AIRGAP_ENABLED`, `FACTORY_ENV`.
-- **The sandbox sets `FACTORY_DISABLE_KEYRING=1`** so credentials stay in a file
-  in the persisted home, even if the upstream default changes.
-
-```sh
-sandbox-cli droid
-sandbox-cli droid exec 'run the tests'
-```
-
----
 
 ## devin — Devin CLI (Cognition)
 
@@ -440,6 +353,27 @@ sandbox-cli droid exec 'run the tests'
 sandbox-cli devin
 sandbox-cli devin -p 'explain this repository'
 sandbox-cli devin -- -p 'fix the failing test' --permission-mode bypass
+```
+
+---
+
+
+## kilocode — Kilo Code CLI
+
+- **Prerequisites:** a provider, configured with `kilocode auth`, or one of the
+  forwarded keys.
+- **Setup:** installed from npm on first use. Kilo Code's CLI is an **opencode
+  fork** — its own logs say so — which is why the forwarded list is opencode's.
+- **Forwarded if set:** `KILOCODE_API_KEY`, `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`. The
+  first is their own gateway's name and is the one entry not verified here.
+- **Not fleet-eligible yet.** `kilocode run <message>` is its non-interactive
+  mode, the same shape as opencode's, but nobody here has an account to run one
+  with — and a descriptor is earned by running the agent.
+
+```sh
+sandbox-cli kilocode
+sandbox-cli kilocode run 'explain this repository'
 ```
 
 ---
@@ -504,7 +438,7 @@ things decide whether an adapter can be used that way:
    one foreground run per agent is enough:
 
    ```sh
-   sandbox-cli aider            # logs in, and installs on the first run
+   sandbox-cli copilot          # logs in, and installs on the first run
    sandbox-cli claude --worktree feature-a --detach -- -p "implement A"
    ```
 
@@ -527,10 +461,9 @@ for approval in a fleet does not fail; it hangs until you notice, holding a slot
 | `codex` | `codex exec PROMPT` | baked into the image; Codex applies its own approval policy on top — relax it through the task's `args:` |
 | `gemini` | `gemini --yolo -p PROMPT` | baked into the image; `-p` alone still stops for tool approval, which is why `--yolo` is not optional here |
 | `opencode` | `opencode run PROMPT` | baked into the image |
-| `droid` | `droid exec PROMPT` | installed on first use (~148MB) |
 
 Anything else is rejected when the file is parsed, before a single container
-starts. The other ten adapters are perfectly usable interactively — they are
+starts. The other seven adapters are perfectly usable interactively — they are
 simply not ones we have confirmed will never stop and wait.
 
 Two things to do before an unattended run, and they are per agent rather than per
@@ -562,16 +495,14 @@ files.pythonhosted.org  github.com  codeload.github.com
 objects.githubusercontent.com  raw.githubusercontent.com
 ```
 
-So npm-installed agents (`cline`, `crush`, `copilot`, `qwen`, `amp`, `continue`,
-`droid`) and the GitHub-released ones (`goose`, `openhands`) can install with the
-baseline alone. These need more:
+So npm-installed agents (`cline`, `copilot`, `qwen`, `kilocode`) and the
+GitHub-released ones (`goose`, `openhands`) can install with the baseline alone.
+These need more:
 
 | Agent | Add to `--allow` | Why |
 |---|---|---|
 | `cursor` | `cursor.com`, `downloads.cursor.com` | vendor installer + payload |
 | `devin` | `cli.devin.ai`, `static.devin.ai` | vendor installer + payload; the script host alone is not enough — measured |
-| `aider` | `astral.sh` | fetches uv before installing Aider |
-| `continue` | `api.continue.dev` | fetches its default config |
 | `claude` | `claude.ai`, `downloads.claude.ai` | installer script + release payload, for the self-updating install — see below |
 
 `claude` is the one row that is about **staying current** rather than installing.
@@ -646,11 +577,10 @@ themselves: browser launch is suppressed when Linux has no `DISPLAY`,
 `WAYLAND_DISPLAY` or `MIR_SOCKET`, and the sandbox sets none, so they take their
 paste-the-code path on their own (`qwen` is additionally forced with
 `NO_BROWSER=1`, and `cursor` with `NO_OPEN_BROWSER=1`). `claude` offers a pasted
-code and a device code. `copilot`, `droid`, `openhands`, `crush` and `amp` are
-device-code or poll-for-result flows to begin with. `cline` has loopback
-callbacks but refuses them with an auth message rather than opening a browser —
-use `cline auth --provider … --apikey …`, as its section says. `aider` and
-`continue` have no login at all.
+code and a device code. `copilot` and `openhands` are device-code or
+poll-for-result flows to begin with. `cline` has loopback callbacks but refuses
+them with an auth message rather than opening a browser — use
+`cline auth --provider … --apikey …`, as its section says.
 
 ## Troubleshooting
 
@@ -660,8 +590,8 @@ or you're using `--allow` without the domains above.
 
 **The agent asks me to log in every time.**
 You're either passing `--no-persist-auth`, or forwarding a path-valued variable
-that moved the agent's state directory (see the list at the top). For Goose and
-Droid, check you haven't overridden the keyring switch the sandbox sets.
+that moved the agent's state directory (see the list at the top). For Goose,
+check you haven't overridden the keyring switch the sandbox sets.
 
 On **native Linux** this also had a cause of its own, fixed in the version that
 carries this note: bind mounts there carry real uids, the container user is uid

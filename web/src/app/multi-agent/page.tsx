@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 
 const TITLE = "Running agents in parallel — sandbox-cli";
 const DESCRIPTION =
-  "One agent per branch, each in its own git worktree and its own container. Mix Claude, Codex, Gemini, OpenCode and Droid across tasks in one fleet file, check the work with verify, and land what passed.";
+  "One agent per branch, each in its own git worktree and its own container. Mix Claude, Codex, Gemini, OpenCode and Cline across tasks in one fleet file, check the work with verify, and land what passed.";
 
 export const metadata: Metadata = {
   title: TITLE,

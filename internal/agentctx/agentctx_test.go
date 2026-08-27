@@ -305,10 +305,10 @@ func TestProjectBucketEmitsOnlySafeCharacters(t *testing.T) {
 }
 
 func TestLookupUnknownAgent(t *testing.T) {
-	if _, ok := Lookup("aider"); ok {
-		t.Error("aider has no verified store descriptor; Lookup must say so")
+	if _, ok := Lookup("cursor"); ok {
+		t.Error("cursor has no verified store descriptor; Lookup must say so")
 	}
-	if got := Untracked("aider", now).State; got != StateUntracked {
+	if got := Untracked("cursor", now).State; got != StateUntracked {
 		t.Errorf("state = %q, want %q", got, StateUntracked)
 	}
 }

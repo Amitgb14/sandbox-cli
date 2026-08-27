@@ -120,10 +120,9 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 	// What the *user* asked for, captured before the wrapper folds in its own —
 	// which is the only point where the two are still separable, and what makes a
 	// fallback re-targetable at all (see retarget). The claude wrapper appends the
-	// host's Claude history and its managed-settings file below, and the droid,
-	// cursor, goose and qwen wrappers append container variables of their own;
-	// those belong to the agent that asked for them, and a fallback brings its
-	// own.
+	// host's Claude history and its managed-settings file below, and the cursor,
+	// goose and qwen wrappers append container variables of their own; those
+	// belong to the agent that asked for them, and a fallback brings its own.
 	user := userInputs{
 		mounts: append([]string(nil), rf.mounts...),
 		env:    append([]string(nil), rf.env...),
@@ -150,7 +149,7 @@ func runWrapper(cmd *cobra.Command, rf *runFlags, args []string, agentCmd, envAl
 
 	// The agent this wrapper is, which is also the head of any routing chain.
 	// Empty for `run`, which has an argv rather than an adapter and nothing to
-	// route to — and empty in effect for the ten adapters that have no descriptor
+	// route to — and empty in effect for the seven adapters that have no descriptor
 	// in internal/agents, since a fallback has to be re-targetable and only a
 	// descriptor says how. Those take the path they always took.
 	if agent := cmd.Annotations[agentAnnotation]; agent != "" {

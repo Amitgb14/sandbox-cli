@@ -457,7 +457,7 @@ sandbox-cli claude --worktree feature-a --detach --dry-run -- -p "implement A"
 container: an agent started in its normal interactive mode will draw a UI nobody
 can see and wait for a keystroke that never comes, until you stop it. Use the
 agent's non-interactive form — `claude -p "…"`, `codex exec "…"`,
-`droid exec "…"` — or an ordinary command like `npm test`.
+`opencode run "…"` — or an ordinary command like `npm test`.
 
 **The container is kept after it exits**, unlike every other sandbox run. That is
 the point: its exit code and its output are the only record that the work
@@ -652,7 +652,7 @@ task needs credentials from the environment instead (`ANTHROPIC_API_KEY`).
 **Three constraints worth knowing before you write a fleet file:**
 
 - **Only agents with a verified headless mode may appear** — `claude`, `cline`,
-  `codex`, `gemini`, `opencode` and `droid` today. Anything else is rejected when the file
+  `codex`, `gemini` and `opencode` today. Anything else is rejected when the file
   is parsed, before a single container starts, because the alternative is an
   unattended agent waiting forever on a keystroke.
 - **One agent per branch**, enforced by docker's own refusal to reuse a container
@@ -1358,15 +1358,12 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli opencode [args]` | Run OpenCode |
 | `sandbox-cli cline [args]` | Run Cline (installed on first use) |
 | `sandbox-cli goose [args]` | Run Goose (installed on first use) |
-| `sandbox-cli crush [args]` | Run Crush (installed on first use) |
-| `sandbox-cli aider [args]` | Run Aider (installed on first use, via uv) |
 | `sandbox-cli copilot [args]` | Run GitHub Copilot CLI (installed on first use) |
 | `sandbox-cli cursor [args]` | Run Cursor CLI (installed on first use) |
 | `sandbox-cli qwen [args]` | Run Qwen Code (installed on first use) |
-| `sandbox-cli amp [args]` | Run Amp (installed on first use) |
-| `sandbox-cli continue [args]` | Run Continue CLI (installed on first use) |
 | `sandbox-cli openhands [args]` | Run OpenHands CLI (installed on first use) |
-| `sandbox-cli droid [args]` | Run Droid (installed on first use) |
+| `sandbox-cli devin [args]` | Run Devin CLI (installed on first use) |
+| `sandbox-cli kilocode [args]` | Run Kilo Code (installed on first use) |
 | `sandbox-cli init` | Scaffold a `.sandbox.yaml` |
 | `sandbox-cli config show\|path\|validate` | Inspect the effective config |
 | `sandbox-cli list` (alias `ps`) | Sandbox sessions running now; `--all` includes finished ones |
@@ -1426,7 +1423,7 @@ interactive mode. There is no terminal inside a detached container, so it drew a
 UI to nothing and is waiting for a keystroke. `docker logs NAME` shows escape
 codes and a prompt rather than work. Stop it (`docker stop NAME`), remove it
 (`docker rm NAME`) and relaunch with the agent's non-interactive form: `claude -p
-"…"`, `codex exec "…"`, `droid exec "…"`.
+"…"`, `codex exec "…"`, `opencode run "…"`.
 
 **"Conflict. The container name … is already in use"** on a detached run — that
 branch already has an agent, and the refusal is the feature: two agents in one

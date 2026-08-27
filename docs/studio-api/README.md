@@ -369,7 +369,7 @@ history, and every row reports its `store` (`sandbox` | `host`), whether it is
 
 `resumable` needs **both** facts and used to carry only the first: the
 sandbox-owned store, *and* an agent whose CLI can reopen a session by id.
-Gemini and droid declare no resume argv, so a run asking to reopen one of their
+Gemini declares no resume argv, so a run asking to reopen one of its
 sessions is refused with "no verified resume flag" — reporting those rows
 resumable offered an action that could only 400, after somebody had chosen it.
 `GET /v1/agents` reports the agent half as `canResume`. That
@@ -829,7 +829,7 @@ conversation*, who would otherwise get a prompt announcing "0 prompts of that
 conversation" over an empty `transcript.jsonl`.
 
 The source agent may be the **same** agent, and that is not degenerate: gemini
-and droid declare no resume argv, so a briefing from itself is the only way to
+declares no resume argv, so a briefing from itself is the only way to
 carry one of their conversations on. `GET /v1/agents` reports `canResume` so a
 client knows which case it is in, and a session's `resumable` now accounts for
 both facts — the sandbox-owned store *and* an agent that can reopen by id.
@@ -862,7 +862,7 @@ cannot explain.
 ### Agent selection
 
 `GET /agents` mirrors `internal/agents`, which only registers adapters with a
-*verified* headless mode (`claude`, `cline`, `codex`, `gemini`, `opencode`, `droid` at
+*verified* headless mode (`claude`, `cline`, `codex`, `gemini`, `opencode` at
 the time of writing). That is not an arbitrary subset — a detached container
 has no terminal, so an agent that stops to ask permission would simply hang
 with nobody able to answer it. `POST /runs` refuses any other agent name.

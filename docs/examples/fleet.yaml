@@ -26,7 +26,7 @@
 # The agent tasks run when they do not name one of their own. Only agents with a
 # verified headless mode may appear — a fleet is unattended, and an agent that
 # stopped to ask for permission would hang until you noticed. Today:
-# claude, cline, codex, gemini, opencode, droid.
+# claude, cline, codex, gemini, opencode.
 #
 # This key is optional if every task below names its own agent.
 agent: claude

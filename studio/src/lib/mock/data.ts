@@ -212,7 +212,7 @@ function buildRuns(): Run[] {
     { seed: BRANCH_SEEDS[0], kind: "interactive", agent: "claude", startedMs: 41 * MINUTE, verify: null, load: 0.62 },
     { seed: BRANCH_SEEDS[1], kind: "fleet", agent: "claude", startedMs: 18 * MINUTE, verify: VERIFY_CMDS[1], load: 0.88 },
     { seed: BRANCH_SEEDS[2], kind: "fleet", agent: "codex", startedMs: 12 * MINUTE, verify: VERIFY_CMDS[0], load: 0.44 },
-    { seed: BRANCH_SEEDS[4], kind: "fleet", agent: "droid", startedMs: 7 * MINUTE, verify: VERIFY_CMDS[0], load: 1.31 },
+    { seed: BRANCH_SEEDS[4], kind: "fleet", agent: "cline", startedMs: 7 * MINUTE, verify: VERIFY_CMDS[0], load: 1.31 },
     { seed: BRANCH_SEEDS[6], kind: "fleet", agent: "gemini", startedMs: 24 * MINUTE, verify: VERIFY_CMDS[2], load: 0.35 },
     { seed: BRANCH_SEEDS[10], kind: "interactive", agent: null, startedMs: 3 * MINUTE, verify: null, load: 0.19 },
   ];
@@ -249,7 +249,7 @@ function buildRuns(): Run[] {
       network: baselineNetwork("allowlist", l.seed.repo === 1 ? ["fonts.googleapis.com"] : []),
       security: security(l.kind === "fleet" ? "prod" : "dev", `${memLimit / 1024 ** 3}g`, l.kind === "fleet" ? "2" : "4"),
       mounts: mountsFor(workspace, l.agent, l.kind === "fleet" ? "prod" : "dev", true, repo.root),
-      envNames: l.agent === "claude" ? ["ANTHROPIC_API_KEY"] : l.agent === "droid" ? ["FACTORY_API_KEY"] : [],
+      envNames: l.agent === "claude" ? ["ANTHROPIC_API_KEY"] : l.agent === "cline" ? ["OPENROUTER_API_KEY"] : [],
       detached: l.kind === "fleet",
       tty: l.kind === "interactive",
       openStdin: l.kind === "interactive",
@@ -284,8 +284,8 @@ function buildRuns(): Run[] {
     // to render that case.
     const agentPool: Array<AgentName | null> =
       kind === "fleet"
-        ? ["claude", "cline", "codex", "gemini", "droid", "opencode"]
-        : ["claude", "claude", "codex", "aider", "cursor", null];
+        ? ["claude", "cline", "codex", "gemini", "opencode"]
+        : ["claude", "claude", "codex", "qwen", "cursor", null];
     const agent = rng.pick(agentPool);
     const profile: Profile = kind === "fleet" ? "prod" : "dev";
     const duration = rng.int(45, 5400) * 1000;
@@ -458,7 +458,7 @@ export const MOCK_WORKTREES: Worktree[] = (() => {
 
 export const MOCK_AGENTS: Agent[] = AGENT_SEEDS.map((seed, i) => {
   const rng = rngFor(0x5150 + i);
-  const persisted = ["claude", "cline", "codex", "gemini", "droid", "opencode"].includes(seed.name);
+  const persisted = ["claude", "cline", "codex", "gemini", "opencode"].includes(seed.name);
   const sessionCount = persisted ? rng.int(3, 148) : 0;
   return {
     name: seed.name,
@@ -509,8 +509,6 @@ function autonomousArgv(name: AgentName): string[] {
       return ["gemini", "--yolo", "-p", "<prompt>"];
     case "opencode":
       return ["opencode", "run", "<prompt>"];
-    case "droid":
-      return ["droid", "exec", "--auto", "high", "<prompt>"];
     default:
       return [name, "<prompt>"];
   }

@@ -3,7 +3,7 @@ package agents
 // Where the first-run version of every lazily-installed agent is decided, in one
 // table.
 //
-// Twelve of the sixteen wrappers install their agent on first run, from a vendor
+// Eight of the twelve wrappers install their agent on first run, from a vendor
 // host, into the persisted agent HOME. Until this table existed each of those
 // installs resolved *whatever the vendor served that day*: `npm install -g <pkg>`
 // with no version, a `curl | bash` whose script is regenerated per release, a
@@ -38,15 +38,20 @@ package agents
 // after download; that is the upgrade path if this is ever worth strengthening.
 // Pinning the top of the tree is the cheap part, and it is all this is.
 //
-// **Bumping.** Twelve hand-maintained versions with no process is its own failure
+// **Bumping.** Eight hand-maintained versions with no process is its own failure
 // mode — a pin nobody bumps becomes an old agent nobody can explain, which is the
 // staleness named below arriving by neglect rather than by design. The intent is
-// a sweep at each release, with amp as the canary since it goes stale fastest,
-// and that intent is currently the whole mechanism.
+// a sweep at each release, and that intent is currently the whole mechanism.
+//
+// It has no canary any more. Amp was it — a continuously-generated version rather
+// than semver, so it went stale first and made the sweep visible — and amp was
+// removed with five other agents. Nothing here is known to rot faster than the
+// rest, and nominating a replacement without measuring which one does would be a
+// worse guide than admitting the gap.
 //
 // The mechanism it wants is small and does not exist yet: a CI step diffing each
 // entry against `npm view <pkg> version` (and the three release URLs) and failing,
-// or opening an issue, when they drift. That turns twelve numbers somebody has to
+// or opening an issue, when they drift. That turns eight numbers somebody has to
 // remember into a thing that reports on itself, which is the difference between a
 // documented intent and a process.
 //
@@ -99,29 +104,22 @@ const (
 )
 
 // installPins is keyed by the *binary* name the bootstrap execs, which is not
-// always the wrapper's name: `cursor` installs `cursor-agent` and `continue`
-// installs `cn`. The binary is what Bootstrap is handed, so it is what the lookup
-// has to use.
+// always the wrapper's name: `cursor` installs `cursor-agent`. The binary is what
+// Bootstrap is handed, so it is what the lookup has to use.
 var installPins = map[string]InstallPin{
 	// npm-distributed. Versions are the published `latest` as of 2026-08-02.
 	"gemini": {Version: "0.53.1"}, // @google/gemini-cli
 	// opencode ships OPENCODE_DISABLE_AUTOUPDATE (see its EnvAllow), which is only
 	// a knob worth having if the thing updates itself.
 	"opencode": {Version: "1.18.11", SelfUpdates: selfUpdateYes}, // opencode-ai
-	"droid":    {Version: "0.186.0"},                             // droid
 	"cline":    {Version: "3.0.49"},                              // cline
-	"crush":    {Version: "0.88.0"},                              // @charmland/crush
+	"kilocode": {Version: "7.4.23"},                              // @kilocode/cli
 	"copilot":  {Version: "1.0.77"},                              // @github/copilot
-	"cn":       {Version: "1.5.47"},                              // @continuedev/cli
 	"qwen":     {Version: "0.21.3"},                              // @qwen-code/qwen-code
-	// Amp publishes a continuously-generated version rather than semver, so this
-	// line goes stale faster than the others by design rather than by neglect.
-	"amp": {Version: "0.0.1785646934-g35813b"}, // @ampcode/cli
 
 	// Installed by their own routes; the version reaches each installer
 	// differently, which is why the install strings live with their wrappers and
 	// only the number lives here.
-	"aider":     {Version: "0.86.2"}, // uv tool install aider-chat==<v>
 	"goose":     {Version: "1.45.0"}, // GOOSE_VERSION=v<v> on the vendor script
 	"openhands": {Version: "1.16.0"}, // release asset URL
 

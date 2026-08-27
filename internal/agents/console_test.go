@@ -59,7 +59,7 @@ func TestConsoleWithoutAPromptIsBareArgv(t *testing.T) {
 // Asking an agent that has no such flag changes nothing. The caller is meant to
 // have refused; quietly doing something else would be worse.
 func TestConsoleIgnoresSkipWhereThereIsNoFlag(t *testing.T) {
-	for _, name := range []string{"codex", "opencode", "droid"} {
+	for _, name := range []string{"codex", "opencode"} {
 		d, ok := Lookup(name)
 		if !ok {
 			continue

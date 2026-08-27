@@ -79,7 +79,6 @@ func TestRegistryAgentsThatInstallLazilyArePinned(t *testing.T) {
 		"codex":    "",
 		"gemini":   "gemini",
 		"opencode": "opencode",
-		"droid":    "droid",
 	}
 	for _, name := range Names() {
 		bin, ok := installs[name]

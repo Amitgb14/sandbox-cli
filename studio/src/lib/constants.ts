@@ -172,7 +172,7 @@ interface AgentSeed {
 }
 
 /**
- * The sixteen adapters in `cli.agentCmds()`, in that order — newest-supported
+ * The twelve adapters in `cli.agentCmds()`, in that order — newest-supported
  * last. `headlessVerified` is the gate that matters: only the agents it marks
  * may be named in a `fleet.yaml`, because a fleet is unattended. It is a
  * *fixture*: the daemon answers for real, and this is what offline mode shows —
@@ -241,24 +241,6 @@ export const AGENT_SEEDS: AgentSeed[] = [
     note: "Block's agent, installed by its own script on first run.",
   },
   {
-    name: "crush",
-    label: "Crush",
-    delivery: "npm",
-    headlessVerified: false,
-    envAllow: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
-    env: [],
-    note: "Charm's agent. Lazily installed.",
-  },
-  {
-    name: "aider",
-    label: "Aider",
-    delivery: "pip",
-    headlessVerified: false,
-    envAllow: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AIDER_MODEL"],
-    env: [],
-    note: "Python; needs pypi.org and files.pythonhosted.org, both in the baseline.",
-  },
-  {
     name: "copilot",
     label: "Copilot CLI",
     delivery: "npm",
@@ -286,24 +268,6 @@ export const AGENT_SEEDS: AgentSeed[] = [
     note: "A Gemini-CLI fork; same absence of a status-line hook.",
   },
   {
-    name: "amp",
-    label: "Amp",
-    delivery: "npm",
-    headlessVerified: false,
-    envAllow: ["AMP_API_KEY"],
-    env: [],
-    note: "Sourcegraph's agent. Lazily installed.",
-  },
-  {
-    name: "continue",
-    label: "Continue CLI",
-    delivery: "npm",
-    headlessVerified: false,
-    envAllow: ["CONTINUE_API_KEY", "ANTHROPIC_API_KEY"],
-    env: [],
-    note: "Lazily installed.",
-  },
-  {
     name: "openhands",
     label: "OpenHands",
     delivery: "pip",
@@ -313,15 +277,6 @@ export const AGENT_SEEDS: AgentSeed[] = [
     note: "Python; the heaviest adapter, which is why nothing is baked.",
   },
   {
-    name: "droid",
-    label: "Droid",
-    delivery: "npm",
-    headlessVerified: true,
-    envAllow: ["FACTORY_API_KEY"],
-    env: ["FACTORY_DISABLE_KEYRING=1"],
-    note: "The keyring opt-out lives in the descriptor, not the wrapper — a fleet gets no wrapper, and would otherwise look for a keyring the container does not have with nobody there to log in again.",
-  },
-  {
     name: "devin",
     label: "Devin CLI",
     delivery: "installer",
@@ -329,6 +284,15 @@ export const AGENT_SEEDS: AgentSeed[] = [
     envAllow: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
     env: [],
     note: "Installed lazily from Cognition's installer. Paid product; headless mode documented but not yet verified here.",
+  },
+  {
+    name: "kilocode",
+    label: "Kilo Code",
+    delivery: "npm",
+    headlessVerified: false,
+    envAllow: ["KILOCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+    env: [],
+    note: "An opencode fork; `kilocode run <message>` is its non-interactive mode, unverified here.",
   },
 ];
 

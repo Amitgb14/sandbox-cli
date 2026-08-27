@@ -242,7 +242,7 @@ func ProbeAll(r Roots, now time.Time) []Finding {
 
 // Untracked is the Finding for an adapter sandbox-cli has no store descriptor
 // for. It exists so that listing can name those agents instead of omitting them:
-// "sandbox-cli does not know where aider keeps sessions" is information, and
+// "sandbox-cli does not know where cursor keeps sessions" is information, and
 // silence is not.
 func Untracked(agent string, now time.Time) Finding {
 	return Finding{Agent: agent, State: StateUntracked, CheckedAt: now}

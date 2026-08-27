@@ -288,7 +288,7 @@ func toSessionSummary(agent string, sess agentctx.Session, store string) Session
 		// The store: the host's own history is readable here and is not this
 		// daemon's to resume, since that would mean mounting the host's history
 		// into a container that was not asked to have it. And the *agent*:
-		// gemini and droid have no resume argv at all, so a run asking to reopen
+		// gemini has no resume argv at all, so a run asking to reopen
 		// one of their sessions is refused in buildRunOptions with "no verified
 		// resume flag". Reporting those rows resumable offered an action that
 		// could only 400 — worse than not offering it, because the failure
