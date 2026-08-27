@@ -11,35 +11,7 @@ version is tagged.
 
 ## Unreleased
 
-### Removed
-
-- **Six agents: `aider`, `amp`, `crush`, `continue`, `codebuff` and `droid`.**
-  The roster is twelve. The boundary is untouched, and so is every remaining
-  wrapper.
-
-  **`droid` is the one that can break a file you already have.** The other five
-  were adapters — a `sandbox-cli <agent>` command and nothing more — but droid
-  also had a *descriptor*, which is what made it nameable outside the CLI. So
-  `agent: droid` in a `fleet.yaml` is now refused when the file is parsed,
-  before any container starts; a Studio launch cannot select it; and the
-  TypeScript and Python SDKs no longer list it. Five agents keep a verified
-  headless mode and remain eligible everywhere: `claude`, `codex`, `gemini`,
-  `opencode` and `cline`.
-
-  Logins already on disk are **left alone** — `~/.config/sandbox/agents/droid`
-  and its siblings are yours, and removing an agent is not a reason for this
-  tool to delete a credential you put somewhere. Delete those directories
-  yourself if you want the disk back.
-
 ### Added
-
-- **A Kilo Code adapter** — `sandbox-cli kilocode`, installed from npm into the
-  persisted agent home on first use. An adapter, not a descriptor: its
-  non-interactive mode (`kilocode run <message>`) has not been verified here, so
-  Studio, a `fleet.yaml` and the SDKs do not offer it. Its CLI is an opencode
-  fork — its own logs say so — so it forwards opencode's provider keys for that
-  reason rather than by assumption.
-
 
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
   sandbox-cli never supplies the key.** `gateway:` in your own config names the
@@ -75,6 +47,37 @@ version is tagged.
   carry a dashed ring, the providers list says *via <host>*, and the gateway's own
   probe result is what is shown, since the vendor behind it being down is the case
   a gateway survives.
+
+## 0.0.1beta.20 — 2026-08-26
+
+### Removed
+
+- **Six agents: `aider`, `amp`, `crush`, `continue`, `codebuff` and `droid`.**
+  The roster is twelve. The boundary is untouched, and so is every remaining
+  wrapper.
+
+  **`droid` is the one that can break a file you already have.** The other five
+  were adapters — a `sandbox-cli <agent>` command and nothing more — but droid
+  also had a *descriptor*, which is what made it nameable outside the CLI. So
+  `agent: droid` in a `fleet.yaml` is now refused when the file is parsed,
+  before any container starts; a Studio launch cannot select it; and the
+  TypeScript and Python SDKs no longer list it. Five agents keep a verified
+  headless mode and remain eligible everywhere: `claude`, `codex`, `gemini`,
+  `opencode` and `cline`.
+
+  Logins already on disk are **left alone** — `~/.config/sandbox/agents/droid`
+  and its siblings are yours, and removing an agent is not a reason for this
+  tool to delete a credential you put somewhere. Delete those directories
+  yourself if you want the disk back.
+
+### Added
+
+- **A Kilo Code adapter** — `sandbox-cli kilocode`, installed from npm into the
+  persisted agent home on first use. An adapter, not a descriptor: its
+  non-interactive mode (`kilocode run <message>`) has not been verified here, so
+  Studio, a `fleet.yaml` and the SDKs do not offer it. Its CLI is an opencode
+  fork — its own logs say so — so it forwards opencode's provider keys for that
+  reason rather than by assumption.
 
 ## 0.0.1beta.19 — 2026-08-25
 

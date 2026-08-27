@@ -23,7 +23,7 @@ const geistMono = Geist_Mono({
 
 const TITLE = "sandbox-cli — run coding agents at full autonomy, contained";
 const DESCRIPTION =
-  "Run Claude Code, Codex, Gemini and 12 more agents inside a disposable Docker container. Only your project is mounted, HOME is ephemeral, host credentials are unreachable.";
+  "Run Claude Code, Codex, Gemini and 9 more agents inside a disposable Docker container. Only your project is mounted, HOME is ephemeral, host credentials are unreachable.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://github.com/Amitgb14/sandbox-cli"),
