@@ -108,7 +108,7 @@ export const FIRST_RUN = [
 
 export const HERO_STATS = [
   { value: "1", label: "host path mounted", sub: "your project, at /workspace" },
-  { value: "15", label: "agents wrapped", sub: "one prefix, flags forwarded verbatim" },
+  { value: "12", label: "agents wrapped", sub: "one prefix, flags forwarded verbatim" },
   { value: "0", label: "host creds forwarded", sub: "default-deny env allowlist" },
   { value: "--rm", label: "every container", sub: "nothing survives the run", mono: true },
 ];
