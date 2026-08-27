@@ -4,7 +4,7 @@
  * page has exactly one place to update when the CLI changes.
  */
 
-export const VERSION = "0.0.1beta.20";
+export const VERSION = "0.0.1";
 
 export const REPO_URL = "https://github.com/Amitgb14/sandbox-cli";
 export const RELEASES_URL = `${REPO_URL}/releases`;
@@ -69,12 +69,17 @@ export const INSTALL_ROUTES: InstallRoute[] = [
     label: "Go",
     hint: "Go 1.25+",
     lines: ["go install github.com/Amitgb14/sandbox-cli/cmd/sandbox-cli@latest"],
-    // Deliberately @latest rather than @v<VERSION>: the release tags are not
-    // semver (0.0.1beta.8, no `v`, no `-` before the pre-release), so the module
-    // proxy cannot resolve one — `@v0.0.1beta.8` fails with "invalid version"
-    // and @latest lands on a pseudo-version of the default branch. Pinning a
-    // release is what the install script is for.
-    note: `Builds from source into $GOBIN, at whatever the default branch is. The release tags are not valid semver, so go install cannot pin one — use the install script with --version ${VERSION} when you need this exact release.`,
+    // Deliberately @latest rather than @v<VERSION>: the release tags carry no
+    // `v` prefix, and a Go module tag must (`v0.0.1`, not `0.0.1`), so the proxy
+    // cannot resolve one — `@v0.0.1` finds no such tag and @latest lands on a
+    // pseudo-version of the default branch. Pinning a release is what the
+    // install script is for.
+    //
+    // The reason narrowed at 0.0.1 and the sentence had to follow: the beta tags
+    // were not valid semver at all ("0.0.1beta.8", no `-` before the
+    // pre-release), so "not semver" covered it. A stable tag is a valid version
+    // that Go still will not take, for the one remaining reason.
+    note: `Builds from source into $GOBIN, at whatever the default branch is. The release tags carry no \`v\` prefix, so go install cannot pin one — use the install script with --version ${VERSION} when you need this exact release.`,
   },
   {
     id: "source",

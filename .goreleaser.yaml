@@ -102,10 +102,12 @@ changelog:
       - Merge pull request
 
 release:
-  # Explicitly true rather than `auto`: auto-detection parses the tag as semver,
-  # and ours ("0.0.1beta.1") is not valid semver, so it cannot infer the
-  # pre-release marker. Set this to false for a stable release.
-  prerelease: true
+  # False from 0.0.1 on: this is a stable release, and GitHub should not mark it
+  # "Pre-release". Explicit rather than `auto` because auto-detection parses the
+  # tag as semver and the beta tags ("0.0.1beta.1") were not valid semver, so it
+  # could not infer the marker either way. Set it back to true for a tag that is
+  # genuinely a pre-release.
+  prerelease: false
   draft: false
   # Re-running a release (after fixing a failure, or re-triggering the workflow)
   # would otherwise abort with "422 already_exists" on the first asset that a

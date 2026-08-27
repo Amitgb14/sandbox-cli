@@ -48,6 +48,39 @@ version is tagged.
   probe result is what is shown, since the vendor behind it being down is the case
   a gateway survives.
 
+## 0.0.1 — 2026-08-26
+
+**This leaves beta.** Twenty pre-releases and no more: the isolation boundary,
+the profiles, the agent roster and the Studio contract have all been stable for
+several releases, and continuing to ship "beta.N" says less about the software
+than about the habit. Nothing in the boundary changes here — this version is
+`0.0.1beta.20` plus the two fixes below.
+
+Version numbers stay conservative on purpose. `0.0.1` is the first stable tag,
+not a claim of feature-completeness: `docs/security/open-items.md` is still the
+live backlog, and the agent still holds raw credentials inside the container.
+What "stable" means here is that the contracts above do not move without a
+changelog entry saying so.
+
+### Fixed
+
+- **The landing page said "15 agents wrapped".** It had said that since the page
+  was rebuilt, through every roster change since — including the two last week.
+  Twelve. The page description, which is the sentence search results show, said
+  "Claude Code, Codex, Gemini and 12 more agents", which is fifteen. Both are now
+  a checked function of the wrapper list rather than a number somebody remembers
+  to update.
+
+- **Studio's offline agent screen understated what crosses the boundary.**
+  Eleven of the twelve entries in the fixture carried a truncated
+  forwarded-variable list — qwen showed two of ten — on the one screen whose
+  subject is exactly that. Worse in the other direction, claude's listed
+  `ANTHROPIC_MODEL`, which no wrapper and no descriptor has ever forwarded: set
+  it on the host and the container never sees it. The fixture now matches the
+  code, in the order the daemon answers, and a test keeps it there. Live mode was
+  always correct — this only affected the screen shown when the daemon is
+  unreachable.
+
 ## 0.0.1beta.20 — 2026-08-26
 
 ### Removed
