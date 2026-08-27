@@ -61,9 +61,9 @@ network; later runs start immediately.
 | Agent | Availability | Installed size (approx.) |
 |---|---|---|
 | `claude`, `codex`, `gemini`, `opencode` | baked into the base image | — |
+| `kilocode` | on first use | 372 MB |
 | `copilot` | on first use | 350 MB |
 | `goose` | on first use | 273 MB |
-| `kilocode` | on first use | 372 MB |
 | `cursor` | on first use | 219 MB |
 | `devin` | on first use | 158 MB |
 | `cline` | on first use | 130 MB |

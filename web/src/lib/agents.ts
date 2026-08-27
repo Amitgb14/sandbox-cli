@@ -1,5 +1,5 @@
 /**
- * The fifteen agent wrappers, mirroring `agentCmds()` in internal/cli and the
+ * The twelve agent wrappers, mirroring `agentCmds()` in internal/cli and the
  * per-agent sections of docs/AGENTS.md. Sizes are the on-disk installed sizes
  * measured for arm64 in July 2026 (see docs/AGENTS.md for the caveats).
  *
@@ -125,6 +125,19 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli opencode run 'run the tests'",
   },
   {
+    id: "kilocode",
+    name: "Kilo Code",
+    vendor: "Kilo",
+    delivery: "first-run",
+    size: "372 MB",
+    login: "`kilocode auth`, or forward a provider key.",
+    env: ["KILOCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+          "GROQ_API_KEY", "OPENROUTER_API_KEY"],
+    gotcha:
+      "Its CLI is an opencode fork — the same command surface, and the same provider keys. `kilocode run <message>` is its non-interactive mode, unverified here, so it is not fleet-eligible yet.",
+    example: "sandbox-cli kilocode run 'explain this repository'",
+  },
+  {
     id: "copilot",
     name: "Copilot CLI",
     vendor: "GitHub",
@@ -177,19 +190,6 @@ export const AGENTS: Agent[] = [
     gotcha:
       "The sandbox sets NO_OPEN_BROWSER=1. If it complains about its own sandboxing, pass --sandbox disabled — this container already provides what that feature exists for.",
     example: "sandbox-cli cursor -- --sandbox disabled",
-  },
-  {
-    id: "kilocode",
-    name: "Kilo Code",
-    vendor: "Kilo",
-    delivery: "first-run",
-    size: "372 MB",
-    login: "`kilocode auth`, or forward a provider key.",
-    env: ["KILOCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
-          "GROQ_API_KEY", "OPENROUTER_API_KEY"],
-    gotcha:
-      "Its CLI is an opencode fork — the same command surface, and the same provider keys. `kilocode run <message>` is its non-interactive mode, unverified here, so it is not fleet-eligible yet.",
-    example: "sandbox-cli kilocode run 'explain this repository'",
   },
   {
     id: "devin",

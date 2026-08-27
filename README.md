@@ -1,6 +1,6 @@
 # sandbox-cli
 
-Run AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose, Crush,
+Run AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose,
 Copilot CLI, Cursor, Qwen, OpenHands, Devin, Kilo Code) — or any
 command — inside a **disposable, isolated Docker container**. Only the project
 you choose is mounted at `/workspace`; `HOME` is a fake, ephemeral directory. A

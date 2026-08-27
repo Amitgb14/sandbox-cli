@@ -57,7 +57,7 @@ version is tagged.
   a connection error naming nothing.
 
   Two refusals carry the design. An agent that speaks its **vendor's own API
-  shape** — claude, gemini, droid — is refused rather than pointed at an
+  shape** — claude and gemini — is refused rather than pointed at an
   OpenAI-shaped endpoint, since that failure lands inside a container as a parse
   error blamed on the model; the table lists only agents where the wiring is
   known, and marks codex unverified rather than claiming it. And a plaintext

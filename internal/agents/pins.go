@@ -38,15 +38,20 @@ package agents
 // after download; that is the upgrade path if this is ever worth strengthening.
 // Pinning the top of the tree is the cheap part, and it is all this is.
 //
-// **Bumping.** Twelve hand-maintained versions with no process is its own failure
+// **Bumping.** Eight hand-maintained versions with no process is its own failure
 // mode — a pin nobody bumps becomes an old agent nobody can explain, which is the
 // staleness named below arriving by neglect rather than by design. The intent is
-// a sweep at each release, with amp as the canary since it goes stale fastest,
-// and that intent is currently the whole mechanism.
+// a sweep at each release, and that intent is currently the whole mechanism.
+//
+// It has no canary any more. Amp was it — a continuously-generated version rather
+// than semver, so it went stale first and made the sweep visible — and amp was
+// removed with five other agents. Nothing here is known to rot faster than the
+// rest, and nominating a replacement without measuring which one does would be a
+// worse guide than admitting the gap.
 //
 // The mechanism it wants is small and does not exist yet: a CI step diffing each
 // entry against `npm view <pkg> version` (and the three release URLs) and failing,
-// or opening an issue, when they drift. That turns twelve numbers somebody has to
+// or opening an issue, when they drift. That turns eight numbers somebody has to
 // remember into a thing that reports on itself, which is the difference between a
 // documented intent and a process.
 //
@@ -99,9 +104,8 @@ const (
 )
 
 // installPins is keyed by the *binary* name the bootstrap execs, which is not
-// always the wrapper's name: `cursor` installs `cursor-agent` and `continue`
-// installs `cn`. The binary is what Bootstrap is handed, so it is what the lookup
-// has to use.
+// always the wrapper's name: `cursor` installs `cursor-agent`. The binary is what
+// Bootstrap is handed, so it is what the lookup has to use.
 var installPins = map[string]InstallPin{
 	// npm-distributed. Versions are the published `latest` as of 2026-08-02.
 	"gemini": {Version: "0.53.1"}, // @google/gemini-cli
@@ -112,8 +116,6 @@ var installPins = map[string]InstallPin{
 	"kilocode": {Version: "7.4.23"},                              // @kilocode/cli
 	"copilot":  {Version: "1.0.77"},                              // @github/copilot
 	"qwen":     {Version: "0.21.3"},                              // @qwen-code/qwen-code
-	// Amp publishes a continuously-generated version rather than semver, so this
-	// line goes stale faster than the others by design rather than by neglect.
 
 	// Installed by their own routes; the version reaches each installer
 	// differently, which is why the install strings live with their wrappers and

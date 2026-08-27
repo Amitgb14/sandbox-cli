@@ -69,15 +69,14 @@ func npmAgentBootstrap(bin, pkg string) []string { return agents.NpmBootstrap(bi
 // and "" for one it deliberately leaves unpinned.
 //
 // The npm agents never need this — agents.NpmBootstrap applies their pin itself,
-// because every one of them spells the version the same way. The four installed
-// by their own routes each spell it differently (`==` for a uv tool, a
-// `GOOSE_VERSION` assignment, a path component in a release URL), so their
-// install strings stay next to the wrapper that owns them and only the number
-// comes from the table.
+// because every one of them spells the version the same way. The ones installed
+// by their own routes each spell it differently (a `GOOSE_VERSION` assignment, a
+// path component in a release URL), so their install strings stay next to the
+// wrapper that owns them and only the number comes from the table.
 //
 // Returning "" rather than a broken fragment is what keeps an unpinned agent's
-// install string byte-identical to what it was before pins existed — for aider
-// and goose, where the version is an optional suffix or an optional assignment.
+// install string byte-identical to what it was before pins existed — goose is
+// the case, where the version is an optional assignment.
 //
 // **It is not safe at every call site, and openhands is the exception.** There
 // the result *is* the version (`oh_ver=` + this), so an empty string yields a

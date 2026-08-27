@@ -29,9 +29,20 @@ func TestStudioAgentSeedFollowsAgentCmds(t *testing.T) {
 	for _, cmd := range agentCmds() {
 		want = append(want, strings.Fields(cmd.Use)[0])
 	}
-	if len(seed) < len(want) {
-		t.Fatalf("the seed lists %d agents, agentCmds() has %d: %s is missing from %s",
-			len(seed), len(want), missing(want, flatten(seed)), path)
+	// Equality, not "at least as many". The first version of this compared
+	// `len(seed) < len(want)` and then only the indexes agentCmds() has, which
+	// catches an adapter *added* and never seeded — but a seed entry left behind
+	// for a removed agent sat past the end of the loop and passed silently. That
+	// is the direction a removal takes, and Studio would have gone on offering an
+	// agent the daemon no longer has.
+	if len(seed) != len(want) {
+		if gaps := missing(want, flatten(seed)); gaps != "" {
+			t.Fatalf("the seed lists %d agents, agentCmds() has %d: %s is missing from %s",
+				len(seed), len(want), gaps, path)
+		}
+		t.Fatalf("the seed lists %d agents, agentCmds() has %d: %s is seeded but has no wrapper — "+
+			"a removed adapter left behind in %s is one Studio still offers",
+			len(seed), len(want), missing(flatten(seed), want), path)
 	}
 	for i, w := range want {
 		if got := seed[i][1]; got != w {
@@ -49,6 +60,9 @@ func flatten(m [][]string) []string {
 	return out
 }
 
+// missing returns the names in want that have does not contain. Called both ways
+// round by the caller above — a wrapper with no seed entry, and a seed entry with
+// no wrapper are the same question asked from opposite ends.
 func missing(want, have []string) string {
 	seen := map[string]bool{}
 	for _, h := range have {

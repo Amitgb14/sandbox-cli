@@ -755,8 +755,8 @@ does not reach a sandbox until someone bumps a line here.
   published. Closing that needs integrity hashes, which the npm CLI verifies only
   from a lockfile and a `-g` install has none of. No cheap fix; recorded rather
   than solved.
-- **`curl | bash` installers** (`aider` via astral.sh, `cursor`, `goose`,
-  `claude`, `devin`) execute arbitrary remote shell inside the container. The
+- **`curl | bash` installers** (`cursor`, `goose`, `claude`, `devin`) execute
+  arbitrary remote shell inside the container. The
   blast radius is the sandbox and the persisted HOME, which is the radius item 8
   already describes — but the code is fetched fresh each first run and is not
   pinnable for three of them.

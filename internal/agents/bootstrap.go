@@ -8,7 +8,7 @@ package agents
 // doc above says what two copies of a security-relevant script do.
 //
 // internal/cli keeps one-line aliases (agentBootstrap / npmAgentBootstrap) so
-// the fifteen wrappers read as they did.
+// the twelve wrappers read as they did.
 
 // Bootstrap builds the container argv for an agent that the base image may not
 // carry. It prefers whatever is already on PATH — the baked copy, for the agents

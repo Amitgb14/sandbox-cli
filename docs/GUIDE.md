@@ -1362,6 +1362,8 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli cursor [args]` | Run Cursor CLI (installed on first use) |
 | `sandbox-cli qwen [args]` | Run Qwen Code (installed on first use) |
 | `sandbox-cli openhands [args]` | Run OpenHands CLI (installed on first use) |
+| `sandbox-cli devin [args]` | Run Devin CLI (installed on first use) |
+| `sandbox-cli kilocode [args]` | Run Kilo Code (installed on first use) |
 | `sandbox-cli init` | Scaffold a `.sandbox.yaml` |
 | `sandbox-cli config show\|path\|validate` | Inspect the effective config |
 | `sandbox-cli list` (alias `ps`) | Sandbox sessions running now; `--all` includes finished ones |

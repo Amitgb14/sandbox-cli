@@ -490,7 +490,7 @@ export const CHALLENGES: Challenge[] = [
     symptom: "A new agent's first run fails with exit 127",
     cause:
       "Eight of the twelve agents are not baked into the image — they install themselves into the persisted HOME on first use, which keeps hundreds of megabytes of adapters you will never run out of the image. That install needs the vendor's download host reachable at that moment.",
-    fix: "Allow the agent's install host. docs/AGENTS.md has the per-agent list; cursor, aider, openhands and continue each need one.",
+    fix: "Allow the agent's install host. docs/AGENTS.md has the per-agent list; cursor and devin each need one, and devin needs two — the script host alone is not enough.",
     fixCode: "sandbox-cli cursor --allow cursor.com --allow downloads.cursor.com",
     scope: "both",
   },

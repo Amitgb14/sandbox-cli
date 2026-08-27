@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`sandbox-cli` runs AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose, Crush, Aider,
+`sandbox-cli` runs AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose,
 Copilot CLI, Cursor, Qwen, OpenHands, Devin, Kilo Code) or any command inside a disposable,
 isolated Docker container. Only the chosen project is bind-mounted at `/workspace`; `HOME` is a
 fake ephemeral path (`/sandbox/home`) and the container is `--rm` (the single exception is
@@ -415,7 +415,7 @@ rather than merely passing.
   `-p <prompt>` where codex's is `exec <prompt>`, so replaying one agent's argv at another
   produces nonsense that fails in a way nobody would connect to routing. A chain therefore
   needs a prompt it can recover, and refuses rather than guessing when the last argument is a
-  flag. Only agents with a **verified headless mode** may be routed to; the ten adapters
+  flag. Only agents with a **verified headless mode** may be routed to; the seven adapters
   without a descriptor are untouched, and asking for a fallback on one is refused.
 
   `internal/handoff` is the conversation carried across, and it is a **briefing, not a
