@@ -96,6 +96,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			Env:                  env,
 			HeadlessVerified:     true,
 			CanSkipPermissions:   d.CanSkipPermissions(),
+			CanSeedConsolePrompt: d.CanSeedConsole(),
 			CanResume:            canResume(d.Name),
 			SkipPermissionArgs:   d.SkipPermissionArgs,
 			AutonomousInvocation: invocation,

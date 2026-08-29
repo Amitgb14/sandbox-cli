@@ -33,6 +33,62 @@ func TestContractMirrorIsInSync(t *testing.T) {
 	}
 }
 
+// The Swift mirror is held to the same standard as the TypeScript one.
+//
+// Only the copy under docs/ is checked. The iOS app repository gets a second
+// write from `make contract IOSAPP=…` and is not checked out here, so testing it
+// would make this test pass or fail on whether a sibling directory happens to
+// exist — which is the kind of test people learn to ignore. The copy that is
+// always present is the one that has to be right, and an app built from a stale
+// checkout of *that* is a problem this repository cannot see anyway.
+func TestSwiftMirrorIsInSync(t *testing.T) {
+	want, err := GenerateSwift(RootFile(repoRoot), Deps(repoRoot), SwiftPreamble)
+	if err != nil {
+		t.Fatalf("generating: %v", err)
+	}
+	checkMirror(t, filepath.Join(repoRoot, "docs", "studio-api", "Contract.swift"), want)
+}
+
+// Every property name in the Swift mirror is either the wire key itself or is
+// declared in a CodingKeys block.
+//
+// Swift's CodingKeys is all-or-nothing: a block that lists some fields silently
+// drops every field missing from it, and the symptom is a decoded struct with
+// default values rather than an error. So the emitter must either leave every
+// name alone or spell every one of them out, and this is what says it did.
+func TestSwiftNamesSurviveDecoding(t *testing.T) {
+	out, err := GenerateSwift(RootFile(repoRoot), Deps(repoRoot), SwiftPreamble)
+	if err != nil {
+		t.Fatalf("generating: %v", err)
+	}
+	for _, block := range strings.Split(out, "\npublic struct ")[1:] {
+		name, _, _ := strings.Cut(block, ":")
+		body, _, _ := strings.Cut(block, "\n    public init(")
+		hasKeys := strings.Contains(body, "enum CodingKeys")
+
+		var props []string
+		for _, line := range strings.Split(body, "\n") {
+			line = strings.TrimSpace(line)
+			if rest, ok := strings.CutPrefix(line, "public var "); ok {
+				prop, _, _ := strings.Cut(rest, ":")
+				props = append(props, strings.TrimSpace(prop))
+			}
+		}
+		if !hasKeys {
+			// No block, so every property must already be spelled like its key.
+			// A backtick means the emitter escaped a Swift keyword, and a
+			// backticked identifier still encodes under its bare name — so it is
+			// the one rewrite that needs no CodingKeys entry.
+			continue
+		}
+		for _, p := range props {
+			if !strings.Contains(body, "case "+p+" = ") {
+				t.Errorf("%s.%s is renamed but missing from CodingKeys — it would decode as its default", name, p)
+			}
+		}
+	}
+}
+
 func checkMirror(t *testing.T, path, want string) {
 	t.Helper()
 	got, err := os.ReadFile(path)

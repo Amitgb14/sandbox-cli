@@ -341,6 +341,17 @@ export interface Agent {
    */
   canSkipPermissions?: boolean;
   /**
+   * Whether an *interactive* run of this agent can be handed a first turn on the
+   * command line. False for opencode, which reads a lone positional as the
+   * project directory to open — a seeded console run died inside the container
+   * with `Failed to change directory to /workspace/review the code`.
+   *
+   * POST /runs refuses the combination anyway, so this is not what enforces it;
+   * it is what lets a launch form say so before asking, rather than explaining a
+   * 400 after the fact. Same argument as canSkipPermissions above.
+   */
+  canSeedConsolePrompt?: boolean;
+  /**
    * Whether a conversation of this agent's can be reopened by id. False for
    * gemini, whose CLI has no resume argv — the conversations panel
    * reads this before offering to carry one on, rather than offering a control
