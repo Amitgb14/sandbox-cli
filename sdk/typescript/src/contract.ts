@@ -467,6 +467,23 @@ export interface AgentInfo {
    */
   skipPermissionArgs?: string[];
   /**
+   * CanSeedConsolePrompt is whether an *interactive* run of this agent can be
+   * handed a first turn on the command line.
+   *
+   * A prompt is not a thing every agent can be given, and assuming otherwise
+   * cost a real run: the argv appended it as a bare positional for everyone,
+   * and opencode reads a lone positional as *the project directory to open*,
+   * so a console run died inside the container with `Failed to change
+   * directory to /workspace/review the code`.
+   *
+   * POST /runs already refuses the combination (see handleCreateRun), so this
+   * field changes nothing about what the daemon will do. It changes what a
+   * client can say *before* asking: without it a UI can only offer the prompt
+   * box, take the 400, and explain a refusal after the fact. That is the same
+   * argument CanSkipPermissions is here for, on the neighbouring question.
+   */
+  canSeedConsolePrompt: boolean;
+  /**
    * CanResume is whether a conversation of this agent's can be reopened by its
    * native session id — `claude --resume`, `codex resume`, `opencode --session`.
    * **Gemini declares none**, so for them "carry this conversation on"

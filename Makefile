@@ -52,9 +52,19 @@ test-integration:
 fmt:
 	gofmt -w .
 
-# The TypeScript mirror of the API's wire shapes, generated from the Go types
-# that define them. Checked in because a client author reads it; kept honest by
-# TestContractMirrorIsInSync, which fails when it and types.go disagree.
+# The TypeScript and Swift mirrors of the API's wire shapes, generated from the
+# Go types that define them. Checked in because a client author reads them; kept
+# honest by TestContractMirrorIsInSync and TestSwiftMirrorIsInSync, which fail
+# when they and types.go disagree.
+#
+# IOSAPP additionally writes the Swift mirror into a checkout of the iOS client,
+# which lives in its own repository:
+#
+#	make contract IOSAPP=../iosapp
+#
+# Exported rather than passed on the command line so the variable reaches the
+# generator's environment; a make-only variable would be silently ignored.
+export IOSAPP
 contract:
 	go run ./cmd/gen-contract .
 
