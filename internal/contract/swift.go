@@ -53,6 +53,17 @@ import (
 //go:embed preamble.swift
 var SwiftPreamble string
 
+// SwiftExtras is the hand-written tail: shapes the server has that the Go types
+// do not carry, query parameters above all — they are read off the URL rather
+// than decoded into a struct, so there is nothing for the generator to walk.
+//
+// It exists because the mirror shipped without them twice. The TypeScript
+// generator dropped `RunListQuery` when it replaced the hand-maintained mirror;
+// this one then dropped it again by appending no tail at all.
+//
+//go:embed extras.swift
+var SwiftExtras string
+
 // GenerateSwift renders the Swift mirror. Same inputs as Generate, and
 // deliberately the same shape of function, so the two cannot be given different
 // roots by accident.
@@ -108,6 +119,7 @@ func GenerateSwift(rootFile string, deps []Source, preamble string) (string, err
 			b.WriteString(out)
 		}
 	}
+	b.WriteString(SwiftExtras)
 	return b.String(), nil
 }
 

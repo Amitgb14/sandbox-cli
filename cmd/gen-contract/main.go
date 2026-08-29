@@ -1,12 +1,13 @@
-// Command gen-contract writes the TypeScript mirror of the Studio API's wire
-// shapes from the Go types that define them.
+// Command gen-contract writes the TypeScript and Swift mirrors of the Studio
+// API's wire shapes from the Go types that define them.
 //
 //	make contract
+//	make contract IOSAPP=../iosapp    # also writes into the iOS client
 //
-// The mirror is checked in because it is documentation as much as it is a type
-// declaration: a client author reads it, and a generated file nobody can see
-// without a toolchain is not documentation. TestContractMirrorIsInSync is what
-// keeps the checked-in copy honest.
+// The mirrors are checked in because they are documentation as much as they are
+// type declarations: a client author reads them, and a generated file nobody can
+// see without a toolchain is not documentation. TestContractMirrorIsInSync and
+// TestSwiftMirrorIsInSync are what keep the checked-in copies honest.
 package main
 
 import (
@@ -22,6 +23,25 @@ func main() {
 	if len(os.Args) > 1 {
 		repo = os.Args[1]
 	}
+	// Every destination is resolved before anything is written, so a typo in
+	// IOSAPP cannot leave half the mirrors regenerated. It used to be checked
+	// after the TypeScript files had already been written, which meant
+	// `IOSAPP=../isoapp` rewrote two mirrors, skipped the third, and exited 1 —
+	// and the next `go test` then failed TestSwiftMirrorIsInSync for a reason
+	// unrelated to whatever the author was changing.
+	swiftDests := []string{filepath.Join(repo, "docs", "studio-api", "Contract.swift")}
+	if app := os.Getenv("IOSAPP"); app != "" {
+		dir := filepath.Join(app, "Sources", "SandboxStudioKit", "Contract")
+		if _, err := os.Stat(dir); err != nil {
+			// Named but not there is a typo, not a preference — and silently
+			// skipping it is how somebody ships an app built against last
+			// month's contract.
+			fmt.Fprintf(os.Stderr, "gen-contract: IOSAPP=%s has no %s\n", app, dir)
+			os.Exit(1)
+		}
+		swiftDests = append(swiftDests, filepath.Join(dir, "Generated.swift"))
+	}
+
 	out, err := contract.Generate(contract.RootFile(repo), contract.Deps(repo), contract.Preamble)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gen-contract:", err)
@@ -55,18 +75,6 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gen-contract:", err)
 		os.Exit(1)
-	}
-	swiftDests := []string{filepath.Join(repo, "docs", "studio-api", "Contract.swift")}
-	if app := os.Getenv("IOSAPP"); app != "" {
-		dir := filepath.Join(app, "Sources", "SandboxStudioKit", "Contract")
-		if _, err := os.Stat(dir); err != nil {
-			// Named but not there is a typo, not a preference — and silently
-			// skipping it is how somebody ships an app built against last
-			// month's contract.
-			fmt.Fprintf(os.Stderr, "gen-contract: IOSAPP=%s has no %s\n", app, dir)
-			os.Exit(1)
-		}
-		swiftDests = append(swiftDests, filepath.Join(dir, "Generated.swift"))
 	}
 	for _, dest := range swiftDests {
 		if err := os.WriteFile(dest, []byte(sw), 0o644); err != nil {

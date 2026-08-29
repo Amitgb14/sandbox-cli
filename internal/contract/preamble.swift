@@ -2,8 +2,10 @@
 //
 // GENERATED from internal/studioapi/types.go by `make contract`. Do not edit:
 // the Go types are the contract, their doc comments are its documentation, and
-// a change made only here is a claim no server makes. `TestContractMirrorIsInSync`
-// fails when this file and those types disagree.
+// a change made only here is a claim no server makes. `TestSwiftMirrorIsInSync`
+// fails when this file and those types disagree — note the name: the test that
+// guards the *TypeScript* mirrors is a different one, and running it instead
+// would pass while this file was wrong.
 //
 // Three things a client must get right, all enforced server-side (see
 // internal/studioapi/guard.go, and the trust model in docs/studio-api/README.md):

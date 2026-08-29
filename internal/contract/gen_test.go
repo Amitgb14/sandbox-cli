@@ -49,6 +49,36 @@ func TestSwiftMirrorIsInSync(t *testing.T) {
 	checkMirror(t, filepath.Join(repoRoot, "docs", "studio-api", "Contract.swift"), want)
 }
 
+// Both mirrors end with their hand-written tail.
+//
+// This is the one thing the drift tests structurally cannot see. They compare a
+// checked-in file to a fresh render, so a generator that forgets to append the
+// tail produces two identical files and a green suite — which is exactly how
+// `RunListQuery` went missing twice: once when the TypeScript generator replaced
+// the hand-maintained mirror, and again when the Swift generator shipped
+// appending no tail at all. Both times the query shape of the most-used listing
+// endpoint simply stopped being described, and nothing failed.
+//
+// Asserting the *suffix* rather than a type name keeps it true of whatever the
+// tail grows to hold next.
+func TestMirrorsCarryTheHandWrittenTail(t *testing.T) {
+	ts, err := Generate(RootFile(repoRoot), Deps(repoRoot), Preamble)
+	if err != nil {
+		t.Fatalf("generating TypeScript: %v", err)
+	}
+	if !strings.HasSuffix(ts, Extras) {
+		t.Error("the TypeScript mirror does not end with extras.ts — the hand-written tail was not appended")
+	}
+
+	sw, err := GenerateSwift(RootFile(repoRoot), Deps(repoRoot), SwiftPreamble)
+	if err != nil {
+		t.Fatalf("generating Swift: %v", err)
+	}
+	if !strings.HasSuffix(sw, SwiftExtras) {
+		t.Error("the Swift mirror does not end with extras.swift — the hand-written tail was not appended")
+	}
+}
+
 // Every property name in the Swift mirror is either the wire key itself or is
 // declared in a CodingKeys block.
 //
