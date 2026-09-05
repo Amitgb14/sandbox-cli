@@ -22,6 +22,29 @@ const (
 	OutcomeClean     = "clean"
 	OutcomeSignalled = "signalled"
 	OutcomeFailed    = "failed" // sandbox-cli itself errored before/while running
+
+	// OutcomeManual marks a session that was never a run: a snapshot somebody
+	// asked for, closed the moment it was taken.
+	//
+	// It exists to keep Crashed() honest. A crash is "nothing closed the
+	// manifest", so a capture that left EndedAt nil would be indistinguishable
+	// from a run that died — and `sandbox-cli recover` leads with crashes,
+	// which would make the one screen whose job is to say what died fill up
+	// with things that didn't.
+	OutcomeManual = "manual"
+)
+
+// Source records who asked for a snapshot, and it decides where the snapshot can
+// be restored from rather than merely describing it: Studio restores what a
+// sandbox run produced, and a snapshot taken through the SDK is restored through
+// the SDK.
+//
+// It is a **scoping** rule and not a boundary — see studioapi/snapshots.go,
+// which derives this from the request rather than accepting it, and says what
+// the split does and does not buy.
+const (
+	SourceRun = "run" // taken during, or for, a sandbox run
+	SourceSDK = "sdk" // taken by a program calling the SDK
 )
 
 // Session is the manifest for one sandbox run: enough to answer "what was I
@@ -44,6 +67,29 @@ type Session struct {
 	Snapshots      int        `json:"snapshots"`
 	LastSnapshot   string     `json:"last_snapshot,omitempty"`
 	LastSnapshotAt *time.Time `json:"last_snapshot_at,omitempty"`
+
+	// Label is what somebody called this snapshot. Only a capture has one: a run
+	// is already named by its branch and its agent, while a checkpoint taken by
+	// hand is otherwise a hex id in a list.
+	Label string `json:"label,omitempty"`
+
+	// Source is SourceRun or SourceSDK, and is empty for every session recorded
+	// before it existed — read those as SourceRun, which is what they were.
+	Source string `json:"source,omitempty"`
+
+	// Retention is how long to keep this one, as a duration string, and empty
+	// means "follow the default in force at the time of pruning".
+	//
+	// The *rule* is stored rather than a computed expiry, and that is the whole
+	// reason this is a string: a stamped ExpiresAt would freeze each snapshot
+	// against whatever the setting happened to be in the second it was taken, so
+	// raising the default in Settings would move nothing that already existed.
+	Retention string `json:"retention,omitempty"`
+
+	// Remote is this snapshot's copy in object storage, when one was made. Nil
+	// means it never left the machine — which is the default, and is not a
+	// failure: mirroring is off until a bucket is configured.
+	Remote *RemoteRef `json:"remote,omitempty"`
 
 	path string // manifest file on disk; not serialized
 }
@@ -69,6 +115,8 @@ func (s Session) Activity() time.Time {
 // Status renders the outcome for display.
 func (s Session) Status() string {
 	switch {
+	case s.Outcome == OutcomeManual:
+		return "snapshot"
 	case s.Crashed():
 		return "crashed"
 	case s.Outcome == OutcomeSignalled:
@@ -80,6 +128,14 @@ func (s Session) Status() string {
 	default:
 		return "clean"
 	}
+}
+
+// marshalSession renders a manifest. One function so the copy written beside the
+// bundle in object storage is byte-for-byte the shape of the one on disk: two
+// encoders would drift, and the remote copy exists precisely to be read by a
+// machine that has lost the local one.
+func marshalSession(s Session) ([]byte, error) {
+	return json.MarshalIndent(s, "", "  ")
 }
 
 // newSessionID is sortable-by-time and collision-proof between two sandboxes
@@ -122,7 +178,7 @@ func (s *Session) Save() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	data, err := marshalSession(*s)
 	if err != nil {
 		return err
 	}

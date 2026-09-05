@@ -769,6 +769,7 @@ sandbox-cli recover                  # what's broken here, and what there is to 
 sandbox-cli recover list             # every recorded run for this repo, newest first
 sandbox-cli recover show ID          # what's in a snapshot
 sandbox-cli recover restore ID       # put it back, on a branch
+sandbox-cli recover fetch            # what a configured bucket holds, and pull one back
 sandbox-cli recover repair           # fix a repository a crashed sandbox broke
 ```
 
@@ -779,6 +780,43 @@ the tree is clean) and `--patch` writes the changes out as a patch instead.
 
 Run it from your normal checkout even when the crash happened in a `--worktree`
 sandbox — worktrees share the repository the snapshots live in.
+
+#### A copy off this machine
+
+Snapshots live in your own repository, which is the fast, private default and
+also its limit: a lost laptop loses them with everything else. Point
+`snapshot.s3` at a bucket (AWS, or MinIO / R2 / Ceph / B2 through `endpoint:`
+and `path_style:`) and each one is uploaded as a **git bundle** — a packfile git
+alone can read, not an archive that needs this tool:
+
+```sh
+git init recovered && cd recovered
+git fetch ../snap.bundle 'refs/sandbox/snapshots/*:refs/heads/snap/*'
+git checkout snap/<id>
+```
+
+From a machine that still has sandbox-cli, `recover fetch` is the shorter way:
+
+```sh
+sandbox-cli recover fetch                    # what the bucket holds for this repo
+sandbox-cli recover fetch 20260724-224601    # unpack it back under refs/sandbox/
+```
+
+It works on a machine that has never seen these snapshots, because a small
+manifest is stored beside every bundle. After a fetch the snapshot is local and
+`show`, `restore` and the rest treat it as if it had never left.
+
+Two things to know. The bucket is addressed by an id built from the repository's
+**absolute path**, so a clone in a new location looks in a namespace of its own —
+an empty listing names the other ids in the bucket, and `--repo-id` reads one of
+them. And a snapshot this machine has no record of can only be checked against
+the manifest that travelled with it, so `fetch` says so: look at it before you
+restore it.
+
+The credential is **named, never held**: `access_key_env` is the name of an
+environment variable read at the moment of upload, so there is nowhere in the
+config file for a secret to sit. Retention prunes the local copy only — the
+bucket's own lifecycle rules govern the objects in it.
 
 `repair` handles the other half. It rebuilds a deleted worktree administrative
 directory and clears locks a killed git left behind, then rebuilds the index from
@@ -1286,6 +1324,16 @@ security:                     # secure-by-default; tune here
 secrets:                      # resolved at run time, forwarded by name only
   GITHUB_TOKEN: { command: gh auth token }
   ANTHROPIC_API_KEY: { file: ~/.secrets/anthropic }
+
+snapshot:                     # crash safety net (sandbox-cli recover)
+  enabled: true               # or use --no-snapshot
+  interval: 2m                # how often the workspace is snapshotted
+  retention: 336h             # 14d, then old crash snapshots are pruned
+  manual_retention: 168h      # 7d, for the checkpoints you take on purpose
+  s3:                         # optional: a copy off this machine, as a git bundle
+    bucket: my-sandbox-snapshots
+    upload: manual            # manual (default) | all | off
+    access_key_env: AWS_ACCESS_KEY_ID   # the variable NAME, never the value
 ```
 
 ### The project file — `.sandbox.yaml`
@@ -1308,11 +1356,6 @@ hostname: devbox
 
 cache:
   enabled: false              # or use --cache
-
-snapshot:                     # crash safety net (sandbox-cli recover)
-  enabled: true               # or use --no-snapshot
-  interval: 2m                # how often the workspace is snapshotted
-  retention: 336h             # 14d, then old snapshots are pruned
 ```
 
 **`.sandbox.yaml` is treated as untrusted.** It travels with the repository —
@@ -1322,7 +1365,9 @@ could run commands on your machine, reach host paths, or weaken the container ar
 **refused** from it:
 
 > `image`, `workdir`, `user`, `home`, `runtime`, `mounts`, `secrets`, `env`,
-> `env_allow`, `security.*`, `cache.paths`, and any `network.mode` /
+> `env_allow`, `security.*`, `cache.paths`, `snapshot` (including `snapshot.s3`,
+> which names a destination to send the working tree to and which of your
+> credentials is read to get there), and any `network.mode` /
 > `network.baseline` that *weakens* what you already have in force.
 
 A project may ask for stricter confinement than your default; it may not ask for
@@ -1383,6 +1428,7 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli fleet clean [--worktrees] [--force]` | Reap finished fleet containers (and clean checkouts); `--force` reaps ones whose branch still has work to land |
 | `sandbox-cli recover` | What a crashed run left behind, and what's broken ([runbook](#after-a-crash-step-by-step)) |
 | `sandbox-cli recover list\|show\|restore` | Find and restore work from a crashed run |
+| `sandbox-cli recover fetch` | List or pull back snapshots mirrored to object storage |
 | `sandbox-cli recover repair` | Fix a repository a crashed sandbox broke |
 | `sandbox-cli version` | Print the version |
 

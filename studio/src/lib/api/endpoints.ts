@@ -17,6 +17,8 @@ import {
   mockFiles,
   mockLogs,
   mockMetrics,
+  MOCK_SNAPSHOTS,
+  MOCK_SNAPSHOT_SETTINGS,
 } from "@/lib/mock/data";
 import { BASELINE_EGRESS, RESERVED_ENV } from "@/lib/constants";
 import type {
@@ -47,6 +49,11 @@ import type {
   ProbeHistory,
   DaemonEgress,
   NetworkMode,
+  Snapshot,
+  SnapshotSettings,
+  SnapshotS3Check,
+  RestoreMode,
+  RestoreResult,
 } from "@/lib/types";
 
 /**
@@ -442,6 +449,123 @@ export const api = {
    * means the repository the daemon was started in, which is what this asked
    * before repositories were plural.
    */
+  /**
+   * The snapshots recorded for a repository, newest first.
+   *
+   * Baselines are filtered out by the daemon: one is recorded before every
+   * launch and holds the workspace as it was *before* the agent touched it, so
+   * offering to restore one would hand back a run's starting point looking like
+   * success.
+   */
+  snapshots: (repo?: string, branch?: string) => {
+    // `repo=all` when nothing is scoped, the same spelling worktrees uses: the
+    // daemon's *absent* parameter means the one repository it was started in,
+    // so "All repositories" cannot be said by leaving it out.
+    const params = new URLSearchParams({ repo: repo ?? "all" });
+    if (branch) params.set("branch", branch);
+    const q = params.toString();
+    return request<Snapshot[]>(`/v1/snapshots${q ? `?${q}` : ""}`, {
+      fixture: () =>
+        MOCK_SNAPSHOTS.filter(
+          (s) => (!repo || s.repoId === repo) && (!branch || s.branch === branch),
+        ),
+      latencyMs: 200,
+      unwrap: (b) => (b as { snapshots: Snapshot[] }).snapshots ?? [],
+    });
+  },
+
+  /**
+   * Checkpoint a workspace now.
+   *
+   * liveOnly, like every write whose point is to change what a later read
+   * returns: a fixture here would report a snapshot that the listing — served by
+   * the same fixtures — cannot then show, which reads as a broken feature rather
+   * than as a missing daemon.
+   */
+  createSnapshot: (body: { repo?: string; branch?: string; label?: string; retention?: string }) =>
+    request<Snapshot>("/v1/snapshots", { method: "POST", body, liveOnly: true }),
+
+  /**
+   * Put a snapshot back.
+   *
+   * The daemon refuses this for a snapshot taken through the SDK — a script
+   * mid-way through something is not a thing to undo from a browser tab — so the
+   * button is disabled on those rather than left to fail.
+   */
+  restoreSnapshot: (id: string, body: { mode?: RestoreMode; branch?: string; repo?: string }) =>
+    request<RestoreResult>(`/v1/snapshots/${encodeURIComponent(id)}/restore`, {
+      method: "POST",
+      body,
+      liveOnly: true,
+    }),
+
+  /** How long one snapshot is kept; "" returns it to the default. */
+  setSnapshotRetention: (id: string, retention: string, repo?: string) =>
+    request<Snapshot>(`/v1/snapshots/${encodeURIComponent(id)}/retention`, {
+      method: "POST",
+      body: { retention, repo },
+      liveOnly: true,
+    }),
+
+  /**
+   * Mirror one snapshot to object storage now.
+   *
+   * For the two cases the automatic path leaves behind: an upload that failed
+   * while the network was down, and a snapshot taken before a bucket was
+   * configured. There is deliberately no "unmirror" — deleting a backup is not
+   * something a button should do.
+   */
+  uploadSnapshot: (id: string, repo?: string) =>
+    request<Snapshot>(`/v1/snapshots/${encodeURIComponent(id)}/upload`, {
+      method: "POST",
+      body: { repo },
+      liveOnly: true,
+    }),
+
+  /**
+   * Ask the bucket whether a snapshot's object is really there.
+   *
+   * `snapshot.remote` records what the upload did; a lifecycle rule or somebody
+   * tidying a bucket leaves a snapshot reading as mirrored when it is not. Per
+   * row and on demand, never for a whole listing.
+   */
+  verifySnapshot: (id: string, repo?: string) =>
+    request<SnapshotS3Check>(`/v1/snapshots/${encodeURIComponent(id)}/verify`, {
+      method: "POST",
+      body: { repo },
+      liveOnly: true,
+    }),
+
+  /**
+   * Does the configured bucket answer, and does the named credential resolve?
+   *
+   * Sends no body: the daemon checks what *it* is configured with. A check that
+   * dialled a host from the request would be a server-side request forgery with
+   * a Test button in front of it.
+   *
+   * liveOnly, because a fixture answering "connected" is the one lie this
+   * particular button must never tell.
+   */
+  checkSnapshotStorage: () =>
+    request<SnapshotS3Check>("/v1/snapshots/s3/check", {
+      method: "POST",
+      body: {},
+      liveOnly: true,
+    }),
+
+  snapshotSettings: () =>
+    request<SnapshotSettings>("/v1/snapshots/settings", {
+      fixture: () => MOCK_SNAPSHOT_SETTINGS,
+      latencyMs: 120,
+    }),
+
+  setSnapshotSettings: (body: SnapshotSettings) =>
+    request<SnapshotSettings>("/v1/snapshots/settings", {
+      method: "POST",
+      body,
+      liveOnly: true,
+    }),
+
   worktrees: (repo?: string) =>
     // `repo=all` when nothing is scoped, because that is what the picker's "All
     // repositories" means — and the daemon's *absent* parameter means something

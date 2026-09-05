@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 )
 
 // --dry-run must stay a pure question: it prints the docker command it *would*
@@ -49,7 +50,7 @@ func TestSnapshotsAreOnByDefault(t *testing.T) {
 // file, or a running sandbox to answer.
 func TestRecoverCommandTree(t *testing.T) {
 	cmd := newRecoverCmd()
-	want := map[string]bool{"list": false, "show": false, "restore": false, "repair": false, "prune": false}
+	want := map[string]bool{"list": false, "show": false, "restore": false, "fetch": false, "repair": false, "prune": false}
 	for _, sub := range cmd.Commands() {
 		name := strings.Fields(sub.Use)[0]
 		if _, ok := want[name]; !ok {
@@ -81,4 +82,67 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// A snapshot id is resolved against the bucket the same way a session reference
+// is resolved against a container listing: an unambiguous prefix is enough, and
+// ambiguity refuses and names the candidates. Guessing here restores the wrong
+// work, which is a cost nobody discovers until they look at the diff.
+func TestFetchResolvesAPrefixAndRefusesAnAmbiguousOne(t *testing.T) {
+	found := []rescue.Session{
+		{ID: "20260901-120000-aaaa"},
+		{ID: "20260901-120000-bbbb"},
+		{ID: "20260902-090000-cccc"},
+	}
+
+	got, err := pickRemote(found, "20260902")
+	if err != nil {
+		t.Fatalf("an unambiguous prefix was refused: %v", err)
+	}
+	if got.ID != "20260902-090000-cccc" {
+		t.Errorf("resolved to %q", got.ID)
+	}
+
+	// An exact id wins over being a prefix of nothing else, and never has to be
+	// disambiguated against itself.
+	if got, err := pickRemote(found, "20260901-120000-aaaa"); err != nil || got.ID != "20260901-120000-aaaa" {
+		t.Errorf("exact id resolved to %q (%v)", got.ID, err)
+	}
+
+	_, err = pickRemote(found, "20260901")
+	if err == nil {
+		t.Fatal("an ambiguous prefix resolved to one snapshot")
+	}
+	for _, want := range []string{"20260901-120000-aaaa", "20260901-120000-bbbb"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name candidate %s: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "20260902-090000-cccc") {
+		t.Errorf("the refusal names a snapshot that does not match: %v", err)
+	}
+
+	if _, err := pickRemote(found, "20261231"); err == nil {
+		t.Error("a prefix matching nothing resolved")
+	}
+}
+
+// Mirroring is off until a bucket is configured, so the answer to "fetch"
+// without one is where to configure it — and it must come from the user's own
+// config, never a project .sandbox.yaml, which is refused snapshot.s3 precisely
+// because it names a network destination and the credential to reach it.
+func TestFetchWithNoBucketNamesWhereToConfigureOne(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	repo := initRepo(t)
+
+	_, err := snapshotBucket(repo)
+	if err == nil {
+		t.Fatal("a repository with no bucket configured resolved one")
+	}
+	if !strings.Contains(err.Error(), "snapshot.s3.bucket") {
+		t.Errorf("the refusal does not name the setting: %v", err)
+	}
+	if !strings.Contains(err.Error(), config.UserConfigPath()) {
+		t.Errorf("the refusal does not name the file to set it in: %v", err)
+	}
 }

@@ -729,6 +729,168 @@ export interface Project {
   missing?: boolean;
 }
 
+/**
+ * Who asked for a snapshot — mirrors studioapi.SnapshotSource.
+ *
+ * It decides where the snapshot can be restored from rather than merely
+ * describing it: this screen restores what a sandbox run produced, while one
+ * taken through the SDK is restored through the SDK, because a script mid-way
+ * through something is not a thing to undo from a browser tab. The daemon
+ * enforces it; the button only has to agree.
+ */
+export type SnapshotSource = "run" | "sdk";
+
+/**
+ * One recoverable point — mirrors studioapi.SnapshotInfo.
+ *
+ * A commit of a workspace tree under `refs/sandbox/snapshots/`. Files and
+ * nothing else: no container, no image, no credential.
+ */
+export interface Snapshot {
+  id: string;
+  repoId?: string;
+  branch?: string;
+  agent?: string;
+  /** What somebody called it. Without one a checkpoint is a hex id in a list. */
+  label?: string;
+  source?: SnapshotSource;
+  commit?: string;
+  /**
+   * The objects are still in the repository. A snapshot whose ref was deleted
+   * by hand survives in the manifest with its content garbage collected, and
+   * offering to restore that is a promise nothing can keep.
+   */
+  reachable: boolean;
+  createdAt: string;
+  endedAt?: string;
+  /** "snapshot" for a capture, "crashed" for a run nothing closed, and so on. */
+  status?: string;
+  /** This snapshot's own keep-window, empty when it follows the default. */
+  retention?: string;
+  /** The window actually in force, defaults resolved. */
+  retentionEffective?: string;
+  /**
+   * The copy in object storage. Absent means this snapshot lives only on the
+   * daemon's machine — the default, and not a failure.
+   */
+  remote?: SnapshotRemote;
+}
+
+/**
+ * A snapshot's copy in object storage — mirrors studioapi.SnapshotRemote.
+ *
+ * It reports what the *upload* did rather than what the bucket holds now, which
+ * is why `uploaded` is a field and not something this UI infers: a listing that
+ * asked the bucket per row would make one round trip per snapshot to answer a
+ * question that almost never changes. The row's Verify action is what asks.
+ */
+export interface SnapshotRemote {
+  bucket?: string;
+  key?: string;
+  /** There is a key and the last attempt did not fail. */
+  uploaded: boolean;
+  uploadedAt?: string;
+  bytes?: number;
+  /**
+   * Why the last attempt failed, empty on success. Rendered rather than hidden:
+   * a snapshot that never left the machine has to look different from one that
+   * did, or the backup is a belief rather than a fact.
+   */
+  error?: string;
+}
+
+/**
+ * Object storage for snapshots — mirrors studioapi.SnapshotS3Settings.
+ *
+ * **There is nowhere here for a credential, on purpose.** The key fields are the
+ * *names* of environment variables read on the daemon's machine, so this object
+ * can be held in a browser, logged and written to a settings file without any of
+ * those becoming somewhere a secret leaks from. `credentialsResolved` is how the
+ * screen can still say whether the credential is actually there.
+ */
+export interface SnapshotS3Settings {
+  /** Empty means mirroring is off. Clearing it is how the UI turns it off. */
+  bucket: string;
+  region?: string;
+  /** An S3-compatible server — MinIO, R2, Ceph, B2. Empty addresses AWS. */
+  endpoint?: string;
+  prefix?: string;
+  /** Address the bucket in the path rather than the hostname. */
+  pathStyle?: boolean;
+  /** "manual" (the default), "all", or "off". */
+  upload?: SnapshotUploadMode;
+  accessKeyEnv?: string;
+  secretKeyEnv?: string;
+  sessionTokenEnv?: string;
+  maxObjectMb?: number;
+  /** Read-only: the named variables are set in the daemon's environment. */
+  credentialsResolved: boolean;
+  /** Read-only: why they did not resolve, naming the variable to set. */
+  credentialsError?: string;
+  /** Read-only: config.yaml sets this, so this screen cannot change it. */
+  configManaged?: boolean;
+}
+
+/**
+ * Which snapshots leave the machine.
+ *
+ * "manual" is the default and the reason is arithmetic rather than caution: the
+ * crash net commits every two minutes for the length of every run, so "all"
+ * means a bundle sized like a clone leaving the machine every two minutes per
+ * in-flight agent.
+ */
+export type SnapshotUploadMode = "manual" | "all" | "off";
+
+/** What a storage check found — mirrors studioapi.SnapshotS3CheckResponse. */
+export interface SnapshotS3Check {
+  ok: boolean;
+  bucket?: string;
+  endpoint?: string;
+  error?: string;
+}
+
+/** The retention configuration — mirrors studioapi.SnapshotSettings. */
+export interface SnapshotSettings {
+  retention: string;
+  manualRetention: string;
+  /**
+   * What config.yaml sets, empty when it sets none. Non-empty means this daemon
+   * ignores a write to the matching field: Studio's own file is a layer *under*
+   * config.yaml, so a value typed by hand outranks one set here — and a screen
+   * that could not tell them apart would offer an edit that does not survive a
+   * restart.
+   */
+  configRetention?: string;
+  configManualRetention?: string;
+  /** There is somewhere to save at all. False when no config dir resolved. */
+  writable: boolean;
+  /**
+   * Object storage. Absent on a read means no bucket is configured; sent on a
+   * write with an empty bucket, it turns mirroring off. Omitted on a write, the
+   * daemon leaves it alone — so a form that only edits the windows cannot clear
+   * somebody's bucket by not knowing about it.
+   */
+  s3?: SnapshotS3Settings;
+}
+
+/** What a restore did — mirrors studioapi.RunRecoverResponse. */
+export interface RestoreResult {
+  sessionId: string;
+  mode: RestoreMode;
+  branch?: string;
+  patch?: string;
+  files: number;
+  /**
+   * The tree on disk already held what the snapshot held, so nothing was
+   * actually rescued. The common case, and worth saying out loud: /workspace is
+   * a bind mount, so the snapshot is the belt rather than the braces.
+   */
+  matchesWorkingTree: boolean;
+}
+
+/** What a restore should do with the snapshot — mirrors studioapi.RestoreMode. */
+export type RestoreMode = "branch" | "patch" | "worktree";
+
 /** One row of a repository's directory listing, from `GET /v1/files`. */
 export interface FileEntry {
   name: string;

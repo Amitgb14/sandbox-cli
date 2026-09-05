@@ -150,3 +150,22 @@ export function basename(path: string, segments = 1): string {
 export function pluralize(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
+
+/**
+ * "168h0m0s" as "7 days".
+ *
+ * The daemon sends a Go duration because that is what it stores and what it
+ * accepts back; a table full of `0m0s` is that value leaking into a place nobody
+ * reads durations that way.
+ */
+export function humanDuration(d?: string): string {
+  if (!d) return "—";
+  const hours = /^(\d+)h/.exec(d);
+  if (!hours) return d;
+  const h = Number(hours[1]);
+  if (h % 24 === 0 && h >= 24) {
+    const days = h / 24;
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  return `${h} hour${h === 1 ? "" : "s"}`;
+}

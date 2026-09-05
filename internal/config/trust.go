@@ -137,12 +137,21 @@ func restrictedProjectKeys(src, inherited Config) []string {
 		// a decision about the boundary, so it belongs to the user.
 		add("ports")
 	}
-	if src.Snapshot.Enabled != nil || src.Snapshot.Interval != "" || src.Snapshot.Retention != "" {
+	if src.Snapshot.Enabled != nil || src.Snapshot.Interval != "" || src.Snapshot.Retention != "" ||
+		src.Snapshot.ManualRetention != "" || src.Snapshot.S3 != nil {
 		// `snapshot.enabled: false` silently removes crash protection, and
 		// `interval: 1ms` turns the host into a sustained `git add -A` loop for the
 		// length of the session (confirmed: 6 commits and 18 loose objects in five
 		// seconds). maxSnapshotFileBytes was deliberately made a constant to keep it
 		// out of a project file; the cadence deserved the same treatment.
+		//
+		// `s3:` is the sharpest of them and would be refused on its own merits.
+		// It names a network destination and, through *_env, which of this
+		// machine's credentials is read — so a repository that could set it would
+		// be handed an exfiltration target and the choice of what to send there,
+		// with the whole working tree already bundled up for the trip. It holds no
+		// secret value, which is not a mitigation: `access_key_env` is a name, and
+		// naming somebody else's variable is the point of the attack.
 		add("snapshot")
 	}
 

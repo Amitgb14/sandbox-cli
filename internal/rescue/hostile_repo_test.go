@@ -1,6 +1,7 @@
 package rescue
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,7 +227,7 @@ func TestMatchesWorkingTreeRunsNoRepositoryCommands(t *testing.T) {
 	markers := t.TempDir()
 	armHostileRepo(t, repo, markers)
 
-	s := Begin(repo, "test", time.Minute, time.Hour)
+	s := Begin(repo, "test", time.Minute, Retention{Run: time.Hour})
 	writeFile(t, filepath.Join(repo, "work.txt"), "the agent's work\n")
 	if _, err := s.Once(); err != nil {
 		t.Logf("snapshot: %v", err)
@@ -252,5 +253,82 @@ func TestMatchesWorkingTreeRunsNoRepositoryCommands(t *testing.T) {
 	left, _ := os.ReadDir(markers)
 	for _, e := range left {
 		t.Errorf("restore ran an agent-supplied command on the host: %s", e.Name())
+	}
+}
+
+// TestCaptureRunsNoRepositoryCommands covers the new entry point. Capture is
+// reachable over HTTP, so unlike the snapshot loop it fires when somebody else
+// asks rather than on sandbox-cli's own schedule — and it adds a `rev-parse
+// HEAD^{tree}` of its own before the snapshot. Every git call it makes must go
+// through the same hardening, or the API has quietly reopened what the loop
+// closed.
+func TestCaptureRunsNoRepositoryCommands(t *testing.T) {
+	repo := initRepo(t)
+	markers := t.TempDir()
+	armHostileRepo(t, repo, markers)
+
+	writeFile(t, filepath.Join(repo, "work.txt"), "agent work\n")
+	snap, err := Capture(repo, CaptureOptions{Agent: "test", Label: "checkpoint"})
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+
+	assertNothingRan(t, markers, "capturing a snapshot")
+
+	tree := git(t, repo, "ls-tree", "-r", "--name-only", snap.Ref)
+	if !strings.Contains(tree, "work.txt") {
+		t.Errorf("capture lost the agent's work; tree = %q", tree)
+	}
+}
+
+// TestMirrorAndFetchRunNoRepositoryCommands covers the two git calls object
+// storage added, and they are not the harmless-looking pair they appear to be.
+//
+// `bundle create` walks and packs the object graph of a repository the agent has
+// been writing to. `fetch` from a bundle publishes a ref, which is precisely
+// what fires .git/hooks/reference-transaction — the hook that falsified the old
+// claim that plumbing commands run nothing. And the second of them runs on bytes
+// that came back from **off this machine**, which is the one input in this
+// package that was never on the host to begin with.
+func TestMirrorAndFetchRunNoRepositoryCommands(t *testing.T) {
+	repo := initRepo(t)
+	bucket, spec := newFakeBucket(t)
+
+	writeFile(t, filepath.Join(repo, "work.txt"), "the agent's work\n")
+	snap, err := Capture(repo, CaptureOptions{Label: "checkpoint"})
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+
+	// Armed only now, so the hostile config is in place for the bundle and the
+	// fetch rather than for the capture — which its own test already covers.
+	markers := t.TempDir()
+	armHostileRepo(t, repo, markers)
+
+	sess := snap.Session
+	if err := Mirror(context.Background(), &sess, spec); err != nil {
+		t.Fatalf("Mirror: %v", err)
+	}
+	assertNothingRan(t, markers, "bundling a snapshot for object storage")
+
+	// Dropped through the package's own hardened runner rather than through the
+	// test's bare `git`, which is the whole trap this test walked into once: a
+	// plain `update-ref -d` fires reference-transaction itself, and the marker it
+	// leaves looks exactly like the failure this test is here to detect.
+	if _, err := run(context.Background(), repo, nil, "update-ref", "-d", snap.Ref); err != nil {
+		t.Fatalf("dropping the ref: %v", err)
+	}
+	assertNothingRan(t, markers, "deleting a snapshot ref")
+
+	if err := Fetch(context.Background(), &sess, spec); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	assertNothingRan(t, markers, "fetching a snapshot back from object storage")
+
+	if sha := git(t, repo, "rev-parse", "--verify", snap.Ref); sha != snap.Commit {
+		t.Errorf("the fetched ref points at %s, want %s", sha, snap.Commit)
+	}
+	if len(bucket.keys()) != 2 {
+		t.Errorf("bucket holds %v, want the bundle and its manifest", bucket.keys())
 	}
 }

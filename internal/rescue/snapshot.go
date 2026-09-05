@@ -2,6 +2,7 @@ package rescue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
@@ -40,8 +42,15 @@ type Snapshotter struct {
 	repoRoot  string
 	indexFile string
 	interval  time.Duration
-	retention time.Duration
+	retention Retention
 	sess      *Session
+
+	// mirror is the bucket the loop's snapshots go to, and is nil unless the
+	// configuration asked for `upload: all`. Set after construction rather than
+	// passed to Begin because it is the one thing here that is not about
+	// *taking* a snapshot, and because a run that never configured a bucket —
+	// which is nearly all of them — should not have to name the absence.
+	mirror *config.S3Spec
 
 	mu         sync.Mutex
 	lastTree   string
@@ -69,19 +78,45 @@ type Snapshotter struct {
 // The expected reasons for nil — no git, not a repository, switched off — are
 // silent, because they are not problems. An unwritable rescue directory is, so
 // that one says so: a safety net that quietly isn't there is worse than none.
-func Begin(workspace, agent string, interval, retention time.Duration) *Snapshotter {
-	if interval <= 0 || !Available() {
+func Begin(workspace, agent string, interval time.Duration, retention Retention) *Snapshotter {
+	if interval <= 0 {
 		return nil
+	}
+	s, err := newSnapshotter(workspace, agent, interval, retention)
+	if err != nil {
+		// The expected reasons are not problems and stay silent; anything else
+		// means a safety net that quietly isn't there, which is worse than none.
+		if !errors.Is(err, errNotSnapshottable) {
+			warnNoSafetyNet(err)
+		}
+		return nil
+	}
+	return s
+}
+
+// errNotSnapshottable marks the reasons a workspace simply has nothing to
+// protect — no git, not a repository, a bare one. Begin treats these as silence
+// and Capture reports them, which is the whole difference between the two: the
+// run path has a reason to say nothing, while a caller who asked for a snapshot
+// in as many words is owed the reason there isn't one.
+var errNotSnapshottable = errors.New("nothing to snapshot")
+
+// newSnapshotter records a session and builds the Snapshotter for it. Shared by Begin and
+// Capture so the two cannot drift on what a session is; they differ only in what
+// they do with an error.
+func newSnapshotter(workspace, agent string, interval time.Duration, retention Retention) (*Snapshotter, error) {
+	if !Available() {
+		return nil, fmt.Errorf("%w: git is not available", errNotSnapshottable)
 	}
 	repoRoot, err := MainRepoRoot(workspace)
 	if err != nil {
-		return nil // not a git repository; nothing to snapshot into
+		return nil, fmt.Errorf("%w: %s is not a git repository", errNotSnapshottable, workspace)
 	}
 	// A bare repository has no working tree to snapshot. Without this the first
 	// `add -A` would fail, and fail again, until the failure policy gave up
 	// noisily in the middle of the agent's UI.
 	if bare, err := run(context.Background(), workspace, nil, "rev-parse", "--is-bare-repository"); err == nil && bare == "true" {
-		return nil
+		return nil, fmt.Errorf("%w: %s is a bare repository", errNotSnapshottable, workspace)
 	}
 	now := time.Now()
 	sess := &Session{
@@ -95,8 +130,7 @@ func Begin(workspace, agent string, interval, retention time.Duration) *Snapshot
 	}
 	sess.Ref = RefPrefix + sess.ID
 	if err := sess.Save(); err != nil {
-		warnNoSafetyNet(err)
-		return nil
+		return nil, err
 	}
 	s := &Snapshotter{
 		workspace: workspace,
@@ -108,8 +142,8 @@ func Begin(workspace, agent string, interval, retention time.Duration) *Snapshot
 		stop:      make(chan struct{}),
 	}
 	if err := os.MkdirAll(filepath.Dir(s.indexFile), 0o700); err != nil {
-		warnNoSafetyNet(err)
-		return nil
+		sess.remove()
+		return nil, err
 	}
 	// Built once, here, rather than per snapshot: it costs a `git init` and the
 	// answer never changes for a session. A failure is not fatal — snapshotting
@@ -119,13 +153,37 @@ func Begin(workspace, agent string, interval, retention time.Duration) *Snapshot
 		fmt.Fprintln(os.Stderr, "sandbox-cli: snapshots will read through the repository's own git config "+
 			"(scratch git dir unavailable); a hostile repo could run a clean filter on this host")
 	}
-	return s
+	return s, nil
 }
 
 // warnNoSafetyNet reports that this run has no crash protection, once, on the
 // way in — while the user can still do something about it.
 func warnNoSafetyNet(err error) {
 	fmt.Fprintf(os.Stderr, "sandbox-cli: crash snapshots unavailable for this run: %v\n", err)
+}
+
+// MirrorTo makes the loop upload each snapshot it takes to object storage.
+//
+// Only called for config.UploadAll. The default is manual-only for a reason
+// worth restating at the place it would be overridden: this loop fires every two
+// minutes for the length of every run, so mirroring it means a bundle sized like
+// a clone leaving the machine every two minutes per in-flight agent. The mode
+// exists because "lose the laptop, lose nothing" is a real requirement; it is
+// not one to switch on for somebody by default.
+func (s *Snapshotter) MirrorTo(spec *config.S3Spec) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mirror = spec
+}
+
+// mirrorSpec reads the configured bucket under the lock.
+func (s *Snapshotter) mirrorSpec() *config.S3Spec {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mirror
 }
 
 // Session exposes the manifest for callers that need to report on it.
@@ -154,7 +212,7 @@ func (s *Snapshotter) loop() {
 	// repository is the natural place. Sessions whose work has since been
 	// committed for real go at the same time — that, rather than the 14-day
 	// timeout, is how most snapshots should end.
-	prune(s.repoRoot, s.retention)
+	pruneExpired(s.repoRoot, s.retention)
 	_, _ = PruneSuperseded(s.repoRoot)
 
 	s.take(snapshotTimeout)
@@ -223,7 +281,22 @@ func (s *Snapshotter) take(timeout time.Duration) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	_, err := s.snapshot(ctx)
+	commit, err := s.snapshot(ctx)
+
+	// Mirrored on the way past, and never allowed to fail the run — the loop's
+	// policy for everything, and doubly so for this one: a bucket that has gone
+	// away, a laptop on a train, an expired credential are all states in which
+	// the *local* safety net is still working perfectly, and stopping it because
+	// the network is unreachable would trade the protection that works for the
+	// one that does not. The manifest records the failure, so the listing says
+	// which snapshots never left.
+	if err == nil && commit != "" {
+		if spec := s.mirrorSpec(); spec.UploadsRun() {
+			mctx, mcancel := context.WithTimeout(context.Background(), remoteTimeout)
+			_ = Mirror(mctx, s.sess, spec)
+			mcancel()
+		}
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -352,19 +425,50 @@ func settled(s Session) bool {
 	return s.EndedAt != nil || time.Since(s.Activity()) > liveSessionGrace
 }
 
-// prune drops sessions whose last activity is older than the retention window,
-// deleting the snapshot ref (which is what was pinning the objects) along with
-// the manifest. Best-effort throughout: retention housekeeping must never be the
-// reason a run misbehaves.
-func prune(repoRoot string, olderThan time.Duration) {
-	if olderThan <= 0 {
-		return
+// pruneExpired is the housekeeping the snapshot loop runs, deleting the snapshot
+// ref (which is what was pinning the objects) along with the manifest.
+// Best-effort throughout: retention housekeeping must never be the reason a run
+// misbehaves.
+func pruneExpired(repoRoot string, r Retention) {
+	_, _ = PruneExpired(repoRoot, r)
+}
+
+// PruneExpired removes snapshot sessions that have outlived their retention, and
+// reports how many went.
+//
+// Retention is asked **per session** rather than applied as one cutoff, because
+// a snapshot somebody took deliberately and a snapshot the crash net took on a
+// timer are not the same thing and should not age at the same rate. A session
+// that names its own retention gets that; anything else gets the default for its
+// kind. See Session.Retention for why the rule is stored rather than an expiry.
+func PruneExpired(repoRoot string, r Retention) (int, error) {
+	sessions, err := Sessions(repoRoot)
+	if err != nil {
+		return 0, err
 	}
-	_, _ = Prune(repoRoot, olderThan)
+	now := time.Now()
+	n := 0
+	for _, sess := range sessions {
+		keep := r.For(sess)
+		if keep <= 0 || !settled(sess) {
+			continue
+		}
+		if !sess.Activity().Before(now.Add(-keep)) {
+			continue
+		}
+		drop(sess)
+		n++
+	}
+	return n, nil
 }
 
 // Prune removes snapshot sessions for a repository that are older than
-// olderThan, and reports how many went. Exposed for `sandbox-cli recover prune`.
+// olderThan, whatever retention they carry, and reports how many went.
+//
+// One cutoff for everything, deliberately: this is `sandbox-cli recover prune
+// --older-than`, where the user has just said what to delete in as many words.
+// A per-snapshot retention is a default to age by, not a veto over an explicit
+// instruction. PruneExpired is the one that honours it.
 func Prune(repoRoot string, olderThan time.Duration) (int, error) {
 	sessions, err := Sessions(repoRoot)
 	if err != nil {

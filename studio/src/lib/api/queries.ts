@@ -12,7 +12,13 @@ import { toast } from "sonner";
 import { api } from "@/lib/api/endpoints";
 import { formatRelative } from "@/lib/format";
 import { useUi } from "@/lib/store";
-import type { LaunchRequest, Project, UsageSnapshot } from "@/lib/types";
+import type {
+  LaunchRequest,
+  Project,
+  RestoreMode,
+  SnapshotSettings,
+  UsageSnapshot,
+} from "@/lib/types";
 
 /**
  * Query keys, in one place. A key spelled two ways is a cache that never
@@ -41,6 +47,9 @@ export const qk = {
   // Repo-scoped keys carry the repo id. A key that did not would serve one
   // repository's worktrees under another's name the moment the picker moved —
   // the cache would hit, and the screen would be confidently wrong.
+  snapshots: (repo?: string, branch?: string) =>
+    ["snapshots", repo ?? "default", branch ?? "all"] as const,
+  snapshotSettings: ["snapshots", "settings"] as const,
   worktrees: (repo?: string) => ["worktrees", repo ?? "default"] as const,
   worktree: (b: string, repo?: string) => ["worktrees", repo ?? "default", b] as const,
   worktreeCommits: (b: string, repo?: string) =>
@@ -705,5 +714,184 @@ export function useSessionRaw(agent: string | null, id: string | null, enabled: 
     queryFn: () => api.sessionRaw(agent!, id!),
     enabled: enabled && !!agent && !!id,
     staleTime: 30_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Snapshots
+// ---------------------------------------------------------------------------
+
+export function useSnapshots(repo?: string, branch?: string) {
+  return useQuery({
+    queryKey: qk.snapshots(repo, branch),
+    queryFn: () => api.snapshots(repo, branch),
+    staleTime: 30_000,
+  });
+}
+
+export function useSnapshotSettings() {
+  return useQuery({
+    queryKey: qk.snapshotSettings,
+    queryFn: api.snapshotSettings,
+    staleTime: 60_000,
+  });
+}
+
+export function useCreateSnapshot(repo?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { branch?: string; label?: string; retention?: string }) =>
+      api.createSnapshot({ repo, ...vars }),
+    onSuccess: (snap) => {
+      void qc.invalidateQueries({ queryKey: ["snapshots"] });
+      toast.success(snap.label ? `Snapshot "${snap.label}" taken` : "Snapshot taken");
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      // An unchanged tree is not a failure — it is the answer. Reporting it as
+      // an error trains people to ignore the ones that are.
+      if (/nothing to snapshot/i.test(message)) {
+        toast.info("Nothing to snapshot", {
+          description: "The workspace is exactly what is already committed.",
+        });
+        return;
+      }
+      toast.error("Could not take a snapshot", { description: message });
+    },
+  });
+}
+
+export function useRestoreSnapshot(repo?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; mode?: RestoreMode; branch?: string }) =>
+      api.restoreSnapshot(vars.id, { mode: vars.mode, branch: vars.branch, repo }),
+    onSuccess: (res) => {
+      // A restore changes the repository, so what the worktree screens show
+      // about branches and dirty files is now stale.
+      void qc.invalidateQueries({ queryKey: ["worktrees"] });
+      if (res.mode === "worktree") {
+        toast.success(`Restored ${res.files} file${res.files === 1 ? "" : "s"} into the worktree`);
+      } else if (res.matchesWorkingTree) {
+        // Worth saying: the common case after a crash is that nothing was
+        // missing, and "created branch X" alone sends somebody looking there for
+        // work that was never gone.
+        toast.success(`Restored onto ${res.branch}`, {
+          description: "The working tree already matched it — nothing was actually missing.",
+        });
+      } else {
+        toast.success(`Restored onto ${res.branch}`);
+      }
+    },
+    onError: (err) =>
+      toast.error("Could not restore that snapshot", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  });
+}
+
+export function useSetSnapshotRetention(repo?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; retention: string }) =>
+      api.setSnapshotRetention(vars.id, vars.retention, repo),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["snapshots"] });
+      toast.success("Retention updated");
+    },
+    onError: (err) =>
+      toast.error("Could not change that retention", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  });
+}
+
+/**
+ * Mirror a snapshot to object storage now.
+ *
+ * The listing is invalidated rather than patched: the row's remote block is what
+ * changed, and a hand-patched cache is how a screen ends up claiming an upload
+ * the daemon does not know about.
+ */
+export function useUploadSnapshot(repo?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.uploadSnapshot(id, repo),
+    onSuccess: (snap) => {
+      void qc.invalidateQueries({ queryKey: ["snapshots"] });
+      toast.success("Snapshot mirrored", {
+        description: snap.remote?.bucket ? `Uploaded to ${snap.remote.bucket}` : undefined,
+      });
+    },
+    onError: (err) =>
+      toast.error("Could not mirror that snapshot", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  });
+}
+
+/**
+ * Ask the bucket whether a snapshot's object is really there.
+ *
+ * A mutation rather than a query, because it is a question somebody *asks*: on a
+ * timer it would be a round trip per row per refetch, and the answer it gives is
+ * only interesting at the moment you are about to rely on the copy.
+ */
+export function useVerifySnapshot(repo?: string) {
+  return useMutation({
+    mutationFn: (id: string) => api.verifySnapshot(id, repo),
+    onSuccess: (res) => {
+      if (res.ok) {
+        toast.success("The object is in the bucket", { description: res.bucket });
+        return;
+      }
+      // Not a thrown error: the daemon answered correctly and the storage did
+      // not. Saying "check failed" would point at the wrong thing.
+      toast.warning("The bucket does not have it", {
+        description: res.error ?? "The object is gone, or the credential cannot read it.",
+      });
+    },
+    onError: (err) =>
+      toast.error("Could not ask the bucket", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  });
+}
+
+/**
+ * Does the configured bucket answer? A mutation for the same reason: it is a
+ * Test button, not a poll, and every press costs a signed request.
+ */
+export function useCheckSnapshotStorage() {
+  return useMutation({
+    mutationFn: () => api.checkSnapshotStorage(),
+    onSuccess: (res) => {
+      if (res.ok) {
+        toast.success("Storage is reachable", { description: res.bucket });
+        return;
+      }
+      toast.warning("Storage did not answer", { description: res.error });
+    },
+    onError: (err) =>
+      toast.error("Could not reach the daemon", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  });
+}
+
+export function useSetSnapshotSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: SnapshotSettings) => api.setSnapshotSettings(body),
+    onSuccess: (fresh) => {
+      qc.setQueryData(qk.snapshotSettings, fresh);
+      // Every listed snapshot's effective retention is computed from these.
+      void qc.invalidateQueries({ queryKey: ["snapshots"] });
+      toast.success("Snapshot retention saved");
+    },
+    onError: (err) =>
+      toast.error("Could not save that", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
   });
 }

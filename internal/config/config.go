@@ -431,7 +431,112 @@ type SnapshotSpec struct {
 	Enabled   *bool  `yaml:"enabled"`   // default true
 	Interval  string `yaml:"interval"`  // Go duration, e.g. "2m" (default 2m; <=0 disables)
 	Retention string `yaml:"retention"` // Go duration; snapshots older than this are pruned (default 336h = 14d)
+
+	// ManualRetention is the same window for a snapshot somebody *asked* for
+	// rather than one the crash net took on a timer (default 168h = 7d).
+	//
+	// A separate key because the two are not the same thing: a crash snapshot is
+	// insurance against something nobody saw coming and has to still be there
+	// when they finally look, while a checkpoint is taken before a known risk by
+	// somebody who is right there. A single window would either keep every
+	// checkpoint for a fortnight or cut the crash net in half.
+	ManualRetention string `yaml:"manual_retention"`
+
+	// S3 mirrors snapshots to object storage, so a checkpoint survives the
+	// machine that took it. Nil is off, which is the default: this reaches the
+	// network and costs money, and neither is a thing to start doing because a
+	// tool was installed.
+	S3 *S3Spec `yaml:"s3"`
 }
+
+// Upload modes for SnapshotSpec.S3.
+//
+// The default is UploadManual rather than UploadAll, and the reason is
+// arithmetic: the crash net commits every two minutes for the length of every
+// run, so mirroring it means a bundle leaving the machine every two minutes per
+// in-flight agent. A checkpoint somebody asked for is a handful a day. Both are
+// available; only one is a sensible thing to switch on by default.
+const (
+	UploadManual = "manual" // snapshots somebody asked for (default)
+	UploadAll    = "all"    // those, and every crash-net snapshot
+	UploadOff    = "off"    // configured but idle
+)
+
+// S3Spec is a bucket to mirror snapshots into, and how to reach it.
+//
+// **It holds no credential, and this is structural rather than a convention.**
+// The three key fields are the *names* of environment variables, exactly as
+// `gateway:` names the variable a gateway key lives in — a config file is a
+// file, it gets committed, copied between machines and pasted into issues, and
+// a secret that was never in it cannot leak from it. There is deliberately
+// nowhere in this struct to put a value.
+//
+// The whole key is refused from a project `.sandbox.yaml` (trust.go): it names a
+// network destination and which credential is read, so a hostile repository that
+// could set it would have both an exfiltration target and a way to choose what
+// gets sent there.
+type S3Spec struct {
+	Bucket string `yaml:"bucket"`
+	Region string `yaml:"region"` // default us-east-1
+
+	// Endpoint reaches an S3-compatible server — MinIO, R2, Ceph, B2. Empty
+	// addresses AWS. Scheme optional, https assumed.
+	Endpoint string `yaml:"endpoint"`
+
+	// Prefix namespaces the keys, so one bucket can hold more than snapshots.
+	Prefix string `yaml:"prefix"`
+
+	// PathStyle addresses the bucket in the path rather than the hostname.
+	// Required by most self-hosted servers.
+	PathStyle bool `yaml:"path_style"`
+
+	// Upload is UploadManual, UploadAll or UploadOff. Empty means UploadManual.
+	Upload string `yaml:"upload"`
+
+	// The variable names holding the credential. Empty means the conventional
+	// AWS one, so a machine with a working `aws` CLI needs nothing here.
+	AccessKeyEnv    string `yaml:"access_key_env"`
+	SecretKeyEnv    string `yaml:"secret_key_env"`
+	SessionTokenEnv string `yaml:"session_token_env"`
+
+	// MaxObjectMB refuses a bundle larger than this rather than letting the
+	// upload run for an hour and fail on S3's 5 GiB single-PUT limit — this
+	// client does not do multipart, and a limit that announces itself beats one
+	// discovered at the end of a long transfer. Zero means the default.
+	MaxObjectMB int `yaml:"max_object_mb"`
+}
+
+// DefaultMaxObjectMB is the bundle-size ceiling when none is configured: 2 GiB,
+// comfortably under S3's 5 GiB cap for a single PUT.
+const DefaultMaxObjectMB = 2048
+
+// UploadMode returns the resolved mode, defaulting to UploadManual.
+func (s *S3Spec) UploadMode() string {
+	if s == nil || s.Bucket == "" {
+		return UploadOff
+	}
+	if s.Upload == "" {
+		return UploadManual
+	}
+	return s.Upload
+}
+
+// MaxObjectBytes returns the resolved bundle ceiling.
+func (s *S3Spec) MaxObjectBytes() int64 {
+	if s == nil || s.MaxObjectMB <= 0 {
+		return int64(DefaultMaxObjectMB) << 20
+	}
+	return int64(s.MaxObjectMB) << 20
+}
+
+// UploadsManual and UploadsAll answer the two questions the snapshot paths
+// actually ask, so neither has to know the spelling of a mode.
+func (s *S3Spec) UploadsManual() bool {
+	m := s.UploadMode()
+	return m == UploadManual || m == UploadAll
+}
+
+func (s *S3Spec) UploadsRun() bool { return s.UploadMode() == UploadAll }
 
 // Snapshot defaults. Two minutes bounds the loss window on a hard kill without
 // making the safety net noticeable; fourteen days is long enough that "the
@@ -440,6 +545,11 @@ type SnapshotSpec struct {
 const (
 	DefaultSnapshotInterval  = 2 * time.Minute
 	DefaultSnapshotRetention = 14 * 24 * time.Hour
+
+	// DefaultManualSnapshotRetention mirrors rescue.DefaultManualRetention. It is
+	// restated rather than imported because internal/rescue imports this package,
+	// and the value is pinned equal by test.
+	DefaultManualSnapshotRetention = 7 * 24 * time.Hour
 )
 
 // IsEnabled reports whether snapshotting should run, defaulting to true when unset.
@@ -455,6 +565,12 @@ func (s SnapshotSpec) EveryDuration() time.Duration {
 // RetentionDuration returns the resolved retention window.
 func (s SnapshotSpec) RetentionDuration() time.Duration {
 	return parseDurationOr(s.Retention, DefaultSnapshotRetention)
+}
+
+// ManualRetentionDuration returns the resolved retention window for snapshots
+// taken on demand.
+func (s SnapshotSpec) ManualRetentionDuration() time.Duration {
+	return parseDurationOr(s.ManualRetention, DefaultManualSnapshotRetention)
 }
 
 func parseDurationOr(s string, fallback time.Duration) time.Duration {
@@ -605,12 +721,31 @@ func (c Config) Validate() error {
 	for _, d := range []struct{ field, value string }{
 		{"snapshot.interval", c.Snapshot.Interval},
 		{"snapshot.retention", c.Snapshot.Retention},
+		{"snapshot.manual_retention", c.Snapshot.ManualRetention},
 	} {
 		if d.value == "" {
 			continue
 		}
 		if _, err := time.ParseDuration(d.value); err != nil {
 			return fmt.Errorf("%s must be a duration like \"2m\" or \"336h\", got %q", d.field, d.value)
+		}
+	}
+	if s3 := c.Snapshot.S3; s3 != nil {
+		switch s3.Upload {
+		case "", UploadManual, UploadAll, UploadOff:
+		default:
+			return fmt.Errorf("snapshot.s3.upload must be %q, %q, or %q, got %q",
+				UploadManual, UploadAll, UploadOff, s3.Upload)
+		}
+		// A bucket is the one field with no sensible default: an endpoint and a
+		// prefix with nothing to put them on is a block somebody believes is
+		// working. Checked here rather than at upload time, where the first
+		// report of it would be a failed checkpoint.
+		if s3.Bucket == "" && (s3.Endpoint != "" || s3.Prefix != "" || s3.Upload != "") {
+			return fmt.Errorf("snapshot.s3 needs a bucket")
+		}
+		if s3.MaxObjectMB < 0 {
+			return fmt.Errorf("snapshot.s3.max_object_mb must not be negative, got %d", s3.MaxObjectMB)
 		}
 	}
 	for name, s := range c.Secrets {
