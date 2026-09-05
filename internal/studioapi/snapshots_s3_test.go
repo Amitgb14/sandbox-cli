@@ -3,6 +3,7 @@ package studioapi
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,11 +17,16 @@ import (
 // and can be told to refuse, which is the only distinction these assertions
 // need.
 type bucketServer struct {
-	mu   sync.Mutex
-	puts []string
-	fail bool
+	mu      sync.Mutex
+	puts    []string
+	objects map[string][]byte
+	fail    bool
 }
 
+// It stores what it is given, which most of these tests do not need and one
+// does: a restore that has to fetch the bundle back is the only assertion that
+// proves the objects are reachable again, and a bucket that forgets them can
+// only ever prove the request was made.
 func (b *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -29,11 +35,33 @@ func (b *bucketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<Error><Code>AccessDenied</Code><Message>no</Message></Error>`)
 		return
 	}
+	key := strings.TrimPrefix(r.URL.Path, "/snaps/")
 	switch r.Method {
 	case http.MethodPut:
+		body, _ := io.ReadAll(r.Body)
+		if b.objects == nil {
+			b.objects = map[string][]byte{}
+		}
+		b.objects[key] = body
 		b.puts = append(b.puts, r.URL.Path)
+	case http.MethodHead:
+		obj, ok := b.objects[key]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprint(len(obj)))
 	case http.MethodGet:
-		fmt.Fprint(w, `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`)
+		if r.URL.Query().Get("list-type") == "2" {
+			fmt.Fprint(w, `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`)
+			return
+		}
+		obj, ok := b.objects[key]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Write(obj)
 	}
 }
 
@@ -207,8 +235,8 @@ func TestSettingsRefuseWritingABucketConfigYamlOwns(t *testing.T) {
 		t.Fatalf("a bucket from config.yaml must be flagged as managed: %+v", got.S3)
 	}
 
-	rec = asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettings{
-		Retention: "336h", ManualRetention: "168h",
+	rec = asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettingsUpdate{
+		Retention: strPtr("336h"), ManualRetention: strPtr("168h"),
 		S3: &SnapshotS3Settings{Bucket: "somewhere-else"},
 	})
 	if rec.Code != http.StatusConflict {
@@ -225,8 +253,8 @@ func TestSettingsWriteWithoutAnS3BlockLeavesTheBucketAlone(t *testing.T) {
 	s, _ := newTestServer(t)
 	h := s.Handler()
 
-	set := asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettings{
-		Retention: "336h", ManualRetention: "168h",
+	set := asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettingsUpdate{
+		Retention: strPtr("336h"), ManualRetention: strPtr("168h"),
 		S3: &SnapshotS3Settings{Bucket: "keep-me", Region: "eu-west-1"},
 	})
 	if set.Code != http.StatusOK {
@@ -234,8 +262,8 @@ func TestSettingsWriteWithoutAnS3BlockLeavesTheBucketAlone(t *testing.T) {
 	}
 
 	// A second write carrying only the windows.
-	set = asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettings{
-		Retention: "720h", ManualRetention: "24h",
+	set = asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettingsUpdate{
+		Retention: strPtr("720h"), ManualRetention: strPtr("24h"),
 	})
 	if set.Code != http.StatusOK {
 		t.Fatalf("second write = %d: %s", set.Code, set.Body)
@@ -258,10 +286,10 @@ func TestAnEmptyBucketTurnsMirroringOff(t *testing.T) {
 	s, _ := newTestServer(t)
 	h := s.Handler()
 
-	asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettings{
+	asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettingsUpdate{
 		S3: &SnapshotS3Settings{Bucket: "b", Endpoint: "https://minio.local", Prefix: "team"},
 	})
-	rec := asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettings{
+	rec := asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettingsUpdate{
 		S3: &SnapshotS3Settings{Bucket: ""},
 	})
 	if rec.Code != http.StatusOK {
@@ -382,5 +410,152 @@ func TestUploadWithoutABucketNamesTheSetting(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "snapshot.s3.bucket") {
 		t.Errorf("the refusal should name the setting, got %s", rec.Body)
+	}
+}
+
+// strPtr is the write type's "this field was sent" — see SnapshotSettingsUpdate,
+// where absence is a distinct request from an empty string.
+func strPtr(v string) *string { return &v }
+
+// The whole point of mirroring, over HTTP: a snapshot whose objects are gone
+// from the repository is restored by fetching the bundle back, not refused.
+//
+// This is a regression test for a defect that made the entire S3 restore path
+// unreachable. rescue.Find returns its error *and* a populated snapshot when the
+// objects have been collected, and this handler read only the error — so the
+// branch below it, the one that fetches, could never run, and a snapshot with a
+// perfectly good copy in the bucket answered 404.
+func TestRestoreFetchesASnapshotThatIsOnlyInTheBucket(t *testing.T) {
+	s, _ := newTestServer(t)
+	snapshotRepo(t, s)
+	withBucket(t, s)
+	h := s.Handler()
+
+	write(t, s.Project+"/work.txt", "the risky migration\n")
+	rec := asBrowser(t, h, "POST", "/v1/snapshots", SnapshotCreateRequest{Label: "before"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", rec.Code, rec.Body)
+	}
+	var snap SnapshotInfo
+	json.Unmarshal(rec.Body.Bytes(), &snap)
+	if snap.Remote == nil || !snap.Remote.Uploaded {
+		t.Fatalf("the snapshot was not mirrored: %+v", snap.Remote)
+	}
+
+	// Erase it locally: the ref, then the objects it was keeping alive. Only the
+	// manifest and the copy in the bucket are left.
+	gitIn(t, s.Project, "update-ref", "-d", "refs/sandbox/snapshots/"+snap.ID)
+	gitIn(t, s.Project, "reflog", "expire", "--expire=now", "--all")
+	gitIn(t, s.Project, "gc", "--prune=now", "--quiet")
+
+	rec = asBrowser(t, h, "POST", "/v1/snapshots/"+snap.ID+"/restore", SnapshotRestoreRequest{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restore of a bucket-only snapshot = %d: %s", rec.Code, rec.Body)
+	}
+	var res RunRecoverResponse
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if res.Branch == "" {
+		t.Fatalf("restore produced no branch: %s", rec.Body)
+	}
+	if out := gitIn(t, s.Project, "show", res.Branch+":work.txt"); !strings.Contains(out, "the risky migration") {
+		t.Fatalf("the restored branch does not hold the work: %q", out)
+	}
+
+	// And the manifest now says the objects are here again, so the listing does
+	// not keep offering a snapshot that has already come home.
+	rec = asBrowser(t, h, "GET", "/v1/snapshots", nil)
+	var list SnapshotListResponse
+	json.Unmarshal(rec.Body.Bytes(), &list)
+	for _, got := range list.Snapshots {
+		if got.ID == snap.ID && !got.Reachable {
+			t.Error("after a fetch the snapshot is still listed as unreachable")
+		}
+	}
+}
+
+// The other half of the same distinction: gone *and* never mirrored is the one
+// shape nothing can undo, and it must not be reported as a fetch failure or a
+// 404 that suggests the id was wrong.
+func TestRestoreOfAGoneSnapshotWithNoCopySaysWhatHappened(t *testing.T) {
+	s, _ := newTestServer(t)
+	snapshotRepo(t, s)
+	h := s.Handler()
+
+	write(t, s.Project+"/work.txt", "x\n")
+	rec := asBrowser(t, h, "POST", "/v1/snapshots", SnapshotCreateRequest{})
+	var snap SnapshotInfo
+	json.Unmarshal(rec.Body.Bytes(), &snap)
+
+	gitIn(t, s.Project, "update-ref", "-d", "refs/sandbox/snapshots/"+snap.ID)
+	gitIn(t, s.Project, "reflog", "expire", "--expire=now", "--all")
+	gitIn(t, s.Project, "gc", "--prune=now", "--quiet")
+
+	rec = asBrowser(t, h, "POST", "/v1/snapshots/"+snap.ID+"/restore", SnapshotRestoreRequest{})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("restore = %d, want 422: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "no longer in the repository") {
+		t.Errorf("the refusal does not say what happened to it: %s", rec.Body)
+	}
+}
+
+// Studio's storage screen knows nothing about retention and must not write it.
+// It used to spread the read back into the write, which copied the *resolved*
+// windows — config.yaml's values, or the built-in defaults — into this daemon's
+// own override file, where they would outlive the line they came from.
+func TestASettingsWriteLeavesTheWindowsItDidNotSendAlone(t *testing.T) {
+	s, _ := newTestServer(t)
+	h := s.Handler()
+
+	set := asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettingsUpdate{
+		Retention: strPtr("720h"), ManualRetention: strPtr("48h"),
+	})
+	if set.Code != http.StatusOK {
+		t.Fatalf("first write = %d: %s", set.Code, set.Body)
+	}
+
+	// A write about the bucket only.
+	set = asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettingsUpdate{
+		S3: &SnapshotS3Settings{Bucket: "somewhere"},
+	})
+	if set.Code != http.StatusOK {
+		t.Fatalf("bucket write = %d: %s", set.Code, set.Body)
+	}
+	var got SnapshotSettings
+	json.Unmarshal(set.Body.Bytes(), &got)
+	if got.Retention != "720h0m0s" || got.ManualRetention != "48h0m0s" {
+		t.Fatalf("a bucket write moved the windows: run=%q manual=%q", got.Retention, got.ManualRetention)
+	}
+	if s.Session.Cfg.Snapshot.Retention != "720h" {
+		t.Errorf("the running config's window was rewritten: %q", s.Session.Cfg.Snapshot.Retention)
+	}
+}
+
+// A window config.yaml sets outranks this screen, and the screen is told so —
+// SnapshotSettings.ConfigRetention is that promise. Applying the write to the
+// running daemon anyway broke it in the direction that hides: the value silently
+// reverted to the built-in default for the life of the process, and the next
+// read, finding nothing left to attribute to config.yaml, un-pinned the field.
+func TestASettingsWriteCannotOverrideWhatConfigYamlPins(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Session.Cfg.Snapshot.Retention = "720h"
+	h := s.Handler()
+
+	set := asBrowser(t, h, "POST", "/v1/snapshots/settings", SnapshotSettingsUpdate{
+		Retention: strPtr(""), ManualRetention: strPtr("24h"),
+	})
+	if set.Code != http.StatusOK {
+		t.Fatalf("write = %d: %s", set.Code, set.Body)
+	}
+	if s.Session.Cfg.Snapshot.Retention != "720h" {
+		t.Fatalf("config.yaml's window was overwritten in the running daemon: %q", s.Session.Cfg.Snapshot.Retention)
+	}
+	var got SnapshotSettings
+	json.Unmarshal(set.Body.Bytes(), &got)
+	if got.ConfigRetention != "720h" {
+		t.Errorf("the field un-pinned itself: configRetention = %q", got.ConfigRetention)
+	}
+	if got.ManualRetention != "24h0m0s" {
+		t.Errorf("the window that was not pinned did not take: %q", got.ManualRetention)
 	}
 }

@@ -44,7 +44,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { PageHeader } from "@/components/common/page-header";
 import { EmptyState } from "@/components/common/empty-state";
 import {
@@ -122,7 +126,10 @@ export default function SnapshotsPage() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button asChild size="sm" variant="outline">
-                  <Link href="/settings#snapshots" aria-label="Snapshot settings">
+                  <Link
+                    href="/settings#snapshots"
+                    aria-label="Snapshot settings"
+                  >
                     <Settings2 className="size-4" />
                   </Link>
                 </Button>
@@ -205,14 +212,20 @@ export default function SnapshotsPage() {
                   <TableCell>
                     <div className="min-w-0">
                       <p className="truncate text-sm">
-                        {s.label || <span className="text-muted-foreground">unlabelled</span>}
+                        {s.label || (
+                          <span className="text-muted-foreground">
+                            unlabelled
+                          </span>
+                        )}
                       </p>
                       <p className="truncate font-mono text-[11px] text-muted-foreground">
                         {s.id}
                       </p>
                     </div>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{s.branch || "—"}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {s.branch || "—"}
+                  </TableCell>
                   <TableCell>
                     <SourceCell snapshot={s} />
                   </TableCell>
@@ -225,12 +238,14 @@ export default function SnapshotsPage() {
                       // restore that is a promise nothing can keep.
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <span className="cursor-help text-caution">collected</span>
+                          <span className="cursor-help text-caution">
+                            collected
+                          </span>
                         </TooltipTrigger>
                         <TooltipContent className="max-w-xs">
-                          The manifest is still here but its objects are gone — the ref
-                          was deleted and git collected the content. Nothing can be
-                          restored from it.
+                          The manifest is still here but its objects are gone —
+                          the ref was deleted and git collected the content.
+                          Nothing can be restored from it.
                         </TooltipContent>
                       </Tooltip>
                     )}
@@ -239,11 +254,15 @@ export default function SnapshotsPage() {
                     <RemoteCell snapshot={s} />
                   </TableCell>
                   <TableCell className="text-xs whitespace-nowrap tabular-nums">
-                    <span className={s.retention ? "" : "text-muted-foreground"}>
+                    <span
+                      className={s.retention ? "" : "text-muted-foreground"}
+                    >
                       {humanDuration(s.retentionEffective)}
                     </span>
                     {s.retention && (
-                      <span className="ml-1.5 text-[10px] text-muted-foreground">set</span>
+                      <span className="ml-1.5 text-[10px] text-muted-foreground">
+                        set
+                      </span>
                     )}
                   </TableCell>
                   <TableCell className="text-xs whitespace-nowrap text-muted-foreground">
@@ -271,9 +290,9 @@ export default function SnapshotsPage() {
                         </DropdownMenuItem>
                         {s.source === "sdk" && (
                           <p className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
-                            Taken through the SDK, so it is restored through the SDK —
-                            a script may be part-way through something this screen
-                            cannot see.
+                            Taken through the SDK, so it is restored through the
+                            SDK — a script may be part-way through something
+                            this screen cannot see.
                           </p>
                         )}
                         <DropdownMenuSeparator />
@@ -281,14 +300,20 @@ export default function SnapshotsPage() {
                           <>
                             <DropdownMenuItem
                               disabled={!s.reachable || upload.isPending}
-                              onClick={() => upload.mutate(s.id)}
+                              onClick={() =>
+                                upload.mutate({ id: s.id, repo: s.repoId })
+                              }
                             >
                               <CloudUpload className="size-3.5" />
-                              {s.remote?.uploaded ? "Upload again" : "Mirror to storage"}
+                              {s.remote?.uploaded
+                                ? "Upload again"
+                                : "Mirror to storage"}
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               disabled={!s.remote?.uploaded || verify.isPending}
-                              onClick={() => verify.mutate(s.id)}
+                              onClick={() =>
+                                verify.mutate({ id: s.id, repo: s.repoId })
+                              }
                             >
                               <ShieldCheck className="size-3.5" />
                               Check it is still there
@@ -314,10 +339,20 @@ export default function SnapshotsPage() {
         open={taking}
         onClose={() => setTaking(false)}
         repo={repo}
-        branches={(worktrees ?? []).filter((w) => !repo || w.repoId === repo).map((w) => w.branch)}
+        branches={(worktrees ?? [])
+          .filter((w) => !repo || w.repoId === repo)
+          .map((w) => w.branch)}
       />
-      <RestoreDialog snapshot={restoring} onClose={() => setRestoring(null)} repo={repo} />
-      <RetentionDialog snapshot={retiming} onClose={() => setRetiming(null)} repo={repo} />
+      <RestoreDialog
+        snapshot={restoring}
+        onClose={() => setRestoring(null)}
+        repo={repo}
+      />
+      <RetentionDialog
+        snapshot={retiming}
+        onClose={() => setRetiming(null)}
+        repo={repo}
+      />
     </div>
   );
 }
@@ -425,8 +460,8 @@ function TakeDialog({
         <DialogHeader>
           <DialogTitle>Take a snapshot</DialogTitle>
           <DialogDescription>
-            Commits the working tree under refs/sandbox/snapshots/. Your index, HEAD,
-            branches and working tree are not touched.
+            Commits the working tree under refs/sandbox/snapshots/. Your index,
+            HEAD, branches and working tree are not touched.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -439,7 +474,8 @@ function TakeDialog({
               placeholder="before the migration"
             />
             <p className="text-[11px] text-muted-foreground">
-              Optional, and worth it: without one a checkpoint is a hex id in a list.
+              Optional, and worth it: without one a checkpoint is a hex id in a
+              list.
             </p>
           </div>
           <div className="space-y-1.5">
@@ -458,8 +494,8 @@ function TakeDialog({
               ))}
             </select>
             <p className="text-[11px] text-muted-foreground">
-              A branch is snapshotted in its own worktree, which is where an agent&apos;s
-              work actually is.
+              A branch is snapshotted in its own worktree, which is where an
+              agent&apos;s work actually is.
             </p>
           </div>
         </div>
@@ -510,19 +546,23 @@ function RestoreDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            Restore <span className="font-mono">{snapshot?.label || snapshot?.id}</span>?
+            Restore{" "}
+            <span className="font-mono">{snapshot?.label || snapshot?.id}</span>
+            ?
           </DialogTitle>
           <DialogDescription asChild>
             <div className="space-y-2 text-sm">
               <p>
-                Branch mode is the default and the only one that cannot destroy anything:
-                it points a new branch at the snapshot and leaves your working tree alone.
+                Branch mode is the default and the only one that cannot destroy
+                anything: it points a new branch at the snapshot and leaves your
+                working tree alone.
               </p>
               {mode === "worktree" && (
                 <p className="text-destructive">
-                  Worktree mode writes the files back over what is there now. It is
-                  refused on a dirty tree rather than offering a force — but everything
-                  committed since this snapshot stays only on its branch.
+                  Worktree mode writes the files back over what is there now. It
+                  is refused on a dirty tree rather than offering a force — but
+                  everything committed since this snapshot stays only on its
+                  branch.
                 </p>
               )}
             </div>
@@ -536,9 +576,15 @@ function RestoreDialog({
             onChange={(e) => setMode(e.target.value as RestoreMode)}
             className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
           >
-            <option value="branch">branch — a new branch at the snapshot</option>
-            <option value="worktree">worktree — put the files back in place</option>
-            <option value="patch">patch — a diff, and nothing is written</option>
+            <option value="branch">
+              branch — a new branch at the snapshot
+            </option>
+            <option value="worktree">
+              worktree — put the files back in place
+            </option>
+            <option value="patch">
+              patch — a diff, and nothing is written
+            </option>
           </select>
         </div>
         <DialogFooter>
@@ -550,7 +596,10 @@ function RestoreDialog({
             disabled={restore.isPending}
             onClick={() => {
               if (!snapshot) return;
-              restore.mutate({ id: snapshot.id, mode }, { onSuccess: () => onClose() });
+              restore.mutate(
+                { id: snapshot.id, mode, repo: snapshot.repoId },
+                { onSuccess: () => onClose() },
+              );
             }}
           >
             <RotateCcw className="size-3.5" />
@@ -586,8 +635,9 @@ function RetentionDialog({
         <DialogHeader>
           <DialogTitle>How long to keep it</DialogTitle>
           <DialogDescription>
-            A Go duration — 72h, 168h, 720h. Empty returns it to the configured default,
-            which is {humanDuration(snapshot?.retentionEffective)} for this one.
+            A Go duration — 72h, 168h, 720h. Empty returns it to the configured
+            default, which is {humanDuration(snapshot?.retentionEffective)} for
+            this one.
           </DialogDescription>
         </DialogHeader>
         <Input
@@ -604,7 +654,14 @@ function RetentionDialog({
             disabled={set.isPending}
             onClick={() => {
               if (!snapshot) return;
-              set.mutate({ id: snapshot.id, retention: value.trim() }, { onSuccess: onClose });
+              set.mutate(
+                {
+                  id: snapshot.id,
+                  retention: value.trim(),
+                  repo: snapshot.repoId,
+                },
+                { onSuccess: onClose },
+              );
             }}
           >
             Save

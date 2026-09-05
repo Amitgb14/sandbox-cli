@@ -282,12 +282,21 @@ succeeded and the storage did not.
 local; what failed is the copy, and `remote.error` carries the reason. Returning
 an error instead would discard the id of a checkpoint that exists.
 
-A settings write that omits `s3` leaves the bucket alone — a client editing only
-the retention windows cannot clear somebody's storage by not knowing about it.
-Sending `s3` with an empty `bucket` is how mirroring is turned off. A bucket set
-in `config.yaml` comes back with `configManaged: true` and a write to it is
+**A settings write takes `SnapshotSettingsUpdate`, not the shape the read
+returns.** Every field is optional and **absent means leave it alone**: the
+screen that edits the bucket sends only `s3`, the one that edits the windows
+sends only the two durations, and neither can clear the other's setting by not
+knowing about it. Sending a window as `""` clears the daemon's own override,
+which is a different request from not sending it; sending `s3` with an empty
+`bucket` turns mirroring off. Half the read's fields are *reports* — what
+`config.yaml` sets, whether anything is writable — so a client echoing a read
+back would be claiming authorship of values it only observed.
+
+A bucket or window set in `config.yaml` outranks this endpoint. The bucket is
 refused with `409` rather than accepted and silently outranked at the next
-restart.
+restart; a pinned window comes back as `configRetention` /
+`configManualRetention` and a write to it is ignored — including in the running
+daemon, which is the half that used to be missed.
 
 ### Which repository a request is about
 

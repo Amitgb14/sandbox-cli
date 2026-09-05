@@ -460,6 +460,14 @@ func RemoteSessions(ctx context.Context, spec *config.S3Spec, repoRoot, repoID s
 			continue
 		}
 		sess.Repo = repoRoot
+		// Workspace too, and for a reason Repo alone does not cover: it is what
+		// studioapi's restore passes to Restore, and a manifest carries the path
+		// the *uploading* machine mounted at /workspace — a directory that need
+		// not exist here, and on a shared layout might exist and be something
+		// else entirely. The repository being fetched into is the honest answer;
+		// a worktree that was never cloned onto this machine is not recoverable
+		// by naming it.
+		sess.Workspace = repoRoot
 		// The manifest is a download in a temp directory that is about to be
 		// removed, and Save() would write the session back into it. Clearing the
 		// path is what makes Save fall through to this machine's rescue
@@ -501,11 +509,17 @@ func RemoteRepoIDs(ctx context.Context, spec *config.S3Spec) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Against the client's own base rather than by searching for "snapshots/" in
+	// the key: a listing returns keys with the configured Prefix applied, and a
+	// prefix of `my-snapshots` or `backups/snapshots` contains that marker itself.
+	// Searching found it there and reported "snapshots" as a repository id — a
+	// namespace that does not exist, offered to the user as the --repo-id to try.
+	base := client.Key("snapshots/")
 	sort.Slice(objects, func(i, j int) bool { return objects[i].Modified.After(objects[j].Modified) })
 	seen := map[string]bool{}
 	var out []string
 	for _, o := range objects {
-		id := repoIDOfKey(o.Key)
+		id := repoIDOfKey(o.Key, base)
 		if id == "" || seen[id] {
 			continue
 		}
@@ -521,19 +535,15 @@ func sessionIDOfKey(key string) string {
 	return strings.TrimSuffix(strings.TrimSuffix(base, ".json"), ".bundle")
 }
 
-// repoIDOfKey reads the repository namespace out of an object key.
-//
-// It looks for the "snapshots/" segment rather than splitting from the left,
-// because a configured Prefix sits in front of it and a listing returns keys
-// with that prefix applied. Finding the marker is what keeps this correct for a
-// bucket shared with anything else.
-func repoIDOfKey(key string) string {
-	const marker = "snapshots/"
-	i := strings.Index(key, marker)
-	if i < 0 {
+// repoIDOfKey reads the repository namespace out of an object key, given the
+// base the listing was made under — the client's configured Prefix plus
+// "snapshots/". A key that is not under it belongs to something else sharing the
+// bucket and is skipped rather than guessed at.
+func repoIDOfKey(key, base string) string {
+	rest := strings.TrimPrefix(key, base)
+	if rest == key {
 		return ""
 	}
-	rest := key[i+len(marker):]
 	j := strings.Index(rest, "/")
 	if j <= 0 {
 		return ""

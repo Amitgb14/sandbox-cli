@@ -74,31 +74,35 @@ export function SnapshotsCard() {
 
         {!data?.writable && (
           <p className="text-xs text-caution">
-            No config directory could be resolved on the daemon&apos;s machine, so nothing
-            can be saved here.
+            No config directory could be resolved on the daemon&apos;s machine,
+            so nothing can be saved here.
           </p>
         )}
 
         <div className="flex items-center gap-3">
           <Button
             size="sm"
-            disabled={save.isPending || !data?.writable || (runPinned && manualPinned)}
+            disabled={
+              save.isPending || !data?.writable || (runPinned && manualPinned)
+            }
             onClick={() =>
               save.mutate({
-                // A pinned field is config.yaml's, so it is not sent back: a UI
-                // that echoed the resolved value would copy config.yaml's setting
-                // into Studio's file, where it would outlive the line it came
-                // from — the mistake the Agents page made with provider hosts.
-                retention: runPinned ? "" : run.trim(),
-                manualRetention: manualPinned ? "" : manual.trim(),
-                writable: true,
+                // A pinned field is config.yaml's, so it is not sent at all: a
+                // UI that echoed the resolved value would copy config.yaml's
+                // setting into Studio's file, where it would outlive the line it
+                // came from — the mistake the Agents page made with provider
+                // hosts. Absent rather than "", which the daemon reads as "clear
+                // my override" and is a different request.
+                retention: runPinned ? undefined : run.trim(),
+                manualRetention: manualPinned ? undefined : manual.trim(),
               })
             }
           >
             Save
           </Button>
           <p className="text-[11px] text-muted-foreground">
-            A Go duration — 72h, 168h, 720h. Empty returns it to the built-in default.
+            A Go duration — 72h, 168h, 720h. Empty returns it to the built-in
+            default.
           </p>
         </div>
       </CardContent>

@@ -26,6 +26,19 @@ const snapshotTimeout = 30 * time.Second
 // key again.
 const finalSnapshotTimeout = 8 * time.Second
 
+// finalMirrorTimeout is the same argument applied to the upload. remoteTimeout is
+// generous because a bundle is megabytes over a connection nobody chose, which is
+// the right trade on the interval and the wrong one on the way out: with
+// `upload: all`, Stop's final snapshot mirrors synchronously, so a Ctrl-C could
+// have held the exit for twenty minutes pushing a clone-sized bundle.
+//
+// A shorter budget loses at most the last upload, and loses it visibly — the
+// manifest records the failure, the listing shows the snapshot as local-only,
+// and `POST /v1/snapshots/{id}/upload` exists precisely for the copy that did
+// not make it while the network was slow or absent. An exit that hangs is the
+// worse failure, and the one nobody can act on.
+const finalMirrorTimeout = 20 * time.Second
+
 // maxConsecutiveFailures disables snapshotting for the rest of a run. Something
 // is structurally wrong with the repository; repeating it every interval would
 // only spam the agent's UI.
@@ -215,7 +228,7 @@ func (s *Snapshotter) loop() {
 	pruneExpired(s.repoRoot, s.retention)
 	_, _ = PruneSuperseded(s.repoRoot)
 
-	s.take(snapshotTimeout)
+	s.take(snapshotTimeout, remoteTimeout)
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
 	for {
@@ -223,7 +236,7 @@ func (s *Snapshotter) loop() {
 		case <-s.stop:
 			return
 		case <-t.C:
-			s.take(snapshotTimeout)
+			s.take(snapshotTimeout, remoteTimeout)
 		}
 	}
 }
@@ -246,7 +259,7 @@ func (s *Snapshotter) Stop(outcome string, exitCode *int) {
 		s.mu.Lock()
 		s.failures, s.disabled = 0, false
 		s.mu.Unlock()
-		s.take(finalSnapshotTimeout)
+		s.take(finalSnapshotTimeout, finalMirrorTimeout)
 
 		now := time.Now()
 		s.sess.EndedAt = &now
@@ -271,7 +284,7 @@ func (s *Snapshotter) Once() (string, error) {
 // take is the fire-and-forget wrapper the loop uses: it applies the failure
 // policy and never propagates an error, because a failed snapshot must not
 // change what the run does.
-func (s *Snapshotter) take(timeout time.Duration) {
+func (s *Snapshotter) take(timeout, mirrorTimeout time.Duration) {
 	s.mu.Lock()
 	if s.disabled {
 		s.mu.Unlock()
@@ -292,7 +305,7 @@ func (s *Snapshotter) take(timeout time.Duration) {
 	// which snapshots never left.
 	if err == nil && commit != "" {
 		if spec := s.mirrorSpec(); spec.UploadsRun() {
-			mctx, mcancel := context.WithTimeout(context.Background(), remoteTimeout)
+			mctx, mcancel := context.WithTimeout(context.Background(), mirrorTimeout)
 			_ = Mirror(mctx, s.sess, spec)
 			mcancel()
 		}

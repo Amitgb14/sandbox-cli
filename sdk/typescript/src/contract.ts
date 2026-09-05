@@ -1652,9 +1652,45 @@ export interface SnapshotSettings {
    */
   writable: boolean;
   /**
-   * S3 is the object-storage configuration. Absent on a read means no bucket
-   * is configured; sent on a write with an empty bucket, it turns mirroring
-   * off.
+   * S3 is the object-storage configuration. Absent means no bucket is
+   * configured.
+   */
+  s3?: SnapshotS3Settings;
+}
+
+/**
+ * SnapshotSettingsUpdate is the body of POST /v1/snapshots/settings.
+ *
+ * A separate type from SnapshotSettings because a write is not a read wearing
+ * the same shape, and the difference is absence. Half the fields above are
+ * *reports* — what config.yaml sets, whether anything is writable at all — and a
+ * client echoing a read back at this endpoint is claiming authorship of values
+ * it only observed. Worse, "" cannot mean both "leave this alone" and "clear it"
+ * in one string field: the screen that edits the bucket sends nothing about the
+ * windows, and with one shared type that was indistinguishable from asking to
+ * blank them, which is how saving a bucket copied config.yaml's retention into
+ * this daemon's own file.
+ *
+ * So the two windows are pointers: **absent means leave it alone**, present and
+ * empty means "back to the built-in default". The same rule the bucket already
+ * had, said in a way a string field can carry.
+ */
+export interface SnapshotSettingsUpdate {
+  /**
+   * Retention is the window for snapshots a sandbox run recorded. Absent leaves
+   * it as it is; "" clears this daemon's override.
+   */
+  retention?: string;
+  /**
+   * ManualRetention is the window for snapshots somebody asked for. Absent
+   * leaves it as it is; "" clears this daemon's override.
+   */
+  manualRetention?: string;
+  /**
+   * S3 is the object-storage configuration. Absent leaves it as it is — a
+   * client that only meant to change a retention window must not clear
+   * somebody's bucket by omitting a field it does not know about. Sent with an
+   * empty bucket, it turns mirroring off.
    */
   s3?: SnapshotS3Settings;
 }

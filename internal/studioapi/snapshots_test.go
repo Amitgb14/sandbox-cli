@@ -34,6 +34,21 @@ func snapshotRepo(t *testing.T, s *Server) {
 	}
 }
 
+// gitIn runs one git command in a test repository and returns its output. The
+// restore tests need to destroy a snapshot's objects the way a real repository
+// would — a deleted ref and a gc — and then read the result back.
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return string(out)
+}
+
 func write(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -242,7 +257,7 @@ func TestSnapshotSettingsSaysWhichLayerIsInForce(t *testing.T) {
 	}
 
 	rec := doRequest(t, h, http.MethodPost, "/v1/snapshots/settings",
-		SnapshotSettings{Retention: "336h", ManualRetention: "24h"})
+		SnapshotSettingsUpdate{Retention: strPtr("336h"), ManualRetention: strPtr("24h")})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("save: %d %s", rec.Code, rec.Body)
 	}
@@ -259,7 +274,7 @@ func TestSnapshotSettingsSaysWhichLayerIsInForce(t *testing.T) {
 	}
 
 	// It writes durations and nothing else.
-	rec = doRequest(t, h, http.MethodPost, "/v1/snapshots/settings", SnapshotSettings{ManualRetention: "soon"})
+	rec = doRequest(t, h, http.MethodPost, "/v1/snapshots/settings", SnapshotSettingsUpdate{ManualRetention: strPtr("soon")})
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("a value that is not a duration: %d, want 422", rec.Code)
 	}

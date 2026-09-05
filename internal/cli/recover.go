@@ -601,12 +601,25 @@ func reportOtherNamespaces(ctx context.Context, spec *config.S3Spec, root, repoI
 // consistency rather than provenance. Said out loud below, because the
 // difference is invisible in a successful run.
 func fetchRemoteSnapshot(ctx context.Context, spec *config.S3Spec, wd, root, repoID, id string) error {
-	if snap, err := rescue.Find(wd, id); err == nil {
-		if snap.Reachable {
-			fmt.Printf("%s is already in this repository\n", snap.ID)
-			fmt.Printf("  Look at it:  sandbox-cli recover show %s\n", snap.ID)
-			fmt.Printf("  Put it back: sandbox-cli recover restore %s\n", snap.ID)
-			return nil
+	// Find returns a populated snapshot *beside* its error whenever it found the
+	// manifest, so the id is the discriminator between "this machine has no
+	// record of it" — the bucket's job, below — and "the record is here and
+	// something else is wrong", which the bucket cannot improve on.
+	snap, err := rescue.Find(wd, id)
+	switch {
+	case err == nil:
+		fmt.Printf("%s is already in this repository\n", snap.ID)
+		fmt.Printf("  Look at it:  sandbox-cli recover show %s\n", snap.ID)
+		fmt.Printf("  Put it back: sandbox-cli recover restore %s\n", snap.ID)
+		return nil
+
+	case errors.Is(err, rescue.ErrSnapshotGone):
+		// The record is here and the objects are not. This is the path worth
+		// preferring: the sha to check the bundle against was written by this
+		// machine, so the comparison proves provenance rather than the bundle
+		// merely agreeing with the manifest that travelled beside it.
+		if !snap.Remote.Uploaded() {
+			return err
 		}
 		sess := snap.Session
 		if err := rescue.Fetch(ctx, &sess, spec); err != nil {
@@ -617,6 +630,11 @@ func fetchRemoteSnapshot(ctx context.Context, spec *config.S3Spec, wd, root, rep
 		}
 		reportFetched(sess, true)
 		return nil
+
+	case snap.ID != "":
+		// Found, and unfetchable for a reason the bucket does not address — a
+		// session that captured nothing has nothing in there either.
+		return err
 	}
 
 	found, _, err := rescue.RemoteSessions(ctx, spec, root, repoID)
@@ -669,8 +687,12 @@ func pickRemote(found []rescue.Session, id string) (rescue.Session, error) {
 }
 
 func reportFetched(sess rescue.Session, wasLocal bool) {
+	bucket := "the bucket"
+	if sess.Remote != nil && sess.Remote.Bucket != "" {
+		bucket = sess.Remote.Bucket
+	}
 	fmt.Println(sess.ID)
-	fmt.Fprintf(os.Stderr, "sandbox-cli: fetched %s from %s into %s\n", sess.ID, sess.Remote.Bucket, sess.Ref)
+	fmt.Fprintf(os.Stderr, "sandbox-cli: fetched %s from %s into %s\n", sess.ID, bucket, sess.Ref)
 	if !wasLocal {
 		// The one thing a successful fetch cannot show. A snapshot this machine
 		// never recorded was checked against a sha that travelled with it, so what

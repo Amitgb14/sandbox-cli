@@ -2,6 +2,7 @@ package rescue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -601,5 +602,78 @@ func TestSnapshotsFromAnotherPathAreReachableByNamingTheNamespace(t *testing.T) 
 	}
 	if !objectExists(ctx, elsewhere, snap.Commit) {
 		t.Fatal("the commit did not arrive in the repository that asked for it")
+	}
+}
+
+// Find returns its error *and* the snapshot whenever it found the manifest, and
+// ErrSnapshotGone is what tells the two callers with somewhere to look — the
+// daemon's restore and `recover fetch` — that this one is worth fetching rather
+// than reporting.
+//
+// It is a sentinel for a reason worth keeping: both callers were written against
+// `err != nil` and had their whole object-storage path made unreachable by it.
+func TestFindReportsAGoneSnapshotWithEnoughToFetchItBack(t *testing.T) {
+	repo := initRepo(t)
+	_, spec := newFakeBucket(t)
+
+	writeFile(t, filepath.Join(repo, "work.txt"), "x\n")
+	snap, err := Capture(repo, CaptureOptions{S3: spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "update-ref", "-d", snap.Ref)
+	git(t, repo, "reflog", "expire", "--expire=now", "--all")
+	git(t, repo, "gc", "--prune=now", "--quiet")
+
+	got, err := Find(repo, snap.ID)
+	if !errors.Is(err, ErrSnapshotGone) {
+		t.Fatalf("error = %v, want one wrapping ErrSnapshotGone", err)
+	}
+	if got.ID != snap.ID {
+		t.Fatalf("the snapshot came back empty beside its error: %+v", got)
+	}
+	if !got.Remote.Uploaded() {
+		t.Fatalf("the manifest lost the copy in the bucket: %+v", got.Remote)
+	}
+	// Which is all Fetch needs, and the point of returning both.
+	sess := got.Session
+	if err := Fetch(context.Background(), &sess, spec); err != nil {
+		t.Fatalf("fetch from what Find handed back: %v", err)
+	}
+	if !objectExists(context.Background(), repo, snap.Commit) {
+		t.Fatal("the commit did not come back")
+	}
+}
+
+// A bucket shared with anything else is addressed through Prefix, and a prefix
+// is free to contain the word this code looks for. Reading the namespace by
+// searching the key found "snapshots/" inside `my-snapshots/` and reported
+// "snapshots" as a repository — a namespace that does not exist, printed to the
+// user as the --repo-id to try.
+func TestNamespacesAreReadAgainstThePrefixNotFoundInsideIt(t *testing.T) {
+	repo := initRepo(t)
+	_, spec := newFakeBucket(t)
+	spec.Prefix = "my-snapshots"
+	ctx := context.Background()
+
+	writeFile(t, filepath.Join(repo, "work.txt"), "x\n")
+	if _, err := Capture(repo, CaptureOptions{S3: spec}); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := RemoteRepoIDs(ctx, spec)
+	if err != nil {
+		t.Fatalf("remote repo ids: %v", err)
+	}
+	want := RemoteNamespace(repo)
+	if len(ids) != 1 || ids[0] != want {
+		t.Fatalf("namespaces = %v, want [%s]", ids, want)
+	}
+
+	// And the listing under that namespace still resolves, which is the half a
+	// wrong id would have made unreachable.
+	found, _, err := RemoteSessions(ctx, spec, repo, "")
+	if err != nil || len(found) != 1 {
+		t.Fatalf("listing under a prefixed bucket found %d snapshot(s) (%v)", len(found), err)
 	}
 }

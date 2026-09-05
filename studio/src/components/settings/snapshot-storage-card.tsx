@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, Cloud, KeyRound, Loader2, TriangleAlert } from "lucide-react";
+import {
+  CheckCircle2,
+  Cloud,
+  KeyRound,
+  Loader2,
+  TriangleAlert,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -68,7 +74,9 @@ export function SnapshotStorageCard() {
           Snapshot storage
           {configured && !managed && (
             <Badge variant="outline" className="text-[10px]">
-              {data?.s3?.upload === "all" ? "every snapshot" : "checkpoints only"}
+              {data?.s3?.upload === "all"
+                ? "every snapshot"
+                : "checkpoints only"}
             </Badge>
           )}
           {managed && (
@@ -81,15 +89,17 @@ export function SnapshotStorageCard() {
 
       <CardContent className="space-y-4">
         <p className="text-xs leading-relaxed text-muted-foreground">
-          A copy of each snapshot in an S3 bucket, as a git bundle — so a checkpoint
-          survives the machine that took it. Works with AWS and anything S3-compatible
-          (MinIO, R2, Ceph, B2). Leave the bucket empty to keep snapshots local.
+          A copy of each snapshot in an S3 bucket, as a git bundle — so a
+          checkpoint survives the machine that took it. Works with AWS and
+          anything S3-compatible (MinIO, R2, Ceph, B2). Leave the bucket empty
+          to keep snapshots local.
         </p>
 
         {managed && (
           <p className="text-xs text-caution">
-            This is configured in your config.yaml, which outranks this screen. Edit it
-            there — a value saved here would be ignored at the next restart.
+            This is configured in your config.yaml, which outranks this screen.
+            Edit it there — a value saved here would be ignored at the next
+            restart.
           </p>
         )}
 
@@ -168,16 +178,20 @@ export function SnapshotStorageCard() {
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             {form?.upload === "all" ? (
               <>
-                Crash snapshots too. Those are taken every two minutes for the length of
-                every run, and each upload is sized like a clone — so this is a real cost
-                per running agent, not a rounding error.
+                Crash snapshots too. Those are taken every two minutes for the
+                length of every run, and each upload is sized like a clone — so
+                this is a real cost per running agent, not a rounding error.
               </>
             ) : form?.upload === "off" ? (
-              <>Configured but idle. Nothing leaves the machine until you change this.</>
+              <>
+                Configured but idle. Nothing leaves the machine until you change
+                this.
+              </>
             ) : (
               <>
-                Snapshots you take on purpose, from this screen or the SDK. The crash-net
-                timer stays local, which is what keeps this affordable.
+                Snapshots you take on purpose, from this screen or the SDK. The
+                crash-net timer stays local, which is what keeps this
+                affordable.
               </>
             )}
           </p>
@@ -196,16 +210,20 @@ export function SnapshotStorageCard() {
                   resolved
                 </Badge>
               ) : (
-                <Badge variant="outline" className="gap-1 text-[10px] text-caution">
+                <Badge
+                  variant="outline"
+                  className="gap-1 text-[10px] text-caution"
+                >
                   <TriangleAlert className="size-3" />
                   not set
                 </Badge>
               ))}
           </div>
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            These are variable <em>names</em>, read from the environment the daemon was
-            started in. The values never reach this page, this browser, or any file Studio
-            writes — so there is nothing here to leak.
+            These are variable <em>names</em>, read from the environment the
+            daemon was started in. The values never reach this page, this
+            browser, or any file Studio writes — so there is nothing here to
+            leak.
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field
@@ -228,7 +246,9 @@ export function SnapshotStorageCard() {
             />
           </div>
           {data?.s3?.credentialsError && (
-            <p className="text-[11px] text-caution">{data.s3.credentialsError}</p>
+            <p className="text-[11px] text-caution">
+              {data.s3.credentialsError}
+            </p>
           )}
         </div>
 
@@ -245,7 +265,12 @@ export function SnapshotStorageCard() {
           <Button
             size="sm"
             disabled={save.isPending || !data?.writable || managed || !form}
-            onClick={() => form && save.mutate({ ...data!, s3: form })}
+            // Only the bucket. Spreading the read in sent the *resolved*
+            // retention windows — config.yaml's values, or the built-in
+            // defaults — and wrote them into Studio's own override file, which
+            // is the one thing the retention card next door is careful not to
+            // do. Absent means "leave it alone".
+            onClick={() => form && save.mutate({ s3: form })}
           >
             Save
           </Button>
@@ -260,16 +285,16 @@ export function SnapshotStorageCard() {
           </Button>
           {!configured && (
             <p className="text-[11px] text-muted-foreground">
-              Save a bucket first — the test asks the daemon about what it is configured
-              with, not about what is typed here.
+              Save a bucket first — the test asks the daemon about what it is
+              configured with, not about what is typed here.
             </p>
           )}
         </div>
 
         {!data?.writable && (
           <p className="text-xs text-caution">
-            No config directory could be resolved on the daemon&apos;s machine, so nothing
-            can be saved here.
+            No config directory could be resolved on the daemon&apos;s machine,
+            so nothing can be saved here.
           </p>
         )}
       </CardContent>
@@ -327,7 +352,9 @@ function Row({
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0 space-y-0.5">
         <p className="text-xs font-medium">{label}</p>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">{hint}</p>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          {hint}
+        </p>
       </div>
       {children}
     </div>

@@ -286,6 +286,15 @@ rather than merely passing.
   same bucket, so `Fetch`'s comparison then proves the bundle and its manifest agree
   rather than that either is yours; the command says which of the two checks ran,
   because a successful fetch looks identical either way.
+
+  `rescue.Find` returns a **populated snapshot beside its error** when the manifest
+  is here and the objects are not, and `ErrSnapshotGone` is the sentinel that says
+  which of its refusals is recoverable. That shape is load-bearing rather than
+  incidental: both callers with somewhere to look — the daemon's restore and
+  `recover fetch` — were originally written against `err != nil`, which made the
+  entire object-storage restore path unreachable, so a snapshot with a good copy in
+  the bucket answered 404. A refusal that carries the means to undo it has to be
+  matched on, not merely reported.
 - **`internal/s3`** — the smallest S3 client that can hold a snapshot: put, get, stat,
   delete, list. Hand-rolled SigV4 against a published AWS test vector rather than the AWS
   SDK, for the reason the module depends only on cobra and yaml.v3 — 15MB of transitive

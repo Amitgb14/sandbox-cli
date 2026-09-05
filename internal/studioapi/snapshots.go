@@ -290,17 +290,19 @@ func (s *Server) handleUploadSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap, err := rescue.Find(sc.Project, r.PathValue("id"))
-	if err != nil {
-		writeError(w, http.StatusNotFound, err)
-		return
-	}
-	if !snap.Reachable {
-		// There is nothing to bundle. Said here rather than letting `git bundle`
-		// fail, because "objects are gone" and "the bucket refused us" are
-		// different problems with different remedies and only one of them is
-		// about S3.
+	if errors.Is(err, rescue.ErrSnapshotGone) {
+		// There is nothing to bundle. Said as its own refusal rather than passing
+		// Find's message through, because "objects are gone" and "the bucket
+		// refused us" are different problems with different remedies and only one
+		// of them is about S3. Matched on the sentinel: Find returns this error
+		// *with* the snapshot, and a bare `err != nil` above would have answered
+		// 404 before either branch could tell them apart.
 		writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
 			"snapshot %s has no objects left in the repository to upload", snap.ID))
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
 		return
 	}
 	sess := snap.Session
@@ -385,7 +387,12 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap, err := rescue.Find(sc.Project, r.PathValue("id"))
-	if err != nil {
+	// A snapshot whose objects are gone is not a 404: the manifest is right here,
+	// and if it was mirrored, so is everything needed to fetch it back. Find
+	// returns the snapshot beside that error for exactly this, and reading only
+	// the error is what made the whole fetch path below unreachable.
+	gone := errors.Is(err, rescue.ErrSnapshotGone)
+	if err != nil && !gone {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
@@ -404,7 +411,14 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 	//
 	// Attempted only when the local copy is missing. Fetching one that is already
 	// here would spend a download to arrive at the bytes already on disk.
-	if !snap.Reachable && snap.Remote.Uploaded() {
+	if gone {
+		if !snap.Remote.Uploaded() {
+			// Nothing local and no copy off the machine: this is the one shape of
+			// gone that nothing can undo, and it keeps Find's message, which names
+			// what happened to it.
+			writeError(w, http.StatusUnprocessableEntity, err)
+			return
+		}
 		sess := snap.Session
 		if err := rescue.Fetch(r.Context(), &sess, s.snapshotS3()); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
@@ -412,6 +426,13 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 				snap.ID, sess.Remote.Bucket, err))
 			return
 		}
+		// The manifest is what a later listing reads, and it now describes a
+		// snapshot whose objects are here again.
+		if err := sess.Save(); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err)
+			return
+		}
+		snap.Session = sess
 	}
 
 	resp, status, err := s.restoreSession(snap.Session, req.Mode, req.Branch)
@@ -457,20 +478,31 @@ func (s *Server) handleGetSnapshotSettings(w http.ResponseWriter, r *http.Reques
 // `snapshot` key from a project file. A UI is not a project file, but it is not a
 // reason to reopen the question either.
 func (s *Server) handleSetSnapshotSettings(w http.ResponseWriter, r *http.Request) {
-	var req SnapshotSettings
+	var req SnapshotSettingsUpdate
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// Starting from what this daemon's file already holds, so a field the request
+	// did not carry survives the write. The file is saved whole, so a fresh
+	// struct here means every client writes every field whether it meant to or
+	// not — the Snapshot storage screen, which knows nothing about retention,
+	// blanked both windows on every save.
+	managed := config.SnapshotOverrides()
 	save := config.SnapshotSpec{
-		Retention:       req.Retention,
-		ManualRetention: req.ManualRetention,
+		Retention:       managed.Retention,
+		ManualRetention: managed.ManualRetention,
+	}
+	if req.Retention != nil {
+		save.Retention = *req.Retention
+	}
+	if req.ManualRetention != nil {
+		save.ManualRetention = *req.ManualRetention
 	}
 	// The bucket is written only when config.yaml does not already set one. The
 	// alternative — accepting the write and having it silently outranked at the
 	// next restart — is the failure the ConfigManaged flag exists to prevent, and
 	// refusing it here is what makes that flag a promise rather than a hint.
-	managed := config.SnapshotOverrides()
 	configS3 := s.configS3(managed)
 	if req.S3 != nil && configS3 {
 		writeError(w, http.StatusConflict, errors.New(
@@ -506,14 +538,40 @@ func (s *Server) handleSetSnapshotSettings(w http.ResponseWriter, r *http.Reques
 	// that was just chosen rather than the one this process started with — and so
 	// the next capture mirrors to the bucket just configured rather than needing
 	// a restart to notice it.
+	//
+	// Only what this layer is allowed to set. A field config.yaml pins is left
+	// alone here for the same reason the bucket is: this daemon's file is a layer
+	// *under* config.yaml, so writing the request over the resolved value claims
+	// an authority the next restart will take back. It went wrong in the
+	// direction that hides: the screen sends "" for a field it has told the user
+	// it cannot change, so editing only the manual window blanked the crash
+	// window in the running process, silently reverting it to the built-in
+	// default — and the next read then found nothing to attribute to config.yaml
+	// and un-pinned the field it had just discarded.
 	if s.Session != nil {
-		s.Session.Cfg.Snapshot.Retention = req.Retention
-		s.Session.Cfg.Snapshot.ManualRetention = req.ManualRetention
+		if req.Retention != nil && !configPins(s.Session.Cfg.Snapshot.Retention, managed.Retention) {
+			s.Session.Cfg.Snapshot.Retention = *req.Retention
+		}
+		if req.ManualRetention != nil && !configPins(s.Session.Cfg.Snapshot.ManualRetention, managed.ManualRetention) {
+			s.Session.Cfg.Snapshot.ManualRetention = *req.ManualRetention
+		}
 		if !configS3 {
 			s.Session.Cfg.Snapshot.S3 = config.SnapshotOverrides().S3
 		}
 	}
 	writeJSON(w, http.StatusOK, s.snapshotSettings())
+}
+
+// configPins reports that config.yaml sets a retention window, as opposed to this
+// daemon's own override file: the value in force, minus this layer, is what was
+// typed by hand.
+//
+// One function rather than the expression written twice, because the read and
+// the write have to agree about it exactly — a screen that says "config.yaml
+// sets this" while the write path overwrites it anyway is worse than either
+// behaviour on its own.
+func configPins(resolved, managed string) bool {
+	return resolved != "" && resolved != managed
 }
 
 // configS3 reports that config.yaml sets the bucket, as opposed to this daemon's
@@ -550,10 +608,10 @@ func (s *Server) snapshotSettings() SnapshotSettings {
 	// anything still set after the override is removed was typed by hand.
 	managed := config.SnapshotOverrides()
 	if s.Session != nil {
-		if v := s.Session.Cfg.Snapshot.Retention; v != "" && v != managed.Retention {
+		if v := s.Session.Cfg.Snapshot.Retention; configPins(v, managed.Retention) {
 			out.ConfigRetention = v
 		}
-		if v := s.Session.Cfg.Snapshot.ManualRetention; v != "" && v != managed.ManualRetention {
+		if v := s.Session.Cfg.Snapshot.ManualRetention; configPins(v, managed.ManualRetention) {
 			out.ConfigManualRetention = v
 		}
 	}

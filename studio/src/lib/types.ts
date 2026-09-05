@@ -24,12 +24,7 @@
 
 /** Docker's own container states, as `runtime.ContainerInfo.State` reports them. */
 export type RunState =
-  | "created"
-  | "running"
-  | "paused"
-  | "exited"
-  | "dead"
-  | "removing";
+  "created" | "running" | "paused" | "exited" | "dead" | "removing";
 
 /**
  * `sandbox.fleet` — the label that separates a `fleet run` container from an
@@ -76,7 +71,14 @@ export interface MountSpec {
   container: string;
   mode: "ro" | "rw";
   /** Why this mount exists, for the one place the UI has to justify reach. */
-  origin?: "workspace" | "worktree-git" | "persisted-home" | "history" | "statusline" | "share" | "cache";
+  origin?:
+    | "workspace"
+    | "worktree-git"
+    | "persisted-home"
+    | "history"
+    | "statusline"
+    | "share"
+    | "cache";
 }
 
 /**
@@ -211,12 +213,7 @@ export interface Run {
 
 /** The verdict a row shows, derived rather than stored. */
 export type RunOutcome =
-  | "running"
-  | "passed"
-  | "failed"
-  | "verify-failed"
-  | "stopped"
-  | "created";
+  "running" | "passed" | "failed" | "verify-failed" | "stopped" | "created";
 
 /** `fleet.VerifyFailedExit` — a verify that ran and said no. */
 export const VERIFY_FAILED_EXIT = 91;
@@ -507,12 +504,7 @@ export interface DoctorCheck {
 
 /** Where a resolved setting came from. Precedence, later wins. */
 export type ConfigLayer =
-  | "default"
-  | "profile"
-  | "user"
-  | "project"
-  | "explicit"
-  | "flag";
+  "default" | "profile" | "user" | "project" | "explicit" | "flag";
 
 export interface ResolvedField {
   key: string;
@@ -870,6 +862,20 @@ export interface SnapshotSettings {
    * daemon leaves it alone — so a form that only edits the windows cannot clear
    * somebody's bucket by not knowing about it.
    */
+  s3?: SnapshotS3Settings;
+}
+
+/**
+ * The body of a settings write — mirrors studioapi.SnapshotSettingsUpdate.
+ *
+ * Not the read type: absent means "leave it alone", so the storage card sends
+ * only `s3` and the retention card sends only the two windows. Echoing a read
+ * back would write the resolved value — config.yaml's, or the built-in default —
+ * into Studio's own file, where it outlives the line it came from.
+ */
+export interface SnapshotSettingsUpdate {
+  retention?: string;
+  manualRetention?: string;
   s3?: SnapshotS3Settings;
 }
 

@@ -51,6 +51,7 @@ import type {
   NetworkMode,
   Snapshot,
   SnapshotSettings,
+  SnapshotSettingsUpdate,
   SnapshotS3Check,
   RestoreMode,
   RestoreResult,
@@ -150,10 +151,13 @@ export const api = {
    * dot-directories never — see internal/studioapi/browse.go.
    */
   browse: (path?: string) =>
-    request<BrowseListing>(`/v1/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`, {
-      fixture: () => mockBrowse(path),
-      latencyMs: 120,
-    }),
+    request<BrowseListing>(
+      `/v1/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+      {
+        fixture: () => mockBrowse(path),
+        latencyMs: 120,
+      },
+    ),
 
   /**
    * Add a repository by host path — the one request in this client that carries
@@ -393,13 +397,16 @@ export const api = {
 
   /** One conversation, parsed into turns. Named by id; the daemon finds the file. */
   sessionTranscript: (agent: string, id: string) =>
-    request<SessionTranscript>(`/v1/agents/${agent}/sessions/${encodeURIComponent(id)}`, {
-      fixture: () => ({
-        session: { id, turns: 0, modified: new Date(0).toISOString() },
-        messages: MOCK_CONVERSATION,
-      }),
-      latencyMs: 240,
-    }),
+    request<SessionTranscript>(
+      `/v1/agents/${agent}/sessions/${encodeURIComponent(id)}`,
+      {
+        fixture: () => ({
+          session: { id, turns: 0, modified: new Date(0).toISOString() },
+          messages: MOCK_CONVERSATION,
+        }),
+        latencyMs: 240,
+      },
+    ),
 
   /**
    * The transcript file as it is on disk — the answer to "is the parsed view
@@ -407,14 +414,17 @@ export const api = {
    * question worth being able to ask.
    */
   sessionRaw: (agent: string, id: string) =>
-    request<SessionRaw>(`/v1/agents/${agent}/sessions/${encodeURIComponent(id)}/raw`, {
-      fixture: () => ({
-        session: { id, turns: 0, modified: new Date(0).toISOString() },
-        size: 0,
-        content: '{"type":"user","message":{"content":"fixture line"}}\n',
-      }),
-      latencyMs: 260,
-    }),
+    request<SessionRaw>(
+      `/v1/agents/${agent}/sessions/${encodeURIComponent(id)}/raw`,
+      {
+        fixture: () => ({
+          session: { id, turns: 0, modified: new Date(0).toISOString() },
+          size: 0,
+          content: '{"type":"user","message":{"content":"fixture line"}}\n',
+        }),
+        latencyMs: 260,
+      },
+    ),
 
   launch: (req: LaunchRequest) =>
     request<{ id: string }>("/v1/runs", {
@@ -467,7 +477,8 @@ export const api = {
     return request<Snapshot[]>(`/v1/snapshots${q ? `?${q}` : ""}`, {
       fixture: () =>
         MOCK_SNAPSHOTS.filter(
-          (s) => (!repo || s.repoId === repo) && (!branch || s.branch === branch),
+          (s) =>
+            (!repo || s.repoId === repo) && (!branch || s.branch === branch),
         ),
       latencyMs: 200,
       unwrap: (b) => (b as { snapshots: Snapshot[] }).snapshots ?? [],
@@ -482,8 +493,17 @@ export const api = {
    * the same fixtures — cannot then show, which reads as a broken feature rather
    * than as a missing daemon.
    */
-  createSnapshot: (body: { repo?: string; branch?: string; label?: string; retention?: string }) =>
-    request<Snapshot>("/v1/snapshots", { method: "POST", body, liveOnly: true }),
+  createSnapshot: (body: {
+    repo?: string;
+    branch?: string;
+    label?: string;
+    retention?: string;
+  }) =>
+    request<Snapshot>("/v1/snapshots", {
+      method: "POST",
+      body,
+      liveOnly: true,
+    }),
 
   /**
    * Put a snapshot back.
@@ -492,7 +512,10 @@ export const api = {
    * mid-way through something is not a thing to undo from a browser tab — so the
    * button is disabled on those rather than left to fail.
    */
-  restoreSnapshot: (id: string, body: { mode?: RestoreMode; branch?: string; repo?: string }) =>
+  restoreSnapshot: (
+    id: string,
+    body: { mode?: RestoreMode; branch?: string; repo?: string },
+  ) =>
     request<RestoreResult>(`/v1/snapshots/${encodeURIComponent(id)}/restore`, {
       method: "POST",
       body,
@@ -559,7 +582,7 @@ export const api = {
       latencyMs: 120,
     }),
 
-  setSnapshotSettings: (body: SnapshotSettings) =>
+  setSnapshotSettings: (body: SnapshotSettingsUpdate) =>
     request<SnapshotSettings>("/v1/snapshots/settings", {
       method: "POST",
       body,
@@ -573,21 +596,30 @@ export const api = {
     // lists containers across every repository already, so a dashboard showing
     // all repositories' runs beside one repository's worktrees was comparing two
     // different questions and looked like missing worktrees.
-    request<Worktree[]>(`/v1/worktrees?repo=${encodeURIComponent(repo ?? "all")}`, {
-      fixture: () => (repo ? MOCK_WORKTREES.filter((w) => w.repoId === repo) : MOCK_WORKTREES),
-      latencyMs: 240,
-      unwrap: (b) => (b as { worktrees: Worktree[] }).worktrees,
-    }),
+    request<Worktree[]>(
+      `/v1/worktrees?repo=${encodeURIComponent(repo ?? "all")}`,
+      {
+        fixture: () =>
+          repo
+            ? MOCK_WORKTREES.filter((w) => w.repoId === repo)
+            : MOCK_WORKTREES,
+        latencyMs: 240,
+        unwrap: (b) => (b as { worktrees: Worktree[] }).worktrees,
+      },
+    ),
 
   worktree: (branch: string, repo?: string) =>
-    request<Worktree>(`/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`, {
-      fixture: () => {
-        const w = MOCK_WORKTREES.find((x) => x.branch === branch);
-        if (!w) throw new Error(`no worktree ${branch}`);
-        return w;
+    request<Worktree>(
+      `/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`,
+      {
+        fixture: () => {
+          const w = MOCK_WORKTREES.find((x) => x.branch === branch);
+          if (!w) throw new Error(`no worktree ${branch}`);
+          return w;
+        },
+        latencyMs: 140,
       },
-      latencyMs: 140,
-    }),
+    ),
 
   worktreeCommits: (branch: string, repo?: string) =>
     request<Commit[]>(
@@ -631,16 +663,22 @@ export const api = {
 
   /** What one commit changed. Scoped to this daemon's project. */
   commitDiff: (sha: string, repo?: string) =>
-    request<DiffFile[]>(`/v1/commits/${encodeURIComponent(sha)}/diff${repoQuery(repo)}`, {
-      fixture: () => [],
-      latencyMs: 200,
-    }),
+    request<DiffFile[]>(
+      `/v1/commits/${encodeURIComponent(sha)}/diff${repoQuery(repo)}`,
+      {
+        fixture: () => [],
+        latencyMs: 200,
+      },
+    ),
 
   removeWorktree: (branch: string, repo?: string) =>
-    request<void>(`/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`, {
-      method: "DELETE",
-      fixture: () => undefined,
-    }),
+    request<void>(
+      `/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`,
+      {
+        method: "DELETE",
+        fixture: () => undefined,
+      },
+    ),
 
   landWorktree: (branch: string, onto?: string) =>
     request<{ merged: boolean; message: string }>(
@@ -707,7 +745,10 @@ export const api = {
  * real preview — a form that guessed at the full rule set would eventually
  * disagree with the thing that actually enforces it.
  */
-export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchPreview {
+export function localPreview(
+  req: LaunchRequest,
+  egress?: DaemonEgress,
+): LaunchPreview {
   const refusals: string[] = [];
   const warnings: string[] = [];
 
@@ -833,7 +874,12 @@ export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchP
   // rather than widening what goes out — and a preview that warned about a mount
   // and said nothing about an inbound port would rank them backwards.
   if (req.publish.length > 0) {
-    const bound = req.publish.filter((p) => !/^(127\.0\.0\.1|localhost|\[::1\])[:.]/.test(p) && p.includes(":") && /^\d+\.|^\[/.test(p));
+    const bound = req.publish.filter(
+      (p) =>
+        !/^(127\.0\.0\.1|localhost|\[::1\])[:.]/.test(p) &&
+        p.includes(":") &&
+        /^\d+\.|^\[/.test(p),
+    );
     warnings.push(
       bound.length > 0
         ? `--publish ${bound.join(", ")} binds an address you named rather than loopback: anything that can reach that address can reach the container.`
@@ -998,7 +1044,8 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   if (req.console && req.agent) body.console = true;
   // Both are console-only and agent-only, and the daemon refuses them
   // otherwise — so the form does not send a pair it knows will 400.
-  if (req.console && req.agent && req.skipPermissions) body.skipPermissions = true;
+  if (req.console && req.agent && req.skipPermissions)
+    body.skipPermissions = true;
   if (req.console && req.agent && req.resume) body.resume = req.resume;
   // A briefing, and only where the daemon accepts one: an agent to read it, no
   // resume alongside it (refused together), and a prompt, since the briefing
