@@ -155,6 +155,8 @@ cache:
 snapshot:
   interval: 2m
   retention: 336h
+  manual_retention: 168h
+  s3: null               # null = snapshots never leave this machine
 
 secrets: {}
 runtime: ""              # "" = docker's default (runc)
@@ -385,7 +387,7 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
   {
     id: "persistence",
     label: "What survives the run",
-    blurb: "Containers are --rm; these two keys decide what outlives them.",
+    blurb: "Containers are --rm; these keys decide what outlives them.",
     keys: [
       {
         key: "cache.enabled / cache.paths",
@@ -394,10 +396,18 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
         body: "Keeps npm, pip, cargo and go caches in named docker volumes so a cold install every run stops hurting. No host directory is involved. Extra paths are added to the built-in set.",
       },
       {
-        key: "snapshot.enabled / interval / retention",
-        type: "bool / duration / duration",
-        fallback: "true / 2m / 336h",
-        body: "The crash safety net: the workspace is committed under refs/sandbox/snapshots/ while a run is in flight, never touching your index, HEAD, branches or working tree. sandbox-cli recover reads it back.",
+        key: "snapshot.enabled / interval / retention / manual_retention",
+        type: "bool / duration / duration / duration",
+        fallback: "true / 2m / 336h / 168h",
+        body: "The crash safety net: the workspace is committed under refs/sandbox/snapshots/ while a run is in flight, never touching your index, HEAD, branches or working tree. sandbox-cli recover reads it back. Checkpoints you take on purpose keep for manual_retention instead.",
+        where: "user",
+      },
+      {
+        key: "snapshot.s3",
+        type: "block",
+        fallback: "unset — snapshots never leave the machine",
+        body: "Mirrors each snapshot to a bucket as a git bundle, so a lost laptop is not a lost snapshot: git alone opens the object, on a machine that has never seen the repository. AWS and anything S3-compatible through endpoint and path_style. The credential is named, never held — access_key_env is the name of a variable read at upload time. sandbox-cli recover fetch lists what is in there and pulls one back. Retention prunes the local copy only; the bucket's own lifecycle rules govern the objects.",
+        where: "user",
       },
     ],
   },

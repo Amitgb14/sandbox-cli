@@ -632,12 +632,12 @@ func baselineFor(workspace, agent string) string {
 	if workspace == "" {
 		return ""
 	}
-	snap := rescue.Begin(workspace, agent, baselineInterval, baselineRetention)
+	snap := rescue.Begin(workspace, agent, baselineInterval, rescue.Retention{Run: baselineRetention})
 	if snap == nil {
 		return "" // not a repository, or snapshots switched off
 	}
 	snap.Start()
-	snap.Stop("baseline", nil)
+	snap.Stop(baselineOutcome, nil)
 	return snap.LastCommit()
 }
 
@@ -648,6 +648,11 @@ const (
 	// The retention rescue itself uses, since these age out through the same
 	// pruning as any other snapshot.
 	baselineRetention = 14 * 24 * time.Hour
+	// baselineOutcome marks the session as a before-image rather than a run's
+	// safety net. Named rather than spelled twice: snapshots.go and recover.go
+	// both have to *exclude* these, and a literal that has to match in three
+	// places is one typo away from offering a run's starting state as its work.
+	baselineOutcome = "baseline"
 )
 
 // concatArgs joins argv fragments into one fresh slice.

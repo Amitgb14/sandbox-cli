@@ -86,3 +86,25 @@ export class WaitError extends Error {
     this.cause = cause;
   }
 }
+
+/**
+ * The workspace had not changed, so there was nothing to snapshot.
+ *
+ * A distinct class because this is the one refusal a script *branches* on rather
+ * than reports: "checkpoint before the risky step, unless there is nothing new"
+ * is the normal shape, and the alternative is matching on the text of an
+ * ApiError message — which works until the wording improves.
+ *
+ * It is deliberately not a success with a null result. A caller handed an id
+ * pointing at no commit would believe it had a checkpoint it does not have, and
+ * would find out at the moment it tried to roll back.
+ */
+export class NothingToSnapshotError extends Error {
+  readonly branch?: string;
+
+  constructor(message: string, branch?: string) {
+    super(message || "nothing to snapshot: the workspace has not changed");
+    this.name = "NothingToSnapshotError";
+    this.branch = branch;
+  }
+}

@@ -250,6 +250,16 @@ export const SDK_SNIPPETS: { title: string; code: string; note: string }[] = [
     note: "start() launches without waiting; follow() streams until the daemon says the output has ended. Leaving the loop early closes the stream, which is what stops the log tail behind it.",
   },
   {
+    title: "Checkpoint before something risky, and roll back if it goes wrong",
+    code: 'import { NothingToSnapshotError } from "@sandbox-cli/sdk";\n\nconst before = await ws.snapshot({ label: "before the migration" });\n\nconst out = await ws.agent("claude", "migrate the schema");\nif (out.exitCode !== 0) {\n  const back = await ws.restore(before.id);            // a new branch at the snapshot\n  console.log(`its starting point is on ${back.branch}`);\n}',
+    note: "A snapshot is a commit of the working tree under refs/sandbox/snapshots/, written through a private index — your own index, HEAD, branches and working tree are never touched. It holds files and nothing else, so it is not a way to resume a stopped machine. Branch mode is the default and the only one that cannot destroy anything; mode: \"worktree\" puts the files back in place, and is refused on a dirty tree. An unchanged tree throws NothingToSnapshotError rather than handing back an id that points at no commit.",
+  },
+  {
+    title: "Keep a checkpoint off the machine",
+    code: 'const before = await ws.snapshot({ label: "before the migration" });\n\nif (!before.remote?.uploaded) {\n  // Real and local-only: the snapshot was taken, the copy did not happen.\n  console.warn("no off-machine copy:", before.remote?.error ?? "no bucket configured");\n}\n\n// Later, once the network is back, or the bucket exists:\nawait ws.uploadSnapshot(before.id);\nawait ws.verifySnapshot(before.id); // ask the bucket, rather than trusting the record',
+    note: "With a bucket configured (snapshot.s3), a snapshot is also uploaded as a git bundle — a packfile git alone can read on a machine that has never seen the repository, not an archive that needs this tool. sandbox-cli never holds the key: access_key_env names the environment variable it is read from, so there is nowhere in a config file, a settings file or an API response for a secret to be. A capture whose upload fails still returns the snapshot, because the checkpoint is real and only the copy failed.",
+  },
+  {
     title: "Clean up when you are done with a run",
     code: 'await ws.stop(run.id);        // ask it to exit\nawait ws.remove(run.id);      // then discard the container and its logs',
     note: "Two calls, and neither happens for you: a finished run's logs are the evidence for what it did. remove() is also what frees the branch's name for the next run.",

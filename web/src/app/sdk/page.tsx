@@ -239,7 +239,7 @@ export default function SdkPage() {
         <Section id="snippets">
           <SectionHead
             eyebrow="small examples"
-            title="Six things worth doing on the first day"
+            title="Eight things worth doing on the first day"
             lead="Each is a whole script rather than a fragment, because the first thing anybody does with a new client is paste one and run it."
           />
 

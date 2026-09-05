@@ -184,12 +184,110 @@ it speaks; the endpoints are equally usable with curl.
 | POST | `/v1/runs/{id}/console/resize` | Tell the container its terminal size — **always needs a token** |
 | POST | `/v1/runs/{id}/stop` | Stop (or `{"force":true}` to kill) a running run |
 | POST | `/v1/runs/{id}/recover` | Restore the crash-recovery snapshot associated with this run's branch |
+| POST | `/v1/runs/{id}/snapshot` | Checkpoint the workspace this run is working in |
+| GET/POST | `/v1/snapshots` | List (`?repo=`, `?repo=all`, `?branch=`) / take a snapshot |
+| POST | `/v1/snapshots/{id}/restore` | Put one back — `branch` (default), `worktree`, or `patch` |
+| POST | `/v1/snapshots/{id}/retention` | How long this one is kept; `""` returns it to the default |
+| POST | `/v1/snapshots/{id}/upload` | Mirror one snapshot to object storage now |
+| POST | `/v1/snapshots/{id}/verify` | Ask the bucket whether the object is really there |
+| GET/POST | `/v1/snapshots/settings` | The retention defaults and the bucket, and which layer set them |
+| POST | `/v1/snapshots/s3/check` | Does the configured bucket answer, and does the credential resolve |
 | GET | `/v1/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
 | GET | `/v1/runs/{id}/metrics` | One resource sample, or a live stream with `?stream=1` |
 | GET | `/v1/stats` | One resource sample per live run, host-wide |
 | GET/POST | `/v1/worktrees` | List (`?repo=`, or `?repo=all` for every registered repository) / create managed git worktrees |
 | GET | `/v1/worktrees/{branch}/diff` | What this branch has beyond its base, plus its uncommitted work |
 | GET/DELETE | `/v1/worktrees/{branch}` | Read / remove (`?repo=`, `?force=1`) one worktree |
+
+### Snapshots
+
+A snapshot is a commit of a working tree under `refs/sandbox/snapshots/`, taken
+through `internal/rescue`: a private `GIT_INDEX_FILE` so the user's index, HEAD,
+branches and working tree are never written, and `internal/githard` so a
+repository an agent controls cannot make the capture run a command on the host.
+It holds **files** — no container, no image and no credential — which is why
+restoring one is cheap and why it is not a way to resume a stopped machine.
+
+Three restore modes, and the default is the only one that cannot destroy
+anything: `branch` points a new branch at the snapshot, `worktree` writes the
+files back and is refused on a dirty tree rather than offering a force, and
+`patch` returns a diff and writes nothing.
+
+Two rules are worth knowing before building against this.
+
+**An unchanged tree is a 422, not an empty success.** A caller handed an id
+pointing at no commit would believe it had a checkpoint it does not have, and
+would find out at the moment it tried to roll back.
+
+**A snapshot records who took it, and that decides who may restore it.**
+`source` is `run` or `sdk`, derived from the request — a browser attaches
+`Origin` to every request and a programmatic client sends none — and never
+accepted from the body, since a caller able to label its own snapshots would be
+choosing its own restore surface. Studio lists both and restores only the `run`
+ones; an SDK-made snapshot is restored through the SDK, because a script part-way
+through something is not a thing to undo from a browser tab.
+
+That last one is a **scoping rule and not a security boundary**. Anything able to
+omit a header can restore anything; the bearer token and the loopback binding are
+what govern who may call this API at all. What it buys is that the two surfaces
+do not silently undo each other's work.
+
+Retention is per snapshot, defaulting to seven days for one somebody asked for
+and fourteen for the crash net. What is stored is the *rule* rather than a
+computed expiry, so raising a default moves every snapshot that never named one.
+The defaults live in `~/.config/sandbox/studio/snapshots.json`, a layer **under**
+the user's `config.yaml` for the same reason `providers.json` is: a value typed
+by hand outranks one set in a UI, and rewriting a hand-maintained YAML file would
+lose its comments and its ordering.
+
+#### Object storage
+
+With `snapshot.s3` configured, a snapshot is also uploaded as a **git bundle**,
+plus its manifest beside it — which is what makes the bucket self-describing: a
+machine that has lost `~/.config/sandbox/rescue` entirely can still be told what
+is in there. The object needs no tooling to open:
+
+```sh
+git init recovered && cd recovered
+git fetch ../snap.bundle 'refs/sandbox/snapshots/*:refs/heads/snap/*'
+git checkout snap/<id>
+```
+
+`git clone` of it does *not* work, and that is a consequence rather than an
+oversight: a snapshot ref lives under `refs/sandbox/`, so the bundle carries no
+branch and no HEAD to check out. Naming one would mean writing a `refs/heads` ref
+into the user's repository, which is the one thing `internal/rescue` promises
+never to do.
+
+Four things a client should know:
+
+**The credential is a name.** `accessKeyEnv` is the name of an environment
+variable read on the daemon's machine. Nothing in this API accepts or returns a
+secret value; `credentialsResolved` and `credentialsError` are the whole of what
+is reported about it.
+
+**`remote` describes the upload, not the bucket.** A lifecycle rule or somebody
+tidying a bucket leaves a snapshot reading as mirrored when it is not, so
+`/verify` is the call that asks. It is per snapshot and on demand — a listing
+that asked per row would make one round trip per snapshot for an answer that
+almost never changes.
+
+**`/s3/check` takes no bucket.** It reports on what the daemon is configured
+with. An endpoint that dialled a host from the request body would be a
+server-side request forgery with a friendly name, so there is no way to give it
+one. A bucket that refuses is `200 {"ok": false, "error": …}` — the request
+succeeded and the storage did not.
+
+**A capture whose upload fails still answers `201`.** The snapshot is real and
+local; what failed is the copy, and `remote.error` carries the reason. Returning
+an error instead would discard the id of a checkpoint that exists.
+
+A settings write that omits `s3` leaves the bucket alone — a client editing only
+the retention windows cannot clear somebody's storage by not knowing about it.
+Sending `s3` with an empty `bucket` is how mirroring is turned off. A bucket set
+in `config.yaml` comes back with `configManaged: true` and a write to it is
+refused with `409` rather than accepted and silently outranked at the next
+restart.
 
 ### Which repository a request is about
 

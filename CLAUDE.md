@@ -249,6 +249,57 @@ rather than merely passing.
   Session manifests live outside every repo (`~/.config/sandbox/rescue/<repo-id>/`) because the
   repo is often the broken thing. Keep the rule: rescue only ever *creates* objects and refs
   under `refs/sandbox/`. Design and rejected alternatives: `docs/proposals/crash-recovery.md`.
+
+  `remote.go` mirrors a snapshot to object storage, and the format is the decision: a
+  **git bundle**, so the object in the bucket is a packfile git alone can read on a
+  machine that has never seen the repository — `git init && git fetch <bundle>` — rather
+  than an archive that needs this tool. A `git clone` of it does *not* work, and that is a
+  consequence of the rule above rather than an oversight: a snapshot ref is not a branch,
+  so the bundle carries no HEAD, and giving it one would mean writing a `refs/heads` ref
+  to bundle it from. The accepted cost is that the bundle is **self-contained** — sized
+  like a clone, not like a diff — which is why the default is `upload: manual` and why
+  `max_object_mb` refuses one up front rather than at the far end of a transfer S3 was
+  always going to reject at 5 GiB. Mirroring is a **backup, never an offload**: the local
+  ref stays and is what `Restore` reads, so `Fetch` puts the objects back where they
+  always were and none of the three restore modes learns that a network exists. Two
+  refusals are load-bearing. `Fetch` validates the manifest's ref **before** spending a
+  download, since a manifest is a file on disk and is never allowed to name a branch. And
+  it compares the fetched sha against the one recorded locally — `git bundle verify` proves
+  a bundle is well formed, not that it is *yours*, and a well-formed bundle of somebody
+  else's commit served under this key restores as silent success. The manual path
+  **returns** a mirror failure while the loop **swallows** it, which is the same asymmetry
+  `Capture` and `Begin` already have: somebody who asked in as many words is owed the
+  answer, and a run whose network died still has a working local safety net. Retention
+  prunes the **local** copy only — deleting an off-machine backup on a timer that runs
+  only while the laptop is open loses the copy that was meant to survive the laptop — so
+  the bucket's own lifecycle rules govern the objects, and the Studio card says so.
+  Nothing here deletes a remote object at all: a `DeleteRemote` helper existed with no
+  caller and a doc comment reading "for pruning", which is a trap rather than a loose
+  end — the next reader wires it into `Prune` and the backup vanishes on the timer it
+  was meant to outlive. `sandbox-cli recover fetch` (`cli/recover.go`) is the way back
+  on a machine that still has this tool, and the two things it refuses to guess at are
+  both consequences of decisions made elsewhere. A repository is addressed in the bucket
+  by `worktree.RepoID`, a hash of its **absolute path**, so a clone in a new location
+  looks in an empty namespace of its own — an empty listing therefore names the other
+  ids that are in the bucket instead of reporting nothing, and `--repo-id` reads one.
+  And a session read *out of* the bucket is fetched against a sha that came from the
+  same bucket, so `Fetch`'s comparison then proves the bundle and its manifest agree
+  rather than that either is yours; the command says which of the two checks ran,
+  because a successful fetch looks identical either way.
+- **`internal/s3`** — the smallest S3 client that can hold a snapshot: put, get, stat,
+  delete, list. Hand-rolled SigV4 against a published AWS test vector rather than the AWS
+  SDK, for the reason the module depends only on cobra and yaml.v3 — 15MB of transitive
+  code and a release cadence to track, in exchange for five requests whose signing has
+  been stable since 2012. The costs are named rather than hidden: no IMDS, no SSO, no
+  config-file profiles, no multipart. Vendors are **configuration, not a list**
+  (`Endpoint`, `PathStyle`), the same reason `creds`' prefix table stays short. Two things
+  are easy to get wrong twice: `Host` is not in `http.Request.Header`, so a signer walking
+  the map alone omits it and every server rejects the result while nothing local
+  complains; and `Stat` is a HEAD, whose response may carry no body, so it is the one
+  operation that can never surface an S3 error *code* — pinned by test so nobody spends an
+  afternoon looking for one. `Config` holds the **names** of the environment variables a
+  credential is read from and has nowhere to put a value, which is what lets the whole
+  struct cross the wire to a browser.
 - **`internal/agentctx`** — where each agent keeps its conversation transcripts, and the
   persisted record of what has actually been confirmed. The paths in `stores.go` are
   *candidates*, not facts: `Probe` looks for them on this machine and the `Registry`
@@ -690,7 +741,10 @@ has the phased design notes, and is gitignored. The rules that follow from it:
 
 - **A project `.sandbox.yaml` is untrusted input** and the privilege-relevant keys are
   *refused* from it (`internal/config/trust.go`): `image`, `workdir`, `user`, `home`,
-  `runtime`, `mounts`, `secrets`, `env`, `env_allow`, `security.*`, `cache.paths`, and
+  `runtime`, `mounts`, `secrets`, `env`, `env_allow`, `security.*`, `cache.paths`,
+  `snapshot` (`enabled: false` silently removes crash protection, `interval: 1ms` is a
+  host busy-loop, and `s3:` names both an exfiltration destination and which of this
+  machine's credentials is read to reach it), and
   any `network.mode`/`network.baseline` that **weakens** what is already in force. A
   project may tighten (`default` → `allowlist` → `none`), never loosen. The escape
   hatches are the user's own config and an explicit `--config <path>`, where typing the

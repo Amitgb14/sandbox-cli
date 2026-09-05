@@ -13,6 +13,108 @@ version is tagged.
 
 ### Added
 
+- **Snapshots you take on purpose, and restore from by name.** A snapshot was
+  something the crash safety net recorded on a timer and `sandbox-cli recover`
+  found for you; it is now something you can ask for — before a risky migration,
+  around an agent you are not sure about — through Studio's new **Snapshots**
+  screen and through the SDK (`ws.snapshot()`, `ws.restore(id)`).
+
+  It is the same mechanism underneath, which is the point: a commit of the
+  working tree under `refs/sandbox/snapshots/`, written through a private index
+  so your own index, `HEAD`, branches and working tree are never touched. It
+  holds **files** — no container, no image, no credential — so restoring one is
+  cheap, and it is not a way to resume a stopped machine.
+
+  An unchanged tree is **refused** rather than recorded. A snapshot id that
+  points at no commit is worse than none: you find out at the moment you try to
+  roll back.
+
+  Retention is per snapshot — seven days by default for one you took, still
+  fourteen for the crash net, and settable on each one or as a default in Studio
+  → Settings. What is stored is the *rule* rather than a computed expiry, so
+  raising the default moves every snapshot that never named its own.
+
+  A snapshot taken through the SDK is restored through the SDK. Studio lists it
+  but will not put it back, because a script part-way through something is not a
+  thing to undo from a browser tab. Snapshots from a sandbox run restore in
+  either place.
+
+- **Snapshots can be mirrored to S3, and sandbox-cli never holds the key.**
+  `snapshot.s3` in your own config — or Settings → Snapshot storage — names a
+  bucket, and each checkpoint is uploaded as a **git bundle**: not an archive
+  that needs this tool to open, but a packfile git alone can read on a machine
+  that has never seen the repository.
+
+      git init recovered && cd recovered
+      git fetch ../snap.bundle 'refs/sandbox/snapshots/*:refs/heads/snap/*'
+      git checkout snap/<id>
+
+  Works with AWS and anything S3-compatible — MinIO, R2, Ceph, B2 — through
+  `endpoint:` and `path_style:` rather than a list of vendors. The signing is
+  ~120 lines of standard library against a published test vector; the AWS SDK
+  would have been 15MB of transitive dependency for five requests.
+
+  **The credential is named, never held.** `access_key_env:` is the *name* of an
+  environment variable read on the daemon's machine, the same shape `gateway:`
+  uses — so there is nowhere in the config file, the settings file, the API
+  response or the browser for a secret to be. What Studio shows is which variable
+  is read and whether it currently resolves.
+
+  By default only snapshots **you take** are uploaded. `upload: all` adds the
+  crash net, and the reason it is not the default is arithmetic: that loop
+  commits every two minutes for the length of every run.
+
+  Two refusals worth knowing. A bundle that comes back holding a **different
+  commit** than this machine recorded is rejected and the ref rolled back —
+  `git bundle verify` proves a bundle is well formed, not that it is *yours*.
+  And `snapshot.s3` is refused from a project `.sandbox.yaml` like the rest of
+  the `snapshot` key: it names a network destination and which credential is
+  read, which is an exfiltration target and the means to fill it.
+
+  Retention still prunes the **local** copy only. Objects in the bucket are
+  governed by its own lifecycle rules — a backup that expires while your laptop
+  is shut is not one.
+
+- **`sandbox-cli recover fetch` — the way back from the bucket.** The bundle
+  recipe above works with nothing but git, which is the point of storing one;
+  this is the shorter path when the machine still has sandbox-cli.
+
+      sandbox-cli recover fetch                    # what the bucket holds for this repo
+      sandbox-cli recover fetch 20260724-224601    # unpack it back under refs/sandbox/
+
+  It works on a machine that has **never seen these snapshots**, because a small
+  manifest is stored beside every bundle — the branch, the agent, the label and
+  the times, next to the bytes they describe. After a fetch the snapshot is
+  local, and `show`, `restore` and the rest treat it as one that never left.
+
+  Two things it will tell you rather than guess at. A repository is addressed in
+  the bucket by an id derived from its **absolute path**, so a clone in a new
+  location looks in a namespace of its own — an empty listing names the other
+  ids that are in there, and `--repo-id` reads one of them. And a snapshot this
+  machine has no record of can only be checked against the manifest that
+  travelled beside it, which is consistency rather than provenance: `fetch` says
+  so, and says to look before you restore.
+
+### Fixed
+
+- **`studio.sh up --bind 0.0.0.0` started nothing, and said so nowhere.** It
+  printed "starting Studio" and exited: no daemon, no error, an empty `api.log`.
+  Working out which hostnames to allow is the last thing that runs before the
+  launch, and on macOS it asks every interface for its address — including the
+  several that have none (`en4`, `awdl0`, `llw0`), where `ipconfig getifaddr`
+  exits 1. Under `set -e` that killed the loop, and with it the script, before
+  the `return 0` written to make exactly this harmless could be reached. Only
+  `--bind` was affected: a loopback bind never asks the question.
+
+
+- **`POST /v1/runs/{id}/recover` restored the state a Studio run *started*
+  from.** The daemon records a baseline before every launch — a before-image, by
+  design — and that session carried the same branch and agent as the run's own
+  and was the most recent, so it won the match outright. The failure was the bad
+  kind: not an error, but a restore that looked like it worked and handed back
+  the work's starting point. Baselines are now skipped when looking for
+  something to recover, and hidden from the snapshot listing.
+
 - **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
   sandbox-cli never supplies the key.** `gateway:` in your own config names the
   agents, the endpoint, and the *variable* the credential lives in — a name, not
@@ -63,16 +165,6 @@ What "stable" means here is that the contracts above do not move without a
 changelog entry saying so.
 
 ### Fixed
-
-- **`studio.sh up --bind 0.0.0.0` started nothing, and said so nowhere.** It
-  printed "starting Studio" and exited: no daemon, no error, an empty `api.log`.
-  Working out which hostnames to allow is the last thing that runs before the
-  launch, and on macOS it asks every interface for its address — including the
-  several that have none (`en4`, `awdl0`, `llw0`), where `ipconfig getifaddr`
-  exits 1. Under `set -e` that killed the loop, and with it the script, before
-  the `return 0` written to make exactly this harmless could be reached. Only
-  `--bind` was affected: a loopback bind never asks the question.
-
 
 - **The landing page said "15 agents wrapped".** It had said that since the page
   was rebuilt, through every roster change since — including the two last week.

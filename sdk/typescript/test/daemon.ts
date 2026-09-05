@@ -43,6 +43,16 @@ export interface FakeDaemonOptions {
   /** The branch and state GET /runs reports, for the reaping rules. */
   listedBranch?: string;
   listedState?: string;
+  /** Refuse a capture the way a daemon does when the tree has not changed. */
+  nothingToSnapshot?: boolean;
+  /** Snapshots GET /v1/snapshots reports. */
+  snapshots?: Array<Record<string, unknown>>;
+
+  /** The bucket the daemon is configured with; unset means none. */
+  bucket?: string;
+
+  /** What the bucket says when it refuses, for the check endpoint. */
+  bucketError?: string;
 }
 
 export class FakeDaemon {
@@ -244,6 +254,94 @@ export class FakeDaemon {
       res.end();
       return;
     }
+    if (url.pathname === "/v1/snapshots" && req.method === "GET") {
+      return json(200, { snapshots: this.opts.snapshots ?? [snapshotRow("snap-1")] });
+    }
+    if (
+      (url.pathname === "/v1/snapshots" || url.pathname === "/v1/runs/run-1/snapshot") &&
+      req.method === "POST"
+    ) {
+      if (this.opts.nothingToSnapshot) {
+        // The daemon's own sentence: the client matches on it to raise a typed
+        // error, so a stub that invented its own wording would test nothing.
+        return json(422, { error: "nothing to snapshot: the workspace has not changed" });
+      }
+      const body = raw ? (JSON.parse(raw) as { label?: string; retention?: string }) : {};
+      return json(201, snapshotRow("snap-1", body.label, body.retention));
+    }
+    if (url.pathname === "/v1/snapshots/snap-1/restore" && req.method === "POST") {
+      const body = raw ? (JSON.parse(raw) as { mode?: string; branch?: string }) : {};
+      return json(200, {
+        sessionId: "snap-1",
+        mode: body.mode ?? "branch",
+        branch: body.branch ?? "sandbox-recover/feature-snap-1",
+        files: 3,
+        matchesWorkingTree: false,
+      });
+    }
+    if (url.pathname === "/v1/snapshots/snap-1/retention" && req.method === "POST") {
+      const body = raw ? (JSON.parse(raw) as { retention?: string }) : {};
+      return json(200, snapshotRow("snap-1", undefined, body.retention));
+    }
+    if (url.pathname === "/v1/snapshots/snap-1/upload" && req.method === "POST") {
+      if (!this.opts.bucket) {
+        return json(422, { error: "no snapshot bucket is configured; set snapshot.s3.bucket in Settings" });
+      }
+      const row = snapshotRow("snap-1");
+      row.remote = {
+        bucket: this.opts.bucket,
+        key: "snapshots/repo-1/snap-1.bundle",
+        uploaded: true,
+        uploadedAt: "2026-08-29T00:01:00Z",
+        bytes: 4096,
+      };
+      return json(200, row);
+    }
+    if (url.pathname === "/v1/snapshots/snap-1/verify" && req.method === "POST") {
+      return json(200, { ok: !!this.opts.bucket, bucket: this.opts.bucket ?? "" });
+    }
+    if (url.pathname === "/v1/snapshots/s3/check" && req.method === "POST") {
+      // A refusing bucket is a 200 with ok:false, which is the whole point of
+      // the shape: the request succeeded and the storage did not.
+      if (this.opts.bucketError) {
+        return json(200, { ok: false, bucket: this.opts.bucket ?? "", error: this.opts.bucketError });
+      }
+      return json(200, { ok: !!this.opts.bucket, bucket: this.opts.bucket ?? "" });
+    }
+    if (url.pathname === "/v1/snapshots/settings" && req.method === "GET") {
+      const out: Record<string, unknown> = {
+        retention: "336h0m0s",
+        manualRetention: "168h0m0s",
+        writable: true,
+      };
+      if (this.opts.bucket) {
+        out.s3 = {
+          bucket: this.opts.bucket,
+          upload: "manual",
+          accessKeyEnv: "AWS_ACCESS_KEY_ID",
+          secretKeyEnv: "AWS_SECRET_ACCESS_KEY",
+          credentialsResolved: true,
+        };
+      }
+      return json(200, out);
+    }
     return json(404, { error: `no route ${req.method} ${url.pathname}` });
   }
+}
+
+/** One row of the shape GET /v1/snapshots answers with. */
+function snapshotRow(id: string, label?: string, retention?: string): Record<string, unknown> {
+  return {
+    id,
+    repoId: "repo-1",
+    branch: "feature",
+    label: label ?? "",
+    source: "sdk",
+    commit: "abc1234",
+    reachable: true,
+    createdAt: "2026-08-29T00:00:00Z",
+    status: "snapshot",
+    retention: retention ?? "",
+    retentionEffective: retention || "168h0m0s",
+  };
 }

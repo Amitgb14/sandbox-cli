@@ -225,7 +225,16 @@ func beginRescue(rf *runFlags, cfg config.Config, opts sandbox.Options) *rescue.
 	if ws == "" {
 		ws, _ = os.Getwd()
 	}
-	s := rescue.Begin(config.ExpandTilde(ws), rf.persistName, interval, cfg.Snapshot.RetentionDuration())
+	s := rescue.Begin(config.ExpandTilde(ws), rf.persistName, interval, rescue.Retention{
+		Run:    cfg.Snapshot.RetentionDuration(),
+		Manual: cfg.Snapshot.ManualRetentionDuration(),
+	})
+	// Only for `upload: all`. The default mirrors checkpoints somebody asked
+	// for and leaves this loop local, which is arithmetic rather than caution:
+	// this fires every two minutes for the length of the run.
+	if cfg.Snapshot.S3.UploadsRun() {
+		s.MirrorTo(cfg.Snapshot.S3)
+	}
 	s.Start()
 	return s
 }

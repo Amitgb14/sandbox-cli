@@ -66,7 +66,7 @@ func writeFile(t *testing.T, path, content string) {
 // snapshot by snapshot.
 func begin(t *testing.T, dir string) *Snapshotter {
 	t.Helper()
-	s := Begin(dir, "test", time.Minute, 14*24*time.Hour)
+	s := Begin(dir, "test", time.Minute, Retention{Run: 14 * 24 * time.Hour})
 	if s == nil {
 		t.Fatal("Begin returned nil for a git repository")
 	}
@@ -329,7 +329,7 @@ func TestRestorePatchFromAnUnbornRepository(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(repo, "first.txt"), "before any commit\n")
 
-	s := Begin(repo, "test", time.Minute, time.Hour)
+	s := Begin(repo, "test", time.Minute, Retention{Run: time.Hour})
 	if s == nil {
 		t.Fatal("Begin returned nil for a repository with no commits")
 	}
@@ -467,7 +467,7 @@ func TestPruneLeavesALiveSessionAlone(t *testing.T) {
 // the run path calls Start/Stop unconditionally, so nil has to be safe.
 func TestBeginIsNilOutsideAGitRepository(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	s := Begin(t.TempDir(), "test", time.Minute, time.Hour)
+	s := Begin(t.TempDir(), "test", time.Minute, Retention{Run: time.Hour})
 	if s != nil {
 		t.Fatal("Begin returned a Snapshotter for a directory that is not a repository")
 	}
@@ -563,7 +563,7 @@ func TestSnapshotSkipsOversizedFiles(t *testing.T) {
 // conversation) is never mentioned.
 func TestRestoreReportsWhenTheWorkingTreeAlreadyMatches(t *testing.T) {
 	repo := initRepo(t)
-	s := Begin(repo, "test", time.Minute, time.Hour)
+	s := Begin(repo, "test", time.Minute, Retention{Run: time.Hour})
 
 	writeFile(t, filepath.Join(repo, "work.txt"), "the agent's work\n")
 	if _, err := s.Once(); err != nil {
