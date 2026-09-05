@@ -64,6 +64,16 @@ changelog entry saying so.
 
 ### Fixed
 
+- **`studio.sh up --bind 0.0.0.0` started nothing, and said so nowhere.** It
+  printed "starting Studio" and exited: no daemon, no error, an empty `api.log`.
+  Working out which hostnames to allow is the last thing that runs before the
+  launch, and on macOS it asks every interface for its address — including the
+  several that have none (`en4`, `awdl0`, `llw0`), where `ipconfig getifaddr`
+  exits 1. Under `set -e` that killed the loop, and with it the script, before
+  the `return 0` written to make exactly this harmless could be reached. Only
+  `--bind` was affected: a loopback bind never asks the question.
+
+
 - **The landing page said "15 agents wrapped".** It had said that since the page
   was rebuilt, through every roster change since — including the two last week.
   Twelve. The page description, which is the sentence search results show, said
