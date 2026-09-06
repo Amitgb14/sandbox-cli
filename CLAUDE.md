@@ -867,7 +867,15 @@ follow and are pinned by `studio/e2e/md.spec.ts`, which stubs its own routes so 
 hostile input is written by hand rather than waited for: an image renders as *text*
 (fetching one reports when a transcript was read), a link is a link only for
 `http:`/`https:` with a bare URL never autolinked, and anything else shows its own
-source. Issue #151.
+source — and a destination the label does not already name is printed beside it,
+since a clickable label that is itself a trusted-looking URL is the shape that
+lies. A fourth rule is about the parser rather than the output: **every inline
+pattern is line-bounded and linear.** The first version matched code spans with a
+backreference to a variable-length run wrapped around a lazy match-anything, which
+backtracks cubically — 13 KB of backticks froze the tab for 12.9 seconds, so a
+renderer built on the assumption that the author is hostile could be hung by one.
+Bounded classes cost a code span containing a backtick and emphasis crossing a
+line; neither is something agents write. Issue #151.
 
 Reading and answering a console run over HTTP is `internal/studioapi/console.go`.
 Two halves, two mechanisms, and the split is the point: **reading** comes from the

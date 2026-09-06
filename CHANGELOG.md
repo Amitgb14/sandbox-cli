@@ -42,6 +42,22 @@ version is tagged.
   worth doing. The stored-transcript viewer uses the same renderer as the live
   console: the same words read two different ways is how one of them stays wrong.
 
+  Four things a reader of this codebase would have hit immediately, found in
+  review of the first version and fixed before it shipped. A reply could **hang
+  the tab**: the code-span pattern backtracked cubically, and 13 KB of backticks
+  blocked the main thread for 12.9 seconds — a denial of service with a one-line
+  payload, in a renderer whose premise is that the author is hostile. Every
+  pattern is now line-bounded and linear (220 KB parses in 3 ms). `SANDBOX_RUN_AS`
+  rendered as *RUN* with the underscores **deleted**, so the reader saw a name
+  that does not exist, and `ignore *.go and *.ts` italicised everything between
+  the stars — emphasis now keeps CommonMark's flanking rules. A fenced block
+  inside a numbered step was run through the *inline* parser, which is the one
+  thing the parser promises never to do, so a list item now holds blocks rather
+  than text — which is also what makes a nested list nest instead of flattening
+  into peers of the point it qualifies. And a link's visible text could lie about
+  where it went, so a destination the label does not already name is shown beside
+  it.
+
   Issue #151.
 
 ### Added

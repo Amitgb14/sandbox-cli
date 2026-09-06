@@ -41,6 +41,18 @@ const CONVERSATION = [
       "![tracker](https://tracker.example/pixel.png)",
       "",
       '<img src=x onerror="alert(1)"> and <b>not bold</b>',
+      "",
+      "A label that lies: [https://github.com/Amitgb14/sandbox-cli](https://evil.example/login)",
+      "",
+      "Set SANDBOX_EGRESS_ALLOW and SANDBOX_RUN_AS, ignore *.go and *.ts files.",
+      "",
+      "1. Run this:",
+      "   ```sh",
+      "   ls -la **/*.go",
+      "   ```",
+      "2. Then check:",
+      "   - inner one",
+      "   - inner two",
     ].join("\n"),
   },
 ];
@@ -142,8 +154,10 @@ test("an agent's markdown is rendered, and its markup is not", async ({
   // Formatted, not literal: the markers are gone and the elements are there.
   await expect(panel.locator("strong", { hasText: "parser" })).toBeVisible();
   await expect(panel.locator("code", { hasText: "parseBlocks" })).toBeVisible();
-  await expect(panel.locator("li")).toHaveCount(2);
-  await expect(panel.locator("pre code")).toContainText('fmt.Println("hi")');
+  await expect(panel.locator("ul").first().locator("> li")).toHaveCount(2);
+  await expect(panel.locator("pre code").first()).toContainText(
+    'fmt.Println("hi")',
+  );
   await expect(panel.getByText("**parser**")).toHaveCount(0);
 
   // An http(s) link is a link, and carries the rel that keeps the opened page
@@ -165,7 +179,70 @@ test("an agent's markdown is rendered, and its markup is not", async ({
   await expect(panel.getByText("<b>not bold</b>")).toBeVisible();
   await expect(panel.getByText("onerror=")).toBeVisible();
 
+  // A label that is itself a trusted-looking URL must not hide where it goes.
+  // Before the review this was a clickable link showing only the label.
+  const lying = panel.getByRole("link", { name: /github\.com\/Amitgb14/ });
+  await expect(lying).toHaveAttribute("href", "https://evil.example/login");
+  await expect(panel.getByText("(evil.example)")).toBeVisible();
+
+  // snake_case survives, and so do globs. Intraword `_` used to be read as
+  // emphasis, which *deleted* the underscores from names that then did not
+  // exist; `*.go and *.ts` used to italicise everything between the two stars.
+  await expect(
+    panel.getByText(/SANDBOX_EGRESS_ALLOW and SANDBOX_RUN_AS/),
+  ).toBeVisible();
+  await expect(panel.getByText(/ignore \*\.go and \*\.ts files/)).toBeVisible();
+  await expect(panel.locator("em")).toHaveCount(0);
+
+  // A fenced block inside a numbered step is code, not text run through the
+  // inline parser — the exact case the parser's own doc comment promises.
+  await expect(panel.locator("li pre code")).toContainText("ls -la **/*.go");
+  await expect(panel.getByText("```sh")).toHaveCount(0);
+
+  // And a nested list nests, rather than flattening into siblings that read as
+  // peers of the step they qualify.
+  await expect(panel.locator("li ul li")).toHaveCount(2);
+
   expect(fetched, "a rendered reply fetched something an agent named").toEqual(
     [],
   );
+});
+
+/**
+ * A renderer whose premise is that the author of the text is hostile must not be
+ * hangable by it. The first version matched code spans with a backreference to a
+ * variable-length run wrapped around a lazy match-anything, which backtracks
+ * cubically: 13 KB of backticks blocked the main thread for 12.9 seconds,
+ * measured. This asserts the tab is still answering afterwards.
+ */
+test("a hostile reply does not hang the tab", async ({ page }) => {
+  const hostile = [
+    "note " + "`".repeat(2000) + "x".repeat(20000),
+    "",
+    "and " + "*".repeat(2000) + "y".repeat(20000),
+  ].join("\n");
+
+  await stub(page);
+  await page.route(`**/v1/runs/${RUN}/conversation*`, (r) =>
+    r.fulfill({
+      json: {
+        messages: [
+          { role: "assistant", text: hostile, at: "2026-09-06T10:00:00Z" },
+        ],
+        writable: false,
+      },
+    }),
+  );
+
+  await page.goto(`/runs/${RUN}`);
+  await page.getByRole("tab", { name: "Console" }).click();
+  // Rendered at all, and quickly: the whole point is that the main thread came
+  // back. A 10s budget is far under the 12.9s one payload used to cost.
+  await expect(page.locator("[data-agent-markdown]").last()).toBeVisible({
+    timeout: 10000,
+  });
+  // Still answering input, which is what "did not hang" means to a person.
+  await expect(page.getByRole("tab", { name: "Logs" })).toBeEnabled({
+    timeout: 2000,
+  });
 });

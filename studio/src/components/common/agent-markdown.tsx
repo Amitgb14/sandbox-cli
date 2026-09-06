@@ -79,9 +79,19 @@ type Block =
   | { kind: "p"; text: string }
   | { kind: "heading"; level: number; text: string }
   | { kind: "code"; lang: string; code: string }
-  | { kind: "list"; ordered: boolean; items: string[]; start: number }
+  | { kind: "list"; ordered: boolean; items: Block[][]; start: number }
   | { kind: "quote"; text: string }
   | { kind: "hr" };
+
+function Blocks({ blocks }: { blocks: Block[] }) {
+  return (
+    <>
+      {blocks.map((b, i) => (
+        <Block key={i} block={b} />
+      ))}
+    </>
+  );
+}
 
 function Block({ block }: { block: Block }) {
   switch (block.kind) {
@@ -100,7 +110,7 @@ function Block({ block }: { block: Block }) {
             : "text-xs";
       return (
         <p
-          className={cn("font-semibold", size)}
+          className={cn("break-words font-semibold", size)}
           role="heading"
           aria-level={block.level}
         >
@@ -110,11 +120,20 @@ function Block({ block }: { block: Block }) {
     }
 
     case "list": {
-      const cls =
-        "ms-5 space-y-1 " + (block.ordered ? "list-decimal" : "list-disc");
-      const items = block.items.map((it, i) => (
-        <li key={i}>
-          <Inline text={it} />
+      const cls = cn(
+        "ms-5 space-y-1 break-words",
+        block.ordered ? "list-decimal" : "list-disc",
+      );
+      const items = block.items.map((blocks, i) => (
+        <li key={i} className="space-y-2">
+          {/* A one-paragraph item renders its text directly. Wrapping it in a
+              <p> would space every bullet like a paragraph, which is what makes
+              a short list look like an essay. */}
+          {blocks.length === 1 && blocks[0].kind === "p" ? (
+            <Inline text={blocks[0].text} />
+          ) : (
+            <Blocks blocks={blocks} />
+          )}
         </li>
       ));
       return block.ordered ? (
@@ -128,7 +147,7 @@ function Block({ block }: { block: Block }) {
 
     case "quote":
       return (
-        <blockquote className="border-s-2 ps-3 text-muted-foreground">
+        <blockquote className="break-words border-s-2 ps-3 text-muted-foreground">
           <Inline text={block.text} />
         </blockquote>
       );
@@ -174,12 +193,15 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   );
 }
 
-const FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([^\s`]*)/;
+const FENCE = /^(\s*)(`{3,}|~{3,})\s*([^\s`]*)/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 const HR = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
-const UL = /^\s{0,3}[-*+]\s+(.*)$/;
-const OL = /^\s{0,3}(\d{1,9})[.)]\s+(.*)$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
+/** A list line, with its indent, its marker and the content after it. */
+const ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+
+/** Deeper than any real reply, and the bound that keeps nesting from recursing. */
+const MAX_DEPTH = 6;
 
 /**
  * Split text into blocks, line by line.
@@ -190,8 +212,15 @@ const QUOTE = /^\s{0,3}>\s?(.*)$/;
  * An unterminated fence — the common case while a reply is still streaming in —
  * runs to the end of the message rather than being abandoned, so a half-arrived
  * code block reads as code rather than as a stray paragraph of source.
+ *
+ * A list item holds **blocks**, not a string, and it is parsed by calling this
+ * function again on the item's own dedented lines. That is what makes a nested
+ * list nest and a fenced block inside a numbered step stay code: the first
+ * version treated an item as text, so `1. Run:` followed by an indented ```sh
+ * fence put the fence through the *inline* parser — the exact thing the
+ * paragraph above says must not happen, in the shape agents write most often.
  */
-function parseBlocks(input: string): Block[] {
+function parseBlocks(input: string, depth = 0): Block[] {
   const lines = input.replace(/\r\n?/g, "\n").split("\n");
   const out: Block[] = [];
   let para: string[] = [];
@@ -216,18 +245,21 @@ function parseBlocks(input: string): Block[] {
     const fence = FENCE.exec(line);
     if (fence) {
       flushAll();
-      const marker = fence[1][0];
-      const len = fence[1].length;
+      const indent = fence[1].length;
+      // Hoisted out of the scan: recompiling this per line inside a long block
+      // is work proportional to the block for no reason.
+      const close = new RegExp(
+        `^\\s*${fence[2][0] === "\`" ? "`" : "~"}{${fence[2].length},}\\s*$`,
+      );
       const body: string[] = [];
       i++;
       for (; i < lines.length; i++) {
-        const close = new RegExp(
-          `^\\s{0,3}${marker === "`" ? "`" : "~"}{${len},}\\s*$`,
-        );
         if (close.test(lines[i])) break;
-        body.push(lines[i]);
+        // Dedented by the fence's own indent, so a block inside a list item is
+        // not rendered with the indentation that put it there.
+        body.push(lines[i].slice(Math.min(indent, leadingSpaces(lines[i]))));
       }
-      out.push({ kind: "code", lang: fence[2] ?? "", code: body.join("\n") });
+      out.push({ kind: "code", lang: fence[3] ?? "", code: body.join("\n") });
       continue;
     }
 
@@ -257,32 +289,10 @@ function parseBlocks(input: string): Block[] {
       continue;
     }
 
-    const ul = UL.exec(line);
-    const ol = OL.exec(line);
-    if (ul || ol) {
+    const item = ITEM.exec(line);
+    if (item && depth < MAX_DEPTH) {
       flushPara();
-      const ordered = !!ol;
-      const items: string[] = [ordered ? ol![2] : ul![1]];
-      const start = ordered ? Number(ol![1]) : 1;
-      // Consume the rest of the run, and continuation lines with it: a wrapped
-      // bullet is one item, not an item and a paragraph.
-      while (i + 1 < lines.length) {
-        const next = lines[i + 1];
-        const nu = UL.exec(next);
-        const no = OL.exec(next);
-        if (ordered ? no : nu) {
-          items.push(ordered ? no![2] : nu![1]);
-          i++;
-          continue;
-        }
-        if (next.trim() && /^\s{2,}\S/.test(next) && !nu && !no) {
-          items[items.length - 1] += "\n" + next.trim();
-          i++;
-          continue;
-        }
-        break;
-      }
-      out.push({ kind: "list", ordered, items, start });
+      i = readList(lines, i, out, depth);
       continue;
     }
 
@@ -290,6 +300,82 @@ function parseBlocks(input: string): Block[] {
   }
   flushAll();
   return out;
+}
+
+function leadingSpaces(s: string): number {
+  return s.length - s.trimStart().length;
+}
+
+/**
+ * Read one list starting at `start`, and return the index of its last line.
+ *
+ * A line belongs to this list if it is a sibling item at the same indent, or if
+ * it is indented past the marker — which is how a nested list, a wrapped
+ * sentence and an indented code fence all reach the item they belong to rather
+ * than ending it. Each item is then parsed as its own document, dedented, so
+ * every block kind works inside one without this function knowing what they are.
+ */
+function readList(
+  lines: string[],
+  start: number,
+  out: Block[],
+  depth: number,
+): number {
+  const first = ITEM.exec(lines[start])!;
+  const indent = first[1].length;
+  const ordered = /\d/.test(first[2]);
+  const startNum = ordered ? Number(first[2].replace(/\D/g, "")) : 1;
+
+  const items: string[][] = [];
+  let current: string[] = [first[3]];
+  // How far in this item's *content* sits, so continuation lines can be
+  // dedented to match it.
+  let contentIndent = indent + first[2].length + 1;
+  let i = start;
+  let blanks = 0;
+
+  for (i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (!line.trim()) {
+      // One blank line inside a list is a loose item; two ends the list.
+      if (++blanks > 1) break;
+      current.push("");
+      continue;
+    }
+
+    const sib = ITEM.exec(line);
+    if (sib && sib[1].length <= indent) {
+      // A sibling, or a marker outdented past this list — either way this item
+      // is finished. A different kind of marker at the same indent ends the
+      // list rather than joining it, so a bulleted aside under numbered steps
+      // does not become step 3.
+      if (sib[1].length < indent || /\d/.test(sib[2]) !== ordered) break;
+      items.push(current);
+      current = [sib[3]];
+      contentIndent = sib[1].length + sib[2].length + 1;
+      blanks = 0;
+      continue;
+    }
+
+    if (leadingSpaces(line) > indent) {
+      current.push(line.slice(Math.min(contentIndent, leadingSpaces(line))));
+      blanks = 0;
+      continue;
+    }
+    break;
+  }
+  items.push(current);
+
+  out.push({
+    kind: "list",
+    ordered,
+    start: startNum,
+    items: items.map((lines) => parseBlocks(lines.join("\n"), depth + 1)),
+  });
+  // The loop above stops *on* the line that ends the list, which the caller has
+  // not seen yet; hand back the one before it.
+  return i - 1;
 }
 
 /* ------------------------------------------------------------------ inline */
@@ -302,52 +388,89 @@ function parseBlocks(input: string): Block[] {
  * Links come next so their label can still carry emphasis, then bold before
  * italic — `**` is a prefix of `*`, and testing the shorter one first would read
  * every bold marker as two empty italics.
+ *
+ * **Every content class is line-bounded and none of them can match a
+ * delimiter.** That is a performance property, and on this input it is a
+ * security one. The first version matched code spans with `` (`+)([\s\S]*?[^`])\1 ``
+ * — a backreference to a variable-length run, wrapped around a lazy
+ * match-anything — which backtracks cubically: 13 KB of text (a run of 1200
+ * backticks and 12 000 following characters) blocked the main thread for **12.9
+ * seconds**, measured. This file's premise is that the author of the text is
+ * hostile, so a renderer that can be made to hang the tab of whoever opens the
+ * run is a denial of service with a one-line payload. Bounded classes make the
+ * scan linear, and the cost is that a code span cannot contain a backtick and
+ * emphasis cannot cross a line — neither of which agents write.
  */
 const INLINE =
-  /(`+)([\s\S]*?[^`])\1(?!`)|(!?)\[([^\]]*)\]\(([^()\s]*)\)|(\*\*|__)([\s\S]+?)\6|(\*|_)([^\s*_][\s\S]*?)\8/;
+  /`([^`\n]+)`|(!?)\[([^\]]*)\]\(([^\s)]*)\)|(\*\*|__)([^\s](?:[^\n]*?[^\s])?)\5|(\*|_)([^\s*_](?:[^\n]*?[^\s])?)\7/g;
 
 function Inline({ text }: { text: string }): ReactNode {
   return <>{renderInline(text)}</>;
 }
 
-function renderInline(text: string, depth = 0): ReactNode[] {
-  const out: ReactNode[] = [];
-  let rest = text;
-  let key = 0;
+/** A character that makes a `_` around it part of a word rather than a marker. */
+function isWordChar(c: string | undefined): boolean {
+  return c !== undefined && /[\p{L}\p{N}_]/u.test(c);
+}
 
+function renderInline(text: string, depth = 0): ReactNode[] {
   // Emphasis recurses into its own content, so a hostile string of markers
   // cannot be made to nest without bound.
   if (depth > 4) return [text];
 
-  while (rest.length > 0) {
-    const m = INLINE.exec(rest);
-    if (!m) {
-      out.push(rest);
-      break;
-    }
-    if (m.index > 0) out.push(rest.slice(0, m.index));
+  const out: ReactNode[] = [];
+  const re = new RegExp(INLINE.source, "g");
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
 
-    if (m[1]) {
+  while ((m = re.exec(text)) !== null) {
+    const isUnderscore = m[5] === "__" || m[7] === "_";
+    if (isUnderscore) {
+      /**
+       * `SANDBOX_EGRESS_ALLOW` is not italic `EGRESS`.
+       *
+       * CommonMark forbids intraword `_` emphasis for exactly this reason, and
+       * without the rule every snake_case identifier in a reply about this
+       * codebase came out mangled — with the underscores *deleted*, so the
+       * reader saw a name that does not exist. `*` keeps no such rule, because
+       * intraword `*` is how emphasis inside a word is written and nothing
+       * common uses it otherwise.
+       */
+      const before = text[m.index - 1];
+      const after = text[m.index + m[0].length];
+      if (isWordChar(before) || isWordChar(after)) {
+        // Not a marker. Resume one character in, so a later delimiter on the
+        // same line is still found.
+        re.lastIndex = m.index + 1;
+        continue;
+      }
+    }
+
+    if (m.index > last) out.push(text.slice(last, m.index));
+
+    if (m[1] !== undefined) {
       // Inline code: the contents are text and nothing else looks at them.
       out.push(
         <code
           key={key++}
           className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]"
         >
-          {m[2]}
+          {m[1]}
         </code>,
       );
-    } else if (m[4] !== undefined) {
+    } else if (m[3] !== undefined) {
       out.push(
-        <Link key={key++} image={m[3] === "!"} label={m[4]} href={m[5]} />,
+        <Link key={key++} image={m[2] === "!"} label={m[3]} href={m[4]} />,
       );
-    } else if (m[6]) {
-      out.push(<strong key={key++}>{renderInline(m[7], depth + 1)}</strong>);
+    } else if (m[5]) {
+      out.push(<strong key={key++}>{renderInline(m[6], depth + 1)}</strong>);
     } else {
-      out.push(<em key={key++}>{renderInline(m[9], depth + 1)}</em>);
+      out.push(<em key={key++}>{renderInline(m[8], depth + 1)}</em>);
     }
-    rest = rest.slice(m.index + m[0].length);
+    last = re.lastIndex;
   }
+  if (last < text.length) out.push(text.slice(last));
   return out;
 }
 
@@ -360,9 +483,14 @@ function renderInline(text: string, depth = 0): ReactNode[] {
  * them. A relative href has no scheme to check and no meaning here — this text
  * did not come from a page — so it is not a link either.
  *
- * What fails the test is shown as `label (url)`, both halves visible: the label
- * is the agent's own words and the URL is the claim it is making about where
- * they go, and a reader deciding whether to trust a transcript should see both.
+ * **The destination is shown either way**, and that is the correction to the
+ * first version of this file. It showed the URL only for the schemes it refused
+ * to link, which is backwards: an unclickable `javascript:` link is the one a
+ * reader is least likely to follow, and a clickable
+ * `[https://github.com/…](https://evil.example/login)` — a label that is itself
+ * a trusted-looking URL — was rendered with the real destination hidden. So a
+ * link that goes somewhere its label does not already name carries the host
+ * beside it. The label is the agent's words; the host is where they go.
  */
 function Link({
   image,
@@ -382,31 +510,38 @@ function Link({
     );
   }
 
-  let safe = false;
+  let url: URL | null = null;
   try {
     const u = new URL(href);
-    safe = u.protocol === "http:" || u.protocol === "https:";
+    if (u.protocol === "http:" || u.protocol === "https:") url = u;
   } catch {
-    safe = false;
+    url = null;
   }
 
-  if (!safe) {
+  if (!url) {
     return (
       <span>
         {label} <span className="text-muted-foreground">({href})</span>
       </span>
     );
   }
+
+  // Suppressed only when the label already names where it goes, so the common
+  // case — a link whose text *is* the URL — does not print the host twice.
+  const names = label.includes(url.host) || label.trim() === "";
   return (
-    <a
-      href={href}
-      target="_blank"
-      // noopener so the opened page cannot reach back through window.opener;
-      // noreferrer so it is not told which run detail somebody was reading.
-      rel="noopener noreferrer nofollow"
-      className="underline underline-offset-2 hover:text-foreground"
-    >
-      {label || href}
-    </a>
+    <>
+      <a
+        href={url.href}
+        target="_blank"
+        // noopener so the opened page cannot reach back through window.opener;
+        // noreferrer so it is not told which run detail somebody was reading.
+        rel="noopener noreferrer nofollow"
+        className="underline underline-offset-2 hover:text-foreground"
+      >
+        {label || url.href}
+      </a>
+      {!names && <span className="text-muted-foreground"> ({url.host})</span>}
+    </>
   );
 }
