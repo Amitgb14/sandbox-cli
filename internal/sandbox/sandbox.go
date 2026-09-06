@@ -482,6 +482,7 @@ func (s *Session) enforceSeccomp(ctx context.Context) error {
 	}
 	r, ok := s.Runtime.(interface {
 		SeccompUnavailable(context.Context) (bool, bool)
+		SeccompRemedy() string
 	})
 	if !ok {
 		return nil // a runtime that cannot be asked; nothing to enforce against
@@ -492,10 +493,15 @@ func (s *Session) enforceSeccomp(ctx context.Context) error {
 			"applies a syscall filter; refusing rather than assuming it does", config.SeccompRequired)
 	}
 	if unavailable {
-		return fmt.Errorf("security.seccomp is %q but this docker daemon applies no syscall filter, so the "+
+		// The remedy comes from the runtime rather than being written here. It
+		// used to be a second copy of the same two lines, which is how a refusal
+		// ends up telling somebody to delete a setting their machine does not
+		// have while the warning next door says something else.
+		return fmt.Errorf("security.seccomp is %q but this daemon applies no syscall filter, so the "+
 			"container would have the full syscall table\n"+
-			"  Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\"\n"+
-			"  or run with --profile dev, which warns instead of refusing", config.SeccompRequired)
+			"  %s\n"+
+			"  or run with --profile dev, which warns instead of refusing",
+			config.SeccompRequired, r.SeccompRemedy())
 	}
 	return nil
 }

@@ -11,6 +11,27 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **The seccomp refusal named a fix that is often not there.** When a daemon
+  applies no syscall filter, sandbox-cli warned (dev) or refused (prod) and told
+  you to remove `"seccomp-profile": "unconfined"` from Docker Desktop's Settings →
+  Docker Engine — as a statement of fact. Hit on a machine whose `daemon.json`
+  contained no such key, and neither did the Desktop settings store or admin
+  policy, while the daemon reported `profile=unconfined` and a container really
+  did run with `Seccomp: 0`. The refusal was right; only its advice was wrong,
+  which is the worse half — being sent to delete a line that is not there reads
+  as the tool having misdiagnosed, and makes a correct refusal look wrong too.
+
+  It now names the setting **conditionally** and then the other known cause:
+  Docker Desktop's containerd image store has been reported to leave the filter
+  off with nothing configured (docker/for-win#13851). That second one is
+  attributed as a report rather than asserted — the rule `creds.Classify` already
+  keeps, so the sentence stays true when the cause turns out to be something else.
+
+  The text lived in **four** places (the prod refusal, the dev warning, `doctor`,
+  and the site) saying the same wrong thing. It is now one exported function the
+  first three read, which is why they could drift in the first place.
 ### Added
 
 - **Snapshots you take on purpose, and restore from by name.** A snapshot was

@@ -514,7 +514,7 @@ export const CHALLENGES: Challenge[] = [
   {
     symptom: '"this docker daemon applies no seccomp profile"',
     cause:
-      'Docker Desktop configured with "seccomp-profile": "unconfined". sandbox-cli ships no profile of its own — the daemon default is good and maintaining a custom one is a large ongoing cost — so an absent filter means the container has the full syscall table. It is reported rather than refused under dev, because that is a property of your installation and fixable in its settings.',
+      'A Docker Desktop that applies no syscall filter — from "seccomp-profile": "unconfined" in Settings → Docker Engine, or from the containerd image store, which has been reported to leave it off with nothing set. sandbox-cli ships no profile of its own — the daemon default is good and maintaining a custom one is a large ongoing cost — so an absent filter means the container has the full syscall table. It is reported rather than refused under dev, because that is a property of your installation and fixable in its settings.',
     fix: "Settings → Docker Engine, remove that line, apply and restart. Under prod this is a hard failure, not a warning.",
     scope: "both",
   },

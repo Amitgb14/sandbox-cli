@@ -148,7 +148,7 @@ const PROD_STEPS: DeployStep[] = [
     title: "Ask the machine before you schedule anything on it",
     code: "sandbox-cli doctor --profile prod",
     warn: "Non-zero exit means do not schedule here yet.",
-    body: "Same checks as dev, opposite disposition: every warning becomes a failure. A question that could not be asked counts as a failure too — it does not get to assume the answer it would prefer. On Docker Desktop the usual blocker is \"seccomp-profile\": \"unconfined\" in Settings → Docker Engine; remove that line and apply.",
+    body: "Same checks as dev, opposite disposition: every warning becomes a failure. A question that could not be asked counts as a failure too — it does not get to assume the answer it would prefer. On Docker Desktop the usual blocker is an absent syscall filter: remove \"seccomp-profile\": \"unconfined\" from Settings → Docker Engine if it is there, and if it is not, check the containerd image store in Settings → General, which has been reported to leave the filter off on its own.",
   },
   {
     title: "Name every domain the run may reach",
