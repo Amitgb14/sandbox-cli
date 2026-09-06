@@ -2,6 +2,9 @@ import { AGENT_SEEDS, BASELINE_EGRESS } from "@/lib/constants";
 import type {
   Agent,
   AgentName,
+  Snapshot,
+  SnapshotSettings,
+  SnapshotSource,
   AuditRecord,
   DaemonInfo,
   DiffFile,
@@ -451,6 +454,44 @@ export const MOCK_WORKTREES: Worktree[] = (() => {
 
   return list;
 })();
+
+// ---------------------------------------------------------------------------
+// Snapshots
+// ---------------------------------------------------------------------------
+
+export const MOCK_SNAPSHOTS: Snapshot[] = (() => {
+  const rng = rngFor(0x5a1105);
+  const seeds: Array<{ branch: string; label: string; source: SnapshotSource; agent: string }> = [
+    { branch: "feat/egress-proxy", label: "before the refactor", source: "run", agent: "claude" },
+    { branch: "feat/egress-proxy", label: "", source: "run", agent: "claude" },
+    { branch: "fix/worktree-prune", label: "green build", source: "sdk", agent: "codex" },
+    { branch: "develop", label: "nightly checkpoint", source: "sdk", agent: "" },
+  ];
+  return seeds.map((seed, i) => ({
+    id: `${20260820 + i}-${rng.int(0x100000, 0xffffff).toString(16)}`,
+    repoId: REPOS[i === 3 ? 1 : 0].id,
+    branch: seed.branch,
+    agent: seed.agent,
+    label: seed.label,
+    source: seed.source,
+    commit: rng.int(0x100000, 0xffffff).toString(16).padStart(7, "0"),
+    reachable: true,
+    createdAt: ago(rng.int(1, 5) * DAY),
+    endedAt: ago(rng.int(1, 5) * DAY),
+    status: "snapshot",
+    retention: i === 2 ? "720h" : "",
+    retentionEffective: i === 2 ? "720h0m0s" : "168h0m0s",
+  }));
+})();
+
+export const MOCK_SNAPSHOT_SETTINGS: SnapshotSettings = {
+  retention: "336h0m0s",
+  manualRetention: "168h0m0s",
+  writable: true,
+  // No bucket, which is the real default. A fixture that invented one would
+  // make the storage card render as configured against a daemon that has none —
+  // and the Test button is liveOnly precisely so it cannot then agree.
+};
 
 // ---------------------------------------------------------------------------
 // Agents

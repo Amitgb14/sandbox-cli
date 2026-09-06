@@ -128,6 +128,15 @@ export const STUDIO_STEPS: StudioStep[] = [
     expect: "The new run in the table within a second or two, and its container visible to `sandbox-cli list` in a terminal — one control plane, two front ends.",
   },
   {
+    title: "Hand a file from one agent to another",
+    side: "browser",
+    body:
+      "Two runs in different repositories cannot see each other — everything a sandbox reaches is scoped to its own project, which is the point and also leaves no way to pass an API contract across. Ticking **Share the handoff directory** mounts the daemon machine's ~/.config/sandbox/shared at /shared, the same thing --share arranges from a shell and through the same code. Then say so in both prompts: write the contract to /shared/openapi.yaml on one side, read it on the other. A namespace narrows it to /shared/NAME so two runs do not clobber the same filename — it prevents collisions, not access, since any run sharing the root reads every namespace in it.",
+    expect: "The file on your own machine under ~/.config/sandbox/shared, still there after both containers exit.",
+    warn:
+      "It is a boolean, not a path you name. An arbitrary host directory chosen in a browser is a different decision from one typed in your own terminal, so Studio offers the one well-known directory the daemon creates and checks — the wider --mount stays a CLI flag.",
+  },
+  {
     title: "Answer an agent that stopped to ask",
     side: "browser",
     body:

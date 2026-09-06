@@ -1739,6 +1739,40 @@ public struct RunCreateRequest: Codable, Hashable, Sendable {
     /// was no inbound chain to carve, so nothing recorded them. Worth knowing
     /// before reading an empty field as "nothing was published".
     public var publish: [String]?
+    /// Share mounts the shared directory (~/.config/sandbox/shared on the
+    /// daemon's machine) at /shared, the same thing `sandbox-cli claude --share`
+    /// arranges and through the same code — sandbox.ShareMount, so there is one
+    /// answer to "what does sharing reach".
+    ///
+    /// It exists because /shared is the *only* way two sandboxes can exchange a
+    /// file. Everything else a run can see is scoped to its own project, so two
+    /// agents in different repositories — which is the case somebody opens two
+    /// Studio tabs to arrange — have no other channel at all.
+    ///
+    /// A boolean and not a list of directories, and the difference is the whole
+    /// design. An arbitrary host path in a request is a browser choosing what the
+    /// container reaches; this is one well-known directory, created and vetted by
+    /// the daemon, that both sides already agree on. The wider thing is `--mount`,
+    /// and it is deliberately not offered here.
+    ///
+    /// Who may ask is the same answer `publish` gives at length: a request is the
+    /// user driving their own daemon, which is the same act as typing the flag. A
+    /// repository is what may not, and cannot — nothing reads this from a
+    /// `.sandbox.yaml`.
+    public var share: Bool?
+    /// ShareName narrows Share to one namespace: ~/.config/sandbox/shared/NAME at
+    /// /shared/NAME, so two concurrent runs that both want a handoff spot do not
+    /// clobber the same filename.
+    ///
+    /// It **requires** Share rather than implying it, the same rule the CLI keeps:
+    /// implying would let one field silently switch on the cross-project channel,
+    /// and `share: false, shareName: "work"` would be a contradiction to settle by
+    /// guessing — with the wrong guess enabling sharing for somebody who wrote
+    /// false.
+    ///
+    /// A namespace prevents collisions, not access: any run with a bare Share has
+    /// the whole shared root mounted and can read every namespace in it.
+    public var shareName: String?
 
     public init(
         repo: String? = nil,
@@ -1760,7 +1794,9 @@ public struct RunCreateRequest: Codable, Hashable, Sendable {
         cpus: String? = nil,
         allow: [String]? = nil,
         env: [String: String]? = nil,
-        publish: [String]? = nil
+        publish: [String]? = nil,
+        share: Bool? = nil,
+        shareName: String? = nil
     ) {
         self.repo = repo
         self.project = project
@@ -1782,6 +1818,8 @@ public struct RunCreateRequest: Codable, Hashable, Sendable {
         self.allow = allow
         self.env = env
         self.publish = publish
+        self.share = share
+        self.shareName = shareName
     }
 }
 
@@ -1879,6 +1917,417 @@ public struct RunRecoverResponse: Codable, Hashable, Sendable {
         self.patch = patch
         self.files = files
         self.matchesWorkingTree = matchesWorkingTree
+    }
+}
+
+/// SnapshotSource records who asked for a snapshot — mirrors the rescue.Source
+/// constants.
+///
+/// It decides where a snapshot can be restored from rather than merely describing
+/// it: Studio restores what a sandbox run produced, and a snapshot taken through
+/// the SDK is restored through the SDK. See snapshots.go for what that split does
+/// and does not buy; it is a scoping rule, not a security boundary.
+public enum SnapshotSource: String, Codable, Hashable, Sendable, CaseIterable {
+    /// SnapshotSourceRun was taken during, or for, a sandbox run. Every snapshot
+    /// recorded before this field existed reads as this one, which is what they
+    /// were.
+    case run = "run"
+    /// SnapshotSourceSDK was taken by a program calling the SDK.
+    case sdk = "sdk"
+}
+
+/// SnapshotInfo is one recoverable point: a commit of a workspace tree under
+/// refs/sandbox/snapshots/, plus what is known about where it came from.
+///
+/// Mirrors rescue.Snapshot. A snapshot never holds a container, an image or a
+/// credential — only the files, in the repository's own object store.
+public struct SnapshotInfo: Codable, Hashable, Sendable {
+    public var id: String
+    public var repoId: String?
+    public var branch: String?
+    public var agent: String?
+    /// Label is what somebody called it. A run is already named by its branch and
+    /// its agent; a checkpoint taken by hand is otherwise a hex id in a list.
+    public var label: String?
+    public var source: SnapshotSource?
+    /// Commit is the sha the snapshot ref resolves to, and is empty when the
+    /// session captured nothing.
+    public var commit: String?
+    /// Reachable reports that the objects are still in the repository. A snapshot
+    /// whose ref was deleted by hand can survive in the manifest while its content
+    /// has been garbage collected, and listing it as restorable would be a
+    /// promise nothing can keep.
+    public var reachable: Bool
+    public var createdAt: String
+    public var endedAt: String?
+    /// Status is the rescue.Session status: "snapshot" for a capture, "crashed"
+    /// for a run nothing closed the manifest for, "clean" and so on.
+    public var status: String?
+    /// Retention is this snapshot's own keep-window as a duration string, and is
+    /// empty when it follows the default. The *rule* is stored rather than an
+    /// expiry so that raising the default moves every snapshot that never named
+    /// one; see rescue.Session.Retention.
+    public var retention: String?
+    /// RetentionEffective is the window actually in force, defaults resolved, so a
+    /// client can show "kept until" without reimplementing the fallback chain.
+    public var retentionEffective: String?
+    /// Remote is the copy in object storage, when a bucket is configured and this
+    /// snapshot was mirrored to it. Absent means the snapshot lives only on this
+    /// machine — which is the default and not a failure.
+    public var remote: SnapshotRemote?
+
+    public init(
+        id: String,
+        repoId: String? = nil,
+        branch: String? = nil,
+        agent: String? = nil,
+        label: String? = nil,
+        source: SnapshotSource? = nil,
+        commit: String? = nil,
+        reachable: Bool,
+        createdAt: String,
+        endedAt: String? = nil,
+        status: String? = nil,
+        retention: String? = nil,
+        retentionEffective: String? = nil,
+        remote: SnapshotRemote? = nil
+    ) {
+        self.id = id
+        self.repoId = repoId
+        self.branch = branch
+        self.agent = agent
+        self.label = label
+        self.source = source
+        self.commit = commit
+        self.reachable = reachable
+        self.createdAt = createdAt
+        self.endedAt = endedAt
+        self.status = status
+        self.retention = retention
+        self.retentionEffective = retentionEffective
+        self.remote = remote
+    }
+}
+
+/// SnapshotRemote is a snapshot's copy in object storage — mirrors
+/// rescue.RemoteRef.
+///
+/// It reports what the *upload* did rather than what the bucket currently holds,
+/// which is a real difference and the reason Uploaded is a field rather than
+/// something a client infers: a listing that asked the bucket per row would make
+/// one round trip per snapshot to answer a question that almost never changes.
+/// POST /v1/snapshots/{id}/verify is the call that asks.
+public struct SnapshotRemote: Codable, Hashable, Sendable {
+    public var bucket: String?
+    public var key: String?
+    /// Uploaded is the summary a UI actually renders: there is a key and the last
+    /// attempt did not fail.
+    public var uploaded: Bool
+    public var uploadedAt: String?
+    public var bytes: Int?
+    /// Error is why the last attempt failed, empty on success. Kept so a snapshot
+    /// that never left the machine is visibly local-only, rather than looking
+    /// mirrored to anybody who was not watching the terminal at the time.
+    public var error: String?
+
+    public init(
+        bucket: String? = nil,
+        key: String? = nil,
+        uploaded: Bool,
+        uploadedAt: String? = nil,
+        bytes: Int? = nil,
+        error: String? = nil
+    ) {
+        self.bucket = bucket
+        self.key = key
+        self.uploaded = uploaded
+        self.uploadedAt = uploadedAt
+        self.bytes = bytes
+        self.error = error
+    }
+}
+
+/// SnapshotS3Settings is the object-storage configuration, as the settings
+/// endpoints exchange it.
+///
+/// **There is deliberately nowhere here to put a credential.** The three key
+/// fields are the *names* of environment variables read on the daemon's machine,
+/// exactly as `gateway:` names the variable a gateway key lives in — so this
+/// struct can be logged, echoed to a browser and written to a settings file
+/// without any of those becoming a place a secret leaks from. CredentialsResolved
+/// is how a UI can still say whether the credential is actually there, which is
+/// the only question about it that a screen needs answered.
+public struct SnapshotS3Settings: Codable, Hashable, Sendable {
+    /// Bucket empty means mirroring is off. Clearing it is how a UI turns the
+    /// feature off, and it clears the rest of the block with it.
+    public var bucket: String
+    public var region: String?
+    /// Endpoint reaches an S3-compatible server — MinIO, R2, Ceph, B2. Empty
+    /// addresses AWS.
+    public var endpoint: String?
+    /// Prefix namespaces the keys within the bucket.
+    public var prefix: String?
+    /// PathStyle addresses the bucket in the path rather than the hostname.
+    public var pathStyle: Bool?
+    /// Upload is "manual" (snapshots somebody asked for — the default), "all"
+    /// (those and every crash-net snapshot) or "off".
+    public var upload: String?
+    public var accessKeyEnv: String?
+    public var secretKeyEnv: String?
+    public var sessionTokenEnv: String?
+    /// MaxObjectMB refuses a bundle larger than this rather than discovering S3's
+    /// 5 GiB single-PUT limit at the end of a long upload. Zero is the default.
+    public var maxObjectMb: Int?
+    /// CredentialsResolved reports that the named variables are actually set in
+    /// the daemon's environment. Read-only, and ignored on a write: it is a fact
+    /// about the machine rather than a setting.
+    public var credentialsResolved: Bool
+    /// CredentialsError is why they did not resolve, naming the variable to set.
+    /// Read-only.
+    public var credentialsError: String?
+    /// ConfigManaged reports that config.yaml sets this block, so this daemon
+    /// ignores a write to it — the same layering the retention windows have, and
+    /// a screen that could not tell would offer an edit that does not survive a
+    /// restart. Read-only.
+    public var configManaged: Bool?
+
+    public init(
+        bucket: String,
+        region: String? = nil,
+        endpoint: String? = nil,
+        prefix: String? = nil,
+        pathStyle: Bool? = nil,
+        upload: String? = nil,
+        accessKeyEnv: String? = nil,
+        secretKeyEnv: String? = nil,
+        sessionTokenEnv: String? = nil,
+        maxObjectMb: Int? = nil,
+        credentialsResolved: Bool,
+        credentialsError: String? = nil,
+        configManaged: Bool? = nil
+    ) {
+        self.bucket = bucket
+        self.region = region
+        self.endpoint = endpoint
+        self.prefix = prefix
+        self.pathStyle = pathStyle
+        self.upload = upload
+        self.accessKeyEnv = accessKeyEnv
+        self.secretKeyEnv = secretKeyEnv
+        self.sessionTokenEnv = sessionTokenEnv
+        self.maxObjectMb = maxObjectMb
+        self.credentialsResolved = credentialsResolved
+        self.credentialsError = credentialsError
+        self.configManaged = configManaged
+    }
+}
+
+/// SnapshotS3CheckResponse is the body of POST /v1/snapshots/s3/check.
+///
+/// A failure is 200 with Ok false rather than a 4xx: the request was well formed
+/// and the daemon answered it correctly — what failed is the bucket, and that is
+/// the *result* being asked for, not an error in asking.
+public struct SnapshotS3CheckResponse: Codable, Hashable, Sendable {
+    public var ok: Bool
+    public var bucket: String?
+    public var endpoint: String?
+    public var error: String?
+
+    public init(
+        ok: Bool,
+        bucket: String? = nil,
+        endpoint: String? = nil,
+        error: String? = nil
+    ) {
+        self.ok = ok
+        self.bucket = bucket
+        self.endpoint = endpoint
+        self.error = error
+    }
+}
+
+/// SnapshotCreateRequest is the body of POST /v1/snapshots.
+///
+/// Source is deliberately absent: it is derived from the request rather than
+/// accepted from it, because a caller able to label its own snapshots would be
+/// choosing which surface may later restore them.
+public struct SnapshotCreateRequest: Codable, Hashable, Sendable {
+    /// Repo is the repository id, never a path. POST /v1/projects is the one
+    /// endpoint in this API that takes a host path, and it is the one place a path
+    /// is validated.
+    public var repo: String?
+    /// Branch selects the worktree to snapshot. Empty means the repository's own
+    /// checkout. It is the worktree that is captured rather than the repository
+    /// root, since that is where an agent's work actually is.
+    public var branch: String?
+    public var label: String?
+    /// Retention overrides how long to keep this one, as a Go duration string
+    /// ("72h"). Empty follows the configured default.
+    public var retention: String?
+
+    public init(
+        repo: String? = nil,
+        branch: String? = nil,
+        label: String? = nil,
+        retention: String? = nil
+    ) {
+        self.repo = repo
+        self.branch = branch
+        self.label = label
+        self.retention = retention
+    }
+}
+
+/// SnapshotListResponse is the body of GET /v1/snapshots.
+public struct SnapshotListResponse: Codable, Hashable, Sendable {
+    public var snapshots: [SnapshotInfo]
+    /// Truncated reports that the listing stopped at a bound rather than at the
+    /// end. A listing that stops without saying so reads as "this is everything".
+    public var truncated: Bool?
+
+    public init(
+        snapshots: [SnapshotInfo],
+        truncated: Bool? = nil
+    ) {
+        self.snapshots = snapshots
+        self.truncated = truncated
+    }
+}
+
+/// SnapshotRestoreRequest is the body of POST /v1/snapshots/:id/restore.
+public struct SnapshotRestoreRequest: Codable, Hashable, Sendable {
+    public var mode: RestoreMode?  // default RestoreModeBranch
+    /// Branch overrides the generated branch name (RestoreModeBranch only).
+    public var branch: String?
+    /// Repo is the repository the snapshot belongs to, as an id. Optional: the
+    /// daemon's default repository is used when it is absent.
+    public var repo: String?
+
+    public init(
+        mode: RestoreMode? = nil,
+        branch: String? = nil,
+        repo: String? = nil
+    ) {
+        self.mode = mode
+        self.branch = branch
+        self.repo = repo
+    }
+}
+
+/// SnapshotRepoRequest is the body of the snapshot endpoints whose only input is
+/// which repository the snapshot belongs to — /upload and /verify.
+///
+/// Its own type rather than borrowing one with spare fields: a handler reading
+/// `Repo` out of a struct called SnapshotRetentionRequest reads as an oversight,
+/// and the next person to add a field to that struct would be adding it to two
+/// endpoints without meaning to.
+public struct SnapshotRepoRequest: Codable, Hashable, Sendable {
+    /// Repo is the repository id, never a path. Optional: the daemon's default
+    /// repository is used when it is absent.
+    public var repo: String?
+
+    public init(
+        repo: String? = nil
+    ) {
+        self.repo = repo
+    }
+}
+
+/// SnapshotRetentionRequest is the body of POST /v1/snapshots/:id/retention.
+/// An empty Retention clears the override and returns the snapshot to the
+/// default.
+public struct SnapshotRetentionRequest: Codable, Hashable, Sendable {
+    public var retention: String
+    public var repo: String?
+
+    public init(
+        retention: String,
+        repo: String? = nil
+    ) {
+        self.retention = retention
+        self.repo = repo
+    }
+}
+
+/// SnapshotSettings is the retention configuration, as GET and POST
+/// /v1/snapshots/settings exchange it.
+///
+/// Both the value in force and where it came from, because those are different
+/// questions and a screen that *writes* one of them needs both: Studio's own
+/// setting is a layer **under** the user's config.yaml, so a value typed by hand
+/// outranks one set here, and a UI that could not tell them apart would offer to
+/// change something it cannot.
+public struct SnapshotSettings: Codable, Hashable, Sendable {
+    /// Retention is the window for snapshots a sandbox run recorded.
+    public var retention: String
+    /// ManualRetention is the window for snapshots somebody asked for.
+    public var manualRetention: String
+    /// ConfigRetention and ConfigManualRetention are the values config.yaml sets,
+    /// empty when it sets none. Non-empty means this daemon will ignore a write to
+    /// the matching field, and the screen should say so rather than accept an edit
+    /// that will not survive a restart.
+    public var configRetention: String?
+    public var configManualRetention: String?
+    /// Writable reports that there is somewhere to save settings at all — false
+    /// when no config directory could be resolved.
+    public var writable: Bool
+    /// S3 is the object-storage configuration. Absent means no bucket is
+    /// configured.
+    public var s3: SnapshotS3Settings?
+
+    public init(
+        retention: String,
+        manualRetention: String,
+        configRetention: String? = nil,
+        configManualRetention: String? = nil,
+        writable: Bool,
+        s3: SnapshotS3Settings? = nil
+    ) {
+        self.retention = retention
+        self.manualRetention = manualRetention
+        self.configRetention = configRetention
+        self.configManualRetention = configManualRetention
+        self.writable = writable
+        self.s3 = s3
+    }
+}
+
+/// SnapshotSettingsUpdate is the body of POST /v1/snapshots/settings.
+///
+/// A separate type from SnapshotSettings because a write is not a read wearing
+/// the same shape, and the difference is absence. Half the fields above are
+/// *reports* — what config.yaml sets, whether anything is writable at all — and a
+/// client echoing a read back at this endpoint is claiming authorship of values
+/// it only observed. Worse, "" cannot mean both "leave this alone" and "clear it"
+/// in one string field: the screen that edits the bucket sends nothing about the
+/// windows, and with one shared type that was indistinguishable from asking to
+/// blank them, which is how saving a bucket copied config.yaml's retention into
+/// this daemon's own file.
+///
+/// So the two windows are pointers: **absent means leave it alone**, present and
+/// empty means "back to the built-in default". The same rule the bucket already
+/// had, said in a way a string field can carry.
+public struct SnapshotSettingsUpdate: Codable, Hashable, Sendable {
+    /// Retention is the window for snapshots a sandbox run recorded. Absent leaves
+    /// it as it is; "" clears this daemon's override.
+    public var retention: String?
+    /// ManualRetention is the window for snapshots somebody asked for. Absent
+    /// leaves it as it is; "" clears this daemon's override.
+    public var manualRetention: String?
+    /// S3 is the object-storage configuration. Absent leaves it as it is — a
+    /// client that only meant to change a retention window must not clear
+    /// somebody's bucket by omitting a field it does not know about. Sent with an
+    /// empty bucket, it turns mirroring off.
+    public var s3: SnapshotS3Settings?
+
+    public init(
+        retention: String? = nil,
+        manualRetention: String? = nil,
+        s3: SnapshotS3Settings? = nil
+    ) {
+        self.retention = retention
+        self.manualRetention = manualRetention
+        self.s3 = s3
     }
 }
 

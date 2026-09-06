@@ -3,7 +3,6 @@ package studioapi
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"sort"
 
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
@@ -38,10 +37,6 @@ func (s *Server) handleRecoverRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	mode := req.Mode
-	if mode == "" {
-		mode = RestoreModeBranch
-	}
 
 	// Snapshots are recorded per repository (~/.config/sandbox/rescue/<repo-id>/),
 	// so the search has to happen in the repository this run belonged to — read
@@ -52,50 +47,10 @@ func (s *Server) handleRecoverRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := rescue.RestoreOptions{Branch: req.Branch}
-	var patchFile string
-	switch mode {
-	case RestoreModeBranch:
-		opts.Mode = rescue.RestoreBranch
-	case RestoreModeWorktree:
-		opts.Mode = rescue.RestoreWorktree
-	case RestoreModePatch:
-		opts.Mode = rescue.RestorePatch
-		// Restore writes the patch to the process's own stdout when Out is ""/"-",
-		// which is the server's terminal, not the HTTP response. A temp file lets
-		// this API return the text instead of printing it somewhere the caller
-		// cannot see.
-		f, terr := os.CreateTemp("", "sandbox-studio-recover-*.patch")
-		if terr != nil {
-			writeError(w, http.StatusInternalServerError, terr)
-			return
-		}
-		patchFile = f.Name()
-		f.Close()
-		opts.Out = patchFile
-		defer os.Remove(patchFile)
-	default:
-		writeError(w, http.StatusBadRequest, fmt.Errorf("mode must be %q, %q, or %q", RestoreModeBranch, RestoreModePatch, RestoreModeWorktree))
-		return
-	}
-
-	result, err := rescue.Restore(sess.Workspace, sess.ID, opts)
+	resp, status, err := s.restoreSession(sess, req.Mode, req.Branch)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err)
+		writeError(w, status, err)
 		return
-	}
-
-	resp := RunRecoverResponse{
-		SessionID:          sess.ID,
-		Mode:               mode,
-		Branch:             result.Branch,
-		Files:              result.Files,
-		MatchesWorkingTree: result.MatchesWorkingTree,
-	}
-	if patchFile != "" {
-		if b, err := os.ReadFile(patchFile); err == nil {
-			resp.Patch = string(b)
-		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -118,6 +73,15 @@ func (s *Server) findRescueSession(sc repoScope, branch, agent string) (rescue.S
 			continue
 		}
 		if agent != "" && sess.Agent != "" && sess.Agent != agent {
+			continue
+		}
+		// Never a baseline. baselineFor records one before every launch, holding
+		// the workspace as it was *before* the agent touched it — and since it is
+		// stamped with the same branch and agent and is the most recent thing
+		// here, it used to win this selection outright. Restoring it is worse
+		// than finding nothing: not a 404, but a restore that looks like it
+		// worked and hands back the work's starting point.
+		if sess.Outcome == baselineOutcome {
 			continue
 		}
 		matches = append(matches, sess)

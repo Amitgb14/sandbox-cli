@@ -596,17 +596,25 @@ resolve_api_bin() {
 # the operator names with --bind explicitly, and the guard's refusal says which
 # host it rejected.
 reachable_hosts() {
-  hostname 2>/dev/null
+  hostname 2>/dev/null || true
   if command -v ipconfig >/dev/null 2>&1; then          # macOS
     for i in $(ipconfig getiflist 2>/dev/null); do
-      ipconfig getifaddr "$i" 2>/dev/null
+      # `|| true` on the command itself, not just `return 0` at the end. Every
+      # Mac holds interfaces with no address (en4, awdl0, llw0), `getifaddr`
+      # exits 1 on each of them, and under `set -e` that killed the *loop* —
+      # long before the trailing `return 0` could make the function succeed.
+      # The symptom was `up --bind 0.0.0.0` printing "starting Studio" and
+      # exiting silently: no daemon, no error, nothing in api.log, because the
+      # script died working out which names to allow rather than starting
+      # anything. Loopback binds never call this, so it only hit the flag it
+      # exists to serve.
+      ipconfig getifaddr "$i" 2>/dev/null || true
     done
   elif command -v ip >/dev/null 2>&1; then              # Linux
     ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]}'
   fi
-  # Always successful: an interface with no address makes the last command fail,
-  # and under  that would abort a launch over a question this only
-  # answers as a courtesy.
+  # An address this cannot discover is one the operator names with --bind
+  # explicitly; none of it is worth failing a launch over.
   return 0
 }
 

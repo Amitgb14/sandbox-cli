@@ -2,6 +2,7 @@ package rescue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,8 +60,23 @@ func resolve(sessions []Session) []Snapshot {
 	return out
 }
 
+// ErrSnapshotGone marks a snapshot whose manifest is here and whose objects are
+// not — the ref was deleted and git collected the commit. It is the recoverable
+// half of "cannot restore this": everything needed to fetch the bundle back from
+// object storage is in the manifest that Find returns beside this error.
+var ErrSnapshotGone = errors.New("snapshot objects are no longer in the repository")
+
 // Find resolves a session id (or unambiguous prefix) for the repository
 // containing dir.
+//
+// It returns a **populated snapshot alongside its error** in the two cases where
+// the manifest was found and the objects were not, and ErrSnapshotGone marks the
+// one of those that is recoverable: the record is here, the commit is not, and a
+// copy may be in the bucket. A caller that reads the error alone can only report
+// the loss; one that reads the snapshot too can go and get it. That distinction
+// is why this is a sentinel rather than a message — both callers with something
+// to fetch (studioapi's restore, `recover fetch`) were written against `err !=
+// nil` and had their whole S3 path made unreachable by it.
 func Find(dir, id string) (Snapshot, error) {
 	repoRoot, err := MainRepoRoot(dir)
 	if err != nil {
@@ -76,7 +92,8 @@ func Find(dir, id string) (Snapshot, error) {
 		return snap, fmt.Errorf("session %s captured no snapshot (the run had no changes, or died before the first one)", sess.ID)
 	}
 	if !snap.Reachable {
-		return snap, fmt.Errorf("session %s snapshot %s is no longer in the repository (garbage collected after its ref was deleted)", sess.ID, short(snap.Commit))
+		return snap, fmt.Errorf("session %s snapshot %s is no longer in the repository (garbage collected after its ref was deleted): %w",
+			sess.ID, short(snap.Commit), ErrSnapshotGone)
 	}
 	return snap, nil
 }

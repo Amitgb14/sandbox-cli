@@ -1,5 +1,5 @@
 import { Transport } from "./transport.js";
-import { ApiError, ConnectionError, WaitError, abortError } from "./errors.js";
+import { ApiError, ConnectionError, NothingToSnapshotError, WaitError, abortError } from "./errors.js";
 import { discoverToken, discoverUrl } from "./discover.js";
 import { initRepo, localRepo, samePath, unbornWithFiles, wirePath, type LocalRepo } from "./local.js";
 import type {
@@ -12,13 +12,22 @@ import type {
   Run,
   RunCreateRequest,
   RunsResponse,
+  RestoreMode,
+  SnapshotCreateRequest,
+  SnapshotInfo,
+  SnapshotListResponse,
+  SnapshotRestoreRequest,
+  SnapshotRetentionRequest,
+  SnapshotS3CheckResponse,
+  SnapshotSettings,
+  RunRecoverResponse,
   WorktreesResponse,
   SessionSummary,
   SessionListResponse,
 } from "./contract.js";
 
 export * from "./contract.js";
-export { ApiError, ConnectionError, TimeoutError, WaitError } from "./errors.js";
+export { ApiError, ConnectionError, NothingToSnapshotError, TimeoutError, WaitError } from "./errors.js";
 // The wire shape of a repository, under a name that does not collide with the
 // Project *class* below. Without this a consumer cannot type a raw
 // `GET /v1/projects` row at all: the class shadows the interface silently, so
@@ -100,6 +109,25 @@ export interface AgentOptions extends RunOptions {
 }
 
 /** How a run ended, and what it actually was. */
+/** Options for {@link Workspace.snapshot} and {@link Workspace.snapshotRun}. */
+export interface SnapshotOptions {
+  /** What to call it. A checkpoint without one is a hex id in a list. */
+  label?: string;
+  /**
+   * How long to keep this one, as a Go duration ("72h"). Omitted follows the
+   * daemon's configured default — seven days for a snapshot somebody asked for.
+   */
+  retention?: string;
+}
+
+/** Options for {@link Workspace.restore}. */
+export interface RestoreOptions {
+  /** Defaults to "branch", the only mode that cannot destroy anything. */
+  mode?: RestoreMode;
+  /** Overrides the generated branch name; "branch" mode only. */
+  branch?: string;
+}
+
 export interface Outcome {
   id: string;
   exitCode: number;
@@ -186,6 +214,36 @@ export class Studio {
   async projects(): Promise<Project[]> {
     const res = await this.t.request<ProjectsResponse>("GET", "/v1/projects");
     return (res.projects ?? []).map((p) => new Project(this.t, p));
+  }
+
+  /**
+   * The snapshot configuration in force on the daemon: the two retention
+   * windows, and the object storage snapshots are mirrored to.
+   *
+   * Daemon-wide rather than per repository, which is why it hangs off the client
+   * and not off a {@link Workspace}: one bucket holds every repository's
+   * snapshots, namespaced by repository id.
+   *
+   * The credential is reported as a *name* and a boolean — which variable is
+   * read, and whether it currently resolves. There is nowhere in the response
+   * for a value, deliberately.
+   */
+  snapshotSettings(): Promise<SnapshotSettings> {
+    return this.t.request<SnapshotSettings>("GET", "/v1/snapshots/settings");
+  }
+
+  /**
+   * Does the configured bucket answer, and does the named credential resolve?
+   *
+   * Asks about what the *daemon* is configured with; there is no way to hand it
+   * a bucket to dial, because a check that took its host from the caller would
+   * be a server-side request forgery with a friendly name.
+   *
+   * A bucket that refuses is a normal result with `ok: false`, not a thrown
+   * error: the request succeeded, the storage did not.
+   */
+  checkSnapshotStorage(): Promise<SnapshotS3CheckResponse> {
+    return this.t.request<SnapshotS3CheckResponse>("POST", "/v1/snapshots/s3/check", {});
   }
 
   /**
@@ -541,6 +599,137 @@ export class Workspace {
     }
     await this.remove(holder.id);
     return holder;
+  }
+
+  /**
+   * Checkpoint this workspace now, and return the snapshot.
+   *
+   * A snapshot is a commit of the working tree under
+   * `refs/sandbox/snapshots/`, written through a private index so the
+   * repository's own index, HEAD, branches and working tree are untouched. It
+   * holds files and nothing else — no container, no image, no credential.
+   *
+   * Throws {@link NothingToSnapshotError} when the tree is exactly what is
+   * already committed, which is the case a "checkpoint before the risky step"
+   * script wants to skip rather than fail on.
+   */
+  async snapshot(opts: SnapshotOptions = {}): Promise<SnapshotInfo> {
+    const body: SnapshotCreateRequest = { repo: this.project.id };
+    if (this.branch) body.branch = this.branch;
+    if (opts.label) body.label = opts.label;
+    if (opts.retention) body.retention = opts.retention;
+    return this.capture("/v1/snapshots", body);
+  }
+
+  /**
+   * Checkpoint the workspace a run is working in.
+   *
+   * The run answers which repository and which worktree from the labels it was
+   * stamped with, so neither is sent — and the daemon refuses them in this body
+   * rather than letting a second answer decide where files are written.
+   */
+  async snapshotRun(id: string, opts: SnapshotOptions = {}): Promise<SnapshotInfo> {
+    const body: SnapshotCreateRequest = {};
+    if (opts.label) body.label = opts.label;
+    if (opts.retention) body.retention = opts.retention;
+    return this.capture(`/v1/runs/${encodeURIComponent(id)}/snapshot`, body);
+  }
+
+  private async capture(path: string, body: SnapshotCreateRequest): Promise<SnapshotInfo> {
+    try {
+      return await this.t.request<SnapshotInfo>("POST", path, body);
+    } catch (err) {
+      // 422 covers every reason a capture can fail, so the message is what
+      // distinguishes them. Matching on it here, once, is the alternative to
+      // every caller doing it — and the daemon's sentence is carried through
+      // either way, so a wording change costs this branch and nothing else.
+      if (err instanceof ApiError && err.status === 422 && /nothing to snapshot/i.test(err.message)) {
+        throw new NothingToSnapshotError(err.message, this.branch);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * The snapshots recorded for this workspace, newest first.
+   *
+   * Scoped to this workspace's branch, because that is what a Workspace *is*.
+   * Pass `allBranches` for the repository's whole set.
+   */
+  async snapshots(opts: { allBranches?: boolean } = {}): Promise<SnapshotInfo[]> {
+    const params = new URLSearchParams({ repo: this.project.id });
+    if (this.branch && !opts.allBranches) params.set("branch", this.branch);
+    const res = await this.t.request<SnapshotListResponse>("GET", `/v1/snapshots?${params}`);
+    return res.snapshots ?? [];
+  }
+
+  /**
+   * Put a snapshot back.
+   *
+   * Defaults to `branch` mode, the only one that cannot destroy anything: it
+   * points a new branch at the snapshot and leaves the working tree alone.
+   * `worktree` writes the files back and is refused on a dirty tree; `patch`
+   * returns a diff and touches nothing.
+   */
+  async restore(id: string, opts: RestoreOptions = {}): Promise<RunRecoverResponse> {
+    const body: SnapshotRestoreRequest = { repo: this.project.id };
+    if (opts.mode) body.mode = opts.mode;
+    if (opts.branch) body.branch = opts.branch;
+    return this.t.request<RunRecoverResponse>(
+      "POST",
+      `/v1/snapshots/${encodeURIComponent(id)}/restore`,
+      body,
+    );
+  }
+
+  /**
+   * Change how long one snapshot is kept — a Go duration ("72h"), or "" to
+   * return it to the configured default.
+   */
+  async setSnapshotRetention(id: string, retention: string): Promise<SnapshotInfo> {
+    const body: SnapshotRetentionRequest = { retention, repo: this.project.id };
+    return this.t.request<SnapshotInfo>(
+      "POST",
+      `/v1/snapshots/${encodeURIComponent(id)}/retention`,
+      body,
+    );
+  }
+
+  /**
+   * Mirror a snapshot to the daemon's configured object storage, now.
+   *
+   * With a bucket configured, {@link Workspace.snapshot} already does this on
+   * the way out — so this is for the two cases it leaves behind: an upload that
+   * failed while the network was down, and a snapshot taken before a bucket
+   * existed. There is deliberately no way to *un*-mirror one from here; deleting
+   * a backup is not a thing an API should make easy.
+   *
+   * Which bucket is the daemon's decision and never this call's. A client able
+   * to name one would be choosing where a repository's contents are sent.
+   */
+  async uploadSnapshot(id: string): Promise<SnapshotInfo> {
+    return this.t.request<SnapshotInfo>(
+      "POST",
+      `/v1/snapshots/${encodeURIComponent(id)}/upload`,
+      { repo: this.project.id },
+    );
+  }
+
+  /**
+   * Ask the bucket whether a snapshot's object is really there.
+   *
+   * `snapshot.remote` records what the *upload* did, which is a different claim:
+   * a lifecycle rule or somebody tidying a bucket leaves a snapshot reading as
+   * mirrored when it is not. This is the call that asks — worth making before
+   * relying on a checkpoint you have not touched in a while, and not worth
+   * making per row of a listing.
+   */
+  async verifySnapshot(id: string): Promise<SnapshotS3CheckResponse> {
+    return this.t.request<SnapshotS3CheckResponse>(
+      "POST",
+      `/v1/snapshots/${encodeURIComponent(id)}/verify`,
+      { repo: this.project.id },
+    );
   }
 
   /**

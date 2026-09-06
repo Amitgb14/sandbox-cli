@@ -184,6 +184,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/runs/{id}", s.handleDeleteRun)
 	mux.HandleFunc("POST /v1/runs/{id}/stop", s.handleStopRun)
 	mux.HandleFunc("POST /v1/runs/{id}/recover", s.handleRecoverRun)
+	mux.HandleFunc("POST /v1/runs/{id}/snapshot", s.handleSnapshotRun)
+	mux.HandleFunc("GET /v1/snapshots", s.handleListSnapshots)
+	mux.HandleFunc("POST /v1/snapshots", s.handleCreateSnapshot)
+	// Registered before the {id} patterns for readability only: the mux prefers
+	// the more specific literal regardless of order.
+	mux.HandleFunc("GET /v1/snapshots/settings", s.handleGetSnapshotSettings)
+	mux.HandleFunc("POST /v1/snapshots/settings", s.handleSetSnapshotSettings)
+	mux.HandleFunc("POST /v1/snapshots/s3/check", s.handleCheckS3)
+	mux.HandleFunc("POST /v1/snapshots/{id}/upload", s.handleUploadSnapshot)
+	mux.HandleFunc("POST /v1/snapshots/{id}/verify", s.handleVerifySnapshot)
+	mux.HandleFunc("POST /v1/snapshots/{id}/restore", s.handleRestoreSnapshot)
+	mux.HandleFunc("POST /v1/snapshots/{id}/retention", s.handleSnapshotRetention)
 	mux.HandleFunc("GET /v1/runs/{id}/logs", s.handleRunLogs)
 	mux.HandleFunc("GET /v1/runs/{id}/metrics", s.handleRunMetrics)
 	mux.HandleFunc("GET /v1/runs/{id}/diff", s.handleRunDiff)

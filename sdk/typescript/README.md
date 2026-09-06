@@ -243,6 +243,82 @@ private store, so what crosses is `HANDOFF.md`, a vendor-neutral transcript and 
 file ledger derived from git — mounted read-only, with a prompt that tells the
 target it is reading a briefing rather than its own history.
 
+## Snapshots
+
+Checkpoint the working tree before something risky, and put it back if it goes
+wrong:
+
+```ts
+const before = await ws.snapshot({ label: "before the migration" });
+
+const out = await ws.agent("claude", "migrate the schema");
+if (out.exitCode !== 0) {
+  await ws.restore(before.id);            // a new branch at the snapshot
+  await ws.restore(before.id, { mode: "worktree" }); // or the files, in place
+}
+```
+
+A snapshot is a commit of the working tree under `refs/sandbox/snapshots/`,
+written through a private index — your own index, `HEAD`, branches and working
+tree are never touched. It holds **files**: no container, no image, and no
+credential, which is why restoring one is cheap and why it is not a way to
+resume a stopped machine.
+
+Three restore modes. `branch` is the default and the only one that cannot
+destroy anything — it points a new branch at the snapshot and leaves the tree
+alone. `worktree` writes the files back, and is refused on a dirty tree rather
+than offering a `--force`. `patch` returns a diff and touches nothing.
+
+An unchanged tree throws `NothingToSnapshotError` rather than returning an id
+that points at no commit, so the common shape is a `catch` and not an `if`:
+
+```ts
+import { NothingToSnapshotError } from "@sandbox-cli/sdk";
+
+try {
+  await ws.snapshot();
+} catch (err) {
+  if (!(err instanceof NothingToSnapshotError)) throw err; // nothing new to keep
+}
+```
+
+Snapshots expire — seven days for one you asked for, configurable per snapshot
+with `setSnapshotRetention(id, "72h")` or `""` to return it to the default.
+
+Two things worth knowing. `snapshotRun(id)` checkpoints what a *running* agent
+is working in, and takes neither a repository nor a branch: the run already
+answers both, and a second answer is refused rather than allowed to decide where
+files are written. And a snapshot taken through this SDK is restored through
+this SDK — Studio lists it but will not put it back, because a script mid-way
+through something is not a thing to undo from a browser tab. Snapshots from a
+sandbox run restore in either place.
+
+### Off-machine copies
+
+If the daemon has a bucket configured (`snapshot.s3`, or Studio → Settings →
+Snapshot storage), `ws.snapshot()` also uploads a git bundle of the tree — so a
+checkpoint survives the machine that took it. Nothing about the call changes; the
+result carries a `remote` block saying where it went.
+
+```ts
+const before = await ws.snapshot({ label: "before the migration" });
+if (!before.remote?.uploaded) {
+  // Real and local-only: the snapshot was taken, the copy did not happen.
+  console.warn("no off-machine copy:", before.remote?.error ?? "no bucket configured");
+}
+```
+
+A capture whose upload fails is **not** an error — the checkpoint exists, so you
+get the id and the reason rather than neither. `ws.uploadSnapshot(id)` retries
+one later, and `ws.verifySnapshot(id)` asks the bucket whether the object is
+actually still there, which `remote` cannot answer: it records what the upload
+did, and a lifecycle rule leaves a snapshot reading as mirrored when it is not.
+
+`studio.snapshotSettings()` reports the configuration, and
+`studio.checkSnapshotStorage()` is the connectivity test. Neither ever carries a
+credential: what you get is the *name* of the variable the daemon reads and
+whether it currently resolves.
+
 ## Secrets
 
 Pass settings in `env`; keep credentials out of it. Values there travel in the
@@ -266,6 +342,9 @@ Each run is a **new container**, so nothing outside the worktree survives betwee
 steps — `/tmp` is gone, `/workspace` is not.
 
 ## Three whole scripts
+
+`examples/checkpoint.ts` is a snapshot around a risky step, rolled back when the
+step fails.
 
 `examples/agent-run.ts` is the end-to-end version of one task — install, hand the
 work to an agent, run the tests, and check what the outcome claims.

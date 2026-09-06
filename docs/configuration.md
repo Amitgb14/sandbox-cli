@@ -37,7 +37,33 @@ secrets:              # broker: resolve at run time, forward by name (never on t
   GITHUB_TOKEN: { command: gh auth token }   # short-lived token from your own tool
   ANTHROPIC_API_KEY: { file: ~/.secrets/anthropic }
   OPENAI_API_KEY: { env: OPENAI_API_KEY }     # from host env, but kept off the command line
+snapshot:             # the crash safety net, and where its snapshots are kept
+  retention: 336h             # crash snapshots (14d)
+  manual_retention: 168h      # checkpoints you take (7d)
+  s3:                         # optional: a copy off this machine, as a git bundle
+    bucket: my-sandbox-snapshots
+    region: us-east-1
+    # endpoint: https://minio.local:9000   # MinIO, R2, Ceph, B2 — empty is AWS
+    # path_style: true                     # most self-hosted servers need this
+    upload: manual            # manual (default) | all | off
+    access_key_env: AWS_ACCESS_KEY_ID      # the variable NAME, never the value
+    secret_key_env: AWS_SECRET_ACCESS_KEY
 ```
+
+`snapshot.s3` holds no credential and has nowhere to put one: `access_key_env`
+names an environment variable read when a snapshot is taken. `upload: manual`
+mirrors the checkpoints you ask for; `all` adds the crash net, which commits
+every two minutes for the length of every run, so it is a real cost per agent
+rather than a rounding error.
+
+Retention prunes the **local** copy. Objects in the bucket are left to its own
+lifecycle rules — a backup that expires while your laptop is shut is not one.
+
+`sandbox-cli recover fetch` reads what is in there and pulls one back. The
+manifest stored beside each bundle is what makes that work on a machine that has
+never seen the repository, and the bucket is addressed by an id derived from the
+repository's **absolute path** — so a clone in a new location looks in a
+namespace of its own, and `--repo-id` reads the one the old path wrote to.
 
 The installer writes this file on a machine that doesn't have one — see
 [Install](install.md#the-config-the-installer-writes).
@@ -87,7 +113,7 @@ naming the key.
 | `cache.paths` | a cache path is a writable volume, so it can shadow the credentials directory |
 | `network.allow` | it only ever *widens*, and it replaces rather than appends — a checked-in list could become the whole allowlist |
 | `ports` | binds a host port, and under an allowlist punches a hole in the default-deny INPUT chain |
-| `snapshot` | `enabled: false` removes crash protection; `interval: 1ms` turns the host into a sustained `git add -A` loop |
+| `snapshot` | `enabled: false` removes crash protection; `interval: 1ms` turns the host into a sustained `git add -A` loop; `s3:` names both somewhere to send the working tree and which of your credentials is read to get there |
 
 **Refused only when they weaken** what is already in force — the same key
 tightening is exactly what a project file is for: `network.mode`,

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -85,6 +86,19 @@ func LoadProfileWith(startDir, explicitPath, flagProfile string, ov Overrides) (
 			cfg.Providers = map[string]string{}
 		}
 		cfg.Providers[agent] = host
+	}
+	// The same layer, for the same reason, for the snapshot retention windows.
+	if o := loadSnapshotOverrides(); o.Retention != "" || o.ManualRetention != "" || o.S3 != nil {
+		if o.Retention != "" {
+			cfg.Snapshot.Retention = o.Retention
+		}
+		if o.ManualRetention != "" {
+			cfg.Snapshot.ManualRetention = o.ManualRetention
+		}
+		if o.S3 != nil {
+			s3 := *o.S3
+			cfg.Snapshot.S3 = &s3
+		}
 	}
 
 	if p := userConfigPath(); p != "" {
@@ -515,6 +529,17 @@ func mergeInto(dst *Config, src Config, baseDir string) {
 	if src.Snapshot.Retention != "" {
 		dst.Snapshot.Retention = src.Snapshot.Retention
 	}
+	if src.Snapshot.ManualRetention != "" {
+		dst.Snapshot.ManualRetention = src.Snapshot.ManualRetention
+	}
+	if src.Snapshot.S3 != nil {
+		// Replaced wholesale rather than merged field by field. A half-inherited
+		// bucket is the shape of mistake this cannot afford: a nearer layer
+		// naming a new endpoint while an outer one still supplies the bucket
+		// would upload somebody's work to a destination neither file describes.
+		s3 := *src.Snapshot.S3
+		dst.Snapshot.S3 = &s3
+	}
 	// Secrets overlay per-key (like Env): a later layer can add or replace an
 	// individual secret without wiping the inherited set.
 	for k, v := range src.Secrets {
@@ -659,6 +684,119 @@ func SaveProviderOverrides(m map[string]string) error {
 		m = map[string]string{}
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// SnapshotOverridesPath is the file Studio writes snapshot settings into, e.g.
+// ~/.config/sandbox/studio/snapshots.json. Empty when there is no home to put it
+// in.
+func SnapshotOverridesPath() string {
+	dir := StudioDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "snapshots.json")
+}
+
+// SnapshotOverrides is the snapshot settings Studio manages, without the user's
+// own config.yaml merged over them.
+//
+// The same layering as ProviderOverrides, for the same two reasons, and it is
+// worth restating because this is the second endpoint to make the choice and the
+// pattern is now the rule rather than a one-off:
+//
+//   - it is a layer *under* config.yaml, so a retention somebody typed by hand
+//     outranks one set with a slider, and the screen says which is in force;
+//   - it is a separate file, because rewriting a hand-maintained YAML file loses
+//     its comments and its ordering — a cost nobody agreed to when they moved a
+//     slider.
+//
+// Exported for the same reason ProviderOverrides is: a UI that *writes* one of
+// these cannot tell "Studio set this" from "the user typed this" by looking at a
+// resolved Config, and rebuilding a save payload from the resolved value is how
+// config.yaml's settings get copied into the override file and then outlive the
+// lines they came from.
+func SnapshotOverrides() SnapshotSpec { return loadSnapshotOverrides() }
+
+func loadSnapshotOverrides() SnapshotSpec {
+	path := SnapshotOverridesPath()
+	if path == "" {
+		return SnapshotSpec{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return SnapshotSpec{}
+	}
+	var out SnapshotSpec
+	if err := json.Unmarshal(data, &out); err != nil {
+		// A settings file that went bad must not stop a run. The defaults are
+		// still there and the worst case is a snapshot kept for the default
+		// window rather than the chosen one.
+		return SnapshotSpec{}
+	}
+	return out
+}
+
+// SaveSnapshotOverrides writes the settings Studio manages, atomically.
+//
+// Deliberately narrow, like SaveProviderOverrides: the only fields read back are
+// the retention windows. Studio cannot turn snapshotting off or change its
+// cadence from here — `enabled: false` silently removes crash protection and a
+// millisecond interval turns the host into a sustained `git add -A` loop, which
+// is why trust.go refuses the whole `snapshot` key from a project file. A UI is
+// not a project file, but it is also not a reason to reopen the question.
+func SaveSnapshotOverrides(s SnapshotSpec) error {
+	path := SnapshotOverridesPath()
+	if path == "" {
+		return fmt.Errorf("cannot determine the sandbox config directory (no HOME?)")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	narrow := SnapshotSpec{Retention: s.Retention, ManualRetention: s.ManualRetention}
+	for _, f := range []struct{ name, val string }{
+		{"retention", narrow.Retention},
+		{"manual_retention", narrow.ManualRetention},
+	} {
+		if f.val == "" {
+			continue
+		}
+		if d, err := time.ParseDuration(f.val); err != nil || d <= 0 {
+			return fmt.Errorf("snapshot.%s must be a positive duration (try %q, %q), got %q", f.name, "168h", "336h", f.val)
+		}
+	}
+	// The bucket travels with them, and it is still narrow in the sense that
+	// matters: every field here is a name or a flag, and there is nowhere to put
+	// a secret. `access_key_env` names a variable — the value stays in the
+	// environment of whoever starts the daemon, and this file never sees it.
+	if s.S3 != nil {
+		s3 := *s.S3
+		switch s3.Upload {
+		case "", UploadManual, UploadAll, UploadOff:
+		default:
+			return fmt.Errorf("snapshot.s3.upload must be %q, %q, or %q, got %q",
+				UploadManual, UploadAll, UploadOff, s3.Upload)
+		}
+		if s3.MaxObjectMB < 0 {
+			return fmt.Errorf("snapshot.s3.max_object_mb must not be negative, got %d", s3.MaxObjectMB)
+		}
+		if s3.Bucket == "" {
+			// Clearing the bucket is how mirroring is turned off from a UI, and
+			// it must not leave an endpoint and a prefix behind pointing at
+			// nothing — a half-configured block reads as working.
+			narrow.S3 = nil
+		} else {
+			narrow.S3 = &s3
+		}
+	}
+	data, err := json.MarshalIndent(narrow, "", "  ")
 	if err != nil {
 		return err
 	}

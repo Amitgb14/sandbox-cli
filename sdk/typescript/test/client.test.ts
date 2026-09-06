@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { FakeDaemon } from "./daemon.js";
-import { Studio, ApiError, ConnectionError, TimeoutError, WaitError } from "../src/index.js";
+import { Studio, ApiError, ConnectionError, NothingToSnapshotError, TimeoutError, WaitError } from "../src/index.js";
 import { gitRootOf, localRepo, wirePath } from "../src/local.js";
 
 
@@ -839,6 +839,200 @@ test("an unknown run option is a typo, not a preference", async () => {
       /unknown run option\(s\): alow/,
     );
     assert.equal(daemon.requests.some((r) => r.method === "POST" && r.path === "/v1/runs"), false);
+  } finally {
+    await daemon.stop();
+  }
+});
+
+
+test("a snapshot is scoped to the workspace that took it, without the caller repeating either", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    const snap = await ws.snapshot({ label: "before the refactor", retention: "72h" });
+
+    const req = daemon.requests.find((r) => r.method === "POST" && r.path === "/v1/snapshots");
+    assert.ok(req, "no capture reached the daemon");
+    // A Workspace *is* a repository and a branch, so it supplies both. A caller
+    // that had to repeat them could get them wrong, and the daemon would write
+    // files under a repository this object never named.
+    assert.deepEqual(req.body, {
+      repo: "repo-1",
+      branch: "feature",
+      label: "before the refactor",
+      retention: "72h",
+    });
+    assert.equal(snap.id, "snap-1");
+    assert.equal(snap.retention, "72h");
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("snapshotting a run sends neither repo nor branch: the run already answers both", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    await ws.snapshotRun("run-1", { label: "midway" });
+
+    const req = daemon.requests.find((r) => r.path === "/v1/runs/run-1/snapshot");
+    assert.ok(req, "no capture reached the daemon");
+    // The daemon refuses these in this body rather than letting a second answer
+    // decide where files are written, so sending them would fail every call.
+    assert.deepEqual(req.body, { label: "midway" });
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("an unchanged workspace is a typed error, not a failure to report", async () => {
+  const { daemon, studio } = await connected({ nothingToSnapshot: true });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    // The shape this exists for: checkpoint before the risky step, unless there
+    // is nothing new. Matching on an ApiError's message would work until the
+    // daemon's wording improved.
+    await assert.rejects(
+      () => ws.snapshot(),
+      (err: unknown) => {
+        assert.ok(err instanceof NothingToSnapshotError, `got ${(err as Error).name}`);
+        assert.equal((err as NothingToSnapshotError).branch, "feature");
+        return true;
+      },
+    );
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("listing is scoped to the branch unless the whole repository is asked for", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    const snaps = await ws.snapshots();
+    assert.equal(snaps.length, 1);
+    assert.equal(snaps[0].source, "sdk");
+
+    await ws.snapshots({ allBranches: true });
+    const paths = daemon.requests.filter((r) => r.path.startsWith("/v1/snapshots?")).map((r) => r.path);
+    assert.ok(paths[0].includes("branch=feature"), `scoped listing was ${paths[0]}`);
+    assert.ok(!paths[1].includes("branch="), `allBranches listing was ${paths[1]}`);
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("restore defaults to the mode that cannot destroy anything", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    const res = await ws.restore("snap-1");
+    assert.equal(res.mode, "branch");
+    assert.equal(res.branch, "sandbox-recover/feature-snap-1");
+
+    // The default is the daemon's, not a value this client sends: an SDK that
+    // spelled "branch" itself would keep sending it after the daemon's default
+    // changed, which is the one way a client can silently disagree with the
+    // contract it generated its types from.
+    const req = daemon.requests.find((r) => r.path === "/v1/snapshots/snap-1/restore");
+    assert.deepEqual(req?.body, { repo: "repo-1" });
+
+    await ws.restore("snap-1", { mode: "worktree" });
+    const explicit = daemon.requests.filter((r) => r.path === "/v1/snapshots/snap-1/restore").at(-1);
+    assert.deepEqual(explicit?.body, { repo: "repo-1", mode: "worktree" });
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("retention can be set on one snapshot, and cleared back to the default", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    const set = await ws.setSnapshotRetention("snap-1", "72h");
+    assert.equal(set.retention, "72h");
+
+    const cleared = await ws.setSnapshotRetention("snap-1", "");
+    assert.equal(cleared.retention, "");
+    assert.equal(cleared.retentionEffective, "168h0m0s");
+
+    const reqs = daemon.requests.filter((r) => r.path === "/v1/snapshots/snap-1/retention");
+    assert.deepEqual(reqs.at(-1)?.body, { retention: "", repo: "repo-1" });
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("a snapshot can be mirrored to object storage after the fact", async () => {
+  const { daemon, studio } = await connected({ bucket: "my-snapshots" });
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    const snap = await ws.uploadSnapshot("snap-1");
+    assert.equal(snap.remote?.uploaded, true);
+    assert.equal(snap.remote?.bucket, "my-snapshots");
+    assert.equal(snap.remote?.key, "snapshots/repo-1/snap-1.bundle");
+
+    // The repository travels with it; the bucket does not. A client able to name
+    // one would be choosing where a repository's contents are sent.
+    const req = daemon.requests.find((r) => r.path === "/v1/snapshots/snap-1/upload");
+    assert.deepEqual(req?.body, { repo: "repo-1" });
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("uploading with no bucket configured names the setting to set", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    const ws = await (await studio.project("app")).workspace("feature");
+    await assert.rejects(
+      () => ws.uploadSnapshot("snap-1"),
+      (err: Error) => /snapshot\.s3\.bucket/.test(err.message),
+    );
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("a bucket that refuses is a result, not a thrown error", async () => {
+  const { daemon, studio } = await connected({
+    bucket: "my-snapshots",
+    bucketError: "s3: GET s3.amazonaws.com: AccessDenied: no",
+  });
+  try {
+    // The request succeeded; the storage did not. A client that had to catch an
+    // exception to render "not connected" would treat a working daemon as a
+    // broken one.
+    const res = await studio.checkSnapshotStorage();
+    assert.equal(res.ok, false);
+    assert.match(res.error ?? "", /AccessDenied/);
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("snapshot settings report the credential by name, never by value", async () => {
+  const { daemon, studio } = await connected({ bucket: "my-snapshots" });
+  try {
+    const settings = await studio.snapshotSettings();
+    assert.equal(settings.s3?.bucket, "my-snapshots");
+    assert.equal(settings.s3?.upload, "manual");
+    // Which variable is read, and whether it resolves — the only two things a
+    // client is told about the credential, and the most it may have.
+    assert.equal(settings.s3?.accessKeyEnv, "AWS_ACCESS_KEY_ID");
+    assert.equal(settings.s3?.credentialsResolved, true);
+    assert.equal(settings.manualRetention, "168h0m0s");
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("no bucket configured is an absence, not a failure", async () => {
+  const { daemon, studio } = await connected();
+  try {
+    const settings = await studio.snapshotSettings();
+    assert.equal(settings.s3, undefined);
+    assert.equal(settings.writable, true);
   } finally {
     await daemon.stop();
   }
