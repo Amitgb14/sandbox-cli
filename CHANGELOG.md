@@ -11,6 +11,39 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **Studio's console showed an agent's markdown as literal characters.**
+  `**bold**`, backticked code, headings and fenced blocks all arrived as the
+  symbols an agent typed, so a reply that was mostly a formatted list or a code
+  block was read as source rather than as the answer.
+
+  It was deliberate, and the reason was a good one: transcript text is written by
+  an agent working in a repository whose contents *it* does not control either,
+  so rendering it as markup is how a prompt injection reaches the browser. What
+  changed is the weight — the console is now how a run is *read*, the terminal
+  being for driving one — so the rule is kept and the rendering made safe instead.
+
+  Safe **structurally, not by configuration**: the renderer emits React elements
+  and has no HTML path at all, so `<img onerror=…>` in a reply comes back as
+  those characters because there is nothing that could do anything else with
+  them. That is why it is ~200 lines rather than a library told to disallow HTML
+  — a setting can be changed by someone who does not know what it was for.
+
+  Three consequences worth knowing. An `![alt](url)` renders as **text**, never an
+  image: fetching it would make the browser report when, and whether, somebody
+  read the transcript. A link is a link only for `http:` and `https:` — everything
+  else shows the label *and* the URL, so a reader sees the claim rather than a
+  label that lies about where it goes — and a bare URL in prose is never
+  autolinked. Tables, footnotes and raw HTML are not supported and degrade to
+  their own source text.
+
+  Fenced code gets a copy button, which is most of why rendering code as code is
+  worth doing. The stored-transcript viewer uses the same renderer as the live
+  console: the same words read two different ways is how one of them stays wrong.
+
+  Issue #151.
+
 ### Added
 
 - **Snapshots you take on purpose, and restore from by name.** A snapshot was
