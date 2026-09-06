@@ -18,17 +18,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  FILE_RULES,
   FLEET_AGENTS,
   FLEET_YAML,
   GUARDRAILS,
   LAND_REFUSALS,
   LOOP,
   MIXED_YAML,
+  REACH,
   RECOVERY,
   RUNGS,
   SHARE_RULES,
   SHARE_YAML,
   UNSUPPORTED_AGENT_COUNT,
+  WATCHING,
 } from "@/lib/fleet";
 import { DOC_URL, REPO_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
@@ -60,6 +63,16 @@ const NAV: NavEntry[] = [
         href: "#quickstart",
         label: "Quick start",
         hint: "one file, one command, and the whole cycle after it",
+      },
+      {
+        href: "#thefile",
+        label: "The file, and what is in reach",
+        hint: "-f, why a typo is an error, and the two directories a task can see",
+      },
+      {
+        href: "#watching",
+        label: "Watching one work",
+        hint: "a fleet container has no keyboard, and silence is usually not a hang",
       },
       {
         href: "#mixing",
@@ -236,6 +249,73 @@ export default function MultiAgentPage() {
                 </div>
               ))}
             </div>
+          </div>
+        </Section>
+
+        {/* ---------------------------------------------------------------- */}
+        <Section id="thefile" tinted>
+          <SectionHead
+            eyebrow="the file, and what is in reach"
+            title="Passed by name, and read in a container that holds two directories"
+            lead={
+              <>
+                Two things account for most of the confusion a first fleet produces: the file is not
+                found for you, and a task can see far less of your machine than the prompt writing it
+                assumes.
+              </>
+            }
+          />
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {FILE_RULES.map((r) => (
+              <div key={r.title} className="flex flex-col gap-3 rounded-xl border bg-card p-5">
+                <h3 className="text-[0.95rem] font-medium">{r.title}</h3>
+                <CodeBlock code={r.code} />
+                <p className="text-sm leading-relaxed text-muted-foreground">{r.body}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-10">
+            <h3 className="mb-3 text-[1.05rem] font-medium">What a task can actually see</h3>
+            <p className="mb-5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              An agent asked for something that is not mounted does not invent it — it reports the
+              path as missing, which reads as the agent failing rather than as the prompt naming
+              somewhere it was never going to reach.
+            </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {REACH.map((r) => (
+                <div key={r.title} className="flex flex-col gap-2.5 rounded-xl border bg-card p-5">
+                  <h4 className="text-[0.95rem] font-medium">{r.title}</h4>
+                  <p className="text-sm leading-relaxed text-muted-foreground">{r.body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Section>
+
+        {/* ---------------------------------------------------------------- */}
+        <Section id="watching">
+          <SectionHead
+            eyebrow="watching one work"
+            title="A fleet container has no keyboard"
+            lead={
+              <>
+                Deliberately, and it is not the same as being unreachable. Nothing is attached to a
+                background container, so an agent that stopped to ask a question would not fail — it
+                would hang, holding a slot until somebody noticed.
+              </>
+            }
+          />
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {WATCHING.map((w) => (
+              <div key={w.title} className="flex flex-col gap-3 rounded-xl border bg-card p-5">
+                <h3 className="text-[0.95rem] font-medium">{w.title}</h3>
+                <CodeBlock code={w.code} />
+                <p className="text-sm leading-relaxed text-muted-foreground">{w.body}</p>
+              </div>
+            ))}
           </div>
         </Section>
 
