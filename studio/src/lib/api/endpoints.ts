@@ -864,9 +864,11 @@ export function localPreview(
     );
   }
 
-  if (req.share.length > 0) {
+  if (req.share) {
     warnings.push(
-      `--share widens the boundary deliberately: ${req.share.length} extra host ${req.share.length === 1 ? "directory is" : "directories are"} in reach.`,
+      req.shareName.trim()
+        ? `--share widens the boundary deliberately: /shared/${req.shareName.trim()} is in reach, and so is every run that shares the root.`
+        : "--share widens the boundary deliberately: the shared handoff directory is in reach, along with everything other sandboxes have left in it.",
     );
   }
 
@@ -901,7 +903,13 @@ export function localPreview(
     ...(req.sync && req.agent === "claude"
       ? ["~/.claude/projects/<this project>"]
       : []),
-    ...req.share,
+    ...(req.share
+      ? [
+          req.shareName.trim()
+            ? `~/.config/sandbox/shared/${req.shareName.trim()}`
+            : "~/.config/sandbox/shared",
+        ]
+      : []),
   ];
 
   return {
@@ -966,12 +974,20 @@ function previewArgv(
             },
           ]
         : []),
-      ...req.share.map((s) => ({
-        host: s,
-        container: s,
-        mode: "rw" as const,
-        origin: "share" as const,
-      })),
+      ...(req.share
+        ? [
+            {
+              host: req.shareName.trim()
+                ? `~/.config/sandbox/shared/${req.shareName.trim()}`
+                : "~/.config/sandbox/shared",
+              container: req.shareName.trim()
+                ? `/shared/${req.shareName.trim()}`
+                : "/shared",
+              mode: "rw" as const,
+              origin: "share" as const,
+            },
+          ]
+        : []),
     ],
   });
 }
@@ -1068,6 +1084,14 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   // the user making it on their own daemon — the same act as typing --publish.
   // What may not make it is a repository, which trust.go refuses `ports:` from.
   if (req.publish.length > 0) body.publish = req.publish;
+  // Sharing travels, and it did not used to: the form collected it, the preview
+  // warned about the reach, and this function dropped it — so a run told to
+  // hand a file over through /shared had no /shared. A namespace goes only with
+  // the flag it needs, which the daemon refuses without.
+  if (req.share) {
+    body.share = true;
+    if (req.shareName.trim()) body.shareName = req.shareName.trim();
+  }
 
   return body;
 }

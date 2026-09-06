@@ -671,7 +671,17 @@ export interface LaunchRequest {
   statusline: boolean;
   verify: string;
   envAllow: string[];
-  share: string[];
+  /**
+   * Mount the shared directory (~/.config/sandbox/shared on the daemon's
+   * machine) at /shared — the only channel two sandboxes have, since everything
+   * else a run sees is scoped to its own project.
+   *
+   * A boolean, not a list of host paths: one well-known directory the daemon
+   * creates and vets, rather than a browser naming what the container reaches.
+   */
+  share: boolean;
+  /** With `share`, narrow it to <shared>/NAME at /shared/NAME. Needs `share`. */
+  shareName: string;
   /**
    * Container ports to bind on the daemon's host, in docker's syntax. A bare
    * port binds 127.0.0.1 there — not 0.0.0.0, which is where sandbox-cli

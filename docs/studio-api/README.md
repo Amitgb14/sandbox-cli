@@ -350,6 +350,35 @@ slashes included, so `GET /worktrees/feat/studio-api` works. Run paths are singl
 segment, so address a slash-bearing branch by id or name there — `GET
 /runs?branch=feat/studio-api` finds it.
 
+### Sharing a directory — the one way across
+
+`POST /v1/runs` takes `share: true`, which mounts the daemon machine's
+`~/.config/sandbox/shared` at `/shared`. It is the same thing
+`sandbox-cli claude --share` arranges, through the same code
+(`sandbox.ShareMount`), so there is one answer to what sharing reaches.
+
+**It exists because there is no other channel.** Everything else a run can see
+is scoped to its own project, so two agents in different repositories — which is
+exactly what somebody opens two Studio tabs to arrange — cannot hand a file over
+at all. Tell one agent to write `/shared/contract.json` and the other to read it.
+
+**A boolean, not a list of host paths, and that is the design.** An arbitrary
+directory in a request would be a browser choosing what a container reaches;
+this is one well-known directory, created, seeded and checked by the daemon
+(`RefuseUnsafeHostPath`, and the group bits opened for the container's user on
+Linux). The wider thing is `--mount`, and it is deliberately not offered here.
+
+`shareName: "work"` narrows it to `<shared>/work` at `/shared/work`, so two runs
+that both want a handoff spot do not clobber the same filename. It **requires**
+`share` — sent alone it is a 400, because implying would let one field switch on
+the cross-project channel, and `share: false, shareName: "work"` would be a
+contradiction settled by guessing. A namespace prevents collisions, not access:
+any run sharing the root reads every namespace inside it.
+
+Who may ask is the answer `publish` gives below at length. A request carrying
+`share` is the user driving their own daemon, the same act as typing the flag.
+What may not is a repository: nothing reads this from a `.sandbox.yaml`.
+
 ### Publishing a port — the one way in
 
 `POST /v1/runs` takes `publish: ["8000"]`, in docker's syntax, so an agent's dev

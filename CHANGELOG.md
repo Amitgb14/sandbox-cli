@@ -97,6 +97,29 @@ version is tagged.
 
 ### Fixed
 
+- **Studio's "Extra host directories" collected a setting it never sent.** The
+  Launch form had the field, the preview warned that the boundary was being
+  widened, and the request body dropped it — so two agents told to hand a file
+  over through `/shared` were running in containers that had no `/shared` at
+  all, and nothing said so. The daemon had no field to receive it either.
+
+  It is now a **toggle**, and it does what the CLI's `--share` does, through the
+  same code: `~/.config/sandbox/shared` mounted at `/shared`, created, seeded and
+  checked in one place rather than two. `shareName` narrows it to a namespace and
+  is refused without `share`, the same rule `--share-name` keeps.
+
+  A boolean rather than the list of host paths it looked like, and that is the
+  design: an arbitrary directory named in a request is a browser choosing what a
+  container reaches, where this is one well-known directory the daemon vets. The
+  wider thing is `--mount`, and it is deliberately still not offered over HTTP.
+
+  Two runs of this bug are worth recording. The form's own field was inert, which
+  is the same class as a write fixture reporting success against state that never
+  changed. And a worktree launch *assigned* its `.git` mounts over the extras
+  rather than appending — so even once the option arrived, the runs most likely
+  to want sharing would have silently lost it. `internal/fleet` had the test for
+  that rule already; the daemon now has the mirror of it.
+
 - **`studio.sh up --bind 0.0.0.0` started nothing, and said so nowhere.** It
   printed "starting Studio" and exited: no daemon, no error, an empty `api.log`.
   Working out which hostnames to allow is the last thing that runs before the

@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Bot, FolderPlus, GitBranch, Play, ShieldCheck, Terminal } from "lucide-react";
+import {
+  Bot,
+  FolderPlus,
+  GitBranch,
+  Play,
+  ShieldCheck,
+  Terminal,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,7 +50,8 @@ import type {
   AgentName,
   LaunchRequest,
   Profile,
-  SessionSummary,} from "@/lib/types";
+  SessionSummary,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -146,7 +154,8 @@ export function LaunchForm() {
     statusline: true,
     verify: "",
     envAllow: [],
-    share: [],
+    share: false,
+    shareName: "",
     publish: [],
   });
 
@@ -232,7 +241,10 @@ export function LaunchForm() {
     [req, worktreeMode, newBranch],
   );
 
-  const preview = useMemo(() => localPreview(resolved, egress), [resolved, egress]);
+  const preview = useMemo(
+    () => localPreview(resolved, egress),
+    [resolved, egress],
+  );
   const blocked = preview.refusals.length > 0;
 
   const agentMeta = agents?.find((a) => a.name === req.agent);
@@ -411,7 +423,9 @@ export function LaunchForm() {
                         // Studio run is detached, so an agent that stops to ask
                         // permission hangs with nobody to answer — the same rule
                         // a fleet applies.
-                        ?.filter((a) => a.headlessVerified && a.name !== req.agent)
+                        ?.filter(
+                          (a) => a.headlessVerified && a.name !== req.agent,
+                        )
                         .map((a) => (
                           <SelectItem key={a.name} value={a.name}>
                             {a.label}
@@ -423,11 +437,12 @@ export function LaunchForm() {
                 {req.fallback.length > 0 && (
                   <Hint>
                     Studio checks the provider before launching and starts{" "}
-                    {agents?.find((a) => a.name === req.fallback[0])?.label ?? req.fallback[0]}{" "}
-                    instead if it is not answering — and if this run fails later having written
-                    nothing, hands the work over with a briefing of what was said. A run that
-                    changed files is never retried. The fallback runs with its own login and its
-                    own transcript.
+                    {agents?.find((a) => a.name === req.fallback[0])?.label ??
+                      req.fallback[0]}{" "}
+                    instead if it is not answering — and if this run fails later
+                    having written nothing, hands the work over with a briefing
+                    of what was said. A run that changed files is never retried.
+                    The fallback runs with its own login and its own transcript.
                   </Hint>
                 )}
               </Field>
@@ -515,7 +530,11 @@ export function LaunchForm() {
                   // The workspace follows the id rather than being chosen
                   // beside it: they are one fact, and two controls for one fact
                   // is how they end up disagreeing.
-                  patch({ repo: v, workspace: picked?.root ?? "", worktree: null });
+                  patch({
+                    repo: v,
+                    workspace: picked?.root ?? "",
+                    worktree: null,
+                  });
                 }}
               >
                 <SelectTrigger id="repo" className="flex-1">
@@ -707,7 +726,9 @@ export function LaunchForm() {
               </Hint>
             )}
             {egress?.mode === "none" && (
-              <Hint tone="contained">This daemon launches with no network at all.</Hint>
+              <Hint tone="contained">
+                This daemon launches with no network at all.
+              </Hint>
             )}
 
             <Hint>
@@ -715,8 +736,8 @@ export function LaunchForm() {
               tighten-only from here, so a request can add domains and cannot
               open the posture. Change it in{" "}
               <code className="font-mono">~/.config/sandbox/config.yaml</code>{" "}
-              (or the <code className="font-mono">--config</code> file the daemon
-              was started with) and restart it.
+              (or the <code className="font-mono">--config</code> file the
+              daemon was started with) and restart it.
             </Hint>
 
             {/* Not offered on a daemon configured to reach nothing. `allow` is
@@ -725,39 +746,55 @@ export function LaunchForm() {
                 widen the posture rather than narrow it, and the daemon refuses
                 it for exactly that reason. */}
             {egress?.mode !== "none" && (
-            <div className="space-y-1.5 pt-1">
-              <Label htmlFor="allow" className="text-xs">
-                Extra domains
-              </Label>
-              <TagInput
-                id="allow"
-                value={req.network.allow}
-                onChange={(allow) => patch({ network: { ...req.network, allow } })}
-                placeholder="internal.example.com, then Enter"
-              />
-              <Hint tone={egress?.mode === "default" ? "caution" : undefined}>
-                {egress?.mode === "default"
-                  ? "Adding a domain here switches the allowlist on for this run — on an unrestricted daemon that tightens the run rather than widening it, which is the only direction a request may move."
-                  : "Resolved fresh per connection by the in-container proxy, which decides on the hostname read from the TLS SNI, a CONNECT, or a Host header — so a host sharing an allowlisted address does not ride in on it."}
-              </Hint>
-            </div>
+              <div className="space-y-1.5 pt-1">
+                <Label htmlFor="allow" className="text-xs">
+                  Extra domains
+                </Label>
+                <TagInput
+                  id="allow"
+                  value={req.network.allow}
+                  onChange={(allow) =>
+                    patch({ network: { ...req.network, allow } })
+                  }
+                  placeholder="internal.example.com, then Enter"
+                />
+                <Hint tone={egress?.mode === "default" ? "caution" : undefined}>
+                  {egress?.mode === "default"
+                    ? "Adding a domain here switches the allowlist on for this run — on an unrestricted daemon that tightens the run rather than widening it, which is the only direction a request may move."
+                    : "Resolved fresh per connection by the in-container proxy, which decides on the hostname read from the TLS SNI, a CONNECT, or a Host header — so a host sharing an allowlisted address does not ride in on it."}
+                </Hint>
+              </div>
             )}
           </Field>
 
           <Separator />
 
-          <Field label="Extra host directories">
-            <TagInput
-              value={req.share}
-              onChange={(share) => patch({ share })}
-              placeholder="/Users/you/shared, then Enter"
-            />
-            <Hint tone={req.share.length > 0 ? "caution" : undefined}>
-              <code className="font-mono">--share</code> widens the boundary on
-              purpose. It stays something you type rather than something a file
-              in the repository can turn on.
-            </Hint>
-          </Field>
+          <Toggle
+            id="share"
+            checked={req.share}
+            onCheckedChange={(share) =>
+              patch({ share, shareName: share ? req.shareName : "" })
+            }
+            label="Share the handoff directory"
+            tone={req.share ? "caution" : undefined}
+            hint="Mounts ~/.config/sandbox/shared at /shared. It is the only way two sandboxes can exchange a file — everything else a run sees is scoped to its own project — so it widens the boundary on purpose. It stays something you turn on here rather than something a file in the repository can."
+          />
+
+          {req.share && (
+            <Field label="Namespace (optional)">
+              <Input
+                value={req.shareName}
+                onChange={(e) => patch({ shareName: e.target.value })}
+                placeholder="work"
+              />
+              <Hint>
+                Mounts <code className="font-mono">/shared/NAME</code> instead
+                of the root, so two runs that both want a handoff spot do not
+                clobber the same filename. It prevents collisions, not access:
+                any run sharing the root can read every namespace in it.
+              </Hint>
+            </Field>
+          )}
 
           <Field label="Published ports">
             <TagInput
@@ -767,12 +804,12 @@ export function LaunchForm() {
             />
             <Hint tone={req.publish.length > 0 ? "caution" : undefined}>
               For reaching a dev server the agent starts. A bare port binds{" "}
-              <code className="font-mono">127.0.0.1</code> on the machine running the
-              daemon — not every interface, which is where this differs from{" "}
-              <code className="font-mono">docker -p</code>; write an address out to say
-              otherwise. Under an allowlist the firewall opens its default-deny inbound
-              chain for exactly these ports, which is the one way a launch option lets
-              anything <em>in</em>.
+              <code className="font-mono">127.0.0.1</code> on the machine
+              running the daemon — not every interface, which is where this
+              differs from <code className="font-mono">docker -p</code>; write
+              an address out to say otherwise. Under an allowlist the firewall
+              opens its default-deny inbound chain for exactly these ports,
+              which is the one way a launch option lets anything <em>in</em>.
             </Hint>
           </Field>
 
@@ -836,10 +873,16 @@ export function LaunchForm() {
           <Toggle
             id="skip-permissions"
             checked={headlessAlwaysSkips || req.skipPermissions}
-            disabled={headlessAlwaysSkips || !req.console || !agentMeta?.canSkipPermissions}
+            disabled={
+              headlessAlwaysSkips ||
+              !req.console ||
+              !agentMeta?.canSkipPermissions
+            }
             onCheckedChange={(skipPermissions) => patch({ skipPermissions })}
             label="Let it work without asking"
-            tone={headlessAlwaysSkips || req.skipPermissions ? "caution" : undefined}
+            tone={
+              headlessAlwaysSkips || req.skipPermissions ? "caution" : undefined
+            }
             hint={
               headlessAlwaysSkips
                 ? `Always on for a headless run, and not a choice: ${agentMeta?.label ?? req.agent} is started in its autonomous argv${skipFlag ? ` (${skipFlag})` : ""}, because an agent that stops for permission with nobody attached does not fail — it hangs. Keep a console below if you want to be asked.`
@@ -1038,16 +1081,22 @@ function BriefingNotice({
             Starting {to ?? "an agent"} with a briefing from {from.agent}
           </p>
           <p className="text-muted-foreground">
-            Not a resume — {to ?? "the agent"} begins a new conversation. What crosses is a
-            briefing mounted read-only at <code>/sandbox/context</code>: HANDOFF.md, the
-            conversation as a vendor-neutral transcript, and the files that changed, derived
-            from git rather than from anything {from.agent} said about itself.
+            Not a resume — {to ?? "the agent"} begins a new conversation. What
+            crosses is a briefing mounted read-only at{" "}
+            <code>/sandbox/context</code>: HANDOFF.md, the conversation as a
+            vendor-neutral transcript, and the files that changed, derived from
+            git rather than from anything {from.agent} said about itself.
           </p>
           <p className="font-mono text-[10px] text-muted-foreground">
             {from.agent} · {from.sessionId.slice(0, 8)}
           </p>
         </div>
-        <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-[11px]" onClick={onClear}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 shrink-0 px-2 text-[11px]"
+          onClick={onClear}
+        >
           Drop
         </Button>
       </div>

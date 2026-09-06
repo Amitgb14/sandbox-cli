@@ -1080,6 +1080,42 @@ type RunCreateRequest struct {
 	// was no inbound chain to carve, so nothing recorded them. Worth knowing
 	// before reading an empty field as "nothing was published".
 	Publish []string `json:"publish,omitempty"`
+
+	// Share mounts the shared directory (~/.config/sandbox/shared on the
+	// daemon's machine) at /shared, the same thing `sandbox-cli claude --share`
+	// arranges and through the same code — sandbox.ShareMount, so there is one
+	// answer to "what does sharing reach".
+	//
+	// It exists because /shared is the *only* way two sandboxes can exchange a
+	// file. Everything else a run can see is scoped to its own project, so two
+	// agents in different repositories — which is the case somebody opens two
+	// Studio tabs to arrange — have no other channel at all.
+	//
+	// A boolean and not a list of directories, and the difference is the whole
+	// design. An arbitrary host path in a request is a browser choosing what the
+	// container reaches; this is one well-known directory, created and vetted by
+	// the daemon, that both sides already agree on. The wider thing is `--mount`,
+	// and it is deliberately not offered here.
+	//
+	// Who may ask is the same answer `publish` gives at length: a request is the
+	// user driving their own daemon, which is the same act as typing the flag. A
+	// repository is what may not, and cannot — nothing reads this from a
+	// `.sandbox.yaml`.
+	Share bool `json:"share,omitempty"`
+
+	// ShareName narrows Share to one namespace: ~/.config/sandbox/shared/NAME at
+	// /shared/NAME, so two concurrent runs that both want a handoff spot do not
+	// clobber the same filename.
+	//
+	// It **requires** Share rather than implying it, the same rule the CLI keeps:
+	// implying would let one field silently switch on the cross-project channel,
+	// and `share: false, shareName: "work"` would be a contradiction to settle by
+	// guessing — with the wrong guess enabling sharing for somebody who wrote
+	// false.
+	//
+	// A namespace prevents collisions, not access: any run with a bare Share has
+	// the whole shared root mounted and can read every namespace in it.
+	ShareName string `json:"shareName,omitempty"`
 }
 
 // HandoffRef names the conversation a run is briefed with: the agent that held
