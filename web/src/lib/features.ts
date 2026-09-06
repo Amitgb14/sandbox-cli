@@ -221,7 +221,7 @@ export const FEATURES: Feature[] = [
     title: "A channel between sandboxes",
     group: "workflow",
     flag: "--share",
-    body: "Two sandboxes cannot see each other — that is the point, but it leaves no way to hand over an API contract. --share mounts one host directory at /shared in every sandbox that asks for it. Then just say so in the prompt.",
+    body: "Two sandboxes cannot see each other — that is the point, but it leaves no way to hand over an API contract. --share mounts one host directory at /shared in every sandbox that asks for it, from a shell or from Studio's Launch screen. Then just say so in the prompt.",
     state: "opt-in",
   },
   {
