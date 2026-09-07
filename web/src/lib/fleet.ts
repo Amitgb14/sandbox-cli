@@ -133,6 +133,77 @@ tasks:
     agent: codex
     prompt: Add per-IP rate limiting.`;
 
+/**
+ * The file, as a thing you pass rather than as a schema.
+ *
+ * Separate from the YAML sample because the sample answers "what goes in it"
+ * and these answer "how does it get read", which is where the friction actually
+ * is — a file named fleet.yml is not the default and will not be found.
+ */
+export const FILE_RULES = [
+  {
+    title: "Named, never discovered",
+    body: "fleet run reads exactly the path you give it, and defaults to ./fleet.yaml. It never walks up the directory tree looking for one, unlike .sandbox.yaml. That is what lets the file carry command-line trust: naming it is an act you performed, so a fleet.yaml in a parent directory or a repository you cloned can never be picked up by accident.",
+    code: "sandbox-cli fleet run -f fleet.yml",
+  },
+  {
+    title: "A typo is an error, not a default",
+    body: "Unknown keys are rejected rather than ignored. max_parallell: 4 fails the load, because the alternative is a fleet running with limits its author believed they had set — including the memory caps.",
+    code: "line 1: field max_parallell not found in type fleet.Spec",
+  },
+  {
+    title: "-f and -c are different files",
+    body: "-f is the task list. -c is the sandbox config, and it is where image:, mounts: and env_allow: live — a task does not choose what it runs in, so a fleet file has no key for any of them.",
+    code: "sandbox-cli fleet run -f ci.yml -c ~/.config/sandbox/prod.yaml",
+  },
+];
+
+/**
+ * What is actually inside a fleet container, for the questions that only come up
+ * once something is missing. Every one of these was somebody's confusing hour.
+ */
+export const REACH = [
+  {
+    title: "The worktree, the login, and the repository's .git",
+    body: "/workspace is the worktree and /sandbox/home is the agent's persisted login. A worktree task also gets the parent repository's .git — read-write, mounted at its own host path, because a linked worktree cannot commit without it — with .git/hooks read-only over the top. Nothing else on your machine is there: not /tmp, not your other repositories, not the skills your own Claude Code has. An agent told to write outside those paths writes into a container that is about to be thrown away.",
+  },
+  {
+    title: "Skills travel with the repository, not with you",
+    body: "A skill committed at .claude/skills/ arrives inside /workspace and every task sees it. One installed at ~/.claude/skills/ on the host does not — the container's HOME is a different directory entirely. It has to be committed, too: a worktree is a checkout of the branch, so an untracked skill in your main checkout is invisible to it.",
+  },
+  {
+    title: "The handover directory is opt-in",
+    body: "/shared exists only when you pass --share, and a fleet file cannot turn it on. Without the flag an agent asked to read /shared/x is being asked for a path that is not there, which it will report as missing rather than invent.",
+  },
+  {
+    title: "The image is not the fleet's to choose",
+    body: "The base image carries node and python3 and no other toolchain — no pip, no go, no compiler beyond build-essential. A verify: of go test or pip install exits 127 in it. The fix is a config layer rather than a fleet one: image: in your own config, or -c naming one.",
+  },
+];
+
+/**
+ * Reading a running agent. The distinction that catches people is that a fleet
+ * container has no keyboard — which is deliberate, and is not the same as being
+ * unreachable.
+ */
+export const WATCHING = [
+  {
+    title: "You read it, you do not type at it",
+    body: "A fleet container is created with no tty and no stdin, so there is nothing to answer a question with. That is the point: a fleet is unattended, and an agent that stopped to ask would not fail but hang, holding a max_parallel slot. To watch one live, sandbox-cli attach <branch> — the top-level command, since there is no fleet attach — streams its output and says in as many words that it has no keyboard.",
+    code: "sandbox-cli fleet logs feature-login -f",
+  },
+  {
+    title: "Silence is usually not a hang",
+    body: "An agent in headless mode buffers and prints its answer at the end rather than narrating as it goes, so an empty log a minute in is normal. fleet status is the better progress signal: it reports what each branch has produced — commits, uncommitted files, how far ahead it is — rather than waiting on stdout.",
+    code: "sandbox-cli fleet status --watch",
+  },
+  {
+    title: "To talk to one, run it interactively instead",
+    body: "Same worktree, same branch, attached. Stop the fleet task first: nothing refuses this for you. The duplicate-name rule that enforces one agent per branch only applies to detached containers, and a foreground run is named for the moment it started — so two agents will happily edit one worktree, which is the silent loss that rule exists to prevent everywhere else.",
+    code: "sandbox-cli fleet stop feature-login\nsandbox-cli claude --worktree feature-login",
+  },
+];
+
 export type LoopStep = {
   cmd: string;
   what: string;
