@@ -34,7 +34,7 @@ const CONVERSATION = [
       'fmt.Println("hi")',
       "```",
       "",
-      "See [the docs](https://example.com/docs) for the rest.",
+      "See [**the docs**](https://example.com/docs) for the rest.",
       "",
       "Click [here](javascript:alert(1)) or [there](data:text/html,<b>x</b>).",
       "",
@@ -53,6 +53,17 @@ const CONVERSATION = [
       "2. Then check:",
       "   - inner one",
       "   - inner two",
+      "",
+      // Separate lines on purpose. Two unrelated `*` on one line pair up — the
+      // classic markdown gotcha, and what CommonMark and GitHub both do — so a
+      // single line here would test that quirk rather than the two fixes.
+      "Run ls -la **/*.go in prose.",
+      "",
+      "And 2*3 and `x*y` are different.",
+      "",
+      "> ```",
+      "> **not bold**",
+      "> ```",
     ].join("\n"),
   },
 ];
@@ -203,6 +214,26 @@ test("an agent's markdown is rendered, and its markup is not", async ({
   // peers of the step they qualify.
   await expect(panel.locator("li ul li")).toHaveCount(2);
 
+  // A glob in prose is a glob. `**/*.go` used to yield <em>/</em>, so the reader
+  // saw `ls -la */.go` — a path that does not exist — with the markers deleted.
+  await expect(panel.getByText(/ls -la \*\*\/\*\.go in prose/)).toBeVisible();
+
+  // A code span survives an unpaired `*` earlier on the line. Emphasis used to
+  // win by starting first and swallow the opening backtick.
+  await expect(panel.locator("code", { hasText: "x*y" })).toBeVisible();
+
+  // A fenced block inside a quote is code, not inline text run through the
+  // emphasis rules — the same promise as a fence inside a list item.
+  await expect(panel.locator("blockquote pre code")).toContainText(
+    "**not bold**",
+  );
+  await expect(panel.locator("blockquote strong")).toHaveCount(0);
+
+  // A link label carries its own formatting, which the file claims and did not do.
+  await expect(
+    panel.locator("a strong", { hasText: "the docs" }),
+  ).toBeVisible();
+
   expect(fetched, "a rendered reply fetched something an agent named").toEqual(
     [],
   );
@@ -220,6 +251,17 @@ test("a hostile reply does not hang the tab", async ({ page }) => {
     "note " + "`".repeat(2000) + "x".repeat(20000),
     "",
     "and " + "*".repeat(2000) + "y".repeat(20000),
+    "",
+    // The one the first version of this test missed, and the one that was still
+    // quadratic: an unclosed `[` scanned to the end of the message, at every `[`.
+    // 80 000 of them cost 2.2s before the label was bounded.
+    // Sized so the *broken* version cannot pass: unbounded, this costs ~20s
+    // (quadratic — 40 000 was only 0.5s, which the first version of this test
+    // used and which therefore proved nothing). Bounded, it is linear and the
+    // whole page renders in under a second.
+    "[".repeat(250000),
+    "",
+    "[a](".repeat(20000),
   ].join("\n");
 
   await stub(page);

@@ -80,7 +80,7 @@ type Block =
   | { kind: "heading"; level: number; text: string }
   | { kind: "code"; lang: string; code: string }
   | { kind: "list"; ordered: boolean; items: Block[][]; start: number }
-  | { kind: "quote"; text: string }
+  | { kind: "quote"; blocks: Block[] }
   | { kind: "hr" };
 
 function Blocks({ blocks }: { blocks: Block[] }) {
@@ -130,7 +130,12 @@ function Block({ block }: { block: Block }) {
               <p> would space every bullet like a paragraph, which is what makes
               a short list look like an essay. */}
           {blocks.length === 1 && blocks[0].kind === "p" ? (
-            <Inline text={blocks[0].text} />
+            // whitespace-pre-wrap here too: the paragraph case keeps line breaks
+            // deliberately, and a one-paragraph item taking this shortcut was
+            // quietly dropping them.
+            <span className="whitespace-pre-wrap">
+              <Inline text={blocks[0].text} />
+            </span>
           ) : (
             <Blocks blocks={blocks} />
           )}
@@ -146,9 +151,15 @@ function Block({ block }: { block: Block }) {
     }
 
     case "quote":
+      // Block-parsed, not inlined. The quote used to collect its stripped lines
+      // into one string and hand them to the inline parser, so a fenced block
+      // inside a quote was not a fence — its backticks rendered literally and
+      // whatever it contained went through the emphasis rules, which is the one
+      // thing parseBlocks promises never happens. A list inside a quote came out
+      // as literal "- a" for the same reason.
       return (
-        <blockquote className="break-words border-s-2 ps-3 text-muted-foreground">
-          <Inline text={block.text} />
+        <blockquote className="space-y-2 break-words border-s-2 ps-3 text-muted-foreground">
+          <Blocks blocks={block.blocks} />
         </blockquote>
       );
 
@@ -231,7 +242,12 @@ function parseBlocks(input: string, depth = 0): Block[] {
     para = [];
   };
   const flushQuote = () => {
-    if (quote.length) out.push({ kind: "quote", text: quote.join("\n") });
+    if (quote.length) {
+      out.push({
+        kind: "quote",
+        blocks: parseBlocks(quote.join("\n"), depth + 1),
+      });
+    }
     quote = [];
   };
   const flushAll = () => {
@@ -268,7 +284,7 @@ function parseBlocks(input: string, depth = 0): Block[] {
       continue;
     }
 
-    const q = QUOTE.exec(line);
+    const q = depth < MAX_DEPTH ? QUOTE.exec(line) : null;
     if (q) {
       flushPara();
       quote.push(q[1]);
@@ -381,28 +397,45 @@ function readList(
 /* ------------------------------------------------------------------ inline */
 
 /**
- * Inline spans, in the one order that works: code first.
+ * Code spans, found first and in a pass of their own.
  *
- * A backtick span suppresses everything inside it, so `**not bold**` written in
- * code has to be matched before the emphasis rules ever see those asterisks.
- * Links come next so their label can still carry emphasis, then bold before
- * italic — `**` is a prefix of `*`, and testing the shorter one first would read
- * every bold marker as two empty italics.
- *
- * **Every content class is line-bounded and none of them can match a
- * delimiter.** That is a performance property, and on this input it is a
- * security one. The first version matched code spans with `` (`+)([\s\S]*?[^`])\1 ``
- * — a backreference to a variable-length run, wrapped around a lazy
- * match-anything — which backtracks cubically: 13 KB of text (a run of 1200
- * backticks and 12 000 following characters) blocked the main thread for **12.9
- * seconds**, measured. This file's premise is that the author of the text is
- * hostile, so a renderer that can be made to hang the tab of whoever opens the
- * run is a denial of service with a one-line payload. Bounded classes make the
- * scan linear, and the cost is that a code span cannot contain a backtick and
- * emphasis cannot cross a line — neither of which agents write.
+ * "Code first" used to mean *first in an alternation*, which is not the same
+ * thing and was not true: the regex engine tries alternatives per **position**,
+ * not per priority, so an emphasis marker earlier in the line won against a code
+ * span later in it. `2*3 and \`x*y\` are different` matched `*3 and \`x*` as
+ * italic, swallowing the opening backtick and destroying the code span. Doing it
+ * as a separate pass makes the guarantee structural: nothing else ever sees the
+ * inside of a code span, because the emphasis scanner is only ever handed the
+ * gaps between them.
  */
-const INLINE =
-  /`([^`\n]+)`|(!?)\[([^\]]*)\]\(([^\s)]*)\)|(\*\*|__)([^\s](?:[^\n]*?[^\s])?)\5|(\*|_)([^\s*_](?:[^\n]*?[^\s])?)\7/g;
+const CODE = /`([^`\n]+)`/g;
+
+/**
+ * Everything else: links, then bold, then italic.
+ *
+ * **Every class is bounded**, and the two caps are the point rather than
+ * tidiness. A label written `[^\]]*` is unbounded in both directions — it
+ * matches newlines, so an unclosed `[` scans to the end of the entire message,
+ * fails, and does it again at the next `[`. That is quadratic, and it was
+ * measured on this exact pattern: 20 000 `[` took 146 ms, 40 000 took 548 ms,
+ * 80 000 took 2.2 s — so a 200 KB reply is ~14 s of blocked main thread, and the
+ * conversation refetches every three seconds, so the tab never comes back.
+ *
+ * That is the same denial of service the code-span rewrite closed, surviving in
+ * the one alternative that was left unbounded. A cap makes each failed attempt
+ * cost the cap rather than the message, which is linear again. 200 characters of
+ * link text and 2 000 of URL are both far past anything real; past them the
+ * construct renders as its own source, which is what this file does with
+ * everything it does not understand.
+ */
+const LINK_LABEL_MAX = 200;
+const LINK_HREF_MAX = 2000;
+const REST = new RegExp(
+  `(!?)\\[([^\\]\\n]{0,${LINK_LABEL_MAX}})\\]\\(([^\\s)]{0,${LINK_HREF_MAX}})\\)` +
+    `|(\\*\\*|__)([^\\s](?:[^\\n]*?[^\\s])?)\\4` +
+    `|(\\*|_)([^\\s*_](?:[^\\n]*?[^\\s])?)\\6`,
+  "g",
+);
 
 function Inline({ text }: { text: string }): ReactNode {
   return <>{renderInline(text)}</>;
@@ -413,35 +446,81 @@ function isWordChar(c: string | undefined): boolean {
   return c !== undefined && /[\p{L}\p{N}_]/u.test(c);
 }
 
+/**
+ * Emphasis has to contain something that is not punctuation.
+ *
+ * `ls -la **\/*.go` is a glob, and the italic rule found `*\/*` inside it: the
+ * content is `/`, which satisfies "starts and ends with a non-space", so the
+ * reader was shown `ls -la *​/.go` — a path that does not exist, with the
+ * markers silently deleted. That is the same failure the intraword-`_` rule
+ * exists to prevent, one character class over.
+ *
+ * Requiring a letter or a digit somewhere inside costs nothing real — emphasis
+ * on pure punctuation is not a thing anybody writes — and it rules out the glob
+ * and path shapes agents produce constantly.
+ */
+function hasWordChar(s: string): boolean {
+  return /[\p{L}\p{N}]/u.test(s);
+}
+
 function renderInline(text: string, depth = 0): ReactNode[] {
-  // Emphasis recurses into its own content, so a hostile string of markers
-  // cannot be made to nest without bound.
+  // Emphasis and link labels recurse into their own content, so a hostile string
+  // of markers cannot be made to nest without bound.
   if (depth > 4) return [text];
 
   const out: ReactNode[] = [];
-  const re = new RegExp(INLINE.source, "g");
+  const code = new RegExp(CODE.source, "g");
+  const key = { n: 0 };
   let last = 0;
-  let key = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = code.exec(text)) !== null) {
+    if (m.index > last) pushRest(out, text.slice(last, m.index), depth, key);
+    out.push(
+      <code
+        key={key.n++}
+        className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]"
+      >
+        {m[1]}
+      </code>,
+    );
+    last = code.lastIndex;
+  }
+  if (last < text.length) pushRest(out, text.slice(last), depth, key);
+  return out;
+}
+
+/** Links and emphasis, over one stretch of text known to contain no code span. */
+function pushRest(
+  out: ReactNode[],
+  text: string,
+  depth: number,
+  key: { n: number },
+): void {
+  const re = new RegExp(REST.source, "g");
+  let last = 0;
   let m: RegExpExecArray | null;
 
   while ((m = re.exec(text)) !== null) {
-    const isUnderscore = m[5] === "__" || m[7] === "_";
-    if (isUnderscore) {
-      /**
-       * `SANDBOX_EGRESS_ALLOW` is not italic `EGRESS`.
-       *
-       * CommonMark forbids intraword `_` emphasis for exactly this reason, and
-       * without the rule every snake_case identifier in a reply about this
-       * codebase came out mangled — with the underscores *deleted*, so the
-       * reader saw a name that does not exist. `*` keeps no such rule, because
-       * intraword `*` is how emphasis inside a word is written and nothing
-       * common uses it otherwise.
-       */
-      const before = text[m.index - 1];
-      const after = text[m.index + m[0].length];
-      if (isWordChar(before) || isWordChar(after)) {
-        // Not a marker. Resume one character in, so a later delimiter on the
-        // same line is still found.
+    const marker = m[4] ?? m[6];
+    const content = m[5] ?? m[7];
+
+    if (marker !== undefined) {
+      // `SANDBOX_EGRESS_ALLOW` is not italic `EGRESS`. CommonMark forbids
+      // intraword `_` emphasis for exactly this reason, and without the rule
+      // every snake_case identifier came out mangled — with the underscores
+      // *deleted*, so the reader saw a name that does not exist. `*` keeps no
+      // such rule, because intraword `*` is how emphasis inside a word is
+      // written.
+      const underscore = marker === "__" || marker === "_";
+      const badFlank =
+        underscore &&
+        (isWordChar(text[m.index - 1]) ||
+          isWordChar(text[m.index + m[0].length]));
+
+      if (badFlank || !hasWordChar(content)) {
+        // Not a marker after all. Resume one character in, so a genuine
+        // delimiter later on the same line is still found.
         re.lastIndex = m.index + 1;
         continue;
       }
@@ -449,29 +528,24 @@ function renderInline(text: string, depth = 0): ReactNode[] {
 
     if (m.index > last) out.push(text.slice(last, m.index));
 
-    if (m[1] !== undefined) {
-      // Inline code: the contents are text and nothing else looks at them.
+    if (m[2] !== undefined) {
       out.push(
-        <code
-          key={key++}
-          className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]"
-        >
-          {m[1]}
-        </code>,
+        <Link
+          key={key.n++}
+          image={m[1] === "!"}
+          label={m[2]}
+          href={m[3]}
+          depth={depth}
+        />,
       );
-    } else if (m[3] !== undefined) {
-      out.push(
-        <Link key={key++} image={m[2] === "!"} label={m[3]} href={m[4]} />,
-      );
-    } else if (m[5]) {
-      out.push(<strong key={key++}>{renderInline(m[6], depth + 1)}</strong>);
+    } else if (m[4]) {
+      out.push(<strong key={key.n++}>{renderInline(m[5], depth + 1)}</strong>);
     } else {
-      out.push(<em key={key++}>{renderInline(m[8], depth + 1)}</em>);
+      out.push(<em key={key.n++}>{renderInline(m[7], depth + 1)}</em>);
     }
     last = re.lastIndex;
   }
   if (last < text.length) out.push(text.slice(last));
-  return out;
 }
 
 /**
@@ -496,10 +570,12 @@ function Link({
   image,
   label,
   href,
+  depth,
 }: {
   image: boolean;
   label: string;
   href: string;
+  depth: number;
 }) {
   // An image is never fetched — see the file comment. It renders as its source.
   if (image) {
@@ -539,7 +615,7 @@ function Link({
         rel="noopener noreferrer nofollow"
         className="underline underline-offset-2 hover:text-foreground"
       >
-        {label || url.href}
+        {label ? renderInline(label, depth + 1) : url.href}
       </a>
       {!names && <span className="text-muted-foreground"> ({url.host})</span>}
     </>
