@@ -32,6 +32,7 @@ version is tagged.
   The text lived in **four** places (the prod refusal, the dev warning, `doctor`,
   and the site) saying the same wrong thing. It is now one exported function the
   first three read, which is why they could drift in the first place.
+
 ### Added
 
 - **Snapshots you take on purpose, and restore from by name.** A snapshot was

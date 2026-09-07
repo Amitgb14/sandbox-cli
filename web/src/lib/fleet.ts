@@ -149,7 +149,7 @@ export const FILE_RULES = [
   {
     title: "A typo is an error, not a default",
     body: "Unknown keys are rejected rather than ignored. max_parallell: 4 fails the load, because the alternative is a fleet running with limits its author believed they had set — including the memory caps.",
-    code: "parsing fleet.yml: field max_parallell not found",
+    code: "line 1: field max_parallell not found in type fleet.Spec",
   },
   {
     title: "-f and -c are different files",
@@ -164,8 +164,8 @@ export const FILE_RULES = [
  */
 export const REACH = [
   {
-    title: "Two directories, and that is all",
-    body: "The worktree at /workspace, and the agent's persisted login at /sandbox/home. Nothing else on your machine is there — not /tmp, not your other repositories, not the skills your own Claude Code has. An agent told to write to a path outside those two writes it into a container that is about to be thrown away.",
+    title: "The worktree, the login, and the repository's .git",
+    body: "/workspace is the worktree and /sandbox/home is the agent's persisted login. A worktree task also gets the parent repository's .git — read-write, mounted at its own host path, because a linked worktree cannot commit without it — with .git/hooks read-only over the top. Nothing else on your machine is there: not /tmp, not your other repositories, not the skills your own Claude Code has. An agent told to write outside those paths writes into a container that is about to be thrown away.",
   },
   {
     title: "Skills travel with the repository, not with you",
@@ -189,7 +189,7 @@ export const REACH = [
 export const WATCHING = [
   {
     title: "You read it, you do not type at it",
-    body: "A fleet container is created with no tty and no stdin, so there is nothing to answer a question with. That is the point: a fleet is unattended, and an agent that stopped to ask would not fail but hang, holding a max_parallel slot. attach still works and streams the output, and says in as many words that it has no keyboard.",
+    body: "A fleet container is created with no tty and no stdin, so there is nothing to answer a question with. That is the point: a fleet is unattended, and an agent that stopped to ask would not fail but hang, holding a max_parallel slot. To watch one live, sandbox-cli attach <branch> — the top-level command, since there is no fleet attach — streams its output and says in as many words that it has no keyboard.",
     code: "sandbox-cli fleet logs feature-login -f",
   },
   {
@@ -199,7 +199,7 @@ export const WATCHING = [
   },
   {
     title: "To talk to one, run it interactively instead",
-    body: "Same worktree, same branch, attached. You cannot do both at once on one branch — docker's duplicate-name refusal is what enforces one agent per branch — so stop the fleet task first.",
+    body: "Same worktree, same branch, attached. Stop the fleet task first: nothing refuses this for you. The duplicate-name rule that enforces one agent per branch only applies to detached containers, and a foreground run is named for the moment it started — so two agents will happily edit one worktree, which is the silent loss that rule exists to prevent everywhere else.",
     code: "sandbox-cli fleet stop feature-login\nsandbox-cli claude --worktree feature-login",
   },
 ];
