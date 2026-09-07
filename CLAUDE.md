@@ -856,6 +856,38 @@ somebody quit — and `fleet` may never set it (`gates_test.go` classifies it `n
 unattended, which is the same reason `internal/agents` only admits agents with a verified headless
 mode. An agent that stops to ask does not fail, it hangs, holding a `max_parallel` slot.
 
+An agent's words are **formatted, never as markup it supplied**
+(`studio/src/components/common/agent-markdown.tsx`, shared by the live console and
+the stored-transcript viewer). Transcript text is untrusted twice over — written by
+an agent working in a repository whose contents it does not control either — so the
+renderer emits React elements and has **no HTML path at all**: not a library
+configured to disallow HTML, since a configuration can be changed by someone who
+does not know what it was for, and the absence of a code path cannot. Three rules
+follow and are pinned by `studio/e2e/md.spec.ts`, which stubs its own routes so the
+hostile input is written by hand rather than waited for: an image renders as *text*
+(fetching one reports when a transcript was read), a link is a link only for
+`http:`/`https:` with a bare URL never autolinked, and anything else shows its own
+source — and a destination the label does not already name is printed beside it,
+since a clickable label that is itself a trusted-looking URL is the shape that
+lies. A fourth rule is about the parser rather than the output: **every inline
+pattern is line-bounded and linear.** The first version matched code spans with a
+backreference to a variable-length run wrapped around a lazy match-anything, which
+backtracks cubically — 13 KB of backticks froze the tab for 12.9 seconds, so a
+renderer built on the assumption that the author is hostile could be hung by one.
+Bounded classes cost a code span containing a backtick and emphasis crossing a
+line; neither is something agents write — and the bound has to be on **every**
+class, which the first fix missed: the link label stayed `[^\]]*`, unbounded in
+both directions, so an unclosed `[` still scanned the whole message at every `[`
+(80 000 of them, 2.2s, cleanly quadratic). Caps on the label and the href make a
+failed attempt cost the cap rather than the message. Two further rules the first
+version claimed and did not keep: **code spans are found in a pass of their own**,
+because "code first" as an *alternation* is a different claim — a regex engine
+tries alternatives per position, not per priority, so an emphasis marker earlier
+in the line beat a code span later in it and swallowed its opening backtick; and
+**emphasis content must contain a letter or a digit**, since `ls -la **/*.go`
+otherwise matches `*/*` and renders a path that does not exist, which is the
+intraword-`_` failure one character class over. Issue #151.
+
 Reading and answering a console run over HTTP is `internal/studioapi/console.go`.
 Two halves, two mechanisms, and the split is the point: **reading** comes from the
 agent's transcript (`agentctx.Transcript`) because a TUI's stdout is repaints and

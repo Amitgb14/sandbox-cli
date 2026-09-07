@@ -1,18 +1,28 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FileJson, KeyRound, MessageSquare, SendHorizontal } from "lucide-react";
+import {
+  FileJson,
+  KeyRound,
+  MessageSquare,
+  SendHorizontal,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { AgentMarkdown } from "@/components/common/agent-markdown";
 import { CopyButton } from "@/components/common/copy-button";
 import { SessionViewer } from "@/components/agents/session-viewer";
 import { EmptyState } from "@/components/common/empty-state";
 import { setApiToken } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/client";
-import { useConversation, useDaemon, useSendConsoleInput } from "@/lib/api/queries";
+import {
+  useConversation,
+  useDaemon,
+  useSendConsoleInput,
+} from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
 import type { Run } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -92,13 +102,11 @@ export function ConsoleView({ run }: { run: Run }) {
                   </span>
                   {m.at && <span>{formatRelative(m.at)}</span>}
                 </div>
-                {/* Rendered as text, never as markup: this is written by an
-                    agent working in a repository whose contents it does not
-                    control either. whitespace-pre-wrap keeps the line breaks
-                    that make a numbered question readable. */}
-                <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {m.text}
-                </p>
+                {/* Formatted, but never as markup the agent supplied:
+                    AgentMarkdown emits React elements and has no HTML path at
+                    all, because this text is written by an agent working in a
+                    repository whose contents it does not control either. */}
+                <AgentMarkdown text={m.text} />
               </div>
             ))
           )}
@@ -128,7 +136,8 @@ export function ConsoleView({ run }: { run: Run }) {
             <div className="flex items-center gap-2">
               <p className="text-xs text-muted-foreground">
                 Goes to the container&apos;s stdin. The agent has to read it and
-                think, so its reply appears on the next poll rather than at once.
+                think, so its reply appears on the next poll rather than at
+                once.
               </p>
               <Button
                 size="sm"
@@ -154,7 +163,7 @@ export function ConsoleView({ run }: { run: Run }) {
           {live && run.openStdin && !consoleEnabled
             ? "This run has a console, but the daemon was started without a token — and typing at a running agent needs one. Set SANDBOX_STUDIO_TOKEN in your .env (or pass -token) and restart the daemon, then paste the same value into the bar at the top of Studio."
             : live
-            ? "This run has no console — it was launched without one, so the container was created with no stdin and cannot be typed at. Tick “Keep a console I can attach to” when launching."
+              ? "This run has no console — it was launched without one, so the container was created with no stdin and cannot be typed at. Tick “Keep a console I can attach to” when launching."
               : "The run has finished. Its conversation is kept; there is nothing listening to answer."}
         </p>
       )}
@@ -180,7 +189,11 @@ export function ConsoleView({ run }: { run: Run }) {
       {data?.sessionId && run.agent && (
         <SessionViewer
           agent={run.agent}
-          session={viewing ? { id: data.sessionId, turns: messages.length, modified: "" } : null}
+          session={
+            viewing
+              ? { id: data.sessionId, turns: messages.length, modified: "" }
+              : null
+          }
           onOpenChange={(o) => !o && setViewing(false)}
         />
       )}
@@ -204,8 +217,8 @@ export function ConsoleView({ run }: { run: Run }) {
               <code>--no-sync</code> is load-bearing: this session lives in the
               sandbox-owned agent HOME, and the default history mount puts your
               host&apos;s project bucket over exactly that path — without it the
-              agent answers &ldquo;No conversation found&rdquo; for an id that is
-              perfectly real.
+              agent answers &ldquo;No conversation found&rdquo; for an id that
+              is perfectly real.
             </p>
           </CardContent>
         </Card>
@@ -219,10 +232,7 @@ export function ConsoleView({ run }: { run: Run }) {
     // Cleared optimistically: the daemon returns 204 with nothing to render, and
     // leaving the text in the box makes it look like it was not sent.
     setDraft("");
-    send.mutate(
-      { data: text },
-      { onError: () => setDraft(text) },
-    );
+    send.mutate({ data: text }, { onError: () => setDraft(text) });
   }
 }
 

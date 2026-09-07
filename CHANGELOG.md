@@ -33,6 +33,53 @@ version is tagged.
   and the site) saying the same wrong thing. It is now one exported function the
   first three read, which is why they could drift in the first place.
 
+- **Studio's console showed an agent's markdown as literal characters.**
+  `**bold**`, backticked code, headings and fenced blocks all arrived as the
+  symbols an agent typed, so a reply that was mostly a formatted list or a code
+  block was read as source rather than as the answer.
+
+  It was deliberate, and the reason was a good one: transcript text is written by
+  an agent working in a repository whose contents *it* does not control either,
+  so rendering it as markup is how a prompt injection reaches the browser. What
+  changed is the weight — the console is now how a run is *read*, the terminal
+  being for driving one — so the rule is kept and the rendering made safe instead.
+
+  Safe **structurally, not by configuration**: the renderer emits React elements
+  and has no HTML path at all, so `<img onerror=…>` in a reply comes back as
+  those characters because there is nothing that could do anything else with
+  them. That is why it is ~200 lines rather than a library told to disallow HTML
+  — a setting can be changed by someone who does not know what it was for.
+
+  Three consequences worth knowing. An `![alt](url)` renders as **text**, never an
+  image: fetching it would make the browser report when, and whether, somebody
+  read the transcript. A link is a link only for `http:` and `https:` — everything
+  else shows the label *and* the URL, so a reader sees the claim rather than a
+  label that lies about where it goes — and a bare URL in prose is never
+  autolinked. Tables, footnotes and raw HTML are not supported and degrade to
+  their own source text.
+
+  Fenced code gets a copy button, which is most of why rendering code as code is
+  worth doing. The stored-transcript viewer uses the same renderer as the live
+  console: the same words read two different ways is how one of them stays wrong.
+
+  Four things a reader of this codebase would have hit immediately, found in
+  review of the first version and fixed before it shipped. A reply could **hang
+  the tab**: the code-span pattern backtracked cubically, and 13 KB of backticks
+  blocked the main thread for 12.9 seconds — a denial of service with a one-line
+  payload, in a renderer whose premise is that the author is hostile. Every
+  pattern is now line-bounded and linear (220 KB parses in 3 ms). `SANDBOX_RUN_AS`
+  rendered as *RUN* with the underscores **deleted**, so the reader saw a name
+  that does not exist, and `ignore *.go and *.ts` italicised everything between
+  the stars — emphasis now keeps CommonMark's flanking rules. A fenced block
+  inside a numbered step was run through the *inline* parser, which is the one
+  thing the parser promises never to do, so a list item now holds blocks rather
+  than text — which is also what makes a nested list nest instead of flattening
+  into peers of the point it qualifies. And a link's visible text could lie about
+  where it went, so a destination the label does not already name is shown beside
+  it.
+
+  Issue #151.
+
 ### Added
 
 - **Snapshots you take on purpose, and restore from by name.** A snapshot was
