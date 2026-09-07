@@ -77,6 +77,7 @@ const Timeout = 90 * time.Second
 type Runtime interface {
 	Available(context.Context) error
 	SeccompUnavailable(context.Context) (bool, bool)
+	SeccompRemedy() string
 	Runtimes(context.Context) ([]string, error)
 	FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string)
 	ResolvesNames(context.Context, string) (runtime.DNSProbe, string)
@@ -150,7 +151,7 @@ func checkSeccomp(ctx context.Context, d Runtime) Check {
 	case unavailable:
 		c.Status = StatusWeak
 		c.Detail = "no syscall filter is applied; the container gets the full syscall table"
-		c.Remedy = "on Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\""
+		c.Remedy = d.SeccompRemedy()
 	default:
 		c.Status = StatusOK
 		c.Detail = "the daemon applies a profile"

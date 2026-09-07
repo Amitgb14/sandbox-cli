@@ -492,12 +492,38 @@ func (s *Session) enforceSeccomp(ctx context.Context) error {
 			"applies a syscall filter; refusing rather than assuming it does", config.SeccompRequired)
 	}
 	if unavailable {
-		return fmt.Errorf("security.seccomp is %q but this docker daemon applies no syscall filter, so the "+
+		// The remedy comes from the runtime rather than being written here. It
+		// used to be a second copy of the same two lines, which is how a refusal
+		// ends up telling somebody to delete a setting their machine does not
+		// have while the warning next door says something else.
+		return fmt.Errorf("security.seccomp is %q but this daemon applies no syscall filter, so the "+
 			"container would have the full syscall table\n"+
-			"  Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\"\n"+
-			"  or run with --profile dev, which warns instead of refusing", config.SeccompRequired)
+			"  %s\n"+
+			"  or run with --profile dev, which warns instead of refusing",
+			config.SeccompRequired, seccompAdvice(s.Runtime))
 	}
 	return nil
+}
+
+// seccompAdvice asks the runtime how to fix an absent syscall filter, and falls
+// back to a sentence that is true of every engine when it cannot answer.
+//
+// A *second* assertion, deliberately, and the reason is the whole point of this
+// function. Folding it into the one above — "give me a runtime that can answer
+// about seccomp *and* knows the remedy" — makes a security refusal depend on a
+// cosmetic method: any Runtime without SeccompRemedy falls through the `!ok`
+// branch and prod stops refusing, silently. That is not hypothetical. It
+// disabled the refusal for `internal/cli`'s own prod launch test, whose fake
+// embeds runtime.Runtime and declares only SeccompUnavailable, so the test that
+// exists to cover this branch began passing without entering it.
+//
+// The rule: what the control *decides on* is asserted narrowly, and anything
+// that only improves the message is optional.
+func seccompAdvice(rt any) string {
+	if r, ok := rt.(interface{ SeccompRemedy() string }); ok {
+		return r.SeccompRemedy()
+	}
+	return "check whether this engine applies a syscall filter (docker info, podman info)"
 }
 
 // newRunID mints the key that pairs a detached run's two audit lines.
