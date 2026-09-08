@@ -204,7 +204,23 @@ export function LaunchForm() {
     const match = worktrees.find(
       (w) => !w.primary && w.branch === deepLinkBranch,
     );
-    if (!match) return;
+    if (!match) {
+      /**
+       * A branch with no worktree yet, which is what a restore hands back: it
+       * creates a *branch* and stops, so following its Continue link found
+       * nothing here and silently applied none of the deep link — the launch
+       * then ran on main, against the files the restore existed to replace.
+       *
+       * Asking for it as a new worktree is the same request the CLI's
+       * `--worktree <branch>` makes, and the daemon resolves it the same way:
+       * an existing branch is checked out into a worktree of its own rather
+       * than created afresh.
+       */
+      deepLinkApplied.current = true;
+      setNewBranch(deepLinkBranch);
+      setWorktreeMode("new");
+      return;
+    }
     deepLinkApplied.current = true;
     // Deliberately touches neither `repo` nor `workspace`. It used to set the
     // workspace from REPOS, which was fixture data — and the fixture's id

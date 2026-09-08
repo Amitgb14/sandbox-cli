@@ -695,6 +695,10 @@ func (s *Server) restoreSession(sess rescue.Session, mode RestoreMode, branch st
 		Files:              result.Files,
 		MatchesWorkingTree: result.MatchesWorkingTree,
 	}
+	// The other half of the restore. Files come back here; the conversation is a
+	// separate operation, and naming it is the difference between "a branch
+	// appeared" and knowing what to do next.
+	resp.Agent, resp.ResumeSessionID = s.conversationFor(sess)
 	if patchFile != "" {
 		if b, err := os.ReadFile(patchFile); err == nil {
 			resp.Patch = string(b)

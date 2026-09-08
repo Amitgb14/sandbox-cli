@@ -11,6 +11,31 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **A restore in Studio offers to carry the conversation on.** Restoring put
+  files back and stopped, which is correct — a snapshot holds files, not a
+  container — and read as nothing having happened: "I restored and no agent
+  started." Recovering the work and recovering the conversation are two
+  operations, and only the first had a button.
+
+  A restore that lands on a branch now says whose conversation that run was
+  having, and offers **Continue** — one click to the Launch screen with the
+  branch and the session already filled in. The daemon identifies it the way
+  everything else here does: by agent, project and the run's own time window,
+  all three already in the manifest, against the session's *start* rather than
+  its last write.
+
+  It stays quiet whenever it cannot be sure — a plain `run` had no conversation,
+  a store may not be verified, and two sessions inside one window cannot be told
+  apart by the clock. Silence there is the decision, not a gap: resuming the
+  wrong conversation is worse than offering none.
+
+  Following that link also works for a branch that has no worktree yet, which is
+  exactly what a restore hands back. It previously matched only existing
+  worktrees, applied nothing, and launched on `main` — against the files the
+  restore existed to replace.
+
 ### Fixed
 
 - **The seccomp refusal named a fix that is often not there.** When a daemon

@@ -521,6 +521,17 @@ func listRoots(f Finding) []string {
 // there: an unrelated conversation does not merely appear on a screen, it is
 // written into a briefing and handed to another agent as what it was doing.
 func PickSession(sessions []Session, from, until time.Time, prompt string) (string, bool) {
+	sess, ok := PickSessionIn(sessions, from, until, prompt)
+	return sess.Path, ok
+}
+
+// PickSessionIn is PickSession returning the whole session rather than its path.
+//
+// Two callers want two different fields of the same answer — the console needs a
+// path to read, and a restore needs an **id** to hand back as a resume link — and
+// the one thing they must not have is two copies of the choosing. So the choice
+// lives here once and PickSession is the thin projection of it.
+func PickSessionIn(sessions []Session, from, until time.Time, prompt string) (Session, bool) {
 	var inWindow []Session
 	for _, sess := range sessions {
 		// A session with no start time is one whose first line could not be read.
@@ -533,31 +544,32 @@ func PickSession(sessions []Session, from, until time.Time, prompt string) (stri
 	}
 	switch len(inWindow) {
 	case 0:
-		return "", false
+		return Session{}, false
 	case 1:
-		return inWindow[0].Path, true
+		return inWindow[0], true
 	}
 
 	// More than one ran in this window, so the clock cannot separate them.
 	if prompt == "" {
-		return "", false
+		return Session{}, false
 	}
 	want := strings.TrimSpace(prompt)
-	var match string
+	var match Session
+	var found bool
 	for _, sess := range inWindow {
 		first, ok := FirstPrompt(sess.Path)
 		if !ok || first != want {
 			continue
 		}
-		if match != "" {
+		if found {
 			// Two sessions opened with the same prompt inside one window. Rare, and
 			// re-running the same task twice is exactly when it happens.
-			return "", false
+			return Session{}, false
 		}
-		match = sess.Path
+		match, found = sess, true
 	}
-	if match == "" {
-		return "", false
+	if !found {
+		return Session{}, false
 	}
 	return match, true
 }

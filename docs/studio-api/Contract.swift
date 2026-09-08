@@ -1902,6 +1902,25 @@ public struct RunRecoverResponse: Codable, Hashable, Sendable {
     /// the snapshot holds — the common case, since /workspace is a bind mount and
     /// the snapshot is the belt, not the braces. See rescue.RestoreResult.
     public var matchesWorkingTree: Bool
+    /// Agent and ResumeSessionID name the conversation this snapshot's run was
+    /// having, when one can be identified — so a client can offer to carry on
+    /// rather than leaving somebody to find it themselves.
+    ///
+    /// Recovering the *work* and recovering the *conversation* are two different
+    /// operations, and a restore only does the first: it puts files back and
+    /// starts nothing. That surprises people, reasonably — "I restored and no
+    /// agent appeared" — and the answer is not to launch one from here (a
+    /// snapshot holds files, not a container, which is what makes it cheap) but
+    /// to hand back the id that makes the second operation one click instead of a
+    /// hunt through `context list`.
+    ///
+    /// Empty when it cannot be identified, which is most of the time and is the
+    /// honest answer: a plain `run` had no conversation, a store may not be
+    /// verified, and several sessions in one window cannot be told apart by the
+    /// clock. Resuming the *wrong* conversation is worse than offering none, so
+    /// silence here is a decision rather than a gap.
+    public var agent: String?
+    public var resumeSessionId: String?
 
     public init(
         sessionId: String,
@@ -1909,7 +1928,9 @@ public struct RunRecoverResponse: Codable, Hashable, Sendable {
         branch: String? = nil,
         patch: String? = nil,
         files: Int,
-        matchesWorkingTree: Bool
+        matchesWorkingTree: Bool,
+        agent: String? = nil,
+        resumeSessionId: String? = nil
     ) {
         self.sessionId = sessionId
         self.mode = mode
@@ -1917,6 +1938,8 @@ public struct RunRecoverResponse: Codable, Hashable, Sendable {
         self.patch = patch
         self.files = files
         self.matchesWorkingTree = matchesWorkingTree
+        self.agent = agent
+        self.resumeSessionId = resumeSessionId
     }
 }
 

@@ -21,7 +21,6 @@ import type {
   LaunchRequest,
   Project,
   RestoreMode,
-  SnapshotSettings,
   SnapshotSettingsUpdate,
   UsageSnapshot,
 } from "@/lib/types";
@@ -866,6 +865,28 @@ export function useRestoreSnapshot(repo?: string) {
         });
       } else {
         toast.success(`Restored onto ${res.branch}`);
+      }
+
+      // A restore puts files back and starts nothing — which is correct, and
+      // reads as nothing having happened. So when the branch and the
+      // conversation are both known, offer the second half rather than leaving
+      // it to be discovered.
+      if (res.branch && res.resumeSessionId) {
+        const q = new URLSearchParams({
+          branch: res.branch,
+          resume: res.resumeSessionId,
+        });
+        if (res.agent) q.set("agent", res.agent);
+        toast("Continue where it left off?", {
+          description: `${res.agent ?? "The agent"}'s conversation from this run can be reopened on ${res.branch}.`,
+          action: {
+            label: "Continue",
+            onClick: () => {
+              window.location.href = `/launch?${q.toString()}`;
+            },
+          },
+          duration: 20000,
+        });
       }
     },
     onError: (err) =>

@@ -902,6 +902,14 @@ export interface RestoreResult {
    * a bind mount, so the snapshot is the belt rather than the braces.
    */
   matchesWorkingTree: boolean;
+  /**
+   * The conversation the restored run was having, when the daemon could
+   * identify one. Empty is the common and honest answer — several sessions in
+   * one window cannot be told apart by the clock, and resuming the wrong one is
+   * worse than offering none.
+   */
+  agent?: string;
+  resumeSessionId?: string;
 }
 
 /** What a restore should do with the snapshot — mirrors studioapi.RestoreMode. */
