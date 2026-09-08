@@ -997,6 +997,15 @@ export function useCheckSnapshotStorage() {
   });
 }
 
+/** The repository's branches, for choosing a base. */
+export function useBranches(repo?: string) {
+  return useQuery({
+    queryKey: ["branches", repo ?? null],
+    queryFn: () => api.branches(repo),
+    staleTime: 30_000,
+  });
+}
+
 export function useSetSnapshotSettings() {
   const qc = useQueryClient();
   return useMutation({

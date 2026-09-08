@@ -211,6 +211,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/doctor", s.handleDoctor)
 	mux.HandleFunc("GET /v1/audit", s.handleAudit)
 	mux.HandleFunc("GET /v1/stats/history", s.handleHistoryStats)
+	mux.HandleFunc("GET /v1/branches", s.handleListBranches)
 	mux.HandleFunc("GET /v1/worktrees", s.handleListWorktrees)
 	mux.HandleFunc("POST /v1/worktrees", s.handleCreateWorktree)
 	// {branch...}, not {branch}: a branch name may contain slashes and usually

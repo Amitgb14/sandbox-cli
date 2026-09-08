@@ -851,6 +851,18 @@ export interface SnapshotS3Check {
   error?: string;
 }
 
+/**
+ * Every local branch in one repository — mirrors studioapi.BranchList.
+ *
+ * For choosing a base. Not the worktree list: that answers which branches *have*
+ * a worktree, and the base is usually `main`, which most often has none.
+ */
+export interface BranchList {
+  branches: string[];
+  /** The checked-out branch; empty on a detached HEAD. */
+  current?: string;
+}
+
 /** The retention configuration — mirrors studioapi.SnapshotSettings. */
 export interface SnapshotSettings {
   retention: string;

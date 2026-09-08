@@ -1489,6 +1489,20 @@ type SnapshotSettingsUpdate struct {
 	S3 *SnapshotS3Settings `json:"s3,omitempty"`
 }
 
+// BranchList is every local branch in one repository, for choosing a base.
+//
+// Names only, plus which one is checked out. A branch decorated with its state
+// would make every caller parse it back apart, and the two questions — "what may
+// I pick" and "what should be selected by default" — have different answers.
+type BranchList struct {
+	// Branches are the repository's local branches, in git's own order.
+	Branches []string `json:"branches"`
+
+	// Current is the checked-out branch, or empty on a detached HEAD — which is a
+	// real state a run can be based on rather than an error.
+	Current string `json:"current,omitempty"`
+}
+
 // LogEventType discriminates a LogEvent. A client switching on it exhaustively
 // knows the difference between "the run's output ended" and "the connection
 // did", which is the one thing a log viewer must not guess: an incomplete

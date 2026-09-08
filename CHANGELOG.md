@@ -13,6 +13,20 @@ version is tagged.
 
 ### Added
 
+- **Base branch is a picker, not a text box.** Studio's Launch screen lists the
+  repository's branches and you choose one; blank still means the daemon's own
+  default, and the checked-out branch is named so you can see what that is.
+
+  It was worth fixing because the base is stamped as a *label* at launch and
+  `fleet land` reads it back to decide what to merge into — so a typo was not
+  caught until landing, by which time the run had already happened against the
+  wrong recorded intent.
+
+  The list is the repository's **branches**, not its worktrees. Those are
+  different and smaller questions: a base is usually the default branch, which
+  most often has no worktree of its own, so a picker built from the worktree list
+  would have omitted the answer people want. `GET /v1/branches` is the new route.
+
 - **You can name the branch a restore creates, from Studio as well as the CLI.**
   The generated name is `sandbox-recover/<branch>-<session>`; leave the new box
   blank for it, or type your own. The CLI has had `--branch` all along — Studio

@@ -40,6 +40,7 @@ import {
   useProjects,
   useRemoveRun,
   useWorktrees,
+  useBranches,
 } from "@/lib/api/queries";
 import { AddRepositoryDialog } from "@/components/shell/add-repository-dialog";
 import { localPreview } from "@/lib/api/endpoints";
@@ -72,6 +73,13 @@ function egressLabel(mode: string): string {
   if (mode === "none") return "none — reaches nothing";
   return "unrestricted";
 }
+
+/**
+ * Radix Select cannot carry "" as a value, and the base's own empty value means
+ * "let the daemon decide" — a real choice rather than an absence. So the option
+ * gets a sentinel and is translated back at the edge.
+ */
+const DEFAULT_BASE = "__default__";
 
 export function LaunchForm() {
   // The daemon's own egress posture, which a launch reports rather than sets.
@@ -196,6 +204,11 @@ export function LaunchForm() {
    * because the list is fetched: applying it repeatedly would fight whatever the
    * person picked afterwards.
    */
+  // The repository's branches, for the base picker. Scoped to whatever the form
+  // is pointed at, so switching repository re-asks rather than offering the
+  // previous one's names.
+  const { data: branches } = useBranches(req.repo ?? undefined);
+
   const deepLinkBranch = search.get("branch");
   const deepLinkApplied = useRef(false);
 
@@ -644,13 +657,40 @@ export function LaunchForm() {
           </Field>
 
           <Field label="Base branch" htmlFor="base">
-            <Input
-              id="base"
+            {/*
+              A picker rather than a text box. The base is stamped as a label at
+              launch and `fleet land` reads it back to decide what to merge into,
+              so a typo is not caught until landing — by which point the run has
+              happened against the wrong recorded intent. The list is the
+              repository's branches, not its worktrees: the base is usually the
+              default branch, which most often has no worktree of its own.
+
+              Empty stays a real choice — the daemon's own default — so a
+              repository whose branches cannot be listed is not a launch nobody
+              can start.
+            */}
+            <Select
               value={req.base ?? ""}
-              onChange={(e) => patch({ base: e.target.value || null })}
-              placeholder="main"
-              className="font-mono"
-            />
+              onValueChange={(v) =>
+                patch({ base: v === DEFAULT_BASE ? null : v })
+              }
+            >
+              <SelectTrigger id="base" className="font-mono">
+                <SelectValue placeholder={branches?.current ?? "main"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={DEFAULT_BASE}>
+                  <span className="text-muted-foreground">
+                    default{branches?.current ? ` (${branches.current})` : ""}
+                  </span>
+                </SelectItem>
+                {(branches?.branches ?? []).map((b) => (
+                  <SelectItem key={b} value={b}>
+                    <span className="font-mono">{b}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Hint>
               Stamped as a label at launch, because by landing time the checkout
               may be on a different branch — and &ldquo;the branch checked out

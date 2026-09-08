@@ -22,6 +22,7 @@ import {
 } from "@/lib/mock/data";
 import { BASELINE_EGRESS, RESERVED_ENV } from "@/lib/constants";
 import type {
+  BranchList,
   Agent,
   Commit,
   HistoryStats,
@@ -588,6 +589,25 @@ export const api = {
       body,
       liveOnly: true,
     }),
+
+  /**
+   * The repository's branches, for the base picker.
+   *
+   * Scoped to one repository and never `all`: a base branch is what a run will
+   * be landed into, so names from another repository would mean nothing where
+   * they were offered.
+   */
+  branches: (repo?: string) =>
+    request<BranchList>(
+      `/v1/branches${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`,
+      {
+        fixture: () => ({
+          branches: ["main", "feat/studio-api", "fix/console-markdown"],
+          current: "main",
+        }),
+        latencyMs: 120,
+      },
+    ),
 
   worktrees: (repo?: string) =>
     // `repo=all` when nothing is scoped, because that is what the picker's "All
