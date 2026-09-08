@@ -863,6 +863,11 @@ export function useRestoreSnapshot(repo?: string) {
           description:
             "The working tree already matched it — nothing was actually missing.",
         });
+      } else if (res.alreadyRestored) {
+        toast.success(`${res.branch} already holds this snapshot`, {
+          description:
+            "It was restored before — nothing was created this time.",
+        });
       } else {
         toast.success(`Restored onto ${res.branch}`);
       }

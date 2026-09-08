@@ -539,6 +539,14 @@ function RestoreDialog({
   repo?: string;
 }) {
   const [mode, setMode] = useState<RestoreMode>("branch");
+  /**
+   * Empty means the generated name, which is the CLI's rule for `--branch` too:
+   * `sandbox-recover/<branch>-<session>`. Left blank rather than prefilled with
+   * the computed default, because computing it here means a second copy of the
+   * daemon's `sanitizeRef` in TypeScript, and a name that drifts from the one
+   * git is actually given is worse than a placeholder.
+   */
+  const [branch, setBranch] = useState("");
   const restore = useRestoreSnapshot(repo);
 
   return (
@@ -587,6 +595,23 @@ function RestoreDialog({
             </option>
           </select>
         </div>
+        {mode === "branch" && (
+          <div className="space-y-1.5">
+            <Label htmlFor="restore-branch">Branch name (optional)</Label>
+            <Input
+              id="restore-branch"
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              placeholder={`sandbox-recover/${snapshot?.branch ?? "…"}-${snapshot?.id ?? ""}`}
+            />
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Leave it blank for the name above. That name embeds the session
+              id, so if it already exists this snapshot has been restored before
+              and the branch already holds it — name a different one only when
+              you want a second copy.
+            </p>
+          </div>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
@@ -597,7 +622,16 @@ function RestoreDialog({
             onClick={() => {
               if (!snapshot) return;
               restore.mutate(
-                { id: snapshot.id, mode, repo: snapshot.repoId },
+                {
+                  id: snapshot.id,
+                  mode,
+                  repo: snapshot.repoId,
+                  // Only where it means anything: worktree and patch modes make
+                  // no branch, and sending a name for them would be a setting
+                  // the daemon quietly ignores.
+                  branch:
+                    mode === "branch" ? branch.trim() || undefined : undefined,
+                },
                 { onSuccess: () => onClose() },
               );
             }}

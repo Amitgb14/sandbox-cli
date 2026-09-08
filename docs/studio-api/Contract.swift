@@ -1921,6 +1921,12 @@ public struct RunRecoverResponse: Codable, Hashable, Sendable {
     /// silence here is a decision rather than a gap.
     public var agent: String?
     public var resumeSessionId: String?
+    /// AlreadyRestored reports that the branch was there before this call, holding
+    /// this same snapshot, so nothing was created. The generated name embeds the
+    /// session id — the branch existing can only mean an earlier restore of this
+    /// snapshot succeeded — and a client that says "restored" for that sends
+    /// somebody looking for a change made days ago.
+    public var alreadyRestored: Bool?
 
     public init(
         sessionId: String,
@@ -1930,7 +1936,8 @@ public struct RunRecoverResponse: Codable, Hashable, Sendable {
         files: Int,
         matchesWorkingTree: Bool,
         agent: String? = nil,
-        resumeSessionId: String? = nil
+        resumeSessionId: String? = nil,
+        alreadyRestored: Bool? = nil
     ) {
         self.sessionId = sessionId
         self.mode = mode
@@ -1940,6 +1947,7 @@ public struct RunRecoverResponse: Codable, Hashable, Sendable {
         self.matchesWorkingTree = matchesWorkingTree
         self.agent = agent
         self.resumeSessionId = resumeSessionId
+        self.alreadyRestored = alreadyRestored
     }
 }
 

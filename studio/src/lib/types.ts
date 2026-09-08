@@ -910,6 +910,11 @@ export interface RestoreResult {
    */
   agent?: string;
   resumeSessionId?: string;
+  /**
+   * The branch was already there holding this snapshot, so nothing was created.
+   * Saying "restored" for this sends somebody looking for a change made days ago.
+   */
+  alreadyRestored?: boolean;
 }
 
 /** What a restore should do with the snapshot — mirrors studioapi.RestoreMode. */

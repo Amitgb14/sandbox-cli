@@ -13,6 +13,21 @@ version is tagged.
 
 ### Added
 
+- **You can name the branch a restore creates, from Studio as well as the CLI.**
+  The generated name is `sandbox-recover/<branch>-<session>`; leave the new box
+  blank for it, or type your own. The CLI has had `--branch` all along — Studio
+  had no way to pass one, so the refusal it showed you named a flag that did not
+  exist where you were reading it.
+
+- **Restoring a snapshot that is already restored now succeeds.** The generated
+  name embeds the session id, so the branch existing can only mean an earlier
+  restore of *this* snapshot worked — and refusing sent people to invent a second
+  name for a second branch holding a byte-identical tree. It now reports
+  `"<branch>" already holds this snapshot — nothing to do` and creates nothing.
+
+  A name that exists and points somewhere **else** is a real collision and is
+  still refused, without moving anything.
+
 - **A restore in Studio offers to carry the conversation on.** Restoring put
   files back and stopped, which is correct — a snapshot holds files, not a
   container — and read as nothing having happened: "I restored and no agent

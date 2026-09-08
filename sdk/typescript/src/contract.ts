@@ -1408,6 +1408,14 @@ export interface RunRecoverResponse {
    */
   agent?: string;
   resumeSessionId?: string;
+  /**
+   * AlreadyRestored reports that the branch was there before this call, holding
+   * this same snapshot, so nothing was created. The generated name embeds the
+   * session id — the branch existing can only mean an earlier restore of this
+   * snapshot succeeded — and a client that says "restored" for that sends
+   * somebody looking for a change made days ago.
+   */
+  alreadyRestored?: boolean;
 }
 
 /**
