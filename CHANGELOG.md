@@ -13,6 +13,19 @@ version is tagged.
 
 ### Fixed
 
+- **The attached terminal says why a full-screen agent will not scroll.** It was
+  reported as unscrollable. Measured, it is two behaviours and both are correct:
+  the normal buffer scrolls through its 5000-line scrollback, and a full-screen
+  agent runs in the **alternate screen buffer**, which is one screen tall in this
+  and every other terminal — there is nothing above the viewport to reach. The
+  wheel is not dead there either; it is handed to the agent as an arrow key, so
+  the application scrolls its own content, which is the most a terminal can do
+  for a full-screen program.
+
+  Nothing said any of that, so it read as broken. The panel now does, and points
+  at the Console tab, which holds the conversation and does scroll.
+
+
 - **The seccomp refusal named a fix that is often not there.** When a daemon
   applies no syscall filter, sandbox-cli warned (dev) or refused (prod) and told
   you to remove `"seccomp-profile": "unconfined"` from Docker Desktop's Settings →

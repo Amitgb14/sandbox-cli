@@ -35,6 +35,23 @@ import "@xterm/xterm/css/xterm.css";
  *   - It does not buffer scrollback across mounts. Detaching and attaching
  *     again gives you what the agent paints next, which is what attaching to a
  *     live pty does everywhere else.
+ *
+ * And one thing it cannot do, reported as a bug and measured to be neither ours
+ * nor fixable here (#152): **a full-screen agent has no scrollback.** It switches
+ * to the alternate screen buffer on startup, which is exactly one screen tall in
+ * this and every other terminal, so there is nothing above the viewport to scroll
+ * to. `scrollback: 5000` below applies to the normal buffer, where the wheel does
+ * move the viewport — measured both ways in e2e/scrollback.spec.ts.
+ *
+ * What the wheel does instead, in the alternate buffer, is become an arrow key
+ * sent to the agent, so the *application* scrolls its own content. That is the
+ * most a terminal can do for a full-screen program, and it is downstream of the
+ * mouse-mode decision below in a way worth stating: xterm only converts the
+ * wheel `if (!s.wheel)`, meaning only while the application has *not* taken the
+ * wheel through mouse tracking. Swallowing those modes to keep selection working
+ * is also what leaves the wheel free to be an arrow key. Grant them back and the
+ * wheel becomes a mouse report, `isMouseReport` drops it, and the gesture does
+ * nothing at all in the one buffer where it was the only thing on offer.
  */
 /**
  * Whether a chunk from the terminal is a mouse report rather than typing.
@@ -98,8 +115,9 @@ export function AttachedTerminal({
         fontFamily:
           'ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace',
         theme: { background: "#0b0b0c" },
-        // The agent redraws for the size we send it, so this is only for
-        // output that has already scrolled past.
+        // The normal buffer only. A full-screen agent runs in the alternate
+        // one, which has no scrollback anywhere — see the note at the top of
+        // this file. This is what a plain command's output scrolls through.
         scrollback: 5000,
       });
       const fit = new FitAddon();
@@ -125,13 +143,21 @@ export function AttachedTerminal({
        * hand-rolled filter would have to reassemble them. Returning true means
        * "handled", which is what stops the default from running.
        */
-      const MOUSE_MODES = new Set([9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016]);
+      const MOUSE_MODES = new Set([
+        9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016,
+      ]);
       const swallowMouseMode = (params: (number | number[])[]) => {
         const wanted = params.map((p) => (Array.isArray(p) ? p[0] : p));
         return wanted.some((p) => MOUSE_MODES.has(p));
       };
-      term.parser.registerCsiHandler({ prefix: "?", final: "h" }, swallowMouseMode);
-      term.parser.registerCsiHandler({ prefix: "?", final: "l" }, swallowMouseMode);
+      term.parser.registerCsiHandler(
+        { prefix: "?", final: "h" },
+        swallowMouseMode,
+      );
+      term.parser.registerCsiHandler(
+        { prefix: "?", final: "l" },
+        swallowMouseMode,
+      );
 
       /**
        * Ctrl-Shift-C copies, the way a terminal does it.
@@ -173,7 +199,9 @@ export function AttachedTerminal({
       const pushSize = () => {
         fit.fit();
         api.resizeConsole(run.id, term.rows, term.cols).catch((e: unknown) => {
-          setError(e instanceof Error ? e.message : "Could not size the terminal.");
+          setError(
+            e instanceof Error ? e.message : "Could not size the terminal.",
+          );
         });
       };
 
@@ -198,7 +226,9 @@ export function AttachedTerminal({
         } catch (e: unknown) {
           // Same reasoning as pushSize: if this fails the screen stays empty,
           // so saying why is the difference between a bug report and a fix.
-          setError(e instanceof Error ? e.message : "Could not size the terminal.");
+          setError(
+            e instanceof Error ? e.message : "Could not size the terminal.",
+          );
         }
       };
 
@@ -284,7 +314,9 @@ export function AttachedTerminal({
           // conversation is not lost — so this ends with the way back into it
           // rather than just an obituary. Printed into the terminal itself
           // because that is where somebody is looking when it stops.
-          term.write("\r\n\x1b[2m— the stream ended; the run has finished —\x1b[0m\r\n");
+          term.write(
+            "\r\n\x1b[2m— the stream ended; the run has finished —\x1b[0m\r\n",
+          );
           if (resumeRef.current) {
             term.write(`\x1b[2m  carry it on:\x1b[0m ${resumeRef.current}\r\n`);
           }
@@ -312,7 +344,9 @@ export function AttachedTerminal({
         <p className="text-xs text-muted-foreground">
           Attached to {run.name}. Everything you type goes to the agent —
           including Ctrl-C, which interrupts it rather than closing this. Select
-          to copy (⌘C, or Ctrl-Shift-C).
+          to copy (⌘C, or Ctrl-Shift-C). A full-screen agent draws one screen
+          with no scrollback, so the wheel scrolls the agent rather than this
+          panel; the Console tab has the conversation, and it does scroll.
         </p>
         <Button
           variant="outline"
