@@ -11,6 +11,60 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **Base branch is a picker, not a text box.** Studio's Launch screen lists the
+  repository's branches and you choose one; blank still means the daemon's own
+  default, and the checked-out branch is named so you can see what that is.
+
+  It was worth fixing because the base is stamped as a *label* at launch and
+  `fleet land` reads it back to decide what to merge into — so a typo was not
+  caught until landing, by which time the run had already happened against the
+  wrong recorded intent.
+
+  The list is the repository's **branches**, not its worktrees. Those are
+  different and smaller questions: a base is usually the default branch, which
+  most often has no worktree of its own, so a picker built from the worktree list
+  would have omitted the answer people want. `GET /v1/branches` is the new route.
+
+- **You can name the branch a restore creates, from Studio as well as the CLI.**
+  The generated name is `sandbox-recover/<branch>-<session>`; leave the new box
+  blank for it, or type your own. The CLI has had `--branch` all along — Studio
+  had no way to pass one, so the refusal it showed you named a flag that did not
+  exist where you were reading it.
+
+- **Restoring a snapshot that is already restored now succeeds.** The generated
+  name embeds the session id, so the branch existing can only mean an earlier
+  restore of *this* snapshot worked — and refusing sent people to invent a second
+  name for a second branch holding a byte-identical tree. It now reports
+  `"<branch>" already holds this snapshot — nothing to do` and creates nothing.
+
+  A name that exists and points somewhere **else** is a real collision and is
+  still refused, without moving anything.
+
+- **A restore in Studio offers to carry the conversation on.** Restoring put
+  files back and stopped, which is correct — a snapshot holds files, not a
+  container — and read as nothing having happened: "I restored and no agent
+  started." Recovering the work and recovering the conversation are two
+  operations, and only the first had a button.
+
+  A restore that lands on a branch now says whose conversation that run was
+  having, and offers **Continue** — one click to the Launch screen with the
+  branch and the session already filled in. The daemon identifies it the way
+  everything else here does: by agent, project and the run's own time window,
+  all three already in the manifest, against the session's *start* rather than
+  its last write.
+
+  It stays quiet whenever it cannot be sure — a plain `run` had no conversation,
+  a store may not be verified, and two sessions inside one window cannot be told
+  apart by the clock. Silence there is the decision, not a gap: resuming the
+  wrong conversation is worse than offering none.
+
+  Following that link also works for a branch that has no worktree yet, which is
+  exactly what a restore hands back. It previously matched only existing
+  worktrees, applied nothing, and launched on `main` — against the files the
+  restore existed to replace.
+
 ### Fixed
 
 - **The seccomp refusal named a fix that is often not there.** When a daemon

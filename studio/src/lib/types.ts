@@ -851,6 +851,18 @@ export interface SnapshotS3Check {
   error?: string;
 }
 
+/**
+ * Every local branch in one repository — mirrors studioapi.BranchList.
+ *
+ * For choosing a base. Not the worktree list: that answers which branches *have*
+ * a worktree, and the base is usually `main`, which most often has none.
+ */
+export interface BranchList {
+  branches: string[];
+  /** The checked-out branch; empty on a detached HEAD. */
+  current?: string;
+}
+
 /** The retention configuration — mirrors studioapi.SnapshotSettings. */
 export interface SnapshotSettings {
   retention: string;
@@ -902,6 +914,19 @@ export interface RestoreResult {
    * a bind mount, so the snapshot is the belt rather than the braces.
    */
   matchesWorkingTree: boolean;
+  /**
+   * The conversation the restored run was having, when the daemon could
+   * identify one. Empty is the common and honest answer — several sessions in
+   * one window cannot be told apart by the clock, and resuming the wrong one is
+   * worse than offering none.
+   */
+  agent?: string;
+  resumeSessionId?: string;
+  /**
+   * The branch was already there holding this snapshot, so nothing was created.
+   * Saying "restored" for this sends somebody looking for a change made days ago.
+   */
+  alreadyRestored?: boolean;
 }
 
 /** What a restore should do with the snapshot — mirrors studioapi.RestoreMode. */

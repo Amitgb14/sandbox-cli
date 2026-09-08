@@ -520,44 +520,74 @@ func listRoots(f Finding) []string {
 // which is the exact bug the first one's comments describe, and it fails worse
 // there: an unrelated conversation does not merely appear on a screen, it is
 // written into a briefing and handed to another agent as what it was doing.
-func PickSession(sessions []Session, from, until time.Time, prompt string) (string, bool) {
-	var inWindow []Session
+// SessionsIn narrows sessions to those that **began** inside a window.
+//
+// On `Started`, never on `Modified`, and that is the whole of it: a session
+// still being appended to has a recent mtime and says nothing about which run it
+// belongs to, which is how a two-day-old conversation matched a run that had
+// just started. A session that began before the run did cannot be that run's.
+//
+// A session with no start time is one whose first line could not be read, and is
+// skipped rather than admitted — a missing value cannot pass the filter that
+// keeps another run's conversation off the screen.
+//
+// Shared because two callers want the same candidates and different answers
+// about ambiguity: a terminal can print "this one, and 2 others" and let a person
+// look, where a button offering to resume has no way to say that and must
+// decline. Splitting it here is what lets them agree on the facts and differ on
+// the policy.
+func SessionsIn(sessions []Session, from, until time.Time) []Session {
+	var in []Session
 	for _, sess := range sessions {
-		// A session with no start time is one whose first line could not be read.
-		// Skipped rather than admitted: a value that is missing cannot pass the
-		// filter that keeps another run's conversation off the screen.
 		if sess.Started.IsZero() || sess.Started.Before(from) || sess.Started.After(until) {
 			continue
 		}
-		inWindow = append(inWindow, sess)
+		in = append(in, sess)
 	}
+	return in
+}
+
+func PickSession(sessions []Session, from, until time.Time, prompt string) (string, bool) {
+	sess, ok := PickSessionIn(sessions, from, until, prompt)
+	return sess.Path, ok
+}
+
+// PickSessionIn is PickSession returning the whole session rather than its path.
+//
+// Two callers want two different fields of the same answer — the console needs a
+// path to read, and a restore needs an **id** to hand back as a resume link — and
+// the one thing they must not have is two copies of the choosing. So the choice
+// lives here once and PickSession is the thin projection of it.
+func PickSessionIn(sessions []Session, from, until time.Time, prompt string) (Session, bool) {
+	inWindow := SessionsIn(sessions, from, until)
 	switch len(inWindow) {
 	case 0:
-		return "", false
+		return Session{}, false
 	case 1:
-		return inWindow[0].Path, true
+		return inWindow[0], true
 	}
 
 	// More than one ran in this window, so the clock cannot separate them.
 	if prompt == "" {
-		return "", false
+		return Session{}, false
 	}
 	want := strings.TrimSpace(prompt)
-	var match string
+	var match Session
+	var found bool
 	for _, sess := range inWindow {
 		first, ok := FirstPrompt(sess.Path)
 		if !ok || first != want {
 			continue
 		}
-		if match != "" {
+		if found {
 			// Two sessions opened with the same prompt inside one window. Rare, and
 			// re-running the same task twice is exactly when it happens.
-			return "", false
+			return Session{}, false
 		}
-		match = sess.Path
+		match, found = sess, true
 	}
-	if match == "" {
-		return "", false
+	if !found {
+		return Session{}, false
 	}
 	return match, true
 }

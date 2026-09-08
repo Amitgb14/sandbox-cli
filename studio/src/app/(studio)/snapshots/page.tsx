@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Camera,
@@ -80,6 +80,24 @@ import type { RestoreMode, Snapshot } from "@/lib/types";
  * why. They are still *listed*: hiding them would make this table claim they do
  * not exist, and the retention on one is still worth seeing and changing.
  */
+/**
+ * The branch name a restore will generate, as the daemon builds it.
+ *
+ * `sanitizeRef` maps "/" to "-", so a snapshot taken on `feat/foo` restores onto
+ * `sandbox-recover/feat-foo-<id>`. Showing the raw branch made the placeholder
+ * disagree with the field's own help text — "leave it blank for the name above"
+ * — and a user who typed what they saw got a second, differently-named branch.
+ *
+ * A copy of one substitution rather than of the daemon's whole rule, which is
+ * why it is a placeholder and not a prefilled value: if the two ever diverge the
+ * blank field still produces the right name, and only the hint is wrong.
+ */
+function defaultRestoreBranch(snapshot: Snapshot | null): string {
+  if (!snapshot) return "sandbox-recover/…";
+  const branch = (snapshot.branch || "detached").replace(/\//g, "-");
+  return `sandbox-recover/${branch}-${snapshot.id}`;
+}
+
 export default function SnapshotsPage() {
   const repoFilter = useUi((s) => s.repoFilter);
   // null is the picker's "All repositories"; the endpoints spell that repo=all.
@@ -539,7 +557,25 @@ function RestoreDialog({
   repo?: string;
 }) {
   const [mode, setMode] = useState<RestoreMode>("branch");
+  /**
+   * Empty means the generated name, which is the CLI's rule for `--branch` too:
+   * `sandbox-recover/<branch>-<session>`. Left blank rather than prefilled with
+   * the computed default, because computing it here means a second copy of the
+   * daemon's `sanitizeRef` in TypeScript, and a name that drifts from the one
+   * git is actually given is worse than a placeholder.
+   */
+  const [branch, setBranch] = useState("");
   const restore = useRestoreSnapshot(repo);
+
+  // The dialog is rendered unconditionally and merely hidden, so its state
+  // outlives a close. Typing a name for snapshot A, cancelling, then restoring
+  // snapshot B put B on a branch named for A — or tripped the "exists and does
+  // not point at this snapshot" refusal for a reason nobody could connect to
+  // what they had done. Cleared when the snapshot changes rather than on close,
+  // because close is not the only way out of it.
+  useEffect(() => {
+    setBranch("");
+  }, [snapshot?.id]);
 
   return (
     <Dialog open={!!snapshot} onOpenChange={(o) => !o && onClose()}>
@@ -587,6 +623,23 @@ function RestoreDialog({
             </option>
           </select>
         </div>
+        {mode === "branch" && (
+          <div className="space-y-1.5">
+            <Label htmlFor="restore-branch">Branch name (optional)</Label>
+            <Input
+              id="restore-branch"
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              placeholder={defaultRestoreBranch(snapshot)}
+            />
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Leave it blank for the name above. That name embeds the session
+              id, so if it already exists this snapshot has been restored before
+              and the branch already holds it — name a different one only when
+              you want a second copy.
+            </p>
+          </div>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
@@ -597,7 +650,16 @@ function RestoreDialog({
             onClick={() => {
               if (!snapshot) return;
               restore.mutate(
-                { id: snapshot.id, mode, repo: snapshot.repoId },
+                {
+                  id: snapshot.id,
+                  mode,
+                  repo: snapshot.repoId,
+                  // Only where it means anything: worktree and patch modes make
+                  // no branch, and sending a name for them would be a setting
+                  // the daemon quietly ignores.
+                  branch:
+                    mode === "branch" ? branch.trim() || undefined : undefined,
+                },
                 { onSuccess: () => onClose() },
               );
             }}
