@@ -86,21 +86,25 @@ func findConversation(s rescue.Session) (conversation, bool) {
 		return conversation{}, false
 	}
 
-	from := s.StartedAt.Add(-conversationSlackBefore)
-	until := s.Activity().Add(conversationSlackAfter)
-
-	var in []agentctx.Session
-	for _, sess := range sessions {
-		if sess.Modified.Before(from) || sess.Modified.After(until) {
-			continue
-		}
-		in = append(in, sess)
-	}
+	// agentctx.SessionsIn, not a loop of its own, and the change it brought is
+	// the point of sharing it: this used to filter on a transcript's **last
+	// write**, where the window belongs against when a session *began*. A
+	// session still being appended to has a recent mtime and says nothing about
+	// which run it belongs to — the misattribution console.go documents from a
+	// real one, which lived here too and would have diverged further the moment
+	// Studio grew the same feature.
+	//
+	// What is deliberately *not* shared is what several candidates mean.
+	// agentctx.ConversationFor declines, because it answers a button that would
+	// silently resume one. Here a person is reading a terminal and can be told
+	// the truth: this one, and how many others sat in the same window.
+	in := agentctx.SessionsIn(sessions, s.StartedAt.Add(-conversationSlackBefore),
+		s.Activity().Add(conversationSlackAfter))
 	if len(in) == 0 {
 		return conversation{}, false
 	}
 	// agentctx.List returns newest first, so the first survivor is the one whose
-	// last write is closest to the end of the run.
+	// session began closest to the end of the run.
 	return conversation{
 		agent:      f.Agent,
 		session:    in[0],
