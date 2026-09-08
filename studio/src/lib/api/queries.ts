@@ -21,7 +21,6 @@ import type {
   LaunchRequest,
   Project,
   RestoreMode,
-  SnapshotSettings,
   SnapshotSettingsUpdate,
   UsageSnapshot,
 } from "@/lib/types";
@@ -848,7 +847,7 @@ export function useRestoreSnapshot(repo?: string) {
         branch: vars.branch,
         repo: vars.repo ?? repo,
       }),
-    onSuccess: (res) => {
+    onSuccess: (res, vars) => {
       // A restore changes the repository, so what the worktree screens show
       // about branches and dirty files is now stale.
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
@@ -856,6 +855,16 @@ export function useRestoreSnapshot(repo?: string) {
         toast.success(
           `Restored ${res.files} file${res.files === 1 ? "" : "s"} into the worktree`,
         );
+      } else if (res.alreadyRestored) {
+        // Tested *before* matchesWorkingTree, which is also true here and is
+        // usually true after a crash — /workspace is a bind mount, so the files
+        // were never gone. The other order meant the commonest already-restored
+        // case (restore, close the tab, restore again) still said "Restored onto
+        // X", which is the message this exists to replace.
+        toast.success(`${res.branch} already holds this snapshot`, {
+          description:
+            "It was restored before — nothing was created this time.",
+        });
       } else if (res.matchesWorkingTree) {
         // Worth saying: the common case after a crash is that nothing was
         // missing, and "created branch X" alone sends somebody looking there for
@@ -866,6 +875,36 @@ export function useRestoreSnapshot(repo?: string) {
         });
       } else {
         toast.success(`Restored onto ${res.branch}`);
+      }
+
+      // A restore puts files back and starts nothing — which is correct, and
+      // reads as nothing having happened. So when the branch and the
+      // conversation are both known, offer the second half rather than leaving
+      // it to be discovered.
+      if (res.branch && res.resumeSessionId) {
+        const q = new URLSearchParams({
+          branch: res.branch,
+          resume: res.resumeSessionId,
+        });
+        if (res.agent) q.set("agent", res.agent);
+        // The repository the row belongs to, not whatever the sidebar is scoped
+        // to. Without it Launch adopts the daemon's *default* project, the
+        // deep-linked branch does not exist there, and the fallback cuts a new
+        // empty branch from that repository's HEAD — resuming the conversation
+        // against the wrong tree, which is the hardest failure here to see
+        // afterwards.
+        const linkRepo = vars.repo ?? repo;
+        if (linkRepo) q.set("repo", linkRepo);
+        toast("Continue where it left off?", {
+          description: `${res.agent ?? "The agent"}'s conversation from this run can be reopened on ${res.branch}.`,
+          action: {
+            label: "Continue",
+            onClick: () => {
+              window.location.href = `/launch?${q.toString()}`;
+            },
+          },
+          duration: 20000,
+        });
       }
     },
     onError: (err) =>
@@ -968,6 +1007,15 @@ export function useCheckSnapshotStorage() {
       toast.error("Could not reach the daemon", {
         description: err instanceof Error ? err.message : String(err),
       }),
+  });
+}
+
+/** The repository's branches, for choosing a base. */
+export function useBranches(repo?: string) {
+  return useQuery({
+    queryKey: ["branches", repo ?? null],
+    queryFn: () => api.branches(repo),
+    staleTime: 30_000,
   });
 }
 

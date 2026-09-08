@@ -26,9 +26,16 @@ import (
 // the window is generous on the late side (a final write can follow the manifest
 // being closed) and tight on the early side, where an earlier conversation in
 // the same project would otherwise be swept in.
+//
+// Shared with Studio through agentctx.ConversationSlack rather than kept here:
+// the two callers correlate the same run against the same store, and a window
+// that differed by thirteen minutes meant `recover restore` could name a session
+// the browser would not — the "one id in the terminal and another in the
+// browser" the shared correlation exists to prevent, surviving in the one input
+// that was still local.
 const (
-	conversationSlackAfter  = 15 * time.Minute
-	conversationSlackBefore = 2 * time.Minute
+	conversationSlackAfter  = agentctx.ConversationSlackAfter
+	conversationSlackBefore = agentctx.ConversationSlackBefore
 )
 
 // The two lookups this needs are vars so tests can pin them. Everything else
@@ -86,21 +93,27 @@ func findConversation(s rescue.Session) (conversation, bool) {
 		return conversation{}, false
 	}
 
-	from := s.StartedAt.Add(-conversationSlackBefore)
-	until := s.Activity().Add(conversationSlackAfter)
-
-	var in []agentctx.Session
-	for _, sess := range sessions {
-		if sess.Modified.Before(from) || sess.Modified.After(until) {
-			continue
-		}
-		in = append(in, sess)
-	}
+	// agentctx.SessionsIn, not a loop of its own, and the change it brought is
+	// the point of sharing it: this used to filter on a transcript's **last
+	// write**, where the window belongs against when a session *began*. A
+	// session still being appended to has a recent mtime and says nothing about
+	// which run it belongs to — the misattribution console.go documents from a
+	// real one, which lived here too and would have diverged further the moment
+	// Studio grew the same feature.
+	//
+	// What is deliberately *not* shared is what several candidates mean.
+	// agentctx.ConversationFor declines, because it answers a button that would
+	// silently resume one. Here a person is reading a terminal and can be told
+	// the truth: this one, and how many others sat in the same window.
+	in := agentctx.SessionsIn(sessions, s.StartedAt.Add(-conversationSlackBefore),
+		s.Activity().Add(conversationSlackAfter))
 	if len(in) == 0 {
 		return conversation{}, false
 	}
-	// agentctx.List returns newest first, so the first survivor is the one whose
-	// last write is closest to the end of the run.
+	// agentctx.List sorts by *last write*, so this is the most recently written
+	// of the candidates — not necessarily the latest to have started. With one
+	// survivor the distinction is moot, and with several the count below is what
+	// the reader is actually given to act on.
 	return conversation{
 		agent:      f.Agent,
 		session:    in[0],
@@ -119,6 +132,15 @@ func reportConversation(s rescue.Session) {
 	c, ok := findConversation(s)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "  The %s conversation from this run could not be located.\n", s.Agent)
+		if !agentctx.TimestampsAvailable(s.Agent) {
+			// Not "nothing matched" — nothing *could*. This agent's transcripts are
+			// listed without a start time, so a run's window has nothing to be
+			// applied to, and saying so is the difference between a limit somebody
+			// can work around and a silence they will keep re-running.
+			fmt.Fprintf(os.Stderr, "  %s transcripts carry no start time, so they cannot be matched to a run.\n", s.Agent)
+			fmt.Fprintf(os.Stderr, "  List them and pick by hand:\n    sandbox-cli %s context list\n", s.Agent)
+			return
+		}
 		// Runs from before the per-project history mount was fixed all landed in
 		// one shared bucket and cannot be attributed to a project, so the
 		// correlation above will never find them. Pointing straight at that bucket

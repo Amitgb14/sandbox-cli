@@ -156,6 +156,12 @@ type RestoreResult struct {
 	// something that was never missing, while the thing that *is* gone after a
 	// kill — the conversation — goes unmentioned.
 	MatchesWorkingTree bool
+
+	// AlreadyRestored reports that the branch was there before this call, holding
+	// this same snapshot — so nothing was created and nothing needed to be. The
+	// generated name embeds the session id, so that can only mean an earlier
+	// restore of this snapshot succeeded.
+	AlreadyRestored bool
 }
 
 // Restore brings a snapshot back. The default mode never touches the working
@@ -218,8 +224,27 @@ func Restore(dir, id string, opts RestoreOptions) (RestoreResult, error) {
 			}
 			name = RestoreBranchPrefix + sanitizeRef(branch) + "-" + snap.ID
 		}
-		if _, err := run(context.Background(), snap.Repo, nil, "show-ref", "--verify", "--quiet", "refs/heads/"+name); err == nil {
-			return res, fmt.Errorf("branch %q already exists; pass --branch NAME to choose another", name)
+		// A branch that already points at this snapshot is this restore, already
+		// done. The generated name embeds the **session id**, so the name existing
+		// can only mean a previous restore of this same snapshot succeeded — and
+		// refusing then sent people to invent a second name for a second branch
+		// holding a byte-identical tree. Restoring twice is a thing people do
+		// (look, close the tab, come back), and the postcondition they want
+		// already holds.
+		//
+		// A name that exists and points somewhere *else* is a real collision —
+		// something took the name — and is still refused. `AlreadyRestored` is on
+		// the result rather than in the message so a caller can say it in its own
+		// words; a CLI prints a line, a browser has a button.
+		if existing, err := run(context.Background(), snap.Repo, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+name); err == nil {
+			if existing != snap.Commit {
+				return res, fmt.Errorf("branch %q already exists and does not point at this snapshot; choose another name", name)
+			}
+			res.Branch = name
+			res.AlreadyRestored = true
+			res.Files = countFiles(snap)
+			res.MatchesWorkingTree = matchesWorkingTree(dir, snap)
+			return res, nil
 		}
 		if _, err := run(context.Background(), snap.Repo, nil, "branch", name, snap.Commit); err != nil {
 			return res, err

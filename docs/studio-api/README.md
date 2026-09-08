@@ -195,6 +195,7 @@ it speaks; the endpoints are equally usable with curl.
 | GET | `/v1/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
 | GET | `/v1/runs/{id}/metrics` | One resource sample, or a live stream with `?stream=1` |
 | GET | `/v1/stats` | One resource sample per live run, host-wide |
+| GET | `/v1/branches` | Every local branch in one repository, and which is checked out — for choosing a base |
 | GET/POST | `/v1/worktrees` | List (`?repo=`, or `?repo=all` for every registered repository) / create managed git worktrees |
 | GET | `/v1/worktrees/{branch}/diff` | What this branch has beyond its base, plus its uncommitted work |
 | GET/DELETE | `/v1/worktrees/{branch}` | Read / remove (`?repo=`, `?force=1`) one worktree |
@@ -297,6 +298,23 @@ refused with `409` rather than accepted and silently outranked at the next
 restart; a pinned window comes back as `configRetention` /
 `configManualRetention` and a write to it is ignored — including in the running
 daemon, which is the half that used to be missed.
+
+### Branches, which are not worktrees
+
+`GET /v1/branches` lists one repository's local branches and names the
+checked-out one. It exists because a base branch is not free text: it is stamped
+as a label at launch, and `fleet land` reads that label back to decide what to
+merge into — so a typo survives the run and surfaces at landing, against an
+intent nothing can correct by then.
+
+It is deliberately not `/v1/worktrees`, which answers a different and smaller
+question. A base is usually the repository's default branch, which most often has
+no worktree of its own, so a picker built from that route would omit exactly the
+answer people are looking for.
+
+There is no `?repo=all`. A base belongs to one repository by construction — it is
+what a run there will be landed into — and a union across repositories would
+offer names that mean nothing where they were chosen.
 
 ### Which repository a request is about
 

@@ -293,7 +293,15 @@ func reportRestore(res rescue.RestoreResult, mode rescue.RestoreMode) {
 		fmt.Fprintf(os.Stderr, "  Keep it with: git commit\n")
 	default:
 		fmt.Println(res.Branch)
-		fmt.Fprintf(os.Stderr, "sandbox-cli: created branch %q from %s", res.Branch, was)
+		if res.AlreadyRestored {
+			// Not "created": nothing was. The branch name embeds the session id, so
+			// this snapshot had been restored before and the branch already holds
+			// it — saying "created" would send somebody looking for a change that
+			// happened days ago.
+			fmt.Fprintf(os.Stderr, "sandbox-cli: %q already holds this snapshot — nothing to do", res.Branch)
+		} else {
+			fmt.Fprintf(os.Stderr, "sandbox-cli: created branch %q from %s", res.Branch, was)
+		}
 		if res.Files > 0 {
 			fmt.Fprintf(os.Stderr, " (%d file(s) changed)", res.Files)
 		}

@@ -1387,6 +1387,35 @@ export interface RunRecoverResponse {
    * the snapshot is the belt, not the braces. See rescue.RestoreResult.
    */
   matchesWorkingTree: boolean;
+  /**
+   * Agent and ResumeSessionID name the conversation this snapshot's run was
+   * having, when one can be identified — so a client can offer to carry on
+   * rather than leaving somebody to find it themselves.
+   *
+   * Recovering the *work* and recovering the *conversation* are two different
+   * operations, and a restore only does the first: it puts files back and
+   * starts nothing. That surprises people, reasonably — "I restored and no
+   * agent appeared" — and the answer is not to launch one from here (a
+   * snapshot holds files, not a container, which is what makes it cheap) but
+   * to hand back the id that makes the second operation one click instead of a
+   * hunt through `context list`.
+   *
+   * Empty when it cannot be identified, which is most of the time and is the
+   * honest answer: a plain `run` had no conversation, a store may not be
+   * verified, and several sessions in one window cannot be told apart by the
+   * clock. Resuming the *wrong* conversation is worse than offering none, so
+   * silence here is a decision rather than a gap.
+   */
+  agent?: string;
+  resumeSessionId?: string;
+  /**
+   * AlreadyRestored reports that the branch was there before this call, holding
+   * this same snapshot, so nothing was created. The generated name embeds the
+   * session id — the branch existing can only mean an earlier restore of this
+   * snapshot succeeded — and a client that says "restored" for that sends
+   * somebody looking for a change made days ago.
+   */
+  alreadyRestored?: boolean;
 }
 
 /**
@@ -1731,6 +1760,25 @@ export interface SnapshotSettingsUpdate {
    * empty bucket, it turns mirroring off.
    */
   s3?: SnapshotS3Settings;
+}
+
+/**
+ * BranchList is every local branch in one repository, for choosing a base.
+ *
+ * Names only, plus which one is checked out. A branch decorated with its state
+ * would make every caller parse it back apart, and the two questions — "what may
+ * I pick" and "what should be selected by default" — have different answers.
+ */
+export interface BranchList {
+  /**
+   * Branches are the repository's local branches, in git's own order.
+   */
+  branches: string[];
+  /**
+   * Current is the checked-out branch, or empty on a detached HEAD — which is a
+   * real state a run can be based on rather than an error.
+   */
+  current?: string;
 }
 
 /**
