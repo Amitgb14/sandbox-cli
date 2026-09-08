@@ -11,6 +11,24 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **`recover fetch ID` refused snapshots that `recover fetch` had just listed.**
+  The listing derives its key from the repository and session ids, so it found
+  the object in the bucket; fetching one by id consulted the local manifest
+  first, and refused when that manifest recorded no upload. Two halves of one
+  command disagreeing about the same object.
+
+  A manifest legitimately has no upload recorded — the object may have been
+  uploaded from another machine under the same repository id, or the record
+  rebuilt from the bucket — and neither means there is nothing there. `Fetch`
+  derives the same key when the manifest carries none, so it simply tries, and
+  says *"not in `<bucket>`"* when it is genuinely absent.
+
+  Nothing is given up: the sha the bundle is checked against is still the one
+  this machine recorded, so a bundle holding somebody else's commit is still
+  refused.
+
 ### Added
 
 - **Base branch is a picker, not a text box.** Studio's Launch screen lists the

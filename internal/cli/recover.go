@@ -626,9 +626,17 @@ func fetchRemoteSnapshot(ctx context.Context, spec *config.S3Spec, wd, root, rep
 		// preferring: the sha to check the bundle against was written by this
 		// machine, so the comparison proves provenance rather than the bundle
 		// merely agreeing with the manifest that travelled beside it.
-		if !snap.Remote.Uploaded() {
-			return err
-		}
+		//
+		// Attempted whether or not the manifest records an upload. It used to
+		// refuse without one, which made the two halves of this command disagree:
+		// `recover fetch` listed the snapshot as being in the bucket — the
+		// listing derives its key from the repository and session ids — while
+		// `recover fetch <id>` said it was gone. A manifest legitimately has no
+		// remote when the object was uploaded from another machine, or when the
+		// record was rebuilt, and neither means the bucket is empty. Fetch
+		// derives the same key when the manifest carries none, and reports a
+		// clean "not in <bucket>" when nothing is there, so trying costs a
+		// HEAD-sized round trip and the local sha still gates what comes back.
 		sess := snap.Session
 		if err := rescue.Fetch(ctx, &sess, spec); err != nil {
 			return err
