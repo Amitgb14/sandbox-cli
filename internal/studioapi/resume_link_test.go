@@ -8,43 +8,11 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 )
 
-// The case the first version of this file could not fail on.
-//
-// Every other test here asserts *silence*, and silence is also what a
-// correlation that can never match produces — so a suite made only of refusals
-// passes forever while the feature does nothing. It did: the first version
-// searched the sandbox-owned store with a host-path project filter, which is
-// two individually-correct choices that together match nothing (14 sessions the
-// shared way, 0 that way, measured). This is the assertion that would have
-// caught it.
-func TestARestoreNamesTheConversationItFound(t *testing.T) {
-	s, _ := newTestServer(t)
-	start := time.Date(2026, 9, 6, 10, 0, 0, 0, time.UTC)
-	end := start.Add(20 * time.Minute)
-
-	restore := agentctx.PinLookups(t,
-		agentctx.Finding{
-			Agent:  "claude",
-			State:  agentctx.StateVerified,
-			Resume: []string{"--resume"},
-		},
-		[]agentctx.Session{
-			{ID: "the-one", Path: "/p/the-one", Started: start.Add(2 * time.Minute)},
-		},
-	)
-	defer restore()
-
-	agent, id := s.conversationFor(rescue.Session{
-		ID:        "snap",
-		Agent:     "claude",
-		Workspace: "/repo",
-		StartedAt: start,
-		EndedAt:   &end,
-	})
-	if agent != "claude" || id != "the-one" {
-		t.Fatalf("conversationFor = %q/%q, want claude/the-one", agent, id)
-	}
-}
+// The positive case lives in internal/agentctx, against a real store on disk —
+// see conversation_test.go. It cannot be written here: stubbing the two lookups
+// replaces the exact layer that was wrong the first time, so the test passed
+// with the bug in it. What is left here is this server's own share of the job,
+// which is the window it derives from a rescue session.
 
 // A restore hands back files and starts nothing, which reads as nothing having
 // happened. Naming the conversation is what makes the second half one click

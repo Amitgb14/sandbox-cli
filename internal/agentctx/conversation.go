@@ -2,6 +2,17 @@ package agentctx
 
 import "time"
 
+// The slack around a run's own window, shared so the CLI and the daemon cannot
+// name different conversations for the same run.
+//
+// Generous on the late side and tight on the early one: a transcript's last
+// write can land after the manifest is closed, while an earlier conversation in
+// the same project would be swept in by any looseness before the start.
+const (
+	ConversationSlackBefore = 2 * time.Minute
+	ConversationSlackAfter  = 15 * time.Minute
+)
+
 // ConversationFor finds the transcript belonging to one sandbox run.
 //
 // The inputs are the three things a run records about itself — which agent, which
@@ -45,8 +56,35 @@ func ConversationFor(agent, project string, from, until time.Time) (Finding, Ses
 	if !ok || f.State != StateVerified || len(f.Resume) == 0 {
 		return Finding{}, Session{}, false
 	}
-	sessions, err := listSessions(f, ListOpts{Project: project})
-	if err != nil || len(sessions) == 0 {
+	// **Two buckets, because the two front ends mount differently.**
+	//
+	// A run started by the CLI gets the host's history bucket for the project
+	// mounted into its HOME, so its transcript lands under the *host path*. A run
+	// started by Studio gets no such mount — `studioapi.buildRunOptions` builds
+	// none — so its transcript lands under the container's own working directory,
+	// which is always `/workspace`.
+	//
+	// Searching only the host path is therefore not merely incomplete for a
+	// Studio run, it is **wrong**: that bucket is where the developer's own
+	// Claude Code sessions for the same project live, so the one conversation it
+	// can offer is the one that is not the run's. That is the misattribution
+	// console.go guards a container against, arriving by a different road.
+	//
+	// The `/workspace` bucket is shared by every project's Studio runs — the
+	// transcripts record no more than that path, which is what PooledSessions
+	// exists to say — so it cannot be narrowed further and the window is the only
+	// thing separating them. Two candidates resolve to nothing, which is the
+	// right answer when nothing can tell them apart.
+	byProject, err := listSessions(f, ListOpts{Project: project})
+	if err != nil {
+		return Finding{}, Session{}, false
+	}
+	byWorkspace, err := listSessions(f, ListOpts{Project: ContainerWorkspace})
+	if err != nil {
+		return Finding{}, Session{}, false
+	}
+	sessions := mergeSessions(byProject, byWorkspace)
+	if len(sessions) == 0 {
 		return Finding{}, Session{}, false
 	}
 	// No prompt to disambiguate with — neither a rescue manifest nor this
@@ -70,3 +108,56 @@ var (
 		return sessions, err
 	}
 )
+
+// ContainerWorkspace is where every sandbox mounts the project, and so the
+// working directory every transcript written *inside* one records.
+//
+// Exported because it is the second bucket a conversation can be in, and a
+// caller correlating a run has to know that "which project" has two answers
+// depending on which front end launched it.
+const ContainerWorkspace = "/workspace"
+
+// mergeSessions concatenates two listings without repeating a session that is in
+// both — the same transcript is reachable under either bucket when a run had the
+// history mount, and counting it twice would look like an ambiguity that is not
+// there and silence an answer that is.
+func mergeSessions(a, b []Session) []Session {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]Session, 0, len(a)+len(b))
+	for _, list := range [][]Session{a, b} {
+		for _, s := range list {
+			key := s.Path
+			if key == "" {
+				key = s.ID
+			}
+			if key == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// TimestampsAvailable reports whether this agent's transcripts carry a start
+// time, which is what a run's window can be applied to.
+//
+// Only two formats have a reader (claude-jsonl and codex's rollout JSONL);
+// everything else is listed Partial, with an id and file times and nothing more.
+// Correlation therefore cannot work for those agents, and this is how a caller
+// tells that apart from "looked and found nothing" — the two are the same
+// silence otherwise, and only one of them is worth the user's time to
+// investigate.
+//
+// It used to appear to work for them: the window was applied to a transcript's
+// mtime, which every listing has. That is the filter console.go documents as
+// having matched a two-day-old conversation, so what was lost by moving to start
+// times is an answer that was sometimes wrong, not an answer that was right.
+func TimestampsAvailable(agent string) bool {
+	store, ok := Lookup(agent)
+	if !ok {
+		return false
+	}
+	return store.Format == FormatClaudeJSONL || store.Format == FormatCodexRollout
+}

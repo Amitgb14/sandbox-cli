@@ -21,23 +21,11 @@ func writeStarted(t *testing.T, dir, id string, started time.Time, cwd string) {
 	}
 }
 
-// ConversationFor must search the store a sandbox's transcripts actually land
-// in, and this test exists because the version that did not looked identical
-// from the outside.
-//
-// A sandbox run's conversation is written into the **host** bucket for the
-// project, because the claude wrapper mounts that bucket into the container. The
-// sandbox-owned store buckets by the container's own working directory, which is
-// always `/workspace`. So searching the sandbox-owned store *with a project
-// filter* is a query that cannot match — measured on a real machine as 14
-// sessions the correct way and 0 that way.
-//
-// What made it dangerous is that nothing showed: an empty answer is also what
-// this returns whenever it declines to guess, so a suite made only of refusals
-// passes forever while the feature never once fires. Stubbing the lookups does
-// not catch it either — the stub replaces the very layer that was wrong. Only a
-// real store on disk does.
-func TestConversationForSearchesTheStoreASandboxWritesTo(t *testing.T) {
+// A run started by the CLI has the host's history bucket for the project
+// mounted into its HOME, so its transcript lands under the host path. This is
+// the shape internal/cli has always correlated, and the one a project filter
+// alone can find.
+func TestConversationForFindsACLIRunsTranscript(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -45,29 +33,78 @@ func TestConversationForSearchesTheStoreASandboxWritesTo(t *testing.T) {
 	const project = "/repo"
 	started := time.Date(2026, 9, 6, 10, 5, 0, 0, time.UTC)
 
-	// The host store, bucketed by the project path — where a sandbox run's
-	// transcript lands, through the history mount.
+	// A CLI run gets the host's history bucket for the project mounted into its
+	// HOME, so its transcript lands under the host path.
 	writeStarted(t,
 		filepath.Join(home, ".claude", "projects", ProjectBucket(project)),
 		"11111111-1111-1111-1111-111111111111", started, project)
 
-	// And the sandbox-owned store, bucketed by the container's cwd. Present so
-	// the test reflects a real machine: narrowing to this store and filtering by
-	// the project path is what found nothing.
-	writeStarted(t,
-		filepath.Join(home, ".config", "sandbox", "agents", "claude", ".claude", "projects", "-workspace"),
-		"22222222-2222-2222-2222-222222222222", started, "/workspace")
+	_, sess, ok := ConversationFor("claude", project,
+		started.Add(-5*time.Minute), started.Add(30*time.Minute))
+	if !ok || sess.ID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("CLI-shaped run: got %q/%v, want the session in the project bucket", sess.ID, ok)
+	}
+}
 
-	f, sess, ok := ConversationFor("claude", project,
+// The shape the review caught, and the reason searching one bucket is not merely
+// incomplete but wrong.
+//
+// A Studio run gets **no history mount** — studioapi.buildRunOptions builds none
+// — so its transcript lands under the container's own working directory,
+// `/workspace`. Searching only the host project bucket therefore cannot find it,
+// and the one thing that bucket *does* hold is the developer's own Claude Code
+// sessions for the same project. So the single conversation the old code could
+// offer for a Studio run was the one that is not the run's.
+func TestConversationForFindsAStudioRunsTranscript(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	const project = "/repo"
+	started := time.Date(2026, 9, 6, 10, 5, 0, 0, time.UTC)
+	agentHome := filepath.Join(home, ".config", "sandbox", "agents", "claude", ".claude", "projects")
+
+	// The run's own transcript, in the pooled container bucket.
+	writeStarted(t, filepath.Join(agentHome, ProjectBucket(ContainerWorkspace)),
+		"22222222-2222-2222-2222-222222222222", started, ContainerWorkspace)
+
+	// And the developer's own session in the same project, well outside the
+	// window — present so the test fails loudly if the window ever stops
+	// separating them.
+	writeStarted(t, filepath.Join(home, ".claude", "projects", ProjectBucket(project)),
+		"99999999-9999-9999-9999-999999999999", started.Add(-6*time.Hour), project)
+
+	_, sess, ok := ConversationFor("claude", project,
 		started.Add(-5*time.Minute), started.Add(30*time.Minute))
 	if !ok {
-		t.Fatal("found no conversation for a run whose transcript is on disk")
+		t.Fatal("found no conversation for a Studio-shaped run")
 	}
-	if sess.ID != "11111111-1111-1111-1111-111111111111" {
-		t.Errorf("session = %q, want the one in the project's bucket", sess.ID)
+	if sess.ID != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("session = %q, want the run's own — not the developer's", sess.ID)
 	}
-	if f.Agent != "claude" || len(f.Resume) == 0 {
-		t.Errorf("finding = %+v, want a verified claude store with a resume argv", f)
+}
+
+// Both buckets holding a session inside one window is a genuine ambiguity: the
+// transcripts record no more than `/workspace`, so nothing can say which is the
+// run's. Nothing is offered.
+func TestConversationForDeclinesWhenBothBucketsMatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	const project = "/repo"
+	started := time.Date(2026, 9, 6, 10, 5, 0, 0, time.UTC)
+
+	writeStarted(t, filepath.Join(home, ".claude", "projects", ProjectBucket(project)),
+		"aaaaaaaa-1111-1111-1111-111111111111", started, project)
+	writeStarted(t,
+		filepath.Join(home, ".config", "sandbox", "agents", "claude", ".claude", "projects",
+			ProjectBucket(ContainerWorkspace)),
+		"bbbbbbbb-2222-2222-2222-222222222222", started.Add(time.Minute), ContainerWorkspace)
+
+	if _, sess, ok := ConversationFor("claude", project,
+		started.Add(-5*time.Minute), started.Add(30*time.Minute)); ok {
+		t.Errorf("guessed between two buckets' sessions in one window: %s", sess.ID)
 	}
 }
 

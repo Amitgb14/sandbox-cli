@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Camera,
@@ -80,6 +80,24 @@ import type { RestoreMode, Snapshot } from "@/lib/types";
  * why. They are still *listed*: hiding them would make this table claim they do
  * not exist, and the retention on one is still worth seeing and changing.
  */
+/**
+ * The branch name a restore will generate, as the daemon builds it.
+ *
+ * `sanitizeRef` maps "/" to "-", so a snapshot taken on `feat/foo` restores onto
+ * `sandbox-recover/feat-foo-<id>`. Showing the raw branch made the placeholder
+ * disagree with the field's own help text — "leave it blank for the name above"
+ * — and a user who typed what they saw got a second, differently-named branch.
+ *
+ * A copy of one substitution rather than of the daemon's whole rule, which is
+ * why it is a placeholder and not a prefilled value: if the two ever diverge the
+ * blank field still produces the right name, and only the hint is wrong.
+ */
+function defaultRestoreBranch(snapshot: Snapshot | null): string {
+  if (!snapshot) return "sandbox-recover/…";
+  const branch = (snapshot.branch || "detached").replace(/\//g, "-");
+  return `sandbox-recover/${branch}-${snapshot.id}`;
+}
+
 export default function SnapshotsPage() {
   const repoFilter = useUi((s) => s.repoFilter);
   // null is the picker's "All repositories"; the endpoints spell that repo=all.
@@ -549,6 +567,16 @@ function RestoreDialog({
   const [branch, setBranch] = useState("");
   const restore = useRestoreSnapshot(repo);
 
+  // The dialog is rendered unconditionally and merely hidden, so its state
+  // outlives a close. Typing a name for snapshot A, cancelling, then restoring
+  // snapshot B put B on a branch named for A — or tripped the "exists and does
+  // not point at this snapshot" refusal for a reason nobody could connect to
+  // what they had done. Cleared when the snapshot changes rather than on close,
+  // because close is not the only way out of it.
+  useEffect(() => {
+    setBranch("");
+  }, [snapshot?.id]);
+
   return (
     <Dialog open={!!snapshot} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-lg">
@@ -602,7 +630,7 @@ function RestoreDialog({
               id="restore-branch"
               value={branch}
               onChange={(e) => setBranch(e.target.value)}
-              placeholder={`sandbox-recover/${snapshot?.branch ?? "…"}-${snapshot?.id ?? ""}`}
+              placeholder={defaultRestoreBranch(snapshot)}
             />
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               Leave it blank for the name above. That name embeds the session

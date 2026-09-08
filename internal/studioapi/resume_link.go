@@ -22,8 +22,12 @@ import (
 // What is left here is the window, which is the one thing only a rescue session
 // knows: from when the run started to its last recorded activity.
 func (s *Server) conversationFor(sess rescue.Session) (agent, sessionID string) {
-	from := sess.StartedAt.Add(-conversationSlack)
-	until := sess.Activity().Add(conversationSlack)
+	// agentctx's window, not console.go's: that one is symmetric because a
+	// container's own start and finish bound it, where a rescue session's last
+	// *activity* can precede a final transcript write. Sharing it with the CLI is
+	// what stops the two naming different conversations for the same snapshot.
+	from := sess.StartedAt.Add(-agentctx.ConversationSlackBefore)
+	until := sess.Activity().Add(agentctx.ConversationSlackAfter)
 
 	f, found, ok := agentctx.ConversationFor(sess.Agent, sess.Workspace, from, until)
 	if !ok || found.ID == "" {

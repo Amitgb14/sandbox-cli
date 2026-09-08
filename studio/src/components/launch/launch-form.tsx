@@ -144,7 +144,12 @@ export function LaunchForm() {
     fallback: initialAgent ? (routingPrefsAtMount[initialAgent] ?? []) : [],
     workspace: "",
     worktree: null,
-    base: "main",
+    // Not "main": that is a guess at a name, and the base is stamped as the
+    // label `fleet land` reads back to decide what to merge into. A repository
+    // whose default is `master` would have been launched with a base that does
+    // not exist there, silently. null means the daemon's own default until the
+    // branch list arrives.
+    base: null,
     profile: "dev",
     network: { mode: "allowlist", baseline: true, allow: [] },
     memory: "4g",
@@ -208,6 +213,19 @@ export function LaunchForm() {
   // is pointed at, so switching repository re-asks rather than offering the
   // previous one's names.
   const { data: branches } = useBranches(req.repo ?? undefined);
+
+  /**
+   * A base the repository does not have is not a base.
+   *
+   * Radix renders the *selected item*, so a value with no matching option shows
+   * as blank while still being sent — which is how a stale name survives a
+   * repository switch and gets stamped as the label. Cleared to the daemon's
+   * default instead, which is a name the run will actually be landed into.
+   */
+  useEffect(() => {
+    if (!branches || !req.base) return;
+    if (!branches.branches.includes(req.base)) patch({ base: null });
+  }, [branches, req.base]);
 
   const deepLinkBranch = search.get("branch");
   const deepLinkApplied = useRef(false);
