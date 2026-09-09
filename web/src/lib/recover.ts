@@ -43,9 +43,16 @@ export const CAPTURED = [
 ];
 
 /**
- * The section that would have prevented the support case. Three ways to start an
- * agent, three different amounts of protection, and the difference is invisible
- * until you need it.
+ * The section that would have prevented the support case: how you start the agent
+ * decides how much is captured, and the difference is invisible until you need
+ * it.
+ *
+ * A fleet task sits on the *none* row, not with Studio. `baselineFor` is called
+ * only from internal/studioapi, and internal/fleet does not import the rescue
+ * package at all — so a fleet task records nothing, where the first draft of this
+ * page told a fleet user they held a before-image they do not have. On the one
+ * page whose job is to say what protection each path gets, that was the worst
+ * available mistake.
  */
 export type Path = {
   how: string;
@@ -63,16 +70,16 @@ export const PATHS: Path[] = [
     body: "A foreground run gets the real safety net: at the start, every two minutes, and on the way out — including on Ctrl-C. This is the only shape that protects work an agent has not committed.",
   },
   {
-    how: "sandbox-cli claude --detach",
+    how: "--detach, and every fleet task",
     cadence: "None",
     level: "none",
-    body: "A detached run returns before the snapshot loop is reached, and there is no process left to hold a ticker. The container outlives your terminal; the safety net does not exist.",
+    body: "A detached run returns before the snapshot loop is reached, and there is no process left to hold a ticker. A fleet task is a detached run, so it records nothing either — internal/fleet does not touch the rescue package at all. The container outlives your terminal; the safety net does not exist.",
   },
   {
-    how: "Studio, and every fleet task",
+    how: "Studio",
     cadence: "One, before the agent starts",
     level: "one",
-    body: "The daemon records a baseline — the workspace as the run began — and closes the session immediately. Kill an agent before it commits and the only snapshot you have is the state from before it did anything.",
+    body: "The daemon records a baseline — the workspace as the run began — and closes the session immediately. Kill an agent before it commits and the only snapshot you have is the state from before it did anything. This is the only path that records a baseline; nothing else does.",
   },
 ];
 
