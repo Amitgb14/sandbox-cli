@@ -412,18 +412,23 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 	// Attempted only when the local copy is missing. Fetching one that is already
 	// here would spend a download to arrive at the bytes already on disk.
 	if gone {
-		if !snap.Remote.Uploaded() {
-			// Nothing local and no copy off the machine: this is the one shape of
-			// gone that nothing can undo, and it keeps Find's message, which names
-			// what happened to it.
+		spec := s.snapshotS3()
+		if spec == nil || spec.Bucket == "" {
+			// Nothing local and nowhere to look: the one shape of gone that nothing
+			// can undo. Keeps Find's message, which names what happened to it.
 			writeError(w, http.StatusUnprocessableEntity, err)
 			return
 		}
+		// Attempted whether or not the manifest records an upload, for the reason
+		// `recover fetch` does the same: an interrupted mirror leaves the object in
+		// the bucket and the record without it, and refusing on the record turns
+		// "two halves of one command disagreeing" into "the CLI and the daemon
+		// disagreeing". Fetch derives the key when the manifest carries none.
 		sess := snap.Session
-		if err := rescue.Fetch(r.Context(), &sess, s.snapshotS3()); err != nil {
+		if err := rescue.Fetch(r.Context(), &sess, spec); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
 				"snapshot %s is not in this repository and could not be fetched from %s: %w",
-				snap.ID, sess.Remote.Bucket, err))
+				snap.ID, spec.Bucket, err))
 			return
 		}
 		// The manifest is what a later listing reads, and it now describes a

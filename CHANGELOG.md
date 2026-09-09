@@ -27,7 +27,14 @@ version is tagged.
 
   Nothing is given up: the sha the bundle is checked against is still the one
   this machine recorded, so a bundle holding somebody else's commit is still
-  refused.
+  refused. Studio's restore had the same guard and gets the same fix — leaving
+  one of them would have moved the disagreement rather than closed it.
+
+  A fetch now also **records what it fetched**, so a snapshot just pulled out of
+  a bucket stops being listed as one that never left the machine. And
+  `--repo-id` is honoured when fetching by id, not only when listing: a
+  repository id hashes an absolute path, so a copy uploaded from a machine that
+  kept the repository elsewhere is under a key nothing local can derive.
 
 ### Added
 

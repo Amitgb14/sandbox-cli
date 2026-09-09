@@ -302,6 +302,16 @@ func Fetch(ctx context.Context, sess *Session, spec *config.S3Spec) error {
 	// returns the wrong tree is the exact failure mode this feature was built in
 	// the shadow of. The ref is rolled back rather than left pointing at content
 	// nobody asked for.
+	// What came back is recorded, for every caller. A fetch *proves* the object
+	// is in the bucket, and leaving the manifest saying otherwise keeps the
+	// disagreement this whole change is about: the listing would go on showing
+	// the snapshot as local-only, Verify would go on deriving a key instead of
+	// reading one, and a stale Error from an interrupted Mirror would outlive the
+	// evidence against it.
+	defer func() {
+		sess.Remote = &RemoteRef{Bucket: spec.Bucket, Key: key, UploadedAt: time.Now()}
+	}()
+
 	if want := sess.LastSnapshot; want != "" {
 		got, err := run(ctx, sess.Repo, nil, "rev-parse", "--verify", "--quiet", ref)
 		if err != nil || got != want {
@@ -607,4 +617,17 @@ func HumanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTP"[exp])
+}
+
+// RemoteBundleKey is the object key a snapshot's bundle lives under, for a
+// caller that knows the namespace and has no manifest recording it.
+//
+// Exported because a repository id is a hash of an **absolute path**: a machine
+// that had the repository somewhere else produced a different one, so "fetch the
+// copy uploaded from over there" cannot be derived and has to be named. Without
+// this, `--repo-id` could only steer the listing and was silently ignored by the
+// fetch, which is the same shape of disagreement as the guard this replaced.
+func RemoteBundleKey(repoID, sessionID string) string {
+	bundle, _ := remoteKeys(repoID, sessionID)
+	return bundle
 }
