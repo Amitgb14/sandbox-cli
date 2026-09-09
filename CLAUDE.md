@@ -856,6 +856,19 @@ somebody quit — and `fleet` may never set it (`gates_test.go` classifies it `n
 unattended, which is the same reason `internal/agents` only admits agents with a verified headless
 mode. An agent that stops to ask does not fail, it hangs, holding a `max_parallel` slot.
 
+Studio no longer *asks* for it. The toggle started off, so the ordinary way to launch an
+agent from the browser produced a container with no stdin, and the way you found out was
+the Terminal tab refusing to be typed at after the agent had started. `consoleRun`
+(`launch-form.tsx`) derives it instead, and the rule is that **every exception is a pair
+the daemon already refuses** rather than a preference somebody encoded in the UI: no
+agent, a `verify` command, a `fallback` chain, or a prompt for an agent whose
+`ConsolePromptArgs` is nil. That is what makes deriving it honest — the form cannot pick
+a mode the daemon would 400, and it names which field chose the mode so the one to clear
+is on screen. It also inverts one control: `verify` used to be disabled by the toggle,
+and is now how you ask for a headless run. `console` is omitted from the form's own state
+type (`FormState = Omit<LaunchRequest, "console">`) rather than defaulted, since a field
+nothing may set is one the next reader wires a control back onto.
+
 An agent's words are **formatted, never as markup it supplied**
 (`studio/src/components/common/agent-markdown.tsx`, shared by the live console and
 the stored-transcript viewer). Transcript text is untrusted twice over — written by

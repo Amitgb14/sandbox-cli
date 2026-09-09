@@ -847,10 +847,11 @@ export function localPreview(
     // than sending one — so without this the run launches as a brand-new
     // conversation with whatever prompt is in the box, and nothing on screen
     // says the conversation was dropped. Arriving from a row's Continue makes
-    // that one click away: the link ticks the console, and unticking it is an
-    // ordinary thing to try.
+    // that one field away: an agent run keeps a console by default, so this
+    // fires once something that cannot have one — a verify command, a fallback
+    // chain — has been filled in underneath a conversation already picked.
     refusals.push(
-      "Resuming a conversation needs the console: a headless resume would replay one prompt into an old conversation and exit. Keep the console ticked, or clear the conversation to start a new one.",
+      "Resuming a conversation needs the console: a headless resume would replay one prompt into an old conversation and exit. Clear whatever made this run headless — a verify command or a fallback agent — or clear the conversation to start a new one.",
     );
   }
 

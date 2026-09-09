@@ -11,6 +11,28 @@ version is tagged.
 
 ## Unreleased
 
+### Changed
+
+- **Studio launches an agent with a console by default, and no longer asks.**
+  "Keep a console I can attach to" was a toggle that started off, so the ordinary
+  way to launch an agent from the browser produced a container with no stdin —
+  and the way you found out was the Terminal tab saying the run could not be
+  typed at, after the agent had already started. It is now derived rather than
+  chosen: an agent run keeps a console, the toggle is gone, and the form states
+  the mode instead of offering it.
+
+  The four exceptions are not a hidden preference. Each is a pair the daemon
+  already refuses, so a console there would be a 400 rather than a different run:
+  a plain command (no interactive mode to swap in), a **verify command** (its
+  exit code is the answer it exists to give, and an interactive session's exit
+  code is whenever you quit), a **fallback agent** (routing retries a run that
+  ended by itself), and a prompt for an agent whose interactive argv cannot carry
+  one — opencode reads a lone positional as the directory to open. The form names
+  whichever of those made a run headless, so the field to clear is on screen.
+
+  Filling in a verify command is therefore now how you ask for a headless run
+  from Studio. The field used to be disabled by the toggle; it is enabled always.
+
 ### Fixed
 
 - **`recover list` called a before-image `clean`, and restoring one said
