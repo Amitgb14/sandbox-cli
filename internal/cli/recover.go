@@ -143,7 +143,11 @@ func printSnapshots(snaps []rescue.Snapshot, all bool) error {
 	}
 	fmt.Fprintln(tw, header)
 	withAgent := false
+	baselines := 0
 	for _, s := range snaps {
+		if s.IsBaseline() {
+			baselines++
+		}
 		branch := s.Branch
 		if branch == "" {
 			branch = "-"
@@ -166,6 +170,15 @@ func printSnapshots(snaps []rescue.Snapshot, all bool) error {
 	}
 	if err := tw.Flush(); err != nil {
 		return err
+	}
+	if baselines > 0 {
+		// Marked rather than hidden. The daemon hides these because its screen
+		// offers a Restore button beside each row, and offering to restore a
+		// before-image is the trap; this listing is what somebody reads while
+		// hunting for lost work, and "no snapshots recorded" would be a worse
+		// answer than "there was a run, and this is all it left".
+		fmt.Printf("\n%d of these are baselines: the workspace as the run *started*, captured before the\n", baselines)
+		fmt.Println("agent ran. Restoring one gives you the starting state, not the work.")
 	}
 	if withAgent {
 		// Not a per-row lookup: resolving each run's transcript means probing the
@@ -306,6 +319,15 @@ func reportRestore(res rescue.RestoreResult, mode rescue.RestoreMode) {
 			fmt.Fprintf(os.Stderr, " (%d file(s) changed)", res.Files)
 		}
 		fmt.Fprintln(os.Stderr)
+		if res.Snapshot.IsBaseline() {
+			// Said before the git commands, like MatchesWorkingTree below and for
+			// the same reason: it changes what those commands are *for*. Somebody
+			// who reads "created branch X" and goes looking for their work will
+			// find the state they had before the run, and conclude the snapshot
+			// lost it rather than that it never held it.
+			fmt.Fprintf(os.Stderr, "  This is a baseline — the workspace as the run started, captured before\n")
+			fmt.Fprintf(os.Stderr, "  the agent ran. It does not contain anything the agent went on to write.\n")
+		}
 		if res.MatchesWorkingTree {
 			// Said before the git commands, because it changes what they are for.
 			// The files were never lost — /workspace is a bind mount — so pointing

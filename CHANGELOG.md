@@ -11,6 +11,30 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **`recover list` called a before-image `clean`, and restoring one said
+  nothing.** A run started from Studio records a *baseline* — the workspace as it
+  was before the agent ran — and closes the session immediately. The CLI knew
+  nothing about that outcome, so a baseline was listed with the same word a
+  finished run's snapshot gets, and `recover restore` handed back the run's
+  starting state without a word about it.
+
+  Reported as work disappearing: an agent wrote a file, was killed before it
+  committed, and the restored branch did not have the file. The restore was
+  correct — the snapshot never held it.
+
+  Baselines are now named as such in the listing, with a line saying what they
+  are, and a restore says plainly that it is the state from *before* the agent
+  ran. Marked rather than hidden, which is the deliberate difference from the
+  daemon: Studio's screen offers a Restore button beside every row, while this
+  listing is what somebody reads while hunting for lost work, where "no snapshots
+  recorded" would be the worse answer.
+
+  The literal is now one shared constant. `runs.go`'s own comment said it "has to
+  match in three places and is one typo away from offering a run's starting state
+  as its work" — it matched in two.
+
 ### Added
 
 - **Base branch is a picker, not a text box.** Studio's Launch screen lists the
