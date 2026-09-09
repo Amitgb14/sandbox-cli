@@ -19,6 +19,7 @@ export const RAW_INSTALL_URL =
  */
 export const MULTI_AGENT_PATH = "/multi-agent/";
 export const STUDIO_PATH = "/studio/";
+export const RECOVER_PATH = "/recover/";
 export const SDK_PATH = "/sdk/";
 export const PYTHON_SDK_PATH = "/sdk/python/";
 
@@ -68,7 +69,9 @@ export const INSTALL_ROUTES: InstallRoute[] = [
     id: "go",
     label: "Go",
     hint: "Go 1.25+",
-    lines: ["go install github.com/Amitgb14/sandbox-cli/cmd/sandbox-cli@latest"],
+    lines: [
+      "go install github.com/Amitgb14/sandbox-cli/cmd/sandbox-cli@latest",
+    ],
     // Deliberately @latest rather than @v<VERSION>: the release tags carry no
     // `v` prefix, and a Go module tag must (`v0.0.1`, not `0.0.1`), so the proxy
     // cannot resolve one — `@v0.0.1` finds no such tag and @latest lands on a
@@ -108,12 +111,32 @@ export const INSTALL_ROUTES: InstallRoute[] = [
 export const FIRST_RUN = [
   { cmd: "sandbox-cli claude", note: "Claude Code, contained" },
   { cmd: "sandbox-cli run -- bash", note: "a shell in the sandbox" },
-  { cmd: "sandbox-cli run --dry-run -- npm test", note: "print the docker argv, run nothing" },
+  {
+    cmd: "sandbox-cli run --dry-run -- npm test",
+    note: "print the docker argv, run nothing",
+  },
 ];
 
 export const HERO_STATS = [
-  { value: "1", label: "host path mounted", sub: "your project, at /workspace" },
-  { value: "12", label: "agents wrapped", sub: "one prefix, flags forwarded verbatim" },
-  { value: "0", label: "host creds forwarded", sub: "default-deny env allowlist" },
-  { value: "--rm", label: "every container", sub: "nothing survives the run", mono: true },
+  {
+    value: "1",
+    label: "host path mounted",
+    sub: "your project, at /workspace",
+  },
+  {
+    value: "12",
+    label: "agents wrapped",
+    sub: "one prefix, flags forwarded verbatim",
+  },
+  {
+    value: "0",
+    label: "host creds forwarded",
+    sub: "default-deny env allowlist",
+  },
+  {
+    value: "--rm",
+    label: "every container",
+    sub: "nothing survives the run",
+    mono: true,
+  },
 ];
