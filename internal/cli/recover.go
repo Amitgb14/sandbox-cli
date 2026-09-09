@@ -143,7 +143,11 @@ func printSnapshots(snaps []rescue.Snapshot, all bool) error {
 	}
 	fmt.Fprintln(tw, header)
 	withAgent := false
+	baselines := 0
 	for _, s := range snaps {
+		if s.IsBaseline() {
+			baselines++
+		}
 		branch := s.Branch
 		if branch == "" {
 			branch = "-"
@@ -166,6 +170,23 @@ func printSnapshots(snaps []rescue.Snapshot, all bool) error {
 	}
 	if err := tw.Flush(); err != nil {
 		return err
+	}
+	if baselines > 0 {
+		// Marked rather than hidden. The daemon hides these because its screen
+		// offers a Restore button beside each row, and offering to restore a
+		// before-image is the trap; this listing is what somebody reads while
+		// hunting for lost work, and "no snapshots recorded" would be a worse
+		// answer than "there was a run, and this is all it left".
+		// "1 of these are baselines" is the *common* case — a daemon run leaves
+		// exactly one session — so the singular is not an edge worth skipping.
+		// ANSI rather than markdown asterisks, which a terminal prints literally;
+		// printFindings above already uses \033[1m for the same job.
+		subject := fmt.Sprintf("%d of these are baselines", baselines)
+		if baselines == 1 {
+			subject = "one of these is a baseline"
+		}
+		fmt.Printf("\n%s: the workspace as the run \033[1mstarted\033[0m, captured before the\n", subject)
+		fmt.Println("agent ran. Restoring one gives you the starting state, not the work.")
 	}
 	if withAgent {
 		// Not a per-row lookup: resolving each run's transcript means probing the
@@ -206,6 +227,13 @@ func newRecoverShowCmd() *cobra.Command {
 			wd, err := os.Getwd()
 			if err != nil {
 				return err
+			}
+			if snap, ferr := rescue.Find(wd, args[0]); ferr == nil && snap.IsBaseline() {
+				// Before the diff, because git streams its own output and anything
+				// after it scrolls past. A baseline's diff is the workspace as the
+				// run *started*, and nothing in git's output says so.
+				fmt.Fprintf(os.Stderr, "sandbox-cli: \033[1mthis is a baseline\033[0m — what follows is the workspace\n")
+				fmt.Fprintf(os.Stderr, "  as the run started, not as the agent left it.\n\n")
 			}
 			err = rescue.Show(wd, args[0], patch)
 			// git streams its own output, including its diagnostics, so a non-zero
@@ -281,6 +309,17 @@ func reportRestore(res rescue.RestoreResult, mode rescue.RestoreMode) {
 	} else {
 		was = "branch " + was
 	}
+	// Before the mode-specific output, so it reaches every mode. It used to live
+	// in the branch case alone, which left it out of the two where it costs most:
+	// `--into-worktree` *overwrites*, so restoring a baseline there replaces the
+	// agent's work with the state from before the run and then prints "Keep it
+	// with: git commit" — committing that reverts exactly what somebody was
+	// hunting for. `--patch` writes a diff nothing labels either.
+	if res.Snapshot.IsBaseline() {
+		fmt.Fprintf(os.Stderr, "sandbox-cli: \033[1mthis is a baseline\033[0m — the workspace as the run started,\n")
+		fmt.Fprintf(os.Stderr, "  captured before the agent ran. It holds nothing the agent went on to write.\n")
+	}
+
 	switch mode {
 	case rescue.RestorePatch:
 		if res.Patch != "-" {

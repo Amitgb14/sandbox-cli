@@ -675,7 +675,7 @@ const (
 	// safety net. Named rather than spelled twice: snapshots.go and recover.go
 	// both have to *exclude* these, and a literal that has to match in three
 	// places is one typo away from offering a run's starting state as its work.
-	baselineOutcome = "baseline"
+	baselineOutcome = rescue.OutcomeBaseline
 )
 
 // concatArgs joins argv fragments into one fresh slice.
