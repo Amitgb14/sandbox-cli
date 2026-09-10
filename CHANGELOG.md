@@ -11,6 +11,47 @@ version is tagged.
 
 ## Unreleased
 
+### Changed
+
+- **Studio launches an agent with a console by default, and no longer asks.**
+  "Keep a console I can attach to" was a toggle that started off, so the ordinary
+  way to launch an agent from the browser produced a container with no stdin —
+  and the way you found out was the Terminal tab saying the run could not be
+  typed at, after the agent had already started. It is now derived rather than
+  chosen: an agent run keeps a console, the toggle is gone, and the form states
+  the mode instead of offering it.
+
+  The four exceptions are not a hidden preference. Each is a pair the daemon
+  already refuses, so a console there would be a 400 rather than a different run:
+  a plain command (no interactive mode to swap in), a **verify command** (its
+  exit code is the answer it exists to give, and an interactive session's exit
+  code is whenever you quit), a **fallback agent** (routing retries a run that
+  ended by itself), and a prompt for an agent whose interactive argv cannot carry
+  one — opencode reads a lone positional as the directory to open. The form names
+  whichever of those made a run headless, so the field to clear is on screen.
+
+  Filling in a verify command is therefore now how you ask for a headless run
+  from Studio. The field used to be disabled by the toggle; it is enabled always.
+
+  **"Let it work without asking" now starts checked**, which preserves the
+  default launch rather than widening it: a headless run gets the flag from
+  `Descriptor.Autonomous` whatever the form says, so clicking Launch and walking
+  away always produced work. A console run takes it from the request instead, so
+  leaving it off would have started the agent's interactive UI and stopped it at
+  its first approval, in a detached container with nobody attached. Same autonomy
+  as before, now unlocked rather than locked — untick it and the session waits to
+  be answered, which the box beside it says.
+
+- **"Run detached" is gone from Studio's launch form.** It never travelled: the
+  request has no such field and the daemon detaches every run, because an HTTP
+  request/response cycle has nowhere to hold a pty. The only thing the toggle
+  changed was the preview beside it — and being false by default, it described a
+  container with a pty that nobody was going to get, said "Attached" in the
+  success toast of every run Studio has ever started, and silently suppressed the
+  warning for an agent with no verified headless argv. The preview now says
+  detached because the run is, and that warning fires on a run being *headless*,
+  which is the fact it was about.
+
 ### Fixed
 
 - **`recover fetch ID` refused snapshots that `recover fetch` had just listed.**
@@ -35,6 +76,28 @@ version is tagged.
   `--repo-id` is honoured when fetching by id, not only when listing: a
   repository id hashes an absolute path, so a copy uploaded from a machine that
   kept the repository elsewhere is under a key nothing local can derive.
+
+- **`recover list` called a before-image `clean`, and restoring one said
+  nothing.** A run started from Studio records a *baseline* — the workspace as it
+  was before the agent ran — and closes the session immediately. The CLI knew
+  nothing about that outcome, so a baseline was listed with the same word a
+  finished run's snapshot gets, and `recover restore` handed back the run's
+  starting state without a word about it.
+
+  Reported as work disappearing: an agent wrote a file, was killed before it
+  committed, and the restored branch did not have the file. The restore was
+  correct — the snapshot never held it.
+
+  Baselines are now named as such in the listing, with a line saying what they
+  are, and a restore says plainly that it is the state from *before* the agent
+  ran. Marked rather than hidden, which is the deliberate difference from the
+  daemon: Studio's screen offers a Restore button beside every row, while this
+  listing is what somebody reads while hunting for lost work, where "no snapshots
+  recorded" would be the worse answer.
+
+  The literal is now one shared constant. `runs.go`'s own comment said it "has to
+  match in three places and is one typo away from offering a run's starting state
+  as its work" — it matched in two.
 
 ### Added
 

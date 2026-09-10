@@ -651,7 +651,15 @@ export interface LaunchRequest {
   network: { mode: NetworkMode; baseline: boolean; allow: string[] };
   memory: string;
   cpus: string;
-  detach: boolean;
+  /**
+   * Deliberately absent: a Studio run is **always** detached. `runs.go` sets
+   * `Detach: true` on every request, because an HTTP request/response cycle has
+   * nowhere to hold a pty — so a `detach` field here could only ever disagree
+   * with what the daemon does, and the form's copy of it did: it was always
+   * false, which silently turned off a capability warning and made the success
+   * toast say "Attached" about every run. What varies is whether the container
+   * keeps a console (see the daemon's `console`), not whether it detaches.
+   */
   /**
    * Start the agent in its interactive mode on a container that keeps a
    * terminal, so `sandbox-cli attach` can answer it. The prompt seeds the first

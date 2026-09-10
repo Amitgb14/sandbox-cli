@@ -32,6 +32,19 @@ const (
 	// which would make the one screen whose job is to say what died fill up
 	// with things that didn't.
 	OutcomeManual = "manual"
+
+	// OutcomeBaseline marks the before-image a daemon run records at launch: it
+	// is captured *before* the agent starts and the session is closed straight
+	// away, so it holds the workspace as it was, not as the agent left it.
+	//
+	// Here rather than in studioapi, which writes it, because internal/cli reads
+	// it and had no idea it existed. That cost somebody real work: a Studio run
+	// killed before it committed left this session, `recover list` reported it as
+	// `clean` — indistinguishable from a finished run's snapshot — and `recover
+	// restore` handed back the state the run *started* from without a word. The
+	// daemon already guards against exactly this and its own comment says the
+	// literal "has to match in three places"; it matched in two.
+	OutcomeBaseline = "baseline"
 )
 
 // Source records who asked for a snapshot, and it decides where the snapshot can
@@ -115,6 +128,10 @@ func (s Session) Activity() time.Time {
 // Status renders the outcome for display.
 func (s Session) Status() string {
 	switch {
+	case s.Outcome == OutcomeBaseline:
+		// Named for what it is, and named *first*: a baseline session is also a
+		// closed one, so every later case would have called it "clean".
+		return "baseline"
 	case s.Outcome == OutcomeManual:
 		return "snapshot"
 	case s.Crashed():
@@ -306,3 +323,9 @@ func (s Session) remove() {
 func indexDir(repoRoot, sessionID string) string {
 	return filepath.Join(sessionsDir(repoRoot), sessionID+".index.d")
 }
+
+// IsBaseline reports a before-image: the workspace as it was when a run started,
+// not as the run left it. Restoring one is legitimate — sometimes the starting
+// state is what you want — but never what somebody hunting for lost work means,
+// so anything offering it has to say so.
+func (s Session) IsBaseline() bool { return s.Outcome == OutcomeBaseline }

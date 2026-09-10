@@ -856,6 +856,35 @@ somebody quit — and `fleet` may never set it (`gates_test.go` classifies it `n
 unattended, which is the same reason `internal/agents` only admits agents with a verified headless
 mode. An agent that stops to ask does not fail, it hangs, holding a `max_parallel` slot.
 
+Studio no longer *asks* for it. The toggle started off, so the ordinary way to launch an
+agent from the browser produced a container with no stdin, and the way you found out was
+the Terminal tab refusing to be typed at after the agent had started. `consoleRun`
+(`launch-form.tsx`) derives it instead, and the rule is that **every exception is a pair
+the daemon already refuses** rather than a preference somebody encoded in the UI: no
+agent, a `verify` command, a `fallback` chain, or a prompt for an agent whose
+`ConsolePromptArgs` is nil. That is what makes deriving it honest — the form cannot pick
+a mode the daemon would 400, and it names which field chose the mode so the one to clear
+is on screen. It also inverts one control: `verify` used to be disabled by the toggle,
+and is now how you ask for a headless run. `console` is omitted from the form's own state
+type (`FormState = Omit<LaunchRequest, "console">`) rather than defaulted, since a field
+nothing may set is one the next reader wires a control back onto.
+
+The default had to move with it, and that is the half worth remembering: a **headless** run
+takes its skip-permissions flag from `Descriptor.Autonomous` whatever the form says, while a
+**console** run takes it from the request (`agent.Console(prompt, skipPermissions)`). So
+making the console the default without defaulting `skipPermissions` to true would have
+turned every launch-and-walk-away into an agent parked at its first approval in a container
+nobody is attached to — the same autonomy as before, lost by moving where it comes from.
+Checked rather than locked is strictly more control than the old form had; what the change
+costs is that the box has to *say* which, since "the prompt seeds the first turn" reads as
+"the run proceeds".
+
+`detach` was removed from `LaunchRequest` in the same pass, and the reason generalises: it
+was a form field the request had no home for, so it could only ever disagree with the
+daemon — and it did, silently, in three places (the preview, the success toast, and the
+`headlessVerified` warning, which never rendered because the field was always false). A
+control for something the daemon decides unconditionally is worse than no control.
+
 An agent's words are **formatted, never as markup it supplied**
 (`studio/src/components/common/agent-markdown.tsx`, shared by the live console and
 the stored-transcript viewer). Transcript text is untrusted twice over — written by

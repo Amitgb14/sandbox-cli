@@ -841,7 +841,9 @@ sandbox-cli recover
 ```
 
 It prints two things: what is broken in the repository here, and every run it has
-a record of. A run marked `crashed` is one that nothing closed.
+a record of. A run marked `crashed` is one that nothing closed; one marked
+`baseline` is a Studio run's before-image — the workspace as it *started*, which
+holds nothing the agent went on to write.
 
 **3. If it reported a problem, fix it.**
 
