@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 )
 
 // bucketServer is a minimal S3 for the handler tests: it records what was PUT
@@ -557,5 +558,58 @@ func TestASettingsWriteCannotOverrideWhatConfigYamlPins(t *testing.T) {
 	}
 	if got.ManualRetention != "24h0m0s" {
 		t.Errorf("the window that was not pinned did not take: %q", got.ManualRetention)
+	}
+}
+
+// The daemon must not refuse a restore on the strength of a manifest that
+// records no upload, for the same reason `recover fetch` must not: `Mirror` puts
+// the objects and *then* records them, so a process that dies in between leaves
+// the bucket holding the snapshot and the manifest denying it.
+//
+// Fixing only the CLI moved the disagreement rather than closing it — from "two
+// halves of one command" to "the CLI recovers it and the daemon returns 422".
+func TestRestoreFetchesBackWhenTheManifestRecordsNoUpload(t *testing.T) {
+	s, _ := newTestServer(t)
+	snapshotRepo(t, s)
+	withBucket(t, s)
+	h := s.Handler()
+
+	write(t, s.Project+"/work.txt", "the work\n")
+	rec := asBrowser(t, h, "POST", "/v1/snapshots", SnapshotCreateRequest{})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", rec.Code, rec.Body)
+	}
+	var snap SnapshotInfo
+	json.Unmarshal(rec.Body.Bytes(), &snap)
+	if snap.Remote == nil || !snap.Remote.Uploaded {
+		t.Fatalf("setup: not mirrored: %+v", snap.Remote)
+	}
+
+	// The manifest forgets the upload — an interrupted mirror — and the objects
+	// go, which is the state a restore has to survive.
+	found, err := rescue.Find(s.Project, snap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := found.Session
+	sess.Remote = nil
+	if err := sess.Save(); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, s.Project, "update-ref", "-d", "refs/sandbox/snapshots/"+snap.ID)
+	gitIn(t, s.Project, "reflog", "expire", "--expire=now", "--all")
+	gitIn(t, s.Project, "gc", "--prune=now", "--quiet")
+
+	rec = asBrowser(t, h, "POST", "/v1/snapshots/"+snap.ID+"/restore", SnapshotRestoreRequest{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restore = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var res RunRecoverResponse
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if res.Branch == "" {
+		t.Fatalf("restore produced no branch: %s", rec.Body)
+	}
+	if out := gitIn(t, s.Project, "show", res.Branch+":work.txt"); !strings.Contains(out, "the work") {
+		t.Errorf("the restored branch does not hold the work: %q", out)
 	}
 }
