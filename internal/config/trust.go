@@ -83,6 +83,15 @@ func restrictedProjectKeys(src, inherited Config) []string {
 	if src.Engine != "" {
 		add("engine") // chooses which binary sandbox-cli executes on your machine
 	}
+	if src.Sandbox != "" {
+		// A sharper `engine`: that key chooses which binary runs the container,
+		// this one chooses whether there is a container. `sandbox: none` from a
+		// checked-in file is a repository asking to be run on the host with the
+		// user's own files in reach, and it would arrive on the *default*
+		// profile — which is why "dev-only" is not the protection it looks like,
+		// and why this is refused outright rather than gated on prod.
+		add("sandbox")
+	}
 	if src.Runtime != "" {
 		add("runtime") // selects the OCI runtime, i.e. the strength of the boundary
 	}

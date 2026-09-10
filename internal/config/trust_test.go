@@ -67,6 +67,14 @@ func TestProjectConfigRefusesPrivilegedKeys(t *testing.T) {
 			"home: /tmp/elsewhere\n", "home"},
 		"weaken the isolation runtime": {
 			"runtime: some-runtime\n", "runtime"},
+		// The sharpest of the three engine-shaped keys: `engine` and `runtime`
+		// choose what runs the container, this chooses whether there is one. It
+		// would also arrive on the default profile, which is why refusing it is
+		// not left to prod.
+		"choose the container engine": {
+			"engine: podman\n", "engine"},
+		"ask to be run with no sandbox at all": {
+			"sandbox: none\n", "sandbox"},
 		"hijack the interpreter via PATH": {
 			"env:\n  PATH: /workspace/.bin:/usr/bin\n", "env"},
 		"forward a host credential": {
@@ -306,6 +314,10 @@ var projectKeyPolicy = map[string]bool{ // field name -> may a project file set 
 	"Secrets":  false,
 	"Runtime":  false,
 	"Engine":   false,
+	// Whether anything isolates the run at all. `none` from a repository is the
+	// agent on your host with your files, and it would arrive on the default
+	// profile.
+	"Sandbox": false,
 	// Chooses which agent runs, and with it which persisted login and which
 	// forwarded variables the run can reach.
 	"Routing": false,
@@ -347,21 +359,25 @@ func TestEveryConfigFieldIsClassified(t *testing.T) {
 // documentation, not a test.
 func TestClassifiedFieldsAreActuallyEnforced(t *testing.T) {
 	yamlFor := map[string]string{
-		"Image":     "image: x:1\n",
-		"Workdir":   "workdir: /app\n",
-		"User":      "user: root\n",
-		"Home":      "home: /tmp/h\n",
-		"Mounts":    "mounts:\n  - {host: /tmp, container: /d}\n",
-		"Env":       "env:\n  A: b\n",
-		"EnvAllow":  "env_allow:\n  - A\n",
-		"Network":   "network:\n  allow:\n    - x.example.com\n",
-		"Ports":     "ports:\n  - 3000\n",
-		"Security":  "security:\n  seccomp: unconfined\n",
-		"Cache":     "cache:\n  paths:\n    - /x\n",
-		"Snapshot":  "snapshot:\n  enabled: false\n",
-		"Secrets":   "secrets:\n  T:\n    env: HOME\n",
-		"Runtime":   "runtime: runsc\n",
-		"Engine":    "engine: podman\n",
+		"Image":    "image: x:1\n",
+		"Workdir":  "workdir: /app\n",
+		"User":     "user: root\n",
+		"Home":     "home: /tmp/h\n",
+		"Mounts":   "mounts:\n  - {host: /tmp, container: /d}\n",
+		"Env":      "env:\n  A: b\n",
+		"EnvAllow": "env_allow:\n  - A\n",
+		"Network":  "network:\n  allow:\n    - x.example.com\n",
+		"Ports":    "ports:\n  - 3000\n",
+		"Security": "security:\n  seccomp: unconfined\n",
+		"Cache":    "cache:\n  paths:\n    - /x\n",
+		"Snapshot": "snapshot:\n  enabled: false\n",
+		"Secrets":  "secrets:\n  T:\n    env: HOME\n",
+		"Runtime":  "runtime: runsc\n",
+		"Engine":   "engine: podman\n",
+		// A settable value rather than `none`, so the refusal under test is the
+		// trust boundary and not Validate's unimplemented-kind error arriving
+		// first and passing for the same thing.
+		"Sandbox":   "sandbox: podman\n",
 		"Routing":   "routing: [codex, claude]\n",
 		"Providers": "providers:\n  claude: evil.example.com\n",
 		// Direction-checked: the sample must *weaken* something already in force,
