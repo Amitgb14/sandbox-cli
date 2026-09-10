@@ -19,6 +19,15 @@ the one before it is good enough to use daily.
 | 5 | [Checkpoint and fork](task-5-checkpoint-and-fork.md) | Stop paying cold start per worktree, and let three attempts at one fix branch from a single prepared state. | Not started |
 | 6 | [macOS microVM](task-6-macos-microvm.md) | A libkrun backend, so the stronger boundary is reachable on the platform most users are on. | Not started |
 
+Running alongside these, on its own track rather than in the queue, is the
+**control plane**: [the session server](../architecture/session-server.md). One
+daemon catalogs sandboxed panes grouped by git worktree, and the CLI, Studio and
+fleet become clients of one protocol instead of three callers that each build
+`sandbox.Options` for themselves. It is a track rather than a task because it
+changes no boundary — `runtime.BuildArgs` stays the only thing that turns policy
+into engine argv — and because every task above gets easier once there is one
+place that knows what is running.
+
 ## Why this order
 
 Task 1 is where every user starts and where they spend every day. A tool whose daily loop

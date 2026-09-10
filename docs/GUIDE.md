@@ -1188,6 +1188,48 @@ ports:
 Flags add to that list rather than replacing it, so `-P 9229` opens a debugger
 port for one run without disturbing the project's own.
 
+### The session server
+
+A second way to look at the same containers, and the first piece of a longer
+track: one daemon per repository that catalogs its sandboxes instead of every
+command re-deriving the grouping from labels.
+
+```sh
+sandbox-cli serve          # foreground; one per repository
+sandbox-cli pane list      # the containers, grouped by worktree
+sandbox-cli session snapshot   # the whole catalog, as the protocol has it
+```
+
+It **starts nothing**, and stopping it leaves every container running — the engine
+owns them, which is the same reason `sandbox-cli list` survives a killed CLI. So
+the question worth asking is what it adds over `list`, and there is exactly one
+answer today: `list` can only show you what the engine still has. A container that
+has been reaped is gone from `docker ps -a` and therefore from `list`, while the
+catalog keeps the pane — stopped, with the branch it was on and the conversation it
+belonged to. That is the half the engine cannot give back.
+
+`pane list` works without the daemon too, by reading the engine directly, and says
+so when it does. The two differ only in that one sentence.
+
+Two things called a snapshot, and they are not the same layer:
+
+| | `session snapshot` | `recover` |
+|---|---|---|
+| holds | layout — worktrees, panes, state | **files** — the workspace, including untracked ones |
+| lives in | `~/.config/sandbox/sessions/<repo>/session.json` | git, under `refs/sandbox/snapshots/` |
+| restoring it | starts no agent, changes no file | gives you a branch with your work on it |
+
+If you are looking for work an agent lost, you want `recover`. This is the other
+one.
+
+The socket is `0600` in a `0700` directory and carries no token: anyone who can
+open it can already run docker as you, so a token would be a second secret
+protecting nothing. Studio keeps its loopback bind and bearer token — a browser can
+reach Studio, which is a different boundary.
+
+Where this is going, and what each phase may not touch, is
+[the session server](architecture/session-server.md).
+
 ### Sessions
 
 A **session** is a container sandbox-cli started. Most finish while you are
@@ -1432,6 +1474,10 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli recover list\|show\|restore` | Find and restore work from a crashed run |
 | `sandbox-cli recover fetch` | List or pull back snapshots mirrored to object storage |
 | `sandbox-cli recover repair` | Fix a repository a crashed sandbox broke |
+| `sandbox-cli serve` | Run the session server for this repository — catalogs its sandboxes, starts none ([track](architecture/session-server.md)) |
+| `sandbox-cli serve status\|stop` | Whether one is running; stop it (containers keep running either way) |
+| `sandbox-cli pane list [--all] [--json]` | The same containers as `list`, grouped by worktree, with the pane ids the protocol uses |
+| `sandbox-cli session snapshot` | The whole catalog as JSON — layout, not files (`recover` is files) |
 | `sandbox-cli version` | Print the version |
 
 Common flags (work on `run` and on every agent wrapper):

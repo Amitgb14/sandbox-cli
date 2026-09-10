@@ -44,6 +44,15 @@ type Config struct {
 	// machine.
 	Engine string `yaml:"engine"`
 
+	// Sandbox is what isolates a run — see SandboxKind. Empty follows Engine,
+	// which is what every config did before this field existed.
+	//
+	// User-config only, and refused from a project file for a sharper version of
+	// `engine`'s reason: `engine` chooses which binary runs on your machine, and
+	// this chooses whether anything stands between the agent and your files at
+	// all. A repository that could set it could ask to be run with no container.
+	Sandbox SandboxKind `yaml:"sandbox"`
+
 	// Routing is the ordered list of agents a run falls through when the one it
 	// asked for is unavailable — ["claude", "codex"] meaning "claude, and codex
 	// if the provider behind claude is not answering". Empty means no routing:
@@ -671,6 +680,17 @@ func (c Config) Validate() error {
 	// file not found" from deep inside a run rather than a config error.
 	if c.Engine != "" && !ValidEngine(c.Engine) {
 		return fmt.Errorf("engine %q: want docker or podman", c.Engine)
+	}
+	// Two checks rather than one, because a typo and an unimplemented kind are
+	// different mistakes and deserve different sentences. Both are refused here,
+	// where the config is legible, rather than at the point of use.
+	if c.Sandbox != "" {
+		if !KnownSandboxKind(c.Sandbox) {
+			return fmt.Errorf("sandbox %q: want docker, podman, bwrap or none", string(c.Sandbox))
+		}
+		if !c.Sandbox.Available() {
+			return RefuseUnimplemented(c.Sandbox)
+		}
 	}
 	// An image reference beginning with a dash is read by docker as another flag,
 	// not as the image: `image: "--privileged"` rendered a real --privileged into

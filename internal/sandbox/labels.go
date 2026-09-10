@@ -134,6 +134,61 @@ const (
 	// a fact not recorded here is one no later command can recover.
 	LabelSession = "sandbox.session"
 
+	// The session-server labels. Three, where the plan for that track proposed
+	// ten — the other seven are either already stamped above or derivable from
+	// what is, and a second label for a fact already recorded is a second answer
+	// that can disagree with the first.
+	//
+	// Dropped as already present: `sandbox.managed` (LabelCLI is the marker for
+	// "this is ours", and the filter every command already uses),
+	// `sandbox.repo_hash` (LabelRepo *is* worktree.RepoID — directory name plus a
+	// hash of the absolute path), `sandbox.branch`, `sandbox.agent`,
+	// `sandbox.profile`. Dropped as derivable: the workspace id follows from
+	// LabelRepo and the worktree id from LabelBranch, both deterministically, so
+	// storing them would only create a way for the catalog and the container to
+	// disagree about which worktree a pane is in.
+	//
+	// Stamped by phase 2, when the server starts containers. Declared now because
+	// phase 1 *reads* them: a container started by an older sandbox-cli carries
+	// none of them, and adoption has to be able to say so rather than guess.
+
+	// LabelPane is the pane id a container belongs to, and the only one of the
+	// three that cannot be derived: it is the catalog's own key, minted when the
+	// pane is created.
+	//
+	// Its absence is meaningful. A container without it was started before the
+	// session server existed, so the catalog has nothing to join on — such a pane
+	// is listed with its *container name* as its id and marked legacy, because a
+	// synthesised `p_` id would name something no engine has heard of.
+	LabelPane = "sandbox.pane"
+
+	// LabelPaneKind is what the pane is for: agent, shell, command, verify or
+	// console.
+	//
+	// Named pane_kind rather than kind because `sandbox-cli list` already prints a
+	// KIND column and it already means interactive-vs-fleet (sessionKind, from
+	// LabelFleet). Two different KINDs in one tool reads fine in a diff and is
+	// indistinguishable in a terminal, which is where somebody decides what to
+	// kill.
+	LabelPaneKind = "sandbox.pane_kind"
+
+	// LabelPaneSession is which session daemon owns this pane.
+	//
+	// *Not* `sandbox.session`, which is taken, and the collision is the sharp kind
+	// rather than the cosmetic kind: that label means the agent conversation a run
+	// reopened, so reusing the name would make a daemon id and a conversation id
+	// indistinguishable in the one place both are recorded — and `recover`'s
+	// resume correlation reads it.
+	LabelPaneSession = "sandbox.pane_session"
+
+	// LabelSandbox is the config.SandboxKind that isolated this run.
+	//
+	// Recorded rather than inferred for the reason LabelProfile already is: a
+	// catalog read next week should not have to ask which engine the machine has
+	// *now*. Today it is always a container kind, which is exactly why stamping it
+	// costs nothing and why the field has to exist before that stops being true.
+	LabelSandbox = "sandbox.sandbox"
+
 	// LabelBaseline is the crash-snapshot commit taken immediately before this
 	// run started: a before-image of the workspace, including files git does not
 	// track, written by internal/rescue through its private index.

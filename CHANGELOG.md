@@ -11,6 +11,28 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **`sandbox-cli serve`, `pane list` and `session snapshot`** — the first slice of
+  the session-server track ([docs](docs/architecture/session-server.md)). One daemon
+  per repository catalogs its sandboxes instead of every command re-deriving the
+  grouping from container labels.
+
+  It **starts nothing**, and stopping it leaves every container running. What it adds
+  over `list` is one thing: `list` can only show what the engine still has, so a
+  reaped container is gone from both — while the catalog keeps the pane, stopped, with
+  the branch it was on and the conversation it belonged to.
+
+  `pane list` works without the daemon by reading the engine directly, and says so.
+  `session snapshot` is **layout**, not files: `recover` is still the one that gives
+  work back, and the two do not touch.
+
+  Also a `sandbox:` config key (`docker`/`podman`), refused from a project
+  `.sandbox.yaml` for a sharper version of `engine`'s reason — that key chooses which
+  binary runs the container, this one chooses whether there is one. `bwrap` and `none`
+  are declared and refused under **every** profile, dev included: dev is the default,
+  so a dev-only no-isolation mode would be reachable by the ordinary path.
+
 ### Changed
 
 - **Studio launches an agent with a console by default, and no longer asks.**

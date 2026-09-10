@@ -387,6 +387,9 @@ func NewRootCmd() *cobra.Command {
 		newWorktreeCmd(),
 		newRecoverCmd(),
 		newContextCmd(),
+		newServeCmd(),
+		newPaneCmd(),
+		newSessionCmd(),
 		newVersionCmd(),
 	)
 	// One command per agent adapter, from the single list in agents.go.
