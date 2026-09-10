@@ -11,6 +11,47 @@ version is tagged.
 
 ## Unreleased
 
+### Changed
+
+- **Studio launches an agent with a console by default, and no longer asks.**
+  "Keep a console I can attach to" was a toggle that started off, so the ordinary
+  way to launch an agent from the browser produced a container with no stdin —
+  and the way you found out was the Terminal tab saying the run could not be
+  typed at, after the agent had already started. It is now derived rather than
+  chosen: an agent run keeps a console, the toggle is gone, and the form states
+  the mode instead of offering it.
+
+  The four exceptions are not a hidden preference. Each is a pair the daemon
+  already refuses, so a console there would be a 400 rather than a different run:
+  a plain command (no interactive mode to swap in), a **verify command** (its
+  exit code is the answer it exists to give, and an interactive session's exit
+  code is whenever you quit), a **fallback agent** (routing retries a run that
+  ended by itself), and a prompt for an agent whose interactive argv cannot carry
+  one — opencode reads a lone positional as the directory to open. The form names
+  whichever of those made a run headless, so the field to clear is on screen.
+
+  Filling in a verify command is therefore now how you ask for a headless run
+  from Studio. The field used to be disabled by the toggle; it is enabled always.
+
+  **"Let it work without asking" now starts checked**, which preserves the
+  default launch rather than widening it: a headless run gets the flag from
+  `Descriptor.Autonomous` whatever the form says, so clicking Launch and walking
+  away always produced work. A console run takes it from the request instead, so
+  leaving it off would have started the agent's interactive UI and stopped it at
+  its first approval, in a detached container with nobody attached. Same autonomy
+  as before, now unlocked rather than locked — untick it and the session waits to
+  be answered, which the box beside it says.
+
+- **"Run detached" is gone from Studio's launch form.** It never travelled: the
+  request has no such field and the daemon detaches every run, because an HTTP
+  request/response cycle has nowhere to hold a pty. The only thing the toggle
+  changed was the preview beside it — and being false by default, it described a
+  container with a pty that nobody was going to get, said "Attached" in the
+  success toast of every run Studio has ever started, and silently suppressed the
+  warning for an agent with no verified headless argv. The preview now says
+  detached because the run is, and that warning fires on a run being *headless*,
+  which is the fact it was about.
+
 ### Fixed
 
 - **`recover list` called a before-image `clean`, and restoring one said

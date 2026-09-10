@@ -56,6 +56,15 @@ import type {
 import { cn } from "@/lib/utils";
 
 /**
+ * What the form holds — every field of a launch request except `console`.
+ *
+ * `console` was a toggle and is now **derived**, so it is omitted here rather
+ * than defaulted: a field nothing may set is one the next reader wires a
+ * control back onto. The rule that replaced the toggle is `consoleRun` below.
+ */
+type FormState = Omit<LaunchRequest, "console">;
+
+/**
  * Launch a run.
  *
  * The form's job is not only to collect settings — it is to make the boundary
@@ -101,11 +110,11 @@ export function LaunchForm() {
    * `?resume=` arrives from a conversation row's **Continue**, with `?agent=`
    * and — when the conversation could be attributed — `?repo=`.
    *
-   * It sets the console at the same time, and that is not a convenience: the
-   * daemon refuses a headless resume outright, because replaying one prompt into
-   * an old conversation and exiting is not what anyone means by carrying it on.
-   * A deep link that set the session without the console would land on a form
-   * that cannot be submitted, with nothing on screen saying why.
+   * It no longer has to set the console: an agent run keeps one by default, and
+   * the daemon refuses a headless resume outright — replaying one prompt into an
+   * old conversation and exiting is not what anyone means by carrying it on. The
+   * link therefore lands on a form that can be submitted as it arrived, and
+   * `localPreview` still refuses if something headless-only is typed underneath.
    *
    * Applied at mount rather than in an effect: unlike `?branch=`, neither value
    * has to be matched against a list the daemon has not sent yet.
@@ -126,7 +135,7 @@ export function LaunchForm() {
   const initialHandoffSession = search.get("handoffSession");
   const routingPrefsAtMount = useRef(routingPrefs).current;
 
-  const [req, setReq] = useState<LaunchRequest>({
+  const [req, setReq] = useState<FormState>({
     agent: initialAgent,
     command: "",
     prompt: "",
@@ -154,9 +163,23 @@ export function LaunchForm() {
     network: { mode: "allowlist", baseline: true, allow: [] },
     memory: "4g",
     cpus: "2",
-    detach: false,
-    console: !!initialResume,
-    skipPermissions: false,
+    /**
+     * True, because the console being the default would otherwise have made the
+     * default launch do nothing.
+     *
+     * This used to be false and locked *on* in the UI: a headless run gets the
+     * flag from `Descriptor.Autonomous` whatever the form says, so clicking
+     * Launch and walking away produced work. A console run takes
+     * `agent.Console(prompt, skipPermissions)` instead, so the same click now
+     * starts claude's interactive UI — which stops at its first tool approval,
+     * in a detached container, with nobody attached yet.
+     *
+     * So this is not a widening: it is the autonomy the default launch already
+     * had, moved from locked-on to *checked and changeable*, which is strictly
+     * more control than before. Untick it and the session waits to be answered,
+     * which is now a thing somebody can ask for.
+     */
+    skipPermissions: true,
     resume: initialResume,
     handoffFrom:
       initialHandoffAgent && initialHandoffSession
@@ -271,13 +294,56 @@ export function LaunchForm() {
     setWorktreeMode("existing");
   }, [deepLinkBranch, worktrees]);
 
-  function patch(next: Partial<LaunchRequest>) {
+  function patch(next: Partial<FormState>) {
     setReq((prev) => ({ ...prev, ...next }));
   }
+
+  const agentMeta = agents?.find((a) => a.name === req.agent);
+
+  /**
+   * Whether this launch keeps a console — **derived**, not chosen.
+   *
+   * An agent run is interactive by default now: the container keeps a terminal
+   * (`-dit`) and the prompt seeds a first turn rather than being the whole run,
+   * so whoever attaches can answer a follow-up question. The toggle that used to
+   * ask is gone, and the four exceptions below are not a hidden preference —
+   * every one of them is a pair the daemon **refuses**, so a console here would
+   * be a 400 rather than a different run.
+   *
+   * - No agent. A plain command is whatever argv was typed; `runs.go` refuses a
+   *   console without an agent, because there is no interactive mode to swap in.
+   * - A verify command. Verify's exit code is the answer it exists to give, and
+   *   an interactive session's exit code is whenever somebody quit — so typing
+   *   one is now how you ask for a headless run.
+   * - A fallback chain. Routing retries a run that exited non-zero having
+   *   changed nothing, which is a claim about a run that ends by itself.
+   * - A prompt for an agent that cannot seed one (`canSeedConsolePrompt`:
+   *   opencode reads a lone positional as the directory to open, so its
+   *   interactive argv has nowhere to put a first turn). Headless is the mode
+   *   that can carry the prompt, and the prompt is the instruction.
+   *
+   * `undefined` counts as "can", and Launch is disabled until the list arrives
+   * (`agentsPending`) rather than that being read as an all-clear: `?agent=` is
+   * a deep link, so the name does **not** have to have come from the picker —
+   * `?agent=cline` plus the prompt a handoff requires is exactly the pair
+   * `runs.go` refuses, and guessing either way in that window would make it
+   * reachable. Waiting is the only answer that cannot be wrong.
+   */
+  const consoleRun =
+    !!req.agent &&
+    !req.verify.trim() &&
+    req.fallback.length === 0 &&
+    (!req.prompt.trim() || agentMeta?.canSeedConsolePrompt !== false);
+
+  // An agent named in the URL whose descriptor has not arrived. Nothing about
+  // the request is known yet — neither the mode nor whether the daemon would
+  // take it — so the button waits rather than the derivation guessing.
+  const agentsPending = !!req.agent && !agentMeta;
 
   const resolved: LaunchRequest = useMemo(
     () => ({
       ...req,
+      console: consoleRun,
       worktree:
         worktreeMode === "main"
           ? null
@@ -285,7 +351,7 @@ export function LaunchForm() {
             ? newBranch || null
             : req.worktree,
     }),
-    [req, worktreeMode, newBranch],
+    [req, consoleRun, worktreeMode, newBranch],
   );
 
   const preview = useMemo(
@@ -293,8 +359,6 @@ export function LaunchForm() {
     [resolved, egress],
   );
   const blocked = preview.refusals.length > 0;
-
-  const agentMeta = agents?.find((a) => a.name === req.agent);
 
   // An agent run with no console skips permissions whatever this form says —
   // *for the agents that have a flag to skip with*. `Descriptor.Autonomous`
@@ -306,7 +370,7 @@ export function LaunchForm() {
   // stop making, pointed the other way. A plain command is excluded too: no
   // agent, nothing to ask.
   const headlessAlwaysSkips =
-    !!req.agent && !req.console && agentMeta?.canSkipPermissions === true;
+    !!req.agent && !consoleRun && agentMeta?.canSkipPermissions === true;
   const skipFlag = agentMeta?.skipPermissionArgs?.join(" ");
   // The repositories the daemon answers about, and nothing else. Addressed by
   // repo **id**, never by a name derived from the workspace path: two clones of
@@ -327,9 +391,13 @@ export function LaunchForm() {
     launch.mutate(resolved, {
       onSuccess: ({ id }) => {
         toast.success("Sandbox starting", {
-          description: resolved.detach
-            ? "Detached — follow it from Runs, and its exit code is the whole supervision story."
-            : "Attached. The terminal tab shows what it draws.",
+          // Every run launched here is detached — the daemon sets it, and this
+          // used to read `req.detach`, a field that was always false, so the
+          // toast said "Attached" about every run Studio has ever started. What
+          // differs is whether there is a console to attach *to*.
+          description: consoleRun
+            ? "Detached with a console — open the Terminal tab to answer it."
+            : "Detached and headless — follow it from Runs, and its exit code is the whole supervision story.",
         });
         router.push(`/runs/${id}`);
       },
@@ -427,10 +495,16 @@ export function LaunchForm() {
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              {agentMeta && !agentMeta.headlessVerified && req.detach && (
+              {/*
+                Gated on the run being headless, which is the fact this is about.
+                It used to be gated on `req.detach` — always false, so this never
+                rendered at all, for the agents it exists to warn about.
+              */}
+              {agentMeta && !agentMeta.headlessVerified && !consoleRun && (
                 <Hint tone="caution">
-                  {agentMeta.label} has no verified headless argv. Detached, an
-                  agent that stops to ask permission does not fail — it hangs.
+                  {agentMeta.label} has no verified headless argv, and this run
+                  is headless. An agent that stops to ask permission with nobody
+                  attached does not fail — it hangs.
                 </Hint>
               )}
               {agentMeta && agentMeta.delivery !== "baked" && (
@@ -558,7 +632,7 @@ export function LaunchForm() {
               <Hint>
                 {req.handoffFrom
                   ? "Required for a handoff, and it is the half the briefing does not carry: the briefing says what happened before, this says what to do now."
-                  : req.console
+                  : consoleRun
                     ? "This seeds the first turn rather than being the whole run — the session stays open, so a follow-up question can be answered by whoever attaches."
                     : "For a detached run this is the whole instruction — nobody is there to answer a follow-up question."}
               </Hint>
@@ -916,15 +990,29 @@ export function LaunchForm() {
 
         {/* ---------------------------------------------------------------- */}
         <Section icon={Terminal} title="Autonomy">
-          <Toggle
-            id="detach"
-            checked={req.detach}
-            onCheckedChange={(detach) => patch({ detach })}
-            label="Run detached"
-            hint="Nobody is attached, so `-d` replaces `-i`/`-it` and the container is not removed on exit — the exit code and its logs are the entire supervision story."
-          />
+          {/*
+            "Run detached" used to be a toggle here and has been removed rather
+            than relabelled. It never travelled — `buildLaunchBody` sends no
+            detach field and `runs.go` sets `Detach: true` on every request,
+            because an HTTP request/response cycle has nowhere to hold a pty —
+            so the only thing it changed was the preview beside it, which is the
+            one place it must not. Unticked, it described a run with a pty that
+            the daemon was never asked for; and it sat directly above a line
+            asserting this run keeps `-dit`, which is the contradiction that
+            found it.
+          */}
 
-          {req.console && req.agent && <ResumePicker req={req} patch={patch} />}
+          {/*
+            Rendered while a conversation is *set* as well as while one can be
+            picked. Typing a verify command under a resumed session flips the run
+            headless, and the daemon refuses a headless resume — so unmounting
+            the picker there left a refusal offering two remedies, one of which
+            was "clear the conversation" with no control on screen to clear it
+            with. The picker stays, and says why it cannot be used.
+          */}
+          {req.agent && (consoleRun || req.resume) && (
+            <ResumePicker req={req} patch={patch} headless={!consoleRun} />
+          )}
 
           {/*
             Three states, and each says something different about the run.
@@ -946,10 +1034,24 @@ export function LaunchForm() {
           */}
           <Toggle
             id="skip-permissions"
-            checked={headlessAlwaysSkips || req.skipPermissions}
+            /*
+              Now that this defaults to *true*, the two states where it means
+              nothing have to say so: an agent whose skip list is empty
+              (`canSkipPermissions === false` — sandbox-cli adds nothing, the
+              approval policy is the agent's own) and no agent at all. Rendering
+              it checked there would be the same false statement the hint beside
+              it was written to stop making, which is why the default could not
+              simply be read off the state.
+            */
+            checked={
+              headlessAlwaysSkips ||
+              (!!req.agent &&
+                agentMeta?.canSkipPermissions !== false &&
+                req.skipPermissions)
+            }
             disabled={
               headlessAlwaysSkips ||
-              !req.console ||
+              !consoleRun ||
               !agentMeta?.canSkipPermissions
             }
             onCheckedChange={(skipPermissions) => patch({ skipPermissions })}
@@ -959,7 +1061,7 @@ export function LaunchForm() {
             }
             hint={
               headlessAlwaysSkips
-                ? `Always on for a headless run, and not a choice: ${agentMeta?.label ?? req.agent} is started in its autonomous argv${skipFlag ? ` (${skipFlag})` : ""}, because an agent that stops for permission with nobody attached does not fail — it hangs. Keep a console below if you want to be asked.`
+                ? `Always on for a headless run, and not a choice: ${agentMeta?.label ?? req.agent} is started in its autonomous argv${skipFlag ? ` (${skipFlag})` : ""}, because an agent that stops for permission with nobody attached does not fail — it hangs. The line below says what made this run headless; clear that for a console, and being asked becomes a choice.`
                 : !req.agent
                   ? "Pick an agent first. A plain command is whatever argv you typed; there are no approval prompts to turn off."
                   : agentMeta?.canSkipPermissions === false
@@ -968,18 +1070,68 @@ export function LaunchForm() {
             }
           />
 
-          <Toggle
-            id="console"
-            checked={req.console}
-            disabled={!req.agent}
-            onCheckedChange={(console) => patch({ console })}
-            label="Keep a console I can attach to"
-            hint={
-              req.agent
-                ? "Starts the agent's interactive mode on a container that keeps a terminal (`-dit`), so `sandbox-cli attach` from any window can answer it. Without this the agent runs headless: it produces one final answer and can never stop to ask."
-                : "Needs an agent. A plain command is already whatever argv you typed — there is no headless mode to swap out of."
-            }
-          />
+          {/*
+            What used to be a toggle. An agent run keeps a console by default,
+            so this states the mode rather than asking for it — and names the
+            field to clear when the mode is not the one you wanted, since every
+            exception is something else on this form having been filled in.
+          */}
+          <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+            <Hint tone={consoleRun ? "contained" : undefined}>
+              {!req.agent ? (
+                <>
+                  <strong className="font-medium">No console.</strong> A plain
+                  command is whatever argv you typed — there is no interactive
+                  mode to swap in, and the daemon refuses a console without an
+                  agent.
+                </>
+              ) : consoleRun ? (
+                <>
+                  <strong className="font-medium">
+                    Keeps a console you can attach to.
+                  </strong>{" "}
+                  The agent starts in its interactive mode on a container that
+                  holds a terminal (<code>-dit</code>), so this window or{" "}
+                  <code>sandbox-cli attach</code> can answer it. The prompt
+                  seeds the first turn instead of being the whole run.{" "}
+                  {/*
+                    Whether it gets anywhere before somebody attaches is the
+                    other half, and it is the half an interactive run changed:
+                    unticked, the session stops at its first approval in a
+                    container nobody is watching yet.
+                  */}
+                  {agentMeta?.canSkipPermissions === false
+                    ? `Whether it stops to ask is ${agentMeta?.label ?? req.agent}'s own approval policy — sandbox-cli adds nothing there.`
+                    : req.skipPermissions
+                      ? "It works through without asking, so it makes progress before anyone attaches."
+                      : "It will stop at its first approval and wait — nobody is attached until you open the Terminal tab."}
+                </>
+              ) : req.verify.trim() ? (
+                <>
+                  <strong className="font-medium">Headless</strong>, because a
+                  verify command is set. Verify decides the run&apos;s exit code
+                  and an interactive session&apos;s exit code is whenever you
+                  quit, so the two are refused together — clear it for a
+                  console.
+                </>
+              ) : req.fallback.length > 0 ? (
+                <>
+                  <strong className="font-medium">Headless</strong>, because a
+                  fallback agent is set. Routing retries a run that exited
+                  non-zero having changed nothing, which is a claim about a run
+                  that ends by itself — clear the chain for a console.
+                </>
+              ) : (
+                <>
+                  <strong className="font-medium">Headless</strong>, because{" "}
+                  {agentMeta?.label ?? req.agent} cannot be handed a first turn
+                  on the command line: its interactive argv reads a lone
+                  positional as something else. Clear the prompt to attach and
+                  type it in the session instead.
+                </>
+              )}
+            </Hint>
+          </div>
 
           <Field label="Verify command" htmlFor="verify">
             <Input
@@ -988,24 +1140,22 @@ export function LaunchForm() {
               onChange={(e) => patch({ verify: e.target.value })}
               placeholder="make test"
               className="font-mono"
-              disabled={req.console}
             />
             <Hint>
-              {req.console ? (
-                <>
-                  Not available with a console. Verify decides the run&apos;s
-                  exit code, which is how <code>land</code> knows the work is
-                  done — and an interactive session&apos;s exit code is whenever
-                  you quit. Run it yourself in the session instead.
-                </>
-              ) : (
-                <>
-                  Wrapped around the agent&apos;s argv <em>inside</em> the
-                  container, and its exit code becomes the container&apos;s. In
-                  the container because a verify running on the host would be
-                  host code selected by a file the agent can write.
-                </>
-              )}
+              <>
+                Wrapped around the agent&apos;s argv <em>inside</em> the
+                container, and its exit code becomes the container&apos;s. In
+                the container because a verify running on the host would be host
+                code selected by a file the agent can write.
+                {req.agent && (
+                  <>
+                    {" "}
+                    Filling this in <em>runs the agent headless</em>: the exit
+                    code is how <code>land</code> knows the work is done, and an
+                    interactive session&apos;s exit code is whenever you quit.
+                  </>
+                )}
+              </>
             </Hint>
           </Field>
 
@@ -1049,11 +1199,18 @@ export function LaunchForm() {
           <Button
             size="lg"
             onClick={submit}
-            disabled={blocked || launch.isPending}
+            disabled={blocked || agentsPending || launch.isPending}
           >
             <Play className="size-4" />
             {launch.isPending ? "Starting…" : "Launch sandbox"}
           </Button>
+          {agentsPending && !blocked && (
+            <p className="text-xs text-muted-foreground">
+              Waiting for the daemon&apos;s agent list — it says whether{" "}
+              {req.agent} can be handed a first turn, which is what decides the
+              mode.
+            </p>
+          )}
           {blocked && (
             <p className="text-xs text-destructive">
               {preview.refusals.length === 1
@@ -1299,9 +1456,16 @@ function Radio({
 function ResumePicker({
   req,
   patch,
+  headless,
 }: {
-  req: LaunchRequest;
-  patch: (p: Partial<LaunchRequest>) => void;
+  req: FormState;
+  patch: (p: Partial<FormState>) => void;
+  /**
+   * This run has gone headless with a conversation still picked — so the daemon
+   * would refuse it. The picker stays rendered to keep "clear the conversation"
+   * reachable, and says which it is.
+   */
+  headless: boolean;
 }) {
   const { data: sessions, isPending } = useAgentSessions(req.agent);
 
@@ -1347,10 +1511,12 @@ function ResumePicker({
           ))}
         </SelectContent>
       </Select>
-      <Hint>
-        {req.resume
-          ? "The prompt above is ignored: the conversation already has one, and this reopens it where it stopped."
-          : "Reopens an earlier session in a fresh container. Only conversations the sandbox itself wrote are listed."}
+      <Hint tone={headless ? "caution" : undefined}>
+        {headless
+          ? "This run is headless, and a headless resume would replay one prompt into an old conversation and exit — so the daemon refuses it. Either start a new conversation here, or clear whatever made the run headless (the line below Autonomy says which)."
+          : req.resume
+            ? "The prompt above is ignored: the conversation already has one, and this reopens it where it stopped."
+            : "Reopens an earlier session in a fresh container. Only conversations the sandbox itself wrote are listed."}
       </Hint>
     </Field>
   );
