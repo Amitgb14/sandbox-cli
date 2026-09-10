@@ -151,9 +151,22 @@ func PIDPath(dir string) string    { return filepath.Join(dir, "pid") }
 // it can already run docker as this user, so a token would be a second secret
 // protecting nothing.
 func Open(dir string, profile, engine string) (*Server, error) {
-	root, err := worktree.RepoRoot(dir)
-	if err != nil {
-		return nil, fmt.Errorf("a session is scoped to a repository, and %s is not in one: %w", dir, err)
+	// worktree.MainRepo, not RepoRoot: `rev-parse --show-toplevel` answers with a
+	// linked worktree's *own* directory, and the session id comes from
+	// worktree.RepoID, which follows the pointer back to the main checkout. Using
+	// both meant one session directory whose Root was whichever directory the
+	// command last ran in — so `serve` from inside a managed worktree recorded the
+	// worktree as the repository, flagged it `Main: true` (the one worktree
+	// `worktree rm` must never touch), lost the real checkout from the catalog, and
+	// found no managed worktrees at all, since worktreeBase is computed from the
+	// main root. Two invocations from different directories then overwrote each
+	// other's Root in one file.
+	//
+	// One repository, one session, and every branch of it agrees which — which is
+	// the same property RepoID exists to give the container labels.
+	root := worktree.MainRepo(dir)
+	if root == "" {
+		return nil, fmt.Errorf("a session is scoped to a repository, and %s is not in one", dir)
 	}
 	sdir, err := DirFor(root)
 	if err != nil {
@@ -258,9 +271,20 @@ func cloneSession(in protocol.Session) protocol.Session {
 func (s *Server) Panes(p protocol.PaneListParams) []protocol.Pane {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return FilterPanes(s.sess, p)
+}
+
+// FilterPanes applies a listing request to a catalog.
+//
+// Exported because there are two callers and one rule: the daemon answering
+// pane.list, and a client that read the catalog itself because no daemon was
+// running. A second copy of the filter is how those two came to answer different
+// questions — the client's honoured `All` and silently ignored the workspace and
+// worktree filters.
+func FilterPanes(sess protocol.Session, p protocol.PaneListParams) []protocol.Pane {
 	var out []protocol.Pane
-	for _, pane := range s.sess.Panes {
-		if p.Workspace != "" && workspaceOf(s.sess, pane.WorktreeID) != p.Workspace {
+	for _, pane := range sess.Panes {
+		if p.Workspace != "" && workspaceOf(sess, pane.WorktreeID) != p.Workspace {
 			continue
 		}
 		if p.Worktree != "" && pane.WorktreeID != p.Worktree {
@@ -533,8 +557,25 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 	for _, pane := range s.sess.Panes {
 		c, ok := byPane[pane.ID]
 		if !ok {
-			// Fall back to the name, for a pane recorded before the label existed.
-			c, ok = byName[pane.ContainerName]
+			// Fall back to the name — but only onto a container that is not somebody
+			// else's, and only once.
+			//
+			// The container name is deterministic (`sandbox-<repo>-<branch>`), so it
+			// is **reused** by the next run on that branch. A bare name lookup
+			// therefore bound a finished pane to the container that replaced it:
+			// `p_one` reported running against `p_two`'s container, still carrying
+			// `p_one`'s agent, while `p_two` never entered the catalog at all — and
+			// a phase-2 mutation by pane id would then act on the wrong container.
+			//
+			// So a container that names a *different* pane is not a match, and
+			// `claimed` is consulted so two catalog panes cannot both take one
+			// container. What is left over is picked up as a new pane below, which is
+			// where it belongs.
+			if cand, found := byName[pane.ContainerName]; found && !claimed[cand.Name] {
+				if label := cand.Labels[sandbox.LabelPane]; label == "" || label == pane.ID {
+					c, ok = cand, true
+				}
+			}
 		}
 		if !ok {
 			// The container is gone. The pane is not: this is the one fact the

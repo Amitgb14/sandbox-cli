@@ -35,6 +35,18 @@ func (s *Server) Serve(ctx context.Context, l Lister) error {
 		return err
 	}
 	sock := SockPath(s.dir)
+	// Dial before unlinking. The socket path always exists after a daemon is
+	// killed rather than stopped, so unlinking has to happen — but doing it
+	// unconditionally means a second `serve` **steals** the first one's socket,
+	// and when the second exits its own cleanup takes the socket and pid file with
+	// it. The first is then still running, still writing session.json, invisible to
+	// `serve status` and unreachable by anything. Two daemons for one repository is
+	// exactly the case flock exists for; this is the half that stops it happening.
+	if conn, err := net.DialTimeout("unix", sock, 500*time.Millisecond); err == nil {
+		conn.Close()
+		return fmt.Errorf("a session server is already running for %s\n"+
+			"  socket %s is answering; stop it with `sandbox-cli serve stop`", s.root, sock)
+	}
 	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("clearing the old socket at %s: %w", sock, err)
 	}
@@ -61,11 +73,28 @@ func (s *Server) Serve(ctx context.Context, l Lister) error {
 	defer os.Remove(PIDPath(s.dir))
 	defer os.Remove(sock)
 
-	// Closing the listener is what unblocks Accept; there is no deadline on a unix
-	// listener worth setting instead.
+	// Closing the listener unblocks Accept. Closing the *connections* is the other
+	// half, and leaving it out made shutdown hang forever: a client that has
+	// connected and gone quiet leaves handleConn blocked in a read that no context
+	// cancels, so `wg.Wait()` never returned. Since signal.NotifyContext keeps the
+	// handler registered, every later SIGTERM was swallowed too — so `serve stop`
+	// and Ctrl-C both looked dead and only SIGKILL worked, which then left the
+	// socket and pid file behind for the next `serve status` to puzzle over. The
+	// package doc invites exactly such a client by naming socat.
+	var (
+		mu     sync.Mutex
+		conns  = map[net.Conn]struct{}{}
+		closed bool
+	)
 	go func() {
 		<-ctx.Done()
 		ln.Close()
+		mu.Lock()
+		closed = true
+		for c := range conns {
+			c.Close()
+		}
+		mu.Unlock()
 	}()
 
 	var wg sync.WaitGroup
@@ -78,9 +107,25 @@ func (s *Server) Serve(ctx context.Context, l Lister) error {
 			}
 			return err
 		}
+		mu.Lock()
+		if closed {
+			// Accepted in the window between cancellation and the listener closing.
+			// Registering it would be a connection nothing will ever close.
+			mu.Unlock()
+			conn.Close()
+			continue
+		}
+		conns[conn] = struct{}{}
+		mu.Unlock()
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				mu.Lock()
+				delete(conns, conn)
+				mu.Unlock()
+			}()
 			s.handleConn(ctx, conn, l)
 		}()
 	}

@@ -115,6 +115,40 @@ Two smaller departures:
   way down. `servePID` dials; the pid is read only so that "stale pid 4711" can be
   said instead of "not running".
 
+## Review remediation
+
+Eight findings from `/code-review high 166`; six major, all reproduced before
+fixing and all now covered by a test verified to fail against the original code.
+
+| Where | What was wrong |
+|---|---|
+| `config/load.go` | **`mergeInto` never copied `Sandbox`.** The key was inert: `sandbox: podman` in a user config was dropped, and `sandbox: none` was therefore never refused — `Validate` runs on the merged config, where the field was always `""`. Documented, announced, and doing nothing. |
+| `session/session.go` | **`Open` used `RepoRoot`, the id used `RepoID`.** `rev-parse --show-toplevel` answers with a *linked worktree's own* directory; `RepoID` follows the pointer to the main checkout. From inside a managed worktree, one session file recorded the worktree as the repository, flagged it `Main` (the one worktree `worktree rm` must never touch), lost the real checkout, and found no managed worktrees at all. Now `worktree.MainRepo`, the same function `RepoID` uses. |
+| `session/session.go` | **The name fallback bound a pane to another pane's container.** Container names are deterministic and therefore reused by the next run on a branch, so a finished `p_one` was reported running against `p_two`'s container — and `p_two` never entered the catalog. A phase-2 mutation by pane id would have acted on the wrong container. Now the fallback requires the container to carry no pane label or the same one, and consults `claimed`. |
+| `session/serve.go` | **A second `serve` stole the first's socket.** Unlinking was unconditional; the second's own cleanup then removed the socket *and* pid file, leaving the first running, invisible to `status`, unreachable, and still writing `session.json` — the two-daemon case `flock`'s comment describes. Now it dials first and refuses. |
+| `session/serve.go` | **Shutdown hung on an idle client.** Cancelling closed the listener but not accepted connections, so `handleConn` blocked in a read and `wg.Wait()` never returned — and since `signal.NotifyContext` keeps the handler registered, later SIGTERMs were swallowed, so `serve stop` and Ctrl-C both looked dead and only SIGKILL worked, leaving the socket behind. Connections are tracked and closed on cancel. |
+| `cli/serve.go` | **`serve stop` could SIGTERM the caller's process group.** `servePID` returns `0` when the pid file is missing, and `kill(0, SIGTERM)` signals every process in the caller's group — the user's shell job and its siblings — while leaving the daemon running. Guarded on `pid > 0` with a message naming `lsof`. |
+| `cli/serve.go` | *minor* — the no-daemon listing honoured only `All`, silently dropping the workspace and worktree filters, so the two sources answered different questions. One `session.FilterPanes` now serves both. |
+| `cli/serve.go` | *minor* — `openSession` swallowed a `LoadProfile` error and recorded `profile: dev`. A repo whose config trips `ErrRestrictedProjectKeys` would be **catalogued as dev**: wrong in the direction that matters, and stamped rather than assumed. The error is returned. |
+
+Two follow-ons found while verifying the fixes, both in the same area:
+
+- `serve status` printed `running (pid 0)` when the pid file was unreadable — a lie
+  in the shape of a fact, and `0` is exactly the value that made `serve stop`
+  dangerous. It now says `pid unknown` and names the file.
+- The second `serve` printed its banner *and* `stopped; containers are untouched`
+  before the refusal, because the banner preceded the bind and the stop message was
+  unconditional. The check moved ahead of the banner, and "stopped" is printed only
+  on a clean stop.
+
+A structural guard came out of the first finding.
+`TestEveryConfigFieldSurvivesTheMerge` sets every `Config` field in a real user
+config, loads it, and fails if it arrives zero — because `mergeInto` is
+hand-written, so a field added to the struct and not to that function parses,
+validates and is silently discarded. `TestEveryConfigFieldIsClassified` already
+made a new field declare its trust; nothing made it declare that it works. Verified
+by reverting the one-line fix: the guard fails, naming the field.
+
 ## Not done
 
 - **`web/src` is deliberately not updated.** The repo's rule is that a user-facing

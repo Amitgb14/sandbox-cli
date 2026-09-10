@@ -63,6 +63,19 @@ func newServeCmd() *cobra.Command {
 				return err
 			}
 
+			// Asked here as well as inside Serve, and the duplication is for the
+			// *order* of the output rather than for the check. Serve's is the real
+			// guard — it is what a library caller gets, and it is the one close enough
+			// to the bind to matter — but by the time it refuses, this command has
+			// already printed a banner saying which socket it is on. Refusing before
+			// the banner is the difference between one sentence and a start, a stop
+			// and an error.
+			if _, alive := servePID(srv.Dir()); alive {
+				return fmt.Errorf("a session server is already running for %s\n"+
+					"  socket %s is answering; stop it with `sandbox-cli serve stop`",
+					srv.Root(), session.SockPath(srv.Dir()))
+			}
+
 			// Catalog once before listening, so the first client gets an answer
 			// rather than a daemon that has not looked yet. A failure here is
 			// reported and not fatal: a daemon that refuses to start because the
@@ -83,9 +96,14 @@ func newServeCmd() *cobra.Command {
 			// anybody wonders, and the answer has to be where they will see it.
 			ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			err = srv.Serve(ctx, rt)
+			if err := srv.Serve(ctx, rt); err != nil {
+				// Only on a clean stop. Printing it unconditionally meant a *failure*
+				// to serve also reported "stopped; containers are untouched", which is
+				// true and reads as though the thing had run.
+				return err
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "stopped; containers are untouched\n")
-			return err
+			return nil
 		},
 	}
 	addSessionFlags(cmd, &engineFlag, &cfgPath)
@@ -117,8 +135,13 @@ func newServeStatusCmd() *cobra.Command {
 
 			pid, alive := servePID(dir)
 			switch {
-			case alive:
+			case alive && pid > 0:
 				fmt.Fprintf(out, "state    running (pid %d)\n", pid)
+			case alive:
+				// Answering, with no readable pid file. "pid 0" would be a lie in the
+				// shape of a fact — and 0 is the value that made `serve stop` signal
+				// the caller's own process group.
+				fmt.Fprintf(out, "state    running (pid unknown — %s is missing or unreadable)\n", session.PIDPath(dir))
 			case pid > 0:
 				// The pid file outlives a daemon that was killed rather than
 				// stopped, which is exactly why the process is checked rather than
@@ -164,6 +187,18 @@ func newServeStopCmd() *cobra.Command {
 			pid, alive := servePID(dir)
 			if !alive {
 				return fmt.Errorf("no session server is running for %s", dir)
+			}
+			if pid <= 0 {
+				// Refused rather than approximated, because the approximation is
+				// dangerous in a way that is easy to miss: `servePID` returns 0 when the
+				// pid file is missing or unreadable, and `kill(0, SIGTERM)` does not mean
+				// "no process" — it signals **every process in the caller's process
+				// group**. `serve stop` would have terminated the user's shell job and
+				// its siblings while leaving the daemon running.
+				return fmt.Errorf("a session server is answering on %s but its pid is unknown\n"+
+					"  %s is missing or unreadable, so there is no process to signal\n"+
+					"  find it with `lsof %s` and stop it by hand",
+					session.SockPath(dir), session.PIDPath(dir), session.SockPath(dir))
 			}
 			if err := stopServe(pid); err != nil {
 				return err
@@ -313,14 +348,12 @@ func panesFor(ctx context.Context, cfgPath, engineFlag string, p protocol.PaneLi
 	if err != nil {
 		return nil, false, err
 	}
-	var out []protocol.Pane
-	for _, pane := range snap.Panes {
-		if !p.All && !pane.Running() {
-			continue
-		}
-		out = append(out, pane)
-	}
-	return out, false, nil
+	// Filtered by the *same* function the daemon applies, rather than by a second
+	// copy of the rule. The first version honoured only `All` and silently dropped
+	// the workspace and worktree filters, so the two sources answered different
+	// questions — invisibly, because no CLI caller sets them yet, which is exactly
+	// how it would have stayed wrong until one did.
+	return session.FilterPanes(snap, p), false, nil
 }
 
 // printPanes renders the table. Values that came off a container label go through
@@ -413,9 +446,19 @@ func openSession(cfgPath, engine string) (*session.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	profile := "dev"
-	if cfg, err := config.LoadProfile(wd, cfgPath, ""); err == nil && cfg.Profile != "" {
-		profile = cfg.Profile
+	// The error is returned, not swallowed into a "dev" default. The profile is
+	// stamped into the catalog as a fact about the run, and a repository whose
+	// config trips ErrRestrictedProjectKeys — or fails to load for any other reason
+	// — would otherwise be recorded as dev: wrong in the one direction that
+	// matters, and recorded rather than merely assumed. Every other command fails
+	// here too, so this also stops `serve` being the one that quietly does not.
+	cfg, err := config.LoadProfile(wd, cfgPath, "")
+	if err != nil {
+		return nil, err
+	}
+	profile := cfg.Profile
+	if profile == "" {
+		profile = config.ProfileDev
 	}
 	return session.Open(wd, profile, engine)
 }

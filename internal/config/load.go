@@ -470,6 +470,9 @@ func mergeInto(dst *Config, src Config, baseDir string) {
 	if src.Engine != "" {
 		dst.Engine = src.Engine
 	}
+	if src.Sandbox != "" {
+		dst.Sandbox = src.Sandbox
+	}
 	// Replaced, never appended to. A chain is an ordered decision about which
 	// agent runs first and which is the safety net; merging two would produce an
 	// order nobody wrote, and append would let a nearer file only ever *add*
