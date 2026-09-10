@@ -324,7 +324,8 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (bui
 			return sandbox.Options{}, fmt.Errorf(
 				"%s cannot be given a prompt for an interactive session: it has no way to be seeded on the command line, "+
 					"and passing one would be read as a directory rather than a message.\n"+
-					"  Untick console to run it headless — %s spells the prompt correctly there — or leave the prompt empty and type it in the session.",
+					"  Run it headless — %s spells the prompt correctly there — or leave the prompt empty and type it in the session.\n"+
+					"  From Studio: an agent run keeps a console by default, and setting a verify command is how you ask for a headless one.",
 				req.Agent, req.Agent)
 		}
 	}

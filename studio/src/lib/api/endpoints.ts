@@ -851,7 +851,7 @@ export function localPreview(
     // fires once something that cannot have one — a verify command, a fallback
     // chain — has been filled in underneath a conversation already picked.
     refusals.push(
-      "Resuming a conversation needs the console: a headless resume would replay one prompt into an old conversation and exit. Clear whatever made this run headless — a verify command or a fallback agent — or clear the conversation to start a new one.",
+      "Resuming a conversation needs the console: a headless resume would replay one prompt into an old conversation and exit. Clear whatever made this run headless — a verify command, a fallback agent, or a prompt for an agent that cannot be handed one — or clear the conversation to start a new one.",
     );
   }
 
@@ -873,15 +873,15 @@ export function localPreview(
     }
   }
 
-  if (req.detach && !req.worktree) {
+  // Unconditional, because the daemon is: `runs.go` sets `Detach: true` on every
+  // request — an HTTP request/response cycle has nowhere to hold a pty — so the
+  // collision this warns about is a property of launching from Studio at all,
+  // not of a setting. It used to be gated on `req.detach`, a form field that
+  // never travelled, which meant the one launch that could collide was the one
+  // that got no warning.
+  if (!req.worktree) {
     warnings.push(
-      "A detached run is named sandbox-<repo>-<branch>, and docker's duplicate-name refusal is what enforces one agent per branch. Without a worktree this will collide with another run on the same branch.",
-    );
-  }
-
-  if (req.verify && !req.detach) {
-    warnings.push(
-      "verify is what makes a run autonomous rather than merely headless. It is wired for attached runs too, but its exit code is the container's — you will see it as the run's outcome, not on screen.",
+      "A run launched here is detached and named sandbox-<repo>-<branch>, and docker's duplicate-name refusal is what enforces one agent per branch. Without a worktree this will collide with another run on the same branch.",
     );
   }
 
@@ -955,7 +955,10 @@ function previewArgv(
     kind: req.verify ? "fleet" : "interactive",
     agent: req.agent,
     command: req.agent ? [req.agent] : req.command.split(/\s+/).filter(Boolean),
-    detached: req.detach,
+    // Always: the daemon detaches every run it is asked for, whatever a form
+    // says. A preview that showed otherwise was describing a container nobody
+    // was going to get.
+    detached: true,
     branch,
     base: req.base,
     verify: req.verify || null,

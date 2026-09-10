@@ -33,6 +33,25 @@ version is tagged.
   Filling in a verify command is therefore now how you ask for a headless run
   from Studio. The field used to be disabled by the toggle; it is enabled always.
 
+  **"Let it work without asking" now starts checked**, which preserves the
+  default launch rather than widening it: a headless run gets the flag from
+  `Descriptor.Autonomous` whatever the form says, so clicking Launch and walking
+  away always produced work. A console run takes it from the request instead, so
+  leaving it off would have started the agent's interactive UI and stopped it at
+  its first approval, in a detached container with nobody attached. Same autonomy
+  as before, now unlocked rather than locked — untick it and the session waits to
+  be answered, which the box beside it says.
+
+- **"Run detached" is gone from Studio's launch form.** It never travelled: the
+  request has no such field and the daemon detaches every run, because an HTTP
+  request/response cycle has nowhere to hold a pty. The only thing the toggle
+  changed was the preview beside it — and being false by default, it described a
+  container with a pty that nobody was going to get, said "Attached" in the
+  success toast of every run Studio has ever started, and silently suppressed the
+  warning for an agent with no verified headless argv. The preview now says
+  detached because the run is, and that warning fires on a run being *headless*,
+  which is the fact it was about.
+
 ### Fixed
 
 - **`recover list` called a before-image `clean`, and restoring one said

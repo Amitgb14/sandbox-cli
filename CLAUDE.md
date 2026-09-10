@@ -869,6 +869,22 @@ and is now how you ask for a headless run. `console` is omitted from the form's 
 type (`FormState = Omit<LaunchRequest, "console">`) rather than defaulted, since a field
 nothing may set is one the next reader wires a control back onto.
 
+The default had to move with it, and that is the half worth remembering: a **headless** run
+takes its skip-permissions flag from `Descriptor.Autonomous` whatever the form says, while a
+**console** run takes it from the request (`agent.Console(prompt, skipPermissions)`). So
+making the console the default without defaulting `skipPermissions` to true would have
+turned every launch-and-walk-away into an agent parked at its first approval in a container
+nobody is attached to — the same autonomy as before, lost by moving where it comes from.
+Checked rather than locked is strictly more control than the old form had; what the change
+costs is that the box has to *say* which, since "the prompt seeds the first turn" reads as
+"the run proceeds".
+
+`detach` was removed from `LaunchRequest` in the same pass, and the reason generalises: it
+was a form field the request had no home for, so it could only ever disagree with the
+daemon — and it did, silently, in three places (the preview, the success toast, and the
+`headlessVerified` warning, which never rendered because the field was always false). A
+control for something the daemon decides unconditionally is worse than no control.
+
 An agent's words are **formatted, never as markup it supplied**
 (`studio/src/components/common/agent-markdown.tsx`, shared by the live console and
 the stored-transcript viewer). Transcript text is untrusted twice over — written by
