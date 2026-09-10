@@ -58,7 +58,11 @@ func newServeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			srv, err := openSession(cfgPath, engine)
+			profile, err := servingProfile(cfgPath)
+			if err != nil {
+				return err
+			}
+			srv, err := openSession(cfgPath, engine, profile)
 			if err != nil {
 				return err
 			}
@@ -322,7 +326,9 @@ func snapshotFor(ctx context.Context, cfgPath, engineFlag string) (protocol.Sess
 	if err != nil {
 		return protocol.Session{}, false, err
 	}
-	srv, err := openSession(cfgPath, engine)
+	// No profile: a listing reads the catalog and records nothing, so it has no
+	// business loading — or failing on — the project config.
+	srv, err := openSession(cfgPath, engine, "")
 	if err != nil {
 		return protocol.Session{}, false, err
 	}
@@ -441,26 +447,43 @@ func writeJSON(w interface{ Write([]byte) (int, error) }, v any) error {
 }
 
 // openSession opens the catalog for the current directory's repository.
-func openSession(cfgPath, engine string) (*session.Server, error) {
+//
+// The profile is a parameter rather than resolved here, and that split is the
+// whole point. A profile is *stamped into the catalog* as a fact about the run, so
+// a repository whose config will not load must not be recorded as `dev` — wrong in
+// the one direction that matters, and written down rather than merely assumed. But
+// that reasoning applies to the command that writes the catalog, not to the ones
+// that read it: an empty profile means "leave whatever the file already says",
+// which is exactly right for a listing.
+//
+// Resolving it here for every caller made `pane list` **fail** in a repository
+// whose `.sandbox.yaml` is refused — a read-only listing, refusing because of a
+// config it has no use for, while `sandbox-cli list` answered the same question
+// about the same containers without complaint. Strictness in the wrong place reads
+// as a broken command.
+func openSession(cfgPath, engine, profile string) (*session.Server, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	// The error is returned, not swallowed into a "dev" default. The profile is
-	// stamped into the catalog as a fact about the run, and a repository whose
-	// config trips ErrRestrictedProjectKeys — or fails to load for any other reason
-	// — would otherwise be recorded as dev: wrong in the one direction that
-	// matters, and recorded rather than merely assumed. Every other command fails
-	// here too, so this also stops `serve` being the one that quietly does not.
+	return session.Open(wd, profile, engine)
+}
+
+// servingProfile resolves the profile `serve` records in the catalog, and refuses
+// rather than guessing. This is the caller finding 8 was about: it writes.
+func servingProfile(cfgPath string) (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
 	cfg, err := config.LoadProfile(wd, cfgPath, "")
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("%w\n  the session server records which profile is in force, so it will not start with an unreadable config", err)
 	}
-	profile := cfg.Profile
-	if profile == "" {
-		profile = config.ProfileDev
+	if cfg.Profile == "" {
+		return config.ProfileDev, nil
 	}
-	return session.Open(wd, profile, engine)
+	return cfg.Profile, nil
 }
 
 func sessionDir(cfgPath string) (string, error) {

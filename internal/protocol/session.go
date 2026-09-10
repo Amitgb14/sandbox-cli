@@ -23,8 +23,17 @@ type Session struct {
 	// Root is the repository this session belongs to. One session, one repository:
 	// the id is derived from it, so two repositories cannot share a socket and a
 	// request never has to say which repository it meant.
-	Root    string `json:"root"`
-	Profile string `json:"profile"`
+	Root string `json:"root"`
+	// Profile is omitted rather than empty when it is not known, which is the rule
+	// this codebase keeps everywhere else: absent means absent, never a placeholder.
+	// `""` would also be an invalid value — the field is dev or prod — so a reader
+	// validating the catalog would call it malformed rather than incomplete.
+	//
+	// It is not known on the read path by design: a listing records nothing, so it
+	// does not load the project config and has no business failing on one. Only the
+	// daemon, which writes the catalog, resolves a profile — and refuses if it
+	// cannot.
+	Profile string `json:"profile,omitempty"`
 
 	Share     bool   `json:"share,omitempty"`
 	SharePath string `json:"share_path,omitempty"`
