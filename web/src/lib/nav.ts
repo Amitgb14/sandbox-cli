@@ -25,7 +25,12 @@
  * the menu tell you something you did not already know from the label.
  */
 
-import { MULTI_AGENT_PATH, SDK_PATH, STUDIO_PATH } from "@/lib/site";
+import {
+  MULTI_AGENT_PATH,
+  SDK_PATH,
+  RECOVER_PATH,
+  STUDIO_PATH,
+} from "@/lib/site";
 
 export type NavLink = {
   href: string;
@@ -41,6 +46,7 @@ export type NavEntry =
 export const NAV: NavEntry[] = [
   { kind: "link", href: "#threat", label: "Why" },
   { kind: "link", href: STUDIO_PATH, label: "Studio" },
+  { kind: "link", href: RECOVER_PATH, label: "Recovery" },
   { kind: "link", href: SDK_PATH, label: "SDK" },
   {
     kind: "group",
@@ -86,7 +92,6 @@ export const NAV: NavEntry[] = [
         label: "Agents",
         hint: "twelve adapters, one prefix, your flags forwarded verbatim",
       },
-
     ],
   },
   {
