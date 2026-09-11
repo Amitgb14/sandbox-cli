@@ -42,7 +42,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/detect"
 	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
@@ -61,13 +63,39 @@ import (
 // and the hand would forget.
 type Lister = runtime.Inspector
 
+// Transcripts finds an agent's conversation for a pane, so its state can be
+// decided from something better than the container's.
+//
+// A function rather than a concrete lookup for two reasons. It does file I/O — and
+// `Adopt` is otherwise pure given a Lister, which is what lets the adoption table be
+// tested without a disk. And correlating a container to a conversation is
+// `agentctx`'s problem, already solved there with rules this package should not
+// restate.
+//
+// Returning nothing is normal and is not an error: a pane with no agent has no
+// conversation, an agent with no verified store has none to read, and two
+// conversations in one window are an ambiguity `agentctx` declines rather than
+// guesses. Each of those lands as `unknown`, which is an answer.
+type Transcripts func(pane protocol.Pane, project string) []agentctx.Message
+
 // Server is one session: one repository, one socket, one catalog.
 type Server struct {
 	dir  string // ~/.config/sandbox/sessions/<sid>
 	root string // the repository this session is for
 
+	// Transcripts is how a pane's conversation is found. Nil means none is looked
+	// for, and every running pane then reports `unknown` — which is exactly what
+	// this catalog did before agent state existed, so a caller that does not set it
+	// loses nothing it had.
+	Transcripts Transcripts
+
 	mu   sync.Mutex
 	sess protocol.Session
+	// lastSaved is the fingerprint of the catalog as last written, so a refresh
+	// that found nothing new writes nothing. Empty means "nothing written yet",
+	// which is correct after Open: the file on disk may match, but this process has
+	// not proven it and a first save costs one write.
+	lastSaved string
 }
 
 // ErrNoSession is returned when a session directory does not exist yet, so a
@@ -326,6 +354,51 @@ func loadState(path string) (protocol.Session, error) {
 	return sess, nil
 }
 
+// SaveIfChanged writes the catalog only when it differs from the last write.
+//
+// The fingerprint is of the catalog *minus its timestamps*, which is the whole point:
+// `UpdatedAt` and every pane's own move on each refresh, so comparing the marshalled
+// whole would find a difference every time and save every time. What a reader cares
+// about is whether a pane appeared, went away or changed state.
+func (s *Server) SaveIfChanged(reason string) error {
+	s.mu.Lock()
+	fp := fingerprint(s.sess)
+	unchanged := fp == s.lastSaved
+	s.mu.Unlock()
+	if unchanged {
+		return nil
+	}
+	if err := s.Save(reason); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.lastSaved = fp
+	s.mu.Unlock()
+	return nil
+}
+
+// fingerprint is what "changed" means for a catalog: the panes that exist and how
+// they are, plus the worktrees they hang off. Deliberately not the timestamps.
+func fingerprint(sess protocol.Session) string {
+	var b strings.Builder
+	for _, ws := range sess.Workspaces {
+		b.WriteString(ws.ID)
+		b.WriteByte(';')
+		for _, wt := range ws.Worktrees {
+			b.WriteString(wt.ID + "=" + wt.Branch + "@" + wt.Path + ",")
+		}
+		b.WriteByte('|')
+	}
+	for _, p := range sess.Panes {
+		b.WriteString(p.ID + "=" + string(p.State) + "/" + p.ContainerID + "/" + string(p.Kind))
+		if p.ExitCode != nil {
+			b.WriteString(":" + strconv.Itoa(*p.ExitCode))
+		}
+		b.WriteByte(',')
+	}
+	return b.String()
+}
+
 // Save writes the catalog, atomically and under a lock, and appends one line to
 // the event log.
 //
@@ -477,6 +550,39 @@ func sortPanes(panes []protocol.Pane) {
 	})
 }
 
+// stateOf decides how a pane is doing, using its conversation when there is one to
+// read.
+//
+// Two layers, and the order is the order of certainty. `internal/detect` is asked
+// first because it knows everything the container knows *and* what the transcript
+// says; with no transcript it answers exactly what the container alone proves, which
+// is what `paneStateFor` has always answered. So the fallback is not a different
+// rule — it is the same rule with less evidence, and a caller that sets no
+// Transcripts keeps precisely the behaviour it had.
+func (s *Server) stateOf(c runtime.ContainerInfo, pane protocol.Pane) (protocol.PaneState, *int) {
+	state, code := paneStateFor(c)
+	if s.Transcripts == nil || c.Finished() {
+		// Nothing to add. A finished container's state is an exit code, and no
+		// conversation outranks that.
+		return state, code
+	}
+	msgs := s.Transcripts(pane, s.root)
+	if len(msgs) == 0 {
+		return state, code
+	}
+	return detect.From(detect.Evidence{
+		ContainerState: c.State,
+		ExitCode:       c.ExitCode,
+		// Whether anything can type at this pane, read back from the container
+		// rather than inferred from its kind: a console run is one docker recorded
+		// with an open stdin, and that is the fact `detect` needs to tell "waiting
+		// for a human" from "quiet".
+		OpenStdin:  c.OpenStdin,
+		Transcript: msgs,
+		Now:        time.Now(),
+	}), code
+}
+
 // paneStateFor decides how a pane is doing from what the container can prove, and
 // no further.
 //
@@ -607,7 +713,7 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 		claimed[c.Name] = true
 		pane.ContainerID = c.ID
 		pane.ContainerName = c.Name
-		pane.State, pane.ExitCode = paneStateFor(c)
+		pane.State, pane.ExitCode = s.stateOf(c, pane)
 		pane.UpdatedAt = time.Now().UTC()
 		panes = append(panes, pane)
 	}
@@ -618,6 +724,7 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 			continue
 		}
 		pane := paneFromContainer(c)
+		pane.State, pane.ExitCode = s.stateOf(c, pane)
 		panes = append(panes, pane)
 	}
 

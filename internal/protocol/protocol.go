@@ -158,6 +158,12 @@ const (
 
 	// OpPaneList returns panes, optionally including the ones that have exited.
 	OpPaneList = "pane.list"
+
+	// OpPaneWait blocks until a pane reaches one of a set of states, or the wait
+	// expires. It is what turns the state machine into something a script can use:
+	// "start six agents, tell me when one needs me" is otherwise a polling loop in
+	// every caller.
+	OpPaneWait = "pane.wait"
 )
 
 // HelloParams identifies the client. Advisory: nothing is gated on it, and it is
@@ -183,6 +189,30 @@ type PaneListParams struct {
 	// common question is "what is running", and a listing that answers a
 	// different question by default is one people learn to filter.
 	All bool `json:"all,omitempty"`
+}
+
+// PaneWaitParams asks to be told when a pane reaches one of these states.
+//
+// A *set* rather than one state, because the useful questions are disjunctions:
+// "blocked or done" is "tell me when you need me or you are finished", and waiting
+// for one of those alone means missing the other and timing out.
+type PaneWaitParams struct {
+	Pane   string      `json:"pane"`
+	States []PaneState `json:"states"`
+	// TimeoutMS bounds the wait. Required in practice: a wait with no bound is a
+	// client that hangs forever on a pane that will never reach the state, which is
+	// every typo.
+	TimeoutMS int `json:"timeout_ms,omitempty"`
+}
+
+// PaneWaitResult is the state that ended the wait.
+//
+// It carries the whole pane rather than just the state, because a caller that waited
+// for `done` usually wants the exit code next, and a second round trip to get it
+// would race the container being reaped.
+type PaneWaitResult struct {
+	State PaneState `json:"state"`
+	Pane  Pane      `json:"pane"`
 }
 
 // PaneListResult is a flat list. Flat rather than nested under worktrees, because

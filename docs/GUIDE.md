@@ -1226,6 +1226,26 @@ That is a fourth way to name one container, not a better one. A branch, a name a
 a short id all still work, and a reference matching two panes refuses and lists
 them rather than picking — stopping the wrong agent costs its work.
 
+**Which agent needs me?** With `sandbox-cli serve` running, a pane's state comes from
+the agent's own conversation rather than only from its container:
+
+| State | Means |
+|---|---|
+| `working` | the conversation is moving, or the agent owes an answer to the last prompt |
+| `blocked` | the agent spoke last, has been quiet since, and **this pane has a console** — so it is waiting for you |
+| `idle` | the same quiet, but nothing can type at this pane |
+| `done` / `failed` | the container exited 0 / non-zero |
+| `unknown` | not enough to say: no transcript yet, or no conversation that can be attributed to this pane |
+
+```sh
+sandbox-cli pane wait p_3f21 --state blocked --state done --timeout 10m
+```
+
+`blocked` is never guessed from the *wording* of a prompt — that would be a list of
+claims about other vendors' phrasing, and one reword turns it into a confident lie. It
+is structural: the agent spoke last, it has gone quiet, and there is a keyboard. Where
+the evidence runs out the answer is `unknown`, and `unknown` means go and look.
+
 Two things called a snapshot, and they are not the same layer:
 
 | | `session snapshot` | `recover` |
@@ -1494,6 +1514,7 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli pane list [--all] [--json]` | The same containers as `list`, grouped by worktree, with the pane ids the protocol uses |
 | `sandbox-cli pane spawn [flags] -- <cmd>` | `run --detach` named as a pane; `--dry-run` prints the engine command |
 | `sandbox-cli pane kill <ref>` | Stop a pane, by pane id, container name, short id or branch |
+| `sandbox-cli pane wait <ref> --state …` | Block until a pane is blocked, done, failed … (needs `serve`) |
 | `sandbox-cli session snapshot` | The whole catalog as JSON — layout, not files (`recover` is files) |
 | `sandbox-cli version` | Print the version |
 
