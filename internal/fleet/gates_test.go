@@ -63,6 +63,11 @@ const (
 	// this means a schedule. Putting a field here that carries no reach into the
 	// `never` list would dilute the one category whose entries are all about
 	// confinement, and the next reader would take "never" at its word.
+	//
+	// No members at present: the pane fields it was introduced for became `fromSpec`
+	// when phase 5 wired them. Kept rather than deleted because the *next* field in
+	// this position wants it, and because a reader finding `never` used for something
+	// that is merely unscheduled is the mistake it prevents.
 	notYet
 )
 
@@ -138,16 +143,21 @@ var optionsPolicy = map[string]fieldPolicy{
 	"TTY":         never, // nothing is attached; BuildSpec resolves this from Detach
 	"NoMetrics":   never, // the live gauge is for foreground runs
 
-	// This container's identity in the session catalog. notYet rather than never:
-	// they carry no reach — a pane id grants nothing, selects no mount, resolves no
-	// path, and is a key into a file in the user's own config directory — so there
-	// is no confinement question to answer. A fleet task *is* a pane, and phase 5
-	// of the session-server track is where it starts saying so. Until then the
-	// fleet path leaves them zero, and this table is what makes that a checked
-	// claim rather than a comment.
-	"PaneID":      notYet,
-	"PaneKind":    notYet,
-	"PaneSession": notYet,
+	// This container's identity in the session catalog, and `fromSpec` since phase 5:
+	// a fleet task *is* a pane, and the launch records one.
+	//
+	// They carry no reach — a pane id grants nothing, selects no mount, resolves no
+	// path, and is a key into a file in the user's own config directory — so there was
+	// never a confinement question to answer, which is why they were `notYet` rather
+	// than `never` while the wiring was outstanding.
+	//
+	// Set by `session.Spawn` rather than by `Runner.options`, which is why
+	// `fleetOptions` still finds them zero and this says `fromSpec` on the strength of
+	// TestFleetLaunchRecordsAPane instead. The distinction is real: a fleet file cannot
+	// ask for a pane id, and nothing would be served by letting it.
+	"PaneID":      fromSpec,
+	"PaneKind":    fromSpec,
+	"PaneSession": fromSpec,
 }
 
 // fleetOptions builds the Options for a task through the same path Launch uses,
