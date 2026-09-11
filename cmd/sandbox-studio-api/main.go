@@ -20,6 +20,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/history"
+	"github.com/Amitgb14/sandbox-cli/internal/qrterm"
 	"github.com/Amitgb14/sandbox-cli/internal/studioapi"
 )
 
@@ -47,22 +48,49 @@ func hostOf(addr string) string {
 	return host
 }
 
-// loopbackAddr reports whether a listen address keeps this server reachable only
-// from this machine. An empty or wildcard host ("", "0.0.0.0", "::") does not.
-func loopbackAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
+// pairingBlock is what -pair and -print-pairing print: anything worth knowing
+// before scanning, the code, the link, and the sentence that has to follow a
+// secret onto a screen. Built before the server starts, so a link that cannot
+// work is refused while nothing has happened yet; printed once it is listening,
+// so a daemon that never came up has not published its token on the way down.
+func pairingBlock(o studioapi.PairingOptions, colour bool) (string, error) {
+	p, err := studioapi.ResolvePairing(o)
 	if err != nil {
-		host = addr
+		return "", err
 	}
-	host = strings.Trim(host, "[]")
-	if host == "" {
-		return false
+	code, err := qrterm.Render(p.Link, colour)
+	if err != nil {
+		return "", err
 	}
-	if strings.EqualFold(host, "localhost") {
-		return true
+	var b strings.Builder
+	b.WriteString("sandbox-studio-api: pairing link for Sandbox Studio — scan it with the app\n")
+	for _, n := range p.Notes {
+		fmt.Fprintf(&b, "  note: %s\n", n)
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	b.WriteString(code)
+	b.WriteString(p.Link + "\n")
+	b.WriteString("Treat this like a password: anyone with it can drive your agents.\n")
+	return b.String(), nil
+}
+
+// isTerminal reports whether f is a terminal rather than a file or a pipe, which
+// decides whether the QR code is painted: escape codes fix its polarity on a
+// light theme and are noise in a log.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// shortHostname is the default label a paired phone shows: the machine's name
+// without its domain, since "amits-mbp" is what somebody recognises and
+// "amits-mbp.corp.example.com" is what gets truncated.
+func shortHostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	name, _, _ := strings.Cut(h, ".")
+	return name
 }
 
 func main() {
@@ -85,6 +113,10 @@ func run() error {
 		historyRetain  time.Duration
 		usageRefreshIn time.Duration
 		probeIn        time.Duration
+		pair           bool
+		printPairing   bool
+		pairURL        string
+		pairName       string
 	)
 	flag.StringVar(&addr, "addr", "127.0.0.1:8787",
 		"address to listen on — loopback by default; see docs/studio-api/README.md before binding this to a network interface")
@@ -106,6 +138,18 @@ func run() error {
 		"origin allowed to drive this control plane cross-origin (repeatable); default: none, so a web page cannot reach it at all")
 	flag.Var(&hosts, "allow-host",
 		"additional Host header value to answer to, beyond the loopback names always accepted (repeatable); needed when reaching a rebound -addr by name")
+	// Pairing is opt-in, and never the default: the block carries the bearer
+	// token, and this process's stderr is routinely somebody else's file — docker
+	// logs, a launchd log, a CI transcript — where a token printed on every start
+	// would sit for as long as the log is kept.
+	flag.BoolVar(&pair, "pair", false,
+		"print a QR code and link for pairing Sandbox Studio for iOS, once the server is listening; it contains the token, so it is printed only when asked")
+	flag.BoolVar(&printPairing, "print-pairing", false,
+		"print the pairing QR code and link and exit without serving, for a daemon already running with the same -token, -addr or -pair-url, and -allow-host")
+	flag.StringVar(&pairURL, "pair-url", "",
+		"address the phone should dial, e.g. http://192.168.1.20:8787 (default: derived from -addr; a loopback -addr is refused, since a phone cannot reach it)")
+	flag.StringVar(&pairName, "pair-name", "",
+		"label a paired phone shows for this daemon (default: this machine's short hostname)")
 	flag.Parse()
 
 	// Validated here, before anything with a side effect. `openHistory` below
@@ -123,6 +167,30 @@ func run() error {
 		return fmt.Errorf("-usage-refresh-interval %s is not usable: each refresh spends a request "+
 			"from the window it measures, and the agent will not refetch more than once a minute "+
 			"regardless. Use a minute or more, or 0 to turn it off", usageRefreshIn)
+	}
+
+	if pairName == "" {
+		pairName = shortHostname()
+	}
+	pairing := studioapi.PairingOptions{
+		URL:          pairURL,
+		Addr:         addr,
+		Token:        token,
+		Name:         pairName,
+		AllowedHosts: hosts,
+		OutboundIP:   studioapi.OutboundIP,
+	}
+	if printPairing {
+		// Before the config is loaded, because nothing here needs it: this
+		// prints facts about flags and exits, and a project that fails to load
+		// should not stand between somebody and the link for a daemon that is
+		// already running fine.
+		block, err := pairingBlock(pairing, isTerminal(os.Stderr))
+		if err != nil {
+			return fmt.Errorf("not printing a pairing link: %w", err)
+		}
+		fmt.Fprint(os.Stderr, block)
+		return nil
 	}
 
 	if project == "" {
@@ -157,7 +225,7 @@ func run() error {
 	// a warning is not a control: the deployment it protects is the one nobody is
 	// watching. Loopback keeps its old behaviour, where the operating system is
 	// the boundary and an unauthenticated daemon is a reasonable default.
-	if !loopbackAddr(addr) && token == "" {
+	if !studioapi.IsLoopbackHost(addr) && token == "" {
 		fmt.Fprintf(os.Stderr,
 			"sandbox-studio-api: refusing to listen on %s without -token.\n"+
 				"  This process can start containers with the docker socket, so an unauthenticated\n"+
@@ -165,6 +233,19 @@ func run() error {
 				"  Set -token (or $SANDBOX_STUDIO_TOKEN), or bind a loopback address and reach it\n"+
 				"  through an SSH tunnel: ssh -N -L 8787:127.0.0.1:8787 you@%s\n", addr, hostOf(addr))
 		os.Exit(2)
+	}
+
+	// Resolved here, with the other refusals and before anything is served: a
+	// -pair that cannot produce a working link is somebody standing at a
+	// terminal waiting for a code, and a daemon that starts anyway leaves them
+	// scrolling for a QR code that is not there.
+	var pairingText string
+	if pair {
+		pairing.Serving = true
+		pairingText, err = pairingBlock(pairing, isTerminal(os.Stderr))
+		if err != nil {
+			return fmt.Errorf("-pair: not printing a pairing link: %w", err)
+		}
 	}
 
 	srv.Token = token
@@ -190,6 +271,15 @@ func run() error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Listen before announcing anything. "listening on" used to be logged ahead
+	// of a bind that could still fail, and the pairing block must not be: a port
+	// already in use would otherwise print a token for a server that never
+	// answered.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -213,7 +303,7 @@ func run() error {
 		if token == "" {
 			log.Printf("sandbox-studio-api: no -token set — every request but /health is unauthenticated")
 		}
-		if !loopbackAddr(addr) {
+		if !studioapi.IsLoopbackHost(addr) {
 			// Said once, at the moment it becomes true, because the whole trust model
 			// below this line assumes only this machine can open a connection.
 			log.Printf("sandbox-studio-api: %s is not a loopback address — anything that can route to this "+
@@ -248,7 +338,12 @@ func run() error {
 				"is not on this server's PATH. The figures are still read and shown; only advancing them " +
 				"needs the agent, which is what running the API on your host gives it")
 		}
-		errCh <- httpSrv.ListenAndServe()
+		if pairingText != "" {
+			// Plain Fprint, not log: a timestamp prefix on each line would
+			// break the code into something a camera cannot read.
+			fmt.Fprint(os.Stderr, pairingText)
+		}
+		errCh <- httpSrv.Serve(ln)
 	}()
 
 	select {

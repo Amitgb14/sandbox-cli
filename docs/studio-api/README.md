@@ -33,7 +33,9 @@ correct), `-history-retain` (drop indexed runs older than this on start; the log
 itself is never touched),
 `-config`, `-profile` (`dev`/`prod`, same meaning as the CLI's `--profile`),
 `-token` (or `$SANDBOX_STUDIO_TOKEN`), `-cors-origin` (repeatable),
-`-allow-host` (repeatable), `-usage-refresh-interval` (default `0`, off).
+`-allow-host` (repeatable), `-usage-refresh-interval` (default `0`, off),
+`-pair` / `-print-pairing` / `-pair-url` / `-pair-name` (see [Pairing the iOS
+app](#pairing-the-ios-app)).
 
 ### `abandoned`, on `GET /v1/usage`
 
@@ -651,6 +653,67 @@ use knowingly, not by default.
 What must *not* be done instead is pointing a local daemon at a remote docker.
 Every refusal here is evaluated against the filesystem this process runs on, so
 that arrangement validates paths on one machine and mounts them on another.
+
+### Pairing the iOS app
+
+Sandbox Studio for iOS is a client of this daemon like any other: it needs the
+address to dial and the token. `-pair` prints both as a QR code the app scans,
+once the server is listening; `-print-pairing` prints it and exits, for a daemon
+that is already running.
+
+```sh
+SANDBOX_STUDIO_TOKEN="$(openssl rand -hex 32)" ./bin/sandbox-studio-api \
+  -addr 0.0.0.0:8787 -allow-host 192.168.1.20 \
+  -pair -pair-url http://192.168.1.20:8787
+```
+
+```
+sandbox-studio-api: pairing link for Sandbox Studio — scan it with the app
+█████████████████████████████████████████
+████ ▄▄▄▄▄ █▀▄█▀ ▄▄▀▀█▄ ▀█ ▄ █ ▄▄▄▄▄ ████
+…
+sandboxstudio://pair#v=1&url=http%3A%2F%2F192.168.1.20%3A8787&token=…&name=amits-mbp
+Treat this like a password: anyone with it can drive your agents.
+```
+
+It is **not a pairing protocol**. The daemon issues no per-device credential and
+keeps no list of phones; the link is the one token, so revoking a phone means
+changing the token. Values sit in the URL *fragment*, which is never sent in a
+request line — if this ever becomes an https link, the token cannot land in an
+access log.
+
+**It is never printed unless asked**, because this process's stderr is routinely
+somebody else's file — `docker logs`, a launchd log, a CI transcript — and a
+token printed on every start would stay there as long as the log does. The code
+is painted black-on-white only when stderr is a terminal, since escape codes are
+noise in a log.
+
+Which address goes in the link, and what is refused:
+
+- **`-pair-url`** names it outright. Use it for a tailnet name, a LAN address,
+  or a proxy in front of a loopback daemon.
+- Without it, a **concrete `-addr`** is used as it is, and **all interfaces**
+  (`0.0.0.0`, `::`, `:8787`) uses the IPv4 address this machine routes outbound
+  traffic from — and says which, since a choice made on your behalf is one you
+  need to know to correct.
+- A **loopback `-addr` with no `-pair-url` is refused**: on a phone, `127.0.0.1`
+  is the phone. A loopback `-pair-url` typed explicitly is printed, with a note —
+  the iOS Simulator shares this machine's network and can dial it.
+- **The name must pass the `Host` check.** The phone's requests carry the name
+  it dialled, and the daemon answers loopback names and `-allow-host` only. Under
+  `-pair` that is a fact about this process, so a name it would refuse is refused
+  before serving, naming the `-allow-host` to add. `-print-pairing` cannot see a
+  running daemon's flags, so it reminds rather than refuses.
+- **The iOS app allows plain `http` only to IP addresses, `.local` names and
+  unqualified names** (App Transport Security's `NSAllowsLocalNetworking`, and
+  deliberately not arbitrary loads). `http://192.168.1.20:8787` and
+  `http://mac.local:8787` work; `http://mac.tailnet.ts.net:8787` is refused by
+  the phone. The link is still printed, with a note: put https in front of that
+  name (`tailscale serve`, a reverse proxy) or pair with an IP or `.local`
+  address.
+- **No `-token`** is allowed — the link carries none — with a warning, because
+  typing at an agent is refused without one, so a paired phone can watch and not
+  answer.
 
 ### Cloning
 

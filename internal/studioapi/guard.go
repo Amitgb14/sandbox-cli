@@ -35,23 +35,46 @@ const maxRequestBody = 1 << 20
 // design, and a configuration that could turn it off would be a footgun with no
 // use case.
 func (s *Server) hostAllowed(r *http.Request) bool {
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	host = strings.Trim(host, "[]") // an IPv6 literal arrives bracketed
-	if strings.EqualFold(host, "localhost") {
+	return AnswersToHost(r.Host, s.AllowedHosts)
+}
+
+// AnswersToHost is hostAllowed's rule on its own: whether a server started with
+// these -allow-host values answers a request for host, with or without a port.
+//
+// Exported so the pairing link can ask the function the guard will ask. A link
+// naming a host this check refuses scans cleanly and then fails on its first
+// request, and a second copy of the rule is how the two would come to disagree.
+func AnswersToHost(host string, allowed []string) bool {
+	if IsLoopbackHost(host) {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return true
-	}
-	for _, allowed := range s.AllowedHosts {
-		if strings.EqualFold(host, allowed) {
+	host = bareHost(host)
+	for _, a := range allowed {
+		if strings.EqualFold(host, a) {
 			return true
 		}
 	}
 	return false
+}
+
+// IsLoopbackHost reports whether host — a name, an IP, or either with a port —
+// names this machine's loopback. The wildcards ("", "0.0.0.0", "::") are not
+// loopback: bound, they are every interface, and dialled, they are nothing.
+func IsLoopbackHost(host string) bool {
+	host = bareHost(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// bareHost drops a port and the brackets an IPv6 literal arrives in.
+func bareHost(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.Trim(host, "[]")
 }
 
 // originAllowed is the CSRF half, and it is the check that actually stops a

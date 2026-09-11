@@ -3,6 +3,7 @@ package studioapi
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -222,6 +223,14 @@ func sandboxStore(f agentctx.Finding) agentctx.Finding {
 	return f
 }
 
+// ConsoleNeedsToken is the refusal a client gets for typing at an agent on a
+// server with no -token. A constant because the pairing block prints it too: a
+// phone paired to a tokenless daemon can watch and never type, and the warning
+// given before pairing should be the sentence the phone is shown afterwards,
+// not a paraphrase of it.
+const ConsoleNeedsToken = "typing at a running agent requires the server to have a -token set; " +
+	"start sandbox-studio-api with -token (or $SANDBOX_STUDIO_TOKEN) to enable the console"
+
 // handleRunConsoleInput is POST /v1/runs/{id}/console/input.
 func (s *Server) handleRunConsoleInput(w http.ResponseWriter, r *http.Request) {
 	// The one endpoint that refuses to work unauthenticated, whatever the rest of
@@ -235,9 +244,7 @@ func (s *Server) handleRunConsoleInput(w http.ResponseWriter, r *http.Request) {
 	// unauthenticated keyboard is not something to hand out because somebody
 	// forgot one.
 	if s.Token == "" {
-		writeError(w, http.StatusForbidden, fmt.Errorf(
-			"typing at a running agent requires the server to have a -token set; "+
-				"start sandbox-studio-api with -token (or $SANDBOX_STUDIO_TOKEN) to enable the console"))
+		writeError(w, http.StatusForbidden, errors.New(ConsoleNeedsToken))
 		return
 	}
 

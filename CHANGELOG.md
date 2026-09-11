@@ -13,6 +13,30 @@ version is tagged.
 
 ### Added
 
+- **`sandbox-studio-api -pair` prints a QR code for pairing Sandbox Studio for
+  iOS.** The app needs what any client needs — the daemon's address and its token —
+  and this puts both in a link a phone camera can carry, once the server is
+  listening. `-print-pairing` prints it and exits, for a daemon already running.
+  It is not a pairing protocol: there is still one token, and the link is it.
+
+  ```sh
+  sandbox-studio-api -addr 0.0.0.0:8787 -token "$T" -allow-host 192.168.1.20 \
+    -pair -pair-url http://192.168.1.20:8787
+  ```
+
+  **Never printed unless asked**, because a daemon's stderr is usually a log
+  somebody else keeps. And it refuses to print a link that cannot work rather than
+  hand over a secret that scans and then fails: a loopback `-addr` with no
+  `-pair-url` (on a phone, `127.0.0.1` is the phone), and under `-pair` a name the
+  daemon's own `Host` check would refuse, with the `-allow-host` to add. An
+  all-interfaces bind uses this machine's LAN address and says so. Plain `http` to a
+  qualified name such as a tailnet hostname prints with a note, since the iOS app
+  allows cleartext only to IP addresses and `.local` names. Details:
+  [Pairing the iOS app](docs/studio-api/README.md#pairing-the-ios-app).
+
+  Adds one dependency, `rsc.io/qr` (BSD, no dependencies of its own), confined to
+  `internal/qrterm`.
+
 - **Fleet agents are panes, and so finally have a crash safety net.** `fleet run` now
   records each launch in the session catalog: a fleet container carries a pane id, is
   listed by `sandbox-cli pane list`, and — the reason this is more than bookkeeping —
