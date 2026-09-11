@@ -840,7 +840,36 @@ proxy's process.
 
 ---
 
-## Detached runs take no periodic snapshots — known, and deliberate for now
+## Detached runs take no periodic snapshots — **closed**, by the session server
+
+> Closed by `sandbox-cli serve`. A running pane is snapshotted on the daemon's own
+> ticker (`internal/session/netkeeper.go`), so both detached paths — `--detach` and
+> every Studio run — now have the net this item says they lack. Issue #163 is the
+> case that cost somebody a file.
+>
+> The two objections below were the reason not to build it in
+> `studioapi/supervisor.go`, and the session server answers them rather than
+> accepting them. **Whose repository**: a session's id derives from
+> `worktree.RepoID`, so a daemon protects the repository it was started in and no
+> other. **A restart**: the catalog is on disk and `Adopt` rebinds live containers
+> from their labels, so a restarted `serve` finds the panes still going and protects
+> them again — in a *new* rescue session, since `rescue.Begin` mints one, which means
+> a pane outliving a restart has two manifests. That is visible in `recover list`
+> rather than being the invisible protection gap this item warned about.
+>
+> Two things it adds that the proposal did not ask for: a floor on the interval
+> (`minKeeperInterval`, 30s), because a config with a typo in it is a timer a daemon
+> honours for as long as the machine is on and the cost is per pane; and the
+> `snapshot` config read from the *user's* file only, which `trust.go` already
+> enforces and which matters more here than on the run path because nobody is
+> watching.
+>
+> Still true, and why the bind mount remains the first line: the files are on the
+> host the instant the agent writes them. A snapshot is the belt.
+>
+> The text below is kept as the record of what the three paths used to do.
+
+### What this used to say
 
 Three paths, three behaviours, and only the first is the safety net people
 picture:
