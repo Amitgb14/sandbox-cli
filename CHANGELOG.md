@@ -13,6 +13,22 @@ version is tagged.
 
 ### Added
 
+- **Fleet agents are panes, and so finally have a crash safety net.** `fleet run` now
+  records each launch in the session catalog: a fleet container carries a pane id, is
+  listed by `sandbox-cli pane list`, and — the reason this is more than bookkeeping —
+  is snapshotted by a running `sandbox-cli serve`. A fleet agent is a detached run, and
+  detached runs had no net.
+
+  `fleet status`'s STATE column now says what the *agent* is doing (`working`,
+  `blocked`, `idle`) when a daemon has been watching, instead of only `running`. It
+  reads the catalog rather than correlating again, because every branch of a fleet
+  shares one repository and a second correlation is a chance to show one branch's state
+  on another's row. Without a daemon the column says exactly what it always said.
+
+  `fleet.yaml` is unchanged, `--share` is still a flag rather than a key, and a fleet in
+  a directory where no catalog can be opened launches exactly as before.
+
+
 - **Detached runs finally have a crash safety net.** `sandbox-cli serve` snapshots
   every running pane on a ticker, so work an agent has not committed is recoverable —
   which it was not for either detached path. A foreground `sandbox-cli claude`

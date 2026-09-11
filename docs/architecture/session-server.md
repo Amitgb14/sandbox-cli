@@ -67,7 +67,7 @@ deliberately does **not** start any agent.
 | 2 | Write path: every detached run is a pane, with labels and a catalog row |
 | 3 | Worktree grouping; one rule for "this worktree is in use", shared by three callers |
 | 4 | `internal/detect` — agent state from the conversation, and `pane.wait` |
-| 5 | Fleet materializes through the session |
+| 5 | Fleet launches are panes, so they get the catalog and the safety net |
 | 6 | Studio becomes a gateway and starts zero containers |
 | 7 | Layout restore across a `serve` restart, with no auto-respawn |
 
@@ -277,6 +277,43 @@ correlation.
 `pane.state` / `pane.exit` events are also not in this phase. They need
 `session.events.subscribe` and a connection that stops being request/response, and
 `pane.wait` covers the question anyone has today without it.
+
+## Phase 5, as built
+
+`fleet run` spawns panes. One line changed at the launch site —
+`r.Session.Start` became `r.start`, which goes through `session.Spawn` when a catalog
+can be opened — and four things follow from it.
+
+A fleet container carries `sandbox.pane` and is listed by `pane list`. `fleet status`
+reports what the *agent* is doing when a daemon has been watching, from the catalog
+rather than from a second correlation — which is exactly why phase 4 left agent state
+out of that table: every branch of a fleet shares one repository, so correlating again
+here is a chance to show one branch's state on another's row. And a fleet agent gets
+the crash safety net, which it had never had: it is a detached run, and detached runs
+had none.
+
+The gate classification flipped, which is the part the table existed for. `PaneID`,
+`PaneKind` and `PaneSession` were `notYet` — checked exactly like `never` but spelled
+differently, because `never` means a decision and that meant a schedule. They are
+`fromSpec` now, on the strength of a named test rather than of `fleetOptions` finding
+them set: they are filled in by `session.Spawn`, not by `Runner.options`, because a
+fleet file cannot ask for a pane id and nothing would be served by letting it.
+
+**Verify stays one container**, against the phase's plan, and this is the decision
+worth arguing. The plan asks for a second pane spawned when the agent pane reaches a
+terminal state, with the task's success being that pane's exit code. `withVerify`
+already wraps the verify around the agent's argv *inside* the one container and makes
+its exit code the container's — so the thing that pane reports is the verdict, which is
+what `land` reads, and `paneKindFor` calls such a pane `verify` for that reason.
+Splitting it needs durable sequencing: something has to notice the agent finished and
+then spawn the verify, and an in-memory "now run the verify" step is a verify that
+silently never runs after a daemon restart. That is the invisible-gap objection that
+kept the snapshot loop out of `studioapi/supervisor.go` for a year, and it would be
+reintroduced here to split one exit code into two.
+
+A nil catalog keeps the old path, and `fleet status` does not start a daemon to answer.
+A fleet is a git operation on a repository; refusing one because the bookkeeping
+directory is unwritable would trade a working feature for a record of it.
 
 ## Invariants this track may not touch
 
