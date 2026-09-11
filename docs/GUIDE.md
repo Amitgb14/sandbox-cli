@@ -1211,6 +1211,21 @@ belonged to. That is the half the engine cannot give back.
 `pane list` works without the daemon too, by reading the engine directly, and says
 so when it does. The two differ only in that one sentence.
 
+Every `--detach` run is a pane, whichever command started it — the pane id is
+printed alongside the container name and stamped as a label, so `kill`, `logs` and
+`attach` all take it:
+
+```sh
+sandbox-cli claude --detach --worktree feat -- -p "do the thing"
+#   pane:  p_4f21c0a9b3de
+sandbox-cli logs p_4f21c0a9b3de -f
+sandbox-cli kill p_4f21c0a9b3de
+```
+
+That is a fourth way to name one container, not a better one. A branch, a name and
+a short id all still work, and a reference matching two panes refuses and lists
+them rather than picking — stopping the wrong agent costs its work.
+
 Two things called a snapshot, and they are not the same layer:
 
 | | `session snapshot` | `recover` |
@@ -1477,6 +1492,8 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli serve` | Run the session server for this repository — catalogs its sandboxes, starts none ([track](architecture/session-server.md)) |
 | `sandbox-cli serve status\|stop` | Whether one is running; stop it (containers keep running either way) |
 | `sandbox-cli pane list [--all] [--json]` | The same containers as `list`, grouped by worktree, with the pane ids the protocol uses |
+| `sandbox-cli pane spawn [flags] -- <cmd>` | `run --detach` named as a pane; `--dry-run` prints the engine command |
+| `sandbox-cli pane kill <ref>` | Stop a pane, by pane id, container name, short id or branch |
 | `sandbox-cli session snapshot` | The whole catalog as JSON — layout, not files (`recover` is files) |
 | `sandbox-cli version` | Print the version |
 

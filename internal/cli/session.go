@@ -117,7 +117,16 @@ func resolveSession(infos []runtime.ContainerInfo, ref string) (runtime.Containe
 	var exact, prefix []runtime.ContainerInfo
 	for _, c := range infos {
 		switch {
-		case c.ID == ref || shortID(c.ID) == ref || c.Name == ref || c.Labels[sandbox.LabelBranch] == ref:
+		// The pane id joins the same tier as the other exact forms rather than being
+		// tried first. It is a fourth way to name one container, not a better one —
+		// and an ambiguity between *kinds* of match is still an ambiguity, so
+		// priority ordering would resolve silently what this refuses out loud.
+		//
+		// Still matched against a listing filtered by sandbox.cli, never handed to
+		// the engine: `sandbox-cli kill postgres` must find nothing rather than
+		// somebody's database, and that rule does not bend for a new id format.
+		case c.ID == ref || shortID(c.ID) == ref || c.Name == ref ||
+			c.Labels[sandbox.LabelBranch] == ref || c.Labels[sandbox.LabelPane] == ref:
 			exact = append(exact, c)
 		case strings.HasPrefix(c.ID, ref) || strings.HasPrefix(c.Name, ref):
 			prefix = append(prefix, c)

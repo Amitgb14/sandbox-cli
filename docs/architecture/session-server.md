@@ -64,7 +64,7 @@ deliberately does **not** start any agent.
 |---|---|
 | 0 | Freeze the boundary: this document, `SandboxKind`, goldens unchanged |
 | 1 | Read-only catalog: `serve`, `session.snapshot`, `pane.list`, adoption |
-| 2 | Write path: `pane.spawn` through the existing detached-run path |
+| 2 | Write path: every detached run is a pane, with labels and a catalog row |
 | 3 | Worktree grouping, and `worktree rm` refusing a live pane |
 | 4 | `internal/detect` — agent state, `pane.wait`, `pane.state` events |
 | 5 | Fleet materializes through the session |
@@ -73,6 +73,55 @@ deliberately does **not** start any agent.
 
 Phase N+1 is not started until Phase N's acceptance is green. Phases 8 (a second
 sandbox backend) and 9 (a TUI) are explicitly not part of this track.
+
+## Phase 2, as built
+
+Every detached run is now a pane. `--detach` mints a pane id, stamps it as a label,
+and records a row; `pane spawn` is the same launch named as one; and `kill`, `logs`
+and `attach` resolve a pane id alongside the forms they already took.
+
+Three decisions are worth keeping.
+
+**`session.Spawn` takes already-built `sandbox.Options` and does not construct
+them.** `internal/fleet`'s rule with teeth — every gate on the run path must be
+repeated by every caller that builds `Options` — is a rule about *builders*, and
+`gates_test.go` exists because it was broken once. A spawn that assembled its own
+Options would inherit that whole obligation in exchange for three labels and a row
+in a file. So the caller resolves the config, applies the flags and passes the
+gates; this sets the three pane fields and nothing else, on a copy.
+
+**The pane id is a label because labels are the only thing that survives.** Docker
+cannot add one after creation, so the id is minted before the container exists. A
+pane whose id is not on its container is one no later `serve` can rebind — it would
+come back from a restart as a "legacy" pane addressable only by name, which is the
+failure this phase exists to remove.
+
+**The catalog is a courtesy, not a gate.** `run --detach` has always worked outside
+a git repository, and a session is scoped to one — so a launch does not depend on
+being able to open a catalog. A failure to *record* after the container is up is
+reported and the run carries on, because the id is already on the container and the
+next `Adopt` recovers the row.
+
+`TestPaneSpawnArgvMatchesTheRunPath` is the invariant made checkable: a pane and
+the equivalent `run --detach` must produce the same engine argv, compared as
+strings, masking only the timestamped container name a branchless run gets by
+design. A session server is exactly the kind of thing that grows a second
+launcher, and the way `BuildArgs` stops being the only one is not a rewrite — it is
+a new caller that assembles *almost* the same spec.
+
+One thing improved on the way past: the duplicate-name refusal now explains
+itself. The engine's atomic rejection is the one-agent-per-branch lock, and it
+surfaced as `exit status 125` under a line of docker's own help. `conflictNote`
+names the container holding the name, and whether it is running or merely unreaped.
+It runs **after** the refusal, never before: a list-then-launch check has a window
+in which two launches both pass, and two agents in one checkout is silent data
+loss.
+
+Deferred from this phase, deliberately: **`pane.spawn` over the socket.** Nothing
+in phase 2's acceptance needs it — the catalog, the labels, the resolution and the
+argv equality are all in the CLI — and the daemon answering it means a second thing
+that builds `Options` from a request, which is the obligation above arriving by
+another door. It is what phase 6 needs, and it belongs with the work that needs it.
 
 ## Invariants this track may not touch
 

@@ -56,6 +56,14 @@ const (
 	// no key for any of them on purpose — a task is a prompt and a branch, not a
 	// place to ask for a docker socket.
 	never
+
+	// notYet: the fleet path leaves it zero today, and a named later phase will
+	// set it. Checked exactly like never, so the claim is enforced rather than
+	// asserted — but spelled differently, because `never` means a decision and
+	// this means a schedule. Putting a field here that carries no reach into the
+	// `never` list would dilute the one category whose entries are all about
+	// confinement, and the next reader would take "never" at its word.
+	notYet
 )
 
 var optionsPolicy = map[string]fieldPolicy{
@@ -129,6 +137,17 @@ var optionsPolicy = map[string]fieldPolicy{
 	"HostGateway": never, // reaching a host service is the opposite of what a fleet is for
 	"TTY":         never, // nothing is attached; BuildSpec resolves this from Detach
 	"NoMetrics":   never, // the live gauge is for foreground runs
+
+	// This container's identity in the session catalog. notYet rather than never:
+	// they carry no reach — a pane id grants nothing, selects no mount, resolves no
+	// path, and is a key into a file in the user's own config directory — so there
+	// is no confinement question to answer. A fleet task *is* a pane, and phase 5
+	// of the session-server track is where it starts saying so. Until then the
+	// fleet path leaves them zero, and this table is what makes that a checked
+	// claim rather than a comment.
+	"PaneID":      notYet,
+	"PaneKind":    notYet,
+	"PaneSession": notYet,
 }
 
 // fleetOptions builds the Options for a task through the same path Launch uses,
@@ -187,12 +206,22 @@ func TestFleetNeverWidensTheBoundary(t *testing.T) {
 	typ := v.Type()
 	for i := 0; i < typ.NumField(); i++ {
 		name := typ.Field(i).Name
-		if optionsPolicy[name] != never {
-			continue
-		}
-		if !v.Field(i).IsZero() {
-			t.Errorf("fleet set %s = %v; a fleet container must be confined exactly as an interactive one,\n"+
-				"and this field is one of the ways it could be less so", name, v.Field(i).Interface())
+		switch optionsPolicy[name] {
+		case never:
+			if !v.Field(i).IsZero() {
+				t.Errorf("fleet set %s = %v; a fleet container must be confined exactly as an interactive one,\n"+
+					"and this field is one of the ways it could be less so", name, v.Field(i).Interface())
+			}
+		case notYet:
+			// Same check, different sentence. If this fires the wiring has arrived,
+			// and the field's policy should move to fromSpec along with a test that
+			// says what the fleet now does with it — rather than this one being
+			// loosened to let it through.
+			if !v.Field(i).IsZero() {
+				t.Errorf("fleet set %s = %v, which is classified notYet.\n"+
+					"  If the later phase has landed, move it to fromSpec and say what the fleet does with it;\n"+
+					"  do not relax this check to accommodate it.", name, v.Field(i).Interface())
+			}
 		}
 	}
 }

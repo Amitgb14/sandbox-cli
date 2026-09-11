@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -12,12 +14,13 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/githard"
+	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
-	"sort"
 )
 
 func newRunCmd() *cobra.Command {
@@ -304,7 +307,7 @@ func reportRescue(snap *rescue.Snapshotter) {
 // The name goes to stdout on its own so the command is scriptable; everything
 // else is stderr, like the rest of sandbox-cli's own commentary.
 func startDetached(rf *runFlags, sess *sandbox.Session, opts sandbox.Options) error {
-	name, err := sess.Start(context.Background(), opts, rf.build)
+	name, pane, err := spawnPane(context.Background(), rf, sess, opts)
 	if err != nil {
 		return err
 	}
@@ -322,8 +325,148 @@ func startDetached(rf *runFlags, sess *sandbox.Session, opts sandbox.Options) er
 	if rf.persistName != "" {
 		fmt.Fprintf(os.Stderr, "  note:  nothing is attached — the agent must be in a mode that exits on its own\n")
 	}
+	if pane != "" {
+		// After the engine's own two lines, because they are the ones that work on
+		// any machine: the pane id is an extra way to name this run, not the primary
+		// one, and printing it first would suggest the catalog is required.
+		fmt.Fprintf(os.Stderr, "  pane:  %s\n", pane)
+	}
 	fmt.Println(name)
 	return nil
+}
+
+// spawnPane starts the container and gives it a pane identity, falling back to
+// the plain start when there is no catalog to record in.
+//
+// The fallback is the decision worth stating: **the catalog is a courtesy, not a
+// gate.** `run --detach` has always worked outside a git repository, and a session
+// is scoped to a repository — so making the launch depend on one would break a
+// case that works today in order to add bookkeeping. The same goes for a session
+// directory that cannot be created, or a socket path too long to bind: none of
+// those is a reason to refuse to start an agent.
+//
+// What is *not* silent is the pane being missing when it could have been there.
+// A failure to record after the container is up is reported and the run carries
+// on, because the pane id is a label on the container and the next `serve` will
+// recover the row.
+func spawnPane(ctx context.Context, rf *runFlags, sess *sandbox.Session, opts sandbox.Options) (name, pane string, err error) {
+	srv, serr := session.Open(workspaceDirFor(rf), sess.Cfg.Profile, sess.Cfg.Engine)
+	if serr != nil {
+		// Not a git repository, or no writable config directory. Start anyway.
+		name, err = sess.Start(ctx, opts, rf.build)
+		return name, "", err
+	}
+	p, err := srv.Spawn(ctx, sess, opts, paneKindFor(opts), rf.build)
+	if err != nil {
+		// Explain a duplicate-name refusal **after** it happens, never before it.
+		//
+		// The engine's atomic rejection of a duplicate name is what enforces one
+		// agent per branch, and the reason it is not a check is that a
+		// list-then-launch has a window in which two launches both pass — two agents
+		// in one checkout, which is silent data loss. So this is a diagnosis of a
+		// refusal that already occurred: it cannot weaken the lock, because the lock
+		// has already fired by the time it runs.
+		//
+		// Worth doing because the raw failure is `exit status 125` under a line of
+		// docker's own help, which says nothing about branches or agents.
+		if note := conflictNote(ctx, sess, opts); note != "" {
+			return "", "", fmt.Errorf("%w\n%s", err, note)
+		}
+	}
+	var saveErr *session.SaveError
+	if errors.As(err, &saveErr) {
+		// The container is up; only the row is missing. Reporting the launch as
+		// failed here would be false, and a caller retrying on it would be asking
+		// for a second agent on one branch.
+		fmt.Fprintf(os.Stderr, "sandbox-cli: %v\n", saveErr)
+		return p.ContainerName, p.ID, nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return p.ContainerName, p.ID, nil
+}
+
+// conflictNote names the container already holding this launch's name, when that
+// is why the launch failed.
+//
+// Returns "" whenever it cannot say so for certain — no inspector, the engine
+// unreachable, nothing of that name there. A guess here would be worse than
+// silence: the start already failed for *some* reason, and attributing it to the
+// wrong one sends the reader after the wrong problem.
+func conflictNote(ctx context.Context, sess *sandbox.Session, opts sandbox.Options) string {
+	name := sandbox.ContainerName(opts)
+	if name == "" {
+		return ""
+	}
+	insp, ok := sess.Runtime.(runtime.Inspector)
+	if !ok {
+		return ""
+	}
+	// Filtered by sandbox.cli, the same rule every other lookup keeps: a container
+	// this tool did not start is not ours to describe, and a same-named container
+	// belonging to somebody else is a different problem with a different answer.
+	infos, err := insp.Containers(ctx, map[string]string{sandbox.LabelCLI: "1"})
+	if err != nil {
+		return ""
+	}
+	for _, c := range infos {
+		if c.Name != name {
+			continue
+		}
+		what := "has finished but has not been reaped"
+		if c.Running() {
+			what = "is still running"
+		}
+		note := fmt.Sprintf("  %s already exists and %s.\n"+
+			"  That name is the lock: one agent per branch, enforced by the engine refusing a duplicate.",
+			termsafe.Clean(name), what)
+		if pane := c.Labels[sandbox.LabelPane]; pane != "" {
+			note += fmt.Sprintf("\n  It is pane %s.", termsafe.Clean(pane))
+		}
+		if c.Running() {
+			return note + fmt.Sprintf("\n  Stop it with: sandbox-cli kill %s", termsafe.Clean(name))
+		}
+		return note + "\n  Reap it with: sandbox-cli clean"
+	}
+	return ""
+}
+
+// paneKindFor says what a detached run is, from what the options already carry.
+//
+// Deliberately derived rather than passed down from each wrapper: the three facts
+// that decide it — is there an agent, is there a verify, is a console being kept —
+// are already in the Options, and a parameter threaded through every wrapper is a
+// parameter one of them would eventually pass wrongly.
+func paneKindFor(opts sandbox.Options) protocol.PaneKind {
+	switch {
+	case opts.Verify != "":
+		// A verify wraps the agent's argv and its exit code is the run's, so the
+		// pane's purpose is the judging rather than the working.
+		return protocol.PaneVerify
+	case opts.Agent == "":
+		return protocol.PaneCommand
+	case opts.Console:
+		return protocol.PaneConsole
+	default:
+		return protocol.PaneAgent
+	}
+}
+
+// workspaceDirFor is the directory the session is scoped to: the repository the
+// run is against, not the one sandbox-cli was invoked from.
+//
+// --project is what makes those different, and taking the cwd would file a run
+// under whichever repository the user happened to be standing in.
+func workspaceDirFor(rf *runFlags) string {
+	if rf.project != "" {
+		return config.ExpandTilde(rf.project)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
 }
 
 // warnDirtyWorktree points out work the agent left uncommitted in a --worktree
