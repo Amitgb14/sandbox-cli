@@ -182,9 +182,16 @@ func (s *Server) handleDeleteWorktree(w http.ResponseWriter, r *http.Request) {
 	//
 	// Refused with 409, the same status the other worktree conflicts use: the
 	// request is well formed and the state says no.
-	if err := session.RefuseWorktreeInUse(r.Context(), s.RT, sc.RepoID, branch); err != nil {
-		writeError(w, http.StatusConflict, err)
-		return
+	// The path, not the branch: the guard matches what a container actually has
+	// mounted, because a label records what was asked for at launch and an agent
+	// that ran `git checkout -b other` inside its worktree has put the two out of
+	// sync. No worktree means nothing mounted, so `worktree.Remove` below gets to
+	// give its own answer rather than this inventing a conflict.
+	if path, exists, err := worktree.Path(sc.Project, branch); err == nil && exists {
+		if err := session.RefuseWorktreeInUse(r.Context(), s.RT, sc.RepoID, branch, path); err != nil {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
 	}
 	force := r.URL.Query().Has("force")
 	if err := worktree.Remove(sc.Project, branch, force); err != nil {

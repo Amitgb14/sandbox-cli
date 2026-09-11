@@ -162,6 +162,49 @@ onto `_`, so the id cannot be reversed — the snapshot was reporting `live_one`
 branch actually called `live-one`. The id stays the sanitised form, because that is
 what makes it a stable key.
 
+### What the review of phase 3 changed
+
+Five of the six findings were about the guard being keyed on the wrong thing, and
+together they rewrote it.
+
+**"Still in use" is `!Finished()`, never `Running()`.** The repo had already decided
+this twice — `clean`'s `sessionFinished` and netavark's reaper both treat a paused or
+restarting container as somebody's live run in an odd moment, and an unreadable state
+as live, because "not knowing is not a licence". The first version asked `Running()`,
+so `docker pause` on an agent was enough to let its bind-mount source be deleted:
+the accident the guard exists to prevent, arriving through the guard itself. The
+predicate now lives on `runtime.ContainerInfo` as `Finished()`, with `clean`'s copy
+delegating to it, so the two cannot drift.
+
+**The match is the mount source, not the branch label.** A label records what the
+launcher asked for; an agent that runs `git checkout -b other` inside its worktree
+puts it out of sync with git — the desync `land` already documents. Keyed on the
+branch, `worktree rm other` resolved to the live container's directory while the
+guard looked for a label that said `feat`, found nothing, and allowed it.
+
+**A caller with no worktree passes no path**, so the refusal cannot fire where there
+is nothing to protect. It used to claim "a sandbox is still running in the worktree
+for feat" about a `--detach` run in the *main* checkout, advising the user to kill a
+working agent to permit an operation that was always a no-op.
+
+**`fleet clean` now asks it too.** The "three callers, one rule" claim was not true:
+that loop's own liveness map is built from containers filtered on `sandbox.fleet`, so
+a non-fleet sandbox working in a fleet-created worktree was invisible to it. Both
+checks run now, because they answer different questions — a held fleet slot, and an
+open directory.
+
+**Worktree ids are unique per branch.** `sanitizeID` maps non-alphanumerics onto `_`
+and lowercases, so `live-one`/`live_one` and `Feat`/`feat` shared one id: two
+branches in one worktree record, whose reported name was whichever container the
+engine listed last, and which changed between refreshes of unchanged state. An id
+whose sanitised form lost information now carries eight hex of the branch. Fixing the
+scheme removes the question rather than answering it, which is why there is no
+collision handling.
+
+The sixth was a missing `termsafe.Clean` on a pane id — a container label value, and
+therefore text a repository can influence, printed into tab-aligned lines beside a
+container name that *was* cleaned.
+
 ## Invariants this track may not touch
 
 Everything in the trust-boundary section of `CLAUDE.md` continues to hold

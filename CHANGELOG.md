@@ -26,6 +26,12 @@ version is tagged.
   refusal — `docker` missing from `PATH` must not block a git operation, and the
   uncommitted-work check still stands.
 
+  "Still in use" means **not finished**, not "running": a paused or restarting
+  container is somebody's live run in an odd moment, so `docker pause` on an agent
+  does not make its worktree removable. And the match is on what the container
+  actually has *mounted* rather than on its branch label, which goes stale the moment
+  an agent runs `git checkout -b` inside its worktree.
+
 - **A worktree's branch in `session snapshot` was the sanitised form of its id.**
   `live-one` was reported as `live_one`: the id maps several characters onto `_` and
   cannot be reversed. The branch now comes from the container's own label, which

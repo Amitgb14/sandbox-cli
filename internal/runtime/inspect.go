@@ -114,6 +114,27 @@ func (c ContainerInfo) EgressAllowlisted() bool {
 // Running reports whether the container is still executing its guest command.
 func (c ContainerInfo) Running() bool { return c.State == "running" }
 
+// Finished reports whether this container is over, and it is deliberately
+// **narrower than `!Running()`**.
+//
+// A paused or restarting container is somebody's live run in an odd moment, and
+// treating it as finished because it was not literally "running" at the instant we
+// looked is how a supervision command destroys the thing it supervises. An
+// unreadable state ("") counts as live for the same reason: not knowing is not a
+// licence.
+//
+// `created` is the exception, and it is one of kind rather than degree — a
+// container that never started ran no agent, wrote nothing, and has no in-flight
+// write to protect.
+//
+// It lives here rather than in one caller because it is now asked by two that must
+// not disagree: `clean`, deciding what to reap, and the session layer, deciding
+// whether a worktree is in use. The second was written as `!Running()` and would
+// have deleted a paused agent's bind-mount source.
+func (c ContainerInfo) Finished() bool {
+	return c.State == "exited" || c.State == "dead" || c.State == "created"
+}
+
 // Inspector is the optional capability of finding containers this tool started
 // before. Like Starter it is kept out of the Runtime interface so a backend that
 // cannot enumerate containers is still a valid Runtime.

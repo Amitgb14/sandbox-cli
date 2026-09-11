@@ -210,6 +210,16 @@ func newWorktreeRemoveCmd() *cobra.Command {
 // that is a git operation, and refusing it for want of a container engine would
 // make the guard worse than the thing it guards against.
 func refuseWorktreeInUse(ctx context.Context, cfgPath, engineFlag, dir, branch string) error {
+	// The worktree first. Asking the engine before knowing there *is* a worktree is
+	// how this came to claim "a sandbox is still running in the worktree for feat"
+	// about a `--detach` run in the main checkout — where no worktree for that branch
+	// exists, the removal was always a harmless no-op, and the advice was to kill a
+	// working agent to permit it. No path, nothing to protect; `worktree.Remove`
+	// then says the true thing, which is that there is no such worktree.
+	path, exists, err := worktree.Path(dir, branch)
+	if err != nil || !exists {
+		return nil
+	}
 	rt, _, err := sessionEngine(cfgPath, engineFlag)
 	if err != nil {
 		return nil
@@ -218,7 +228,7 @@ func refuseWorktreeInUse(ctx context.Context, cfgPath, engineFlag, dir, branch s
 	if err != nil {
 		return nil
 	}
-	return session.RefuseWorktreeInUse(ctx, rt, repoID, branch)
+	return session.RefuseWorktreeInUse(ctx, rt, repoID, branch, path)
 }
 
 // reportGit translates a worktree.Git result into CLI behaviour: git's own

@@ -113,9 +113,10 @@ func newCleanCmd() *cobra.Command {
 // behind, with Remove=false, and without this case the only way to remove it was
 // `clean --force` — whose flag help warns about killing an agent that may still
 // be working, which is a much scarier thing than what the user is actually doing.
-func sessionFinished(c runtime.ContainerInfo) bool {
-	return c.State == "exited" || c.State == "dead" || c.State == "created"
-}
+// Moved onto runtime.ContainerInfo, because a second caller arrived that must not
+// disagree with this one: internal/session, deciding whether a worktree is in use.
+// Kept as a named function here because the reasoning above is about `clean`.
+func sessionFinished(c runtime.ContainerInfo) bool { return c.Finished() }
 
 func dash(s string) string {
 	if strings.TrimSpace(s) == "" {
