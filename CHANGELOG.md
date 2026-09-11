@@ -13,6 +13,30 @@ version is tagged.
 
 ### Fixed
 
+- **A worktree a sandbox is still running in can no longer be removed.** The worktree
+  directory is the container's bind-mount source, so removing it leaves an agent
+  writing into a path that no longer has a name. `fleet clean --worktrees` had always
+  skipped a branch whose container was running; `sandbox-cli worktree rm` and Studio's
+  `DELETE /v1/worktrees/{branch}` had not — so a browser could do it to a working
+  agent. All three now share one rule.
+
+  **`--force` does not cover this.** It means "I accept losing the uncommitted work I
+  can see", and an agent that is still running has not finished writing; the refusal
+  says so, and names the pane to stop. An engine that cannot be reached is *not* a
+  refusal — `docker` missing from `PATH` must not block a git operation, and the
+  uncommitted-work check still stands.
+
+  "Still in use" means **not finished**, not "running": a paused or restarting
+  container is somebody's live run in an odd moment, so `docker pause` on an agent
+  does not make its worktree removable. And the match is on what the container
+  actually has *mounted* rather than on its branch label, which goes stale the moment
+  an agent runs `git checkout -b` inside its worktree.
+
+- **A worktree's branch in `session snapshot` was the sanitised form of its id.**
+  `live-one` was reported as `live_one`: the id maps several characters onto `_` and
+  cannot be reversed. The branch now comes from the container's own label, which
+  carries it exactly as git has it.
+
 - **The published `sandbox-studio-api` image always reported version `0.0.1`.**
   `Dockerfile.studio-api` built with `-ldflags="-s -w"` and no
   `-X …/internal/version.Version=…`, so the binary inside reported

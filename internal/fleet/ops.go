@@ -8,6 +8,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -368,6 +369,23 @@ func (r *Runner) Clean(ctx context.Context, branch string, worktrees, force bool
 	for _, b := range r.worktreeBranches(branch, infos) {
 		if running[b] || held[b] {
 			continue // already reported above
+		}
+		// `running` above is built from r.containers(), which filters on
+		// sandbox.fleet — so it cannot see a *non-fleet* sandbox working in a
+		// fleet-created worktree. That is an ordinary thing to have: the fleet task
+		// finishes, somebody runs `sandbox-cli claude --worktree <branch> --detach` in
+		// the checkout it left behind, and `worktree.Dirty` finds nothing yet because
+		// the agent has only just started. The directory would then be removed under
+		// a live container.
+		//
+		// So the repo-scoped rule is asked as well, rather than instead: this loop's
+		// own check is about fleet bookkeeping (a slot still held), and that one is
+		// about a directory being open.
+		if path, exists, perr := worktree.Path(r.Repo, b); perr == nil && exists {
+			if err := session.RefuseWorktreeInUse(ctx, r.Inspector, r.RepoID, b, path); err != nil {
+				res.Kept = append(res.Kept, fmt.Sprintf("%s: %v", b, err))
+				continue
+			}
 		}
 		if dirty := worktree.Dirty(r.Repo, b, 1); len(dirty) > 0 {
 			res.Kept = append(res.Kept, fmt.Sprintf(

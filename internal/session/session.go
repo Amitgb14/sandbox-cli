@@ -29,6 +29,7 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -427,7 +428,24 @@ func worktreeIDFor(branch string) string {
 	if branch == "" {
 		return "wt_detached"
 	}
-	return "wt_" + sanitizeID(branch)
+	id := sanitizeID(branch)
+	if id == branch {
+		// Already safe, so the id *is* the branch and nothing is lost. This is the
+		// common case — `feat`, `main`, `release_2` — and it keeps the id readable.
+		return "wt_" + id
+	}
+	// Sanitising lost information, so a suffix puts it back. Without this,
+	// `live-one` and `live_one` produced the same id (and so did `Feat` and `feat`,
+	// since sanitizeID lowercases) — two real branches sharing one worktree record,
+	// whose reported name was then whichever container the engine happened to list
+	// last: a wrong name that looked authoritative, and one that changed between two
+	// refreshes of unchanged state.
+	//
+	// Eight hex of the branch rather than four: this is a map key, and the cost of a
+	// collision is two branches' panes grouped under one worktree, which is the
+	// failure being fixed.
+	sum := sha256.Sum256([]byte(branch))
+	return "wt_" + id + "_" + hex.EncodeToString(sum[:])[:8]
 }
 
 func sanitizeID(s string) string {
@@ -603,9 +621,32 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 		panes = append(panes, pane)
 	}
 
+	// The exact branch name per worktree id, taken from the container's own label.
+	// Built here because this is where the containers are in hand, and the
+	// alternative is reversing worktreeIDFor — which cannot be done: sanitizeID maps
+	// several characters onto "_", so `live-one` and `live_one` produce the same id,
+	// and the reconstruction reported `live_one` for a branch actually called
+	// `live-one`.
+	// The exact branch name per worktree id, taken from the container's own label.
+	// Built here because this is where the containers are in hand, and the
+	// alternative is reversing worktreeIDFor, which cannot be done: sanitizeID maps
+	// several characters onto "_" and lowercases, so the reconstruction reported
+	// `live_one` for a branch actually called `live-one`.
+	//
+	// No collision handling, and that is a property of worktreeIDFor rather than an
+	// assumption: an id whose sanitised form lost information carries a hash of the
+	// branch, so distinct branches have distinct ids and this map cannot be
+	// overwritten by a different name.
+	branches := map[string]string{}
+	for _, c := range found {
+		if b := c.Labels[sandbox.LabelBranch]; b != "" {
+			branches[worktreeIDFor(b)] = b
+		}
+	}
+
 	sortPanes(panes)
 	s.sess.Panes = panes
-	s.sess.Workspaces = s.workspacesFor(repoID, panes)
+	s.sess.Workspaces = s.workspacesFor(repoID, panes, branches)
 	return nil
 }
 
@@ -655,7 +696,7 @@ func paneFromContainer(c runtime.ContainerInfo) protocol.Pane {
 // container is evidence that the branch was checked out at least once. What is
 // never done is inventing a *path* for a worktree git has not heard of, because a
 // path is the thing a later command would try to mount.
-func (s *Server) workspacesFor(repoID string, panes []protocol.Pane) []protocol.Workspace {
+func (s *Server) workspacesFor(repoID string, panes []protocol.Pane, branches map[string]string) []protocol.Workspace {
 	ws := protocol.Workspace{
 		ID:       "ws_" + sanitizeID(repoID),
 		Label:    filepath.Base(s.root),
@@ -695,9 +736,16 @@ func (s *Server) workspacesFor(repoID string, panes []protocol.Pane) []protocol.
 	// honest shape — the worktree may have been removed since the container
 	// started, and guessing a path is how a later command mounts the wrong one.
 	for _, p := range panes {
-		if !seen[p.WorktreeID] {
-			add(protocol.Worktree{ID: p.WorktreeID, Branch: branchOfID(p.WorktreeID)})
+		if seen[p.WorktreeID] {
+			continue
 		}
+		// The container's own label first. It carries the branch exactly as git has
+		// it, where the id has been through sanitizeID and cannot be turned back.
+		branch, ok := branches[p.WorktreeID]
+		if !ok {
+			branch = branchOfID(p.WorktreeID)
+		}
+		add(protocol.Worktree{ID: p.WorktreeID, Branch: branch})
 	}
 	sort.SliceStable(ws.Worktrees, func(i, j int) bool {
 		if ws.Worktrees[i].Main != ws.Worktrees[j].Main {
@@ -708,9 +756,13 @@ func (s *Server) workspacesFor(repoID string, panes []protocol.Pane) []protocol.
 	return []protocol.Workspace{ws}
 }
 
-// branchOfID is the inverse of worktreeIDFor, and it is lossy: sanitizeID maps
-// several characters onto "_", so this reconstructs a label to show rather than a
-// branch name to act on. Nothing resolves a branch from it.
+// branchOfID is the last resort, and it is lossy: worktreeIDFor sanitises and may
+// append a hash, so this reconstructs something to *show* rather than a branch name
+// to act on. Nothing resolves a branch from it.
+//
+// It is reached only for a worktree id with no container to read a branch off and no
+// record of one in the catalog — in practice a catalog entry that outlived every
+// container mentioning it, since both git and a container supply the real name.
 func branchOfID(id string) string {
 	return strings.TrimPrefix(id, "wt_")
 }
