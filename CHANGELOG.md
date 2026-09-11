@@ -13,6 +13,28 @@ version is tagged.
 
 ### Added
 
+- **Detached runs finally have a crash safety net.** `sandbox-cli serve` snapshots
+  every running pane on a ticker, so work an agent has not committed is recoverable —
+  which it was not for either detached path. A foreground `sandbox-cli claude`
+  snapshots every two minutes; a `--detach` run snapshotted **not at all**, and a
+  Studio run recorded one *baseline* before the agent started and closed it. That is
+  why a file an agent was watched writing came back missing from `recover restore`
+  ([#163](https://github.com/Amitgb14/sandbox-cli/issues/163)): the only snapshot
+  was the before-image.
+
+  It lives in the session server rather than in Studio's supervisor because that is
+  what answers the two objections on the record against building it. **Whose
+  repository**: a session is scoped to one, by construction — the daemon protects the
+  repository it was started in and no other. **A restart**: the catalog is on disk, so
+  a restarted `serve` rebinds the panes still running and protects them again, in a new
+  rescue session that `recover list` shows — rather than an invisible gap.
+
+  Off if `snapshot.enabled` is false, and `serve` says which at startup. The interval
+  follows `snapshot.interval` with a 30-second floor: the foreground loop is bounded by
+  somebody's patience, this one runs for as long as the machine is on, and the cost is
+  paid per pane.
+
+
 - **`sandbox-cli pane wait`, and agent state that is more than the container's.** A
   running container used to be reported `unknown`, because an agent editing a file and
   an agent parked at a permission prompt are the same running container. The session

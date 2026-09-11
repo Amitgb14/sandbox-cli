@@ -75,6 +75,18 @@ func newServeCmd() *cobra.Command {
 			// nobody asked it.
 			srv.Transcripts = session.ReadTranscripts
 
+			// The safety net for detached runs, which is every run this daemon can see.
+			// Built from the *user's* config: `snapshot` is refused from a project
+			// `.sandbox.yaml` because `enabled: false` silently removes crash
+			// protection, and a daemon honouring such a file would do it for as long as
+			// the machine is on.
+			cfg, cfgErr := config.LoadProfile(wdOrDot(), cfgPath, "")
+			if cfgErr != nil {
+				return cfgErr
+			}
+			srv.Keeper = session.NewKeeper(cfg)
+			defer srv.Keeper.Close()
+
 			// Asked here as well as inside Serve, and the duplication is for the
 			// *order* of the output rather than for the check. Serve's is the real
 			// guard — it is what a library caller gets, and it is the one close enough
@@ -101,6 +113,13 @@ func newServeCmd() *cobra.Command {
 
 			fmt.Fprintf(cmd.OutOrStdout(), "sandbox-cli serve\n  repository %s\n  socket     %s\n  panes      %d\n",
 				srv.Root(), session.SockPath(srv.Dir()), len(srv.Snapshot().Panes))
+			// Said at startup, because a safety net nobody knows about is one nobody
+			// relies on — and because the off case has to be as visible as the on one.
+			if every := srv.Keeper.Interval(); every > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "  snapshots  every %s, for every running pane\n", every)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "  snapshots  off (snapshot.enabled is false in your config)\n")
+			}
 
 			// SIGINT and SIGTERM stop the server and leave every container alone.
 			// Notified here rather than left to cobra so the message below is
@@ -662,6 +681,16 @@ func servingProfile(cfgPath string) (string, error) {
 		return config.ProfileDev, nil
 	}
 	return cfg.Profile, nil
+}
+
+// wdOrDot is the working directory, or "." when it cannot be read — which only
+// happens if it was deleted underneath the process, and a config load from "." is a
+// better answer there than refusing to start.
+func wdOrDot() string {
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
 }
 
 func sessionDir(cfgPath string) (string, error) {

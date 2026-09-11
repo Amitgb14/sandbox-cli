@@ -1200,6 +1200,13 @@ sandbox-cli pane list      # the containers, grouped by worktree
 sandbox-cli session snapshot   # the whole catalog, as the protocol has it
 ```
 
+It also **snapshots every running pane** on a ticker, which is the crash safety net
+detached runs never had: a foreground `sandbox-cli claude` snapshots every two
+minutes, a `--detach` run used to snapshot not at all, and a Studio run recorded only
+a before-image. So if an agent writes something and is killed before committing,
+`sandbox-cli recover` has it. Off if `snapshot.enabled` is false in your config, and
+`serve` says which at startup.
+
 It **starts nothing**, and stopping it leaves every container running — the engine
 owns them, which is the same reason `sandbox-cli list` survives a killed CLI. So
 the question worth asking is what it adds over `list`, and there is exactly one

@@ -83,6 +83,11 @@ type Server struct {
 	dir  string // ~/.config/sandbox/sessions/<sid>
 	root string // the repository this session is for
 
+	// Keeper is the crash safety net for this session's panes. Nil means none —
+	// which is what every caller but the daemon wants, since a one-shot command that
+	// started a snapshot loop would have nothing to run it.
+	Keeper *Keeper
+
 	// Transcripts is how a pane's conversation is found. Nil means none is looked
 	// for, and every running pane then reports `unknown` — which is exactly what
 	// this catalog did before agent state existed, so a caller that does not set it
@@ -294,6 +299,27 @@ func cloneSession(in protocol.Session) protocol.Session {
 		out.Focus = &f
 	}
 	return out
+}
+
+// WorktreeDir is the host directory a pane is working in, or "" when the catalog
+// cannot say.
+//
+// Read from the catalog's own worktree records rather than derived from the branch,
+// because those come from git and from the containers themselves — and a branch a
+// container mentions whose worktree has since been removed deliberately has no path.
+// Returning "" there is the point: a caller about to write into that directory must
+// not be handed a guess.
+func (s *Server) WorktreeDir(pane protocol.Pane) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ws := range s.sess.Workspaces {
+		for _, wt := range ws.Worktrees {
+			if wt.ID == pane.WorktreeID {
+				return wt.Path
+			}
+		}
+	}
+	return ""
 }
 
 // Panes returns the panes matching a listing request.

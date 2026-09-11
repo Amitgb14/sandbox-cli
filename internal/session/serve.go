@@ -81,6 +81,7 @@ func (s *Server) Serve(ctx context.Context, l Lister) error {
 	// and Ctrl-C both looked dead and only SIGKILL worked, which then left the
 	// socket and pid file behind for the next `serve status` to puzzle over. The
 	// package doc invites exactly such a client by naming socat.
+	var wg sync.WaitGroup
 	var (
 		mu     sync.Mutex
 		conns  = map[net.Conn]struct{}{}
@@ -97,7 +98,34 @@ func (s *Server) Serve(ctx context.Context, l Lister) error {
 		mu.Unlock()
 	}()
 
-	var wg sync.WaitGroup
+	// The safety net, on its own ticker. Started here rather than in the accept loop
+	// because it has to run whether or not anybody is asking questions: a detached
+	// agent works for an hour with no client connected, and that hour is exactly
+	// when a snapshot is wanted.
+	if every := s.Keeper.Interval(); every > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := time.NewTicker(every)
+			defer t.Stop()
+			// Once immediately, so a pane that starts and dies inside one interval is
+			// not left with nothing — which for a short agent run is most of them.
+			s.sweep(ctx, l)
+			for {
+				select {
+				case <-ctx.Done():
+					// A final sweep on the way out: whatever each agent wrote since the
+					// last tick is in its closing snapshot, and the containers keep
+					// running so a later `serve` protects them again.
+					s.Keeper.Close()
+					return
+				case <-t.C:
+					s.sweep(ctx, l)
+				}
+			}
+		}()
+	}
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -354,6 +382,22 @@ func (s *Server) wait(ctx context.Context, l Lister, p protocol.PaneWaitParams) 
 		case <-time.After(sleep):
 		}
 	}
+}
+
+// sweep refreshes the catalog and hands it to the net.
+//
+// It re-adopts first, because the net's decisions are about *now*: a pane that exited
+// two seconds ago needs its closing snapshot, and one whose worktree was removed must
+// not be written into. A failure to reach the engine skips the sweep rather than
+// guessing from a stale catalog — snapshotting a pane the engine can no longer
+// confirm is running is how a finished run keeps accumulating commits.
+func (s *Server) sweep(ctx context.Context, l Lister) {
+	if err := s.Adopt(ctx, l); err != nil {
+		return
+	}
+	_ = s.SaveIfChanged("sweep")
+	snap := s.Snapshot()
+	s.Keeper.Sweep(ctx, snap.Panes, s.WorktreeDir)
 }
 
 func decodeParams(raw json.RawMessage, into any) *protocol.Error {
