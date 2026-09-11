@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -163,6 +165,7 @@ func newWorktreeListCmd() *cobra.Command {
 
 func newWorktreeRemoveCmd() *cobra.Command {
 	var force bool
+	var engineFlag, cfgPath string
 	cmd := &cobra.Command{
 		Use:   "rm BRANCH",
 		Short: "Remove the sandbox worktree for BRANCH",
@@ -170,12 +173,21 @@ func newWorktreeRemoveCmd() *cobra.Command {
 			"commits stay in your repository — only the checkout is deleted.\n\n" +
 			"If the worktree has modified or untracked files, removal is refused: that\n" +
 			"work exists nowhere else. Commit it (from inside the worktree, or from the\n" +
-			"sandbox) or copy it out first. --force discards it permanently.",
+			"sandbox) or copy it out first. --force discards it permanently.\n\n" +
+			"A worktree a sandbox is still running in is refused outright, and --force\n" +
+			"does not cover that: it discards work you can see, and an agent that is\n" +
+			"still running has not finished writing. Stop the sandbox first.",
 		Aliases: []string{"remove"},
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			wd, err := os.Getwd()
 			if err != nil {
+				return err
+			}
+			// Before git is asked to do anything: removing the directory while a
+			// container has it bind-mounted leaves an agent writing into a path that
+			// no longer has a name.
+			if err := refuseWorktreeInUse(cmd.Context(), cfgPath, engineFlag, wd, args[0]); err != nil {
 				return err
 			}
 			if err := worktree.Remove(wd, args[0], force); err != nil {
@@ -186,7 +198,27 @@ func newWorktreeRemoveCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "discard uncommitted changes in the worktree and remove it anyway")
+	addSessionFlags(cmd, &engineFlag, &cfgPath)
 	return cmd
+}
+
+// refuseWorktreeInUse asks the engine whether anything is still working in this
+// worktree, and says nothing when it cannot ask.
+//
+// The engine is resolved here rather than at the top of the command because a
+// machine with no docker on its PATH should still be able to remove a worktree:
+// that is a git operation, and refusing it for want of a container engine would
+// make the guard worse than the thing it guards against.
+func refuseWorktreeInUse(ctx context.Context, cfgPath, engineFlag, dir, branch string) error {
+	rt, _, err := sessionEngine(cfgPath, engineFlag)
+	if err != nil {
+		return nil
+	}
+	repoID, err := worktree.RepoID(dir)
+	if err != nil {
+		return nil
+	}
+	return session.RefuseWorktreeInUse(ctx, rt, repoID, branch)
 }
 
 // reportGit translates a worktree.Git result into CLI behaviour: git's own

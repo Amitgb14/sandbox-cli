@@ -65,7 +65,7 @@ deliberately does **not** start any agent.
 | 0 | Freeze the boundary: this document, `SandboxKind`, goldens unchanged |
 | 1 | Read-only catalog: `serve`, `session.snapshot`, `pane.list`, adoption |
 | 2 | Write path: every detached run is a pane, with labels and a catalog row |
-| 3 | Worktree grouping, and `worktree rm` refusing a live pane |
+| 3 | Worktree grouping; one rule for "this worktree is in use", shared by three callers |
 | 4 | `internal/detect` — agent state, `pane.wait`, `pane.state` events |
 | 5 | Fleet materializes through the session |
 | 6 | Studio becomes a gateway and starts zero containers |
@@ -122,6 +122,45 @@ in phase 2's acceptance needs it — the catalog, the labels, the resolution and
 argv equality are all in the CLI — and the daemon answering it means a second thing
 that builds `Options` from a request, which is the obligation above arriving by
 another door. It is what phase 6 needs, and it belongs with the work that needs it.
+
+## Phase 3, as built
+
+The grouping was already there — phase 1's `workspacesFor` derives worktrees from
+`worktree.List` plus git, so a `worktree create` needs no insertion step and adding
+one would be a second source of truth for something git already answers. What phase
+3 actually needed was the refusal, and it turned out to be missing in more places
+than the plan said.
+
+**`RefuseWorktreeInUse` is one rule with three callers**, because there were three
+callers and two answers. `fleet clean --worktrees` had always skipped a branch whose
+container was running. `sandbox-cli worktree rm` and Studio's `DELETE /v1/worktrees/
+{branch}` had not — so a browser could remove a worktree while an agent was working
+in it, pulling the bind-mount *source* out from under a container that then went on
+writing into a path with no name. A gate two of three callers apply is a gate the
+third will be found missing later; this is the same shape as `internal/fleet`'s rule
+about `sandbox.Options`, on a different axis.
+
+**`--force` does not override it**, and that asymmetry with the dirty check is the
+decision. `--force` means "I accept losing the uncommitted work I can see", and the
+work here is being written by a process that is still running, so nobody can see all
+of it yet. The other way to resolve it — killing the pane implicitly — is worse,
+because the flag would then mean "stop my agent", which is not what anyone types it
+for. So it refuses and names the pane to stop, and says in as many words that
+`--force` will not help, since `--force` overriding the *other* refusal is exactly
+what invites trying it.
+
+**An unanswerable question is not a refusal.** An engine that cannot be reached is
+no evidence that a pane is running, and `docker` missing from `PATH` must not block
+a git operation — the dirty check is what protects the files and it still stands.
+That is the opposite of prod's rule for boundary controls, and deliberately: this is
+not a boundary control, it is a convenience that prevents a specific accident.
+
+One thing found by looking at real output: a worktree's branch now comes from the
+container's `sandbox.branch` **label** rather than from un-sanitising its id.
+`worktreeIDFor` runs the branch through `sanitizeID`, which maps several characters
+onto `_`, so the id cannot be reversed — the snapshot was reporting `live_one` for a
+branch actually called `live-one`. The id stays the sanitised form, because that is
+what makes it a stable key.
 
 ## Invariants this track may not touch
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -170,6 +171,19 @@ func (s *Server) handleDeleteWorktree(w http.ResponseWriter, r *http.Request) {
 	if primary, ok := s.primaryWorktree(sc, nil); ok && primary.Branch == branch {
 		writeError(w, http.StatusConflict, fmt.Errorf(
 			"%q is this repository's own checkout, not a managed worktree — there is nothing here to remove", branch))
+		return
+	}
+	// The guard this handler did not have. A browser could remove a worktree while
+	// an agent was working in it — pulling the bind-mount source out from under a
+	// container that went on writing into a path with no name. `fleet clean` had
+	// always skipped a branch whose container was running; this and `worktree rm`
+	// did not, so the rule is now one function with three callers rather than two
+	// answers.
+	//
+	// Refused with 409, the same status the other worktree conflicts use: the
+	// request is well formed and the state says no.
+	if err := session.RefuseWorktreeInUse(r.Context(), s.RT, sc.RepoID, branch); err != nil {
+		writeError(w, http.StatusConflict, err)
 		return
 	}
 	force := r.URL.Query().Has("force")
