@@ -37,6 +37,24 @@ version is tagged.
   cannot be reversed. The branch now comes from the container's own label, which
   carries it exactly as git has it.
 
+- **The published `sandbox-studio-api` image always reported version `0.0.1`.**
+  `Dockerfile.studio-api` built with `-ldflags="-s -w"` and no
+  `-X …/internal/version.Version=…`, so the binary inside reported
+  `internal/version`'s compile-time default whatever commit it came from — through
+  every release — and Studio's own header showed it. The Dockerfile now takes an
+  `ARG VERSION` and the image workflow passes `git describe`, so a `main` build says
+  `0.0.1-49-g573d89b` rather than borrowing the last tag's number.
+
+  `internal/version` now has a test that reads the build files and fails when a
+  shipped artefact does not stamp the version — the same guard, one copy over, that
+  `TestSiteVersionMatchesTheBinary` exists for. A plain `go build` is deliberately
+  exempt: a developer's binary reporting the default is honest, a published one is
+  not.
+
+  If you run the control plane as a host process, build it with
+  `make build-studio-api` rather than `go build ./cmd/sandbox-studio-api` — only the
+  former passes the flag.
+
 ### Added
 
 - **Every detached run is now a pane.** `--detach` mints a pane id, stamps it on the
