@@ -17,9 +17,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/detect"
 	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
+	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
 // The session server's commands: `serve`, and the two read-only views of what it
@@ -66,6 +68,12 @@ func newServeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Only the daemon looks for conversations. It is the one caller that
+			// refreshes repeatedly, so the per-pane file reads are amortised — and a
+			// one-shot `pane list` reading every agent's transcript store to print a
+			// column would pay that cost on every invocation to answer a question
+			// nobody asked it.
+			srv.Transcripts = session.ReadTranscripts
 
 			// Asked here as well as inside Serve, and the duplication is for the
 			// *order* of the output rather than for the check. Serve's is the real
@@ -228,7 +236,7 @@ func newPaneCmd() *cobra.Command {
 			"Phase 1 of the session-server track is read-only, so `pane spawn` does not\n" +
 			"exist yet: panes are created by the agent wrappers and catalogued here.",
 	}
-	cmd.AddCommand(newPaneListCmd(), newPaneSpawnCmd(), newPaneKillCmd())
+	cmd.AddCommand(newPaneListCmd(), newPaneSpawnCmd(), newPaneKillCmd(), newPaneWaitCmd())
 	return cmd
 }
 
@@ -339,6 +347,100 @@ func newPaneListCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&all, "all", false, "include panes whose container has exited")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the protocol's own shape")
 	return cmd
+}
+
+func newPaneWaitCmd() *cobra.Command {
+	var engineFlag, cfgPath string
+	var states []string
+	var timeout time.Duration
+	cmd := &cobra.Command{
+		Use:   "wait <ref>",
+		Short: "Block until a pane reaches one of the given states",
+		Long: "Waits for a pane to reach any of --state, and exits non-zero if the wait\n" +
+			"expires. What it is for: starting several agents and being told when one of\n" +
+			"them needs you, instead of watching a listing.\n\n" +
+			"A timeout is not a failure of the pane — it means the pane was in some other\n" +
+			"state when the clock ran out, and the message says which. A script that treats\n" +
+			"one as \"the agent failed\" will stop work that was merely slow.\n\n" +
+			"Needs a running session server: the wait is the daemon's poll loop, and there\n" +
+			"is nothing for this command to block on without one.",
+		Example: "  sandbox-cli pane wait p_3f21 --state blocked --state done\n" +
+			"  sandbox-cli pane wait feat --state done --timeout 10m",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(states) == 0 {
+				return fmt.Errorf("say what to wait for with --state (%s, %s, %s, %s, %s)\n"+
+					"  a wait for nothing is a sleep",
+					protocol.StateWorking, protocol.StateBlocked, protocol.StateIdle,
+					protocol.StateDone, protocol.StateFailed)
+			}
+			want := make([]protocol.PaneState, 0, len(states))
+			for _, st := range states {
+				ps := protocol.PaneState(strings.TrimSpace(st))
+				if !protocol.KnownPaneState(ps) {
+					return fmt.Errorf("unknown state %q (known: %s)", st,
+						strings.Join(protocol.PaneStateNames(), ", "))
+				}
+				want = append(want, ps)
+			}
+
+			dir, err := sessionDir(cfgPath)
+			if err != nil {
+				return err
+			}
+			if _, alive := servePID(dir); !alive {
+				// Said rather than worked around. The other pane commands fall back to
+				// reading the engine, and a wait cannot: blocking is the daemon's poll
+				// loop, and reimplementing it here would be a second one to keep in step.
+				return fmt.Errorf("no session server is running for %s\n"+
+					"  `pane wait` blocks in the daemon's own poll loop, so start one with `sandbox-cli serve`",
+					repoRootForMessage(dir))
+			}
+
+			var res protocol.PaneWaitResult
+			// The deadline follows the wait, plus slack for the round trip. A constant
+			// here would cut off a legitimate wait and report it as a transport error.
+			err = session.CallWithin(session.SockPath(dir), protocol.OpPaneWait,
+				protocol.PaneWaitParams{
+					Pane:      args[0],
+					States:    want,
+					TimeoutMS: int(timeout / time.Millisecond),
+				}, &res, timeout+30*time.Second)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\n",
+				res.Pane.ID, res.State, termsafe.Clean(res.Pane.ContainerName))
+			fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", detect.Describe(res.State))
+			return nil
+		},
+	}
+	addSessionFlags(cmd, &engineFlag, &cfgPath)
+	cmd.Flags().StringArrayVar(&states, "state", nil,
+		"a state to wait for; repeatable, and any one of them ends the wait")
+	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "give up after this long")
+	return cmd
+}
+
+// repoRootForMessage names the repository in an error, preferring the repository to
+// the session directory.
+//
+// The catalog is the better source when there is one — it records the root a daemon
+// was opened on — but a session that has never run has no catalog, and falling back
+// to the session *directory* made the message name a path under
+// ~/.config/sandbox/sessions, which is not a thing the reader typed or cares about.
+// The working directory is what they are standing in.
+func repoRootForMessage(dir string) string {
+	if snap, err := readCatalog(dir); err == nil && snap.Root != "" {
+		return snap.Root
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if root, err := worktree.RepoRoot(wd); err == nil {
+			return root
+		}
+		return wd
+	}
+	return dir
 }
 
 func newSessionCmd() *cobra.Command {

@@ -234,11 +234,18 @@ func (s *Server) dispatch(ctx context.Context, req protocol.Request, l Lister) (
 			panes = []protocol.Pane{}
 		}
 		return protocol.PaneListResult{Panes: panes}, nil
+
+	case protocol.OpPaneWait:
+		var p protocol.PaneWaitParams
+		if err := decodeParams(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.wait(ctx, l, p)
 	}
 
 	return nil, protocol.Errorf(protocol.CodeInvalid,
-		"unknown op %q; this sandbox-cli implements %s, %s and %s",
-		req.Op, protocol.OpHello, protocol.OpSnapshot, protocol.OpPaneList)
+		"unknown op %q; this sandbox-cli implements %s, %s, %s and %s",
+		req.Op, protocol.OpHello, protocol.OpSnapshot, protocol.OpPaneList, protocol.OpPaneWait)
 }
 
 // refresh re-adopts from the engine and persists the result.
@@ -255,10 +262,98 @@ func (s *Server) refresh(ctx context.Context, l Lister) *protocol.Error {
 	if err := s.Adopt(ctx, l); err != nil {
 		return protocol.Errorf(protocol.CodeEngineUnavailable, "%v", err)
 	}
-	if err := s.Save("refresh"); err != nil {
+	// Only when something changed. `pane.wait` refreshes every two seconds for as
+	// long as it waits, and saving each time would be nine hundred identical writes
+	// and nine hundred identical lines in the event log for one half-hour wait — an
+	// fsync per poll, and a log that says nothing because it says everything.
+	if err := s.SaveIfChanged("refresh"); err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox-cli: the catalog could not be written (%v); this answer is still from the engine\n", err)
 	}
 	return nil
+}
+
+// waitPoll is how often a wait re-reads the engine.
+//
+// Polling rather than watching, and the reason is that the thing being waited on is
+// mostly not an event: a container exiting is one docker will tell you about, but an
+// agent going quiet is the *absence* of writes to a file, which nothing announces.
+// One mechanism that handles both beats two that each handle half.
+//
+// Two seconds, which is slow enough that a dozen waiting clients do not keep the
+// engine busy and fast enough that nobody notices. `pane.wait` is for a script, and
+// a script is not watching the clock.
+const waitPoll = 2 * time.Second
+
+// maxWait bounds a wait that asked for none, rather than letting it run forever.
+const maxWait = 30 * time.Minute
+
+// wait blocks until the pane reaches one of the states asked for.
+//
+// Three ways out, and each is a different answer. The state arrives, which is the
+// point. The deadline passes, which is `timeout` — **not** a failure of the pane, and
+// the distinction matters because a caller that treats a timeout as "the agent
+// failed" will kill work that was merely slow. Or the pane stops existing, which ends
+// the wait with whatever state it last had rather than hanging until the deadline on
+// something that is never going to change.
+func (s *Server) wait(ctx context.Context, l Lister, p protocol.PaneWaitParams) (any, *protocol.Error) {
+	if p.Pane == "" {
+		return nil, protocol.Errorf(protocol.CodeInvalid, "name a pane to wait on")
+	}
+	if len(p.States) == 0 {
+		return nil, protocol.Errorf(protocol.CodeInvalid,
+			"say which states to wait for, e.g. %q or %q — a wait for nothing is a sleep",
+			protocol.StateBlocked, protocol.StateDone)
+	}
+	want := make(map[protocol.PaneState]bool, len(p.States))
+	for _, st := range p.States {
+		want[st] = true
+	}
+
+	timeout := time.Duration(p.TimeoutMS) * time.Millisecond
+	if timeout <= 0 || timeout > maxWait {
+		timeout = maxWait
+	}
+	deadline := time.Now().Add(timeout)
+
+	for {
+		if err := s.refresh(ctx, l); err != nil {
+			return nil, err
+		}
+		pane, rerr := s.Resolve(p.Pane)
+		if rerr != nil {
+			var perr *protocol.Error
+			if errors.As(rerr, &perr) {
+				return nil, perr
+			}
+			return nil, protocol.Errorf(protocol.CodeNotFound, "%v", rerr)
+		}
+		if want[pane.State] {
+			return protocol.PaneWaitResult{State: pane.State, Pane: pane}, nil
+		}
+		// A pane that has stopped is not going to reach anything else. Ending here
+		// rather than at the deadline is the difference between "it finished and you
+		// asked for the wrong state" and five minutes of silence.
+		if pane.State == protocol.StateStopped {
+			return nil, protocol.Errorf(protocol.CodeNotFound,
+				"pane %s is stopped and will not reach %v", pane.ID, p.States)
+		}
+
+		left := time.Until(deadline)
+		if left <= 0 {
+			return nil, protocol.Errorf(protocol.CodeTimeout,
+				"pane %s was %q after %s, waiting for %v",
+				pane.ID, pane.State, timeout, p.States)
+		}
+		sleep := waitPoll
+		if left < sleep {
+			sleep = left
+		}
+		select {
+		case <-ctx.Done():
+			return nil, protocol.Errorf(protocol.CodeTimeout, "cancelled while waiting on pane %s", pane.ID)
+		case <-time.After(sleep):
+		}
+	}
 }
 
 func decodeParams(raw json.RawMessage, into any) *protocol.Error {
@@ -318,12 +413,23 @@ func readLine(r *bufio.Reader, max int) ([]byte, error) {
 // the lifecycle: these are one-shot commands, and the cost is a connect to a unix
 // socket.
 func Call(sock, op string, params any, into any) error {
+	return CallWithin(sock, op, params, into, 30*time.Second)
+}
+
+// CallWithin is Call with the read deadline a caller needs.
+//
+// It exists because `pane.wait` broke the constant: a wait is *meant* to block for
+// minutes, and a 30-second deadline on the connection cut it off at 30 seconds with a
+// read error — a client reporting a transport failure for a server doing exactly what
+// it was asked. The deadline has to be the caller's, because only the caller knows how
+// long the answer may legitimately take.
+func CallWithin(sock, op string, params any, into any, deadline time.Duration) error {
 	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(deadline))
 
 	r := bufio.NewReader(conn)
 	enc := json.NewEncoder(conn)

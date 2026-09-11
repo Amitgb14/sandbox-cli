@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,12 +21,18 @@ import (
 // and what a pane's state is decided from, so a fake that invented its own shape
 // would be testing a translation layer that does not exist in production.
 type fakeEngine struct {
+	// mu guards the fields, because `pane.wait` polls this from the server's
+	// goroutine while a test mutates it from another — which is the whole point of
+	// the wait tests, and a data race without this.
+	mu         sync.Mutex
 	containers []runtime.ContainerInfo
 	err        error
 	asked      []map[string]string
 }
 
 func (f *fakeEngine) Containers(_ context.Context, labels map[string]string) ([]runtime.ContainerInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.asked = append(f.asked, labels)
 	if f.err != nil {
 		return nil, f.err

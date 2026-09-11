@@ -11,6 +11,31 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **`sandbox-cli pane wait`, and agent state that is more than the container's.** A
+  running container used to be reported `unknown`, because an agent editing a file and
+  an agent parked at a permission prompt are the same running container. The session
+  server now reads the tail of the agent's own conversation and distinguishes
+  `working`, `blocked` and `idle`.
+
+  `blocked` means *somebody can answer and the agent is waiting*: it is reported only
+  for a pane with an open stdin — a console run — because a headless pane has no
+  keyboard, and quiet there is `idle`. It is never inferred from the wording of a
+  prompt. Matching "Do you want to proceed?" and friends would be a list of claims
+  about other people's products that cannot be kept current, and a vendor rewording one
+  would turn a confident `blocked` into a confident lie. Where the evidence runs out
+  the answer stays `unknown`.
+
+  ```sh
+  sandbox-cli pane wait p_3f21 --state blocked --state done --timeout 10m
+  ```
+
+  A timeout exits non-zero and says which state the pane was actually in — it is not a
+  failure of the pane, and a script that treats it as one will stop work that was
+  merely slow. `pane wait` needs a running `sandbox-cli serve`, since the wait is the
+  daemon's own poll loop.
+
 ### Fixed
 
 - **A worktree a sandbox is still running in can no longer be removed.** The worktree

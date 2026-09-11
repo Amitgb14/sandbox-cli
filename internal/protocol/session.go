@@ -144,6 +144,30 @@ const (
 	StateStopped PaneState = "stopped"
 )
 
+// KnownPaneState reports whether s names a state at all.
+//
+// Needed because a caller validating `--state` had nothing to ask: `detect.Describe`
+// answers every input, by design — a state it has not heard of is exactly when
+// somebody needs a sentence — so checking it for emptiness validated nothing and
+// `--state typo` became a wait that could never end.
+func KnownPaneState(s PaneState) bool {
+	switch s {
+	case StateUnknown, StateStarting, StateWorking, StateBlocked,
+		StateIdle, StateDone, StateFailed, StateStopped:
+		return true
+	}
+	return false
+}
+
+// PaneStateNames is every state, for a message that has to list them.
+func PaneStateNames() []string {
+	return []string{
+		string(StateUnknown), string(StateStarting), string(StateWorking),
+		string(StateBlocked), string(StateIdle), string(StateDone),
+		string(StateFailed), string(StateStopped),
+	}
+}
+
 // Pane is one sandbox: a container, and the facts about it a later command needs.
 //
 // What it deliberately does **not** hold is the argv. The handoff pack's own

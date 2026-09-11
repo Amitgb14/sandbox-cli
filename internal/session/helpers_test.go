@@ -86,3 +86,7 @@ func asProtocolError(err error, into **protocol.Error) bool {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+var errNoFile = os.ErrNotExist
+
+func osReadFile(path string) ([]byte, error) { return os.ReadFile(path) }

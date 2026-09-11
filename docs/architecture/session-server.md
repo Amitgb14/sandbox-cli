@@ -66,7 +66,7 @@ deliberately does **not** start any agent.
 | 1 | Read-only catalog: `serve`, `session.snapshot`, `pane.list`, adoption |
 | 2 | Write path: every detached run is a pane, with labels and a catalog row |
 | 3 | Worktree grouping; one rule for "this worktree is in use", shared by three callers |
-| 4 | `internal/detect` — agent state, `pane.wait`, `pane.state` events |
+| 4 | `internal/detect` — agent state from the conversation, and `pane.wait` |
 | 5 | Fleet materializes through the session |
 | 6 | Studio becomes a gateway and starts zero containers |
 | 7 | Layout restore across a `serve` restart, with no auto-respawn |
@@ -204,6 +204,79 @@ collision handling.
 The sixth was a missing `termsafe.Clean` on a pane id — a container label value, and
 therefore text a repository can influence, printed into tab-aligned lines beside a
 container name that *was* cleaned.
+
+## Phase 4, as built
+
+`internal/detect` answers the question the catalog could not: which of these agents
+is waiting for me. Until now every running pane reported `unknown`, because an agent
+editing a file and an agent parked at a permission prompt are the same running
+container.
+
+**It does not match prose, and that is the decision.** The obvious implementation
+reads the last assistant message and looks for "Do you want to proceed?", "[y/n]",
+"May I" — and that is `internal/creds`' prefix table again: a lookup against claims
+about other people's products, which can be neither completed nor kept current. Worse
+here than there, because `creds` reports the *evidence* ("begins with `ghp_`") while
+this would report a *conclusion*, so a vendor rewording a prompt turns a confident
+`blocked` into a confident lie. A user waiting on an agent that is not asking is the
+failure this feature would introduce; a user told `unknown` goes and looks.
+
+Three structural facts instead, none of them anybody's wording:
+
+- **Who spoke last.** `agentctx` already separates a prompt somebody typed from a
+  tool result arriving as a user message — and from codex's `developer` turns and its
+  injected `<environment_context>`. If the last turn is the user's, the agent owes an
+  answer, and it owes it whether that was two seconds or two hours ago: "thinking" and
+  "hung" are the same evidence, so this does not guess between them.
+- **How long ago.** A transcript being appended to is an agent working.
+- **Whether anyone can answer.** This is the one that makes `blocked` meaningful. A
+  pane with an open stdin is a console: a human can type at it, so an agent that has
+  gone quiet there is waiting for one. A headless pane has no keyboard, so "waiting
+  for a human" is not a state it can be in — quiet there is `idle`. Without the
+  distinction every finished headless run would report as needing attention.
+
+The better signal, named because it is what to do next rather than what was missed: a
+claude transcript records `tool_use` blocks, and one with no matching `tool_result` is
+an agent waiting — on the tool, or on somebody approving it — which is structural and
+exact. `agentctx.Message` drops both, because it carries what was *said*, which is the
+half that can contain a question. Reaching it means a second parser or a new shape
+there, and neither is worth doing before something needs the precision.
+
+`pane.wait` is what turns the states into something a script can use. Three ways out
+and each is a different answer: the state arrives; the deadline passes, which is
+`timeout` and **not** a failure of the pane (a caller that conflates them stops work
+that was merely slow); or the pane stops existing, which ends the wait there rather
+than in silence until the deadline. It polls rather than watching, because the thing
+waited on is mostly not an event — a container exiting is one docker announces, but an
+agent going quiet is the *absence* of writes to a file, which nothing does.
+
+Two things the poll loop forced, both bugs in the first version. `Call`'s 30-second
+deadline cut a legitimate wait off at 30 seconds and reported it as a transport error,
+so the deadline is now the caller's. And refreshing every two seconds saved the
+catalog every two seconds — nine hundred identical writes and nine hundred identical
+event lines for one half-hour wait — so `SaveIfChanged` fingerprints the catalog
+*minus its timestamps*, which is the only definition of "changed" that a poll does not
+trip on every time.
+
+Only the daemon looks for conversations (`Transcripts` is nil otherwise, and every
+running pane then reports `unknown`, which is exactly what the catalog did before).
+It is the one caller that refreshes repeatedly, so the per-pane file reads are
+amortised; a one-shot `pane list` reading every agent's transcript store to print a
+column would pay that on every invocation.
+
+**`fleet status` is deliberately not wired to this**, against the phase's "should".
+Two reasons, and the second is the blocking one. A fleet is unattended, so the state
+detection adds over the container's own is mostly about waiting for a human, which
+cannot happen there. And correlating a *worktree* run to its conversation is not the
+same lookup as correlating a project run — every branch of a fleet shares one
+repository — so getting it wrong means showing one branch's state on another's row,
+which is the misattribution class `agentctx.ConversationFor` was rewritten to prevent.
+Phase 5 moves fleet onto the session, where panes get their state without a second
+correlation.
+
+`pane.state` / `pane.exit` events are also not in this phase. They need
+`session.events.subscribe` and a connection that stops being request/response, and
+`pane.wait` covers the question anyone has today without it.
 
 ## Invariants this track may not touch
 
