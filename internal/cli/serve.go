@@ -228,7 +228,83 @@ func newPaneCmd() *cobra.Command {
 			"Phase 1 of the session-server track is read-only, so `pane spawn` does not\n" +
 			"exist yet: panes are created by the agent wrappers and catalogued here.",
 	}
-	cmd.AddCommand(newPaneListCmd())
+	cmd.AddCommand(newPaneListCmd(), newPaneSpawnCmd(), newPaneKillCmd())
+	return cmd
+}
+
+// newPaneSpawnCmd is the same launch every wrapper makes, named as a pane.
+//
+// It exists for two reasons and neither is convenience. The first is that the
+// protocol's `pane.spawn` has to have a CLI twin, so the claim "a pane spawned by
+// the server is the same container as the equivalent CLI flags" is a comparison
+// somebody can run rather than a promise. The second is that the comparison is a
+// *test* — `TestPaneSpawnArgvMatchesTheRunPath` — and a test needs both sides to be
+// reachable from one process.
+//
+// Built on exactly the same `runFlags` the `run` command uses, so the sandbox flags
+// behave identically and there is no second flag surface to keep in step.
+func newPaneSpawnCmd() *cobra.Command {
+	rf := &runFlags{}
+	cmd := &cobra.Command{
+		Use:   "spawn [flags] -- <command>",
+		Short: "Start a pane: a detached sandbox recorded in the catalog",
+		Long: "The same container `run --detach` starts, with a pane id and a row in the\n" +
+			"catalog. Every sandbox flag means what it means elsewhere.\n\n" +
+			"`--dry-run` prints the engine command and starts nothing — and is the thing\n" +
+			"worth comparing: a pane and the equivalent `run --detach` must produce the\n" +
+			"same argv, because both go through runtime.BuildArgs and nothing else does.",
+		Example: "  sandbox-cli pane spawn --worktree feat -- npm test\n" +
+			"  sandbox-cli pane spawn --dry-run --worktree feat -- npm test",
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Detached by definition: a pane is a container somebody looks at later,
+			// and the HTTP-shaped half of this protocol has nowhere to hold a pty.
+			rf.detach = true
+			guest := guestArgs(cmd, args)
+			if len(guest) == 0 {
+				return fmt.Errorf("no command given; usage: sandbox-cli pane spawn [flags] -- <command> [args...]")
+			}
+			return execute(rf, guest)
+		},
+	}
+	addRunFlags(cmd, rf)
+	return cmd
+}
+
+func newPaneKillCmd() *cobra.Command {
+	var engineFlag, cfgPath string
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "kill <ref>",
+		Short: "Stop a pane",
+		Long: "Resolves a pane id, a container name, a short container id, or a branch when\n" +
+			"that is unambiguous — and refuses when it is not, because stopping the wrong\n" +
+			"agent costs its work.\n\n" +
+			"The same verb as `sandbox-cli kill`, which also accepts pane ids. This one\n" +
+			"exists so `pane` is a complete noun rather than a half of one.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, engine, err := sessionEngine(cfgPath, engineFlag)
+			if err != nil {
+				return err
+			}
+			// The same three functions `sandbox-cli kill` uses, rather than a second
+			// resolver: one listing filtered by sandbox.cli, one all-or-nothing
+			// resolution, one stop. A second copy is how two commands that name the
+			// same container come to disagree about which one that is.
+			infos, err := sandboxSessions(cmd.Context(), rt, engine, true)
+			if err != nil {
+				return err
+			}
+			targets, err := killTargets(infos, args, false)
+			if err != nil {
+				return err
+			}
+			return stopSessions(cmd.Context(), rt, targets, force, cmd.OutOrStdout())
+		},
+	}
+	addSessionFlags(cmd, &engineFlag, &cfgPath)
+	cmd.Flags().BoolVar(&force, "force", false, "SIGKILL instead of asking the guest to exit")
 	return cmd
 }
 

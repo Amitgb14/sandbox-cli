@@ -151,6 +151,22 @@ type Options struct {
 	// see rather than one it has to infer.
 	Baseline string
 
+	// PaneID, PaneKind and PaneSession are this container's identity in the
+	// session catalog (internal/session).
+	//
+	// Stamped as labels, which is what makes the catalog survivable: the engine is
+	// the state store, so a pane whose id is not on the container is one no later
+	// `serve` can rebind after a restart — it would come back as a "legacy"
+	// container addressable only by name.
+	//
+	// They carry no reach. A pane id grants nothing, selects no mount and resolves
+	// no path; it is a key into a file in the user's own config directory. That is
+	// why they sit here rather than behind a gate, and it is the reason the
+	// equivalent question for `fleet` is about bookkeeping rather than confinement.
+	PaneID      string
+	PaneKind    string
+	PaneSession string
+
 	// AuthPersistDir, when non-empty, is a host directory bind-mounted read-write
 	// as the agent's whole HOME so its login/config survives the ephemeral
 	// container (log in once). Set by the claude/codex wrappers.
@@ -717,6 +733,14 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		LabelPrompt:         truncatePrompt(opts.Prompt),
 		LabelSession:        opts.SessionID,
 		LabelBaseline:       opts.Baseline,
+		LabelPane:           opts.PaneID,
+		LabelPaneKind:       opts.PaneKind,
+		LabelPaneSession:    opts.PaneSession,
+		// Read off the config rather than taken from Options, so the label and the
+		// thing that actually isolated the run cannot disagree. There is no
+		// per-invocation override to honour: SandboxKind is a config key, and its
+		// zero value follows the engine.
+		LabelSandbox: string(cfg.Sandbox.Resolve(cfg.Engine)),
 	} {
 		if v != "" {
 			labels[k] = v

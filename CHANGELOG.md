@@ -13,6 +13,35 @@ version is tagged.
 
 ### Added
 
+- **Every detached run is now a pane.** `--detach` mints a pane id, stamps it on the
+  container, and records a row in the session catalog — so `sandbox-cli serve` can
+  rebind a run across a restart instead of listing it as something it has no id for.
+
+  `sandbox-cli pane spawn` is the same launch named as a pane, and `pane kill` the
+  matching verb. `kill`, `logs` and `attach` now accept a pane id too, alongside the
+  container name, short id and branch they already took — as a fourth *equal* form,
+  not a preferred one, so an ambiguity between kinds of match still refuses out loud.
+
+  The catalog is a courtesy rather than a gate: `run --detach` still works outside a
+  git repository, where there is no session to record in, and a row that cannot be
+  written is reported while the run carries on — the id is on the container, so the
+  next `serve` recovers it.
+
+  Every run also records *what isolated it* (`sandbox.sandbox`), so a catalog read
+  next week does not have to ask what the machine has now.
+
+### Fixed
+
+- **A duplicate container name now explains itself.** Starting a second detached run
+  on one branch is refused by the engine — that atomic refusal is what enforces one
+  agent per branch — and it surfaced as `exit status 125` beneath a line of docker's
+  own help, which says nothing about branches or agents. It now names the container
+  holding the name, whether it is running or merely unreaped, and which pane it is.
+  Said *after* the refusal rather than checked before it: a list-then-launch has a
+  window in which two launches both pass, and two agents in one checkout is silent
+  data loss.
+
+
 - **`sandbox-cli serve`, `pane list` and `session snapshot`** — the first slice of
   the session-server track ([docs](docs/architecture/session-server.md)). One daemon
   per repository catalogs its sandboxes instead of every command re-deriving the
