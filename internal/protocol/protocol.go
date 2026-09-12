@@ -221,3 +221,101 @@ type PaneWaitResult struct {
 type PaneListResult struct {
 	Panes []Pane `json:"panes"`
 }
+
+// OpPaneSpawn starts a pane.
+//
+// The one op that *creates* something, and therefore the only one whose params are
+// a trust boundary rather than a question. Everything PaneSpawnParams may carry is
+// enumerated there, and what it deliberately cannot carry is the point: a caller on
+// this socket can ask for a sandbox, and cannot ask for a different *kind* of
+// sandbox.
+const OpPaneSpawn = "pane.spawn"
+
+// PaneSpawnParams is a request to start a pane.
+//
+// **What is absent is the design.** There is no `mounts`, no `secrets`, no `env`, no
+// `env_allow`, no `user`, no `image`, no `runtime`, no `no_hardening` — the fields
+// `config/trust.go` refuses from a project file, for the same reasons. A socket is a
+// narrower thing to trust than a terminal: same-uid is its whole authentication, so
+// a caller that can open it can already run docker as you — but "can already" is not
+// "should, through this" , and an op that forwarded those fields would make this
+// daemon a way to launder them past every refusal that reads a config.
+//
+// Each field below is classified by `TestSpawnParamsAreAllClassified`, which fails
+// when the struct grows one that has not been decided on. That test is the reason
+// this type is safe to extend: a new field is a new way for a socket-spawned
+// container to differ from the one the CLI would have started, and the decision gets
+// made there rather than noticed later.
+type PaneSpawnParams struct {
+	// Kind is what the pane is for. Required: a pane with no kind is a container
+	// nobody can say the purpose of afterwards.
+	Kind PaneKind `json:"kind"`
+
+	// Agent is the adapter to run, empty for a plain command. Only agents with a
+	// verified headless mode can be named, which is `internal/agents`' own rule.
+	Agent string `json:"agent,omitempty"`
+
+	// Prompt is what the agent is asked to do, and Argv the command for a
+	// kind=command pane. One or the other, never both: an agent's argv is built by
+	// its descriptor, and letting a caller supply one would be letting it choose
+	// flags the descriptor deliberately does not pass.
+	Prompt string   `json:"prompt,omitempty"`
+	Argv   []string `json:"argv,omitempty"`
+
+	// Worktree is the branch to work in. The pane runs in that worktree, created
+	// if it does not exist — the same resolution `--worktree` does.
+	Worktree string `json:"worktree,omitempty"`
+	// Base is the branch the work is expected to land on, recorded as a label.
+	Base string `json:"base,omitempty"`
+
+	// Share mounts the shared directory at /shared. A boolean, never a path: one
+	// well-known directory the daemon creates and vets, rather than a caller
+	// naming what the container reaches.
+	Share bool `json:"share,omitempty"`
+	// ShareName scopes that mount to a subdirectory, which avoids collisions and
+	// is not an isolation boundary.
+	ShareName string `json:"share_name,omitempty"`
+
+	// Console keeps a terminal and an open stdin, so somebody can answer the
+	// agent. SkipPermissions adds the agent's skip flag to a console run.
+	Console         bool `json:"console,omitempty"`
+	SkipPermissions bool `json:"skip_permissions,omitempty"`
+	// Resume reopens a conversation by the agent's own session id. Requires
+	// Console: a headless resume replays one prompt into an old conversation and
+	// exits, which is not what anyone means by carrying it on.
+	Resume string `json:"resume,omitempty"`
+
+	// Verify is the task's definition of done, wrapped around the argv inside the
+	// container and becoming its exit code.
+	Verify string `json:"verify,omitempty"`
+
+	// Memory and CPUs are caps. They can only narrow what the config allows, which
+	// is checked rather than assumed.
+	Memory string `json:"memory,omitempty"`
+	CPUs   string `json:"cpus,omitempty"`
+
+	// Allow adds egress domains. It can only *add* to the baseline — the same
+	// asymmetry `fleet.yaml` has, and for the same reason: a caller that could
+	// subtract would be asking for a narrower allowlist than the user configured,
+	// and the way to want less egress is `network: none`.
+	Allow []string `json:"allow,omitempty"`
+	// Network is the posture, and may only tighten: "none" is accepted, and
+	// anything that would loosen what the config has in force is refused.
+	Network string `json:"network,omitempty"`
+
+	// Git forwards the git identity and trusts the workspace.
+	Git bool `json:"git,omitempty"`
+
+	// DryRun builds the argv and starts nothing, so a caller can compare what this
+	// socket would launch against what the CLI would.
+	DryRun bool `json:"dry_run,omitempty"`
+}
+
+// PaneSpawnResult is the pane that was started, or the argv a dry run would have
+// used.
+type PaneSpawnResult struct {
+	Pane *Pane `json:"pane,omitempty"`
+	// Argv is set only for a dry run, and is the engine command — the same string
+	// `--dry-run` prints, so the two can be compared as text.
+	Argv []string `json:"argv,omitempty"`
+}

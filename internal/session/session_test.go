@@ -537,7 +537,11 @@ func TestServeAnswersThePhaseOneOps(t *testing.T) {
 
 	// An op that does not exist refuses, rather than succeeding with nothing: a
 	// client cannot tell the second from a feature that silently did nothing.
-	err := Call(sock, "pane.spawn", struct{}{}, nil)
+	// An op from the protocol's eventual surface that this phase does not implement.
+	// Named rather than invented, because "unknown op" and "op I have not written
+	// yet" must answer the same way: a client cannot tell them apart and should not
+	// have to.
+	err := Call(sock, "session.events.subscribe", struct{}{}, nil)
 	if err == nil {
 		t.Fatal("an unimplemented op answered ok")
 	}

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/protocol"
+	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
 // Handler answers one op. Split out so the dispatch table is data rather than a
@@ -269,6 +271,13 @@ func (s *Server) dispatch(ctx context.Context, req protocol.Request, l Lister) (
 			return nil, err
 		}
 		return s.wait(ctx, l, p)
+
+	case protocol.OpPaneSpawn:
+		var p protocol.PaneSpawnParams
+		if err := decodeParams(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.spawnOp(ctx, p)
 	}
 
 	return nil, protocol.Errorf(protocol.CodeInvalid,
@@ -298,6 +307,88 @@ func (s *Server) refresh(ctx context.Context, l Lister) *protocol.Error {
 		fmt.Fprintf(os.Stderr, "sandbox-cli: the catalog could not be written (%v); this answer is still from the engine\n", err)
 	}
 	return nil
+}
+
+// spawnOp answers pane.spawn: the one op that creates something.
+//
+// It refuses rather than improvising whenever the daemon was not given what the op
+// needs. A `serve` with no sandbox session cannot start a container, and answering a
+// spawn with anything other than a refusal would be a request that appeared to
+// succeed — which for a launch is the worst kind of wrong answer, since the caller
+// then waits for a pane that will never exist.
+func (s *Server) spawnOp(ctx context.Context, p protocol.PaneSpawnParams) (any, *protocol.Error) {
+	if s.Launcher == nil {
+		return nil, protocol.Errorf(protocol.CodeSandboxUnavailable,
+			"this session server was started without a launcher, so it can catalog containers and not create them")
+	}
+
+	cfg, err := EffectiveConfig(s.Launcher.Cfg, p)
+	if err != nil {
+		return nil, asProtocolErr(err, protocol.CodePolicyRefused)
+	}
+	// A worktree is resolved — and created — before the options are built, the same
+	// order the run path and `fleet.Runner` use: the directory is what gets mounted,
+	// so there is nothing to build options about until it exists.
+	dir, err := ResolveWorktreeFor(s.root, p)
+	if err != nil {
+		return nil, asProtocolErr(err, protocol.CodeInvalid)
+	}
+	repoID, err := worktree.RepoID(s.root)
+	if err != nil {
+		return nil, asProtocolErr(err, protocol.CodeInvalid)
+	}
+	opts, err := OptionsFor(cfg, s.root, dir, repoID, p)
+	if err != nil {
+		return nil, asProtocolErr(err, protocol.CodeInvalid)
+	}
+
+	// A launcher built from the effective config rather than the daemon's own, so a
+	// request that tightened the network runs under the tightened one. Same session
+	// object otherwise: the image builder and the engine are the daemon's.
+	launcher := s.Launcher
+	if cfg.Network.Mode != s.Launcher.Cfg.Network.Mode {
+		tightened := *s.Launcher
+		tightened.Cfg = cfg
+		launcher = &tightened
+	}
+
+	if p.DryRun {
+		// Nothing is started and no pane is minted, which is what keeps the argv
+		// comparable with `--dry-run`'s: a pane id is a label, and a dry run has no
+		// container to put one on.
+		spec, err := launcher.Prepare(opts)
+		if err != nil {
+			return nil, asProtocolErr(err, protocol.CodeInvalid)
+		}
+		return protocol.PaneSpawnResult{Argv: runtime.BuildArgs(spec)}, nil
+	}
+
+	pane, err := s.Spawn(ctx, launcher, opts, paneKindFromParams(p), false)
+	var saveErr *SaveError
+	if errors.As(err, &saveErr) {
+		// The container is up and only the row is missing. Reporting a failure would
+		// be false, and a caller retrying would ask for a second agent on one branch.
+		fmt.Fprintf(os.Stderr, "sandbox-cli: %v\n", saveErr)
+		return protocol.PaneSpawnResult{Pane: &pane}, nil
+	}
+	if err != nil {
+		return nil, asProtocolErr(err, protocol.CodeEngineUnavailable)
+	}
+	return protocol.PaneSpawnResult{Pane: &pane}, nil
+}
+
+// asProtocolErr keeps a refusal's own code when it has one, rather than flattening
+// every failure into whatever the call site guessed.
+//
+// It matters because the codes are what a client branches on: a `policy_refused`
+// answered as `invalid` reads as "you typed it wrong" for a request that was
+// understood perfectly and declined.
+func asProtocolErr(err error, fallback protocol.Code) *protocol.Error {
+	var perr *protocol.Error
+	if errors.As(err, &perr) {
+		return perr
+	}
+	return protocol.Errorf(fallback, "%v", err)
 }
 
 // waitPoll is how often a wait re-reads the engine.

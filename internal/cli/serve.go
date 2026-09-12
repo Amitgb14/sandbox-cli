@@ -18,7 +18,10 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/detect"
+	"github.com/Amitgb14/sandbox-cli/internal/image"
 	"github.com/Amitgb14/sandbox-cli/internal/protocol"
+	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
@@ -86,6 +89,19 @@ func newServeCmd() *cobra.Command {
 			}
 			srv.Keeper = session.NewKeeper(cfg)
 			defer srv.Keeper.Close()
+
+			// What `pane.spawn` launches with, built the same way `run` builds it — one
+			// `sandbox.Session` over the resolved config — so a socket-spawned container
+			// and a CLI-spawned one go through one `BuildSpec` and one `BuildArgs`.
+			//
+			// The lazy image builder is wired in for the same reason the run path wires
+			// it: a first spawn against a cold image must build it rather than fail, and
+			// a daemon is exactly where nobody is watching to run `--build`.
+			launcher := sandbox.New(cfg)
+			if d, ok := launcher.Runtime.(*runtime.DockerCLI); ok {
+				image.Register(d)
+			}
+			srv.Launcher = launcher
 
 			// Asked here as well as inside Serve, and the duplication is for the
 			// *order* of the output rather than for the check. Serve's is the real

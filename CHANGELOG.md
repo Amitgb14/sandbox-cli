@@ -13,6 +13,26 @@ version is tagged.
 
 ### Added
 
+- **`pane.spawn` over the session socket.** A client can now ask a running
+  `sandbox-cli serve` to start a pane, with `dry_run` to see the engine command first.
+  What it cannot ask for is the point: the request has no `mounts`, `secrets`, `env`,
+  `env_allow`, `user`, `image`, `runtime` or `no_hardening` — the keys a project
+  `.sandbox.yaml` is refused, on the same reasoning. The network posture may only
+  *tighten*, `persist_auth` has no request field at all (the config answers), and every
+  field of the request is classified by a test that fails when the struct grows one
+  nobody decided on.
+
+### Fixed
+
+- **Three ways a socket-spawned container differed from the CLI's**, found by
+  comparing the two as text rather than by review. A spawn with no worktree got a
+  *timestamped* container name instead of `sandbox-<repo>-<branch>` — so it had no
+  one-agent-per-branch lock; the `base` label `fleet land` reads was usually empty; and
+  the linked-worktree `.git` mounts were missing entirely, which leaves git unable to
+  read the repository from inside the container, so an agent can edit files and not
+  commit them.
+
+
 - **Fleet agents are panes, and so finally have a crash safety net.** `fleet run` now
   records each launch in the session catalog: a fleet container carries a pane id, is
   listed by `sandbox-cli pane list`, and — the reason this is more than bookkeeping —

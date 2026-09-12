@@ -315,6 +315,77 @@ A nil catalog keeps the old path, and `fleet status` does not start a daemon to 
 A fleet is a git operation on a repository; refusing one because the bookkeeping
 directory is unwritable would trade a working feature for a record of it.
 
+## `pane.spawn` over the socket
+
+Deferred from phase 2 with a reason, and built as its own change for the same reason:
+a daemon answering `pane.spawn` is a **fourth** thing that builds `sandbox.Options`,
+and the only one fed by a request rather than by flags. `internal/fleet`'s rule with
+teeth — every gate on the run path must be repeated by every caller that builds
+Options — was broken once, silently, for `persist_auth`.
+
+Two things make it safe, and neither is a comment.
+
+**The params are narrow.** `protocol.PaneSpawnParams` has no `mounts`, `secrets`,
+`env`, `env_allow`, `user`, `image`, `runtime` or `no_hardening` — the keys
+`config/trust.go` refuses from a project file. A caller on this socket can ask for a
+sandbox and cannot ask for a different *kind* of sandbox, so the dangerous half of the
+surface does not exist to be guarded. The socket's authentication is same-uid, so such
+a caller could run `docker` directly — but "could already" is not "should, through
+this", and an op that forwarded those fields would make the daemon a way to launder
+them past every refusal that reads a config.
+
+**Every remaining field is classified.** `TestSpawnParamsAreAllClassified` fails when
+the struct grows one nobody decided on, exactly as `gates_test.go` does for `Options`.
+`persist_auth` is re-checked here and has no request field at all: the config answers
+or nothing does. The network posture may only *tighten*, in `trust.go`'s own direction
+— and it is applied by `EffectiveConfig` rather than in the builder, because
+`sandbox.Options` has no network field: the mode lives on the config, which is a
+structural fact worth knowing before trying to gate it in the wrong place.
+
+### What the test found that review would not have
+
+The first version had a socket-vs-in-process argv test, and it passed while the
+builder was wrong — because both of its sides went through `OptionsFor`. Sabotaging
+the builder (`GitIdentity: true` unconditionally) did not fail it.
+
+The test that bites compares the socket against **the CLI**, and lives in
+`internal/cli` because only that package can reach both. It found three real
+divergences immediately:
+
+- **Branch** was taken from the request, so a spawn with no worktree had no branch
+  label and therefore a *timestamped* container name instead of
+  `sandbox-<repo>-<branch>`. That name is the one-agent-per-branch lock, so the socket
+  path silently had no lock.
+- **Base** came from the request only, so the label `fleet land` reads to decide what
+  to merge into was usually empty.
+- **`LinkedWorktreeMounts` was missing entirely.** A linked worktree's `.git` is a
+  pointer file, so without the parent's `.git` bound in, git inside the container
+  cannot read the repository — the agent can edit files and not commit them. Verified
+  fixed by running `git rev-parse` inside a socket-spawned container.
+
+All three are the same mistake: reading a fact from the *request* that only the
+repository can answer.
+
+The verify wrapper moved to `internal/sandbox` on the way, because this package
+became its third caller and `session` is imported by `fleet` — so reaching back would
+be an import cycle and the alternative was a second copy of a script whose exit code
+is a contract `fleet status` and `land` read off containers that exited days ago.
+
+### Whether phase 6 needs it
+
+Worth recording, because the plan assumes it does and that may be wrong.
+`session.Spawn` takes **built** Options — chosen in phase 2 precisely so there is no
+second builder — so a process that already builds them can record panes correctly
+without any wire format. `internal/studioapi` is such a process: it has had its own
+builder since before this track. So phase 6's goal (Studio starts zero containers)
+could be met by Studio embedding a session server, with one builder per process and no
+duplicate of `RunCreateRequest` on the wire.
+
+What the socket op is genuinely for is a caller that is **not** the launcher — a thin
+or remote client, which is what `04-cli-and-studio.md` has in mind for the SDK. It is
+built and tested; whether phase 6 uses it or embeds instead is a decision that phase
+should make on its own evidence.
+
 ## Invariants this track may not touch
 
 Everything in the trust-boundary section of `CLAUDE.md` continues to hold
