@@ -83,6 +83,14 @@ type Server struct {
 	dir  string // ~/.config/sandbox/sessions/<sid>
 	root string // the repository this session is for
 
+	// Launcher is what actually starts containers, and nil means this daemon can
+	// catalog them and not create them — which is what `pane.spawn` refuses on
+	// rather than improvising. Separate from the catalog because the two have
+	// genuinely different lifetimes: a `serve` in a directory with no usable engine
+	// is still useful for reading, and a read-only client has no business holding
+	// something that can launch.
+	Launcher *sandbox.Session
+
 	// Keeper is the crash safety net for this session's panes. Nil means none —
 	// which is what every caller but the daemon wants, since a one-shot command that
 	// started a snapshot loop would have nothing to run it.

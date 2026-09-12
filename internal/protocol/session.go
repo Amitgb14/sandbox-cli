@@ -114,6 +114,27 @@ const (
 	PaneConsole PaneKind = "console"
 )
 
+// KnownPaneKind reports whether k names a kind.
+//
+// Needed because `OptionsFor` checked only that the field was non-empty, so
+// `kind: "not-a-kind"` was accepted and then silently replaced by a derived value —
+// a client could not tell a typo from a decision.
+func KnownPaneKind(k PaneKind) bool {
+	switch k {
+	case PaneAgent, PaneShell, PaneCommand, PaneVerify, PaneConsole:
+		return true
+	}
+	return false
+}
+
+// PaneKindNames is every kind, for a message that has to list them.
+func PaneKindNames() []string {
+	return []string{
+		string(PaneAgent), string(PaneShell), string(PaneCommand),
+		string(PaneVerify), string(PaneConsole),
+	}
+}
+
 // PaneState is how a pane is doing.
 //
 // Phase 1 fills in only what a container can prove: Running, Stopped, Failed,
