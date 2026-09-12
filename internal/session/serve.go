@@ -15,6 +15,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -326,9 +327,14 @@ func (s *Server) spawnOp(ctx context.Context, p protocol.PaneSpawnParams) (any, 
 	if err != nil {
 		return nil, asProtocolErr(err, protocol.CodePolicyRefused)
 	}
-	// A worktree is resolved — and created — before the options are built, the same
-	// order the run path and `fleet.Runner` use: the directory is what gets mounted,
-	// so there is nothing to build options about until it exists.
+	// Every refusal first, because the next line **creates a branch and a checkout**.
+	// Without this order a malformed request left a worktree behind — `{agent, argv,
+	// worktree: "junk"}` was refused after `junk` had been created, so repeated bad
+	// requests accumulated branches — which inverts `worktree.Resolve`'s own rule that
+	// a refusal comes before the first side effect.
+	if err := ValidateSpawn(cfg, p); err != nil {
+		return nil, asProtocolErr(err, protocol.CodeInvalid)
+	}
 	dir, err := ResolveWorktreeFor(s.root, p)
 	if err != nil {
 		return nil, asProtocolErr(err, protocol.CodeInvalid)
@@ -372,9 +378,45 @@ func (s *Server) spawnOp(ctx context.Context, p protocol.PaneSpawnParams) (any, 
 		return protocol.PaneSpawnResult{Pane: &pane}, nil
 	}
 	if err != nil {
+		// A duplicate container name is the one-agent-per-branch lock firing, and it is
+		// the commonest way a spawn fails. Reported as `engine_unavailable` it reads as
+		// "docker is down", so a client retries — which is the wrong response to "that
+		// branch already has an agent", and the retry will fail the same way forever.
+		if code := spawnFailureCode(ctx, s.Launcher, opts); code != "" {
+			return nil, protocol.Errorf(code, "%v", err)
+		}
 		return nil, asProtocolErr(err, protocol.CodeEngineUnavailable)
 	}
 	return protocol.PaneSpawnResult{Pane: &pane}, nil
+}
+
+// spawnFailureCode classifies a launch failure, or returns "" when it cannot.
+//
+// Asked **after** the failure, the same way `conflictNote` is on the CLI path and for
+// the same reason: the engine's atomic refusal of a duplicate name is what enforces
+// one agent per branch, and a list-then-launch check has a window in which two
+// launches both pass. This only explains a refusal that has already happened.
+func spawnFailureCode(ctx context.Context, launcher *sandbox.Session, opts sandbox.Options) protocol.Code {
+	name := sandbox.ContainerName(opts)
+	if name == "" || launcher == nil {
+		return ""
+	}
+	insp, ok := launcher.Runtime.(runtime.Inspector)
+	if !ok {
+		return ""
+	}
+	infos, err := insp.Containers(ctx, map[string]string{sandbox.LabelCLI: "1"})
+	if err != nil {
+		// The engine could not be asked, which is itself consistent with it being
+		// unavailable. Let the caller's fallback stand.
+		return ""
+	}
+	for _, c := range infos {
+		if c.Name == name {
+			return protocol.CodeConflict
+		}
+	}
+	return ""
 }
 
 // asProtocolErr keeps a refusal's own code when it has one, rather than flattening

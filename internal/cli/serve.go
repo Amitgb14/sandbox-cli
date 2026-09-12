@@ -97,6 +97,14 @@ func newServeCmd() *cobra.Command {
 			// The lazy image builder is wired in for the same reason the run path wires
 			// it: a first spawn against a cold image must build it rather than fail, and
 			// a daemon is exactly where nobody is watching to run `--build`.
+			// The engine the daemon actually reported, not whatever the config
+			// happened to say. `sessionEngine` honours `--engine`, and without this the
+			// catalog side spoke podman while the launcher built a docker client: on a
+			// podman-only host `pane.spawn` failed with "docker not found" from a daemon
+			// that had just printed it was serving podman, and on a host with both the
+			// container went to docker while `Adopt` and `pane kill` queried podman — so
+			// the pane was never rebound and the catalog's engine was a lie.
+			cfg.Engine = engine
 			launcher := sandbox.New(cfg)
 			if d, ok := launcher.Runtime.(*runtime.DockerCLI); ok {
 				image.Register(d)

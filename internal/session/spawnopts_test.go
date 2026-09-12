@@ -8,6 +8,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
 // This file is the reason `pane.spawn` is safe to have.
@@ -47,7 +48,15 @@ const (
 // exist rather than being guarded.
 var paramPolicies = map[string]paramPolicy{
 	// What to run. None of these reaches past the container.
-	"Kind":     honoured,
+	//
+	// Kind is `derived` and not `honoured`, which the first version of this row got
+	// wrong: `paneKindFromParams` computes the recorded kind from the *options*, so a
+	// request claiming `agent` while setting a verify cannot produce a pane labelled
+	// agent whose exit code is a verdict. The one exception is `shell`, which nothing
+	// else can tell — `argv: ["bash"]` with a console is indistinguishable from any
+	// other command — so that value is carried through. An inaccurate row here is
+	// worse than a missing one, because this table is what the next reader trusts.
+	"Kind":     derived,
 	"Prompt":   honoured,
 	"Worktree": honoured,
 	"Base":     honoured,
@@ -190,7 +199,31 @@ func TestOptionsForRefusals(t *testing.T) {
 		params protocol.PaneSpawnParams
 		want   string
 	}{
-		{"no kind", protocol.PaneSpawnParams{Agent: "claude"}, "needs a kind"},
+		{"no kind", protocol.PaneSpawnParams{Agent: "claude"}, "want one of"},
+		// Checked against the set rather than for emptiness: a typo was accepted and
+		// then silently replaced by a derived kind, so a client could not tell a
+		// mistake from a decision.
+		{"a kind that is not one", protocol.PaneSpawnParams{
+			Kind: protocol.PaneKind("not-a-kind"), Agent: "claude", Prompt: "go",
+		}, "want one of"},
+		// Three fields that only mean something to an agent. Refused rather than
+		// ignored — dropping `resume` silently lost the conversation id, so the pane's
+		// state was then decided with no transcript to correlate against.
+		{"console with no agent", protocol.PaneSpawnParams{
+			Kind: protocol.PaneCommand, Argv: []string{"bash"}, Console: true,
+		}, "console needs an agent"},
+		{"resume with no agent", protocol.PaneSpawnParams{
+			Kind: protocol.PaneCommand, Argv: []string{"bash"}, Console: true, Resume: "abc",
+		}, "needs an agent"},
+		{"skip_permissions with no agent", protocol.PaneSpawnParams{
+			Kind: protocol.PaneCommand, Argv: []string{"bash"}, SkipPermissions: true,
+		}, "skip_permissions needs an agent"},
+		// A resume lands on the agent's command line after the descriptor's flag, so a
+		// value shaped like a flag is the thing refusing agent+argv exists to prevent.
+		{"a resume that is a flag", protocol.PaneSpawnParams{
+			Kind: protocol.PaneConsole, Agent: "claude", Console: true,
+			Resume: "--mcp-config /workspace/x.json",
+		}, "not a session id"},
 		{"nothing to run", protocol.PaneSpawnParams{Kind: protocol.PaneAgent}, "nothing to run"},
 		// An agent's argv is its descriptor's, and a caller supplying one would be
 		// choosing flags the descriptor deliberately does not pass.
@@ -292,5 +325,107 @@ func TestVerifyWrapsThroughTheSharedImplementation(t *testing.T) {
 	joined := strings.Join(opts.Command, " ")
 	if !strings.Contains(joined, `"$@"`) {
 		t.Errorf("the wrapper does not pass the argv through \"$@\":\n%s", joined)
+	}
+}
+
+// The high finding from the review of this op, and the reason its "tighten only"
+// claim did not hold.
+//
+// `BuildSpec` computes `allowlist := cfg.Network.Mode == "allowlist" ||
+// len(opts.Allow) > 0`, so a non-empty `allow` switched the allowlist *on* — turning
+// a `network: none` config into a bridged container running the root firewall phase
+// with the **baseline** egress list, github.com included, plus whatever the caller
+// named. Measured before the fix: a request that explicitly asked for `network: none`
+// still came out with `--network sandbox-cli --user root --cap-add NET_ADMIN`.
+//
+// `config/load.go` guards the CLI's `--allow` the same way, which is where the intent
+// was already written down.
+func TestAllowCannotLoosenTheNetwork(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", shortTmp(t))
+	cfg := config.Default()
+	cfg.Network.Mode = "none"
+
+	for _, name := range []string{"implicitly", "while explicitly asking for none"} {
+		p := protocol.PaneSpawnParams{
+			Kind: protocol.PaneCommand, Argv: []string{"true"}, Allow: []string{"evil.example"},
+		}
+		if name != "implicitly" {
+			p.Network = "none"
+		}
+		eff, err := EffectiveConfig(cfg, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateSpawn(eff, p); err == nil {
+			t.Errorf("%s: a request naming egress domains under `none` was accepted", name)
+		} else if !strings.Contains(err.Error(), "reaches nothing") {
+			t.Errorf("%s: %v\n  want a refusal about the posture", name, err)
+		}
+	}
+
+	// And under a posture that *can* carry an allowlist, the domains go through.
+	open := config.Default()
+	open.Network.Mode = "allowlist"
+	opts, err := OptionsFor(open, "/repo", "/repo", "r-1", protocol.PaneSpawnParams{
+		Kind: protocol.PaneCommand, Argv: []string{"true"}, Allow: []string{"docs.example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opts.Allow) != 1 || opts.Allow[0] != "docs.example.com" {
+		t.Errorf("allow = %v under allowlist, want it honoured", opts.Allow)
+	}
+}
+
+// Every refusal comes before the first side effect, which is `worktree.Resolve`'s own
+// rule and was inverted here: a malformed request was refused *after* its worktree had
+// been created, so repeated bad requests accumulated branches.
+//
+// `ValidateSpawn` is pure, and this is what pins that — a refusal that needed the
+// worktree in order to fire would fail here.
+func TestValidateSpawnTouchesNothing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", shortTmp(t))
+	dir, _ := repo(t)
+
+	// The request the review used: contradictory, and naming a worktree.
+	bad := protocol.PaneSpawnParams{
+		Kind: protocol.PaneAgent, Agent: "claude", Argv: []string{"sh"}, Worktree: "junk-branch",
+	}
+	if err := ValidateSpawn(config.Default(), bad); err == nil {
+		t.Fatal("the contradictory request was accepted")
+	}
+
+	// Nothing was created: no branch, no worktree.
+	if wts, err := worktree.List(dir); err == nil {
+		for _, wt := range wts {
+			if wt.Branch == "junk-branch" {
+				t.Errorf("validation created the worktree for %q", wt.Branch)
+			}
+		}
+	}
+	if _, exists, _ := worktree.Path(dir, "junk-branch"); exists {
+		t.Error("validation created a worktree directory for a request it refused")
+	}
+}
+
+// `shell` is the one kind the request is the only thing that knows, so it survives —
+// and a verify still outranks whatever the request called the pane, because the label
+// and the container must not disagree about what the thing is.
+func TestShellKindSurvivesAndVerifyOutranks(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		params protocol.PaneSpawnParams
+		want   protocol.PaneKind
+	}{
+		{"a shell", protocol.PaneSpawnParams{
+			Kind: protocol.PaneShell, Argv: []string{"bash"},
+		}, protocol.PaneShell},
+		{"a verify outranks even a shell", protocol.PaneSpawnParams{
+			Kind: protocol.PaneShell, Argv: []string{"bash"}, Verify: "true",
+		}, protocol.PaneVerify},
+	} {
+		if got := paneKindFromParams(tc.params); got != tc.want {
+			t.Errorf("%s: kind = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

@@ -371,6 +371,55 @@ became its third caller and `session` is imported by `fleet` — so reaching bac
 be an import cycle and the alternative was a second copy of a script whose exit code
 is a contract `fleet status` and `land` read off containers that exited days ago.
 
+### What the review of it found
+
+Eight findings, and the first was a hole in the one op whose whole justification was
+that every field is gated.
+
+**`allow` loosened the network posture.** `EffectiveConfig` gated `network` and nothing
+gated `allow` — but `BuildSpec` computes `allowlist := mode == "allowlist" ||
+len(opts.Allow) > 0`, so a non-empty `allow` switched the allowlist *on*. Under a
+`network: none` config a request naming one domain produced a bridged container running
+the root firewall phase with the **baseline** egress list, github.com included.
+Measured: even a request that explicitly asked for `network: none` came out with
+`--network sandbox-cli --user root --cap-add NET_ADMIN`. `config/load.go` already
+guards the CLI's `--allow` the same way, which is where the intent was written down all
+along. Refused now rather than silently dropped, because the CLI's case is flag
+precedence and this is a caller asking for two contradictory things at once.
+
+**A refused spawn still created a branch and a worktree**, because
+`ResolveWorktreeFor` ran before the refusals. Repeated malformed requests accumulated
+them, which inverts `worktree.Resolve`'s own rule that a refusal comes before the first
+side effect. The refusals are now a pure `ValidateSpawn` the dispatch calls first —
+and the test that pins it is in the *dispatch*, because a test of the pure function
+passed with the ordering reverted.
+
+**`serve --engine podman` catalogued podman and spawned with docker.** The flag reached
+the `Lister` and not the launcher, so on a podman-only host `pane.spawn` failed with
+"docker not found" from a daemon that had just printed it was serving podman — and on a
+host with both, the container went to docker while `Adopt` and `pane kill` queried
+podman, so the pane was never rebound.
+
+Four smaller ones, all the same shape — a field accepted and then quietly discarded.
+`kind` was checked for emptiness and then ignored, so a typo was accepted and `shell`
+was recorded as `command`; `console`, `resume` and `skip_permissions` were silently
+dropped for a request with no agent, and dropping `resume` lost the conversation id so
+the pane's state was later decided with no transcript; `resume` was unvalidated and
+lands on the agent's command line, so a value shaped like a flag was the thing refusing
+`agent` + `argv` exists to prevent; and every launch failure reported
+`engine_unavailable`, including the duplicate-name refusal that is the
+one-agent-per-branch lock — which reads as "docker is down" and invites a retry that
+can only fail the same way.
+
+The eighth was the changelog: a `### Fixed` heading inserted above two existing `###
+Added` bullets, which made them read as fixes. The entry under it has been removed
+rather than moved, because those three divergences never shipped — they were introduced
+and corrected inside one PR, so they changed nothing for anybody using the tool.
+
+One correction to the table itself: `Kind` was classified `honoured` and is in fact
+`derived`. An inaccurate row is worse than a missing one, because the table is what the
+next reader trusts.
+
 ### Whether phase 6 needs it
 
 Worth recording, because the plan assumes it does and that may be wrong.

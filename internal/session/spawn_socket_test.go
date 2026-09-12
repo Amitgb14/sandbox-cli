@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
 // What this proves, precisely: the **wire** is faithful. A request crossing the
@@ -174,4 +176,48 @@ func maskName(argv []string) string {
 		}
 	}
 	return strings.Join(out, " ")
+}
+
+// The ordering, pinned where it actually lives.
+//
+// `TestValidateSpawnTouchesNothing` proves the validator is pure; it does **not**
+// prove the dispatch calls it first, and it passed with that ordering reverted. This
+// is the one that bites: a refused request must leave no branch and no worktree
+// behind, because `ResolveWorktreeFor` creates both and repeated bad requests would
+// otherwise accumulate them.
+func TestARefusedSpawnCreatesNoWorktree(t *testing.T) {
+	dir, _ := repo(t)
+	srv := open(t, dir)
+	srv.Launcher = sandbox.New(config.Default())
+
+	// Contradictory, and naming a worktree: the request from the review.
+	_, perr := srv.spawnOp(context.Background(), protocol.PaneSpawnParams{
+		Kind: protocol.PaneAgent, Agent: "claude", Argv: []string{"sh"}, Worktree: "junk-branch",
+	})
+	if perr == nil {
+		t.Fatal("the contradictory request was accepted")
+	}
+
+	if _, exists, _ := worktree.Path(dir, "junk-branch"); exists {
+		t.Error("a refused spawn created a worktree; every refusal comes before the first side effect")
+	}
+	if wts, err := worktree.List(dir); err == nil {
+		for _, wt := range wts {
+			if wt.Branch == "junk-branch" {
+				t.Errorf("a refused spawn left the worktree for %q", wt.Branch)
+			}
+		}
+	}
+	// And the branch itself: `worktree.Resolve` creates one when it is missing, so a
+	// leftover branch is the same leak wearing a different hat.
+	if branchExistsIn(t, dir, "junk-branch") {
+		t.Error("a refused spawn created the branch")
+	}
+}
+
+func branchExistsIn(t *testing.T, dir, branch string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = dir
+	return cmd.Run() == nil
 }

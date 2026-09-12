@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
@@ -44,12 +45,29 @@ import (
 // two differ for a worktree run, and conflating them is how a worktree pane comes to
 // be labelled with the main checkout's branch.
 func OptionsFor(cfg config.Config, repoRoot, workDir, repoID string, p protocol.PaneSpawnParams) (sandbox.Options, error) {
-	if p.Kind == "" {
-		return sandbox.Options{}, protocol.Errorf(protocol.CodeInvalid,
-			"a pane needs a kind: one of agent, shell, command, verify, console")
+	if err := ValidateSpawn(cfg, p); err != nil {
+		return sandbox.Options{}, err
+	}
+	return optionsFor(cfg, repoRoot, workDir, repoID, p)
+}
+
+// ValidateSpawn is every refusal, and it touches nothing.
+//
+// Pure on purpose, because the caller has to be able to run it **before** resolving a
+// worktree — and resolving one creates a branch and a checkout. Without this split, a
+// malformed request left a worktree behind: `{agent, argv, worktree: "junk"}` was
+// refused with "two answers to one question" *after* `junk` had been created, so
+// repeated bad requests accumulated branches. That inverts `worktree.Resolve`'s own
+// rule that every refusal comes before the first side effect.
+func ValidateSpawn(cfg config.Config, p protocol.PaneSpawnParams) error {
+	if !protocol.KnownPaneKind(p.Kind) {
+		// Checked rather than merely non-empty. `kind: "not-a-kind"` was accepted and
+		// then silently replaced, so a client could not tell a typo from a decision.
+		return protocol.Errorf(protocol.CodeInvalid,
+			"kind %q: want one of %s", string(p.Kind), strings.Join(protocol.PaneKindNames(), ", "))
 	}
 	if p.Agent == "" && len(p.Argv) == 0 {
-		return sandbox.Options{}, protocol.Errorf(protocol.CodeInvalid,
+		return protocol.Errorf(protocol.CodeInvalid,
 			"nothing to run: name an agent, or give an argv")
 	}
 	if p.Agent != "" && len(p.Argv) > 0 {
@@ -57,18 +75,73 @@ func OptionsFor(cfg config.Config, repoRoot, workDir, repoID string, p protocol.
 		// and a caller supplying one would be choosing flags the descriptor
 		// deliberately does not pass — `--dangerously-skip-permissions` above all,
 		// which is why `SkipPermissions` is a separate, gated field.
-		return sandbox.Options{}, protocol.Errorf(protocol.CodeInvalid,
+		return protocol.Errorf(protocol.CodeInvalid,
 			"agent and argv are two answers to one question: an agent's command line comes from its descriptor")
 	}
 	if p.Resume != "" && !p.Console {
-		return sandbox.Options{}, protocol.Errorf(protocol.CodeInvalid,
+		return protocol.Errorf(protocol.CodeInvalid,
 			"resuming a conversation needs a console: a headless resume replays one prompt into an old conversation and exits")
 	}
+	// Three fields that only mean something to an agent, refused rather than ignored
+	// — the same refusals `studioapi.buildRunOptions` makes, which is the gate
+	// repetition this file's own doc comment invokes. Ignoring `resume` was the worst
+	// of the three: the conversation id was dropped, so the pane's state was later
+	// decided with no transcript to correlate against and the caller was told nothing.
+	if p.Agent == "" {
+		for _, bad := range []struct {
+			set  bool
+			name string
+			why  string
+		}{
+			{p.Console, "console", "a console starts an agent's interactive mode, and a plain command is already whatever argv you gave"},
+			{p.Resume != "", "resume", "a conversation belongs to an agent"},
+			{p.SkipPermissions, "skip_permissions", "there are no approval prompts in a plain command to turn off"},
+		} {
+			if bad.set {
+				return protocol.Errorf(protocol.CodeInvalid,
+					"%s needs an agent: %s", bad.name, bad.why)
+			}
+		}
+	}
 	if p.Console && p.Verify != "" {
-		return sandbox.Options{}, protocol.Errorf(protocol.CodeInvalid,
+		return protocol.Errorf(protocol.CodeInvalid,
 			"console and verify are refused together: verify's exit code is the answer it exists to give, and an interactive session's exit code is whenever somebody quit")
 	}
 
+	if len(p.Allow) > 0 && cfg.Network.Mode == "none" {
+		return protocol.Errorf(protocol.CodePolicyRefused,
+			"allow names egress domains and the network is %q, which reaches nothing: naming domains would switch the allowlist on and widen what is in force",
+			cfg.Network.Mode)
+	}
+	if p.Agent != "" {
+		agent, ok := agents.Lookup(p.Agent)
+		if !ok {
+			return protocol.Errorf(protocol.CodeInvalid, "no verified adapter for agent %q", p.Agent)
+		}
+		if p.Console && p.Resume != "" {
+			if _, ok := resumeArgsFor(agent.Name); !ok {
+				return protocol.Errorf(protocol.CodeInvalid, "agent %q has no verified resume flag", agent.Name)
+			}
+			if err := validSessionID(p.Resume); err != nil {
+				return err
+			}
+		}
+		if p.Console && p.Prompt != "" && !agent.CanSeedConsole() {
+			return protocol.Errorf(protocol.CodeInvalid,
+				"%s cannot be given a prompt for an interactive session: it has no way to be seeded on the command line",
+				agent.Name)
+		}
+	}
+	if !p.Share && p.ShareName != "" {
+		return protocol.Errorf(protocol.CodeInvalid,
+			"share_name names a subdirectory of the shared mount, and share is not set — there is nothing for it to scope")
+	}
+	return nil
+}
+
+// optionsFor builds the Options, having been validated. Unexported so the ordering
+// above cannot be skipped by a new caller.
+func optionsFor(cfg config.Config, repoRoot, workDir, repoID string, p protocol.PaneSpawnParams) (sandbox.Options, error) {
 	opts := sandbox.Options{
 		Project: workDir,
 		RepoID:  repoID,
@@ -137,6 +210,12 @@ func OptionsFor(cfg config.Config, repoRoot, workDir, repoID string, p protocol.
 	// same reason: a caller that could subtract would be asking for a narrower
 	// allowlist than the user wrote, and the way to want less egress is
 	// `network: none`.
+	//
+	// `allow` cannot loosen the posture either — that refusal is in ValidateSpawn,
+	// because `BuildSpec` computes `allowlist := mode == "allowlist" || len(Allow) > 0`
+	// and a non-empty Allow therefore turned a `none` config into a bridged container
+	// with the baseline egress list. `config/load.go` guards the CLI's `--allow` the
+	// same way.
 	opts.Allow = append([]string(nil), p.Allow...)
 	// The *posture* is not here, because `sandbox.Options` has no field for it: the
 	// mode lives on the config, and `opts.Allow` can only add domains. A request
@@ -155,9 +234,6 @@ func OptionsFor(cfg config.Config, repoRoot, workDir, repoID string, p protocol.
 			return sandbox.Options{}, err
 		}
 		opts.ExtraMounts = append(opts.ExtraMounts, m.Mount)
-	} else if p.ShareName != "" {
-		return sandbox.Options{}, protocol.Errorf(protocol.CodeInvalid,
-			"share_name names a subdirectory of the shared mount, and share is not set — there is nothing for it to scope")
 	}
 
 	// --- the agent, and the one gate that was missed once ---------------------
@@ -181,6 +257,9 @@ func OptionsFor(cfg config.Config, repoRoot, workDir, repoID string, p protocol.
 			if !ok {
 				return sandbox.Options{}, protocol.Errorf(protocol.CodeInvalid,
 					"agent %q has no verified resume flag", agent.Name)
+			}
+			if err := validSessionID(p.Resume); err != nil {
+				return sandbox.Options{}, err
 			}
 			opts.Command = concat(agent.Console("", p.SkipPermissions), args, []string{p.Resume})
 			// Recorded, so the conversation belonging to this run is known rather
@@ -317,7 +396,15 @@ func concat(parts ...[]string) []string {
 func paneKindFromParams(p protocol.PaneSpawnParams) protocol.PaneKind {
 	switch {
 	case p.Verify != "":
+		// The exit code is a verdict, whatever the request called the pane. The label
+		// and the container must not disagree about what the thing is.
 		return protocol.PaneVerify
+	case p.Kind == protocol.PaneShell:
+		// The one kind nothing else can tell. A shell is `argv: ["bash"]` with a
+		// console, which is indistinguishable from any other command — so the request
+		// is the only thing that knows, and discarding it meant a client asking for a
+		// shell got a row that said `command`.
+		return protocol.PaneShell
 	case p.Agent == "":
 		return protocol.PaneCommand
 	case p.Console:
@@ -325,4 +412,27 @@ func paneKindFromParams(p protocol.PaneSpawnParams) protocol.PaneKind {
 	default:
 		return protocol.PaneAgent
 	}
+}
+
+// validSessionID refuses a resume that is not a session id.
+//
+// It lands on the agent's argv after the descriptor's resume flag, so a value like
+// `--mcp-config /workspace/x.json` would be parsed by the agent as a flag — which is
+// exactly what refusing `agent` + `argv` above exists to prevent. The shape is the
+// union of what the agents use: a uuid, or a token of word characters and dashes.
+func validSessionID(id string) error {
+	if id == "" || len(id) > 200 {
+		return protocol.Errorf(protocol.CodeInvalid, "resume %q is not a session id", id)
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_':
+		default:
+			return protocol.Errorf(protocol.CodeInvalid,
+				"resume %q is not a session id: it reaches the agent's command line, so only letters, digits, dashes and underscores are accepted",
+				id)
+		}
+	}
+	return nil
 }
