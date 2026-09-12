@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -11,12 +12,15 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
 	"github.com/Amitgb14/sandbox-cli/internal/handoff"
+	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/routing"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -163,7 +167,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// StartRecorded rather than Start: this run is detached, so its line says
 	// only that it launched — and the supervisor needs that same record to write
 	// the partner line when the container ends. See supervisor.recordEnding.
-	name, launched, err := s.Session.StartRecorded(r.Context(), opts, false)
+	name, launched, err := s.startRun(r.Context(), opts, req)
 	if err != nil {
 		if msg, held := s.nameHeldBy(r.Context(), opts); held {
 			writeError(w, http.StatusConflict, fmt.Errorf("%s", msg))
@@ -201,6 +205,45 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		meta:      launched,
 	})
 	writeJSON(w, http.StatusCreated, toRun(run, s.Engine))
+}
+
+// startRun launches the container, through the catalog when there is one.
+//
+// `SpawnRecorded` rather than `Spawn`, for the reason `handleCreateRun` used
+// `StartRecorded`: the audit line of a detached run says only that it launched, and
+// the supervisor writes the partner line when the container ends. Handing the record
+// over is what makes the second line describe the same run.
+//
+// Without a catalog it is the call this replaced, so a daemon that cannot open one
+// still launches — the bookkeeping is a courtesy, and refusing a run because a
+// directory is unwritable would trade the feature for a record of it.
+func (s *Server) startRun(ctx context.Context, opts sandbox.Options, req RunCreateRequest) (string, audit.SessionMeta, error) {
+	if s.Panes == nil {
+		return s.Session.StartRecorded(ctx, opts, false)
+	}
+	kind := protocol.PaneAgent
+	switch {
+	case req.Verify != "":
+		// The exit code is a verdict, which is what `land` reads — so the pane's
+		// purpose is the judging rather than the working.
+		kind = protocol.PaneVerify
+	case opts.Agent == "":
+		kind = protocol.PaneCommand
+	case req.Console:
+		kind = protocol.PaneConsole
+	}
+	pane, meta, err := s.Panes.SpawnRecorded(ctx, s.Session, opts, kind, false)
+	var saveErr *session.SaveError
+	if errors.As(err, &saveErr) {
+		// The container is up and only the row is missing. Reporting a failure would be
+		// false, and the pane id is a label, so the next `Adopt` recovers the row.
+		log.Printf("sandbox-studio-api: %v", saveErr)
+		return pane.ContainerName, meta, nil
+	}
+	if err != nil {
+		return "", audit.SessionMeta{}, err
+	}
+	return pane.ContainerName, meta, nil
 }
 
 // buildRunOptions turns a request into sandbox.Options, following the same

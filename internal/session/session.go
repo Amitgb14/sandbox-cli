@@ -454,6 +454,29 @@ func (s *Server) Save(reason string) error {
 	}
 	defer unlock()
 
+	// Read-modify-write, inside the lock, and this is the part that took a second
+	// writer to notice.
+	//
+	// `Save` wrote the whole catalog from a copy taken at `Open`, so two processes
+	// each doing Open → Spawn → Save would clobber one another: the second's view
+	// predates the first's write, and the first's pane vanishes. The lock serialises
+	// the writes and does nothing about the lost update.
+	//
+	// It was narrow while every writer was short-lived — `sandbox-cli claude
+	// --detach` opens, appends and exits — and self-healing for *running* panes,
+	// since the pane id is a label and the next `Adopt` recovers the row from the
+	// engine. What it could lose permanently is a **stopped** pane, which is the one
+	// thing the catalog holds that the engine cannot give back.
+	//
+	// It stops being narrow the moment a long-lived process is also a writer, which
+	// is what `internal/studioapi` becomes: its in-memory copy would be hours old.
+	if onDisk, lerr := loadState(StatePath(s.dir)); lerr == nil {
+		snap = mergeCatalogs(onDisk, snap)
+		s.mu.Lock()
+		s.sess = cloneSession(snap)
+		s.mu.Unlock()
+	}
+
 	b, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return err
@@ -489,6 +512,72 @@ func (s *Server) Save(reason string) error {
 	}
 	s.appendEvent(reason, snap)
 	return nil
+}
+
+// mergeCatalogs combines the catalog on disk with this process's own view.
+//
+// The rule follows from where authority actually lies. Panes are the **union**, keyed
+// by id, and the newer `UpdatedAt` wins — because a pane another writer knows about is
+// a real container, and dropping it is the lost update this exists to prevent. The
+// grouping is taken from *ours*, because workspaces and worktrees are derived from git
+// and the engine on every `Adopt`: a merge of two derivations is not more true than
+// the fresher one.
+//
+// Session identity (id, name, root) is ours too. Two writers for one repository agree
+// on all three by construction — the id is a function of the repository — so there is
+// nothing to reconcile and a disagreement would mean something worse than a stale
+// read.
+func mergeCatalogs(onDisk, ours protocol.Session) protocol.Session {
+	out := ours
+	byID := make(map[string]protocol.Pane, len(ours.Panes)+len(onDisk.Panes))
+	order := make([]string, 0, len(ours.Panes)+len(onDisk.Panes))
+	add := func(p protocol.Pane) {
+		prev, seen := byID[p.ID]
+		if !seen {
+			order = append(order, p.ID)
+			byID[p.ID] = p
+			return
+		}
+		// Newer wins. Equal timestamps keep what is already there, which makes the
+		// merge stable rather than dependent on argument order.
+		if p.UpdatedAt.After(prev.UpdatedAt) {
+			byID[p.ID] = p
+		}
+	}
+	for _, p := range onDisk.Panes {
+		add(p)
+	}
+	for _, p := range ours.Panes {
+		add(p)
+	}
+	out.Panes = make([]protocol.Pane, 0, len(order))
+	for _, id := range order {
+		out.Panes = append(out.Panes, byID[id])
+	}
+	sortPanes(out.Panes)
+
+	// A pane adopted from the other writer may be on a worktree this view has no
+	// record of, and a pane that renders under nothing is the failure the ids exist
+	// to prevent. Fill those in from the disk copy rather than inventing them.
+	if len(out.Workspaces) > 0 {
+		known := map[string]bool{}
+		for _, wt := range out.Workspaces[0].Worktrees {
+			known[wt.ID] = true
+		}
+		var missing []protocol.Worktree
+		for _, ws := range onDisk.Workspaces {
+			for _, wt := range ws.Worktrees {
+				if !known[wt.ID] {
+					known[wt.ID] = true
+					missing = append(missing, wt)
+				}
+			}
+		}
+		out.Workspaces[0].Worktrees = append(out.Workspaces[0].Worktrees, missing...)
+	} else {
+		out.Workspaces = onDisk.Workspaces
+	}
+	return out
 }
 
 // appendEvent records that the catalog changed. Best-effort and silent on

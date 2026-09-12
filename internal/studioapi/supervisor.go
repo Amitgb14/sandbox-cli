@@ -312,7 +312,11 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 	// that record, the retry's ending is never written. Which would have left
 	// exactly the failover episodes these panels are about sitting in the "not
 	// recorded" bucket: the one case the feature exists to report.
-	name, launched, err := sv.s.Session.StartRecorded(ctx, opts, false)
+	// Through the catalog too, so a failover's replacement container is a pane like
+	// the attempt it replaces. Without this the retry would be the one launch in the
+	// daemon that no catalog knew about — and it is the launch most worth finding
+	// later, since the pane it replaced was renamed rather than removed.
+	name, launched, err := sv.s.startRun(ctx, opts, RunCreateRequest{Agent: opts.Agent, Verify: opts.Verify})
 	if err != nil {
 		restore()
 		return err

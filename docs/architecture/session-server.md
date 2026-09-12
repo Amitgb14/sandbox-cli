@@ -68,7 +68,7 @@ deliberately does **not** start any agent.
 | 3 | Worktree grouping; one rule for "this worktree is in use", shared by three callers |
 | 4 | `internal/detect` — agent state from the conversation, and `pane.wait` |
 | 5 | Fleet launches are panes, so they get the catalog and the safety net |
-| 6 | Studio becomes a gateway and starts zero containers |
+| 6 | Studio records every run as a pane (a writer, not a second owner) |
 | 7 | Layout restore across a `serve` restart, with no auto-respawn |
 
 Phase N+1 is not started until Phase N's acceptance is green. Phases 8 (a second
@@ -434,6 +434,60 @@ What the socket op is genuinely for is a caller that is **not** the launcher —
 or remote client, which is what `04-cli-and-studio.md` has in mind for the SDK. It is
 built and tested; whether phase 6 uses it or embeds instead is a decision that phase
 should make on its own evidence.
+
+## Phase 6, as built — and where it departs from the plan
+
+Every run started from Studio is now a pane: it carries a pane id, `sandbox-cli pane
+list` shows it, and a running `sandbox-cli serve` snapshots it. That last one is the
+payoff — a Studio run is a *detached* run, and detached runs had no crash safety net
+until the keeper landed, after which every kind of pane got it and Studio's did not.
+
+**The plan asks for "every mutation is a protocol call", and this is not that.** The
+reasoning, because it is a departure rather than an omission:
+
+Making `studioapi` a client of `serve` means the narrow `pane.spawn` params have to
+grow until they cover everything `RunCreateRequest` carries — and narrowness is the
+security property those params were given. It also makes a working Studio depend on a
+daemon nobody currently has to run.
+
+*Embedding* a session server in `studioapi` is worse, and this is the argument that
+settled it: there would then be two processes running adoption loops and snapshot
+keepers over one `session.json`, each believing it owns the catalog. The flock stops
+corruption and does nothing about two owners disagreeing.
+
+So `studioapi` is a **writer, not an owner**. It opens the catalog, appends a pane,
+and saves. No adoption loop, no keeper. If a `serve` is running it owns those, and it
+reconciles Studio's panes exactly as it reconciles the CLI's — from the container
+labels, which are the source of truth. This is the same shape the CLI has had since
+phase 2, and it is why the labels were made the authority in the first place.
+
+### The bug a second writer exposed
+
+`Save` wrote the whole catalog from a copy taken at `Open`, so two processes each
+doing Open → Spawn → Save clobbered one another: the second's view predates the
+first's write, and the flock serialises the writes while doing nothing about the lost
+update.
+
+It was already wrong for the CLI — two `sandbox-cli claude --detach` started close
+together in one repository could lose a row — but narrow, because every writer was
+short-lived and a *running* pane is self-healing: the id is a label, so the next
+`Adopt` recovers it. What it could lose permanently is a **stopped** pane, which is
+the one thing the catalog holds that the engine cannot give back. A long-lived second
+writer turns that window from milliseconds into hours.
+
+`Save` is now a read-modify-write inside the lock. Panes are the union keyed by id
+with the newer `UpdatedAt` winning; the grouping comes from the fresher derivation
+rather than from a merge of two, since workspaces and worktrees are recomputed from
+git and the engine on every `Adopt`.
+
+### Not done
+
+The **read** path is unchanged: `GET /v1/runs` still asks the engine rather than the
+catalog, so the phase's "restart studio-api and read from session.snapshot" is not
+met. And nothing here is visible in Studio's UI — `web/src` and `studio/src` are
+untouched, which is the deferral carried since phase 1 finally becoming a real gap
+rather than a deliberate wait. Both are listing work rather than boundary work, and
+both want deciding with the UI in front of you.
 
 ## Invariants this track may not touch
 
