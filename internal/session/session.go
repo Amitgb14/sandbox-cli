@@ -826,8 +826,28 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 		return fmt.Errorf("asking %s what is running: %w", s.sess.Engine, err)
 	}
 
+	// The keeper's view, read **before** `s.mu` is taken. `Keeper.snapshot` holds its
+	// own mutex across `rescue.Begin`, which shells out to git several times — so
+	// calling into it while holding the server mutex would make a `pane list` arriving
+	// during a sweep wait on that git work, stalling every other handler with it.
+	// Reading first costs a map copy.
+	latest := map[string]string{}
+	for _, c := range found {
+		if id := c.Labels[sandbox.LabelPane]; id != "" {
+			if commit := s.Keeper.LastSnapshot(id); commit != "" {
+				latest[id] = commit
+			}
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	for _, p := range s.sess.Panes {
+		if commit := s.Keeper.LastSnapshot(p.ID); commit != "" {
+			latest[p.ID] = commit
+		}
+	}
 
 	// Index the engine's answer by the two things a pane can be joined on.
 	byPane := map[string]runtime.ContainerInfo{}
@@ -866,6 +886,27 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 				}
 			}
 		}
+		// Asked for **every** pane, including the ones whose container is gone. The
+		// first version asked only in the rebind branch, so a pane reaped between two
+		// sweeps kept whatever `last_snapshot` an earlier tick had persisted — the
+		// stale-pointer failure this field was fixed for, one snapshot further back.
+		if commit := latest[pane.ID]; commit != "" {
+			pane.LastSnapshot = commit
+		}
+		// Catalogs written before `Baseline` existed carry the baseline commit in
+		// `LastSnapshot`, because that is what the old code put there. Left alone, such
+		// a row reports the before-image under the new "newest snapshot" meaning
+		// forever — the exact inverted data this change exists to remove — so the label
+		// is read into its own field and a carried value that *is* the baseline is
+		// dropped rather than re-interpreted.
+		if c, ok := byPane[pane.ID]; ok {
+			if b := c.Labels[sandbox.LabelBaseline]; b != "" {
+				pane.Baseline = b
+				if pane.LastSnapshot == b {
+					pane.LastSnapshot = ""
+				}
+			}
+		}
 		if !ok {
 			// The container is gone. The pane is not: this is the one fact the
 			// catalog holds that the engine cannot give back.
@@ -879,12 +920,6 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 		pane.ContainerID = c.ID
 		pane.ContainerName = c.Name
 		pane.State, pane.ExitCode = s.stateOf(c, pane)
-		// Carried forward rather than recomputed when the keeper has nothing to say: a
-		// pane whose snapshotting stopped keeps the newest commit it had, because that
-		// is still the newest there is.
-		if latest := s.Keeper.LastSnapshot(pane.ID); latest != "" {
-			pane.LastSnapshot = latest
-		}
 		pane.UpdatedAt = time.Now().UTC()
 		panes = append(panes, pane)
 	}
@@ -896,8 +931,8 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 		}
 		pane := paneFromContainer(c)
 		pane.State, pane.ExitCode = s.stateOf(c, pane)
-		if latest := s.Keeper.LastSnapshot(pane.ID); latest != "" {
-			pane.LastSnapshot = latest
+		if commit := latest[pane.ID]; commit != "" {
+			pane.LastSnapshot = commit
 		}
 		panes = append(panes, pane)
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -678,10 +679,38 @@ func TestRestartRebindsAndRespawnsNothing(t *testing.T) {
 		t.Errorf("the stopped pane lost its agent: %q", got.Agent)
 	}
 
-	// Nothing was started. A restart that launched containers would be a restart that
-	// could double an agent, which is why "do not auto-respawn" is in the plan.
 	if len(eng.asked) == 0 {
 		t.Error("the restart never asked the engine anything")
+	}
+}
+
+// "Do not auto-respawn agents" is pinned **structurally**, because it cannot be pinned
+// by observation.
+//
+// The first attempt asserted `len(eng.asked) != 0`, which proves the engine was queried
+// and says nothing about whether anything was started — and `fakeEngine` implements only
+// `Containers`, so a spawn would have been invisible to it anyway. An `Adopt` that
+// launched containers would have kept that test green, which makes it a test of nothing.
+//
+// What can be checked is the capability: `Adopt` is handed a `Lister`, and a `Lister`
+// cannot start a container. If somebody widens that parameter to something that can —
+// which is how a convenience feature would arrive — this fails.
+func TestAdoptCannotStartContainers(t *testing.T) {
+	// A Lister is exactly runtime.Inspector: one method, which enumerates.
+	var l Lister = (*fakeEngine)(nil)
+	if _, ok := l.(interface {
+		Start(context.Context, runtime.RunSpec) (string, error)
+	}); ok {
+		t.Error("a Lister can start containers, so Adopt could respawn an agent on restart")
+	}
+	if _, ok := l.(runtime.Runtime); ok {
+		t.Error("Adopt's parameter widened to a full Runtime; it only needs to enumerate")
+	}
+	// And the fake really is the whole of what Adopt gets, so the tests above are
+	// exercising the same narrowness production has.
+	if reflect.TypeOf((*Lister)(nil)).Elem().NumMethod() != 1 {
+		t.Errorf("Lister has %d methods, want the single enumerating one",
+			reflect.TypeOf((*Lister)(nil)).Elem().NumMethod())
 	}
 }
 

@@ -54,6 +54,17 @@ type Keeper struct {
 	// container stops, which is also when its session is closed with an outcome.
 	by map[string]*keeperEntry
 
+	// final is the last commit of a pane whose session has been closed, kept because
+	// `Stop` takes the **final** snapshot — "whatever the agent wrote between the last
+	// tick and its exit", which is the one most worth having. The entry is removed from
+	// `by` when the pane stops, so without this `LastSnapshot` answered "" for exactly
+	// the pane whose newest snapshot had just been written: a weaker version of the bug
+	// this field exists to fix.
+	//
+	// It grows by one string per finished pane for the life of the daemon, which is the
+	// same bound the catalog itself has — a pane is never removed either.
+	final map[string]string
+
 	interval  time.Duration
 	retention rescue.Retention
 	mirror    *config.S3Spec
@@ -76,6 +87,7 @@ type keeperEntry struct {
 func NewKeeper(cfg config.Config) *Keeper {
 	k := &Keeper{
 		by:        map[string]*keeperEntry{},
+		final:     map[string]string{},
 		enabled:   cfg.Snapshot.IsEnabled(),
 		interval:  cfg.Snapshot.EveryDuration(),
 		retention: rescue.Retention{Run: cfg.Snapshot.RetentionDuration(), Manual: cfg.Snapshot.ManualRetentionDuration()},
@@ -152,6 +164,13 @@ func (k *Keeper) Sweep(ctx context.Context, panes []protocol.Pane, worktreeDir f
 		// Stop takes a final snapshot of its own, which is the point: whatever the
 		// agent wrote between the last tick and its exit is in it.
 		c.entry.snap.Stop(outcome, code)
+		// Read *after* Stop, so the commit recorded is the final one, and kept in
+		// `final` because the entry has already left `by`.
+		if last := c.entry.snap.LastCommit(); last != "" {
+			k.mu.Lock()
+			k.final[c.id] = last
+			k.mu.Unlock()
+		}
 	}
 
 	for _, p := range panes {
@@ -230,12 +249,17 @@ func (k *Keeper) LastSnapshot(paneID string) string {
 		return ""
 	}
 	k.mu.Lock()
-	defer k.mu.Unlock()
 	e, ok := k.by[paneID]
-	if !ok || e.snap == nil {
-		return ""
+	closed := k.final[paneID]
+	k.mu.Unlock()
+	if ok && e.snap != nil {
+		if live := e.snap.LastCommit(); live != "" {
+			return live
+		}
 	}
-	return e.snap.LastCommit()
+	// A pane whose session has been closed: its final snapshot, which is the newest
+	// there will ever be.
+	return closed
 }
 
 // Close stops every session, for a daemon shutting down.
@@ -249,14 +273,19 @@ func (k *Keeper) Close() {
 		return
 	}
 	k.mu.Lock()
-	entries := make([]*keeperEntry, 0, len(k.by))
+	entries := make(map[string]*keeperEntry, len(k.by))
 	for id, e := range k.by {
-		entries = append(entries, e)
+		entries[id] = e
 		delete(k.by, id)
 	}
 	k.mu.Unlock()
-	for _, e := range entries {
+	for id, e := range entries {
 		e.snap.Stop(rescue.OutcomeSignalled, nil)
+		if last := e.snap.LastCommit(); last != "" {
+			k.mu.Lock()
+			k.final[id] = last
+			k.mu.Unlock()
+		}
 	}
 }
 

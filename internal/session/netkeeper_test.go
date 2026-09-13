@@ -190,3 +190,49 @@ func inCommit(t *testing.T, dir, commit, path string) bool {
 	cmd.Dir = dir
 	return cmd.Run() == nil
 }
+
+// The **final** snapshot must stay reachable after the pane's session closes.
+//
+// `Sweep` removes the entry from the live map before calling `Stop`, and `Stop` is what
+// takes the final snapshot — "whatever the agent wrote between the last tick and its
+// exit", which is the one most worth having. So `LastSnapshot` answered "" for exactly
+// the pane whose newest snapshot had just been written: a weaker version of the bug
+// `last_snapshot` was fixed for.
+func TestLastSnapshotSurvivesThePaneClosing(t *testing.T) {
+	dir, _ := repo(t)
+	t.Setenv("XDG_CONFIG_HOME", shortTmp(t))
+	k := NewKeeper(snapshotsOn())
+
+	if err := os.WriteFile(filepath.Join(dir, "work.txt"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	at := func(protocol.Pane) string { return dir }
+	live := protocol.Pane{ID: "p_1", State: protocol.StateUnknown, Agent: "claude"}
+	k.Sweep(context.Background(), []protocol.Pane{live}, at)
+
+	first := k.LastSnapshot("p_1")
+	if first == "" {
+		t.Fatal("no snapshot commit for a running pane")
+	}
+
+	// The work that arrives between the last tick and the exit — the case Stop's final
+	// snapshot exists for.
+	if err := os.WriteFile(filepath.Join(dir, "work.txt"), []byte("two, written last"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := 0
+	done := protocol.Pane{ID: "p_1", State: protocol.StateDone, ExitCode: &code, Agent: "claude"}
+	k.Sweep(context.Background(), []protocol.Pane{done}, at)
+
+	last := k.LastSnapshot("p_1")
+	if last == "" {
+		t.Fatal("the pane's newest snapshot became unreachable the moment its session closed")
+	}
+	if last == first {
+		t.Error("last_snapshot is still the second-to-last: Stop's final snapshot is not being recorded")
+	}
+	// And it really holds the late write, which is the whole claim.
+	if !inCommit(t, dir, last, "work.txt") {
+		t.Errorf("commit %s does not hold the file", last)
+	}
+}
