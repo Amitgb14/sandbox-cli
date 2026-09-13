@@ -12,6 +12,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/doctor"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 )
 
 // `sandbox-cli doctor` answers one question: can this host deliver what the
@@ -71,7 +72,29 @@ func newDoctorCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), doctorTimeout)
 			defer cancel()
-			return reportDoctor(name, runDoctorChecks(ctx, name, engine))
+			verdict := reportDoctor(name, runDoctorChecks(ctx, name, engine))
+			// The session server, printed **after** the table and not as a check.
+			//
+			// It started as a check and that was the wrong shape: every non-OK status
+			// here is fatal under prod (see `doctor.Verdict`), so "no daemon is running"
+			// would have failed `doctor --profile prod` on a host perfectly able to run a
+			// sandbox. The checks answer "can this host deliver what the profile
+			// promises", and whether a daemon happens to be up is not a property of the
+			// host — nor of the boundary, which holds either way. What a daemon adds is
+			// the crash net for detached runs and the agent state that separates
+			// `blocked` from `working`: worth saying, not worth failing on.
+			//
+			// Printed **before** the verdict is returned, and whatever it was. The first
+			// version returned early on a failing check — so under `--profile prod` on a
+			// host that fails one, the case where a reader most wants the whole picture,
+			// the note never appeared at all.
+			//
+			// On `os.Stdout`, the same stream `reportDoctor` writes the table to. Using
+			// `cmd.OutOrStdout()` here meant a caller redirecting cobra's output captured
+			// the note and lost the table, or the reverse.
+			fmt.Fprintln(os.Stdout)
+			fmt.Fprintln(os.Stdout, sessionServerNote())
+			return verdict
 		},
 	}
 	cmd.Flags().StringVar(&profile, "profile", "", "profile to check against: dev (default) or prod")
@@ -173,6 +196,50 @@ func reportDoctor(profile string, checks []check) error {
 	return fmt.Errorf("this host cannot satisfy the %s profile: %s\n"+
 		"  fix the above, or use --profile dev, which warns instead of refusing",
 		profile, strings.Join(blocking, ", "))
+}
+
+// --- the session-server note -------------------------------------------------
+//
+// Placed after reportDoctor rather than before it: inserting a function between that
+// one's doc comment and its declaration left godoc attaching "reportDoctor prints the
+// findings…" to this, and reportDoctor undocumented.
+
+// sessionServerNote says whether a session server is running for this repository, and
+// what is lost when one is not.
+//
+// A note rather than a check, because `doctor`'s checks all answer "can this host
+// deliver what the profile promises" and every non-OK status among them is fatal under
+// prod. A daemon being up is not a property of the host, and nothing about the boundary
+// depends on it — every isolation invariant holds either way. What it adds is the crash
+// safety net for detached runs and the agent state that separates `blocked` from
+// `working`, which is worth saying and not worth failing on.
+func sessionServerNote() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "session server:  cannot read the working directory, so there is no repository to ask about"
+	}
+	dir, err := session.DirFor(wd)
+	if err != nil {
+		// `DirFor` goes through `worktree.RepoID`, which runs git — so this is reached by
+		// git missing from PATH and by a repository it cannot read, not only by "this is
+		// not a repository". The error is included rather than paraphrased away: a
+		// confidently wrong diagnosis from the command whose job is diagnosis is the
+		// worst thing it can print.
+		return "session server:  not applicable — a session is scoped to a git repository, and this is not one\n" +
+			"                 (" + err.Error() + ")"
+	}
+	if err := session.CheckSockPath(dir); err != nil {
+		// A path too long to bind: starting one would fail, which is more useful than
+		// "not running".
+		return "session server:  cannot run here — " + err.Error()
+	}
+	if _, alive := servePID(dir); alive {
+		return "session server:  running on " + session.SockPath(dir) +
+			"\n                 detached runs are snapshotted, and pane state comes from the agent's own conversation"
+	}
+	return "session server:  not running — " + session.SockPath(dir) +
+		"\n                 so detached runs get no periodic snapshots and pane state stays `unknown`." +
+		"\n                 Start one with: sandbox-cli serve"
 }
 
 func plural(n int, one, many string) string {

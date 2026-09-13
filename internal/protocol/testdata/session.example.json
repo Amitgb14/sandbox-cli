@@ -53,12 +53,13 @@
       "container_id": "8f2c1ab",
       "state": "working",
       "conversation_id": "sess_abc",
-      "last_snapshot": "refs/sandbox/snapshots/20260909T190100Z",
+      "last_snapshot": "4c1d9f30a2b7e85c1a6f0d3b9e7c2a84f5b1d6e0",
       "exit_code": null,
       "legacy": false,
       "created_at": "2026-09-09T19:01:00Z",
       "updated_at": "2026-09-09T19:04:00Z",
-      "pane_kind": "agent"
+      "pane_kind": "agent",
+      "baseline": "9a0b7e2c4d6f81a3b5c7e9f0d2b4a6c8e0f1a3b5"
     }
   ]
 }

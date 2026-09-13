@@ -1264,6 +1264,11 @@ Two things called a snapshot, and they are not the same layer:
 If you are looking for work an agent lost, you want `recover`. This is the other
 one.
 
+A pane's `last_snapshot` is a pointer from the first into the second: the **newest**
+snapshot of that pane's workspace. Its `baseline` is a different pointer — the workspace
+as the run *started* — so restoring a baseline gives back the state before the work. Full
+detail: [sessions](usage/sessions.md#the-session-server-and-the-two-things-called-a-snapshot).
+
 The socket is `0600` in a `0700` directory and carries no token: anyone who can
 open it can already run docker as you, so a token would be a second secret
 protecting nothing. Studio keeps its loopback bind and bearer token — a browser can

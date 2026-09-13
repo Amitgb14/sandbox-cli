@@ -75,3 +75,51 @@ Under Podman these commands need to be told which engine to look at
 
 Next: [Monitoring a run](monitoring.md) · [Worktrees](worktrees.md) ·
 [documentation index](../README.md)
+
+## The session server, and the two things called a snapshot
+
+`sandbox-cli serve` is a second way to look at the same containers, and the piece that
+makes a detached run survivable. One daemon per repository catalogs its sandboxes —
+which worktrees exist, which containers are in them, how each is doing — instead of
+every command re-deriving the grouping from labels.
+
+```sh
+sandbox-cli serve              # foreground, one per repository
+sandbox-cli pane list          # the containers, grouped by worktree
+sandbox-cli pane wait p_3f21 --state blocked --state done
+sandbox-cli session snapshot   # the whole catalog, as the protocol has it
+```
+
+Two things it adds that `sandbox-cli list` cannot:
+
+- **Detached runs get snapshotted.** A foreground `sandbox-cli claude` snapshots every
+  two minutes; a `--detach` run and a Studio run never did. With a daemon running, every
+  pane is, so work an agent had not committed is recoverable.
+- **Pane state comes from the agent's conversation**, not only its container, so
+  `blocked` (the agent is waiting for you) is distinguishable from `working`.
+
+Stopping the daemon leaves every container running. The engine owns them, which is the
+same reason `sandbox-cli list` survives a killed CLI — and restarting `serve` rebinds the
+live ones from their labels and marks the rest `stopped`. It starts nothing: a restart
+that respawned agents would be a restart that could double one.
+
+### Layout and files are different layers
+
+The word "snapshot" means two unrelated things in this tool, and the one you want when
+work has gone missing is always the second:
+
+| | `session snapshot` | `recover` |
+|---|---|---|
+| holds | **layout** — worktrees, panes, their state | **files** — the workspace, untracked ones included |
+| lives in | `~/.config/sandbox/sessions/<repo>/session.json` | git, under `refs/sandbox/snapshots/` |
+| restoring it | starts no agent, changes no file | gives you a branch with your work on it |
+| survives a reboot | yes, as a record; the containers do not | yes |
+
+A pane's `last_snapshot` is a pointer from the first layer into the second: the **newest**
+snapshot taken of that pane's workspace. Its `baseline` is a different pointer — the
+workspace as the run *started*, recorded before the agent did anything. Restoring a
+baseline gives back the state before the work, which is worth knowing before you reach
+for one.
+
+`sandbox-cli doctor` says whether a server is running for the repository you are in, and
+what is lost when one is not.

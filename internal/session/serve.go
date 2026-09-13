@@ -528,9 +528,17 @@ func (s *Server) sweep(ctx context.Context, l Lister) {
 	if err := s.Adopt(ctx, l); err != nil {
 		return
 	}
-	_ = s.SaveIfChanged("sweep")
 	snap := s.Snapshot()
 	s.Keeper.Sweep(ctx, snap.Panes, s.WorktreeDir)
+	// Saved **after** the sweep, and this ordering is the point. Saving first persisted
+	// the commit from the *previous* tick, so a daemon killed between two ticks left the
+	// catalog naming a snapshot older than the newest one actually in
+	// refs/sandbox/snapshots — reading back an interval behind in exactly the crash the
+	// net exists for. A second Adopt picks up what the sweep just wrote.
+	if err := s.Adopt(ctx, l); err != nil {
+		return
+	}
+	_ = s.SaveIfChanged("sweep")
 }
 
 func decodeParams(raw json.RawMessage, into any) *protocol.Error {

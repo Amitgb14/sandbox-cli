@@ -84,7 +84,7 @@ func (s *Server) SpawnRecorded(ctx context.Context, sess *sandbox.Session, opts 
 		ContainerName:  name,
 		State:          protocol.StateUnknown,
 		ConversationID: opts.SessionID,
-		LastSnapshot:   opts.Baseline,
+		Baseline:       opts.Baseline,
 		CreatedAt:      time.Now().UTC(),
 		UpdatedAt:      time.Now().UTC(),
 	}
