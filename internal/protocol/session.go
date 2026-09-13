@@ -218,11 +218,25 @@ type Pane struct {
 	ExitCode *int `json:"exit_code,omitempty"`
 
 	// ConversationID is the agent's own session id, so a stopped pane can be
-	// carried on rather than restarted. LastSnapshot is the git ref under
-	// refs/sandbox/snapshots/ — a pointer into the other snapshot layer, never a
-	// copy of what it holds.
+	// carried on rather than restarted.
 	ConversationID string `json:"conversation_id,omitempty"`
-	LastSnapshot   string `json:"last_snapshot,omitempty"`
+
+	// LastSnapshot is the **newest** snapshot taken of this pane's workspace, as a
+	// commit under refs/sandbox/snapshots/ — a pointer into the other snapshot layer,
+	// never a copy of what it holds.
+	//
+	// It was populated from the container's baseline label, and that was the bug
+	// issue #163 is about wearing a field name: a baseline is the workspace as the run
+	// *started*, so "last snapshot" pointed at the oldest thing there was, and
+	// restoring it gave back the state before the agent worked. Empty when nothing has
+	// snapshotted this pane — which is the honest answer for a pane no `serve` was
+	// watching, and better than a commit that is real and means the opposite.
+	LastSnapshot string `json:"last_snapshot,omitempty"`
+
+	// Baseline is the before-image recorded at launch, kept under its own name so the
+	// information is not lost now that LastSnapshot means what it says. Restoring it
+	// gives the workspace as the run started.
+	Baseline string `json:"baseline,omitempty"`
 
 	// Legacy marks a container started before this daemon existed. It has no pane
 	// label, so its ID *is* its container name: a synthesised `p_` id would name

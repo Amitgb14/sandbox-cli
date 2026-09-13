@@ -214,6 +214,30 @@ func (k *Keeper) snapshot(ctx context.Context, p protocol.Pane, dir string) {
 	}
 }
 
+// LastSnapshot is the newest snapshot commit taken of this pane, or "" when none has
+// been.
+//
+// The keeper is the only thing that knows it: `rescue.Snapshotter` records the commit
+// it last wrote, and nothing else in the catalog is watching. Before this, a pane's
+// `LastSnapshot` was filled in from the container's *baseline* label — the workspace as
+// the run started — so following it gave back the state before the agent worked, which
+// is issue #163's confusion in a field name.
+//
+// Empty is the honest answer for a pane no daemon was watching. A commit that is real
+// and means the opposite is worse than nothing.
+func (k *Keeper) LastSnapshot(paneID string) string {
+	if k == nil {
+		return ""
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	e, ok := k.by[paneID]
+	if !ok || e.snap == nil {
+		return ""
+	}
+	return e.snap.LastCommit()
+}
+
 // Close stops every session, for a daemon shutting down.
 //
 // Each gets a final snapshot and the `signalled` outcome, which is what a foreground

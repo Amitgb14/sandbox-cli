@@ -11,7 +11,21 @@ version is tagged.
 
 ## Unreleased
 
+### Fixed
+
+- **A pane's `last_snapshot` pointed at the snapshot taken *before* the run.** It was
+  populated from the container's baseline label — the workspace as the agent started —
+  so the field somebody checks first when work has gone missing named the oldest
+  snapshot there was, and restoring it gave back the state before the work. It is now
+  the newest snapshot, and the baseline has its own field.
+
 ### Added
+
+- **`sandbox-cli doctor` says whether a session server is running** for the repository
+  you are in, and what is lost when one is not: detached runs get no periodic snapshots,
+  and pane state stays `unknown`. A note rather than a check, because a daemon being up
+  is not a property of the host and the boundary does not depend on it.
+
 
 - **Runs started from Studio are panes.** A run launched through `POST /v1/runs` now
   gets a pane id, appears in `sandbox-cli pane list`, and — the reason this is more

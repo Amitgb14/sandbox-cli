@@ -12,6 +12,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/doctor"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 )
 
 // `sandbox-cli doctor` answers one question: can this host deliver what the
@@ -71,7 +72,22 @@ func newDoctorCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), doctorTimeout)
 			defer cancel()
-			return reportDoctor(name, runDoctorChecks(ctx, name, engine))
+			if err := reportDoctor(name, runDoctorChecks(ctx, name, engine)); err != nil {
+				return err
+			}
+			// The session server, printed **after** the table and not as a check.
+			//
+			// It started as a check and that was the wrong shape: every non-OK status
+			// here is fatal under prod (see `doctor.Verdict`), so "no daemon is running"
+			// would have failed `doctor --profile prod` on a host perfectly able to run a
+			// sandbox. The checks answer "can this host deliver what the profile
+			// promises", and whether a daemon happens to be up is not a property of the
+			// host — nor of the boundary, which holds either way. What a daemon adds is
+			// the crash net for detached runs and the agent state that separates
+			// `blocked` from `working`: worth saying, not worth failing on.
+			fmt.Fprintln(cmd.OutOrStdout())
+			fmt.Fprintln(cmd.OutOrStdout(), sessionServerNote())
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&profile, "profile", "", "profile to check against: dev (default) or prod")
@@ -115,6 +131,40 @@ func resolveDoctorTarget(cfgPath, flag, networkFlag string) (profile, engine str
 
 // reportDoctor prints the findings and returns a non-zero-exit error when the
 // profile cannot be satisfied.
+// sessionServerNote says whether a session server is running for this repository, and
+// what is lost when one is not.
+//
+// A note rather than a check, because `doctor`'s checks all answer "can this host
+// deliver what the profile promises" and every non-OK status among them is fatal under
+// prod. A daemon being up is not a property of the host, and nothing about the boundary
+// depends on it — every isolation invariant holds either way. What it adds is the crash
+// safety net for detached runs and the agent state that separates `blocked` from
+// `working`, which is worth saying and not worth failing on.
+func sessionServerNote() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "session server:  cannot read the working directory, so there is no repository to ask about"
+	}
+	dir, err := session.DirFor(wd)
+	if err != nil {
+		// A session is scoped to a repository, so there is nothing to run here — a
+		// fact rather than a problem.
+		return "session server:  not applicable — this is not a git repository, and a session is scoped to one"
+	}
+	if err := session.CheckSockPath(dir); err != nil {
+		// A path too long to bind: starting one would fail, which is more useful than
+		// "not running".
+		return "session server:  cannot run here — " + err.Error()
+	}
+	if _, alive := servePID(dir); alive {
+		return "session server:  running on " + session.SockPath(dir) +
+			"\n                 detached runs are snapshotted, and pane state comes from the agent's own conversation"
+	}
+	return "session server:  not running — " + session.SockPath(dir) +
+		"\n                 so detached runs get no periodic snapshots and pane state stays `unknown`." +
+		"\n                 Start one with: sandbox-cli serve"
+}
+
 func reportDoctor(profile string, checks []check) error {
 	fmt.Printf("profile: %s\n\n", profile)
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)

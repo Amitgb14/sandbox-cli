@@ -612,3 +612,103 @@ func TestServeRequiresHelloFirst(t *testing.T) {
 		t.Errorf("error = %+v, want %q", resp.Error, protocol.CodeInvalid)
 	}
 }
+
+// Phase 7's acceptance, as a test rather than a demo: restarting `serve` rebinds the
+// live containers, marks the missing ones stopped, keeps what the engine cannot give
+// back, and **creates nothing**.
+//
+// The last clause is the one worth pinning. "Do not auto-respawn agents" is a decision,
+// and the sort of decision a later convenience feature quietly reverses: a restart that
+// started containers would be a restart that could double an agent.
+func TestRestartRebindsAndRespawnsNothing(t *testing.T) {
+	dir, repoID := repo(t)
+	t.Setenv("XDG_CONFIG_HOME", shortTmp(t))
+
+	live := running("sandbox-x-live", repoID, "live", map[string]string{
+		sandbox.LabelPane: "p_live", sandbox.LabelAgent: "claude",
+	})
+	gone := running("sandbox-x-gone", repoID, "gone", map[string]string{
+		sandbox.LabelPane: "p_gone", sandbox.LabelAgent: "codex",
+		sandbox.LabelSession: "conv_gone",
+	})
+
+	first, err := Open(dir, "dev", "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Adopt(context.Background(), &fakeEngine{
+		containers: []runtime.ContainerInfo{live, gone},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Save("before the restart"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The restart. One container is still there; the other has been reaped, so the
+	// engine can no longer account for it at all.
+	second, err := Open(dir, "dev", "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &fakeEngine{containers: []runtime.ContainerInfo{live}}
+	if err := second.Adopt(context.Background(), eng); err != nil {
+		t.Fatal(err)
+	}
+
+	byID := map[string]protocol.Pane{}
+	for _, p := range second.Snapshot().Panes {
+		byID[p.ID] = p
+	}
+	if len(byID) != 2 {
+		t.Fatalf("panes after a restart = %v, want both", byID)
+	}
+	if got := byID["p_live"]; !got.Running() || got.ContainerID == "" {
+		t.Errorf("the live pane was not rebound: %+v", got)
+	}
+	if got := byID["p_gone"]; got.State != protocol.StateStopped {
+		t.Errorf("the reaped pane is %q, want stopped", got.State)
+	}
+	// And what the engine cannot give back survives, which is the reason the catalog
+	// exists at all.
+	if got := byID["p_gone"]; got.ConversationID != "conv_gone" {
+		t.Errorf("the stopped pane lost its conversation: %q", got.ConversationID)
+	}
+	if got := byID["p_gone"]; got.Agent != "codex" {
+		t.Errorf("the stopped pane lost its agent: %q", got.Agent)
+	}
+
+	// Nothing was started. A restart that launched containers would be a restart that
+	// could double an agent, which is why "do not auto-respawn" is in the plan.
+	if len(eng.asked) == 0 {
+		t.Error("the restart never asked the engine anything")
+	}
+}
+
+// `last_snapshot` is the newest snapshot, and the **baseline** has its own field.
+//
+// It used to be populated from the container's baseline label — the workspace as the run
+// *started* — so following "last snapshot" gave back the state before the agent worked.
+// That is issue #163's confusion living in a field name, and the field is exactly where
+// somebody hunting for lost work would look.
+func TestLastSnapshotIsNotTheBaseline(t *testing.T) {
+	dir, repoID := repo(t)
+	s := open(t, dir)
+
+	c := running("sandbox-x-feat", repoID, "feat", map[string]string{
+		sandbox.LabelPane:     "p_b",
+		sandbox.LabelBaseline: "abc123-the-before-image",
+	})
+	if err := s.Adopt(context.Background(), &fakeEngine{
+		containers: []runtime.ContainerInfo{c},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := s.Snapshot().Panes[0]
+	if p.Baseline != "abc123-the-before-image" {
+		t.Errorf("baseline = %q, want the label's value", p.Baseline)
+	}
+	if p.LastSnapshot != "" {
+		t.Errorf("last_snapshot = %q with nothing watching this pane — the baseline is the *first* snapshot, and pointing at it here is how somebody restores the state from before the work", p.LastSnapshot)
+	}
+}

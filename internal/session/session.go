@@ -879,6 +879,12 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 		pane.ContainerID = c.ID
 		pane.ContainerName = c.Name
 		pane.State, pane.ExitCode = s.stateOf(c, pane)
+		// Carried forward rather than recomputed when the keeper has nothing to say: a
+		// pane whose snapshotting stopped keeps the newest commit it had, because that
+		// is still the newest there is.
+		if latest := s.Keeper.LastSnapshot(pane.ID); latest != "" {
+			pane.LastSnapshot = latest
+		}
 		pane.UpdatedAt = time.Now().UTC()
 		panes = append(panes, pane)
 	}
@@ -890,6 +896,9 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 		}
 		pane := paneFromContainer(c)
 		pane.State, pane.ExitCode = s.stateOf(c, pane)
+		if latest := s.Keeper.LastSnapshot(pane.ID); latest != "" {
+			pane.LastSnapshot = latest
+		}
 		panes = append(panes, pane)
 	}
 
@@ -952,10 +961,15 @@ func paneFromContainer(c runtime.ContainerInfo) protocol.Pane {
 		// resumed case, since that is the only one where it is known rather than
 		// inferred.
 		ConversationID: c.Labels[sandbox.LabelSession],
-		LastSnapshot:   c.Labels[sandbox.LabelBaseline],
-		Legacy:         legacy,
-		CreatedAt:      created.UTC(),
-		UpdatedAt:      time.Now().UTC(),
+		// The *baseline*, under its own name. It used to be assigned to LastSnapshot,
+		// which made "last snapshot" point at the workspace as the run started — so
+		// following it gave back the state before the agent worked, which is issue
+		// #163's confusion in a field name. LastSnapshot is filled in from the keeper,
+		// which is the only thing that knows the newest one.
+		Baseline:  c.Labels[sandbox.LabelBaseline],
+		Legacy:    legacy,
+		CreatedAt: created.UTC(),
+		UpdatedAt: time.Now().UTC(),
 	}
 }
 

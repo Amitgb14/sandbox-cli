@@ -531,6 +531,34 @@ untouched, which is the deferral carried since phase 1 finally becoming a real g
 rather than a deliberate wait. Both are listing work rather than boundary work, and
 both want deciding with the UI in front of you.
 
+## Phase 7, as built
+
+Most of it was already true. Phase 1 made `Open` load `session.json` and `Adopt` rebind
+live containers from their labels, so a restarted `serve` already found the panes that
+were still going, marked the rest `stopped`, and started nothing. What this phase added
+is the test for that — "do not auto-respawn" is a decision, and the sort a later
+convenience feature quietly reverses — plus two things that were actually wrong.
+
+**`last_snapshot` pointed at the baseline**, which is issue #163's confusion living in a
+field name. The baseline is the workspace as the run *started*, so "last snapshot" named
+the oldest thing there was, and following it gave back the state from before the agent
+worked — in the field somebody hunting for lost work would look at first. It is now the
+newest snapshot, read from the keeper, which is the only thing that knows; a pane no
+daemon was watching has none, and empty is the honest answer. The baseline keeps its own
+field, because it is still worth knowing and now says what it is.
+
+**`doctor` mentions the session server**, and the shape of that is the part worth
+recording. It began as a check and that was wrong: every non-OK status in `doctor`'s
+table is fatal under prod, so "no daemon is running" would have failed
+`doctor --profile prod` on a host perfectly able to run a sandbox. Those checks answer
+"can this host deliver what the profile promises", and a daemon being up is neither a
+property of the host nor of the boundary — every isolation invariant holds either way.
+So it prints after the table as a note, saying what is lost when one is not running.
+
+`docs/usage/sessions.md` now explains the two layers side by side, because "snapshot"
+means two unrelated things in this tool and the one somebody wants when work has gone
+missing is always `recover`.
+
 ## Invariants this track may not touch
 
 Everything in the trust-boundary section of `CLAUDE.md` continues to hold
