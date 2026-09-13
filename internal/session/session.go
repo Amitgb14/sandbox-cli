@@ -109,6 +109,10 @@ type Server struct {
 	// which is correct after Open: the file on disk may match, but this process has
 	// not proven it and a first save costs one write.
 	lastSaved string
+	// adopted records whether *this* process has rebuilt the catalog from the engine.
+	// It is the freshness signal `mergeCatalogs` needs: only a process that has
+	// adopted has a grouping worth preferring over the one on disk.
+	adopted bool
 }
 
 // ErrNoSession is returned when a session directory does not exist yet, so a
@@ -396,19 +400,19 @@ func loadState(path string) (protocol.Session, error) {
 // about is whether a pane appeared, went away or changed state.
 func (s *Server) SaveIfChanged(reason string) error {
 	s.mu.Lock()
-	fp := fingerprint(s.sess)
-	unchanged := fp == s.lastSaved
+	unchanged := fingerprint(s.sess) == s.lastSaved
 	s.mu.Unlock()
 	if unchanged {
 		return nil
 	}
-	if err := s.Save(reason); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	s.lastSaved = fp
-	s.mu.Unlock()
-	return nil
+	// `s.mu` is released before `Save`, which takes the flock first: taking the mutex
+	// and then the flock would deadlock against Save's order.
+	//
+	// The fingerprint is recorded by `Save`, from what it actually committed. Setting
+	// it here from the pre-call value was wrong once the merge could change the
+	// result: memory and the recorded fingerprint then disagreed, and the next call
+	// wrote again although nothing had changed.
+	return s.Save(reason)
 }
 
 // fingerprint is what "changed" means for a catalog: the panes that exist and how
@@ -443,38 +447,49 @@ func fingerprint(sess protocol.Session) string {
 // renames and the loser's panes vanish. The event is appended last, so the log
 // never claims a write that did not reach disk.
 func (s *Server) Save(reason string) error {
-	s.mu.Lock()
-	s.sess.UpdatedAt = time.Now().UTC()
-	snap := cloneSession(s.sess)
-	s.mu.Unlock()
-
+	// **flock first, then the struct mutex, and both held for the whole
+	// read-modify-write.** The ordering is a deadlock rule and the holding is a
+	// correctness one.
+	//
+	// The first version snapshotted `s.sess` *before* taking the flock and wrote the
+	// merged result back afterwards — so anything that changed the catalog while this
+	// call waited for the lock was silently reverted. `serve` does exactly that from
+	// several goroutines: the keeper's sweep runs `Adopt`, and every accepted
+	// connection can run `refresh`. A handler's in-flight `Save` could therefore undo
+	// a sweep's discovery that a pane had exited, and the sweep's next `Snapshot`
+	// would then hand the keeper a pane list where that pane was still running — so
+	// its rescue session never closed, never took the final snapshot, and kept
+	// committing into its worktree. Which is precisely what `sweep`'s own comment says
+	// must not happen.
+	//
+	// Holding `s.mu` across the write costs handlers a few milliseconds of fsync. The
+	// alternative costs a finished run an unbounded series of commits.
+	//
+	// Nothing may take `s.mu` and *then* the flock, or the two orders deadlock.
+	// `SaveIfChanged` is the only near miss and releases `s.mu` before calling here.
 	unlock, err := flock(lockPath(s.dir))
 	if err != nil {
 		return err
 	}
 	defer unlock()
 
-	// Read-modify-write, inside the lock, and this is the part that took a second
-	// writer to notice.
-	//
-	// `Save` wrote the whole catalog from a copy taken at `Open`, so two processes
-	// each doing Open → Spawn → Save would clobber one another: the second's view
-	// predates the first's write, and the first's pane vanishes. The lock serialises
-	// the writes and does nothing about the lost update.
-	//
-	// It was narrow while every writer was short-lived — `sandbox-cli claude
-	// --detach` opens, appends and exits — and self-healing for *running* panes,
-	// since the pane id is a label and the next `Adopt` recovers the row from the
-	// engine. What it could lose permanently is a **stopped** pane, which is the one
-	// thing the catalog holds that the engine cannot give back.
-	//
-	// It stops being narrow the moment a long-lived process is also a writer, which
-	// is what `internal/studioapi` becomes: its in-memory copy would be hours old.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.sess.UpdatedAt = time.Now().UTC()
+	snap := cloneSession(s.sess)
+
+	// The other writer's view, merged in. `Save` used to write the whole catalog from
+	// one process's copy, so two processes each doing Open → Spawn → Save clobbered
+	// one another. That was narrow while every writer was short-lived and
+	// self-healing for *running* panes — the pane id is a label, so the next `Adopt`
+	// recovers the row from the engine — but what it could lose permanently is a
+	// **stopped** pane, which is the one thing the catalog holds that the engine
+	// cannot give back. `internal/studioapi` is a long-lived writer, which turns
+	// milliseconds into hours.
 	if onDisk, lerr := loadState(StatePath(s.dir)); lerr == nil {
-		snap = mergeCatalogs(onDisk, snap)
-		s.mu.Lock()
+		snap = mergeCatalogs(onDisk, snap, s.adopted)
 		s.sess = cloneSession(snap)
-		s.mu.Unlock()
 	}
 
 	b, err := json.MarshalIndent(snap, "", "  ")
@@ -510,7 +525,13 @@ func (s *Server) Save(reason string) error {
 	if err := os.Rename(tmpName, StatePath(s.dir)); err != nil {
 		return err
 	}
-	s.appendEvent(reason, snap)
+	// The fingerprint of what was **committed**, not of what this call set out to
+	// write. The merge can pull in another writer's panes, so recording the pre-merge
+	// value left `lastSaved` disagreeing with memory and made the next
+	// `SaveIfChanged` write again although nothing had changed — the one thing it
+	// exists to avoid.
+	s.lastSaved = fingerprint(snap)
+	s.appendEventLocked(reason, snap)
 	return nil
 }
 
@@ -525,9 +546,18 @@ func (s *Server) Save(reason string) error {
 //
 // Session identity (id, name, root) is ours too. Two writers for one repository agree
 // on all three by construction — the id is a function of the repository — so there is
-// nothing to reconcile and a disagreement would mean something worse than a stale
-// read.
-func mergeCatalogs(onDisk, ours protocol.Session) protocol.Session {
+// nothing to reconcile and a disagreement would mean something worse than a stale read.
+//
+// `oursIsDerived` is the freshness signal the first version lacked, and it mattered as
+// soon as the second writer existed. "Take the grouping from ours" rests on ours being
+// a fresh derivation — true for a process that runs `Adopt`, and **false for
+// `internal/studioapi`**, which is a writer that deliberately runs no adoption loop,
+// so its grouping is frozen at daemon start and is the stalest copy in the system.
+// Concretely: a worktree is removed, `serve` rewrites its record with no `Path` (the
+// deliberate "never invent a path for a worktree git has not heard of"), and the next
+// Studio launch would write the stale *pathed* record back — which is the field
+// `WorktreeDir` returns and the snapshot keeper writes into.
+func mergeCatalogs(onDisk, ours protocol.Session, oursIsDerived bool) protocol.Session {
 	out := ours
 	byID := make(map[string]protocol.Pane, len(ours.Panes)+len(onDisk.Panes))
 	order := make([]string, 0, len(ours.Panes)+len(onDisk.Panes))
@@ -556,6 +586,16 @@ func mergeCatalogs(onDisk, ours protocol.Session) protocol.Session {
 	}
 	sortPanes(out.Panes)
 
+	if !oursIsDerived {
+		// A writer that has never adopted has nothing authoritative to say about the
+		// grouping, so the disk copy stands — and its panes still hang off it, because
+		// the ids are derived from the branch and agree across writers by construction.
+		if len(onDisk.Workspaces) > 0 {
+			out.Workspaces = onDisk.Workspaces
+		}
+		return out
+	}
+
 	// A pane adopted from the other writer may be on a worktree this view has no
 	// record of, and a pane that renders under nothing is the failure the ids exist
 	// to prevent. Fill those in from the disk copy rather than inventing them.
@@ -583,7 +623,9 @@ func mergeCatalogs(onDisk, ours protocol.Session) protocol.Session {
 // appendEvent records that the catalog changed. Best-effort and silent on
 // failure, the same bargain internal/audit makes: the catalog is what was asked
 // for, the log of changes to it is a courtesy.
-func (s *Server) appendEvent(reason string, snap protocol.Session) {
+// appendEventLocked is appendEvent, called with s.mu held — which every caller now
+// is, since Save holds it for the whole write.
+func (s *Server) appendEventLocked(reason string, snap protocol.Session) {
 	f, err := os.OpenFile(EventsPath(s.dir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
@@ -877,6 +919,7 @@ func (s *Server) Adopt(ctx context.Context, l Lister) error {
 	sortPanes(panes)
 	s.sess.Panes = panes
 	s.sess.Workspaces = s.workspacesFor(repoID, panes, branches)
+	s.adopted = true
 	return nil
 }
 

@@ -316,7 +316,13 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 	// the attempt it replaces. Without this the retry would be the one launch in the
 	// daemon that no catalog knew about — and it is the launch most worth finding
 	// later, since the pane it replaced was renamed rather than removed.
-	name, launched, err := sv.s.startRun(ctx, opts, RunCreateRequest{Agent: opts.Agent, Verify: opts.Verify})
+	//
+	// No synthesised request: this used to build a `RunCreateRequest{Agent, Verify}`
+	// and so dropped `Console`, which would have labelled a console run's replacement
+	// `agent`. Unreachable today only because console and fallback are refused
+	// together — which is the kind of safety that stops being true when somebody
+	// relaxes an unrelated rule. `startRun` reads the options it is given.
+	name, launched, err := sv.s.startRun(ctx, opts)
 	if err != nil {
 		restore()
 		return err

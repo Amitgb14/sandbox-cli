@@ -480,6 +480,48 @@ with the newer `UpdatedAt` winning; the grouping comes from the fresher derivati
 rather than from a merge of two, since workspaces and worktrees are recomputed from
 git and the engine on every `Adopt`.
 
+### What the review of it found
+
+Five findings, and the first was a regression the merge itself introduced — which is
+the hazard of fixing a concurrency bug.
+
+**`Save` reverted a concurrent `Adopt`.** It snapshotted `s.sess` before taking the
+flock and wrote the merged result back afterwards, so anything that changed the catalog
+while it waited for the lock was silently undone. `serve` changes it from several
+goroutines — the keeper's sweep runs `Adopt`, and every accepted connection can run
+`refresh` — and the flock is now contended by a long-lived second writer, so the window
+is real rather than theoretical. A handler's in-flight `Save` could undo a sweep's
+discovery that a pane had exited; the sweep's next `Snapshot` would hand the keeper a
+pane that looked alive, so its rescue session never closed, never took the final
+snapshot, and kept committing into a finished run's worktree — exactly what `sweep`'s
+own comment says must not happen. `Save` now holds the flock *and* the struct mutex for
+the whole read-modify-write, in that order, and nothing may take them the other way
+round.
+
+**The merge's "grouping comes from ours" needed a freshness signal.** That rests on
+*ours* being a fresh derivation, which is true for a process that runs `Adopt` and false
+for the writer this phase adds: `studioapi` deliberately runs no adoption loop, so its
+grouping is frozen at daemon start and is the stalest copy in the system. It would have
+written a removed worktree's *pathed* record back over the pathless one `serve` had just
+derived — and that field is what `WorktreeDir` returns and the keeper writes into.
+`mergeCatalogs` now takes whether the caller has adopted.
+
+**A run targeting another repository was catalogued in this one.** The catalog belongs
+to `-project`, and a request may name a different registered repository through `repo`;
+the row then landed in A's catalog with A's `pane_session` on B's container, so A's
+`Adopt` never matched it and marked it stopped — a permanent phantom pane in A for a run
+it never hosted, and nothing in B. Such a run now launches uncatalogued rather than
+miscatalogued. Per-repository catalogs are the real answer and are a larger change.
+
+Two smaller ones. The failover synthesised a `RunCreateRequest` and dropped `Console`
+from it, so a console run's replacement would have been labelled `agent` — unreachable
+only because console and fallback are refused together, which is the kind of safety that
+stops holding when somebody relaxes an unrelated rule; the pane kind is derived from the
+*options* now, as the three classifiers before it already were. And `SaveIfChanged`
+recorded a fingerprint of the catalog it had not written, so a merge that pulled in
+another writer's panes left memory and the fingerprint disagreeing and caused one extra
+write — `Save` now reports what it committed.
+
 ### Not done
 
 The **read** path is unchanged: `GET /v1/runs` still asks the engine rather than the
