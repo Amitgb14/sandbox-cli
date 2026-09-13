@@ -68,7 +68,7 @@ deliberately does **not** start any agent.
 | 3 | Worktree grouping; one rule for "this worktree is in use", shared by three callers |
 | 4 | `internal/detect` — agent state from the conversation, and `pane.wait` |
 | 5 | Fleet launches are panes, so they get the catalog and the safety net |
-| 6 | Studio becomes a gateway and starts zero containers |
+| 6 | Studio records every run as a pane (a writer, not a second owner) |
 | 7 | Layout restore across a `serve` restart, with no auto-respawn |
 
 Phase N+1 is not started until Phase N's acceptance is green. Phases 8 (a second
@@ -434,6 +434,102 @@ What the socket op is genuinely for is a caller that is **not** the launcher —
 or remote client, which is what `04-cli-and-studio.md` has in mind for the SDK. It is
 built and tested; whether phase 6 uses it or embeds instead is a decision that phase
 should make on its own evidence.
+
+## Phase 6, as built — and where it departs from the plan
+
+Every run started from Studio is now a pane: it carries a pane id, `sandbox-cli pane
+list` shows it, and a running `sandbox-cli serve` snapshots it. That last one is the
+payoff — a Studio run is a *detached* run, and detached runs had no crash safety net
+until the keeper landed, after which every kind of pane got it and Studio's did not.
+
+**The plan asks for "every mutation is a protocol call", and this is not that.** The
+reasoning, because it is a departure rather than an omission:
+
+Making `studioapi` a client of `serve` means the narrow `pane.spawn` params have to
+grow until they cover everything `RunCreateRequest` carries — and narrowness is the
+security property those params were given. It also makes a working Studio depend on a
+daemon nobody currently has to run.
+
+*Embedding* a session server in `studioapi` is worse, and this is the argument that
+settled it: there would then be two processes running adoption loops and snapshot
+keepers over one `session.json`, each believing it owns the catalog. The flock stops
+corruption and does nothing about two owners disagreeing.
+
+So `studioapi` is a **writer, not an owner**. It opens the catalog, appends a pane,
+and saves. No adoption loop, no keeper. If a `serve` is running it owns those, and it
+reconciles Studio's panes exactly as it reconciles the CLI's — from the container
+labels, which are the source of truth. This is the same shape the CLI has had since
+phase 2, and it is why the labels were made the authority in the first place.
+
+### The bug a second writer exposed
+
+`Save` wrote the whole catalog from a copy taken at `Open`, so two processes each
+doing Open → Spawn → Save clobbered one another: the second's view predates the
+first's write, and the flock serialises the writes while doing nothing about the lost
+update.
+
+It was already wrong for the CLI — two `sandbox-cli claude --detach` started close
+together in one repository could lose a row — but narrow, because every writer was
+short-lived and a *running* pane is self-healing: the id is a label, so the next
+`Adopt` recovers it. What it could lose permanently is a **stopped** pane, which is
+the one thing the catalog holds that the engine cannot give back. A long-lived second
+writer turns that window from milliseconds into hours.
+
+`Save` is now a read-modify-write inside the lock. Panes are the union keyed by id
+with the newer `UpdatedAt` winning; the grouping comes from the fresher derivation
+rather than from a merge of two, since workspaces and worktrees are recomputed from
+git and the engine on every `Adopt`.
+
+### What the review of it found
+
+Five findings, and the first was a regression the merge itself introduced — which is
+the hazard of fixing a concurrency bug.
+
+**`Save` reverted a concurrent `Adopt`.** It snapshotted `s.sess` before taking the
+flock and wrote the merged result back afterwards, so anything that changed the catalog
+while it waited for the lock was silently undone. `serve` changes it from several
+goroutines — the keeper's sweep runs `Adopt`, and every accepted connection can run
+`refresh` — and the flock is now contended by a long-lived second writer, so the window
+is real rather than theoretical. A handler's in-flight `Save` could undo a sweep's
+discovery that a pane had exited; the sweep's next `Snapshot` would hand the keeper a
+pane that looked alive, so its rescue session never closed, never took the final
+snapshot, and kept committing into a finished run's worktree — exactly what `sweep`'s
+own comment says must not happen. `Save` now holds the flock *and* the struct mutex for
+the whole read-modify-write, in that order, and nothing may take them the other way
+round.
+
+**The merge's "grouping comes from ours" needed a freshness signal.** That rests on
+*ours* being a fresh derivation, which is true for a process that runs `Adopt` and false
+for the writer this phase adds: `studioapi` deliberately runs no adoption loop, so its
+grouping is frozen at daemon start and is the stalest copy in the system. It would have
+written a removed worktree's *pathed* record back over the pathless one `serve` had just
+derived — and that field is what `WorktreeDir` returns and the keeper writes into.
+`mergeCatalogs` now takes whether the caller has adopted.
+
+**A run targeting another repository was catalogued in this one.** The catalog belongs
+to `-project`, and a request may name a different registered repository through `repo`;
+the row then landed in A's catalog with A's `pane_session` on B's container, so A's
+`Adopt` never matched it and marked it stopped — a permanent phantom pane in A for a run
+it never hosted, and nothing in B. Such a run now launches uncatalogued rather than
+miscatalogued. Per-repository catalogs are the real answer and are a larger change.
+
+Two smaller ones. The failover synthesised a `RunCreateRequest` and dropped `Console`
+from it, so a console run's replacement would have been labelled `agent` — unreachable
+only because console and fallback are refused together, which is the kind of safety that
+stops holding when somebody relaxes an unrelated rule; the pane kind is derived from the
+*options* now, as the three classifiers before it already were. And `SaveIfChanged`
+recorded a fingerprint of the catalog it had not written, so a merge that pulled in
+another writer's panes left memory and the fingerprint disagreeing and caused one extra
+write — `Save` now reports what it committed.
+
+### Not done
+
+The **read** path is unchanged: `GET /v1/runs` still asks the engine rather than the
+catalog, so the phase's "restart studio-api and read from session.snapshot" is not
+met. And nothing here is visible in Studio's UI — `web/src` and `studio/src` are
+untouched, which is the deferral carried since phase 1 finally becoming a real gap
+rather than a deliberate wait. Both are listing work rather than boundary work, and
+both want deciding with the UI in front of you.
 
 ## Invariants this track may not touch
 

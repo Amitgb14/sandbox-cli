@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
@@ -33,11 +34,27 @@ import (
 // audit line. None of that is repeated here, and the argv is assembled in exactly
 // one place.
 func (s *Server) Spawn(ctx context.Context, sess *sandbox.Session, opts sandbox.Options, kind protocol.PaneKind, forceBuild bool) (protocol.Pane, error) {
+	pane, _, err := s.SpawnRecorded(ctx, sess, opts, kind, forceBuild)
+	return pane, err
+}
+
+// SpawnRecorded is Spawn, and also hands back the audit record the launch wrote.
+//
+// It exists for the caller that will later learn something this one cannot: how the
+// run *ended*. A detached launch has no exit code to wait for, so its audit line
+// carries a placeholder and `Finished: false`; whoever sees the container stop
+// completes the pair by writing the same record again with the real outcome. Handing
+// the record over is what makes that second line describe the same run rather than a
+// reconstruction of it — `internal/studioapi`'s supervisor is the caller, and the
+// reason `sandbox.Session` already has this exact pair.
+//
+// Two entry points, one implementation, so the two cannot drift.
+func (s *Server) SpawnRecorded(ctx context.Context, sess *sandbox.Session, opts sandbox.Options, kind protocol.PaneKind, forceBuild bool) (protocol.Pane, audit.SessionMeta, error) {
 	if sess == nil {
-		return protocol.Pane{}, fmt.Errorf("no sandbox session to start in")
+		return protocol.Pane{}, audit.SessionMeta{}, fmt.Errorf("no sandbox session to start in")
 	}
 	if kind == "" {
-		return protocol.Pane{}, fmt.Errorf("a pane needs a kind: one of agent, shell, command, verify, console")
+		return protocol.Pane{}, audit.SessionMeta{}, fmt.Errorf("a pane needs a kind: one of agent, shell, command, verify, console")
 	}
 
 	// Minted before the container exists, because the id has to be a **label** and
@@ -50,12 +67,12 @@ func (s *Server) Spawn(ctx context.Context, sess *sandbox.Session, opts sandbox.
 	opts.PaneKind = string(kind)
 	opts.PaneSession = s.sessionID()
 
-	name, err := sess.Start(ctx, opts, forceBuild)
+	name, meta, err := sess.StartRecorded(ctx, opts, forceBuild)
 	if err != nil {
 		// Nothing is recorded. A pane for a container that was refused is a row
 		// claiming a run happened, which is the same reason `StartRecorded` writes no
 		// audit line for a failed launch.
-		return protocol.Pane{}, err
+		return protocol.Pane{}, audit.SessionMeta{}, err
 	}
 
 	pane := protocol.Pane{
@@ -83,9 +100,9 @@ func (s *Server) Spawn(ctx context.Context, sess *sandbox.Session, opts sandbox.
 	// pane id as a label, so the next `Adopt` recovers the row this could not write
 	// — which is the point of keeping the id on the container rather than only here.
 	if err := s.Save("spawn " + id); err != nil {
-		return pane, &SaveError{PaneID: id, Container: name, Err: err}
+		return pane, meta, &SaveError{PaneID: id, Container: name, Err: err}
 	}
-	return pane, nil
+	return pane, meta, nil
 }
 
 // SaveError says the container started and the catalog did not record it.

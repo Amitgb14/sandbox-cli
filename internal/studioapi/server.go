@@ -22,6 +22,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/image"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -45,6 +46,29 @@ type engineRuntime interface {
 // invocation answers via --project/cwd.
 type Server struct {
 	Session *sandbox.Session
+
+	// Panes records every launch in the session catalog, so a run started from
+	// Studio is a pane like any other: it carries a pane id, `sandbox-cli pane list`
+	// shows it, and a running `sandbox-cli serve` snapshots it.
+	//
+	// A **writer, not an owner**, and that distinction is the whole design of this
+	// phase. The plan asks for "every mutation is a protocol call", which would make
+	// this process a client of `serve` — and the narrow `pane.spawn` params would
+	// then have to grow to cover everything `RunCreateRequest` carries, which is the
+	// security property they were given for. The alternative of *embedding* a session
+	// server here is worse: two processes running adoption loops and snapshot
+	// keepers over one `session.json`, fighting for the catalog they are both meant
+	// to own.
+	//
+	// So this opens the catalog, appends, and saves. It runs no adoption loop and no
+	// keeper; if a `serve` is running it owns those, and it reconciles these panes the
+	// same way it reconciles the CLI's — from the container labels, which are the
+	// source of truth. `Save` is a read-modify-write under the lock precisely so two
+	// writers of different lifetimes cannot lose each other's rows.
+	//
+	// Nil is supported and means no catalog: the daemon still launches, which is what
+	// keeps `--api-in-docker` and a read-only config directory working.
+	Panes   *session.Server
 	RT      engineRuntime
 	Project string // resolved absolute host directory
 	RepoID  string // worktree.RepoID(Project); "" outside a git repo

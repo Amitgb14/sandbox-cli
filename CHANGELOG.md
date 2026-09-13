@@ -13,6 +13,27 @@ version is tagged.
 
 ### Added
 
+- **Runs started from Studio are panes.** A run launched through `POST /v1/runs` now
+  gets a pane id, appears in `sandbox-cli pane list`, and — the reason this is more
+  than bookkeeping — is snapshotted by a running `sandbox-cli serve`. A Studio run is a
+  detached run, and detached runs had no crash safety net.
+
+  The daemon is a *writer* and not a second owner of the catalog: it records panes and
+  runs no adoption loop or snapshot keeper, so a `sandbox-cli serve` (if one is running)
+  stays the only thing that reconciles. A daemon that cannot open a catalog — a project
+  that is not a git repository, `--api-in-docker` — still launches runs exactly as
+  before.
+
+### Fixed
+
+- **Two writers of the session catalog could lose each other's rows.** `Save` wrote the
+  whole catalog from a copy taken when it was opened, so two processes each recording a
+  pane clobbered one another. Running panes were self-healing — the pane id is a
+  container label, so the next refresh recovers the row — but a **stopped** pane's row
+  is the one thing the catalog holds that the engine cannot give back, and it could be
+  lost for good. `Save` is now a read-modify-write under the lock.
+
+
 - **`pane.spawn` over the session socket.** A client can now ask a running
   `sandbox-cli serve` to start a pane, with `dry_run` to see the engine command first.
   What it cannot ask for is the point: the request has no `mounts`, `secrets`, `env`,
