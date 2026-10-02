@@ -650,6 +650,29 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     login is saved. There are no aliases for the old spellings: there is no
     backward compatibility with beta.15's command line.
     `TestTopLevelIsAgentNeutral` pins the top level.
+  - **Recover: rebuilt, not ported.** beta.15's `rescue` had two halves, and
+    the bind mount was the reason for both:
+    - *Repair* fixed a host repository a container had broken: a pruned
+      `.git/worktrees`, an index git could not read. It is **dropped**,
+      because a guest never writes to the host repository now.
+    - *Snapshots* committed the host workspace mid-run through a private
+      index. They become **checkpoints**, built inside the guest the same way:
+      a private index and a hidden ref (`refs/sandbox/checkpoint`), so the
+      agent's index, HEAD and branches are untouched. They come back through
+      the existing bundle endpoint, verified like bring-back, into
+      `refs/sandbox/checkpoints/<id>`.
+
+    `recover` lists the session records whose work never came back, asks each
+    one's sandboxd about its sandbox, and says what is left: alive (bring it
+    back), gone with a checkpoint, or gone. `restore` and `show` are dropped,
+    since a checkpoint is already a ref. Resuming the conversation
+    (`recover_resume`) is dropped too: transcripts stay in the guest and are
+    not synced. `_old/internal/rescue` stays as the reference until `_old/`
+    goes.
+
+    Not yet: checkpoints run only while a CLI is attached. Detached runs and
+    fleet tasks have nothing driving them, so a detached run's protection is
+    still bring-back before the idle timeout.
 
 ## Risks
 

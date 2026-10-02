@@ -27,7 +27,7 @@ func NewRootCmd() *cobra.Command {
 	}
 	root.AddCommand(
 		newVersionCmd(), newContextCmd(), newRunCmd(), newListCmd(), newAttachCmd(),
-		newLogsCmd(), newKillCmd(), newBringBackCmd(), newDoctorCmd(), newTunnelCmd(),
+		newLogsCmd(), newKillCmd(), newBringBackCmd(), newRecoverCmd(), newDoctorCmd(), newTunnelCmd(),
 	)
 	root.AddCommand(newSuspendCmds()...)
 	root.AddCommand(newAgentGroupCmd())

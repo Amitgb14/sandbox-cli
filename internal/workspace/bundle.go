@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/githard"
@@ -51,11 +54,56 @@ func RepoRoot(dir string) string {
 // into, so work can be brought back after the run — or later, from another
 // command. It lives outside every repository.
 type Session struct {
-	Sandbox string `json:"sandbox"`
-	Context string `json:"context"`
-	Repo    string `json:"repo"`
-	Base    string `json:"base"`
-	Branch  string `json:"branch"`
+	Sandbox string    `json:"sandbox"`
+	Context string    `json:"context"`
+	Repo    string    `json:"repo"`
+	Base    string    `json:"base"`
+	Branch  string    `json:"branch"`
+	Started time.Time `json:"started,omitempty"`
+
+	// Checkpoint is the last checkpoint fetched, and when.
+	Checkpoint   string    `json:"checkpoint,omitempty"`
+	CheckpointAt time.Time `json:"checkpoint_at,omitempty"`
+	// Done is set once the work has been brought back (or there was none):
+	// the record has nothing left to recover. BroughtBack is the ref, if any.
+	Done        bool   `json:"done,omitempty"`
+	BroughtBack string `json:"brought_back,omitempty"`
+}
+
+// Sessions lists every recorded session, newest first. A record that cannot
+// be read is skipped: it was written by this CLI, and one bad file should not
+// hide the rest.
+func Sessions() ([]Session, error) {
+	entries, err := os.ReadDir(filepath.Join(ConfigDir(), "sessions"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []Session
+	for _, e := range entries {
+		id, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok || !e.Type().IsRegular() {
+			continue
+		}
+		if s, err := LoadSession(id); err == nil {
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Started.After(out[j].Started) })
+	return out, nil
+}
+
+// Forget removes a session's record. Refs it fetched are left alone: they are
+// in the user's repository, and deleting one is the user's decision.
+func Forget(id string) error { return os.Remove(sessionPath(id)) }
+
+// MarkBroughtBack records that a session's work is home. ref is "" when there
+// was nothing new.
+func (s *Session) MarkBroughtBack(ref string) {
+	s.Done, s.BroughtBack = true, ref
+	_ = s.Save()
 }
 
 func sessionPath(id string) string { return filepath.Join(ConfigDir(), "sessions", id+".json") }
@@ -114,6 +162,11 @@ func CloneIn(ctx context.Context, c *api.Client, sandbox, repo string) (string, 
 //
 // It returns the ref, or "" when there was nothing new.
 func BringBack(ctx context.Context, c *api.Client, s Session, name string) (string, error) {
+	// Names that are namespaces of their own: refs/sandbox/fleet/<branch> and
+	// refs/sandbox/checkpoints/<id> cannot coexist with a ref of the same name.
+	if name == "fleet" || name == "checkpoints" {
+		return "", fmt.Errorf("refs/sandbox/%s is reserved; bring it back under another name (--name)", name)
+	}
 	commit := "cd /workspace && git add -A && " +
 		"(git diff --cached --quiet || git -c user.name=sandbox -c user.email=sandbox@localhost commit -q -m 'sandbox: uncommitted work at the end of the run')"
 	if res, err := c.Run(ctx, s.Sandbox, api.RunRequest{Argv: []string{"sh", "-c", commit}}); err != nil {

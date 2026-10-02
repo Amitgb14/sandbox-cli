@@ -55,6 +55,13 @@ git log -p HEAD..refs/sandbox/sbx_…
 git merge refs/sandbox/sbx_…
 ```
 
+While a run is attached, its working tree is also checkpointed to
+`refs/sandbox/checkpoints/<id>` every five minutes (`--checkpoint-every`). That
+doesn't touch the sandbox's own index or branches. If the CLI is killed, the
+machine sleeps or the VM dies, `sandbox-cli recover` says where each run's work
+still is: in a sandbox you can still bring back, in its last checkpoint, or
+nowhere.
+
 ## Coding agents
 
 `sandbox-cli agent <name>` is `run` with a coding agent's conveniences on top:

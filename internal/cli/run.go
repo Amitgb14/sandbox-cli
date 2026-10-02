@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -41,6 +42,7 @@ type runFlags struct {
 	profile       string
 	configPath    string
 	fallback      []string
+	checkpoint    time.Duration
 }
 
 func (rf *runFlags) register(cmd *cobra.Command) {
@@ -67,6 +69,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.profile, "profile", "", "dev or prod (prod: no persisted logins)")
 	f.StringVar(&rf.fromSnapshot, "from-snapshot", "", "start from a snapshot (sandbox-cli snapshot) instead of the image")
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
+	f.DurationVar(&rf.checkpoint, "checkpoint-every", 5*time.Minute, "fetch the sandbox's working tree to refs/sandbox/checkpoints/<id> this often while attached, so a dead VM loses minutes rather than the run (0: never)")
 	f.StringArrayVar(&rf.fallback, "fallback", nil, "an agent to try next if this one's provider is down or it fails having changed nothing (repeatable; agent wrappers only)")
 }
 
@@ -159,7 +162,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 			if err != nil {
 				return 1, err
 			}
-			sess = &workspace.Session{Sandbox: sb.ID, Context: ctxName, Repo: repo, Base: base, Branch: workspace.SandboxBranch}
+			sess = &workspace.Session{Sandbox: sb.ID, Context: ctxName, Repo: repo, Base: base, Branch: workspace.SandboxBranch, Started: time.Now().UTC()}
 			_ = sess.Save()
 		} else {
 			fmt.Fprintln(os.Stderr, "sandbox-cli: not in a git repository; /workspace starts empty (use --bind on a local endpoint to mount a directory)")
@@ -188,7 +191,16 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		return 0, nil
 	}
 
+	stopCheckpoints := func() error { return nil }
+	if sess != nil && rf.checkpoint > 0 {
+		stopCheckpoints = startCheckpoints(ctx, c, sess, rf.checkpoint)
+	}
 	code, err := attach(ctx, c, sb.ID, p.PID, tty)
+	// Reported only now: while attached, the agent owns the terminal, and a
+	// line printed over its UI is a line nobody can read.
+	if cerr := stopCheckpoints(); cerr != nil {
+		fmt.Fprintf(os.Stderr, "sandbox-cli: checkpoints failed during the run: %v\n", cerr)
+	}
 	if err != nil {
 		return 1, err
 	}
@@ -210,11 +222,13 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 			keep = true
 			fmt.Fprintf(os.Stderr, "sandbox-cli: bringing work back failed: %v\n  the sandbox is kept: sandbox-cli bring-back %s\n", err, sb.ID)
 		case ref == "":
+			sess.MarkBroughtBack("")
 			fmt.Fprintln(os.Stderr, "sandbox-cli: no new commits to bring back")
 			if rs.result != nil {
 				rs.result.changed = new(bool)
 			}
 		default:
+			sess.MarkBroughtBack(ref)
 			if rs.result != nil {
 				changed := true
 				rs.result.changed = &changed
@@ -226,6 +240,46 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		fmt.Fprintf(os.Stderr, "sandbox-cli: kept %s (sandbox-cli kill %s)\n", sb.ID, sb.ID)
 	}
 	return code, nil
+}
+
+// startCheckpoints takes a checkpoint every interval until the returned
+// function is called, which stops it and reports the last failure, if the
+// failures were not followed by a success. The session record is updated after
+// each one, so a CLI that is itself killed leaves the latest checkpoint
+// findable by `recover`.
+func startCheckpoints(ctx context.Context, c *api.Client, sess *workspace.Session, every time.Duration) func() error {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		var last error
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				done <- last
+				return
+			case <-t.C:
+			}
+			ref, fetched, err := workspace.Checkpoint(ctx, c, *sess)
+			switch {
+			case err != nil:
+				if ctx.Err() == nil {
+					last = err
+				}
+			case fetched:
+				last = nil
+				sess.Checkpoint, sess.CheckpointAt = ref, time.Now().UTC()
+				_ = sess.Save()
+			default:
+				last = nil
+			}
+		}
+	}()
+	return func() error {
+		cancel()
+		return <-done
+	}
 }
 
 // attach connects the terminal (or stdin/stdout) to a process until it exits.

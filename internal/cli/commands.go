@@ -287,6 +287,7 @@ func newBringBackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			s.MarkBroughtBack(ref)
 			if ref == "" {
 				fmt.Fprintln(cmd.OutOrStdout(), "no new commits")
 				return nil

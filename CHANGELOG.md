@@ -34,8 +34,18 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   itself: every command there works for any command run in one.
 - **`usage` is removed.** It read one agent's private cache file and had
   nothing to do with sandboxes.
-- **Not yet rebuilt:** `worktree`, `recover`, `context list` (agent
-  conversations) and Studio. They return on the new API.
+- **`recover` is rebuilt for VMs.** The host repository is never written
+  by a guest now, so there is nothing to repair. `recover` lists runs whose
+  work never came back, and says whether it is in a sandbox that is still
+  alive, in a checkpoint, or lost. While a run is attached, its working tree is
+  checkpointed to `refs/sandbox/checkpoints/<id>` every five minutes
+  (`--checkpoint-every`, `0` to turn it off), without touching the sandbox's
+  index or branches. `recover forget` drops a record. `recover restore`,
+  `show` and `repair` are gone: a checkpoint is already a ref you can review
+  and merge. `bring-back --name fleet` and `--name checkpoints` are refused,
+  because both are namespaces of their own.
+- **Not yet rebuilt:** `worktree`, `context list` (agent conversations) and
+  Studio. They return on the new API.
 
 **Changed:**
 
