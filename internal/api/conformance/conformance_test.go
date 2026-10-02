@@ -23,7 +23,7 @@ func serveFake(t *testing.T, pol spec.Policy, caps ...string) *api.Client {
 // The suite against the fake, with the default policy and every capability the
 // fake can pretend to have.
 func TestFakeDefaultPolicy(t *testing.T) {
-	Run(t, serveFake(t, spec.DefaultPolicy(), api.CapNetworkPolicyUpdate, api.CapEgressAllowlist))
+	Run(t, serveFake(t, spec.DefaultPolicy(), api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot))
 }
 
 // An endpoint that cannot filter egress — a backend without host networking.

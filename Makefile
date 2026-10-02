@@ -4,7 +4,7 @@ PKG := github.com/Amitgb14/sandbox-cli
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build build-studio-api install test test-integration lint fmt clean snapshot release docker-build image
+.PHONY: build build-studio-api install test test-sdk test-integration lint fmt clean snapshot release docker-build image
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
@@ -47,6 +47,10 @@ install:
 
 test:
 	go test ./...
+
+# The Python SDK against a real sandboxd (the in-memory backend).
+test-sdk: build
+	SANDBOXD=$(CURDIR)/bin/sandboxd python3 -m unittest discover -s sdk/python/tests
 
 # Requires a running Docker daemon; builds the base image on first run.
 test-integration:

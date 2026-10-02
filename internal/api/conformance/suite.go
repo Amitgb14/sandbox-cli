@@ -76,6 +76,9 @@ func Run(t *testing.T, c *api.Client) {
 		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
 		{"WorkspaceRoundTripsAsABundle", testWorkspaceBundle},
 		{"AttachStreamsInputAndOutput", testAttach},
+		{"SuspendKeepsTheSandbox", testSuspend},
+		{"ASnapshotForksTheSandbox", testSnapshot},
+		{"ATunnelReachesAGuestPort", testTunnel},
 	} {
 		t.Run(tc.name, func(t *testing.T) { tc.fn(t, e) })
 	}
@@ -742,5 +745,140 @@ func testAttach(t *testing.T, e *env) {
 	// A plain request to the attach endpoint, without the upgrade, is refused.
 	if _, err := e.c.Run(ctx, sb.ID, api.RunRequest{Argv: []string{"true"}, Tty: true}); !api.IsCode(err, api.CodeInvalidRequest) {
 		t.Errorf("run with a terminal: %v; want invalid_request", err)
+	}
+}
+
+// Suspend stops a sandbox and resume brings it back as it was. A suspended
+// sandbox does no work, and a sandbox with a running process is not suspended
+// out from under it.
+func testSuspend(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	if !e.caps.Has(api.CapSuspend) {
+		_, err := e.c.Suspend(ctx, sb.ID)
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	if err := e.c.WriteFile(ctx, sb.ID, "/workspace/kept.txt", []byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"sleep", "30"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.c.Suspend(ctx, sb.ID)
+	wantCode(t, err, api.CodeConflict)
+	_ = e.c.Signal(ctx, sb.ID, p.PID, "KILL")
+	e.follow(t, sb.ID, p.PID)
+
+	got, err := e.c.Suspend(ctx, sb.ID)
+	if err != nil || got.State != api.StateSuspended {
+		t.Fatalf("suspend: %+v, %v", got, err)
+	}
+	_, err = e.c.Run(ctx, sb.ID, api.RunRequest{Argv: []string{"true"}})
+	wantCode(t, err, api.CodeConflict)
+	_, err = e.c.Suspend(ctx, sb.ID)
+	wantCode(t, err, api.CodeConflict)
+
+	got, err = e.c.Resume(ctx, sb.ID)
+	if err != nil || got.State != api.StateRunning {
+		t.Fatalf("resume: %+v, %v", got, err)
+	}
+	if data, err := e.c.ReadFile(ctx, sb.ID, "/workspace/kept.txt"); err != nil || string(data) != "before" {
+		t.Fatalf("after resume: %q, %v", data, err)
+	}
+	if res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"echo", "awake"}}); string(res.Stdout) != "awake\n" {
+		t.Fatalf("a command after resume printed %q", res.Stdout)
+	}
+	_, err = e.c.Resume(ctx, sb.ID)
+	wantCode(t, err, api.CodeConflict)
+}
+
+// A snapshot captures a sandbox; sandboxes started from it begin where it was
+// and diverge from there. The original keeps running.
+func testSnapshot(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	ctx := ctxT(t)
+	if !e.caps.Has(api.CapMemorySnapshot) {
+		_, err := e.c.CreateSnapshot(ctx, sb.ID)
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	if err := e.c.WriteFile(ctx, sb.ID, "/workspace/state.txt", []byte("prepared")); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := e.c.CreateSnapshot(ctx, sb.ID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	t.Cleanup(func() { _ = e.c.DeleteSnapshot(context.Background(), snap.ID) })
+	if res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"echo", "still"}}); string(res.Stdout) != "still\n" {
+		t.Fatalf("the original stopped working after a snapshot: %q", res.Stdout)
+	}
+	list, err := e.c.Snapshots(ctx)
+	if err != nil || len(list) == 0 {
+		t.Fatalf("snapshot list: %v, %v", list, err)
+	}
+
+	forks := make([]api.Sandbox, 2)
+	for i := range forks {
+		forks[i] = e.newSandbox(t, api.CreateSandboxRequest{SnapshotID: snap.ID, Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+		if data, err := e.c.ReadFile(ctx, forks[i].ID, "/workspace/state.txt"); err != nil || string(data) != "prepared" {
+			t.Fatalf("fork %d: %q, %v", i, data, err)
+		}
+	}
+	if err := e.c.WriteFile(ctx, forks[0].ID, "/workspace/state.txt", []byte("changed in fork 0")); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{forks[1].ID, sb.ID} {
+		if data, _ := e.c.ReadFile(ctx, ref, "/workspace/state.txt"); string(data) != "prepared" {
+			t.Fatalf("a write in one fork reached %s: %q", ref, data)
+		}
+	}
+	_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID, MemoryMB: 1})
+	wantCode(t, err, api.CodeInvalidRequest)
+	_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: "snp_0000000000000000"})
+	wantCode(t, err, api.CodeNotFound)
+}
+
+// A tunnel reaches a TCP port on the guest's own loopback, and only there.
+func testTunnel(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	if !e.caps.Has(api.CapTunnel) {
+		_, err := e.c.Tunnel(ctx, sb.ID, 8080)
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	echo := `import socket
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 8765)); s.listen(1)
+c, _ = s.accept(); c.sendall(b"hello from the guest:" + c.recv(64)); c.close()`
+	if res, err := e.c.Run(ctx, sb.ID, api.RunRequest{Argv: []string{"python3", "-c", "print(1)"}}); err != nil || res.ExitCode != 0 {
+		t.Skip("the sandbox image has no python3 to listen with")
+	}
+	p, err := e.c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"python3", "-c", echo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conn io.ReadWriteCloser
+	for i := 0; i < 100; i++ { // the listener takes a moment to come up
+		if conn, err = e.c.Tunnel(ctx, sb.ID, 8765); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("tunnel: %v", err)
+	}
+	conn.Write([]byte("ping"))
+	got, _ := io.ReadAll(conn)
+	conn.Close()
+	if string(got) != "hello from the guest:ping" {
+		t.Fatalf("through the tunnel: %q", got)
+	}
+	e.follow(t, sb.ID, p.PID)
+	if _, err := e.c.Tunnel(ctx, sb.ID, 0); !api.IsCode(err, api.CodeInvalidRequest) {
+		t.Errorf("port 0: %v; want invalid_request", err)
 	}
 }

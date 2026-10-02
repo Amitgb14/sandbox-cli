@@ -88,6 +88,7 @@ internal/
   image/        OCI pull, safe unpack (paths resolved inside the root), ext4 root disks
 packaging/systemd/      sandboxd unit and an example operator policy (docs/self-hosting.md)
 packaging/launchd/      the macOS launch agent (docs/local-macos.md)
+sdk/                    Python (tested: make test-sdk) and TypeScript clients
   workspace/    clone-in, bring-back
   state/ cli/ version/
 ```

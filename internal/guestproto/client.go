@@ -179,6 +179,38 @@ func (c *Client) List(ctx context.Context, path string) ([]DirEntry, error) {
 	return resp.Entries, err
 }
 
+// DialPort connects to a port on the guest's loopback. The returned
+// connection carries that TCP connection's bytes.
+func (c *Client) DialPort(ctx context.Context, port int) (io.ReadWriteCloser, error) {
+	cn, done, err := c.open(ctx, Request{Op: OpDial, Port: port})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := cn.response(); err != nil {
+		done()
+		return nil, err
+	}
+	return &dialed{cn: cn, done: done}, nil
+}
+
+type dialed struct {
+	cn   *conn
+	done func()
+	once sync.Once
+}
+
+func (d *dialed) Read(p []byte) (int, error)  { return d.cn.br.Read(p) }
+func (d *dialed) Write(p []byte) (int, error) { return d.cn.rwc.Write(p) }
+func (d *dialed) Close() error                { d.once.Do(d.done); return nil }
+
+// CloseWrite passes a half-close on to the guest, when the transport can.
+func (d *dialed) CloseWrite() error {
+	if cw, ok := d.cn.rwc.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
 // Process is a command running in the guest.
 type Process struct {
 	cn     *conn

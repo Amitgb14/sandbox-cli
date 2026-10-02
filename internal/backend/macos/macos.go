@@ -93,6 +93,7 @@ func (b *Backend) Capabilities() map[string]bool {
 		api.CapEgressOpen:      true,
 		api.CapBindWorkspace:   true,
 		api.CapWorkspaceBundle: true,
+		api.CapTunnel:          true,
 	}
 }
 
@@ -361,4 +362,13 @@ func (c *execConn) Close() error {
 		}
 	})
 	return nil
+}
+
+// DialGuest opens a tunnel to a port on the guest's loopback.
+func (b *Backend) DialGuest(ctx context.Context, id string, port int) (io.ReadWriteCloser, error) {
+	if err := b.known(id); err != nil {
+		return nil, err
+	}
+	conn, err := b.client(id).DialPort(ctx, port)
+	return conn, mapErr(err)
 }

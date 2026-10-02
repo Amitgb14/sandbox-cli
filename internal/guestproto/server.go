@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -70,6 +71,8 @@ func (s *Server) ServeConn(c io.ReadWriteCloser) {
 		s.list(c, req)
 	case OpExec:
 		s.exec(c, br, req)
+	case OpDial:
+		s.dial(c, br, req)
 	default:
 		reply(c, fail(CodeBadRequest, "unknown op "+req.Op))
 	}
@@ -407,6 +410,40 @@ func (s *Server) exec(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
 	var b [4]byte
 	binary.BigEndian.PutUint32(b[:], uint32(int32(code)))
 	_ = send(FrameExit, b[:])
+}
+
+// dial connects to a port on the guest's own loopback — never anywhere else:
+// a tunnel reaches a server in the sandbox, it is not a way around the
+// sandbox's egress policy.
+func (s *Server) dial(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
+	if req.Port < 1 || req.Port > 65535 {
+		reply(c, fail(CodeBadRequest, "port must be 1-65535"))
+		return
+	}
+	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(req.Port)))
+	if err != nil {
+		reply(c, fail(CodeNotFound, "nothing is listening on that port"))
+		return
+	}
+	defer conn.Close()
+	reply(c, Response{OK: true})
+	// Plain Reader/Writer wrappers on purpose: io.Copy would otherwise take the
+	// destination's ReadFrom, and *os.File's (the vsock connection) splices —
+	// which stalls on a blocking vsock descriptor the runtime's poller does not
+	// manage. Found by the tunnel conformance test hanging on a real guest.
+	// Each direction ends with a half-close passed on, so a client that sends
+	// and then waits for EOF (most of them) gets its whole reply. The guest's
+	// side finishing ends the tunnel; the host finishing only stops input.
+	go func() {
+		_, _ = io.Copy(struct{ io.Writer }{conn}, struct{ io.Reader }{br})
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.CloseWrite()
+		}
+	}()
+	_, _ = io.Copy(struct{ io.Writer }{c}, struct{ io.Reader }{conn})
+	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
 }
 
 // lookPath finds name on a PATH, inside root.

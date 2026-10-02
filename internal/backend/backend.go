@@ -38,6 +38,40 @@ type Spec struct {
 	// Bind, when set, is a host directory — already resolved and checked by
 	// hostpath — to mount at /workspace.
 	Bind *Bind
+	// FromSnapshot, when set, starts the sandbox from a snapshot of another —
+	// memory, processes and disk as they were — instead of booting the image.
+	FromSnapshot string
+}
+
+// Suspender can stop a sandbox and bring it back later with its memory,
+// processes and disk exactly as they were, costing no CPU or memory meanwhile.
+type Suspender interface {
+	Suspend(ctx context.Context, id string) error
+	Resume(ctx context.Context, id string) error
+}
+
+// Snapshotter can capture a running sandbox — memory and disk — without
+// stopping it, and start new sandboxes from the capture (Spec.FromSnapshot).
+type Snapshotter interface {
+	Snapshot(ctx context.Context, id, snapshotID string) (SnapshotInfo, error)
+	DeleteSnapshot(ctx context.Context, snapshotID string) error
+}
+
+// SnapshotInfo describes a capture.
+type SnapshotInfo struct {
+	ID       string
+	Bytes    int64 // on the host's disk
+	Image    string
+	CPUs     float64
+	MemoryMB int
+	DiskMB   int
+}
+
+// Dialer can open a TCP connection to a port on the guest's own loopback —
+// a tunnel, which is how a dev server in a sandbox is reached without
+// publishing anything on the network.
+type Dialer interface {
+	DialGuest(ctx context.Context, id string, port int) (io.ReadWriteCloser, error)
 }
 
 // Bind is a host directory mounted at /workspace.
@@ -114,4 +148,6 @@ var (
 	ErrNoSuchCmd   = errors.New("no such command")
 	ErrBadSignal   = errors.New("unsupported signal")
 	ErrUnavailable = errors.New("backend unavailable")
+	ErrBusy        = errors.New("busy")
+	ErrUnsupported = errors.New("unsupported for this sandbox")
 )

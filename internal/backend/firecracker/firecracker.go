@@ -36,8 +36,11 @@ type Config struct {
 	Firecracker string // the VMM binary
 	Kernel      string // guest kernel (vmlinux)
 	Agent       string // sandbox-guestd built for the guest's architecture
-	StateDir    string // image cache and per-sandbox directories
-	Puller      *image.Puller
+	StateDir    string // per-sandbox directories, snapshots
+	// ImageDir holds the root disks built from images; default StateDir. With the
+	// jailer it must be on the same filesystem as StateDir (disks are hard-linked).
+	ImageDir string
+	Puller   *image.Puller
 	// Network, when set, gives each sandbox a tap device with egress enforced on
 	// the host. Nil means sandboxes have no network interface.
 	Network *Network
@@ -60,12 +63,15 @@ type Backend struct {
 }
 
 type vm struct {
-	id     string
-	dir    string
-	cmd    *exec.Cmd
-	client *guestproto.Client
-	net    *tap // nil without networking
-	exited chan struct{}
+	id        string
+	dir       string // host-side state: console log, pid, snapshot files
+	root      string // the jail's root, when there is one; else dir
+	spec      backend.Spec
+	cmd       *exec.Cmd
+	client    *guestproto.Client
+	net       *tap // nil without networking
+	exited    chan struct{}
+	suspended bool
 }
 
 // New checks the configuration and returns a backend. It removes what an
@@ -96,6 +102,9 @@ func New(cfg Config) (*Backend, error) {
 	}
 	if cfg.Puller.Cache == "" {
 		cfg.Puller.Cache = filepath.Join(cfg.StateDir, "images")
+	}
+	if cfg.ImageDir == "" {
+		cfg.ImageDir = cfg.StateDir
 	}
 	if cfg.BootTimeout == 0 {
 		cfg.BootTimeout = 30 * time.Second
@@ -142,6 +151,9 @@ func (b *Backend) Capabilities() map[string]bool {
 		api.CapNetworkPolicyUpdate: net,
 		api.CapEgressAllowlist:     net,
 		api.CapWorkspaceBundle:     true,
+		api.CapSuspend:             true,
+		api.CapMemorySnapshot:      true,
+		api.CapTunnel:              true,
 	}
 }
 
@@ -151,6 +163,9 @@ func (b *Backend) get(id string) (*vm, error) {
 	v, ok := b.vms[id]
 	if !ok {
 		return nil, backend.ErrNotFound
+	}
+	if v.suspended {
+		return nil, backend.ErrBusy
 	}
 	select {
 	case <-v.exited:
@@ -163,7 +178,10 @@ func (b *Backend) get(id string) (*vm, error) {
 // Create builds (or reuses) the image's root disk, makes the scratch disk,
 // starts the VMM and waits for the guest agent.
 func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
-	rootfs, err := image.BuildRootFS(ctx, b.cfg.Puller, s.Image, b.cfg.Agent, b.cfg.StateDir)
+	if s.FromSnapshot != "" {
+		return b.createFromSnapshot(ctx, s)
+	}
+	rootfs, err := image.BuildRootFS(ctx, b.cfg.Puller, s.Image, b.cfg.Agent, b.cfg.ImageDir)
 	if err != nil {
 		b.cfg.Logf("sandbox %s: image %s: %v", s.ID, s.Image, err)
 		return fmt.Errorf("image %s: %w", s.Image, err)
@@ -172,18 +190,17 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 		b.cfg.Logf("sandbox %s: image %s was built without root, so its files are owned by the building user", s.ID, s.Image)
 	}
 
-	dir := filepath.Join(b.sandboxesDir(), s.ID)
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	v, err := b.newVM(s)
+	if err != nil {
 		return err
 	}
-	v := &vm{id: s.ID, dir: dir, exited: make(chan struct{})}
 	defer func() {
 		if err != nil {
 			b.destroy(v)
 		}
 	}()
 
-	scratch := filepath.Join(dir, "scratch.ext4")
+	scratch := filepath.Join(v.dir, "scratch.ext4")
 	if err := image.MakeScratch(ctx, scratch, s.DiskMB); err != nil {
 		return err
 	}
@@ -201,54 +218,98 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 		bootArgs = append(bootArgs, t.kernelArgs()...)
 	}
 
-	paths := vmPaths{
-		Kernel: b.cfg.Kernel, RootFS: rootfs.Path, Scratch: scratch,
-		VsockUDS: filepath.Join(dir, "v.sock"), APISock: filepath.Join(dir, "api.sock"),
-	}
+	// The sandbox's own files are named relative to the VMM's working directory
+	// (its sandbox directory, or the jail's root), and the shared ones by
+	// absolute path. A snapshot records these paths, so relative ones are what
+	// let it be restored into another sandbox's directory.
+	paths := vmPaths{Kernel: b.cfg.Kernel, RootFS: rootfs.Path, Scratch: "scratch.ext4", VsockUDS: "v.sock"}
 	if b.cfg.Jailer != nil {
-		if paths, err = b.cfg.Jailer.prepare(s.ID, paths); err != nil {
+		if paths, err = b.cfg.Jailer.prepare(s.ID, b.cfg.Kernel, rootfs.Path, scratch); err != nil {
 			return err
 		}
 	}
-	cfg := BuildConfig(s, paths, strings.Join(bootArgs, " "), v.net)
-	cfgJSON, _ := json.MarshalIndent(cfg, "", "  ")
-	cfgPath := filepath.Join(dir, "vm.json")
-	if b.cfg.Jailer != nil {
-		cfgPath = b.cfg.Jailer.chrootPath(s.ID, "vm.json")
-	}
-	if err := os.WriteFile(cfgPath, cfgJSON, 0o600); err != nil {
+	cfgJSON, _ := json.MarshalIndent(BuildConfig(s, paths, strings.Join(bootArgs, " "), v.net), "", "  ")
+	if err := os.WriteFile(v.hostPath("vm.json"), cfgJSON, 0o600); err != nil {
 		return err
 	}
-	if b.cfg.Jailer != nil {
-		b.cfg.Jailer.own(s.ID, cfgPath)
-	}
+	b.own(s.ID, v.hostPath("vm.json"))
 
-	console, err := os.OpenFile(filepath.Join(dir, "console.log"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	t0 := time.Now()
+	if err := b.vmm(v, "--config-file", "vm.json"); err != nil {
+		return err
+	}
+	if err := b.waitReady(ctx, v); err != nil {
+		return err
+	}
+	b.cfg.Logf("sandbox %s: ready in %v", s.ID, time.Since(t0).Round(time.Millisecond))
+	b.mu.Lock()
+	b.vms[s.ID] = v
+	b.mu.Unlock()
+	return nil
+}
+
+// newVM makes a sandbox's directory and record.
+func (b *Backend) newVM(s backend.Spec) (*vm, error) {
+	dir := filepath.Join(b.sandboxesDir(), s.ID)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return nil, err
+	}
+	v := &vm{id: s.ID, dir: dir, spec: s}
+	if b.cfg.Jailer != nil {
+		v.root = b.cfg.Jailer.root(s.ID)
+	}
+	return v, nil
+}
+
+// hostPath is where a file the VMM names relatively lives, as the host sees it.
+func (v *vm) hostPath(name string) string {
+	if v.root != "" {
+		return filepath.Join(v.root, name)
+	}
+	return filepath.Join(v.dir, name)
+}
+
+func (b *Backend) own(id, path string) {
+	if b.cfg.Jailer != nil {
+		b.cfg.Jailer.own(id, path)
+	}
+}
+
+// vmm starts the VMM — under the jailer when there is one — with its API
+// socket and the given arguments, from the directory its relative paths are
+// relative to.
+func (b *Backend) vmm(v *vm, args ...string) error {
+	_ = os.Remove(v.hostPath("v.sock"))
+	_ = os.Remove(v.hostPath("api.sock"))
+	console, err := os.OpenFile(filepath.Join(v.dir, "console.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer console.Close()
 	if b.cfg.Jailer != nil {
-		v.cmd = b.cfg.Jailer.command(s.ID, b.cfg.Firecracker)
+		v.cmd = b.cfg.Jailer.command(v.id, b.cfg.Firecracker, args...)
 	} else {
-		v.cmd = exec.Command(b.cfg.Firecracker, "--api-sock", paths.APISock, "--config-file", cfgPath)
+		v.cmd = exec.Command(b.cfg.Firecracker, append([]string{"--api-sock", "api.sock"}, args...)...)
+		v.cmd.Dir = v.dir
 	}
 	v.cmd.Stdout, v.cmd.Stderr = console, console
 	v.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	t0 := time.Now()
+	v.exited = make(chan struct{})
 	if err := v.cmd.Start(); err != nil {
 		return fmt.Errorf("starting the VMM: %w", err)
 	}
-	_ = os.WriteFile(filepath.Join(dir, "vmm.pid"), []byte(fmt.Sprint(v.cmd.Process.Pid)), 0o600)
-	go func() { _ = v.cmd.Wait(); close(v.exited) }()
-
-	udsHost := filepath.Join(dir, "v.sock")
-	if b.cfg.Jailer != nil {
-		udsHost = b.cfg.Jailer.chrootPath(s.ID, "v.sock")
-	}
+	_ = os.WriteFile(filepath.Join(v.dir, "vmm.pid"), []byte(fmt.Sprint(v.cmd.Process.Pid)), 0o600)
+	cmd, exited := v.cmd, v.exited
+	go func() { _ = cmd.Wait(); close(exited) }()
+	uds := v.hostPath("v.sock")
 	v.client = &guestproto.Client{Dial: func(ctx context.Context) (io.ReadWriteCloser, error) {
-		return vsock.DialFirecracker(ctx, udsHost, guestPort)
+		return vsock.DialFirecracker(ctx, uds, guestPort)
 	}}
+	return nil
+}
+
+// waitReady waits for the guest agent, or for the VMM to die trying.
+func (b *Backend) waitReady(ctx context.Context, v *vm) error {
 	rctx, cancel := context.WithTimeout(ctx, b.cfg.BootTimeout)
 	defer cancel()
 	ready := make(chan error, 1)
@@ -256,19 +317,14 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 	select {
 	case err := <-ready:
 		if err != nil {
-			b.cfg.Logf("sandbox %s: guest agent did not answer; console:\n%s", s.ID, tail(filepath.Join(dir, "console.log"), 4096))
+			b.cfg.Logf("sandbox %s: guest agent did not answer; console:\n%s", v.id, tail(filepath.Join(v.dir, "console.log"), 4096))
 			return fmt.Errorf("the guest did not come up: %w", err)
 		}
+		return nil
 	case <-v.exited:
-		b.cfg.Logf("sandbox %s: the VMM exited during boot; console:\n%s", s.ID, tail(filepath.Join(dir, "console.log"), 4096))
-		return errors.New("the VMM exited during boot")
+		b.cfg.Logf("sandbox %s: the VMM exited; console:\n%s", v.id, tail(filepath.Join(v.dir, "console.log"), 4096))
+		return errors.New("the VMM exited before the guest came up")
 	}
-	b.cfg.Logf("sandbox %s: ready in %v", s.ID, time.Since(t0).Round(time.Millisecond))
-
-	b.mu.Lock()
-	b.vms[s.ID] = v
-	b.mu.Unlock()
-	return nil
 }
 
 func (b *Backend) UpdateNetwork(_ context.Context, id string, p api.NetworkPolicy) error {
@@ -295,7 +351,7 @@ func (b *Backend) Terminate(_ context.Context, id string) error {
 
 // destroy kills the VMM's process group and removes everything the sandbox had.
 func (b *Backend) destroy(v *vm) {
-	if v.cmd != nil && v.cmd.Process != nil {
+	if v.cmd != nil && v.cmd.Process != nil && v.exited != nil {
 		_ = syscall.Kill(-v.cmd.Process.Pid, syscall.SIGKILL)
 		select {
 		case <-v.exited:
@@ -502,4 +558,14 @@ func (b *Backend) Close() {
 	if b.cfg.Network != nil {
 		b.cfg.Network.Close()
 	}
+}
+
+// DialGuest opens a tunnel to a port on the guest's loopback.
+func (b *Backend) DialGuest(ctx context.Context, id string, port int) (io.ReadWriteCloser, error) {
+	v, err := b.get(id)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := v.client.DialPort(ctx, port)
+	return conn, mapErr(err)
 }

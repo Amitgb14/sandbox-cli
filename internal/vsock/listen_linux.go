@@ -47,12 +47,32 @@ func Listen(port uint32) (*Listener, error) {
 }
 
 // Accept implements net.Listener.
+//
+// The accepted descriptor is non-blocking, which is what makes os.NewFile hand
+// it to the runtime's poller. That matters for Close: on a blocking descriptor
+// the runtime defers the real close(2) until any read blocked on it returns —
+// and a read on a connection the other side is waiting to see closed never
+// returns, so the peer never got its EOF. Found by a tunnel that delivered its
+// reply and then hung.
 func (l *Listener) Accept() (net.Conn, error) {
-	nfd, _, e := syscall.Syscall6(syscall.SYS_ACCEPT4, uintptr(l.fd), 0, 0, syscall.SOCK_CLOEXEC, 0, 0)
+	nfd, _, e := syscall.Syscall6(syscall.SYS_ACCEPT4, uintptr(l.fd), 0, 0, syscall.SOCK_CLOEXEC|syscall.SOCK_NONBLOCK, 0, 0)
 	if e != 0 {
 		return nil, e
 	}
 	return &conn{File: os.NewFile(nfd, "vsock")}, nil
+}
+
+// CloseWrite half-closes the connection: the peer reads EOF, and can still send.
+func (c *conn) CloseWrite() error {
+	sc, err := c.File.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var serr error
+	if err := sc.Control(func(fd uintptr) { serr = syscall.Shutdown(int(fd), syscall.SHUT_WR) }); err != nil {
+		return err
+	}
+	return serr
 }
 
 // Close implements net.Listener.
@@ -66,12 +86,11 @@ type addr uint32
 func (a addr) Network() string { return "vsock" }
 func (a addr) String() string  { return fmt.Sprintf("vsock:%d", uint32(a)) }
 
-// conn adapts an accepted vsock fd to net.Conn. Deadlines are not supported;
-// the guest agent bounds nothing by time — the host does.
+// conn adapts an accepted vsock fd to net.Conn.
 type conn struct{ *os.File }
 
-func (c *conn) LocalAddr() net.Addr              { return addr(0) }
-func (c *conn) RemoteAddr() net.Addr             { return addr(0) }
-func (c *conn) SetDeadline(time.Time) error      { return nil }
-func (c *conn) SetReadDeadline(time.Time) error  { return nil }
-func (c *conn) SetWriteDeadline(time.Time) error { return nil }
+func (c *conn) LocalAddr() net.Addr                { return addr(0) }
+func (c *conn) RemoteAddr() net.Addr               { return addr(0) }
+func (c *conn) SetDeadline(t time.Time) error      { return c.File.SetDeadline(t) }
+func (c *conn) SetReadDeadline(t time.Time) error  { return c.File.SetReadDeadline(t) }
+func (c *conn) SetWriteDeadline(t time.Time) error { return c.File.SetWriteDeadline(t) }

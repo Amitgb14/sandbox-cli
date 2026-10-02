@@ -14,6 +14,7 @@ const Version = "v1"
 const (
 	StatePending    = "pending"
 	StateRunning    = "running"
+	StateSuspended  = "suspended"
 	StateTerminated = "terminated"
 )
 
@@ -75,6 +76,8 @@ const (
 	CapEgressOpen = "egress_open"
 	// CapWorkspaceBundle: a git bundle can be cloned in and brought back out.
 	CapWorkspaceBundle = "workspace_bundle"
+	// CapTunnel: a TCP port on the guest's loopback can be reached through the API.
+	CapTunnel = "tunnel"
 )
 
 // Limits are the largest resources a sandbox may ask for.
@@ -106,6 +109,10 @@ type CreateSandboxRequest struct {
 	// IdleTimeoutSecs terminates the sandbox after this long with no request
 	// touching it and no process running. 0 takes the server's default.
 	IdleTimeoutSecs int `json:"idle_timeout_secs,omitempty"`
+	// SnapshotID starts the sandbox from a snapshot (capability
+	// memory_snapshot): memory, processes and disk as they were captured. Its
+	// image and resources are the snapshot's.
+	SnapshotID string `json:"snapshot_id,omitempty"`
 	// Bind mounts a host directory at /workspace instead of starting empty.
 	// Local endpoints only (capability bind_workspace, and the operator's
 	// allow_bind); the host path is refused if it is /, the home directory or
@@ -141,6 +148,20 @@ type Sandbox struct {
 	// IdleTimeoutSecs is in force for this sandbox; 0 means it never idles out.
 	IdleTimeoutSecs int   `json:"idle_timeout_secs"`
 	Bind            *Bind `json:"bind,omitempty"`
+}
+
+// Snapshot is a capture of a sandbox's memory and disk.
+type Snapshot struct {
+	ID        string    `json:"id"`
+	Sandbox   string    `json:"sandbox"`
+	Image     string    `json:"image"`
+	Bytes     int64     `json:"bytes"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// SnapshotList is the body of GET /v1/snapshots.
+type SnapshotList struct {
+	Snapshots []Snapshot `json:"snapshots"`
 }
 
 // SandboxList is the body of GET /v1/sandboxes.

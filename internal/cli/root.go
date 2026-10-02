@@ -29,8 +29,9 @@ func NewRootCmd() *cobra.Command {
 	}
 	root.AddCommand(
 		newVersionCmd(), newContextCmd(), newRunCmd(), newListCmd(), newAttachCmd(),
-		newLogsCmd(), newKillCmd(), newBringBackCmd(), newDoctorCmd(),
+		newLogsCmd(), newKillCmd(), newBringBackCmd(), newDoctorCmd(), newTunnelCmd(),
 	)
+	root.AddCommand(newSuspendCmds()...)
 	for _, name := range agents.InteractiveNames() {
 		d, _ := agents.LookupInteractive(name)
 		root.AddCommand(newAgentCmd(d))

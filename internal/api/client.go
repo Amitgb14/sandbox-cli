@@ -275,6 +275,36 @@ func (c *Client) GetWorkspaceBundle(ctx context.Context, ref, base, branch strin
 	return err
 }
 
+// Suspend stops a sandbox, keeping its memory, processes and disk.
+func (c *Client) Suspend(ctx context.Context, ref string) (Sandbox, error) {
+	var out Sandbox
+	return out, c.json(ctx, http.MethodPost, sbx(ref)+"/suspend", nil, &out)
+}
+
+// Resume brings a suspended sandbox back.
+func (c *Client) Resume(ctx context.Context, ref string) (Sandbox, error) {
+	var out Sandbox
+	return out, c.json(ctx, http.MethodPost, sbx(ref)+"/resume", nil, &out)
+}
+
+// CreateSnapshot captures a running sandbox's memory and disk.
+func (c *Client) CreateSnapshot(ctx context.Context, ref string) (Snapshot, error) {
+	var out Snapshot
+	return out, c.json(ctx, http.MethodPost, sbx(ref)+"/snapshots", nil, &out)
+}
+
+// Snapshots lists this endpoint's snapshots.
+func (c *Client) Snapshots(ctx context.Context) ([]Snapshot, error) {
+	var out SnapshotList
+	err := c.json(ctx, http.MethodGet, "/v1/snapshots", nil, &out)
+	return out.Snapshots, err
+}
+
+// DeleteSnapshot removes a snapshot.
+func (c *Client) DeleteSnapshot(ctx context.Context, id string) error {
+	return c.json(ctx, http.MethodDelete, "/v1/snapshots/"+url.PathEscape(id), nil, nil)
+}
+
 // ReadFile returns a guest file's contents.
 func (c *Client) ReadFile(ctx context.Context, ref, path string) ([]byte, error) {
 	resp, err := c.do(ctx, http.MethodGet, sbx(ref)+"/files", url.Values{"path": {path}}, nil, "")

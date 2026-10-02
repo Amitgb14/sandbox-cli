@@ -234,7 +234,8 @@ func newTestBackend(t *testing.T, fc, kernel, agent, state string, puller *image
 	t.Helper()
 	cfg := Config{
 		Firecracker: fc, Kernel: kernel, Agent: agent, StateDir: state, Puller: puller,
-		Logf: func(f string, a ...any) { t.Logf(f, a...) },
+		ImageDir: filepath.Join(os.TempDir(), "sandbox-test-images"), // shared across runs
+		Logf:     func(f string, a ...any) { t.Logf(f, a...) },
 	}
 	if os.Getenv("SANDBOX_TEST_NETWORK") == "1" {
 		cfg.Network = &Network{Logf: cfg.Logf}

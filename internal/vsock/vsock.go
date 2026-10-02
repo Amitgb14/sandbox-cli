@@ -52,3 +52,11 @@ type bridged struct {
 }
 
 func (b *bridged) Read(p []byte) (int, error) { return b.r.Read(p) }
+
+// CloseWrite half-closes toward the guest.
+func (b *bridged) CloseWrite() error {
+	if cw, ok := b.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}

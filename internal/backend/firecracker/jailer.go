@@ -58,35 +58,33 @@ func (j *Jailer) uid(id string) int {
 
 // prepare puts the kernel, the shared root disk and the scratch disk into the
 // chroot and returns the paths as the VMM will see them.
-func (j *Jailer) prepare(id string, p vmPaths) (vmPaths, error) {
+func (j *Jailer) prepare(id, kernel, rootfs, scratch string) (vmPaths, error) {
 	if os.Geteuid() != 0 {
-		return p, errors.New("the jailer needs root")
+		return vmPaths{}, errors.New("the jailer needs root")
 	}
 	root := j.root(id)
 	if err := os.MkdirAll(root, 0o700); err != nil {
-		return p, err
+		return vmPaths{}, err
 	}
 	uid := j.uid(id)
-	for name, src := range map[string]string{"vmlinux": p.Kernel, "rootfs.ext4": p.RootFS} {
+	for name, src := range map[string]string{"vmlinux": kernel, "rootfs.ext4": rootfs} {
 		dst := filepath.Join(root, name)
 		// A hard link, because the root disk is gigabytes and shared: copying it
 		// per sandbox is the cost the overlay design exists to avoid. It stays
 		// owned by root and read-only to the VMM's uid.
 		if err := os.Link(src, dst); err != nil {
-			return p, fmt.Errorf("linking %s into the jail (the jail must be on the same filesystem as the image cache): %w", name, err)
+			return vmPaths{}, fmt.Errorf("linking %s into the jail (the jail must be on the same filesystem as the image cache): %w", name, err)
 		}
 	}
-	scratch := filepath.Join(root, "scratch.ext4")
-	if err := os.Rename(p.Scratch, scratch); err != nil {
-		return p, fmt.Errorf("moving the scratch disk into the jail: %w", err)
+	if scratch != "" {
+		if err := os.Rename(scratch, filepath.Join(root, "scratch.ext4")); err != nil {
+			return vmPaths{}, fmt.Errorf("moving the scratch disk into the jail: %w", err)
+		}
+		if err := os.Chown(filepath.Join(root, "scratch.ext4"), uid, uid); err != nil {
+			return vmPaths{}, err
+		}
 	}
-	if err := os.Chown(scratch, uid, uid); err != nil {
-		return p, err
-	}
-	return vmPaths{
-		Kernel: "/vmlinux", RootFS: "/rootfs.ext4", Scratch: "/scratch.ext4",
-		VsockUDS: "/v.sock", APISock: "/api.sock",
-	}, nil
+	return vmPaths{Kernel: "/vmlinux", RootFS: "/rootfs.ext4", Scratch: "/scratch.ext4", VsockUDS: "/v.sock"}, nil
 }
 
 func (j *Jailer) own(id, path string) {
@@ -95,15 +93,15 @@ func (j *Jailer) own(id, path string) {
 }
 
 // command is the jailer invocation; the VMM's own arguments follow "--".
-func (j *Jailer) command(id, firecracker string) *exec.Cmd {
+func (j *Jailer) command(id, firecracker string, args ...string) *exec.Cmd {
 	u := fmt.Sprint(j.uid(id))
-	return exec.Command(j.Path,
+	return exec.Command(j.Path, append([]string{
 		"--id", jailID(id),
 		"--exec-file", firecracker,
 		"--uid", u, "--gid", u,
 		"--chroot-base-dir", j.ChrootBase,
-		"--", "--config-file", "/vm.json", "--api-sock", "/api.sock",
-	)
+		"--", "--api-sock", "api.sock",
+	}, args...)...)
 }
 
 func (j *Jailer) cleanup(id string) {
@@ -122,4 +120,14 @@ func (b *Backend) ownerFor(id string) int {
 		return -1
 	}
 	return b.cfg.Jailer.uid(id)
+}
+
+// cleanupProcess removes what a previous run of the jailer created in the
+// chroot — device nodes and sockets — so it can start the same jail again on
+// resume. The sandbox's files (disks, snapshots) stay.
+func (j *Jailer) cleanupProcess(id string) {
+	root := j.root(id)
+	for _, p := range []string{"dev", "run", "api.sock", "v.sock"} {
+		_ = os.RemoveAll(filepath.Join(root, p))
+	}
 }

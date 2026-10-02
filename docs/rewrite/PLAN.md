@@ -550,8 +550,48 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     routing and Studio are rebuilt from it, and deleting the reference before
     the rebuild would mean rebuilding from memory, which `port-from-old`
     exists to prevent.
-- **M8 — what makes sandboxes cheap to keep.** Suspend and resume, filesystem and
-  memory snapshots, clone (Firecracker), tunnels, the Python and TypeScript SDKs.
+- **M8 — what makes sandboxes cheap to keep.** *Done, except two things noted
+  below.*
+  - **Suspend/resume and snapshots,** as optional backend interfaces
+    (`Suspender`, `Snapshotter`) behind capabilities:
+    - suspend is refused while a process runs (its stream would be cut);
+    - a snapshot fixes the image and resources of the forks made from it.
+
+    On Firecracker, each sandbox's own files are named relative to the VMM's
+    working directory, so a snapshot restores into another sandbox's directory.
+    Forks get reflinked copies of the scratch disk and the memory file.
+  - **Measured on this machine through the conformance suite:**
+    - two forks restored and answering in **20 ms** each, then diverging;
+    - suspend and resume with files intact.
+  - **Forks with a network are refused, not half-done.** A snapshot carries the
+    guest's address and tap name, so per-fork network identity needs a network
+    namespace per VM; that is a later step. A networked sandbox can still be
+    suspended and resumed, since it keeps its tap.
+  - **Tunnels.** The guest agent dials `127.0.0.1:<port>` only, so a tunnel
+    reaches a server in the sandbox and is never a way around egress. On top of
+    that: `GET …/tunnel` upgraded to raw bytes, and `sandbox-cli tunnel ID
+    [LOCAL:]PORT`, which listens on 127.0.0.1 only.
+  - **Two real bugs, found by the tunnel test hanging on a real guest:**
+    - The guest agent's vsock descriptors were blocking, so Go deferred
+      `close(2)` until a blocked read returned, and the host never saw EOF.
+      They are now non-blocking and run through the poller.
+    - Every hop tore the whole tunnel down when one direction ended, losing the
+      reply of any client that sends and then waits for EOF. Half-closes are
+      now passed through at each hop.
+  - **CLI:** `suspend`, `resume`, `snapshot`, `tunnel`, and `run
+    --from-snapshot`.
+  - **SDKs** (`sdk/`):
+    - Python, standard library only (unix socket, TLS with a private CA, typed
+      errors): six tests run against a real sandboxd (`make test-sdk`), clean
+      with resource warnings as errors;
+    - TypeScript, `fetch`-based, written to the same contract and **not yet
+      run**, since this machine has no Node.
+
+    Attach and tunnels stay in the Go client and the CLI for now.
+  - **Root disks have their own cache directory** (`Config.ImageDir`), which
+    tests share. Every VM test run had been rebuilding a 3.6 GB disk into a
+    fresh state directory, and the runs killed while debugging filled the disk.
+  - **Not verified:** suspend and fork under the jailer (real root).
 - **M9 — cloud.**
   - Control plane: tenants, API keys, scheduling across nodes, metering, quotas.
   - Image and snapshot storage in object storage.

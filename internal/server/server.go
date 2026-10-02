@@ -56,9 +56,10 @@ type Server struct {
 
 	now func() time.Time
 
-	mu        sync.Mutex
-	sandboxes map[string]*record // id -> record
-	reaper    sync.Once
+	mu            sync.Mutex
+	sandboxes     map[string]*record // id -> record
+	reaper        sync.Once
+	snapshotStore *snapshots
 }
 
 type record struct {
@@ -115,6 +116,12 @@ func (s *Server) Handler() http.Handler {
 	route("POST /v1/sandboxes/{ref}/processes/{pid}/stdin", true, s.writeStdin)
 	route("POST /v1/sandboxes/{ref}/processes/{pid}/signal", false, s.signal)
 	route("GET /v1/sandboxes/{ref}/processes/{pid}/attach", false, s.attach)
+	route("POST /v1/sandboxes/{ref}/suspend", false, s.suspend)
+	route("POST /v1/sandboxes/{ref}/resume", false, s.resume)
+	route("POST /v1/sandboxes/{ref}/snapshots", false, s.createSnapshot)
+	route("GET /v1/snapshots", false, s.listSnapshots)
+	route("DELETE /v1/snapshots/{id}", false, s.deleteSnapshot)
+	route("GET /v1/sandboxes/{ref}/tunnel", false, s.tunnel)
 	route("GET /v1/sandboxes/{ref}/files", false, s.readFile)
 	route("PUT /v1/sandboxes/{ref}/files", true, s.writeFile)
 	route("DELETE /v1/sandboxes/{ref}/files", false, s.removeFile)
@@ -184,6 +191,20 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	if req.SnapshotID != "" {
+		if !s.Backend.Capabilities()[api.CapMemorySnapshot] {
+			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot start from a snapshot")
+			return
+		}
+		if code, msg := s.fromSnapshot(&req); code != "" {
+			status := http.StatusBadRequest
+			if code == api.CodeNotFound {
+				status = http.StatusNotFound
+			}
+			writeErr(w, status, code, msg)
+			return
+		}
+	}
 	id := spec.NewID()
 	bs, err := spec.Resolve(req, s.Policy, id)
 	if err != nil {
@@ -193,6 +214,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	if !s.canEnforce(w, bs.Network) {
 		return
 	}
+	bs.FromSnapshot = req.SnapshotID
 	if bs.Bind != nil && !s.Backend.Capabilities()[api.CapBindWorkspace] {
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot mount host directories")
 		return
@@ -858,6 +880,10 @@ func writeBackendErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "no such command")
 	case errors.Is(err, backend.ErrBadSignal):
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "unsupported signal")
+	case errors.Is(err, backend.ErrBusy):
+		writeErr(w, http.StatusConflict, api.CodeConflict, "the sandbox is busy")
+	case errors.Is(err, backend.ErrUnsupported):
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, err.Error())
 	default:
 		// The message is generic on purpose: a backend error can carry host paths
 		// and engine detail that are the operator's to read, not the caller's.

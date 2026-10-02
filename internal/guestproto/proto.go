@@ -39,6 +39,9 @@ const (
 	OpWrite  = "write"
 	OpRemove = "remove"
 	OpList   = "list"
+	// OpDial connects to a port on the guest's loopback and, after the answer
+	// line, carries that connection's raw bytes both ways.
+	OpDial = "dial"
 )
 
 // Request is the first line of every connection.
@@ -51,6 +54,7 @@ type Request struct {
 	Size int64             `json:"size,omitempty"`
 	// Tty runs an exec on a pseudo-terminal of Rows x Cols: stdout and stderr
 	// become one stream, and FrameResize changes the size.
+	Port int    `json:"port,omitempty"`
 	Tty  bool   `json:"tty,omitempty"`
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`

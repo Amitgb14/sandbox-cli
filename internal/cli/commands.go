@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"sort"
 	"strings"
@@ -315,6 +317,99 @@ func newDoctorCmd() *cobra.Command {
 			fmt.Fprintf(out, "can:       %s\n", strings.Join(on, ", "))
 			fmt.Fprintf(out, "limits:    %v cpus, %d MiB memory, %d MiB disk\n", caps.Limits.MaxCPUs, caps.Limits.MaxMemoryMB, caps.Limits.MaxDiskMB)
 			return nil
+		},
+	}
+	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
+	return cmd
+}
+
+func newSuspendCmds() []*cobra.Command {
+	var ctxFlag string
+	mk := func(use, short string, do func(*api.Client, *cobra.Command, string) error) *cobra.Command {
+		cmd := &cobra.Command{Use: use + " SANDBOX", Short: short, Args: cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				c, _, err := newClient(ctxFlag)
+				if err != nil {
+					return err
+				}
+				return do(c, cmd, args[0])
+			}}
+		cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
+		return cmd
+	}
+	return []*cobra.Command{
+		mk("suspend", "Stop a sandbox, keeping its memory, processes and disk", func(c *api.Client, cmd *cobra.Command, ref string) error {
+			_, err := c.Suspend(cmd.Context(), ref)
+			return err
+		}),
+		mk("resume", "Bring a suspended sandbox back as it was", func(c *api.Client, cmd *cobra.Command, ref string) error {
+			_, err := c.Resume(cmd.Context(), ref)
+			return err
+		}),
+		mk("snapshot", "Capture a sandbox; start forks of it with run --from-snapshot", func(c *api.Client, cmd *cobra.Command, ref string) error {
+			s, err := c.CreateSnapshot(cmd.Context(), ref)
+			if err == nil {
+				fmt.Fprintln(cmd.OutOrStdout(), s.ID)
+			}
+			return err
+		}),
+	}
+}
+
+// newTunnelCmd forwards a local port to a port on a sandbox's loopback. It
+// listens on 127.0.0.1 only: a tunnel is for you, not for your network.
+func newTunnelCmd() *cobra.Command {
+	var ctxFlag string
+	cmd := &cobra.Command{
+		Use:     "tunnel SANDBOX [LOCAL:]PORT",
+		Short:   "Forward a local port to a port inside a sandbox",
+		Example: "  sandbox-cli tunnel sbx_… 3000          # localhost:3000 -> the sandbox's 3000\n  sandbox-cli tunnel sbx_… 8080:3000",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			local, remote, ok := strings.Cut(args[1], ":")
+			if !ok {
+				remote = local
+			}
+			var lp, rp int
+			if _, err := fmt.Sscan(local, &lp); err != nil {
+				return fmt.Errorf("local port %q", local)
+			}
+			if _, err := fmt.Sscan(remote, &rp); err != nil {
+				return fmt.Errorf("port %q", remote)
+			}
+			c, _, err := newClient(ctxFlag)
+			if err != nil {
+				return err
+			}
+			l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", lp))
+			if err != nil {
+				return err
+			}
+			defer l.Close()
+			fmt.Fprintf(os.Stderr, "sandbox-cli: 127.0.0.1:%d -> %s:%d (Ctrl-C to stop)\n", lp, args[0], rp)
+			go func() { <-cmd.Context().Done(); l.Close() }()
+			for {
+				local, err := l.Accept()
+				if err != nil {
+					return nil
+				}
+				go func() {
+					defer local.Close()
+					remote, err := c.Tunnel(cmd.Context(), args[0], rp)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "sandbox-cli: tunnel: %v\n", err)
+						return
+					}
+					defer remote.Close()
+					go func() {
+						_, _ = io.Copy(remote, local)
+						if cw, ok := remote.(interface{ CloseWrite() error }); ok {
+							_ = cw.CloseWrite()
+						}
+					}()
+					_, _ = io.Copy(local, remote)
+				}()
+			}
 		},
 	}
 	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")

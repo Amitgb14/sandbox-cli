@@ -38,6 +38,7 @@ type runFlags struct {
 	noPersistAuth bool
 	project       string
 	noBringBack   bool
+	fromSnapshot  string
 	profile       string
 	configPath    string
 }
@@ -64,6 +65,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.project, "project", "", "repository to work on (default: the current directory)")
 	f.BoolVar(&rf.noBringBack, "no-bring-back", false, "do not fetch the sandbox's commits when the command ends")
 	f.StringVar(&rf.profile, "profile", "", "dev or prod (prod: no persisted logins)")
+	f.StringVar(&rf.fromSnapshot, "from-snapshot", "", "start from a snapshot (sandbox-cli snapshot) instead of the image")
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
 }
 
@@ -101,7 +103,7 @@ func execute(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 
 	req := api.CreateSandboxRequest{
 		Name: rf.name, Image: rf.image, CPUs: rf.cpus, MemoryMB: rf.memory, DiskMB: rf.disk,
-		IdleTimeoutSecs: rf.idle,
+		IdleTimeoutSecs: rf.idle, SnapshotID: rf.fromSnapshot,
 	}
 	if req.Env, err = buildEnv(rf.env, rs.agent); err != nil {
 		return 1, err
@@ -134,7 +136,7 @@ func execute(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	}()
 
 	var sess *session
-	if rf.bind == "" && !rf.noWorkspace {
+	if rf.bind == "" && !rf.noWorkspace && rf.fromSnapshot == "" {
 		if repo := repoRoot(project); repo != "" {
 			base, err := cloneIn(ctx, c, sb.ID, repo)
 			if err != nil {

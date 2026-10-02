@@ -15,6 +15,15 @@ import (
 // StreamProtocol is the Upgrade token for an attach stream.
 const StreamProtocol = "sbx-stream/1"
 
+// TunnelProtocol is the Upgrade token for a tunnel: after the 101, the
+// connection is the raw bytes of a TCP connection to the guest's port.
+const TunnelProtocol = "sbx-tunnel/1"
+
+// Tunnel opens a TCP connection to port on the sandbox's own loopback.
+func (c *Client) Tunnel(ctx context.Context, ref string, port int) (io.ReadWriteCloser, error) {
+	return c.upgrade(ctx, sbx(ref)+"/tunnel?port="+strconv.Itoa(port), TunnelProtocol)
+}
+
 // Stream is an attached process: what the process writes arrives through Copy,
 // and Stdin, Resize and Signal reach it. Close detaches without stopping it.
 type Stream struct {
@@ -25,13 +34,21 @@ type Stream struct {
 // Attach opens a two-way stream on a running process. Output is replayed from
 // the beginning.
 func (c *Client) Attach(ctx context.Context, ref string, pid int) (*Stream, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.base+sbx(ref)+"/processes/"+strconv.Itoa(pid)+"/attach", nil)
+	rwc, err := c.upgrade(ctx, sbx(ref)+"/processes/"+strconv.Itoa(pid)+"/attach", StreamProtocol)
+	if err != nil {
+		return nil, err
+	}
+	return &Stream{rwc: rwc}, nil
+}
+
+// upgrade performs a GET that switches the connection to protocol.
+func (c *Client) upgrade(ctx context.Context, path, protocol string) (io.ReadWriteCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", StreamProtocol)
+	req.Header.Set("Upgrade", protocol)
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -46,14 +63,14 @@ func (c *Client) Attach(ctx context.Context, ref string, pid int) (*Stream, erro
 		if jsonErr := decodeErr(data, &eb); jsonErr == nil && eb.Error.Code != "" {
 			return nil, &Error{Status: resp.StatusCode, Code: eb.Error.Code, Message: eb.Error.Message}
 		}
-		return nil, fmt.Errorf("attach: %s", resp.Status)
+		return nil, fmt.Errorf("%s: %s", protocol, resp.Status)
 	}
 	rwc, ok := resp.Body.(io.ReadWriteCloser)
 	if !ok {
 		resp.Body.Close()
-		return nil, fmt.Errorf("attach: the connection was not upgraded")
+		return nil, fmt.Errorf("%s: the connection was not upgraded", protocol)
 	}
-	return &Stream{rwc: rwc}, nil
+	return rwc, nil
 }
 
 func (s *Stream) send(typ byte, b []byte) error {

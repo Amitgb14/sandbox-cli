@@ -33,6 +33,12 @@ type Backend struct {
 	mu        sync.Mutex
 	sandboxes map[string]*sandbox
 	caps      map[string]bool
+	snapshots map[string]fakeSnapshot
+}
+
+type fakeSnapshot struct {
+	info  backend.SnapshotInfo
+	files map[string]*node
 }
 
 type node struct {
@@ -50,7 +56,7 @@ type sandbox struct {
 
 // New returns an empty fake with the capabilities given (api.Cap* names).
 func New(caps ...string) *Backend {
-	b := &Backend{sandboxes: map[string]*sandbox{}, caps: map[string]bool{}}
+	b := &Backend{sandboxes: map[string]*sandbox{}, caps: map[string]bool{}, snapshots: map[string]fakeSnapshot{}}
 	for _, c := range caps {
 		b.caps[c] = true
 	}
@@ -95,12 +101,59 @@ func (b *Backend) Create(_ context.Context, spec backend.Spec) error {
 	if _, dup := b.sandboxes[spec.ID]; dup {
 		return fmt.Errorf("fake: sandbox %s already exists", spec.ID)
 	}
-	b.sandboxes[spec.ID] = &sandbox{
-		spec: spec,
-		files: map[string]*node{
-			"/": {dir: true}, "/tmp": {dir: true}, "/workspace": {dir: true},
-		},
+	files := map[string]*node{"/": {dir: true}, "/tmp": {dir: true}, "/workspace": {dir: true}}
+	if spec.FromSnapshot != "" {
+		snap, ok := b.snapshots[spec.FromSnapshot]
+		if !ok {
+			return backend.ErrNotFound
+		}
+		files = copyFiles(snap.files)
 	}
+	b.sandboxes[spec.ID] = &sandbox{spec: spec, files: files}
+	return nil
+}
+
+func copyFiles(in map[string]*node) map[string]*node {
+	out := make(map[string]*node, len(in))
+	for p, n := range in {
+		out[p] = &node{dir: n.dir, data: append([]byte(nil), n.data...)}
+	}
+	return out
+}
+
+// Suspend and Resume record nothing the fake could lose: its sandboxes have no
+// memory to keep. They exist so the server's handling of the states is tested.
+func (b *Backend) Suspend(_ context.Context, id string) error {
+	_, err := b.get(id)
+	return err
+}
+
+func (b *Backend) Resume(_ context.Context, id string) error {
+	_, err := b.get(id)
+	return err
+}
+
+// Snapshot captures the files; a sandbox started from it gets its own copy, so
+// the two diverge from there — which is what a fork means.
+func (b *Backend) Snapshot(_ context.Context, id, snapshotID string) (backend.SnapshotInfo, error) {
+	s, err := b.get(id)
+	if err != nil {
+		return backend.SnapshotInfo{}, err
+	}
+	s.mu.Lock()
+	files := copyFiles(s.files)
+	info := backend.SnapshotInfo{ID: snapshotID, Image: s.spec.Image, CPUs: s.spec.CPUs, MemoryMB: s.spec.MemoryMB, DiskMB: s.spec.DiskMB}
+	s.mu.Unlock()
+	b.mu.Lock()
+	b.snapshots[snapshotID] = fakeSnapshot{info: info, files: files}
+	b.mu.Unlock()
+	return info, nil
+}
+
+func (b *Backend) DeleteSnapshot(_ context.Context, snapshotID string) error {
+	b.mu.Lock()
+	delete(b.snapshots, snapshotID)
+	b.mu.Unlock()
 	return nil
 }
 

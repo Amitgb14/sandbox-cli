@@ -304,3 +304,35 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 	return s.b.Write(p)
 }
 func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// A dial reaches a listener on the guest's loopback and carries bytes both
+// ways, including the reply after the client's half-close.
+func TestDialCarriesBothDirections(t *testing.T) {
+	c, _ := serve(t)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		buf := make([]byte, 64)
+		n, _ := conn.Read(buf)
+		conn.Write(append([]byte("hi:"), buf[:n]...))
+		conn.Close()
+	}()
+	port := l.Addr().(*net.TCPAddr).Port
+	d, err := c.DialPort(ctx(t), port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Write([]byte("ping"))
+	got, _ := io.ReadAll(d)
+	d.Close()
+	if string(got) != "hi:ping" {
+		t.Fatalf("got %q", got)
+	}
+}
