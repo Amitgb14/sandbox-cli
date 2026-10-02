@@ -1,5 +1,10 @@
 # Task 3 — Stronger isolation for Linux production (Kata)
 
+> **Superseded 2026-10-01.** Every sandbox is now a microVM: Firecracker on Linux by
+> default, not Kata as an option. See [`docs/rewrite/PLAN.md`](../rewrite/PLAN.md) (M3, M5).
+> Kept as history: the gVisor measurements and the egress findings still explain why
+> enforcement moved to the host.
+
 **Goal.** When you need real isolation for untrusted code, give each sandbox its own
 lightweight VM — Kata Containers on Linux — instead of a shared kernel.
 

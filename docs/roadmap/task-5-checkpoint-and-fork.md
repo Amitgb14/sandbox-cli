@@ -1,5 +1,9 @@
 # Task 5 — Checkpoint and fork
 
+> **Re-scoped 2026-10-01.** Snapshots, suspend/resume and clone are built on Firecracker
+> (rewrite M8); the macOS `container` runtime reports the capability off. The "filesystem half on
+> Docker first" path below no longer exists. See [`docs/rewrite/PLAN.md`](../rewrite/PLAN.md).
+
 **Goal.** Stop paying a cold start for every parallel agent, and let several attempts at
 the same problem branch from one prepared state instead of each building it again.
 
@@ -23,11 +27,11 @@ exploration that is about *isolation*. The half that is missing is *state*: ever
 container starts cold, so three agents attempting the same fix each run `npm install`
 again, and "run three attempts, keep the one that passes tests" costs three full setups.
 
-The rest of the category has converged on this and the numbers are not close. Blaxel
-resumes a full memory+filesystem snapshot in under 25ms; Freestyle forks a live VM
-copy-on-write in ~320ms median, independent of VM size; Zeroboot forks a KVM VM at p50
-0.79ms by mmap'ing a Firecracker snapshot `MAP_PRIVATE`. Fly's Sprites argue the whole
-ephemeral-sandbox framing is wrong and that dependencies should be installed once.
+The rest of the category has converged on this and the numbers are not close. One hosted
+service resumes a full memory+filesystem snapshot in under 25ms; another forks a live VM
+copy-on-write in ~320ms median, independent of VM size; an open-source project forks a KVM
+VM at p50 0.79ms by mmap'ing a Firecracker snapshot `MAP_PRIVATE`. One hosting provider
+argues the whole ephemeral-sandbox framing is wrong and that dependencies should be installed once.
 
 **The word "snapshot" is already taken here, and it means something else.**
 `internal/rescue` writes commits under `refs/sandbox/snapshots/` so a crash cannot destroy
