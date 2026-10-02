@@ -1,4 +1,4 @@
-//go:build vm
+//go:build vm && linux
 
 // The guest agent and the image pipeline against a real microVM — rewrite M4's
 // proof, and the starting point of the M5 backend.
@@ -25,8 +25,15 @@ import (
 	"testing"
 	"time"
 
+	"net/http/httptest"
+
+	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/api/conformance"
+	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/guestproto"
 	"github.com/Amitgb14/sandbox-cli/internal/image"
+	"github.com/Amitgb14/sandbox-cli/internal/server"
+	"github.com/Amitgb14/sandbox-cli/internal/spec"
 	"github.com/Amitgb14/sandbox-cli/internal/vsock"
 )
 
@@ -178,4 +185,154 @@ func TestVMGuestAgent(t *testing.T) {
 		t.Fatalf("16 MiB round trip: %v", err)
 	}
 	t.Logf("16 MiB write+read over vsock: %v", time.Since(t0))
+}
+
+// TestVMConformance runs the API conformance suite against sandboxd serving
+// this backend: every sandbox in it is a real microVM. Run unprivileged it has
+// no network and no jailer, so the suite sees an endpoint that offers mode none.
+func TestVMConformance(t *testing.T) {
+	kernel := os.Getenv("SANDBOX_TEST_KERNEL")
+	fc := os.Getenv("SANDBOX_TEST_FIRECRACKER")
+	if kernel == "" || fc == "" {
+		t.Skip("set SANDBOX_TEST_KERNEL and SANDBOX_TEST_FIRECRACKER")
+	}
+	state, err := os.MkdirTemp("", "fcst") // short: socket paths are limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(state) })
+	agent := filepath.Join(state, "sandbox-guestd")
+	build := exec.Command("go", "build", "-trimpath", "-o", agent, "../../../cmd/sandbox-guestd")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building the guest agent: %v\n%s", err, out)
+	}
+	puller := &image.Puller{Cache: filepath.Join(os.TempDir(), "sandbox-test-images")}
+	if h := os.Getenv("SANDBOX_TEST_PLAIN_HTTP"); h != "" {
+		puller.PlainHTTP = map[string]bool{h: true}
+	}
+	be := newTestBackend(t, fc, kernel, agent, state, puller)
+	pol := spec.DefaultPolicy()
+	pol.DefaultImage = "alpine:3.20"
+	if r := os.Getenv("SANDBOX_TEST_IMAGE"); r != "" {
+		pol.DefaultImage = r
+	}
+	pol, notes := pol.FitTo(be.Capabilities())
+	for _, n := range notes {
+		t.Log("policy: " + n)
+	}
+	srv := &server.Server{Backend: be, Policy: pol, Token: "vm-conformance"}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	conformance.Run(t, api.NewClientWithHTTP(ts.URL, "vm-conformance", ts.Client()))
+}
+
+// newTestBackend is the backend as the environment asks for it:
+// SANDBOX_TEST_NETWORK=1 adds host networking (root, or a user+network
+// namespace), SANDBOX_TEST_JAILER=/path/to/jailer adds the jailer (real root).
+func newTestBackend(t *testing.T, fc, kernel, agent, state string, puller *image.Puller) *Backend {
+	t.Helper()
+	cfg := Config{
+		Firecracker: fc, Kernel: kernel, Agent: agent, StateDir: state, Puller: puller,
+		Logf: func(f string, a ...any) { t.Logf(f, a...) },
+	}
+	if os.Getenv("SANDBOX_TEST_NETWORK") == "1" {
+		cfg.Network = &Network{Logf: cfg.Logf}
+	}
+	if j := os.Getenv("SANDBOX_TEST_JAILER"); j != "" {
+		cfg.Jailer = &Jailer{Path: j, ChrootBase: filepath.Join(state, "jail"), UIDBase: 900000}
+	}
+	be, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		be.mu.Lock()
+		ids := make([]string, 0, len(be.vms))
+		for id := range be.vms {
+			ids = append(ids, id)
+		}
+		be.mu.Unlock()
+		for _, id := range ids {
+			_ = be.Terminate(context.Background(), id)
+		}
+		if cfg.Network != nil {
+			cfg.Network.Close()
+		}
+	})
+	return be
+}
+
+// TestVMEgress checks egress enforcement from inside a real guest: names on the
+// allowlist resolve and connect, everything else is refused — by DNS, by the
+// proxy, or by the drop — and a live update to none cuts it off.
+//
+// Needs SANDBOX_TEST_NETWORK=1 and root (or `unshare -rn`, where there is no
+// route out, so the allowed probes are only checked when SANDBOX_TEST_INTERNET=1),
+// and an image with curl and getent (the base image).
+func TestVMEgress(t *testing.T) {
+	kernel := os.Getenv("SANDBOX_TEST_KERNEL")
+	fc := os.Getenv("SANDBOX_TEST_FIRECRACKER")
+	if kernel == "" || fc == "" || os.Getenv("SANDBOX_TEST_NETWORK") != "1" || os.Getenv("SANDBOX_TEST_IMAGE") == "" {
+		t.Skip("set SANDBOX_TEST_KERNEL, SANDBOX_TEST_FIRECRACKER, SANDBOX_TEST_NETWORK=1 and SANDBOX_TEST_IMAGE")
+	}
+	internet := os.Getenv("SANDBOX_TEST_INTERNET") == "1"
+	state, _ := os.MkdirTemp("", "fcnet")
+	t.Cleanup(func() { os.RemoveAll(state) })
+	agent := filepath.Join(state, "sandbox-guestd")
+	build := exec.Command("go", "build", "-trimpath", "-o", agent, "../../../cmd/sandbox-guestd")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	puller := &image.Puller{Cache: filepath.Join(os.TempDir(), "sandbox-test-images")}
+	if h := os.Getenv("SANDBOX_TEST_PLAIN_HTTP"); h != "" {
+		puller.PlainHTTP = map[string]bool{h: true}
+	}
+	be := newTestBackend(t, fc, kernel, agent, state, puller)
+	ctx := context.Background()
+	id := spec.NewID()
+	err := be.Create(ctx, backend.Spec{
+		ID: id, Image: os.Getenv("SANDBOX_TEST_IMAGE"), CPUs: 1, MemoryMB: 512, DiskMB: 1024,
+		Network: api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com", "example.com"}, Deny: []string{"gist.github.com"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh := func(script string) (string, int) {
+		var out bytes.Buffer
+		p, err := be.Start(ctx, id, backend.ProcSpec{Argv: []string{"sh", "-c", script}}, &out, &out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Stdin().Close()
+		code := p.Wait()
+		return strings.TrimSpace(out.String()), code
+	}
+	probe := func(name, script string, wantOK bool) {
+		t.Helper()
+		out, code := sh(script)
+		if (code == 0) != wantOK {
+			t.Errorf("%s: exit %d, want success=%v\n%s", name, code, wantOK, out)
+		} else {
+			t.Logf("%s: exit %d as expected", name, code)
+		}
+	}
+	probe("an allowed name resolves", "getent hosts github.com", true)
+	probe("a denied name does not resolve", "getent hosts gist.github.com", false)
+	probe("an unlisted name does not resolve", "getent hosts attacker.example", false)
+	probe("TLS with no name is refused", "curl -sk -m 5 -o /dev/null https://1.1.1.1/", false)
+	probe("a denied name is refused even when dialled by address", "curl -s -m 5 -o /dev/null --resolve gist.github.com:443:1.1.1.1 https://gist.github.com/", false)
+	probe("other ports go nowhere", "timeout 5 bash -c 'echo > /dev/tcp/1.1.1.1/22'", false)
+	if internet {
+		probe("an allowed name connects", "curl -sS -m 10 -o /dev/null https://github.com/", true)
+		probe("plain HTTP to an allowed name connects", "curl -sS -m 10 -o /dev/null http://example.com/", true)
+	}
+	// A live update to none: the same name that resolved now does not, and
+	// nothing connects.
+	if err := be.UpdateNetwork(ctx, id, api.NetworkPolicy{Mode: api.NetworkNone}); err != nil {
+		t.Fatal(err)
+	}
+	probe("after the update to none, nothing resolves", "getent hosts github.com", false)
+	probe("after the update to none, nothing connects", "curl -s -m 5 -o /dev/null --resolve github.com:443:1.1.1.1 https://github.com/", false)
 }

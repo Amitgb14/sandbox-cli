@@ -2,6 +2,7 @@ package spec
 
 import (
 	"errors"
+	"os"
 	"reflect"
 	"testing"
 
@@ -191,5 +192,42 @@ func TestNewIDIsNotAName(t *testing.T) {
 	}
 	if NewID() == id {
 		t.Fatal("two ids collided")
+	}
+}
+
+func TestLoadPolicy(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := dir + "/policy.yaml"
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	p, err := LoadPolicy(write(`
+default_image: registry.example/base:1
+images: [registry.example/base:1]
+limits: {max_cpus: 4}
+network:
+  default: {mode: allowlist, allow: [GitHub.com., pypi.org]}
+  ceiling: allowlist
+  may_allow: ["*.corp.example"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.DefaultImage != "registry.example/base:1" || p.Limits.MaxCPUs != 4 || p.Limits.MaxMemoryMB != DefaultPolicy().Limits.MaxMemoryMB {
+		t.Errorf("policy: %+v", p)
+	}
+	if !reflect.DeepEqual(p.Network.Default.Allow, []string{"github.com", "pypi.org"}) {
+		t.Errorf("default allow not normalised: %v", p.Network.Default.Allow)
+	}
+	// A misspelt key is an error, not a silently ignored restriction.
+	if _, err := LoadPolicy(write("network: {celing: none}\n")); err == nil {
+		t.Error("an unknown key was accepted")
+	}
+	// A default above the ceiling is incoherent.
+	if _, err := LoadPolicy(write("network: {default: {mode: open}, ceiling: allowlist}\n")); err == nil {
+		t.Error("a default above the ceiling was accepted")
 	}
 }

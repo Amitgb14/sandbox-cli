@@ -1,0 +1,31 @@
+# sandboxd on a self-hosted Linux machine (docs/self-hosting.md).
+#
+# Runs as root: tap devices, nftables and the jailer need it. What the VMMs run
+# as is not root — the jailer gives each one an unprivileged uid of its own and
+# a chroot.
+[Unit]
+Description=sandboxd — microVM sandboxes for agents
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sandboxd \
+  --backend firecracker \
+  --kernel /var/lib/sandboxd/vmlinux \
+  --firecracker /usr/local/bin/firecracker \
+  --jailer /usr/local/bin/jailer \
+  --policy /etc/sandboxd/policy.yaml \
+  --listen 0.0.0.0:7443 \
+  --tls-cert /etc/sandboxd/tls/cert.pem \
+  --tls-key /etc/sandboxd/tls/key.pem \
+  --token-file /etc/sandboxd/token \
+  --allowed-host sandbox.example.internal
+Restart=on-failure
+RestartSec=2s
+# sandboxd terminates its sandboxes on SIGTERM; give it time to.
+TimeoutStopSec=60s
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

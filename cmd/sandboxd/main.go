@@ -5,14 +5,21 @@
 // that would let anyone on the network create sandboxes: a non-loopback address
 // with no token.
 //
-// The only backend in M2 is the in-memory fake, which runs no host processes and
-// isolates nothing — it exists so the API and its conformance suite can be
-// exercised end to end. It must be asked for by name; the real backends arrive in
-// M5 (Linux) and M6 (macOS).
+// Backends:
+//
+//	--backend firecracker   Linux: every sandbox a Firecracker microVM. As root
+//	                        (the system service) it adds host-enforced egress and,
+//	                        with --jailer, the jailer; unprivileged it serves
+//	                        sandboxes with no network, and says so.
+//	--backend fake          in memory, no VMs, isolates nothing: for development
+//	                        and the conformance suite.
+//
+// A network address needs both a token and TLS; only loopback may go without.
 package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -50,9 +57,20 @@ func run(args []string) error {
 	fl := flag.NewFlagSet("sandboxd", flag.ContinueOnError)
 	listen := fl.String("listen", "", "unix:///path/to/socket, or host:port (default: a unix socket in the user's runtime directory)")
 	tokenFile := fl.String("token-file", "", "file holding the bearer token clients must present")
-	backendName := fl.String("backend", "", "which backend to serve: fake (the only one before M5)")
-	var allowedHosts listFlag
+	tlsCert := fl.String("tls-cert", "", "TLS certificate (PEM); required for a non-loopback address")
+	tlsKey := fl.String("tls-key", "", "TLS private key (PEM)")
+	policyFile := fl.String("policy", "", "operator policy (YAML); default: the built-in policy")
+	backendName := fl.String("backend", "", "firecracker or fake")
+	stateDir := fl.String("state-dir", defaultStateDir(), "images and per-sandbox state")
+	kernel := fl.String("kernel", "", "firecracker: guest kernel (vmlinux)")
+	firecracker := fl.String("firecracker", "firecracker", "firecracker: the VMM binary")
+	jailer := fl.String("jailer", "", "firecracker: the jailer binary; enables it (root only)")
+	agent := fl.String("agent", "", "firecracker: sandbox-guestd for the guest (default: beside this binary)")
+	network := fl.Bool("network", os.Geteuid() == 0, "firecracker: host-enforced egress (root only)")
+	defaultImage := fl.String("default-image", "", "image for requests that name none (overrides the policy file)")
+	var allowedHosts, insecureRegistries listFlag
 	fl.Var(&allowedHosts, "allowed-host", "a Host name to answer besides loopback (repeatable)")
+	fl.Var(&insecureRegistries, "insecure-registry", "a registry (host:port) to pull from over plain HTTP — a local one; repeatable")
 	showVersion := fl.Bool("version", false, "print the version and exit")
 	if err := fl.Parse(args); err != nil {
 		return err
@@ -61,23 +79,50 @@ func run(args []string) error {
 		fmt.Println("sandboxd " + version.Version)
 		return nil
 	}
+	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "sandboxd: "+format+"\n", a...) }
 
-	be, err := newBackend(*backendName)
+	pol := spec.DefaultPolicy()
+	if *policyFile != "" {
+		p, err := spec.LoadPolicy(*policyFile)
+		if err != nil {
+			return err
+		}
+		pol = p
+	}
+	if *defaultImage != "" {
+		pol.DefaultImage = *defaultImage
+	}
+
+	be, err := newBackend(*backendName, backendOptions{
+		stateDir: *stateDir, kernel: *kernel, firecracker: *firecracker, jailer: *jailer,
+		agent: *agent, network: *network, logf: logf, insecureRegistries: insecureRegistries,
+	})
 	if err != nil {
+		return err
+	}
+	pol, notes := pol.FitTo(be.Capabilities())
+	for _, n := range notes {
+		logf("policy: %s", n)
+	}
+	if err := pol.Validate(); err != nil {
 		return err
 	}
 	token, err := readToken(*tokenFile)
 	if err != nil {
 		return err
 	}
-	pol := spec.DefaultPolicy()
-	if err := pol.Validate(); err != nil {
-		return err
-	}
 
-	ln, where, err := openListener(*listen, token != "")
+	ln, where, err := openListener(*listen, token != "", *tlsCert != "")
 	if err != nil {
 		return err
+	}
+	if *tlsCert != "" {
+		cert, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+		if err != nil {
+			return fmt.Errorf("tls: %w", err)
+		}
+		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+		where = "https://" + strings.TrimPrefix(where, "tcp://")
 	}
 	srv := &http.Server{
 		Handler: (&server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts}).Handler(),
@@ -86,10 +131,11 @@ func run(args []string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	fmt.Fprintf(os.Stderr, "sandboxd %s: serving API %s on %s, backend %s, token %s\n",
-		version.Version, api.Version, where, be.Name(), map[bool]string{true: "required", false: "not required"}[token != ""])
+	logf("%s serving API %s on %s; backend %s; token %s; network ceiling %s; default image %s",
+		version.Version, api.Version, where, be.Name(),
+		map[bool]string{true: "required", false: "not required"}[token != ""], pol.Network.Ceiling, pol.DefaultImage)
 	if be.Name() == "fake" {
-		fmt.Fprintln(os.Stderr, "sandboxd: the fake backend runs no VMs and isolates nothing; it is for development and the conformance suite")
+		logf("the fake backend runs no VMs and isolates nothing; it is for development and the conformance suite")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -103,17 +149,41 @@ func run(args []string) error {
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdown)
+	err = srv.Shutdown(shutdown)
+	if c, ok := be.(interface{ Close() }); ok {
+		c.Close()
+	}
+	return err
 }
 
-func newBackend(name string) (backend.Backend, error) {
+type backendOptions struct {
+	stateDir, kernel, firecracker, jailer, agent string
+	network                                      bool
+	logf                                         func(string, ...any)
+	insecureRegistries                           []string
+}
+
+func defaultStateDir() string {
+	if os.Geteuid() == 0 {
+		return "/var/lib/sandboxd"
+	}
+	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
+		return filepath.Join(d, "sandboxd")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share", "sandboxd")
+}
+
+func newBackend(name string, o backendOptions) (backend.Backend, error) {
 	switch name {
 	case "fake":
-		return fake.New(api.CapNetworkPolicyUpdate), nil
+		return fake.New(api.CapNetworkPolicyUpdate, api.CapEgressAllowlist), nil
+	case "firecracker":
+		return newFirecracker(o)
 	case "":
-		return nil, errors.New("--backend is required; the only one before M5 is: fake")
+		return nil, errors.New("--backend is required: firecracker or fake")
 	}
-	return nil, fmt.Errorf("unknown backend %q; the only one before M5 is: fake", name)
+	return nil, fmt.Errorf("unknown backend %q: want firecracker or fake", name)
 }
 
 // readToken reads the token file, refusing one other users can read: a token
@@ -143,7 +213,7 @@ func readToken(path string) (string, error) {
 // openListener opens the socket or port to serve on. A TCP address that is not
 // loopback needs a token — otherwise anyone who can reach the port can create
 // sandboxes and run commands in them.
-func openListener(addr string, haveToken bool) (net.Listener, string, error) {
+func openListener(addr string, haveToken, haveTLS bool) (net.Listener, string, error) {
 	if addr == "" {
 		addr = "unix://" + defaultSocket()
 	}
@@ -159,11 +229,16 @@ func openListener(addr string, haveToken bool) (net.Listener, string, error) {
 	if !loopback && !haveToken {
 		return nil, "", fmt.Errorf("--listen %s is reachable from other machines; refusing to serve it without --token-file", addr)
 	}
+	// A bearer token over plain HTTP on a network is a token anyone on the path
+	// can read and reuse.
+	if !loopback && !haveTLS {
+		return nil, "", fmt.Errorf("--listen %s is reachable from other machines; refusing to serve it without --tls-cert and --tls-key", addr)
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, "", err
 	}
-	return ln, ln.Addr().String(), nil
+	return ln, "tcp://" + ln.Addr().String(), nil
 }
 
 func defaultSocket() string {

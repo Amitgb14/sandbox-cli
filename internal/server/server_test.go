@@ -14,7 +14,7 @@ import (
 )
 
 func newServer(token string) *Server {
-	return &Server{Backend: fake.New(), Policy: spec.DefaultPolicy(), Token: token}
+	return &Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy(), Token: token}
 }
 
 func do(t *testing.T, h http.Handler, method, target, host, origin, token, ct string, body []byte) *httptest.ResponseRecorder {

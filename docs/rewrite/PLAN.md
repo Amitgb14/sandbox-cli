@@ -395,9 +395,84 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     cached after that. The agent answered at 56 ms, `whoami` is `sandbox`, and
     node 22, git, Claude Code 2.1.287 and codex 0.160.0 all run inside the
     microVM.
-- **M5 — self-hosted Linux.** `backend/firecracker` and `sandboxd` under systemd
-  with TLS and tokens. Clone-in and bring-back. Network policy enforced on the
-  host. Idle timeout. Conformance green.
+- **M5 — self-hosted Linux.** *Done, except two checks that need real root
+  (below).*
+  - **`backend/firecracker`.** Each sandbox is:
+    - the image's shared read-only root disk;
+    - a sparse scratch disk the guest agent overlays on it;
+    - the VMM, reached only through vsock.
+
+    Sandboxes boot with M3's fast kernel line and are ready in ~60 ms. `BuildConfig`
+    renders the VM configuration as a pure function. VMs left by an earlier
+    sandboxd are reaped at start, and sandboxd terminates its own on shutdown.
+  - **Host-enforced egress** (`network.go`). Each sandbox has a tap on its own
+    /30, in nftables table `inet sandboxd`:
+    - tcp/80 and tcp/443 are redirected to one proxy in sandboxd, which picks
+      the sandbox's allowlist by source address (`egressproxy.Server.MatchFor`);
+    - DNS goes to a stub resolver (`egressproxy.DNS`) that answers only
+      allowlisted names, with the host's address, and **forwards nothing**, so
+      DNS is not a way out;
+    - everything else from the tap is dropped and nothing is forwarded.
+
+    Every packet the guest may send the host arrives DNAT'd (M3's firewalld
+    finding), and the proxy and resolver ports drop anything not redirected.
+    `deny` now wins inside the matcher, wildcards included (`NewPolicyMatcher`):
+    folding deny into the allowlist only removed exact names, so `*.github.com`
+    with `gist.github.com` denied would have let gist through. Caught before it
+    shipped. A live policy change is one atomic step in nftables and one in
+    the proxy.
+  - **The jailer** (`jailer.go`). Each VMM gets its own unprivileged uid
+    (one per sandbox: a shared uid would let one VMM signal or trace another),
+    and a chroot holding hard links to the shared disks.
+  - **Fail closed on capability.** `spec.FitTo` narrows the server's policy to
+    what the backend can enforce. Unprivileged, there are no taps, so the
+    ceiling is `none`, and the startup line says so. The server then refuses,
+    with `unsupported`, any allowlist a backend cannot enforce, even if a
+    misconfigured policy would allow it. New conformance run: an endpoint with
+    no egress at all.
+  - **Idle timeout:** per sandbox, with a policy default and limit. The reaper
+    counts a running process as activity, and a request naming the sandbox
+    does too.
+  - **Workspace in and out:**
+    - `POST /v1/sandboxes/{ref}/workspace` streams a git bundle in, and the
+      guest clones it into `/workspace`;
+    - `GET …/workspace/bundle?base=&branch=` returns `base..branch` as a bundle:
+      a 409 when there is nothing new, an honest status code rather than a
+      truncated 200, with guest messages passed through `termsafe`.
+
+    The host never mounts the repository, and verifying and fetching what
+    comes back is the client's job (M7).
+  - **sandboxd** gains:
+    - `--backend firecracker` and an operator policy file (`--policy`, YAML,
+      unknown keys refused);
+    - TLS, required with a token on any non-loopback address;
+    - `--insecure-registry` for a local registry, named explicitly.
+
+    Also: a systemd unit, an example policy, `docs/self-hosting.md`, and
+    `api.NewClientWithCA` for a private CA.
+  - **Image pulls work offline** from the manifest last fetched for a reference;
+    an unmapped owner inside a user namespace is counted, not fatal.
+  - **The in-image proxy embedding is removed** (`egressproxy/embed.go` and its
+    two tests): the proxy runs on the host now.
+  - **Verified on this machine, with real microVMs:**
+    - the whole conformance suite against the backend, both unprivileged
+      (30 pass, 3 skips that say why) and with networking in a user+network
+      namespace (all pass, 1 skip by design);
+    - the real `sandboxd` binary over its unix socket, and the fake over TLS
+      with a private CA;
+    - egress from inside a guest:
+      - allowed names resolve;
+      - denied and unlisted names do not;
+      - TLS without a name is refused, and so is a denied name dialled by
+        address;
+      - other ports go nowhere;
+      - a live update to `none` cuts both DNS and connections.
+  - **Needs real root, and is handed over:**
+    - the jailer under the backend;
+    - egress with an uplink (allowed names actually connecting);
+    - the full networked suite outside a namespace.
+
+    Commands are in `docs/testing/end-to-end.md`.
 - **M6 — local Mac.** `backend/macos` and `sandboxd` under launchd on a unix
   socket. Bind (option) and clone. Conformance green, minus the capabilities
   reported off.

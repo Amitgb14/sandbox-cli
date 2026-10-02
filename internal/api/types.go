@@ -68,6 +68,13 @@ const (
 	CapSuspend             = "suspend"
 	CapMemorySnapshot      = "memory_snapshot"
 	CapBindWorkspace       = "bind_workspace"
+	// CapEgressAllowlist: network mode allowlist is enforced. Without it, the
+	// endpoint offers only none — a sandbox there has no network at all.
+	CapEgressAllowlist = "egress_allowlist"
+	// CapEgressOpen: network mode open is available.
+	CapEgressOpen = "egress_open"
+	// CapWorkspaceBundle: a git bundle can be cloned in and brought back out.
+	CapWorkspaceBundle = "workspace_bundle"
 )
 
 // Limits are the largest resources a sandbox may ask for.
@@ -75,6 +82,8 @@ type Limits struct {
 	MaxCPUs     float64 `json:"max_cpus"`
 	MaxMemoryMB int     `json:"max_memory_mb"`
 	MaxDiskMB   int     `json:"max_disk_mb"`
+	// MaxIdleTimeoutSecs bounds idle_timeout_secs; 0 means no bound.
+	MaxIdleTimeoutSecs int `json:"max_idle_timeout_secs"`
 }
 
 // NetworkCeiling is the server's network policy floor and ceiling, as a client
@@ -94,6 +103,9 @@ type CreateSandboxRequest struct {
 	DiskMB   int               `json:"disk_mb,omitempty"`
 	Env      map[string]string `json:"env,omitempty"`
 	Network  *NetworkPolicy    `json:"network,omitempty"`
+	// IdleTimeoutSecs terminates the sandbox after this long with no request
+	// touching it and no process running. 0 takes the server's default.
+	IdleTimeoutSecs int `json:"idle_timeout_secs,omitempty"`
 }
 
 // UpdateSandboxRequest changes a running sandbox.
@@ -115,6 +127,8 @@ type Sandbox struct {
 	EnvNames  []string      `json:"env_names,omitempty"`
 	Network   NetworkPolicy `json:"network"`
 	CreatedAt time.Time     `json:"created_at"`
+	// IdleTimeoutSecs is in force for this sandbox; 0 means it never idles out.
+	IdleTimeoutSecs int `json:"idle_timeout_secs"`
 }
 
 // SandboxList is the body of GET /v1/sandboxes.

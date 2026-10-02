@@ -21,6 +21,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +72,9 @@ func Run(t *testing.T, c *api.Client) {
 		{"NetworkDenyIsKeptAndNormalized", testNetworkDeny},
 		{"NetworkAllowOutsideMayAllowIsRefused", testNetworkMayAllow},
 		{"NetworkUpdateFollowsTheSameRules", testNetworkUpdate},
+		{"IdleSandboxIsTerminated", testIdleTimeout},
+		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
+		{"WorkspaceRoundTripsAsABundle", testWorkspaceBundle},
 	} {
 		t.Run(tc.name, func(t *testing.T) { tc.fn(t, e) })
 	}
@@ -566,6 +573,122 @@ func testNetworkUpdate(t *testing.T, e *env) {
 		after, _ := e.c.Sandbox(ctx, sb.ID)
 		if after.Network.Mode != api.NetworkNone {
 			t.Errorf("a refused update changed the policy to %q", after.Network.Mode)
+		}
+	}
+}
+
+func testIdleTimeout(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{IdleTimeoutSecs: 2})
+	if sb.IdleTimeoutSecs != 2 {
+		t.Fatalf("idle_timeout_secs = %d, want 2", sb.IdleTimeoutSecs)
+	}
+	// Watched through the listing: a GET names the sandbox, and naming it is
+	// activity, which would keep it alive.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		list, err := e.c.Sandboxes(ctxT(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range list {
+			if s.ID == sb.ID && s.State == api.StateTerminated {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatal("an idle sandbox was not terminated")
+}
+
+func testIdleTimeoutLimit(t *testing.T, e *env) {
+	max := e.caps.Limits.MaxIdleTimeoutSecs
+	if max <= 0 {
+		t.Skip("no idle timeout limit")
+	}
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{IdleTimeoutSecs: max + 1})
+	wantCode(t, err, api.CodeInvalidRequest)
+}
+
+// The workspace model end to end: a repository goes in as a bundle, the agent
+// commits inside, and the work comes back as a bundle the client verifies and
+// fetches — the host never mounts the repository into the guest.
+func testWorkspaceBundle(t *testing.T, e *env) {
+	if !e.caps.Has(api.CapWorkspaceBundle) {
+		sb := e.newSandbox(t, api.CreateSandboxRequest{})
+		err := e.c.PutWorkspace(ctxT(t), sb.ID, "main", bytes.NewReader(nil))
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on the client to make a bundle with")
+	}
+	host := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", host, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "feat")
+	if err := os.WriteFile(filepath.Join(host, "README"), []byte("from the host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "README")
+	git("commit", "-q", "-m", "host commit")
+	base := git("rev-parse", "HEAD")
+	in := filepath.Join(t.TempDir(), "in.bundle")
+	git("bundle", "create", "-q", in, "feat")
+
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	if res, err := e.c.Run(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"git", "--version"}}); err != nil || res.ExitCode != 0 {
+		t.Skip("the sandbox image has no git")
+	}
+	f, _ := os.Open(in)
+	defer f.Close()
+	if err := e.c.PutWorkspace(ctxT(t), sb.ID, "feat", f); err != nil {
+		t.Fatalf("put workspace: %v", err)
+	}
+	got, err := e.c.ReadFile(ctxT(t), sb.ID, "/workspace/README")
+	if err != nil || string(got) != "from the host\n" {
+		t.Fatalf("the cloned workspace has README = %q, %v", got, err)
+	}
+
+	// Nothing new yet: nothing to bring back.
+	err = e.c.GetWorkspaceBundle(ctxT(t), sb.ID, base, "feat", io.Discard)
+	wantCode(t, err, api.CodeConflict)
+
+	if err := e.c.WriteFile(ctxT(t), sb.ID, "/workspace/agent.txt", []byte("from the agent\n")); err != nil {
+		t.Fatal(err)
+	}
+	res := e.run(t, sb.ID, api.RunRequest{Cwd: "/workspace", Argv: []string{"sh", "-c",
+		"git add -A && git -c user.name=agent -c user.email=agent@example.com commit -q -m 'agent commit'"}})
+	if res.ExitCode != 0 {
+		t.Fatalf("commit in the sandbox: exit %d: %s", res.ExitCode, res.Stderr)
+	}
+
+	out := filepath.Join(t.TempDir(), "out.bundle")
+	of, _ := os.Create(out)
+	err = e.c.GetWorkspaceBundle(ctxT(t), sb.ID, base, "feat", of)
+	of.Close()
+	if err != nil {
+		t.Fatalf("get bundle: %v", err)
+	}
+	git("bundle", "verify", "-q", out)
+	git("fetch", "-q", out, "feat:refs/sandbox/conformance")
+	if msg := git("log", "-1", "--format=%s", "refs/sandbox/conformance"); msg != "agent commit" {
+		t.Fatalf("brought back %q, want the agent's commit", msg)
+	}
+
+	for name, call := range map[string]func() error{
+		"a range as the base":   func() error { return e.c.GetWorkspaceBundle(ctxT(t), sb.ID, "a..b", "feat", io.Discard) },
+		"an option as a branch": func() error { return e.c.GetWorkspaceBundle(ctxT(t), sb.ID, base, "--all", io.Discard) },
+		"no branch to clone":    func() error { return e.c.PutWorkspace(ctxT(t), sb.ID, "", bytes.NewReader(nil)) },
+	} {
+		if err := call(); !api.IsCode(err, api.CodeInvalidRequest) {
+			t.Errorf("%s: err = %v; want invalid_request", name, err)
 		}
 	}
 }

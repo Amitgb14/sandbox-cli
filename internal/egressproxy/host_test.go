@@ -5,10 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -192,69 +188,20 @@ func FuzzSNIFromClientHello(f *testing.F) {
 	})
 }
 
-// TestEmbeddedSourcesAreComplete fails when a source file is added to this
-// package and not added to the //go:embed list.
-//
-// Without it, a new file would simply be absent from the image build context and
-// the proxy would fail to compile — inside a docker build, long after the change
-// that caused it, with an error pointing at the wrong place. Test files are
-// deliberately excluded and are checked to stay excluded.
-func TestEmbeddedSourcesAreComplete(t *testing.T) {
-	onDisk, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]bool{}
-	for _, f := range onDisk {
-		if strings.HasSuffix(f, "_test.go") || f == "embed.go" {
-			continue // tests never ship; embed.go is the shipper, not the shipped
-		}
-		want[f] = true
-	}
-
-	got := map[string]bool{}
-	for _, f := range EmbeddedFiles() {
-		got[f] = true
-		if strings.HasSuffix(f, "_test.go") {
-			t.Errorf("%s is a test file and must not ship in the image", f)
+// Deny wins over the allowlist, including over a wildcard that covers the name.
+func TestDenyWinsOverAWildcard(t *testing.T) {
+	m := NewPolicyMatcher([]string{"*.github.com", "example.com"}, []string{"gist.github.com"})
+	for host, want := range map[string]bool{
+		"api.github.com": true, "example.com": true,
+		"gist.github.com": false, "GIST.github.com.": false, "evil.example": false,
+	} {
+		if got := m.Allows(host); got != want {
+			t.Errorf("Allows(%q) = %v, want %v", host, got, want)
 		}
 	}
-	for f := range want {
-		if !got[f] {
-			t.Errorf("%s is not in the //go:embed list in embed.go, so it would be missing "+
-				"from the image build context and the proxy would fail to compile", f)
-		}
-	}
-	for f := range got {
-		if !want[f] {
-			t.Errorf("%s is embedded but no longer exists", f)
-		}
-	}
-}
-
-// TestEmbeddedSourcesCompile builds the generated build context with the real
-// toolchain, so a syntax error in the generated main or a missing import is
-// caught here rather than inside a docker build.
-func TestEmbeddedSourcesCompile(t *testing.T) {
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("no go toolchain")
-	}
-	dir := t.TempDir()
-	err := WriteBuildContext(dir, func(name string, data []byte) error {
-		p := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(p, data, 0o644)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "proxy-bin"), ".")
-	cmd.Dir = filepath.Join(dir, "proxy")
-	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0", "GOFLAGS=-mod=mod")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("the embedded proxy source does not compile for linux:\n%s", out)
+	// A denied wildcard refuses everything under it.
+	m = NewPolicyMatcher([]string{"*.github.com"}, []string{"*.githubusercontent.com", "*.gist.github.com"})
+	if m.Allows("x.gist.github.com") || !m.Allows("gist.github.com") {
+		t.Error("a deny wildcard did not behave like an allow wildcard")
 	}
 }

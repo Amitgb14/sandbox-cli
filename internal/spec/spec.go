@@ -52,6 +52,9 @@ type Policy struct {
 	DefaultCPUs     float64
 	DefaultMemoryMB int
 	DefaultDiskMB   int
+	// DefaultIdleSecs applies when a request names no idle timeout; 0 means a
+	// sandbox never idles out unless asked to.
+	DefaultIdleSecs int
 	Limits          api.Limits
 
 	Network NetworkPolicy
@@ -78,7 +81,8 @@ func DefaultPolicy() Policy {
 		DefaultCPUs:     1,
 		DefaultMemoryMB: 1024,
 		DefaultDiskMB:   10240,
-		Limits:          api.Limits{MaxCPUs: 8, MaxMemoryMB: 16384, MaxDiskMB: 102400},
+		DefaultIdleSecs: 1800,
+		Limits:          api.Limits{MaxCPUs: 8, MaxMemoryMB: 16384, MaxDiskMB: 102400, MaxIdleTimeoutSecs: 7 * 24 * 3600},
 		Network: NetworkPolicy{
 			Default:  api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: policy.BaselineEgress()},
 			Ceiling:  api.NetworkAllowlist,
@@ -109,6 +113,30 @@ func (p Policy) Validate() error {
 		return fmt.Errorf("policy: default resources must be positive and within the limits")
 	}
 	return nil
+}
+
+// FitTo narrows the policy to what a backend can enforce, and says what it
+// changed. A server whose backend cannot filter egress offers mode none and
+// nothing else: advertising allowlist there would hand out sandboxes that are
+// either open or offline while claiming to be filtered. The notes are for the
+// operator; the narrowed policy is what clients see.
+func (p Policy) FitTo(caps map[string]bool) (Policy, []string) {
+	var notes []string
+	n := p.Network
+	if !caps[api.CapEgressAllowlist] && api.NetworkRank(n.Ceiling) > api.NetworkRank(api.NetworkNone) {
+		notes = append(notes, "this backend cannot enforce an egress allowlist: sandboxes get no network (mode none)")
+		n.Ceiling = api.NetworkNone
+		n.Default = api.NetworkPolicy{Mode: api.NetworkNone}
+		n.MayAllow = nil
+	} else if !caps[api.CapEgressOpen] && n.Ceiling == api.NetworkOpen {
+		notes = append(notes, "this backend cannot offer open egress: the ceiling is allowlist")
+		n.Ceiling = api.NetworkAllowlist
+		if n.Default.Mode == api.NetworkOpen {
+			n.Default = api.NetworkPolicy{Mode: api.NetworkNone}
+		}
+	}
+	p.Network = n
+	return p, notes
 }
 
 // Ceiling reports the policy the way /v1/capabilities shows it.
@@ -178,6 +206,17 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 		return backend.Spec{}, invalid("memory_mb %d: must be between 0 and %d", s.MemoryMB, pol.Limits.MaxMemoryMB)
 	case s.DiskMB < 0 || s.DiskMB > pol.Limits.MaxDiskMB:
 		return backend.Spec{}, invalid("disk_mb %d: must be between 0 and %d", s.DiskMB, pol.Limits.MaxDiskMB)
+	}
+
+	switch idle := req.IdleTimeoutSecs; {
+	case idle < 0:
+		return backend.Spec{}, invalid("idle_timeout_secs must not be negative")
+	case idle == 0:
+		s.IdleTimeoutSecs = pol.DefaultIdleSecs
+	case pol.Limits.MaxIdleTimeoutSecs > 0 && idle > pol.Limits.MaxIdleTimeoutSecs:
+		return backend.Spec{}, invalid("idle_timeout_secs %d: at most %d", idle, pol.Limits.MaxIdleTimeoutSecs)
+	default:
+		s.IdleTimeoutSecs = idle
 	}
 
 	env, err := ResolveEnv(req.Env)

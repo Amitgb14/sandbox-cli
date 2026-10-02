@@ -26,8 +26,11 @@ const maxSymlinkHops = 40
 // UnpackStats reports what an unpack skipped, so a caller can say so.
 type UnpackStats struct {
 	Files, Dirs, Symlinks, Hardlinks int
-	SkippedDevices                   int   // device nodes and FIFOs: never created
-	Bytes                            int64 // regular file content written
+	SkippedDevices                   int // device nodes and FIFOs: never created
+	// UnmappedOwners counts entries whose owner could not be set because this
+	// process runs as root in a user namespace that has no mapping for it.
+	UnmappedOwners int
+	Bytes          int64 // regular file content written
 }
 
 // Unpack applies one layer (a tar stream, gzip-compressed or not) on top of
@@ -171,7 +174,13 @@ func Unpack(root string, layer io.Reader, maxBytes int64, st *UnpackStats) error
 
 		if isRoot {
 			if err := os.Lchown(target, h.Uid, h.Gid); err != nil {
-				return err
+				// EINVAL is a uid or gid this user namespace cannot map. On a real
+				// host as root it does not happen; inside a namespace the file
+				// keeps the namespace's root as owner, and the count says so.
+				if !errors.Is(err, errInvalid) {
+					return err
+				}
+				st.UnmappedOwners++
 			}
 		}
 		if err := os.Chmod(target, mode); err != nil {

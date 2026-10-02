@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,6 +65,23 @@ func NewClient(endpoint, token string) (*Client, error) {
 		return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port] or unix:///path", endpoint)
 	}
 	return &Client{base: strings.TrimSuffix(u.String(), "/"), token: token, http: &http.Client{}}, nil
+}
+
+// NewClientWithCA is NewClient for an https endpoint whose certificate is
+// signed by a private CA — the usual self-hosted case. caPEM holds the CA
+// certificates to trust, in addition to none of the system's: a self-hosted
+// endpoint is reached by its own CA only.
+func NewClientWithCA(endpoint, token string, caPEM []byte) (*Client, error) {
+	c, err := NewClient(endpoint, token)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("no certificates found in the CA file")
+	}
+	c.http = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}
+	return c, nil
 }
 
 // NewClientWithHTTP is NewClient with a caller-supplied http.Client, for tests
@@ -229,6 +248,30 @@ func (c *Client) WriteStdin(ctx context.Context, ref string, pid int, data []byt
 // Signal delivers a signal (one of Signals) to a process.
 func (c *Client) Signal(ctx context.Context, ref string, pid int, signal string) error {
 	return c.json(ctx, http.MethodPost, sbx(ref)+"/processes/"+strconv.Itoa(pid)+"/signal", SignalRequest{Signal: signal}, nil)
+}
+
+// PutWorkspace clones a git bundle into the sandbox's empty /workspace and
+// checks out branch.
+func (c *Client) PutWorkspace(ctx context.Context, ref, branch string, bundle io.Reader) error {
+	resp, err := c.do(ctx, http.MethodPost, sbx(ref)+"/workspace", url.Values{"branch": {branch}},
+		bundle, "application/octet-stream")
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
+// GetWorkspaceBundle streams a git bundle of base..branch from the sandbox's
+// /workspace into w. The bundle is untrusted: verify it before fetching from it.
+func (c *Client) GetWorkspaceBundle(ctx context.Context, ref, base, branch string, w io.Writer) error {
+	resp, err := c.do(ctx, http.MethodGet, sbx(ref)+"/workspace/bundle",
+		url.Values{"base": {base}, "branch": {branch}}, nil, "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = io.Copy(w, resp.Body)
+	return err
 }
 
 // ReadFile returns a guest file's contents.

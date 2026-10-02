@@ -23,7 +23,15 @@ func serveFake(t *testing.T, pol spec.Policy, caps ...string) *api.Client {
 // The suite against the fake, with the default policy and every capability the
 // fake can pretend to have.
 func TestFakeDefaultPolicy(t *testing.T) {
-	Run(t, serveFake(t, spec.DefaultPolicy(), api.CapNetworkPolicyUpdate))
+	Run(t, serveFake(t, spec.DefaultPolicy(), api.CapNetworkPolicyUpdate, api.CapEgressAllowlist))
+}
+
+// An endpoint that cannot filter egress — a backend without host networking.
+// Its policy is narrowed to none (spec.FitTo), and the suite's network tests
+// must hold there too: every allowlist request refused, nothing served open.
+func TestFakeNoEgress(t *testing.T) {
+	pol, _ := spec.DefaultPolicy().FitTo(map[string]bool{})
+	Run(t, serveFake(t, pol))
 }
 
 // The same suite against an endpoint that cannot update network policy and
@@ -32,7 +40,7 @@ func TestFakeDefaultPolicy(t *testing.T) {
 func TestFakeNarrowPolicy(t *testing.T) {
 	pol := spec.DefaultPolicy()
 	pol.Network.MayAllow = nil
-	Run(t, serveFake(t, pol))
+	Run(t, serveFake(t, pol, api.CapEgressAllowlist))
 }
 
 // TestEndpoint runs the suite against a real sandboxd, when one is named. It is
@@ -47,6 +55,13 @@ func TestEndpoint(t *testing.T) {
 		t.Skip("SANDBOX_CONFORMANCE_ENDPOINT not set")
 	}
 	c, err := api.NewClient(endpoint, os.Getenv("SANDBOX_CONFORMANCE_TOKEN"))
+	if ca := os.Getenv("SANDBOX_CONFORMANCE_CA"); ca != "" {
+		pem, rerr := os.ReadFile(ca)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		c, err = api.NewClientWithCA(endpoint, os.Getenv("SANDBOX_CONFORMANCE_TOKEN"), pem)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

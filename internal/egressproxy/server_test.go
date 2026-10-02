@@ -258,3 +258,34 @@ func TestSilentConnectionIsTimedOut(t *testing.T) {
 		t.Error("the server never closed a silent connection; it would hold a goroutine and an fd")
 	}
 }
+
+// One proxy on the host serves every sandbox: the allowlist is chosen by the
+// connecting address, and an address no sandbox holds gets no allowlist at all.
+func TestMatchForPicksThePolicyByAddress(t *testing.T) {
+	for name, tc := range map[string]struct {
+		pick    *Matcher
+		allowed bool
+	}{
+		"this sandbox's list allows it": {NewMatcher([]string{"github.com"}), true},
+		"this sandbox's list does not":  {NewMatcher([]string{"example.com"}), false},
+		"no sandbox holds the address":  {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, l, log, mu := testServer(t, []string{"github.com"}) // Match alone would allow
+			var asked net.Addr
+			s.MatchFor = func(remote net.Addr) *Matcher { asked = remote; return tc.pick }
+			c, err := net.Dial("tcp", l.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			speak(t, c, "github.com")
+			if d := awaitDecision(t, mu, log); d.Allowed != tc.allowed {
+				t.Fatalf("decision %+v; want allowed=%v", d, tc.allowed)
+			}
+			if asked == nil {
+				t.Fatal("MatchFor was not consulted")
+			}
+		})
+	}
+}

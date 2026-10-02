@@ -98,6 +98,9 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 		os.Remove(tmp)
 		return nil, err
 	}
+	if res.Stats.UnmappedOwners > 0 {
+		res.OwnedByHost = true
+	}
 	return res, os.Rename(tmp, out)
 }
 

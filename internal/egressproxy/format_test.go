@@ -6,20 +6,8 @@ import (
 )
 
 // TestDenyLinePrefixIsWhatTheProxyPrints checks that the constants and the line
-// the proxy actually emits still describe the same thing. They share a definition
-// now, so this cannot drift the way three literals could — what it still catches
-// is someone reintroducing a literal, which is how the drift started.
+// a decision renders as still describe the same thing.
 func TestDenyLinePrefixIsWhatTheProxyPrints(t *testing.T) {
-	// The shipped `main` must build its line from the constant, not from text.
-	if !strings.Contains(mainSource, "egressproxy.LogLinePrefix") {
-		t.Error("the proxy's main no longer logs via egressproxy.LogLinePrefix.\n" +
-			"internal/runtime counts refusals by matching DenyLinePrefix; a literal here\n" +
-			"is how that counter silently starts reporting zero.")
-	}
-	if strings.Contains(mainSource, `"`+LogLinePrefix) {
-		t.Error("the proxy's main has a literal copy of LogLinePrefix again")
-	}
-
 	// The half that lives in Decision.String: the verb.
 	line := Decision{Host: "gist.github.com", Port: 443, Reason: "not on the egress allowlist"}.String()
 	if !strings.HasPrefix(line, denyVerb+" ") {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -136,6 +137,7 @@ type Puller struct {
 	PlainHTTP map[string]bool
 	OS, Arch  string // platform; default linux/runtime.GOARCH
 	MaxBlob   int64  // per blob; default 8 GiB
+	Logf      func(format string, a ...any)
 
 	mu     sync.Mutex
 	tokens map[string]string // repo -> bearer token
@@ -247,6 +249,20 @@ var accept = strings.Join([]string{mtOCIIndex, mtDockerList, mtOCIManifest, mtDo
 func (p *Puller) fetchManifest(ctx context.Context, r Ref, reference string) (body []byte, mediaType, digest string, err error) {
 	resp, err := p.get(ctx, r, p.base(r)+"/manifests/"+url.PathEscape(reference), accept)
 	if err != nil {
+		// Offline — the registry could not be reached at all, as opposed to
+		// refusing — falls back to the manifest last fetched for this reference.
+		// It was verified when it was fetched; what may be stale is which
+		// manifest a mutable tag points at, and the log says so.
+		var ne net.Error
+		if errors.As(err, &ne) || isDialError(err) {
+			if b, mt, ok := p.cachedManifest(r, reference); ok {
+				if p.Logf != nil {
+					p.Logf("registry %s unreachable; using the manifest cached for %s:%s", r.Registry, r.Repo, reference)
+				}
+				sum := sha256.Sum256(b)
+				return b, mt, "sha256:" + hex.EncodeToString(sum[:]), nil
+			}
+		}
 		return nil, "", "", err
 	}
 	defer resp.Body.Close()
@@ -259,7 +275,49 @@ func (p *Puller) fetchManifest(ctx context.Context, r Ref, reference string) (bo
 	}
 	sum := sha256.Sum256(body)
 	mt, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
-	return body, strings.TrimSpace(mt), "sha256:" + hex.EncodeToString(sum[:]), nil
+	mt = strings.TrimSpace(mt)
+	p.cacheManifest(r, reference, body, mt)
+	return body, mt, "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func (p *Puller) manifestPath(r Ref, reference string) string {
+	k := sha256.Sum256([]byte(r.Registry + "/" + r.Repo + "@" + reference))
+	return filepath.Join(p.Cache, "manifests", hex.EncodeToString(k[:]))
+}
+
+func (p *Puller) cacheManifest(r Ref, reference string, body []byte, mt string) {
+	path := p.manifestPath(r, reference)
+	if os.MkdirAll(filepath.Dir(path), 0o700) != nil {
+		return
+	}
+	b, _ := json.Marshal(struct {
+		MediaType string `json:"media_type"`
+		Body      []byte `json:"body"`
+	}{mt, body})
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, path)
+	}
+}
+
+func (p *Puller) cachedManifest(r Ref, reference string) ([]byte, string, bool) {
+	b, err := os.ReadFile(p.manifestPath(r, reference))
+	if err != nil {
+		return nil, "", false
+	}
+	var m struct {
+		MediaType string `json:"media_type"`
+		Body      []byte `json:"body"`
+	}
+	if json.Unmarshal(b, &m) != nil || len(m.Body) == 0 {
+		return nil, "", false
+	}
+	return m.Body, m.MediaType, true
+}
+
+func isDialError(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
 }
 
 // blob downloads a blob into the cache unless it is already there, verifying

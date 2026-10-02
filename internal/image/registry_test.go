@@ -232,3 +232,28 @@ func TestBuildRootFS(t *testing.T) {
 		t.Fatalf("a changed guest agent reused the old disk: %v", err)
 	}
 }
+
+// Offline, a pull falls back to the manifest last fetched for the reference —
+// the blobs are already cached and were verified when they arrived.
+func TestPullFallsBackToTheCachedManifestWhenOffline(t *testing.T) {
+	r, digest, _ := newRegistry(t, "amd64")
+	var host string
+	srv := httptest.NewServer(r.handler(&host))
+	host = strings.TrimPrefix(srv.URL, "http://")
+	p := &Puller{Cache: t.TempDir(), PlainHTTP: map[string]bool{host: true}, Arch: "amd64"}
+	if _, err := p.Pull(context.Background(), host+"/team/app:1.0"); err != nil {
+		t.Fatal(err)
+	}
+	srv.Close() // the registry is gone
+	got, err := p.Pull(context.Background(), host+"/team/app:1.0")
+	if err != nil {
+		t.Fatalf("offline pull: %v", err)
+	}
+	if got.Digest != digest {
+		t.Errorf("offline digest %s, want %s", got.Digest, digest)
+	}
+	// A reference never fetched has nothing to fall back to.
+	if _, err := p.Pull(context.Background(), host+"/team/app:2.0"); err == nil {
+		t.Error("an unseen reference resolved offline")
+	}
+}

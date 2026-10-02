@@ -86,6 +86,7 @@ internal/
   guestproto/   host <-> guest agent protocol; the host treats the guest as hostile
   vsock/        guest vsock listener, host dial through the VMM's bridge
   image/        OCI pull, safe unpack (paths resolved inside the root), ext4 root disks
+packaging/systemd/      sandboxd unit and an example operator policy (docs/self-hosting.md)
   workspace/    clone-in, bring-back
   state/ cli/ version/
 ```

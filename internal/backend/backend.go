@@ -32,6 +32,9 @@ type Spec struct {
 	DiskMB   int
 	Env      map[string]string
 	Network  api.NetworkPolicy
+	// IdleTimeoutSecs is enforced by the server, not the backend; carried here
+	// so the resolved spec is the whole decision.
+	IdleTimeoutSecs int
 }
 
 // ProcSpec is one process to start inside a sandbox. Env is merged over the

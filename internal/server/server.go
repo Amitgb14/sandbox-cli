@@ -58,14 +58,23 @@ type Server struct {
 
 	mu        sync.Mutex
 	sandboxes map[string]*record // id -> record
+	reaper    sync.Once
 }
 
 type record struct {
-	mu      sync.Mutex
-	sbx     api.Sandbox
-	env     map[string]string
-	procs   map[int]*procRecord
-	nextPID int
+	mu         sync.Mutex
+	sbx        api.Sandbox
+	env        map[string]string
+	procs      map[int]*procRecord
+	nextPID    int
+	lastActive time.Time
+}
+
+// touch records activity: any request naming the sandbox keeps it alive.
+func (r *record) touch(now time.Time) {
+	r.mu.Lock()
+	r.lastActive = now
+	r.mu.Unlock()
 }
 
 type procRecord struct {
@@ -109,6 +118,9 @@ func (s *Server) Handler() http.Handler {
 	route("PUT /v1/sandboxes/{ref}/files", true, s.writeFile)
 	route("DELETE /v1/sandboxes/{ref}/files", false, s.removeFile)
 	route("GET /v1/sandboxes/{ref}/dirs", false, s.listDir)
+	route("POST /v1/sandboxes/{ref}/workspace", true, s.putWorkspace)
+	route("GET /v1/sandboxes/{ref}/workspace/bundle", false, s.getWorkspaceBundle)
+	s.reaper.Do(func() { go s.reapIdle() })
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")
 	})
@@ -177,6 +189,9 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		writeSpecErr(w, err)
 		return
 	}
+	if !s.canEnforce(w, bs.Network) {
+		return
+	}
 
 	// The name is claimed before the backend is asked, under the lock, so two
 	// concurrent creates with one name cannot both pass a check-then-create.
@@ -185,9 +200,11 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			ID: id, Name: req.Name, State: api.StatePending, Image: bs.Image,
 			CPUs: bs.CPUs, MemoryMB: bs.MemoryMB, DiskMB: bs.DiskMB,
 			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: s.now().UTC(),
+			IdleTimeoutSecs: bs.IdleTimeoutSecs,
 		},
-		env:   bs.Env,
-		procs: map[int]*procRecord{},
+		env:        bs.Env,
+		procs:      map[int]*procRecord{},
+		lastActive: s.now(),
 	}
 	s.mu.Lock()
 	if req.Name != "" {
@@ -242,6 +259,14 @@ func (s *Server) listSandboxes(w http.ResponseWriter, r *http.Request) {
 // sandboxes. A name prefers the live sandbox, then the newest terminated one, so
 // that deleting by name twice is still idempotent.
 func (s *Server) lookup(ref string) (*record, bool) {
+	rec, ok := s.find(ref)
+	if ok {
+		rec.touch(s.now())
+	}
+	return rec, ok
+}
+
+func (s *Server) find(ref string) (*record, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if rec, ok := s.sandboxes[ref]; ok {
@@ -310,6 +335,9 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		writeSpecErr(w, err)
 		return
 	}
+	if !s.canEnforce(w, pol) {
+		return
+	}
 	id := rec.snapshot().ID
 	if err := s.Backend.UpdateNetwork(r.Context(), id, pol); err != nil {
 		writeBackendErr(w, err)
@@ -357,6 +385,66 @@ func (s *Server) forgetOldTerminated() {
 	sort.Slice(dead, func(i, j int) bool { return dead[i].CreatedAt.Before(dead[j].CreatedAt) })
 	for _, sb := range dead[:len(dead)-keepTerminated] {
 		delete(s.sandboxes, sb.ID)
+	}
+}
+
+// canEnforce refuses a network policy the backend cannot enforce. spec has
+// already applied the server's policy; this is the second check, against the
+// backend itself, so that a misconfigured policy fails closed: a request for an
+// allowlist on a backend without host networking is refused, never served as a
+// sandbox that is quietly open or quietly offline.
+func (s *Server) canEnforce(w http.ResponseWriter, p api.NetworkPolicy) bool {
+	caps := s.Backend.Capabilities()
+	switch {
+	case p.Mode == api.NetworkAllowlist && !caps[api.CapEgressAllowlist]:
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot enforce an egress allowlist")
+		return false
+	case p.Mode == api.NetworkOpen && !caps[api.CapEgressOpen]:
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint does not offer open egress")
+		return false
+	}
+	return true
+}
+
+// reapIdle terminates sandboxes that have been idle past their timeout: no
+// request has named them and no process is running in them. A running process
+// is activity even with nobody watching — a build left to finish is not idle.
+func (s *Server) reapIdle() {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for range t.C {
+		now := s.now()
+		s.mu.Lock()
+		var due []*record
+		for _, rec := range s.sandboxes {
+			rec.mu.Lock()
+			idle := rec.sbx.IdleTimeoutSecs
+			live := rec.sbx.State == api.StateRunning
+			busy := false
+			for _, pr := range rec.procs {
+				busy = busy || pr.info.State == api.ProcessRunning
+			}
+			if busy {
+				rec.lastActive = now
+			}
+			if live && idle > 0 && now.Sub(rec.lastActive) >= time.Duration(idle)*time.Second {
+				due = append(due, rec)
+			}
+			rec.mu.Unlock()
+		}
+		s.mu.Unlock()
+		for _, rec := range due {
+			id := rec.snapshot().ID
+			if err := s.Backend.Terminate(context.Background(), id); err != nil {
+				continue
+			}
+			rec.mu.Lock()
+			rec.sbx.State = api.StateTerminated
+			rec.mu.Unlock()
+		}
+		if len(due) > 0 {
+			s.forgetOldTerminated()
+		}
 	}
 }
 
