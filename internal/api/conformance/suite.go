@@ -1,0 +1,571 @@
+// Package conformance is the definition of "the same API in every mode".
+//
+// Run takes a client and nothing else. It does not know whether the endpoint is
+// the in-process fake, a Mac running the local backend, a self-hosted Linux
+// machine or the cloud — and it must not: a test that needs to know is a test of
+// one backend, not of the API. Where endpoints legitimately differ, a test asks
+// the endpoint's capabilities and skips with the reason; it never asks which
+// mode it is talking to.
+//
+// Commands are limited to echo, cat, printenv, pwd, sleep, true and false — what
+// every Linux image has, with the same behaviour — so the suite runs unchanged
+// against a real VM. A test that needs more belongs in
+// docs/testing/end-to-end.md.
+//
+// Rules for adding a test are in .claude/skills/conformance-test/SKILL.md.
+package conformance
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Amitgb14/sandbox-cli/internal/api"
+)
+
+// Run runs the whole suite against the endpoint behind c.
+func Run(t *testing.T, c *api.Client) {
+	t.Helper()
+	ctx := context.Background()
+	caps, err := c.Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("capabilities: %v", err)
+	}
+	e := &env{c: c, caps: caps}
+	for _, tc := range []struct {
+		name string
+		fn   func(*testing.T, *env)
+	}{
+		{"CapabilitiesDescribeTheEndpoint", testCapabilities},
+		{"SandboxLifecycle", testLifecycle},
+		{"TerminateIsIdempotent", testTerminateIdempotent},
+		{"NamesAreUniqueAmongLiveSandboxes", testNameConflict},
+		{"InvalidNameIsRejected", testInvalidName},
+		{"UnknownSandboxIsNotFound", testUnknownSandbox},
+		{"EnvironmentValuesAreNeverReturned", testEnvValuesHidden},
+		{"ReservedEnvironmentNamesAreRefused", testReservedEnv},
+		{"RunCapturesOutputAndExitCode", testRunOutput},
+		{"RunPassesStdin", testRunStdin},
+		{"RunTimesOut", testRunTimeout},
+		{"RunRejectsAnUnknownCommand", testUnknownCommand},
+		{"RunUsesTheWorkingDirectory", testRunCwd},
+		{"BackgroundProcessStreamsStdinToOutput", testBackgroundProcess},
+		{"SignalEndsAProcess", testSignal},
+		{"LateFollowerSeesOutputFromTheStart", testLateFollower},
+		{"FilesRoundTrip", testFilesRoundTrip},
+		{"FilesAndProcessesShareOneFilesystem", testFilesShared},
+		{"RemovingANonEmptyDirectoryConflicts", testRemoveNonEmpty},
+		{"PathTraversalIsRejected", testPathTraversal},
+		{"TerminatedSandboxRefusesWork", testTerminatedRefuses},
+		{"NetworkDefaultApplies", testNetworkDefault},
+		{"NetworkAboveCeilingIsRefused", testNetworkAboveCeiling},
+		{"NetworkEmptyAllowlistIsRefused", testNetworkEmptyAllowlist},
+		{"NetworkDenyIsKeptAndNormalized", testNetworkDeny},
+		{"NetworkAllowOutsideMayAllowIsRefused", testNetworkMayAllow},
+		{"NetworkUpdateFollowsTheSameRules", testNetworkUpdate},
+	} {
+		t.Run(tc.name, func(t *testing.T) { tc.fn(t, e) })
+	}
+}
+
+type env struct {
+	c    *api.Client
+	caps api.Capabilities
+}
+
+func ctxT(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// uniqueName is a sandbox name no other run of the suite will use, so two runs
+// can share an endpoint.
+func uniqueName(prefix string) string {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return prefix + "-" + hex.EncodeToString(b[:])
+}
+
+// newSandbox creates a sandbox owned by the test, terminated when it ends —
+// failed or not.
+func (e *env) newSandbox(t *testing.T, req api.CreateSandboxRequest) api.Sandbox {
+	t.Helper()
+	sb, err := e.c.CreateSandbox(ctxT(t), req)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = e.c.TerminateSandbox(context.Background(), sb.ID) })
+	return sb
+}
+
+func wantCode(t *testing.T, err error, code string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("succeeded; want error %q", code)
+	}
+	if !api.IsCode(err, code) {
+		t.Fatalf("error = %v; want code %q", err, code)
+	}
+}
+
+func (e *env) run(t *testing.T, ref string, req api.RunRequest) api.RunResult {
+	t.Helper()
+	res, err := e.c.Run(ctxT(t), ref, req)
+	if err != nil {
+		t.Fatalf("run %v: %v", req.Argv, err)
+	}
+	return res
+}
+
+// follow collects a process's whole output and its exit code.
+func (e *env) follow(t *testing.T, ref string, pid int) (string, int) {
+	t.Helper()
+	var out bytes.Buffer
+	code := -999
+	err := e.c.FollowOutput(ctxT(t), ref, pid, func(ev api.OutputEvent) error {
+		if ev.ExitCode != nil {
+			code = *ev.ExitCode
+		}
+		out.Write(ev.Data)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("follow: %v", err)
+	}
+	if code == -999 {
+		t.Fatal("output stream ended without an exit code")
+	}
+	return out.String(), code
+}
+
+// --- tests -------------------------------------------------------------------
+
+func testCapabilities(t *testing.T, e *env) {
+	c := e.caps
+	if c.APIVersion != api.Version {
+		t.Errorf("api_version = %q, want %q", c.APIVersion, api.Version)
+	}
+	if c.Backend == "" {
+		t.Error("backend is empty")
+	}
+	if c.Limits.MaxCPUs <= 0 || c.Limits.MaxMemoryMB <= 0 || c.Limits.MaxDiskMB <= 0 {
+		t.Errorf("limits must be positive: %+v", c.Limits)
+	}
+	if api.NetworkRank(c.Network.Ceiling) < 0 {
+		t.Errorf("network ceiling %q is not a mode", c.Network.Ceiling)
+	}
+	if api.NetworkRank(c.Network.Default.Mode) > api.NetworkRank(c.Network.Ceiling) {
+		t.Errorf("default network mode %q is above the ceiling %q", c.Network.Default.Mode, c.Network.Ceiling)
+	}
+}
+
+func testLifecycle(t *testing.T, e *env) {
+	name := uniqueName("life")
+	sb := e.newSandbox(t, api.CreateSandboxRequest{Name: name})
+	if sb.State != api.StateRunning {
+		t.Fatalf("created sandbox is %q, want running", sb.State)
+	}
+	if !strings.HasPrefix(sb.ID, "sbx_") {
+		t.Errorf("id %q does not look like a sandbox id", sb.ID)
+	}
+	ctx := ctxT(t)
+	for _, ref := range []string{sb.ID, name} {
+		got, err := e.c.Sandbox(ctx, ref)
+		if err != nil || got.ID != sb.ID {
+			t.Fatalf("get %q = %+v, %v; want %s", ref, got, err, sb.ID)
+		}
+	}
+	list, err := e.c.Sandboxes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, s := range list {
+		found = found || s.ID == sb.ID
+	}
+	if !found {
+		t.Error("created sandbox is not listed")
+	}
+	if err := e.c.TerminateSandbox(ctx, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.c.Sandbox(ctx, sb.ID)
+	if err != nil || got.State != api.StateTerminated {
+		t.Fatalf("after terminate: %+v, %v; want terminated", got, err)
+	}
+}
+
+func testTerminateIdempotent(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	for i := 0; i < 2; i++ {
+		if err := e.c.TerminateSandbox(ctx, sb.ID); err != nil {
+			t.Fatalf("terminate #%d: %v", i+1, err)
+		}
+	}
+}
+
+func testNameConflict(t *testing.T, e *env) {
+	name := uniqueName("dup")
+	first := e.newSandbox(t, api.CreateSandboxRequest{Name: name})
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Name: name})
+	wantCode(t, err, api.CodeConflict)
+	// Once the first is gone, the name is free again.
+	if err := e.c.TerminateSandbox(ctxT(t), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	second := e.newSandbox(t, api.CreateSandboxRequest{Name: name})
+	if second.ID == first.ID {
+		t.Fatal("reusing a name returned the terminated sandbox")
+	}
+	got, err := e.c.Sandbox(ctxT(t), name)
+	if err != nil || got.ID != second.ID {
+		t.Fatalf("name resolves to %+v, %v; want the live sandbox %s", got, err, second.ID)
+	}
+}
+
+func testInvalidName(t *testing.T, e *env) {
+	for _, name := range []string{"Upper", "has space", "sbx_lookslikeanid", "-lead", strings.Repeat("a", 64)} {
+		_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Name: name})
+		if !api.IsCode(err, api.CodeInvalidRequest) {
+			t.Errorf("name %q: error = %v; want invalid_request", name, err)
+		}
+	}
+}
+
+func testUnknownSandbox(t *testing.T, e *env) {
+	_, err := e.c.Sandbox(ctxT(t), uniqueName("nobody"))
+	wantCode(t, err, api.CodeNotFound)
+	_, err = e.c.Run(ctxT(t), "sbx_0000000000000000", api.RunRequest{Argv: []string{"true"}})
+	wantCode(t, err, api.CodeNotFound)
+}
+
+func testEnvValuesHidden(t *testing.T, e *env) {
+	const secret = "s3cr3t-value-that-must-not-echo"
+	sb := e.newSandbox(t, api.CreateSandboxRequest{Env: map[string]string{"API_TOKEN": secret}})
+	raw, _ := json.Marshal(sb)
+	if bytes.Contains(raw, []byte(secret)) {
+		t.Fatalf("create response contains the value: %s", raw)
+	}
+	if len(sb.EnvNames) != 1 || sb.EnvNames[0] != "API_TOKEN" {
+		t.Errorf("env_names = %v, want [API_TOKEN]", sb.EnvNames)
+	}
+	got, _ := e.c.Sandbox(ctxT(t), sb.ID)
+	raw, _ = json.Marshal(got)
+	if bytes.Contains(raw, []byte(secret)) {
+		t.Fatalf("get response contains the value: %s", raw)
+	}
+	// It is hidden from the API, not from the sandbox.
+	res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"printenv", "API_TOKEN"}})
+	if strings.TrimSpace(string(res.Stdout)) != secret {
+		t.Errorf("the sandbox does not see the variable: %q", res.Stdout)
+	}
+}
+
+func testReservedEnv(t *testing.T, e *env) {
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Env: map[string]string{"LD_PRELOAD": "/x.so"}})
+	wantCode(t, err, api.CodeRefused)
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	_, err = e.c.Run(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"true"}, Env: map[string]string{"BASH_ENV": "/x"}})
+	wantCode(t, err, api.CodeRefused)
+}
+
+func testRunOutput(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"echo", "hello", "world"}})
+	if res.ExitCode != 0 || string(res.Stdout) != "hello world\n" || res.TimedOut || res.Truncated {
+		t.Errorf("echo: %+v", res)
+	}
+	res = e.run(t, sb.ID, api.RunRequest{Argv: []string{"false"}})
+	if res.ExitCode != 1 {
+		t.Errorf("false exited %d, want 1", res.ExitCode)
+	}
+}
+
+func testRunStdin(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	in := []byte("line one\nline two\n")
+	res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"cat"}, Stdin: in})
+	if !bytes.Equal(res.Stdout, in) || res.ExitCode != 0 {
+		t.Errorf("cat stdin: stdout=%q exit=%d", res.Stdout, res.ExitCode)
+	}
+}
+
+func testRunTimeout(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	start := time.Now()
+	res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"sleep", "30"}, TimeoutSecs: 1})
+	if !res.TimedOut || res.ExitCode != -1 {
+		t.Errorf("result %+v; want timed_out and exit -1", res)
+	}
+	// Generous: this bounds "was killed", not how fast.
+	if d := time.Since(start); d > 15*time.Second {
+		t.Errorf("a 1s timeout took %v", d)
+	}
+}
+
+func testUnknownCommand(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	_, err := e.c.Run(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"definitely-not-a-command-x9"}})
+	wantCode(t, err, api.CodeInvalidRequest)
+	_, err = e.c.Run(ctxT(t), sb.ID, api.RunRequest{})
+	wantCode(t, err, api.CodeInvalidRequest)
+}
+
+func testRunCwd(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"pwd"}, Cwd: "/tmp"})
+	if strings.TrimSpace(string(res.Stdout)) != "/tmp" {
+		t.Errorf("pwd in /tmp printed %q", res.Stdout)
+	}
+	_, err := e.c.Run(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"pwd"}, Cwd: "tmp"})
+	wantCode(t, err, api.CodeInvalidRequest)
+}
+
+func testBackgroundProcess(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	p, err := e.c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"cat"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.State != api.ProcessRunning || p.PID <= 0 {
+		t.Fatalf("started process: %+v", p)
+	}
+	if err := e.c.WriteStdin(ctx, sb.ID, p.PID, []byte("ping\n"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.c.WriteStdin(ctx, sb.ID, p.PID, []byte("pong\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	out, code := e.follow(t, sb.ID, p.PID)
+	if out != "ping\npong\n" || code != 0 {
+		t.Errorf("output %q exit %d", out, code)
+	}
+	got, err := e.c.Process(ctx, sb.ID, p.PID)
+	if err != nil || got.State != api.ProcessExited || got.ExitCode == nil || *got.ExitCode != 0 {
+		t.Errorf("after exit: %+v, %v", got, err)
+	}
+	list, err := e.c.Processes(ctx, sb.ID)
+	if err != nil || len(list) != 1 || list[0].PID != p.PID {
+		t.Errorf("process list: %+v, %v", list, err)
+	}
+	err = e.c.WriteStdin(ctx, sb.ID, p.PID, []byte("late"), false)
+	wantCode(t, err, api.CodeConflict)
+}
+
+func testSignal(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	p, err := e.c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"sleep", "30"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.c.Signal(ctx, sb.ID, p.PID, "TERM"); err != nil {
+		t.Fatal(err)
+	}
+	if _, code := e.follow(t, sb.ID, p.PID); code != 128+15 {
+		t.Errorf("exit after TERM = %d, want %d", code, 128+15)
+	}
+	err = e.c.Signal(ctx, sb.ID, p.PID, "STOP")
+	wantCode(t, err, api.CodeInvalidRequest)
+}
+
+func testLateFollower(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	p, err := e.c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"echo", "early"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait for it to finish before anyone follows.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		got, err := e.c.Process(ctx, sb.ID, p.PID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State == api.ProcessExited {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("echo never exited")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for i := 0; i < 2; i++ { // and a second follower sees the same
+		if out, code := e.follow(t, sb.ID, p.PID); out != "early\n" || code != 0 {
+			t.Errorf("follower %d: output %q exit %d", i+1, out, code)
+		}
+	}
+}
+
+func testFilesRoundTrip(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	data := []byte("package main\n\x00binary-safe\xff\n")
+	if err := e.c.WriteFile(ctx, sb.ID, "/workspace/nested/dir/f.txt", data); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.c.ReadFile(ctx, sb.ID, "/workspace/nested/dir/f.txt")
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read back %q, %v", got, err)
+	}
+	entries, err := e.c.ListDir(ctx, sb.ID, "/workspace/nested/dir")
+	if err != nil || len(entries) != 1 || entries[0].Name != "f.txt" || entries[0].Type != "file" || entries[0].Size != int64(len(data)) {
+		t.Fatalf("listing: %+v, %v", entries, err)
+	}
+	entries, err = e.c.ListDir(ctx, sb.ID, "/workspace/nested")
+	if err != nil || len(entries) != 1 || entries[0].Type != "dir" {
+		t.Fatalf("parent listing: %+v, %v", entries, err)
+	}
+	if err := e.c.RemoveFile(ctx, sb.ID, "/workspace/nested/dir/f.txt"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.c.ReadFile(ctx, sb.ID, "/workspace/nested/dir/f.txt")
+	wantCode(t, err, api.CodeNotFound)
+}
+
+func testFilesShared(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	if err := e.c.WriteFile(ctxT(t), sb.ID, "/workspace/shared.txt", []byte("via the API\n")); err != nil {
+		t.Fatal(err)
+	}
+	res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"cat", "/workspace/shared.txt"}})
+	if string(res.Stdout) != "via the API\n" {
+		t.Errorf("a process read %q", res.Stdout)
+	}
+	res = e.run(t, sb.ID, api.RunRequest{Argv: []string{"cat", "shared.txt"}, Cwd: "/workspace"})
+	if string(res.Stdout) != "via the API\n" {
+		t.Errorf("a relative path from cwd read %q", res.Stdout)
+	}
+}
+
+func testRemoveNonEmpty(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	if err := e.c.WriteFile(ctx, sb.ID, "/workspace/d/x", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, e.c.RemoveFile(ctx, sb.ID, "/workspace/d"), api.CodeConflict)
+}
+
+func testPathTraversal(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	for _, p := range []string{"relative/path", "/workspace/../etc/passwd", "/a/../../b", "", "/x\x00y"} {
+		_, err := e.c.ReadFile(ctx, sb.ID, p)
+		if !api.IsCode(err, api.CodeInvalidRequest) {
+			t.Errorf("read %q: error = %v; want invalid_request", p, err)
+		}
+		if err := e.c.WriteFile(ctx, sb.ID, p, []byte("x")); !api.IsCode(err, api.CodeInvalidRequest) {
+			t.Errorf("write %q: error = %v; want invalid_request", p, err)
+		}
+	}
+}
+
+func testTerminatedRefuses(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	if err := e.c.TerminateSandbox(ctx, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.c.Run(ctx, sb.ID, api.RunRequest{Argv: []string{"true"}})
+	wantCode(t, err, api.CodeConflict)
+	wantCode(t, e.c.WriteFile(ctx, sb.ID, "/workspace/x", []byte("x")), api.CodeConflict)
+}
+
+func testNetworkDefault(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	if sb.Network.Mode != e.caps.Network.Default.Mode {
+		t.Errorf("network mode %q, want the server default %q", sb.Network.Mode, e.caps.Network.Default.Mode)
+	}
+}
+
+func testNetworkAboveCeiling(t *testing.T, e *env) {
+	if e.caps.Network.Ceiling == api.NetworkOpen {
+		t.Skip("ceiling is open: no mode is above it")
+	}
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkOpen}})
+	wantCode(t, err, api.CodeRefused)
+	_, err = e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Network: &api.NetworkPolicy{Mode: "wide-open"}})
+	wantCode(t, err, api.CodeInvalidRequest)
+	// Tightening is always allowed.
+	sb := e.newSandbox(t, api.CreateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	if sb.Network.Mode != api.NetworkNone {
+		t.Errorf("asked for none, got %q", sb.Network.Mode)
+	}
+}
+
+func testNetworkEmptyAllowlist(t *testing.T, e *env) {
+	if api.NetworkRank(e.caps.Network.Ceiling) < api.NetworkRank(api.NetworkAllowlist) {
+		t.Skip("ceiling is below allowlist")
+	}
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{
+		Network: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{}},
+	})
+	wantCode(t, err, api.CodeRefused)
+}
+
+func testNetworkDeny(t *testing.T, e *env) {
+	if api.NetworkRank(e.caps.Network.Ceiling) < api.NetworkRank(api.NetworkAllowlist) {
+		t.Skip("ceiling is below allowlist")
+	}
+	sb := e.newSandbox(t, api.CreateSandboxRequest{
+		Network: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Deny: []string{"Gist.GitHub.com.", "gist.github.com"}},
+	})
+	if len(sb.Network.Deny) != 1 || sb.Network.Deny[0] != "gist.github.com" {
+		t.Errorf("deny = %v; want [gist.github.com], normalized and deduplicated", sb.Network.Deny)
+	}
+	if len(sb.Network.Allow) == 0 {
+		t.Error("an omitted allow list did not inherit the server default")
+	}
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{
+		Network: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Deny: []string{"https://example.com/path"}},
+	})
+	wantCode(t, err, api.CodeInvalidRequest)
+}
+
+func testNetworkMayAllow(t *testing.T, e *env) {
+	if api.NetworkRank(e.caps.Network.Ceiling) < api.NetworkRank(api.NetworkAllowlist) {
+		t.Skip("ceiling is below allowlist")
+	}
+	for _, m := range e.caps.Network.MayAllow {
+		if m == "*" {
+			t.Skip("may_allow is [*]: every name is permitted")
+		}
+	}
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{
+		Network: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"not-permitted.conformance.invalid"}},
+	})
+	wantCode(t, err, api.CodeRefused)
+}
+
+func testNetworkUpdate(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	none := api.UpdateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkNone}}
+	if !e.caps.Has(api.CapNetworkPolicyUpdate) {
+		_, err := e.c.UpdateSandbox(ctx, sb.ID, none)
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	got, err := e.c.UpdateSandbox(ctx, sb.ID, none)
+	if err != nil || got.Network.Mode != api.NetworkNone {
+		t.Fatalf("update to none: %+v, %v", got, err)
+	}
+	if e.caps.Network.Ceiling != api.NetworkOpen {
+		_, err = e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkOpen}})
+		wantCode(t, err, api.CodeRefused)
+		after, _ := e.c.Sandbox(ctx, sb.ID)
+		if after.Network.Mode != api.NetworkNone {
+			t.Errorf("a refused update changed the policy to %q", after.Network.Mode)
+		}
+	}
+}

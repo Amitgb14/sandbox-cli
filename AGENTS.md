@@ -48,6 +48,11 @@ go vet ./...
 go test ./...               # unit tests; no VM, no daemon
 go test -race ./...
 go test ./internal/policy -run TestProjectConfigRefusesPrivilegedKeys   # one test
+go build -o bin/sandboxd ./cmd/sandboxd
+
+# the conformance suite against a running sandboxd
+SANDBOX_CONFORMANCE_ENDPOINT=unix:///run/user/$UID/sandboxd.sock \
+SANDBOX_CONFORMANCE_TOKEN=… go test ./internal/api/conformance -run TestEndpoint -v
 gofmt -w cmd internal
 ```
 
@@ -58,7 +63,11 @@ else without a decision recorded in the plan.
 
 ```
 cmd/sandbox-cli         client
+cmd/sandboxd            the API server
 internal/
+  api/          v1 wire types and client; api/conformance is the suite every endpoint must pass
+  server/       HTTP handlers and the request guard
+  spec/         requests resolved against the server's policy: tighten, never loosen
   policy/       config schema, layering, profiles, trust refusals, reserved env
   hostpath/     refusals for host paths: never /, never home, never an ancestor
   githard/      every host-side git call goes through this
@@ -67,10 +76,9 @@ internal/
   egressproxy/  name-based egress allowlist
   audit/        run log — environment variables by name only
   termsafe/     printing repository-controlled text safely
-  spec/         request validation and resolution (being rebuilt)
   backend/      Backend interface + capabilities; macos/, firecracker/, fake/
   workspace/    clone-in, bring-back
-  state/ session/ cli/ version/
+  state/ cli/ version/
 ```
 
 The skeleton fills in milestone by milestone. A package with only a doc comment

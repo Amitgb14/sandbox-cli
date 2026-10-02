@@ -246,11 +246,34 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     `_old/` for the macOS backend (M6), the only one with bind mounts.
   - `timezone` moved into `spec` with its pure tests. The tests that go through
     `BuildSpec` wait in `_old/` until `spec` builds requests again.
-- **M2 — the API, on paper and in Go.**
-  - `docs/api/v1.md`; `internal/api` types and client.
-  - `backend/fake` and a `sandboxd` serving it.
-  - The **conformance suite**, written against the fake first. This is where
-    "same in three modes" becomes executable.
+- **M2 — the API, on paper and in Go.** *Done.*
+  - `docs/api/v1.md`: capabilities, sandboxes, processes (run, background,
+    output stream, stdin, signals), files, network policy, errors. PTY, tunnels,
+    workspace, idle timeout and snapshots are listed as later additions.
+  - `internal/api`: wire types and a client that speaks HTTP or a unix socket.
+  - `internal/spec`: requests resolved against the server's policy. Tighten,
+    never loosen: mode ceiling, `may_allow` for added names, `deny` always
+    accepted, an empty allowlist refused, reserved environment names refused.
+  - `internal/server`: the handlers, with the Studio daemon's request guard
+    carried over (Host, Origin, constant-time token, content type, body caps).
+    It keeps its own sandbox list, so a reference never reaches the backend
+    unresolved. Process output is capped at 8 MiB per stream, and the cut is
+    reported.
+  - `internal/backend`: the interface. `backend/fake` is in memory with seven
+    builtin commands and runs no host process.
+  - `cmd/sandboxd`: a unix socket at 0600 by default. It refuses a non-loopback
+    address without a token, a token file readable by others, and a second
+    instance on the same socket.
+  - **Conformance suite** (`internal/api/conformance`): 27 tests that know only
+    the client. They run against the fake under two policies, so the
+    capability-gated and `may_allow`-gated branches both execute. They also ran,
+    unchanged, against a real `sandboxd` over its unix socket.
+  - Found by the suite before anything shipped: `allow: []` was collapsing into
+    "the default list" through `omitempty`. The field now keeps null and empty
+    distinct on the wire.
+  - Decided along the way: the skeleton's `backend/oci` and `session` are gone;
+    `backend/macos` and `backend/firecracker` hold their places. The token in a
+    query string returns only with the first WebSocket endpoint.
 - **M3 — measure (no product code merged).**
   - *Firecracker as root:* boot time, memory, the jailer, tap + nftables egress
     through `egressproxy`, vsock throughput for bundles, snapshot and restore
