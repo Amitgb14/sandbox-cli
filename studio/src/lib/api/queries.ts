@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
 import type {
   Agent,
+  AgentState,
   AuditEvent,
   Diff,
   DirEntry,
@@ -44,6 +45,7 @@ export const keys = {
   diff: (repo: string, ref: string) => ["diff", repo, ref] as const,
   fleet: (repo: string) => ["fleet", repo] as const,
   agents: ["agents"] as const,
+  agentStates: ["agent-states"] as const,
 };
 
 // --- reads -------------------------------------------------------------------------
@@ -119,6 +121,15 @@ export function useSnapshots(enabled = true) {
 
 export function useRepos() {
   return useQuery({ queryKey: keys.repos, queryFn: async () => (await apiFetch<{ repos: Repo[] }>("/repos")).repos });
+}
+
+/** Every live agent sandbox and what its agent is doing; reads conversations, so polled gently. */
+export function useAgentStates() {
+  return useQuery({
+    queryKey: keys.agentStates,
+    queryFn: () => apiFetch<AgentState[]>("/agents/state"),
+    refetchInterval: 5_000,
+  });
 }
 
 export function useRuns() {

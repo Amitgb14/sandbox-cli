@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, History, PauseCircle, ShieldCheck } from "lucide-react";
+import { Boxes, Hand, History, PauseCircle, ShieldCheck } from "lucide-react";
 import { PageHeader, SectionHeader } from "@/components/common/page-header";
 import { MetricTile } from "@/components/common/metric-tile";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Labels } from "@/components/sandbox/labels";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useInfo, useRuns, useSandboxes } from "@/lib/api/queries";
+import { useAgentStates, useInfo, useRuns, useSandboxes } from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
 
 /** What is running, what came back, and what this sandboxd can do. */
@@ -16,6 +16,9 @@ export default function DashboardPage() {
   const { data: info } = useInfo();
   const { data: sandboxes, isLoading } = useSandboxes();
   const { data: runs } = useRuns();
+  const { data: agentStates } = useAgentStates();
+  const agentOf = new Map((agentStates ?? []).map((a) => [a.sandbox, a]));
+  const waiting = (agentStates ?? []).filter((a) => a.state === "blocked");
   const live = (sandboxes ?? []).filter((s) => s.state !== "terminated");
   const caps = info?.capabilities;
 
@@ -25,7 +28,8 @@ export default function DashboardPage() {
         title="Dashboard"
         description={info ? `Context ${info.context} · sandbox-cli ${info.version}` : "Connecting to sandboxd…"}
       />
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <MetricTile label="Waiting for you" icon={Hand} value={agentStates ? waiting.length : null} hint="agents quiet at a terminal" />
         <MetricTile label="Running" icon={Boxes} loading={isLoading} value={live.filter((s) => s.state === "running").length} hint="sandboxes on this sandboxd" />
         <MetricTile label="Suspended" icon={PauseCircle} loading={isLoading} value={live.filter((s) => s.state === "suspended").length} hint="memory kept, nothing running" />
         <MetricTile label="Work not back" icon={History} value={runs?.filter((r) => !r.done).length ?? null} hint="runs whose commits have not been brought back" />
@@ -39,6 +43,7 @@ export default function DashboardPage() {
             <TableRow>
               <TableHead>Sandbox</TableHead>
               <TableHead>State</TableHead>
+              <TableHead>Agent</TableHead>
               <TableHead>Labels</TableHead>
               <TableHead className="text-right">Created</TableHead>
             </TableRow>
@@ -52,13 +57,16 @@ export default function DashboardPage() {
                   </Link>
                 </TableCell>
                 <TableCell><StatusBadge outcome={s.state} size="sm" /></TableCell>
+                <TableCell title={agentOf.get(s.id)?.why}>
+                  {agentOf.has(s.id) ? <StatusBadge outcome={agentOf.get(s.id)!.state} size="sm" /> : <span className="text-xs text-muted-foreground">—</span>}
+                </TableCell>
                 <TableCell><Labels labels={s.labels} /></TableCell>
                 <TableCell className="text-right text-xs text-muted-foreground">{formatRelative(s.created_at)}</TableCell>
               </TableRow>
             ))}
             {live.length === 0 && !isLoading && (
               <TableRow>
-                <TableCell colSpan={4} className="text-sm text-muted-foreground">
+                <TableCell colSpan={5} className="text-sm text-muted-foreground">
                   Nothing running. <Link href="/launch" className="underline">Launch something</Link>.
                 </TableCell>
               </TableRow>

@@ -292,3 +292,37 @@ func TestRepoAtHomeIsRefused(t *testing.T) {
 		t.Errorf("a repository under home: %q %v", root, err)
 	}
 }
+
+// The dashboard's "waiting for you": every live agent sandbox with what its
+// agent is doing, decided by the CLI's code, and nothing for a sandbox no
+// agent run started. Behind the token, like every /api route.
+func TestAgentStatesListsAgentSandboxes(t *testing.T) {
+	_, st, c := studioUnderTest(t)
+	ctx := context.Background()
+	agent, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{Labels: map[string]string{"agent": "claude"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.StartProcess(ctx, agent.ID, api.RunRequest{Argv: []string{"sleep", "30"}, Tty: true})
+	if _, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := call(t, st.URL, "GET", "/api/agents/state", "", "", nil); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("without the token: %d", r.StatusCode)
+	}
+	req, _ := http.NewRequest("GET", st.URL+"/api/agents/state", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got []AgentState
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	// No conversation written yet: unknown, with the reason, rather than a guess.
+	if len(got) != 1 || got[0].Sandbox != agent.ID || got[0].Agent != "claude" || got[0].State != "unknown" || got[0].Why == "" {
+		t.Errorf("got %+v", got)
+	}
+}

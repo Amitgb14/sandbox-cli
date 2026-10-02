@@ -96,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	api("GET /api/repos/{id}/fleet", s.fleetState)
 	api("POST /api/repos/{id}/fleet/land", s.fleetLand)
 	api("GET /api/runs", s.listRuns)
+	api("GET /api/agents/state", s.agentStates)
 	api("POST /api/runs", s.launch)
 	api("POST /api/runs/{sandbox}/bring-back", s.bringBack)
 	api("DELETE /api/runs/{sandbox}", s.forgetRun)

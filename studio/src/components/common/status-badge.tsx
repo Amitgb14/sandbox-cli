@@ -2,7 +2,10 @@ import {
   CheckCircle2,
   CircleDashed,
   CircleSlash,
+  CircleHelp,
+  Hand,
   Loader2,
+  Moon,
   PauseCircle,
   ShieldAlert,
   Unplug,
@@ -50,6 +53,19 @@ const VARIANTS: Record<string, { label: string; icon: LucideIcon; className: str
   },
   lost: { label: "Lost", icon: Unplug, className: "text-status-critical border-status-critical/30 bg-status-critical/10" },
   exited: { label: "Exited", icon: CheckCircle2, className: "text-muted-foreground border-border bg-muted/40" },
+  // An agent's state (internal/agentstate). `blocked` is the one that asks for
+  // somebody, so it is the one that stands out.
+  working: {
+    label: "Working",
+    icon: Loader2,
+    className: "text-status-running border-status-running/30 bg-status-running/10",
+    spin: true,
+  },
+  blocked: { label: "Waiting for you", icon: Hand, className: "text-caution border-caution/40 bg-caution/15" },
+  idle: { label: "Idle", icon: Moon, className: "text-muted-foreground border-border bg-muted/40" },
+  done: { label: "Done", icon: CheckCircle2, className: "text-status-good border-status-good/30 bg-status-good/10" },
+  stopped: { label: "Stopped", icon: CircleSlash, className: "text-muted-foreground border-border bg-muted/40" },
+  unknown: { label: "Unknown", icon: CircleHelp, className: "text-muted-foreground border-border" },
 };
 
 export function StatusBadge({

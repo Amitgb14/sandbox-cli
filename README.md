@@ -96,6 +96,17 @@ resumed conversation. A run that changed files is never retried. Put
 `routing: [claude, codex]` in `~/.config/sandbox/config.yaml` to make a chain
 the default; a project's `.sandbox.yaml` cannot set it.
 
+With several agents going, `sandbox-cli agent state` says which one needs
+you. It reports working, blocked (quiet at a terminal, so waiting for an
+answer), idle, done or failed. It decides from the agent's process and its
+conversation, never from what the agent wrote. `agent wait` blocks until an
+agent gets to one of the states you name:
+
+```sh
+sandbox-cli agent state
+sandbox-cli agent wait fix-auth --state blocked --state done --state failed --timeout 30m
+```
+
 ```sh
 sandbox-cli agent fleet run -f fleet.yaml  # one agent per branch, in parallel sandboxes
 sandbox-cli agent fleet status

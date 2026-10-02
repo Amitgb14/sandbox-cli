@@ -44,6 +44,12 @@ func Execute() int {
 			return ee.code // the guest's exit status, mirrored
 		}
 		fmt.Fprintln(os.Stderr, "sandbox-cli: "+err.Error())
+		// An error that is not a failure says so with its own code, after
+		// its message: `agent wait` timing out is 2, not the 1 of a broken run.
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) {
+			return coded.ExitCode()
+		}
 		return 1
 	}
 	return 0

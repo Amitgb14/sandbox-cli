@@ -825,8 +825,8 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     What it offers this design, to port when wanted:
     - ~~a codex transcript reader~~ *ported*: a codex conversation briefs the
       next agent (`agentctx.ParseCodexTranscript`);
-    - the session server's agent states (`working` / `blocked` / `idle`, from
-      the agent's own transcript) and `pane wait`;
+    - ~~agent states~~ *ported*: `agent state`, `agent wait`, and Studio's
+      "waiting for you" (`internal/agentstate`);
     - S3 mirroring of checkpoints, whose trust reasoning
       (`docs/security/open-items.md`) applies unchanged;
     - ~~testing the Python SDK on 3.9 and 3.13 in CI~~ *done*: CI had not run

@@ -33,7 +33,7 @@ func newAgentGroupCmd() *cobra.Command {
 			"  sandbox-cli agent codex --fallback claude -- exec \"fix the failing test\"\n" +
 			"  sandbox-cli agent fleet run -f fleet.yaml",
 	}
-	cmd.AddCommand(newAgentListCmd(), newFleetCmd())
+	cmd.AddCommand(newAgentListCmd(), newAgentStateCmd(), newAgentWaitCmd(), newFleetCmd())
 	for _, name := range agents.InteractiveNames() {
 		d, _ := agents.LookupInteractive(name)
 		cmd.AddCommand(newAgentCmd(d))
