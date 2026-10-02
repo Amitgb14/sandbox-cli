@@ -155,6 +155,17 @@ function fromB64(s: string | null | undefined): Uint8Array {
   return out;
 }
 
+/**
+ * A request body from bytes. Since TypeScript 5.7 a Uint8Array may view a
+ * SharedArrayBuffer, which fetch does not accept as a body, so a plain
+ * Uint8Array no longer type-checks as one. slice() copies into an
+ * ArrayBuffer-backed array, which every TypeScript version accepts; the copy
+ * is bounded by the API's own limits on what one request carries.
+ */
+function asBody(b: Uint8Array): BodyInit {
+  return b.slice();
+}
+
 export interface ClientOptions {
   token?: string;
   /** A fetch implementation; default globalThis.fetch. */
@@ -337,7 +348,7 @@ export class Client {
   async writeStdin(ref: string, pid: number, data: Uint8Array, close = false): Promise<void> {
     await this.request("POST", `${this.sbx(ref)}/processes/${pid}/stdin`, {
       query: close ? { close: "1" } : undefined,
-      body: data,
+      body: asBody(data),
       contentType: "application/octet-stream",
     });
   }
@@ -352,7 +363,7 @@ export class Client {
   }
 
   async writeFile(ref: string, path: string, data: Uint8Array): Promise<void> {
-    await this.request("PUT", this.sbx(ref) + "/files", { query: { path }, body: data, contentType: "application/octet-stream" });
+    await this.request("PUT", this.sbx(ref) + "/files", { query: { path }, body: asBody(data), contentType: "application/octet-stream" });
   }
 
   async removeFile(ref: string, path: string): Promise<void> {
@@ -366,7 +377,7 @@ export class Client {
 
   /** Clone a git bundle (which must carry HEAD) into /workspace as `branch`. */
   async putWorkspace(ref: string, branch: string, bundle: Uint8Array): Promise<void> {
-    await this.request("POST", this.sbx(ref) + "/workspace", { query: { branch }, body: bundle, contentType: "application/octet-stream" });
+    await this.request("POST", this.sbx(ref) + "/workspace", { query: { branch }, body: asBody(bundle), contentType: "application/octet-stream" });
   }
 
   /** base..branch as a git bundle. It comes from the guest: verify it before fetching from it. */
