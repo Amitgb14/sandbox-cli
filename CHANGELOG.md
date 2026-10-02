@@ -40,7 +40,10 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   alive, in a checkpoint, or lost. While a run is attached, its working tree is
   checkpointed to `refs/sandbox/checkpoints/<id>` every five minutes
   (`--checkpoint-every`, `0` to turn it off), without touching the sandbox's
-  index or branches. `recover forget` drops a record. `recover restore`,
+  index or branches. `attach` checkpoints a detached run while you are attached
+  to it, and `agent fleet run` checkpoints every task while it runs; a task the
+  fleet lost names its last checkpoint. `run --detach --checkpoint-every` is
+  refused, since nothing would take them. `recover forget` drops a record. `recover restore`,
   `show` and `repair` are gone: a checkpoint is already a ref you can review
   and merge. `bring-back --name fleet` and `--name checkpoints` are refused,
   because both are namespaces of their own.

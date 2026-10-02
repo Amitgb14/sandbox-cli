@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
@@ -101,4 +102,62 @@ func Checkpoint(ctx context.Context, c *api.Client, s Session) (ref string, fetc
 		return "", false, err
 	}
 	return ref, true, nil
+}
+
+// Checkpoints calls take every interval until the returned stop is called, and
+// stop reports the last failure if no success followed it: one checkpoint that
+// failed while the VM was busy is not worth reporting once a later one worked.
+// taken is called after each checkpoint that fetched something new, so a caller
+// can record it before the next one — a CLI that is itself killed should leave
+// the latest checkpoint findable.
+//
+// One loop serves every caller that stays connected to a run (run, attach and
+// each fleet task), so the rule about which failures surface is the same in
+// all of them. A run nobody is connected to has nothing driving this. That is
+// why `run --detach` refuses --checkpoint-every rather than accepting it and
+// taking none.
+func Checkpoints(ctx context.Context, every time.Duration, take func(context.Context) (string, bool, error), taken func(ref string)) (stop func() error) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		var last error
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				done <- last
+				return
+			case <-t.C:
+			}
+			ref, fetched, err := take(ctx)
+			switch {
+			case err != nil:
+				// A checkpoint cut short by stop is not a failure of the run.
+				if ctx.Err() == nil {
+					last = err
+				}
+			default:
+				last = nil
+				if fetched && taken != nil {
+					taken(ref)
+				}
+			}
+		}
+	}()
+	return func() error {
+		cancel()
+		return <-done
+	}
+}
+
+// SessionCheckpoints checkpoints a session's sandbox every interval, recording
+// each new checkpoint in the session record.
+func SessionCheckpoints(ctx context.Context, c *api.Client, sess *Session, every time.Duration) (stop func() error) {
+	return Checkpoints(ctx, every,
+		func(ctx context.Context) (string, bool, error) { return Checkpoint(ctx, c, *sess) },
+		func(ref string) {
+			sess.Checkpoint, sess.CheckpointAt = ref, time.Now().UTC()
+			_ = sess.Save()
+		})
 }

@@ -80,7 +80,7 @@ export const FEATURES: Feature[] = [
     title: "Checkpoints, and recover",
     group: "workflow",
     flag: "--checkpoint-every",
-    body: "While a run is attached, its working tree is fetched every five minutes through a private index — the agent's branches and staging are untouched. If the CLI, the machine or the VM dies, sandbox-cli recover says where each run's work still is.",
+    body: "While a run is attached — or a fleet task is running — its working tree is fetched every five minutes through a private index; the agent's branches and staging are untouched. If the CLI, the machine or the VM dies, sandbox-cli recover says where each run's work still is.",
     code: "sandbox-cli recover",
     state: "default",
   },

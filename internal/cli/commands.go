@@ -179,12 +179,13 @@ func pickProcess(ctx context.Context, c *api.Client, ref string, pid int) (int, 
 func newAttachCmd() *cobra.Command {
 	var ctxFlag string
 	var pid int
+	var every time.Duration
 	cmd := &cobra.Command{
 		Use:   "attach SANDBOX",
 		Short: "Attach your terminal to a sandbox's process; detaching (closing the terminal) leaves it running",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, _, err := newClient(ctxFlag)
+			c, ctxName, err := newClient(ctxFlag)
 			if err != nil {
 				return err
 			}
@@ -196,7 +197,16 @@ func newAttachCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// A run started with --detach has nothing checkpointing it; while
+			// someone is attached to it, this does.
+			stop := func() error { return nil }
+			if sess, ok := attachedSession(cmd.Context(), c, ctxName, args[0]); ok && every > 0 {
+				stop = workspace.SessionCheckpoints(cmd.Context(), c, sess, every)
+			}
 			code, err := attach(cmd.Context(), c, args[0], p, info.Tty && isTerminal(os.Stdin))
+			if cerr := stop(); cerr != nil {
+				fmt.Fprintf(os.Stderr, "sandbox-cli: checkpoints failed while attached: %v\n", cerr)
+			}
 			if err != nil {
 				return err
 			}
@@ -208,7 +218,28 @@ func newAttachCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
 	cmd.Flags().IntVar(&pid, "pid", 0, "process to attach to (default: the running one)")
+	cmd.Flags().DurationVar(&every, "checkpoint-every", 5*time.Minute, "while attached to a run on a repository, fetch its working tree to refs/sandbox/checkpoints/<id> this often (0: never)")
 	return cmd
+}
+
+// attachedSession finds the run record for the sandbox ref names, if this host
+// started a run on a repository there that has not finished, and the
+// repository is still on disk. ref is resolved through the server's listing
+// first: session records are keyed by ID, and a name is what people type.
+func attachedSession(ctx context.Context, c *api.Client, ctxName, ref string) (*workspace.Session, bool) {
+	sb, err := c.Sandbox(ctx, ref)
+	if err != nil {
+		return nil, false
+	}
+	s, err := workspace.LoadSession(sb.ID)
+	// The same ID on another sandboxd is another sandbox.
+	if err != nil || s.Done || s.Repo == "" || s.Context != ctxName {
+		return nil, false
+	}
+	if _, err := os.Stat(s.Repo); err != nil {
+		return nil, false
+	}
+	return &s, true
 }
 
 func newLogsCmd() *cobra.Command {

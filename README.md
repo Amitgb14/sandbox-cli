@@ -59,8 +59,10 @@ git merge refs/sandbox/sbx_…
 ```
 
 While a run is attached, its working tree is also checkpointed to
-`refs/sandbox/checkpoints/<id>` every five minutes (`--checkpoint-every`). That
-doesn't touch the sandbox's own index or branches. If the CLI is killed, the
+`refs/sandbox/checkpoints/<id>` every five minutes (`--checkpoint-every`). So is
+a detached run while you are attached to it (`sandbox-cli attach`), and each
+fleet task while `agent fleet run` waits on it. That doesn't touch the sandbox's
+own index or branches. If the CLI is killed, the
 machine sleeps or the VM dies, `sandbox-cli recover` says where each run's work
 still is: in a sandbox you can still bring back, in its last checkpoint, or
 nowhere.

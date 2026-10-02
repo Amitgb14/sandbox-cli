@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -35,6 +36,7 @@ func repoHere() (string, error) {
 func newFleetRunCmd() *cobra.Command {
 	var file, ctxFlag, profile string
 	var keep bool
+	var every time.Duration
 	cmd := &cobra.Command{
 		Use:   "run -f fleet.yaml",
 		Short: "Run every task, max_parallel at a time, and bring each one's work back to refs/sandbox/fleet/<branch>",
@@ -57,7 +59,7 @@ func newFleetRunCmd() *cobra.Command {
 				return err
 			}
 			r := &fleet.Runner{Client: c, Repo: repo, Keep: keep, Out: cmd.OutOrStdout(),
-				PersistLogins: cfg.PersistAuthEnabled()}
+				PersistLogins: cfg.PersistAuthEnabled(), CheckpointEvery: every}
 			st, err := r.Run(cmd.Context(), spec)
 			if err != nil {
 				return err
@@ -73,6 +75,7 @@ func newFleetRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
 	cmd.Flags().StringVar(&profile, "profile", "", "dev or prod (prod: no persisted logins)")
 	cmd.Flags().BoolVar(&keep, "keep", false, "keep each task's sandbox when it finishes")
+	cmd.Flags().DurationVar(&every, "checkpoint-every", 5*time.Minute, "fetch each task's working tree to refs/sandbox/checkpoints/<sandbox> this often while it runs (0: never)")
 	return cmd
 }
 
@@ -103,7 +106,13 @@ func newFleetStatusCmd() *cobra.Command {
 			fmt.Fprintf(tw, "BRANCH\tAGENT\tSTATE\tEXIT\tREF\n")
 			for _, b := range names {
 				t := st.Tasks[b]
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", termsafe.Clean(b), t.Agent, t.State, t.ExitCode, t.Ref)
+				// Where the work is: what came back, or else the last
+				// checkpoint of a task that never got that far.
+				ref := t.Ref
+				if ref == "" && t.Checkpoint != "" {
+					ref = t.Checkpoint + " (checkpoint)"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", termsafe.Clean(b), t.Agent, t.State, t.ExitCode, ref)
 			}
 			return tw.Flush()
 		},

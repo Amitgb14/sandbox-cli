@@ -49,8 +49,11 @@ type TaskState struct {
 	State    string `json:"state"`
 	ExitCode int    `json:"exit_code"`     // -1: the agent never ran, or its exit was not seen
 	Ref      string `json:"ref,omitempty"` // empty: nothing new came back
-	Log      string `json:"log"`
-	Error    string `json:"error,omitempty"`
+	// Checkpoint is the latest checkpoint fetched while the task ran: where its
+	// work is if the sandbox died before bring-back.
+	Checkpoint string `json:"checkpoint,omitempty"`
+	Log        string `json:"log"`
+	Error      string `json:"error,omitempty"`
 }
 
 // State is a fleet run's record, kept outside the repository.
@@ -114,7 +117,12 @@ type Runner struct {
 	PersistLogins bool
 	// Keep leaves each task's sandbox running when it finishes.
 	Keep bool
-	Out  io.Writer // progress lines
+	// CheckpointEvery fetches each task's working tree to
+	// refs/sandbox/checkpoints/<sandbox> this often while it runs; zero never.
+	// A fleet runs unattended for longer than anything else, and a VM lost an
+	// hour in should not take the hour with it.
+	CheckpointEvery time.Duration
+	Out             io.Writer // progress lines
 }
 
 var nameUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
@@ -167,11 +175,13 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (*State, error) {
 			slots <- struct{}{}
 			defer func() { <-slots }()
 			ts := st.Tasks[t.Branch]
-			r.runTask(ctx, spec, t, caps, ts, &mu)
+			r.runTask(ctx, spec, t, caps, ts, &mu, func() { _ = st.save(&mu) })
 			mu.Lock()
 			line := fmt.Sprintf("%-24s %-9s exit %d", t.Branch, ts.State, ts.ExitCode)
 			if ts.Ref != "" {
 				line += "  " + ts.Ref
+			} else if ts.State == TaskLost && ts.Checkpoint != "" {
+				line += "  last checkpoint " + ts.Checkpoint
 			}
 			if ts.Error != "" {
 				line += "  (" + ts.Error + ")"
@@ -185,7 +195,7 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (*State, error) {
 	return st, st.save(&mu)
 }
 
-func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabilities, ts *TaskState, mu *sync.Mutex) {
+func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabilities, ts *TaskState, mu *sync.Mutex, save func()) {
 	fail := func(state string, err error) {
 		mu.Lock()
 		ts.State, ts.Error = state, err.Error()
@@ -241,6 +251,18 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 		fail(TaskFailed, err)
 		return
 	}
+	sess := workspace.Session{Sandbox: sb.ID, Repo: r.Repo, Base: base, Branch: workspace.SandboxBranch}
+	stop := func() error { return nil }
+	if r.CheckpointEvery > 0 {
+		stop = workspace.Checkpoints(ctx, r.CheckpointEvery,
+			func(ctx context.Context) (string, bool, error) { return workspace.Checkpoint(ctx, r.Client, sess) },
+			func(ref string) {
+				mu.Lock()
+				ts.Checkpoint = ref
+				mu.Unlock()
+				save()
+			})
+	}
 	code := -1
 	err = r.Client.FollowOutput(ctx, sb.ID, p.PID, func(ev api.OutputEvent) error {
 		if ev.ExitCode != nil {
@@ -250,6 +272,12 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 		return nil
 	})
 	logf.Close()
+	// A failed checkpoint does not fail the task: the work is judged by its
+	// verify and brought back below, and a checkpoint only mattered had the
+	// sandbox died. It is said, so a run that would have had none is known.
+	if cerr := stop(); cerr != nil {
+		fmt.Fprintf(r.Out, "%s: checkpoints failed: %v\n", t.Branch, cerr)
+	}
 	if err != nil {
 		fail(TaskLost, err)
 		return
@@ -258,7 +286,6 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 		workspace.SaveLogin(context.Background(), r.Client, sb.ID, d)
 	}
 
-	sess := workspace.Session{Sandbox: sb.ID, Repo: r.Repo, Base: base, Branch: workspace.SandboxBranch}
 	ref, err := workspace.BringBack(context.Background(), r.Client, sess, "fleet/"+t.Branch)
 	mu.Lock()
 	defer mu.Unlock()

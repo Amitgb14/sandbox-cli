@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,10 +49,15 @@ type runFlags struct {
 	labels        []string
 	volumes       []string
 	git           bool
+
+	// flags is the set these were parsed from, to tell a flag that was given
+	// from one left at its default.
+	flags *pflag.FlagSet
 }
 
 func (rf *runFlags) register(cmd *cobra.Command) {
 	f := cmd.Flags()
+	rf.flags = f
 	f.StringVar(&rf.context, "context", "", "which sandboxd to use (sandbox-cli context ls)")
 	f.StringVar(&rf.image, "image", "", "image to run (default: the server's)")
 	f.Float64Var(&rf.cpus, "cpus", 0, "vCPUs")
@@ -74,7 +80,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.profile, "profile", "", "dev or prod (prod: no persisted logins)")
 	f.StringVar(&rf.fromSnapshot, "from-snapshot", "", "start from a snapshot (sandbox-cli snapshot) instead of the image")
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
-	f.DurationVar(&rf.checkpoint, "checkpoint-every", 5*time.Minute, "fetch the sandbox's working tree to refs/sandbox/checkpoints/<id> this often while attached, so a dead VM loses minutes rather than the run (0: never)")
+	f.DurationVar(&rf.checkpoint, "checkpoint-every", 5*time.Minute, "fetch the sandbox's working tree to refs/sandbox/checkpoints/<id> this often while attached (and again whenever you attach), so a dead VM loses minutes rather than the run (0: never)")
 	f.BoolVar(&rf.git, "git", false, "make the sandbox's commits with your own git user.name and user.email (default: a neutral sandbox identity)")
 	f.StringArrayVar(&rf.volumes, "volume", nil, "mount a named volume, NAME:/path or NAME:/path:ro (repeatable; sandbox-cli volume)")
 	f.StringArrayVar(&rf.labels, "label", nil, "label the sandbox, key=value (repeatable); shown by list and recorded in its audit events")
@@ -137,6 +143,12 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	project := rf.project
 	if project == "" {
 		project, _ = os.Getwd()
+	}
+	// Nothing takes checkpoints of a run nobody is connected to. Asked for and
+	// not deliverable, so refused rather than accepted and never taken.
+	if rf.detach && rf.flags != nil && rf.flags.Changed("checkpoint-every") && rf.checkpoint > 0 {
+		return 1, errors.New("--checkpoint-every needs a connected client and --detach leaves none; " +
+			"checkpoints are taken again whenever you attach (sandbox-cli attach --checkpoint-every)")
 	}
 	// The configuration first: a mistake in your own files is yours to fix
 	// whether or not a sandboxd is answering, and should not wait behind one.
@@ -255,7 +267,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 
 	stopCheckpoints := func() error { return nil }
 	if sess != nil && rf.checkpoint > 0 {
-		stopCheckpoints = startCheckpoints(ctx, c, sess, rf.checkpoint)
+		stopCheckpoints = workspace.SessionCheckpoints(ctx, c, sess, rf.checkpoint)
 	}
 	code, err := attach(ctx, c, sb.ID, p.PID, tty)
 	// Reported only now: while attached, the agent owns the terminal, and a
@@ -302,46 +314,6 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		fmt.Fprintf(os.Stderr, "sandbox-cli: kept %s (sandbox-cli kill %s)\n", sb.ID, sb.ID)
 	}
 	return code, nil
-}
-
-// startCheckpoints takes a checkpoint every interval until the returned
-// function is called, which stops it and reports the last failure, if the
-// failures were not followed by a success. The session record is updated after
-// each one, so a CLI that is itself killed leaves the latest checkpoint
-// findable by `recover`.
-func startCheckpoints(ctx context.Context, c *api.Client, sess *workspace.Session, every time.Duration) func() error {
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	go func() {
-		var last error
-		t := time.NewTicker(every)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				done <- last
-				return
-			case <-t.C:
-			}
-			ref, fetched, err := workspace.Checkpoint(ctx, c, *sess)
-			switch {
-			case err != nil:
-				if ctx.Err() == nil {
-					last = err
-				}
-			case fetched:
-				last = nil
-				sess.Checkpoint, sess.CheckpointAt = ref, time.Now().UTC()
-				_ = sess.Save()
-			default:
-				last = nil
-			}
-		}
-	}()
-	return func() error {
-		cancel()
-		return <-done
-	}
 }
 
 // attach connects the terminal (or stdin/stdout) to a process until it exits.

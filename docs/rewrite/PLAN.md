@@ -784,9 +784,16 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     base image, would make it once; that is a decision about image size and
     about sharing a writable volume across an agent's runs.
 
-    Not yet: checkpoints run only while a CLI is attached. Detached runs and
-    fleet tasks have nothing driving them, so a detached run's protection is
-    still bring-back before the idle timeout.
+    **Done: checkpoints wherever a client is connected.** One loop
+    (`workspace.Checkpoints`) serves `run`, `attach` and each fleet task.
+    `attach` checkpoints a run this host started on a repository, matching it
+    by sandbox ID and context. `agent fleet run` checkpoints every task and
+    records the ref in the fleet state, so a lost task names where its work
+    is. A run nobody is connected to still has nothing taking checkpoints, so
+    `run --detach --checkpoint-every` is refused rather than accepted and
+    never honoured. sandboxd cannot take them itself: the repository a
+    checkpoint lands in is on the client's machine, which need not be the
+    server's.
 
 ## Risks
 
