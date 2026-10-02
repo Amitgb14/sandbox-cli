@@ -1,7 +1,9 @@
 /bin/
 /bin-docker/
 /dist/
-/.claude/
+# Per-machine Claude Code state, except the project skills, which are shared.
+/.claude/*
+!/.claude/skills/
 __pycache__/
 docs/proposals/
 
