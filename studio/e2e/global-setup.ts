@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -17,9 +17,12 @@ async function waitFor(fn: () => Promise<boolean>, what: string) {
 export default async function globalSetup() {
   const dir = mkdtempSync(join(tmpdir(), "studio-e2e-"));
   const env = { ...process.env, XDG_CONFIG_HOME: join(dir, "cfg"), SANDBOX_CONTEXT: "e2e" };
-  const sandboxd = spawn(bin("sandboxd"), ["--backend", "fake", "--state-dir", join(dir, "state"), "--listen", "127.0.0.1:7180"], { env, stdio: "ignore" });
-  await waitFor(async () => (await fetch("http://127.0.0.1:7180/v1/health")).ok, "sandboxd");
-  const add = spawn(bin("sandbox-cli"), ["context", "add", "e2e", "http://127.0.0.1:7180"], { env, stdio: "inherit" });
+  // A unix socket, as a local sandboxd serves by default: only its owner can
+  // connect, so it needs no token. A TCP port, even on loopback, needs one.
+  const sock = join(dir, "d.sock");
+  const sandboxd = spawn(bin("sandboxd"), ["--backend", "fake", "--state-dir", join(dir, "state"), "--listen", `unix://${sock}`], { env, stdio: "ignore" });
+  await waitFor(async () => existsSync(sock), "sandboxd");
+  const add = spawn(bin("sandbox-cli"), ["context", "add", "e2e", `unix://${sock}`], { env, stdio: "inherit" });
   await new Promise((r) => add.on("exit", r));
   const studio = spawn(bin("sandbox-cli"), ["studio", "--port", "7181", "--ui-dir", resolve(__dirname, "../out")], { env, cwd: dir });
   let out = "";

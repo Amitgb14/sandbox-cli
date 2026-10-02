@@ -1,9 +1,10 @@
 // Command sandboxd serves Sandbox API v1 (docs/api/v1.md) for one machine.
 //
 // Locally it listens on a unix socket that only its owner can open; on a
-// self-hosted server, on TCP with a bearer token. It refuses the combination
-// that would let anyone on the network create sandboxes: a non-loopback address
-// with no token.
+// self-hosted server, on TCP with a bearer token. It refuses the combinations
+// that would let someone else create sandboxes: any TCP address with no token
+// (a loopback port is open to every user on the machine), and a non-loopback
+// one without TLS.
 //
 // Backends:
 //
@@ -16,7 +17,8 @@
 //	--backend fake          in memory, no VMs, isolates nothing: for development
 //	                        and the conformance suite.
 //
-// A network address needs both a token and TLS; only loopback may go without.
+// TCP needs a token, and a network address TLS as well; only a unix socket
+// may go without a token.
 package main
 
 import (
@@ -250,9 +252,12 @@ func readToken(path string) (string, error) {
 	return tok, nil
 }
 
-// openListener opens the socket or port to serve on. A TCP address that is not
-// loopback needs a token — otherwise anyone who can reach the port can create
-// sandboxes and run commands in them.
+// openListener opens the socket or port to serve on. Any TCP address needs a
+// token — otherwise anyone who can reach the port can create sandboxes, run
+// commands in them and type into their terminals. Loopback is no exception: a
+// loopback port is reachable by every user on the machine, which is why Studio
+// carries a token of its own. Only a unix socket, which listenUnix makes
+// owner-only, may go without one. One that is not loopback needs TLS too.
 func openListener(addr string, haveToken, haveTLS bool) (net.Listener, string, error) {
 	if addr == "" {
 		addr = "unix://" + defaultSocket()
@@ -266,7 +271,10 @@ func openListener(addr string, haveToken, haveTLS bool) (net.Listener, string, e
 	}
 	ip := net.ParseIP(host)
 	loopback := host == "localhost" || (ip != nil && ip.IsLoopback())
-	if !loopback && !haveToken {
+	if !haveToken {
+		if loopback {
+			return nil, "", fmt.Errorf("--listen %s is reachable by every user on this machine; refusing to serve it without --token-file (or listen on a unix:// socket, which only you can open)", addr)
+		}
 		return nil, "", fmt.Errorf("--listen %s is reachable from other machines; refusing to serve it without --token-file", addr)
 	}
 	// A bearer token over plain HTTP on a network is a token anyone on the path

@@ -196,6 +196,11 @@ In the rewrite:
   A fleet task now takes the user's config (image, env, secrets, network) and
   profile through the same code as `run`. Before, it built its own request and
   ignored both.
+- **`sandboxd` refuses a TCP listener without a token, loopback included.** A
+  loopback port is reachable by every user on the machine, and with no token
+  any of them could create sandboxes, run commands and type into a running
+  agent's terminal. Serve locally on the default unix socket, which only its
+  owner can open, or pass `--token-file`.
 
 ### Changed
 
