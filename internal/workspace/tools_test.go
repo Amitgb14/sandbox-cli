@@ -82,3 +82,17 @@ func TestAgentTools(t *testing.T) {
 	}
 	c.TerminateSandbox(ctx, inst.ID)
 }
+
+// A new pin names the volumes of the agent's earlier installs, and nothing
+// else: not another agent's whose name starts the same, not a volume that
+// only looks similar.
+func TestSupersededTools(t *testing.T) {
+	vols := []api.Volume{
+		{Name: "agent-qwen-cfca24e1"}, {Name: "agent-qwen-00aa11bb"}, {Name: "agent-qwen-code-00aa11bb"},
+		{Name: "agent-qwen-notahash"}, {Name: "agent-qwen-00aa11bbc"}, {Name: "cache"},
+	}
+	got := supersededTools(vols, "qwen", "agent-qwen-cfca24e1")
+	if len(got) != 1 || got[0] != "agent-qwen-00aa11bb" {
+		t.Errorf("got %v", got)
+	}
+}

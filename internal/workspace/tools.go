@@ -72,7 +72,26 @@ func AgentTools(ctx context.Context, c *api.Client, caps api.Capabilities, d age
 		logf("installing %s into a volume failed, so this run installs it itself: %v", d.Name, err)
 		return nil
 	}
+	for _, old := range supersededTools(vols, d.Name, name) {
+		logf("volume %s held an earlier install of %s and is no longer used: sandbox-cli volume rm %s", old, d.Name, old)
+	}
 	return mount
+}
+
+// supersededTools names the earlier tools volumes of an agent: its name, then
+// eight hex digits, but not current. Said rather than deleted: a volume is
+// the user's to remove, and a name of that shape is only very probably ours.
+func supersededTools(vols []api.Volume, agent, current string) []string {
+	var out []string
+	prefix := "agent-" + agent + "-"
+	for _, v := range vols {
+		rest, ok := strings.CutPrefix(v.Name, prefix)
+		if !ok || v.Name == current || len(rest) != 8 || strings.Trim(rest, "0123456789abcdef") != "" {
+			continue
+		}
+		out = append(out, v.Name)
+	}
+	return out
 }
 
 // installTools runs the install in a sandbox of its own: the volume writable,

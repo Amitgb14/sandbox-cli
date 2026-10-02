@@ -801,8 +801,9 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
       serialised until their VMM has opened its drives. Each jail's link is
       chowned to its own uid, and that ownership matters only at open time.
     - **Open:**
-      - an old pin's volume is left behind (`sandbox-cli volume rm` removes
-        it);
+      - an old pin's volume is left behind. The run that installs the new
+        one names it with the `sandbox-cli volume rm` that removes it; it
+        is not deleted for you, because a volume is the user's;
       - an agent run with a tools volume is not served from a pool, whose
         sandboxes have no volumes.
 

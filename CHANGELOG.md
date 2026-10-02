@@ -82,8 +82,9 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   volume read-only, so an agent cannot change what its next run executes.
   The install runs in a sandbox of its own, with no repository and no
   secrets. Where volumes or a network are not available, the run installs
-  the agent itself, as before. `sandbox-cli volume ls` shows these volumes,
-  and `volume rm` removes one left behind by an older pin.
+  the agent itself, as before. `sandbox-cli volume ls` shows these volumes.
+  When a new pin installs, the run names the previous version's volume and
+  the `volume rm` that removes it.
 - **A volume can be mounted read-only by several sandboxes at once.** A
   writer still has a volume to itself, and a volume being read cannot be
   mounted writable.
