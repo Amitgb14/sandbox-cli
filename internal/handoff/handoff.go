@@ -28,6 +28,14 @@
 // changed" survives a translation between vendors perfectly; a summary of intent
 // does not.
 //
+// What changed in the rewrite is only where it goes. beta.15 wrote a host
+// directory and bind-mounted it read-only; there is no mount now, so an export
+// is built in memory and the caller writes it into the next sandbox over the
+// API. It is therefore writable by the agent reading it — which matters less
+// than it did, since nothing reads it back: the host never trusts what an
+// agent says about itself, and the briefing is only ever evidence for the one
+// agent it was written for.
+//
 // Everything here is **deterministic** — no network, no API key, no token cost —
 // which is what makes it testable in `make test` and what makes it safe to run
 // in the middle of a failover, when the provider that would have written a
@@ -35,20 +43,16 @@
 package handoff
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
-	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
-// GuestDir is where an export is mounted inside the container. Read-only: the
-// briefing is evidence about a run that has finished, and an agent that could
-// rewrite it could rewrite its own history.
+// GuestDir is where an export is written inside the next sandbox.
 const GuestDir = "/sandbox/context"
 
 // maxBriefTurns bounds what the brief quotes. A long session is thousands of
@@ -57,79 +61,53 @@ const GuestDir = "/sandbox/context"
 // the previous agent's chatter has spent the budget it was supposed to save.
 const maxBriefTurns = 40
 
+// FileStat is one file the previous agent changed.
+type FileStat struct {
+	Path                  string
+	Status                string // "added", "modified", "deleted"; "" reads as modified
+	Insertions, Deletions int
+	Binary                bool
+}
+
 // Export is one prepared handoff.
 type Export struct {
-	// Dir is the host directory to mount at GuestDir.
-	Dir string
+	// Files maps a name under GuestDir to its contents.
+	Files map[string][]byte
 	// From is the agent whose conversation this is.
 	From string
 	// Turns is how many prompts the source session held, for the line that says
 	// what is being handed over.
 	Turns int
-	// Files is how many files it changed, from the workspace rather than from
+	// Changed is how many files it changed, from the workspace rather than from
 	// the transcript.
-	Files int
+	Changed int
 }
 
-// Write produces an export for the conversation in sessionPath, describing work
-// done in workspace, under dir.
+// Build produces an export from a conversation and the files changed.
 //
-// A missing or unreadable transcript is **not** an error: the point of a
-// handoff is that the first agent failed, and an agent that died before writing
-// anything is exactly the case routing fires on. The export is still written,
-// with what is known — usually the file ledger alone — because "here is what
-// changed on disk, there was no conversation" is a true and useful briefing.
-func Write(dir, from, sessionPath, workspace string, base string) (*Export, error) {
-	// 0750/0640 rather than 0700/0600, and this is the difference between a
-	// briefing and a directory the agent cannot open.
-	//
-	// The export is bind-mounted into the container, which on native Linux runs
-	// as 1001:<the host user's primary gid> (sandbox/hostgroup.go). A directory
-	// created by os.MkdirTemp is 0700 and owned by the host uid, so the guest
-	// gets EACCES on every file — silently, since the run has already printed
-	// that the briefing was carried, and the agent is told by its own prompt to
-	// read a path it cannot. macOS hides this entirely: Docker Desktop
-	// virtualizes bind-mount ownership, so it is a bug that only appears where
-	// most unattended runs happen.
-	//
-	// Group bits are enough; no chown is needed, because the container's gid is
-	// the host user's own. Not world-readable: /tmp is shared, and the brief
-	// quotes a conversation.
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return nil, err
+// No transcript is **not** an error: the point of a handoff is that the first
+// agent failed, and an agent that died before writing anything is exactly the
+// case routing fires on. The export is still built, with what is known —
+// usually the file ledger alone — because "here is what changed on disk, there
+// was no conversation" is a true and useful briefing.
+//
+// stats comes from git, never from the transcript. Under routing's rule it is
+// always empty — a run that changed files is not retried — and the ledger says
+// so, which is itself the most useful line in it.
+func Build(from string, msgs []agentctx.Message, stats []FileStat) *Export {
+	if len(msgs) > maxBriefTurns {
+		msgs = msgs[len(msgs)-maxBriefTurns:]
 	}
-	// MkdirTemp made it 0700 before this was called, and MkdirAll leaves an
-	// existing directory's mode alone.
-	if err := os.Chmod(dir, 0o750); err != nil {
-		return nil, err
-	}
-	ex := &Export{Dir: dir, From: from}
-
-	var msgs []agentctx.Message
-	if sessionPath != "" {
-		if m, err := agentctx.Transcript(sessionPath, maxBriefTurns); err == nil {
-			msgs = m
-		}
-	}
+	ex := &Export{From: from, Changed: len(stats), Files: map[string][]byte{}}
 	for _, m := range msgs {
 		if m.Role == "user" {
 			ex.Turns++
 		}
 	}
-
-	stats := changedFiles(workspace, base)
-	ex.Files = len(stats)
-
-	if err := writeJSONL(filepath.Join(dir, "transcript.jsonl"), msgs); err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "files.md"), []byte(fileLedger(stats)), 0o640); err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "HANDOFF.md"), []byte(brief(from, msgs, stats)), 0o640); err != nil {
-		return nil, err
-	}
-	return ex, nil
+	ex.Files["transcript.jsonl"] = transcriptJSONL(msgs)
+	ex.Files["files.md"] = []byte(fileLedger(stats))
+	ex.Files["HANDOFF.md"] = []byte(brief(from, msgs, stats))
+	return ex
 }
 
 // Prompt is the sentence prepended to the fallback agent's prompt.
@@ -141,58 +119,17 @@ func Write(dir, from, sessionPath, workspace string, base string) (*Export, erro
 func (e *Export) Prompt(original string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "A previous agent (%s) was working on this task and stopped before finishing. "+
-		"Its briefing is mounted read-only at %s: HANDOFF.md (what was being done and decided), "+
+		"Its briefing is at %s: HANDOFF.md (what was being done and decided), "+
 		"transcript.jsonl (%d prompts of that conversation), and files.md (%d files it changed). "+
 		"Read them first. This is a briefing, not a resumed conversation — you did not have it, "+
 		"so treat it as evidence about work in progress rather than as your own memory.\n\n",
-		e.From, GuestDir, e.Turns, e.Files)
+		e.From, GuestDir, e.Turns, e.Changed)
 	b.WriteString("The original task follows.\n\n")
 	b.WriteString(original)
 	return b.String()
 }
 
-// changedFiles is what the previous agent did to the workspace, asked of git
-// rather than of the agent. base is the branch the work is measured against, and
-// may be empty — then only uncommitted work is reported, which is where an
-// interrupted agent's output usually still is.
-func changedFiles(workspace, base string) []worktree.FileStat {
-	if workspace == "" {
-		return nil
-	}
-	seen := map[string]worktree.FileStat{}
-	order := []string{}
-	add := func(st worktree.FileStat) {
-		if _, ok := seen[st.Path]; !ok {
-			order = append(order, st.Path)
-		}
-		cur := seen[st.Path]
-		cur.Path = st.Path
-		if cur.Status == "" {
-			cur.Status = st.Status
-		}
-		cur.Insertions += st.Insertions
-		cur.Deletions += st.Deletions
-		cur.Binary = cur.Binary || st.Binary
-		seen[st.Path] = cur
-	}
-	for _, st := range worktree.WorkingStatIn(workspace) {
-		add(st)
-	}
-	if base != "" {
-		if branch := worktree.HeadBranch(workspace); branch != "" && branch != base {
-			for _, st := range worktree.DiffStat(workspace, branch, base) {
-				add(st)
-			}
-		}
-	}
-	out := make([]worktree.FileStat, 0, len(order))
-	for _, p := range order {
-		out = append(out, seen[p])
-	}
-	return out
-}
-
-func fileLedger(stats []worktree.FileStat) string {
+func fileLedger(stats []FileStat) string {
 	var b strings.Builder
 	b.WriteString("# Files the previous agent changed\n\n")
 	if len(stats) == 0 {
@@ -224,7 +161,7 @@ func fileLedger(stats []worktree.FileStat) string {
 // Assistant turns are reduced to their first line — in practice the heading or
 // the conclusion — because the body is reasoning the target cannot verify and
 // should not inherit as fact.
-func brief(from string, msgs []agentctx.Message, stats []worktree.FileStat) string {
+func brief(from string, msgs []agentctx.Message, stats []FileStat) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Handoff from %s\n\n", from)
 	fmt.Fprintf(&b, "Written %s by sandbox-cli, deterministically, from the previous run's\n",
@@ -309,21 +246,15 @@ type normalized struct {
 	At   string `json:"at,omitempty"`
 }
 
-func writeJSONL(path string, msgs []agentctx.Message) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
+func transcriptJSONL(msgs []agentctx.Message) []byte {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
 	for _, m := range msgs {
 		at := ""
 		if !m.At.IsZero() {
 			at = m.At.UTC().Format(time.RFC3339)
 		}
-		if err := enc.Encode(normalized{Role: m.Role, Text: m.Text, At: at}); err != nil {
-			return err
-		}
+		_ = enc.Encode(normalized{Role: m.Role, Text: m.Text, At: at})
 	}
-	return nil
+	return b.Bytes()
 }

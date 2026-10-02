@@ -1,3 +1,7 @@
+// claudeLine and userPromptText moved to internal/agentctx/transcript.go in
+// rewrite M10 (handoff needed them first); the rest of this file waits for
+// `context list` to be rebuilt on the API.
+
 package agentctx
 
 import (
@@ -179,28 +183,6 @@ func trailingUUID(name string) (string, bool) {
 	return tail, true
 }
 
-// claudeLine is the part of one transcript line this package reads. Everything
-// else in the line is ignored by encoding/json, which is what keeps the reader
-// from breaking every time Claude Code adds a field.
-//
-// Timestamp is a string rather than a time.Time on purpose: a single line with an
-// unparseable date would otherwise fail to decode entirely, losing the fields
-// next to it.
-type claudeLine struct {
-	Type        string `json:"type"`
-	SessionID   string `json:"sessionId"`
-	Cwd         string `json:"cwd"`
-	Timestamp   string `json:"timestamp"`
-	IsMeta      bool   `json:"isMeta"`
-	IsSidechain bool   `json:"isSidechain"`
-	AITitle     string `json:"aiTitle"`
-	LastPrompt  string `json:"lastPrompt"`
-	Message     *struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-	} `json:"message"`
-}
-
 // readClaudeSession fills in what only the transcript can say. It is best-effort
 // by design: a truncated or half-written transcript — the normal state of the
 // session that is running right now — must still list, with whatever was already
@@ -289,44 +271,6 @@ func readClaudeSession(path string, s *Session) {
 		s.Title = lastPrompt // short sessions never get a generated title
 	}
 	s.Title = oneLine(s.Title)
-}
-
-// userPromptText reports whether a user message is a prompt someone typed, and
-// returns its text. Content is either a string (the plain case) or a block array;
-// an array holding a tool_result is the tool-call return path, while an array
-// with text blocks is a real prompt that carried an attachment.
-func userPromptText(content json.RawMessage) (string, bool) {
-	trimmed := strings.TrimSpace(string(content))
-	if trimmed == "" {
-		return "", false
-	}
-	if trimmed[0] == '"' {
-		var s string
-		if err := json.Unmarshal(content, &s); err != nil || strings.TrimSpace(s) == "" {
-			return "", false
-		}
-		return s, true
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(content, &blocks); err != nil {
-		return "", false
-	}
-	var text string
-	for _, b := range blocks {
-		if b.Type == "tool_result" {
-			return "", false
-		}
-		if b.Type == "text" && text == "" {
-			text = b.Text
-		}
-	}
-	if text == "" {
-		return "", false
-	}
-	return text, true
 }
 
 // oneLine flattens a prompt for a table cell. Prompts are routinely pasted logs

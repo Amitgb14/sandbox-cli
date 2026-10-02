@@ -1,9 +1,16 @@
+// Package agentctx reads agents' conversation transcripts.
+//
+// Only the claude-jsonl reader is here so far: it is the one format verified
+// against real transcripts, and handoff needs it. The session store — finding,
+// listing and resuming conversations — is beta.15's _old/internal/agentctx, and
+// comes back with `context list`.
 package agentctx
 
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -49,8 +56,14 @@ func Transcript(path string, n int) ([]Message, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return ParseTranscript(f, n)
+}
 
-	sc := bufio.NewScanner(f)
+// ParseTranscript is Transcript for a transcript already in hand — one read out
+// of a sandbox over the API, where there is no host path to Lstat, and the guest
+// answered with file contents rather than a link.
+func ParseTranscript(r io.Reader, n int) ([]Message, error) {
+	sc := bufio.NewScanner(r)
 	// Same limit List uses, and for the same reason: one tool result can be
 	// megabytes, and the default 64KB would stop the scan partway through.
 	sc.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
@@ -187,4 +200,64 @@ func FirstPrompt(path string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// claudeLine is the part of one transcript line this package reads. Everything
+// else in the line is ignored by encoding/json, which is what keeps the reader
+// from breaking every time Claude Code adds a field.
+//
+// Timestamp is a string rather than a time.Time on purpose: a single line with an
+// unparseable date would otherwise fail to decode entirely, losing the fields
+// next to it.
+type claudeLine struct {
+	Type        string `json:"type"`
+	SessionID   string `json:"sessionId"`
+	Cwd         string `json:"cwd"`
+	Timestamp   string `json:"timestamp"`
+	IsMeta      bool   `json:"isMeta"`
+	IsSidechain bool   `json:"isSidechain"`
+	AITitle     string `json:"aiTitle"`
+	LastPrompt  string `json:"lastPrompt"`
+	Message     *struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	} `json:"message"`
+}
+
+// userPromptText reports whether a user message is a prompt someone typed, and
+// returns its text. Content is either a string (the plain case) or a block array;
+// an array holding a tool_result is the tool-call return path, while an array
+// with text blocks is a real prompt that carried an attachment.
+func userPromptText(content json.RawMessage) (string, bool) {
+	trimmed := strings.TrimSpace(string(content))
+	if trimmed == "" {
+		return "", false
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(content, &s); err != nil || strings.TrimSpace(s) == "" {
+			return "", false
+		}
+		return s, true
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(content, &blocks); err != nil {
+		return "", false
+	}
+	var text string
+	for _, b := range blocks {
+		if b.Type == "tool_result" {
+			return "", false
+		}
+		if b.Type == "text" && text == "" {
+			text = b.Text
+		}
+	}
+	if text == "" {
+		return "", false
+	}
+	return text, true
 }

@@ -617,6 +617,23 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     The first real run found a bug no unit test had: tasks created together
     built one root disk together, sharing a partial file. Builds are now
     serialized per key, and each writes a partial file of its own.
+  - **Routing and handoff: done.** `routing` came across unchanged with its
+    tests. `handoff` builds its briefing in memory, and the CLI writes it into
+    the next sandbox, since there is no mount to put it on. Its tests keep
+    every assertion they made. `perms_test.go` is dropped: it pinned group
+    bits on a host directory bind-mounted into a container. The claude
+    transcript reader moved from `_old/internal/agentctx` into a new
+    `internal/agentctx`, with a `ParseTranscript` that reads bytes from a
+    guest. The rest of that package waits for `context list`. What changed:
+    - "the workspace changed" is bring-back's answer: no ref after a
+      successful bring-back means unchanged, and anything else is unknown;
+    - each attempt is a fresh sandbox, so a guest that lies about having done
+      nothing cannot pass work to the next agent;
+    - `--detach --fallback` is refused rather than left unwatched.
+
+    Not yet: route ids and `routed_from` in the audit record, because the new
+    CLI writes no audit record at all. That is a gap of its own, still open
+    for M10.
 
 ## Risks
 

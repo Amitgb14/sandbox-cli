@@ -40,6 +40,7 @@ type runFlags struct {
 	fromSnapshot  string
 	profile       string
 	configPath    string
+	fallback      []string
 }
 
 func (rf *runFlags) register(cmd *cobra.Command) {
@@ -66,6 +67,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.profile, "profile", "", "dev or prod (prod: no persisted logins)")
 	f.StringVar(&rf.fromSnapshot, "from-snapshot", "", "start from a snapshot (sandbox-cli snapshot) instead of the image")
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
+	f.StringArrayVar(&rf.fallback, "fallback", nil, "an agent to try next if this one's provider is down or it fails having changed nothing (repeatable; agent wrappers only)")
 }
 
 // sandboxFlagNames lists the long flags a wrapper consumes before handing the
@@ -85,12 +87,28 @@ func sandboxFlagNames() map[string]bool {
 type runSpec struct {
 	argv  []string
 	agent *agents.Descriptor
+	// before runs once the workspace and login are in place, before the
+	// command starts; after runs once it has exited, before the sandbox goes.
+	before, after func(ctx context.Context, c *api.Client, sandbox string)
+	// result, when set, is filled in with what the run did.
+	result *runResult
 }
 
-// execute is the whole of a run: create, set up the workspace, restore the
+// runResult is what routing needs to know about a run that has ended.
+type runResult struct {
+	// changed reports whether the workspace ended differently from how it
+	// began; nil when that could not be determined.
+	changed *bool
+}
+
+// execute is a var so routing's tests can script what each attempt did; a
+// real attempt needs a guest that runs git.
+var execute = runSandbox
+
+// runSandbox is the whole of a run: create, set up the workspace, restore the
 // login, attach, and on the way out save the login, bring work back and clean
 // up. It returns the command's exit code.
-func execute(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
+func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	c, ctxName, err := newClient(rf.context)
 	if err != nil {
 		return 1, err
@@ -153,6 +171,10 @@ func execute(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		workspace.RestoreLogin(ctx, c, sb.ID, *rs.agent)
 	}
 
+	if rs.before != nil {
+		rs.before(ctx, c, sb.ID)
+	}
+
 	tty := !rf.detach && isTerminal(os.Stdin) && isTerminal(os.Stdout)
 	rows, cols := termSize(os.Stdout)
 	p, err := c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: rs.argv, Cwd: "/workspace", Tty: tty, Rows: rows, Cols: cols})
@@ -171,6 +193,9 @@ func execute(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		return 1, err
 	}
 
+	if rs.after != nil {
+		rs.after(context.Background(), c, sb.ID)
+	}
 	if persist {
 		workspace.SaveLogin(context.Background(), c, sb.ID, *rs.agent)
 	}
@@ -186,7 +211,14 @@ func execute(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 			fmt.Fprintf(os.Stderr, "sandbox-cli: bringing work back failed: %v\n  the sandbox is kept: sandbox-cli bring-back %s\n", err, sb.ID)
 		case ref == "":
 			fmt.Fprintln(os.Stderr, "sandbox-cli: no new commits to bring back")
+			if rs.result != nil {
+				rs.result.changed = new(bool)
+			}
 		default:
+			if rs.result != nil {
+				changed := true
+				rs.result.changed = &changed
+			}
 			fmt.Fprintf(os.Stderr, "sandbox-cli: work brought back to %s\n  review: git log -p HEAD..%s · merge: git merge %s\n", ref, ref, ref)
 		}
 	}

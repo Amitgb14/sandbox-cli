@@ -36,6 +36,9 @@ func newRunCmd() *cobra.Command {
 		Example: "  sandbox-cli run -- npm test\n  sandbox-cli run --network none -- make\n  sandbox-cli run --detach -- ./long-job.sh",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(rf.fallback) > 0 {
+				return fmt.Errorf("--fallback is for agent wrappers (sandbox-cli claude --fallback codex …): run has no agent to fall back from")
+			}
 			code, err := execute(cmd.Context(), rf, runSpec{argv: args})
 			if err != nil {
 				return err
@@ -55,7 +58,7 @@ func newRunCmd() *cobra.Command {
 // argument that is not one (or after "--"), is the agent's — so agent flags never
 // collide with the CLI's.
 func newAgentCmd(d agents.Descriptor) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:                d.Name + " [sandbox-flags] [--] [" + d.Name + "-args...]",
 		Short:              "Run " + d.Name + " in a new sandbox",
 		DisableFlagParsing: true,
@@ -67,13 +70,7 @@ func newAgentCmd(d agents.Descriptor) *cobra.Command {
 			if err := fc.ParseFlags(sandboxArgs); err != nil {
 				return err
 			}
-			if help, _ := fc.Flags().GetBool("help"); help {
-				fmt.Fprintf(cmd.OutOrStdout(), "Usage: sandbox-cli %s [sandbox-flags] [--] [%s-args...]\n\nSandbox flags:\n%s",
-					d.Name, d.Name, fc.Flags().FlagUsages())
-				return nil
-			}
-			argv := append(append([]string{}, d.Command...), agentArgs...)
-			code, err := execute(cmd.Context(), rf, runSpec{argv: argv, agent: &d})
+			code, err := routedRun(cmd.Context(), rf, d, agentArgs)
 			if err != nil {
 				return err
 			}
@@ -83,6 +80,18 @@ func newAgentCmd(d agents.Descriptor) *cobra.Command {
 			return nil
 		},
 	}
+	// cobra answers --help itself, even with flag parsing off, and this command
+	// declares no flags of its own — so without this the sandbox flags a
+	// wrapper accepts were listed nowhere.
+	cmd.SetHelpFunc(func(cmd *cobra.Command, _ []string) {
+		rf := &runFlags{}
+		fc := &cobra.Command{}
+		rf.register(fc)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n\nUsage: sandbox-cli %s [sandbox-flags] [--] [%s-args...]\n\n"+
+			"Leading sandbox flags are consumed; everything after them, or after --, goes to %s.\n\nSandbox flags:\n%s",
+			cmd.Short, d.Name, d.Name, d.Name, fc.Flags().FlagUsages())
+	})
+	return cmd
 }
 
 func splitWrapperArgs(args []string) (sandbox, agent []string) {

@@ -60,6 +60,25 @@ headless), and aider, amp, cline, continue, copilot, crush, cursor, goose,
 openhands and qwen. A wrapper consumes its leading sandbox flags and passes
 everything else to the agent: `sandbox-cli claude --network none --resume`.
 
+When a provider is down, a run can fall through to another agent:
+
+```sh
+sandbox-cli claude --fallback codex -p "fix the failing test"
+```
+
+Each provider is probed before a sandbox is made for it. A run that fails
+having changed nothing is retried with the next agent in a fresh sandbox, with
+a briefing from the first agent at `/sandbox/context`. That briefing is not a
+resumed conversation. A run that changed files is never retried. Put
+`routing: [claude, codex]` in `~/.config/sandbox/config.yaml` to make a chain
+the default; a project's `.sandbox.yaml` cannot set it.
+
+```sh
+sandbox-cli fleet run -f fleet.yaml  # one agent per branch, in parallel sandboxes
+sandbox-cli fleet status
+sandbox-cli fleet land --all         # merge what verified
+```
+
 ## Build
 
 ```sh

@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
@@ -95,5 +97,23 @@ func TestBuildEnv(t *testing.T) {
 	}
 	if _, err := buildEnv([]string{"LD_PRELOAD=/x"}, nil); err == nil {
 		t.Error("a reserved name was accepted")
+	}
+}
+
+// A wrapper's help lists the sandbox flags it accepts. cobra answers --help
+// before RunE, and a wrapper declares no flags of its own, so they were
+// listed nowhere.
+func TestWrapperHelpListsTheSandboxFlags(t *testing.T) {
+	root := NewRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"claude", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--fallback", "--network", "--no-persist-auth", "goes to claude"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("help does not mention %s:\n%s", want, out.String())
+		}
 	}
 }
