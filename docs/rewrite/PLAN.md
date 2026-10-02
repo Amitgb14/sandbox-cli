@@ -281,6 +281,41 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
   - *macOS `container`:* boot time, read-only bind honoured, virtio-fs
     ownership, whether the guest can program iptables or egress must go over
     vsock, labels across restarts, and stdio over `exec -i`.
+  - *Status:* scripts written (`scripts/m3/`, with a README naming the exact
+    commands). The non-root Linux steps were run on a development machine on
+    2026-10-02. That machine was an x86_64 host, on xfs, with Firecracker 1.17.0
+    and guest kernel 6.1.155. These are **preliminary**: the real numbers come
+    from the maintainer's hosts.
+    - **Boot is dominated by the kernel command line, not by the VM.** From
+      starting the VMM to the guest's init being ready took 742 ms with default
+      arguments, 578 ms with `quiet`, and **53 ms** with `quiet` plus the
+      keyboard-controller probe disabled (`i8042.noaux i8042.nomux i8042.nopnp
+      i8042.dumbkbd`). The guest kernel's own boot fell from 620 ms to 20 ms.
+      `reboot=k` still ends the VM. The backend's kernel command line is a
+      measured decision, not a default.
+    - Memory: the VMM process holds 66 MB with an idle 512 MiB guest, and 95 MB
+      with 2 GiB configured. Guest memory is only resident once touched.
+    - vsock: a fresh connection round trip takes 105 µs. Throughput is 1.26 GB/s
+      host→guest and 1.65 GB/s guest→host, so bundles over vsock are not the
+      bottleneck.
+    - Snapshots, 1 GiB guest:
+      - pausing takes 5 ms and a full snapshot 230 ms;
+      - the memory file is the full 1 GiB on disk;
+      - restoring into a fresh VMM takes 6 ms, and the guest answers over vsock
+        9 ms after the load starts.
+
+      Suspend, resume and fork are cheap enough to be ordinary operations. The
+      cost to manage is the disk.
+    - Disk: a 1 GiB copy takes 277 ms, against 6 ms as a reflink on xfs. Where
+      the filesystem shares blocks, a per-sandbox root disk is close to free.
+    - Network, run in a user and network namespace, so without an uplink:
+      - every probe that should be blocked was blocked: a name not on the
+        allowlist, TLS with no SNI, other TCP ports, DNS over UDP, and the
+        host's own ports;
+      - the proxy allowed the right names, and then could not resolve them;
+      - the probes that should reach anything need a real host.
+    - Not yet run anywhere: the jailer (needs real root), and everything on
+      macOS.
 - **M4 — guestd and images.**
   - `sandbox-guestd` and `guestproto`, tested over a unix socket with no VM.
   - Image pipeline: OCI pull → ext4 rootfs (Linux) and OCI pull (macOS).
