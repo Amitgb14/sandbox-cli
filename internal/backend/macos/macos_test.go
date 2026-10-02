@@ -173,3 +173,18 @@ func TestConformanceThroughAFakeRuntime(t *testing.T) {
 	defer be.Close()
 	conformance.Run(t, api.NewClientWithHTTP(ts.URL, "macos-fake", ts.Client()))
 }
+
+// The runtime's argv is visible to every process on the Mac (ps), so a
+// sandbox's environment is set inside the guest, never passed as -e.
+func TestBuildRunArgsCarryNoEnvironmentValue(t *testing.T) {
+	const secret = "s3cret-value-in-env"
+	s := backend.Spec{ID: "sbx_0123456789abcdef", Image: "img:1", Env: map[string]string{"API_TOKEN": secret},
+		Network: api.NetworkPolicy{Mode: api.NetworkNone}}
+	args, err := BuildRunArgs(s, "/agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := strings.Join(args, " "); strings.Contains(j, secret) || strings.Contains(j, "API_TOKEN") {
+		t.Errorf("an environment variable reached the runtime's argv: %s", j)
+	}
+}

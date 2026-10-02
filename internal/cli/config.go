@@ -28,6 +28,13 @@ func loadConfig(project, configPath, profile string, ov policy.Overrides) (polic
 			return cfg, err
 		}
 	}
+	// The merged result, checked as a whole: a mode nobody defines, a secret
+	// with two sources, a reserved name in env: or secrets:. beta.15 ran this
+	// on every load and the rewrite had dropped the call, so a typo'd
+	// network.mode ran as the server's default.
+	if err := cfg.Validate(); err != nil {
+		return cfg, fmt.Errorf("config: %w", err)
+	}
 	return cfg, nil
 }
 

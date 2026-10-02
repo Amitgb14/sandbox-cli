@@ -200,6 +200,11 @@ In the rewrite:
   A fleet task now takes the user's config (image, env, secrets, network) and
   profile through the same code as `run`. Before, it built its own request and
   ignored both.
+- **Your config is validated as a whole again.** beta.15 checked the merged
+  config on every load, and the rewrite had dropped that check. Now a
+  `network.mode` nobody defines, a secret with two sources, or a reserved name
+  (`LD_PRELOAD`, `BASH_ENV`, …) in your own `env:` or `secrets:` is refused
+  before anything starts. A mistyped mode used to run on the server's default.
 - **Ctrl-C while watching a detached run detaches; it no longer stops the run.**
   Without a terminal, `sandbox-cli attach` passed the interrupt on to the
   process, so a keystroke meant for the viewer killed an unattended agent.

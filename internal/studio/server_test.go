@@ -265,3 +265,30 @@ func TestAttachBridge(t *testing.T) {
 	}
 	t.Fatal("no exit message")
 }
+
+// A repository Studio registers is checked at its root through hostpath: a
+// subdirectory of home is fine, a repository whose root is home is not —
+// Studio would hand every file in it to a launch.
+func TestRepoAtHomeIsRefused(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if out, err := exec.Command("git", "init", "-q", home).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	sub := filepath.Join(home, "src")
+	os.MkdirAll(sub, 0o755)
+	if _, err := validateRepoPath(sub); err == nil {
+		t.Error("a directory whose repository root is home was registered")
+	}
+	repo := filepath.Join(home, "proj")
+	os.MkdirAll(repo, 0o755)
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if root, err := validateRepoPath(repo); err != nil || root == "" {
+		t.Errorf("a repository under home: %q %v", root, err)
+	}
+}

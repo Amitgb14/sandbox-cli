@@ -10,6 +10,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/policy"
 	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
@@ -177,5 +178,65 @@ func TestTopLevelIsAgentNeutral(t *testing.T) {
 	}
 	if !top["agent"] || !top["run"] {
 		t.Errorf("top level: %v", top)
+	}
+}
+
+// Every load is validated as a whole, as beta.15's was: a reserved name is an
+// instruction to the guest's shell or loader, so no config sets it, the user's
+// own included, by env: or as a secret's name; and a network mode nobody
+// defines is an error, not the server's default.
+func TestLoadConfigValidatesTheMergedConfig(t *testing.T) {
+	for _, tc := range []struct{ user, project, says string }{
+		{user: "env:\n  LD_PRELOAD: /tmp/x.so\n", says: "LD_PRELOAD"},
+		{user: "secrets:\n  BASH_ENV:\n    env: HOME\n", says: "BASH_ENV"},
+		{user: "network:\n  mode: allowlst\n", says: "network.mode"},
+		{user: "secrets:\n  TOKEN:\n    env: HOME\n    file: /x\n", says: "exactly one"},
+		{project: "env:\n  PS4: x\n", says: "may not"},
+	} {
+		home, project := t.TempDir(), t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", home)
+		if tc.user != "" {
+			os.MkdirAll(filepath.Join(home, "sandbox"), 0o700)
+			os.WriteFile(filepath.Join(home, "sandbox", "config.yaml"), []byte(tc.user), 0o600)
+		}
+		if tc.project != "" {
+			os.WriteFile(filepath.Join(project, ".sandbox.yaml"), []byte(tc.project), 0o644)
+		}
+		_, err := loadConfig(project, "", "", policy.Overrides{})
+		if err == nil || !strings.Contains(err.Error(), tc.says) {
+			t.Errorf("user %q project %q: %v, want an error naming %q", tc.user, tc.project, err, tc.says)
+		}
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if _, err := loadConfig(t.TempDir(), "", "", policy.Overrides{}); err != nil {
+		t.Errorf("no config at all: %v", err)
+	}
+}
+
+// prod keeps no refresh token: the profile turns persisted logins off for
+// every run that takes its configuration through applyConfig, fleet tasks
+// included (their runner is given cfg.PersistAuthEnabled from the same load).
+func TestProdTurnsPersistedLoginsOff(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+	os.MkdirAll(filepath.Join(home, "sandbox"), 0o700)
+	os.WriteFile(filepath.Join(home, "sandbox", "config.yaml"), []byte("profile: prod\nnetwork:\n  allow: [api.example]\n"), 0o600)
+	rf := &runFlags{}
+	if err := applyConfig(rf, t.TempDir(), &api.CreateSandboxRequest{}, api.Capabilities{}); err != nil {
+		t.Fatal(err)
+	}
+	if !rf.noPersistAuth {
+		t.Error("a prod run restores and saves the agent's login")
+	}
+	cfg, err := loadConfig(t.TempDir(), "", "", policy.Overrides{})
+	if err != nil || cfg.PersistAuthEnabled() {
+		t.Errorf("prod's config allows persisted logins (%v)", err)
+	}
+}
+
+// kill never infers its target: stopping the wrong sandbox costs its work.
+func TestKillNeedsANamedTarget(t *testing.T) {
+	if err := newKillCmd().Args(newKillCmd(), nil); err == nil {
+		t.Error("kill with no sandbox named was accepted")
 	}
 }

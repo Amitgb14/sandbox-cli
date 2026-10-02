@@ -7,6 +7,7 @@ import (
 	"flag"
 	"net"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
@@ -69,5 +70,19 @@ func TestBuildConfigWithVolumesGolden(t *testing.T) {
 	}
 	if volumeBootArg(backend.Spec{}) != "" {
 		t.Error("no volumes should add no boot argument")
+	}
+}
+
+// A sandbox's environment reaches the guest over the agent channel, never in
+// the VMM's config or the kernel command line, both of which are files and
+// process arguments other things on the host can read.
+func TestBuildConfigCarriesNoEnvironmentValue(t *testing.T) {
+	const secret = "s3cret-value-in-env"
+	s := backend.Spec{ID: "sbx_0123456789abcdef", Image: "img", Env: map[string]string{"API_TOKEN": secret},
+		Network: api.NetworkPolicy{Mode: api.NetworkNone}}
+	p := vmPaths{Kernel: "/k/vmlinux", RootFS: "/i/rootfs.ext4", Scratch: "/s/scratch.ext4", VsockUDS: "/s/v.sock"}
+	out, _ := json.Marshal(BuildConfig(s, p, "console=ttyS0 ro", nil))
+	if strings.Contains(string(out), secret) || strings.Contains(string(out), "API_TOKEN") {
+		t.Errorf("an environment variable reached the VM config: %s", out)
 	}
 }
