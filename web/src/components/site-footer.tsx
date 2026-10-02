@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { GithubMark, Wordmark } from "@/components/logo";
-import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, VERSION } from "@/lib/site";
+import { DOC_URL, MULTI_AGENT_PATH, PYTHON_SDK_PATH, REPO_URL, SDK_PATH, VERSION } from "@/lib/site";
 
 /**
  * Outbound links only. There is deliberately no "on this page" index here — the
@@ -14,6 +14,8 @@ const COLUMNS = [
     links: [
       { label: "User guide", href: DOC_URL.guide },
       { label: "Running agents in parallel", href: MULTI_AGENT_PATH },
+      { label: "TypeScript SDK", href: SDK_PATH },
+      { label: "Python SDK", href: PYTHON_SDK_PATH },
       { label: "Agent reference", href: DOC_URL.agents },
       { label: "Security model", href: DOC_URL.security },
       { label: "Changelog", href: DOC_URL.changelog },

@@ -1571,3 +1571,24 @@ func TestLinkedWorktreeMounts_RefusesASymlinkedHooksDir(t *testing.T) {
 		t.Fatalf("a symlinked parent hooks dir was accepted: %v", m)
 	}
 }
+
+// In a linked worktree `.git` is a file, so `.git/hooks` is not a directory
+// that is missing but a path through a file: there is nothing to mount or
+// refuse, and the run goes ahead. The symlink refusal must not turn that into
+// a refusal of every worktree run.
+func TestHooksDirInALinkedWorktreeIsNotARefusal(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, ".git"), []byte("gitdir: /elsewhere/.git/worktrees/x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mount, err := hooksDir(filepath.Join(ws, ".git", "hooks"))
+	if err != nil || mount {
+		t.Errorf("hooksDir through a .git file = %v, %v; want no mount and no error", mount, err)
+	}
+	linked := t.TempDir()
+	os.MkdirAll(filepath.Join(linked, ".git"), 0o755)
+	os.Symlink(t.TempDir(), filepath.Join(linked, ".git", "hooks"))
+	if _, err := hooksDir(filepath.Join(linked, ".git", "hooks")); err == nil {
+		t.Error("a symlinked hooks directory was not refused")
+	}
+}

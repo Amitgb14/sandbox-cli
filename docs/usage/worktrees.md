@@ -98,7 +98,7 @@ Three things to know before using `--detach`:
 - **The agent must exit on its own.** A detached container has no terminal
   inside it, so an agent in its normal interactive mode draws a UI nobody can
   see and waits forever. Use the non-interactive form — `claude -p "…"`,
-  `codex exec "…"`, `droid exec "…"` — or a plain command like `npm test`.
+  `codex exec "…"`, `opencode run "…"` — or a plain command like `npm test`.
 - **The container is kept after it exits**, unlike every other sandbox run. Its
   exit code and logs are the only record that the work happened, so `--rm` would
   delete exactly what you came back for. `sandbox-cli clean` is how it gets reaped.

@@ -65,15 +65,32 @@ export function EpisodeFlow({ episodes }: { episodes: RouteEpisode[] }) {
                   )}
                 </span>
               ))}
-              <Badge
-                variant="outline"
-                className={cn(
-                  "ml-auto text-[10px]",
-                  e.rescued ? "text-status-good" : "text-status-critical",
-                )}
-              >
-                {e.rescued ? "rescued" : "still failed"}
-              </Badge>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "ml-auto text-[10px]",
+                      e.rescued === true && "text-status-good",
+                      e.rescued === false && "text-status-critical",
+                      e.rescued === null && "text-muted-foreground",
+                    )}
+                  >
+                    {e.rescued === true
+                      ? "rescued"
+                      : e.rescued === false
+                        ? "still failed"
+                        : "outcome not recorded"}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  {e.rescued === null
+                    ? "The last attempt was detached, and a detached run's audit line is written when the container launches — so the exit code in the log is a placeholder rather than a result. `sandbox-cli list` has its fate."
+                    : e.rescued
+                      ? "The agent that took over finished the work."
+                      : "The chain fired and the work still did not land — a container spent for nothing."}
+                </TooltipContent>
+              </Tooltip>
             </div>
             {/* The reason, once, below the chain rather than beside it: it is a
                 sentence, and putting a sentence inline pushed the outcome badge

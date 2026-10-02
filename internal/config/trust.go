@@ -83,6 +83,15 @@ func restrictedProjectKeys(src, inherited Config) []string {
 	if src.Engine != "" {
 		add("engine") // chooses which binary sandbox-cli executes on your machine
 	}
+	if src.Sandbox != "" {
+		// A sharper `engine`: that key chooses which binary runs the container,
+		// this one chooses whether there is a container. `sandbox: none` from a
+		// checked-in file is a repository asking to be run on the host with the
+		// user's own files in reach, and it would arrive on the *default*
+		// profile — which is why "dev-only" is not the protection it looks like,
+		// and why this is refused outright rather than gated on prod.
+		add("sandbox")
+	}
 	if src.Runtime != "" {
 		add("runtime") // selects the OCI runtime, i.e. the strength of the boundary
 	}
@@ -137,12 +146,21 @@ func restrictedProjectKeys(src, inherited Config) []string {
 		// a decision about the boundary, so it belongs to the user.
 		add("ports")
 	}
-	if src.Snapshot.Enabled != nil || src.Snapshot.Interval != "" || src.Snapshot.Retention != "" {
+	if src.Snapshot.Enabled != nil || src.Snapshot.Interval != "" || src.Snapshot.Retention != "" ||
+		src.Snapshot.ManualRetention != "" || src.Snapshot.S3 != nil {
 		// `snapshot.enabled: false` silently removes crash protection, and
 		// `interval: 1ms` turns the host into a sustained `git add -A` loop for the
 		// length of the session (confirmed: 6 commits and 18 loose objects in five
 		// seconds). maxSnapshotFileBytes was deliberately made a constant to keep it
 		// out of a project file; the cadence deserved the same treatment.
+		//
+		// `s3:` is the sharpest of them and would be refused on its own merits.
+		// It names a network destination and, through *_env, which of this
+		// machine's credentials is read — so a repository that could set it would
+		// be handed an exfiltration target and the choice of what to send there,
+		// with the whole working tree already bundled up for the trip. It holds no
+		// secret value, which is not a mitigation: `access_key_env` is a name, and
+		// naming somebody else's variable is the point of the attack.
 		add("snapshot")
 	}
 

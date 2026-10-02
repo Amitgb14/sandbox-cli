@@ -17,9 +17,12 @@ import {
   mockFiles,
   mockLogs,
   mockMetrics,
+  MOCK_SNAPSHOTS,
+  MOCK_SNAPSHOT_SETTINGS,
 } from "@/lib/mock/data";
 import { BASELINE_EGRESS, RESERVED_ENV } from "@/lib/constants";
 import type {
+  BranchList,
   Agent,
   Commit,
   HistoryStats,
@@ -47,6 +50,12 @@ import type {
   ProbeHistory,
   DaemonEgress,
   NetworkMode,
+  Snapshot,
+  SnapshotSettings,
+  SnapshotSettingsUpdate,
+  SnapshotS3Check,
+  RestoreMode,
+  RestoreResult,
 } from "@/lib/types";
 
 /**
@@ -143,10 +152,13 @@ export const api = {
    * dot-directories never — see internal/studioapi/browse.go.
    */
   browse: (path?: string) =>
-    request<BrowseListing>(`/v1/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`, {
-      fixture: () => mockBrowse(path),
-      latencyMs: 120,
-    }),
+    request<BrowseListing>(
+      `/v1/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+      {
+        fixture: () => mockBrowse(path),
+        latencyMs: 120,
+      },
+    ),
 
   /**
    * Add a repository by host path — the one request in this client that carries
@@ -386,13 +398,16 @@ export const api = {
 
   /** One conversation, parsed into turns. Named by id; the daemon finds the file. */
   sessionTranscript: (agent: string, id: string) =>
-    request<SessionTranscript>(`/v1/agents/${agent}/sessions/${encodeURIComponent(id)}`, {
-      fixture: () => ({
-        session: { id, turns: 0, modified: new Date(0).toISOString() },
-        messages: MOCK_CONVERSATION,
-      }),
-      latencyMs: 240,
-    }),
+    request<SessionTranscript>(
+      `/v1/agents/${agent}/sessions/${encodeURIComponent(id)}`,
+      {
+        fixture: () => ({
+          session: { id, turns: 0, modified: new Date(0).toISOString() },
+          messages: MOCK_CONVERSATION,
+        }),
+        latencyMs: 240,
+      },
+    ),
 
   /**
    * The transcript file as it is on disk — the answer to "is the parsed view
@@ -400,14 +415,17 @@ export const api = {
    * question worth being able to ask.
    */
   sessionRaw: (agent: string, id: string) =>
-    request<SessionRaw>(`/v1/agents/${agent}/sessions/${encodeURIComponent(id)}/raw`, {
-      fixture: () => ({
-        session: { id, turns: 0, modified: new Date(0).toISOString() },
-        size: 0,
-        content: '{"type":"user","message":{"content":"fixture line"}}\n',
-      }),
-      latencyMs: 260,
-    }),
+    request<SessionRaw>(
+      `/v1/agents/${agent}/sessions/${encodeURIComponent(id)}/raw`,
+      {
+        fixture: () => ({
+          session: { id, turns: 0, modified: new Date(0).toISOString() },
+          size: 0,
+          content: '{"type":"user","message":{"content":"fixture line"}}\n',
+        }),
+        latencyMs: 260,
+      },
+    ),
 
   launch: (req: LaunchRequest) =>
     request<{ id: string }>("/v1/runs", {
@@ -442,6 +460,155 @@ export const api = {
    * means the repository the daemon was started in, which is what this asked
    * before repositories were plural.
    */
+  /**
+   * The snapshots recorded for a repository, newest first.
+   *
+   * Baselines are filtered out by the daemon: one is recorded before every
+   * launch and holds the workspace as it was *before* the agent touched it, so
+   * offering to restore one would hand back a run's starting point looking like
+   * success.
+   */
+  snapshots: (repo?: string, branch?: string) => {
+    // `repo=all` when nothing is scoped, the same spelling worktrees uses: the
+    // daemon's *absent* parameter means the one repository it was started in,
+    // so "All repositories" cannot be said by leaving it out.
+    const params = new URLSearchParams({ repo: repo ?? "all" });
+    if (branch) params.set("branch", branch);
+    const q = params.toString();
+    return request<Snapshot[]>(`/v1/snapshots${q ? `?${q}` : ""}`, {
+      fixture: () =>
+        MOCK_SNAPSHOTS.filter(
+          (s) =>
+            (!repo || s.repoId === repo) && (!branch || s.branch === branch),
+        ),
+      latencyMs: 200,
+      unwrap: (b) => (b as { snapshots: Snapshot[] }).snapshots ?? [],
+    });
+  },
+
+  /**
+   * Checkpoint a workspace now.
+   *
+   * liveOnly, like every write whose point is to change what a later read
+   * returns: a fixture here would report a snapshot that the listing — served by
+   * the same fixtures — cannot then show, which reads as a broken feature rather
+   * than as a missing daemon.
+   */
+  createSnapshot: (body: {
+    repo?: string;
+    branch?: string;
+    label?: string;
+    retention?: string;
+  }) =>
+    request<Snapshot>("/v1/snapshots", {
+      method: "POST",
+      body,
+      liveOnly: true,
+    }),
+
+  /**
+   * Put a snapshot back.
+   *
+   * The daemon refuses this for a snapshot taken through the SDK — a script
+   * mid-way through something is not a thing to undo from a browser tab — so the
+   * button is disabled on those rather than left to fail.
+   */
+  restoreSnapshot: (
+    id: string,
+    body: { mode?: RestoreMode; branch?: string; repo?: string },
+  ) =>
+    request<RestoreResult>(`/v1/snapshots/${encodeURIComponent(id)}/restore`, {
+      method: "POST",
+      body,
+      liveOnly: true,
+    }),
+
+  /** How long one snapshot is kept; "" returns it to the default. */
+  setSnapshotRetention: (id: string, retention: string, repo?: string) =>
+    request<Snapshot>(`/v1/snapshots/${encodeURIComponent(id)}/retention`, {
+      method: "POST",
+      body: { retention, repo },
+      liveOnly: true,
+    }),
+
+  /**
+   * Mirror one snapshot to object storage now.
+   *
+   * For the two cases the automatic path leaves behind: an upload that failed
+   * while the network was down, and a snapshot taken before a bucket was
+   * configured. There is deliberately no "unmirror" — deleting a backup is not
+   * something a button should do.
+   */
+  uploadSnapshot: (id: string, repo?: string) =>
+    request<Snapshot>(`/v1/snapshots/${encodeURIComponent(id)}/upload`, {
+      method: "POST",
+      body: { repo },
+      liveOnly: true,
+    }),
+
+  /**
+   * Ask the bucket whether a snapshot's object is really there.
+   *
+   * `snapshot.remote` records what the upload did; a lifecycle rule or somebody
+   * tidying a bucket leaves a snapshot reading as mirrored when it is not. Per
+   * row and on demand, never for a whole listing.
+   */
+  verifySnapshot: (id: string, repo?: string) =>
+    request<SnapshotS3Check>(`/v1/snapshots/${encodeURIComponent(id)}/verify`, {
+      method: "POST",
+      body: { repo },
+      liveOnly: true,
+    }),
+
+  /**
+   * Does the configured bucket answer, and does the named credential resolve?
+   *
+   * Sends no body: the daemon checks what *it* is configured with. A check that
+   * dialled a host from the request would be a server-side request forgery with
+   * a Test button in front of it.
+   *
+   * liveOnly, because a fixture answering "connected" is the one lie this
+   * particular button must never tell.
+   */
+  checkSnapshotStorage: () =>
+    request<SnapshotS3Check>("/v1/snapshots/s3/check", {
+      method: "POST",
+      body: {},
+      liveOnly: true,
+    }),
+
+  snapshotSettings: () =>
+    request<SnapshotSettings>("/v1/snapshots/settings", {
+      fixture: () => MOCK_SNAPSHOT_SETTINGS,
+      latencyMs: 120,
+    }),
+
+  setSnapshotSettings: (body: SnapshotSettingsUpdate) =>
+    request<SnapshotSettings>("/v1/snapshots/settings", {
+      method: "POST",
+      body,
+      liveOnly: true,
+    }),
+
+  /**
+   * The repository's branches, for the base picker.
+   *
+   * Scoped to one repository and never `all`: a base branch is what a run will
+   * be landed into, so names from another repository would mean nothing where
+   * they were offered.
+   */
+  branches: (repo?: string) =>
+    request<BranchList>(
+      `/v1/branches${repo ? `?repo=${encodeURIComponent(repo)}` : ""}`,
+      {
+        fixture: () => ({
+          branches: ["main", "feat/studio-api", "fix/console-markdown"],
+          current: "main",
+        }),
+        latencyMs: 120,
+      },
+    ),
+
   worktrees: (repo?: string) =>
     // `repo=all` when nothing is scoped, because that is what the picker's "All
     // repositories" means — and the daemon's *absent* parameter means something
@@ -449,21 +616,30 @@ export const api = {
     // lists containers across every repository already, so a dashboard showing
     // all repositories' runs beside one repository's worktrees was comparing two
     // different questions and looked like missing worktrees.
-    request<Worktree[]>(`/v1/worktrees?repo=${encodeURIComponent(repo ?? "all")}`, {
-      fixture: () => (repo ? MOCK_WORKTREES.filter((w) => w.repoId === repo) : MOCK_WORKTREES),
-      latencyMs: 240,
-      unwrap: (b) => (b as { worktrees: Worktree[] }).worktrees,
-    }),
+    request<Worktree[]>(
+      `/v1/worktrees?repo=${encodeURIComponent(repo ?? "all")}`,
+      {
+        fixture: () =>
+          repo
+            ? MOCK_WORKTREES.filter((w) => w.repoId === repo)
+            : MOCK_WORKTREES,
+        latencyMs: 240,
+        unwrap: (b) => (b as { worktrees: Worktree[] }).worktrees,
+      },
+    ),
 
   worktree: (branch: string, repo?: string) =>
-    request<Worktree>(`/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`, {
-      fixture: () => {
-        const w = MOCK_WORKTREES.find((x) => x.branch === branch);
-        if (!w) throw new Error(`no worktree ${branch}`);
-        return w;
+    request<Worktree>(
+      `/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`,
+      {
+        fixture: () => {
+          const w = MOCK_WORKTREES.find((x) => x.branch === branch);
+          if (!w) throw new Error(`no worktree ${branch}`);
+          return w;
+        },
+        latencyMs: 140,
       },
-      latencyMs: 140,
-    }),
+    ),
 
   worktreeCommits: (branch: string, repo?: string) =>
     request<Commit[]>(
@@ -507,16 +683,22 @@ export const api = {
 
   /** What one commit changed. Scoped to this daemon's project. */
   commitDiff: (sha: string, repo?: string) =>
-    request<DiffFile[]>(`/v1/commits/${encodeURIComponent(sha)}/diff${repoQuery(repo)}`, {
-      fixture: () => [],
-      latencyMs: 200,
-    }),
+    request<DiffFile[]>(
+      `/v1/commits/${encodeURIComponent(sha)}/diff${repoQuery(repo)}`,
+      {
+        fixture: () => [],
+        latencyMs: 200,
+      },
+    ),
 
   removeWorktree: (branch: string, repo?: string) =>
-    request<void>(`/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`, {
-      method: "DELETE",
-      fixture: () => undefined,
-    }),
+    request<void>(
+      `/v1/worktrees/${encodeURIComponent(branch)}${repoQuery(repo)}`,
+      {
+        method: "DELETE",
+        fixture: () => undefined,
+      },
+    ),
 
   landWorktree: (branch: string, onto?: string) =>
     request<{ merged: boolean; message: string }>(
@@ -583,7 +765,10 @@ export const api = {
  * real preview — a form that guessed at the full rule set would eventually
  * disagree with the thing that actually enforces it.
  */
-export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchPreview {
+export function localPreview(
+  req: LaunchRequest,
+  egress?: DaemonEgress,
+): LaunchPreview {
   const refusals: string[] = [];
   const warnings: string[] = [];
 
@@ -635,6 +820,11 @@ export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchP
         "prod does not mount the host's Claude history bucket: it is a host path outside the workspace.",
       );
     }
+    if (req.publish.length > 0) {
+      refusals.push(
+        "prod refuses published ports: publishing opens the boundary inward, and prod is the profile for runs nobody is watching. The daemon says the same thing, and would say it after the launch rather than before.",
+      );
+    }
   }
 
   for (const name of req.envAllow) {
@@ -649,21 +839,74 @@ export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchP
     refusals.push("Nothing to run: pick an agent or give a command.");
   }
 
-  if (req.detach && !req.worktree) {
-    warnings.push(
-      "A detached run is named sandbox-<repo>-<branch>, and docker's duplicate-name refusal is what enforces one agent per branch. Without a worktree this will collide with another run on the same branch.",
+  // The daemon's handoff rules, said before the launch rather than after it.
+  // Each is a request it refuses outright, so showing them here is the
+  // difference between a control that explains itself and a 400.
+  if (req.resume && !req.console) {
+    // The daemon refuses a headless resume, and the form drops the field rather
+    // than sending one — so without this the run launches as a brand-new
+    // conversation with whatever prompt is in the box, and nothing on screen
+    // says the conversation was dropped. Arriving from a row's Continue makes
+    // that one field away: an agent run keeps a console by default, so this
+    // fires once something that cannot have one — a verify command, a fallback
+    // chain — has been filled in underneath a conversation already picked.
+    refusals.push(
+      "Resuming a conversation needs the console: a headless resume would replay one prompt into an old conversation and exit. Clear whatever made this run headless — a verify command, a fallback agent, or a prompt for an agent that cannot be handed one — or clear the conversation to start a new one.",
     );
   }
 
-  if (req.verify && !req.detach) {
+  if (req.handoffFrom) {
+    if (!req.agent) {
+      refusals.push(
+        "A briefing is something an agent reads: pick one, or drop the conversation you are handing over.",
+      );
+    }
+    if (!req.prompt.trim()) {
+      refusals.push(
+        "A handoff needs a prompt: the briefing says what happened before, and the prompt says what to do now. Without one the agent is handed evidence and no instruction.",
+      );
+    }
+    if (req.resume) {
+      refusals.push(
+        "Resume and handoff are opposites: one reopens a conversation with the agent that wrote it, the other starts a new one carrying a briefing about it. Pick one.",
+      );
+    }
+  }
+
+  // Unconditional, because the daemon is: `runs.go` sets `Detach: true` on every
+  // request — an HTTP request/response cycle has nowhere to hold a pty — so the
+  // collision this warns about is a property of launching from Studio at all,
+  // not of a setting. It used to be gated on `req.detach`, a form field that
+  // never travelled, which meant the one launch that could collide was the one
+  // that got no warning.
+  if (!req.worktree) {
     warnings.push(
-      "verify is what makes a run autonomous rather than merely headless. It is wired for attached runs too, but its exit code is the container's — you will see it as the run's outcome, not on screen.",
+      "A run launched here is detached and named sandbox-<repo>-<branch>, and docker's duplicate-name refusal is what enforces one agent per branch. Without a worktree this will collide with another run on the same branch.",
     );
   }
 
-  if (req.share.length > 0) {
+  if (req.share) {
     warnings.push(
-      `--share widens the boundary deliberately: ${req.share.length} extra host ${req.share.length === 1 ? "directory is" : "directories are"} in reach.`,
+      req.shareName.trim()
+        ? `--share widens the boundary deliberately: /shared/${req.shareName.trim()} is in reach, and so is every run that shares the root.`
+        : "--share widens the boundary deliberately: the shared handoff directory is in reach, along with everything other sandboxes have left in it.",
+    );
+  }
+
+  // Louder than share, because it is the only option here that opens a way *in*
+  // rather than widening what goes out — and a preview that warned about a mount
+  // and said nothing about an inbound port would rank them backwards.
+  if (req.publish.length > 0) {
+    const bound = req.publish.filter(
+      (p) =>
+        !/^(127\.0\.0\.1|localhost|\[::1\])[:.]/.test(p) &&
+        p.includes(":") &&
+        /^\d+\.|^\[/.test(p),
+    );
+    warnings.push(
+      bound.length > 0
+        ? `--publish ${bound.join(", ")} binds an address you named rather than loopback: anything that can reach that address can reach the container.`
+        : `--publish opens the way in for ${req.publish.length} port${req.publish.length === 1 ? "" : "s"}, bound to 127.0.0.1 on the machine running the daemon.`,
     );
   }
 
@@ -681,7 +924,13 @@ export function localPreview(req: LaunchRequest, egress?: DaemonEgress): LaunchP
     ...(req.sync && req.agent === "claude"
       ? ["~/.claude/projects/<this project>"]
       : []),
-    ...req.share,
+    ...(req.share
+      ? [
+          req.shareName.trim()
+            ? `~/.config/sandbox/shared/${req.shareName.trim()}`
+            : "~/.config/sandbox/shared",
+        ]
+      : []),
   ];
 
   return {
@@ -706,7 +955,10 @@ function previewArgv(
     kind: req.verify ? "fleet" : "interactive",
     agent: req.agent,
     command: req.agent ? [req.agent] : req.command.split(/\s+/).filter(Boolean),
-    detached: req.detach,
+    // Always: the daemon detaches every run it is asked for, whatever a form
+    // says. A preview that showed otherwise was describing a container nobody
+    // was going to get.
+    detached: true,
     branch,
     base: req.base,
     verify: req.verify || null,
@@ -716,6 +968,11 @@ function previewArgv(
       mode: effectiveMode,
       baseline,
       allow,
+      // Container ports, as the daemon would resolve them: a spec may be
+      // "8080:8000", and what the firewall carves out is the container half.
+      ingressPorts: req.publish
+        .map((p) => Number(p.split(":").pop()?.split("/")[0]))
+        .filter((n) => Number.isFinite(n) && n > 0),
       networkName: effectiveMode === "allowlist" ? "sandbox-net" : undefined,
       enforcement: effectiveMode === "allowlist" ? "name" : null,
     },
@@ -741,12 +998,20 @@ function previewArgv(
             },
           ]
         : []),
-      ...req.share.map((s) => ({
-        host: s,
-        container: s,
-        mode: "rw" as const,
-        origin: "share" as const,
-      })),
+      ...(req.share
+        ? [
+            {
+              host: req.shareName.trim()
+                ? `~/.config/sandbox/shared/${req.shareName.trim()}`
+                : "~/.config/sandbox/shared",
+              container: req.shareName.trim()
+                ? `/shared/${req.shareName.trim()}`
+                : "/shared",
+              mode: "rw" as const,
+              origin: "share" as const,
+            },
+          ]
+        : []),
     ],
   });
 }
@@ -763,8 +1028,7 @@ function previewArgv(
  *                     could pick its own profile would drop a run out of prod.
  *   network.mode      tighten-only, and not expressible per-request at all.
  *   envAllow          decides which host variables cross into the container.
- *   share / publish   a mount and an inbound port — the two widest things a
- *                     launch option can add.
+ *   share             a mount, the widest thing a launch option can add.
  *   persistAuth       whether an OAuth refresh token is mounted.
  *
  * Those are shown so you can see what you are about to get, and they come from
@@ -773,6 +1037,15 @@ function previewArgv(
  *
  * What does travel is the task: which agent, what to do, where, and the limits
  * that only ever narrow it.
+ *
+ * **Published ports do travel**, and they are the one thing here that opens a
+ * way *in* rather than narrowing what goes out. That is deliberate: an agent
+ * running a dev server is a real reason to want one, and `trust.go` already
+ * draws the line in the right place — a repository may not declare `ports:`,
+ * because it is a decision about the boundary that belongs to the user, and a
+ * request from this form *is* the user making it on their own daemon. A bare
+ * port binds loopback on the daemon's host, so the default reach is the machine
+ * you are already on.
  */
 function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {};
@@ -811,8 +1084,17 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   if (req.console && req.agent) body.console = true;
   // Both are console-only and agent-only, and the daemon refuses them
   // otherwise — so the form does not send a pair it knows will 400.
-  if (req.console && req.agent && req.skipPermissions) body.skipPermissions = true;
+  if (req.console && req.agent && req.skipPermissions)
+    body.skipPermissions = true;
   if (req.console && req.agent && req.resume) body.resume = req.resume;
+  // A briefing, and only where the daemon accepts one: an agent to read it, no
+  // resume alongside it (refused together), and a prompt, since the briefing
+  // says what happened before and the prompt says what to do now. Unlike resume
+  // it is not console-only — a handoff starts a *new* conversation, so running
+  // it headless is a legitimate thing to want.
+  if (req.agent && req.handoffFrom && !req.resume && req.prompt.trim()) {
+    body.handoffFrom = req.handoffFrom;
+  }
   // Refused together by the daemon, so the form does not send a pair it knows
   // will 400. Verify decides the exit code; an interactive session's exit code
   // is whenever you quit.
@@ -822,6 +1104,18 @@ function toRunCreate(req: LaunchRequest): Record<string, unknown> {
   // Domains add to the baseline and cannot subtract from it, so this narrows or
   // does nothing — the one network field a request may carry.
   if (req.network.allow.length > 0) body.allow = req.network.allow;
+  // Ports travel: publishing is a decision about the boundary, and a request is
+  // the user making it on their own daemon — the same act as typing --publish.
+  // What may not make it is a repository, which trust.go refuses `ports:` from.
+  if (req.publish.length > 0) body.publish = req.publish;
+  // Sharing travels, and it did not used to: the form collected it, the preview
+  // warned about the reach, and this function dropped it — so a run told to
+  // hand a file over through /shared had no /shared. A namespace goes only with
+  // the flag it needs, which the daemon refuses without.
+  if (req.share) {
+    body.share = true;
+    if (req.shareName.trim()) body.shareName = req.shareName.trim();
+  }
 
   return body;
 }

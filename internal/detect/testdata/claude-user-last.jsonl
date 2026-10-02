@@ -1,0 +1,2 @@
+{"type":"assistant","timestamp":"2026-09-11T09:59:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Ready."}]}}
+{"type":"user","timestamp":"2026-09-11T10:00:00Z","cwd":"/workspace","message":{"role":"user","content":"now run the tests"}}

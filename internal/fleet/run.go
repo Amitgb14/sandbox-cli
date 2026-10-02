@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,8 +10,10 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -21,6 +24,20 @@ type Runner struct {
 	Session *sandbox.Session
 	// Inspector finds containers this repository already has running.
 	Inspector runtime.Inspector
+
+	// Panes records each launch in the session catalog, so a fleet container is a
+	// pane like any other: it carries a pane id, it is listed by `pane list`, and —
+	// the reason this matters rather than being tidiness — a running `sandbox-cli
+	// serve` snapshots it. Before this, a fleet agent had no crash safety net at all,
+	// for exactly the reason every other detached run had none: nothing was watching
+	// it.
+	//
+	// Optional. Nil means the launch goes straight to `sandbox.Session.Start` as it
+	// always did, which is what keeps `fleet run` working in a directory where no
+	// catalog can be opened — a fleet is a git operation on a repository, and
+	// refusing one because bookkeeping is unavailable would trade a working feature
+	// for a record of it.
+	Panes *session.Server
 	// Controller stops, reaps and reads the logs of those containers. Optional:
 	// only the commands that act on existing containers need it.
 	Controller runtime.Controller
@@ -83,7 +100,12 @@ type LaunchResult struct {
 	Agent        string
 	WorktreePath string
 	ContainerID  string
-	Err          error
+	// PaneID is the catalog's handle for this launch, empty when there was no
+	// catalog to record in. Printed nowhere today — the branch is the fleet's handle
+	// everywhere — and carried so a caller that wants `pane wait` has something to
+	// pass it.
+	PaneID string
+	Err    error
 }
 
 // slotPoll is how often Launch re-checks for a free slot when max_parallel caps
@@ -246,12 +268,13 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, tas
 		res.Err = err
 		return res
 	}
-	id, err := r.Session.Start(ctx, opts, forceBuild)
+	id, pane, err := r.start(ctx, opts, forceBuild)
 	if err != nil {
 		res.Err = err
 		return res
 	}
 	res.ContainerID = id
+	res.PaneID = pane
 
 	verb := "reusing"
 	if info.Created {
@@ -269,6 +292,44 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, tas
 	// prints the real ids from the inspector for the commands that want one.
 	r.logf("started %s on %s (%s worktree %s)", agent.Name, task.Branch, verb, info.Path)
 	return res
+}
+
+// start launches the task's container, through the catalog when there is one.
+//
+// The pane kind is **verify** for a task that declared one, and that is a reading of
+// what the container is rather than a shortcut. `withVerify` wraps the verify around
+// the agent's argv inside the one container and makes its exit code the container's —
+// so the thing that pane reports is the verdict, which is what `land` reads. The
+// phase's plan asked for a *second* pane instead, spawned when the agent pane reaches
+// a terminal state; that needs durable sequencing, because an in-memory "now run the
+// verify" step is a verify that silently never runs after a daemon restart. Which is
+// the invisible-gap objection that kept the snapshot loop out of the supervisor for a
+// year. One container, one exit code, no sequencer.
+func (r *Runner) start(ctx context.Context, opts sandbox.Options, forceBuild bool) (containerID, paneID string, err error) {
+	if r.Panes == nil {
+		id, err := r.Session.Start(ctx, opts, forceBuild)
+		return id, "", err
+	}
+	kind := protocol.PaneAgent
+	if opts.Verify != "" {
+		kind = protocol.PaneVerify
+	} else if opts.Agent == "" {
+		kind = protocol.PaneCommand
+	}
+	pane, err := r.Panes.Spawn(ctx, r.Session, opts, kind, forceBuild)
+	var saveErr *session.SaveError
+	if errors.As(err, &saveErr) {
+		// The container is up and only the row is missing. Reporting the launch as
+		// failed would be false, and a fleet that retried on it would ask for a second
+		// agent on one branch — which docker would refuse, turning a bookkeeping
+		// failure into a task failure.
+		r.logf("%v", saveErr)
+		return pane.ContainerName, pane.ID, nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return pane.ContainerName, pane.ID, nil
 }
 
 // options turns a task into the sandbox options for its container. Everything

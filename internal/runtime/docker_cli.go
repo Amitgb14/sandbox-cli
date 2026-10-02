@@ -672,17 +672,40 @@ func (d *DockerCLI) WarnIfSeccompDisabled(ctx context.Context) {
 	fmt.Fprintln(d.stderr(), "sandbox-cli: this "+string(d.engine())+" daemon applies no seccomp profile, so the container "+
 		"has the full syscall table\n"+
 		"  the other hardening still applies (non-root, cap-drop, no-new-privileges), but this layer is absent\n"+
-		"  "+seccompRemedy(d.engine()))
+		"  "+SeccompRemedy(d.engine()))
 }
 
-// seccompRemedy names the fix for the engine in hand rather than assuming Docker
+// SeccompRemedy names the fix for the engine in hand rather than assuming Docker
 // Desktop, which is not even the common case on Linux.
-func seccompRemedy(e Engine) string {
+//
+// It reports **candidates, not a diagnosis**, and that correction is the reason
+// this is one exported function rather than the four copies it used to be. The
+// old text said "remove \"seccomp-profile\": \"unconfined\"" as a statement of
+// fact, and a user hit it on a machine whose daemon.json contained no such key —
+// verified: no seccomp setting in daemon.json, the Desktop settings store, or
+// admin policy, and the daemon reporting profile=unconfined all the same
+// (`Seccomp: 0` inside a container, so the refusal itself was right). Being sent
+// to delete a line that is not there is worse than being told less: it reads as
+// the tool having misdiagnosed, which makes the refusal look wrong too.
+//
+// So it names the setting *conditionally* and then the other known cause. Docker
+// Desktop's containerd image store has been reported to leave the filter off
+// with nothing in daemon.json (docker/for-win#13851). That is attributed as a
+// report rather than asserted, which is the rule creds.Classify already keeps for
+// the same reason: a sentence that names evidence stays true when the cause turns
+// out to be something else.
+func SeccompRemedy(e Engine) string {
 	if e == EnginePodman {
 		return "check seccomp is enabled for your podman install (containers.conf `seccomp_profile`)"
 	}
-	return "on Docker Desktop: Settings > Docker Engine, remove \"seccomp-profile\": \"unconfined\""
+	return "if daemon.json sets \"seccomp-profile\": \"unconfined\", remove it — Docker Desktop: Settings > Docker Engine\n" +
+		"  if it does not, the containerd image store has been reported to leave the filter off — Docker Desktop: Settings > General"
 }
+
+// SeccompRemedy for this engine, for callers holding the Runtime rather than the
+// dialect. One method so a caller that has already asked SeccompUnavailable can
+// print the matching advice without knowing which engine answered.
+func (d *DockerCLI) SeccompRemedy() string { return SeccompRemedy(d.engine()) }
 
 // Runtimes lists the OCI runtimes the daemon has registered.
 //

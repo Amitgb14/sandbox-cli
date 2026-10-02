@@ -60,6 +60,10 @@ jobs:
             dockerfile: ./Dockerfile.studio-api
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The tags, so `git describe` below has something to describe. A shallow
+          # checkout has none, and the version would degrade to a bare sha.
+          fetch-depth: 0
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -85,10 +89,23 @@ jobs:
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,format=short
 
+      # The version the binary inside reports. Only the API image has a Go binary
+      # in it; the UI leg ignores the arg, which is cheaper than a second step
+      # that differs only in this.
+      #
+      # `git describe` rather than the tag name, so a main build says what it is
+      # (`0.0.1-49-g573d89b`) instead of borrowing the last release's number. The
+      # checkout above is shallow by default, hence fetch-depth 0 — without the
+      # tags, describe falls back to a bare sha and the version loses its lineage.
+      - id: ver
+        run: echo "version=$(git describe --tags --always 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
           # One architecture on a pull request: the second proves the manifest,
           # not the Dockerfile, and arm64 under QEMU is where the minutes go.
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}

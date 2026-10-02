@@ -28,6 +28,8 @@
 #   --ui-only        run the browser half only, against a daemon elsewhere
 #   --api-url URL    which daemon the UI talks to  (implies --ui-only)
 #   --bind ADDR      address the daemon listens on  (default: 127.0.0.1)
+#   --allow-host H   extra Host the daemon answers to   (repeatable)
+#   --cors-origin U  extra origin it accepts, with scheme  (repeatable)
 #   --no-install     use the binaries already on this machine
 #   --no-pull        do not refresh the image
 #
@@ -58,11 +60,26 @@
 #      while every request is refused on the origin check, which looks exactly
 #      like the daemon being down.
 #
-# There is no TLS here. The safe shape is to leave the daemon on loopback and
-# tunnel to it — `ssh -N -L 8787:127.0.0.1:8787 you@box`, then use
-# http://localhost:8787 — which keeps every check in guard.go true. `--bind` is
-# for private networks you already trust; the daemon refuses a routable address
-# with no token.
+# There is no TLS here, so three shapes hold and they are not equal:
+#
+#   1. a tunnel — `ssh -N -L 8787:127.0.0.1:8787 you@box`, then
+#      `--api-url http://localhost:8787`. The daemon stays on loopback, so every
+#      check in guard.go stays true and the transport is SSH's. Nothing new to
+#      trust, and the recommended shape.
+#   2. a reverse proxy terminating TLS in front (Caddy, nginx), which is what to
+#      use when several people reach the machine:
+#
+#        sh studio.sh up --api-only --allow-host api.example.com \
+#          --cors-origin https://studio.example.com
+#
+#      Both flags *add* to what this script works out for itself, because a
+#      proxied deployment's names are not derivable from --bind or --port: the
+#      browser dials one name and the page is served from another. The daemon
+#      stays on 127.0.0.1, so the proxy is the only way in. On your own machine,
+#      `--ui-only --api-url https://api.example.com`. See docs/studio-api/README.md.
+#   3. `--bind` on a private network you already trust, knowing the token and
+#      every prompt cross it in cleartext. The daemon refuses a routable address
+#      with no token at all.
 #
 # ── The repository it starts in, and the ones you add ────────────────────────
 #
@@ -154,6 +171,17 @@ API_URL=""
 BIND="127.0.0.1"
 NO_INSTALL=0
 NO_PULL=0
+# Extra names the daemon should answer to, and extra origins it should accept —
+# both **added** to what this script works out for itself, never replacing it.
+#
+# That direction is the same one the daemon takes with -allow-host (loopback is
+# always allowed and the flag adds to it) and the same one a fleet task takes
+# with `allow`. It is what a proxied deployment needs: the browser dials
+# api.example.com and the page is served from https://studio.example.com, and
+# neither is derivable from --bind or --port. Space-separated because this is
+# POSIX sh and there are no arrays.
+EXTRA_HOSTS=""
+EXTRA_ORIGINS=""
 
 STATE="${XDG_CONFIG_HOME:-${HOME}/.config}/sandbox/studio"
 PIDFILE="${STATE}/api.pid"
@@ -194,6 +222,8 @@ while [ $# -gt 0 ]; do
     --ui-only)       UI_ONLY=1; shift ;;
     --api-url)       API_URL=$(need --api-url "${2:-}"); UI_ONLY=1; shift 2 ;;
     --bind)          BIND=$(need --bind "${2:-}"); shift 2 ;;
+    --allow-host)    EXTRA_HOSTS="$EXTRA_HOSTS $(need --allow-host "${2:-}")"; shift 2 ;;
+    --cors-origin)   EXTRA_ORIGINS="$EXTRA_ORIGINS $(need --cors-origin "${2:-}")"; shift 2 ;;
     --no-install)    NO_INSTALL=1; shift ;;
     --no-pull)       NO_PULL=1; shift ;;
     # The header comment, however long it has grown: a fixed line range silently
@@ -323,6 +353,50 @@ container_exists() { docker container inspect "$1" >/dev/null 2>&1; }
 
 # Whole seconds: a fractional `sleep` is a GNU/BSD extension, and this script
 # should not be the reason it fails on a smaller shell.
+# What this run wrote, and nothing earlier.
+api_log_this_run() {
+  if [ "$API_IN_DOCKER" = 1 ]; then
+    docker logs --tail 20 "$API_NAME" 2>&1
+    return
+  fi
+  offset=${API_LOG_OFFSET:-0}
+  # This run's bytes (+1 because tail counts from the byte after the offset),
+  # then the *last* twenty of them. A refusal writes two lines and exits, so
+  # either end shows it; a daemon that has been alive and logging for twenty
+  # seconds has its reason at the end, under a startup banner that is not it.
+  tail -c "+$((offset + 1))" "$LOGFILE" 2>/dev/null | tail -n 20
+}
+
+# wait_for_api URL — like wait_for, but gives up the moment the daemon is gone.
+#
+# A daemon that refuses its config exits in milliseconds, and waiting twenty
+# seconds for a process that is not there says "did not answer" when the truth is
+# "would not start". They send a reader to different places: one to the network,
+# the other to the file it was told about.
+# Whether the daemon is still there, whichever way it was started. The container
+# path writes no pidfile — do_down even deletes it — so a `kill -0` on an empty
+# string skips the check entirely and a containerised daemon that refused its
+# config still waits out the full twenty seconds and reports a timeout, which is
+# the one sentence this was written to remove.
+api_alive() { # api_alive PID
+  if [ "$API_IN_DOCKER" = 1 ]; then
+    [ "$(docker container inspect -f '{{.State.Running}}' "$API_NAME" 2>/dev/null)" = "true" ]
+    return
+  fi
+  [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+}
+
+wait_for_api() { # wait_for_api URL PID
+  i=0
+  while [ "$i" -lt 20 ]; do
+    if http_ok "$1"; then return 0; fi
+    if ! api_alive "${2:-}"; then return 2; fi
+    i=$((i + 1))
+    sleep 1
+  done
+  return 1
+}
+
 wait_for() { # wait_for URL
   i=0
   while [ "$i" -lt 20 ]; do
@@ -522,17 +596,25 @@ resolve_api_bin() {
 # the operator names with --bind explicitly, and the guard's refusal says which
 # host it rejected.
 reachable_hosts() {
-  hostname 2>/dev/null
+  hostname 2>/dev/null || true
   if command -v ipconfig >/dev/null 2>&1; then          # macOS
     for i in $(ipconfig getiflist 2>/dev/null); do
-      ipconfig getifaddr "$i" 2>/dev/null
+      # `|| true` on the command itself, not just `return 0` at the end. Every
+      # Mac holds interfaces with no address (en4, awdl0, llw0), `getifaddr`
+      # exits 1 on each of them, and under `set -e` that killed the *loop* —
+      # long before the trailing `return 0` could make the function succeed.
+      # The symptom was `up --bind 0.0.0.0` printing "starting Studio" and
+      # exiting silently: no daemon, no error, nothing in api.log, because the
+      # script died working out which names to allow rather than starting
+      # anything. Loopback binds never call this, so it only hit the flag it
+      # exists to serve.
+      ipconfig getifaddr "$i" 2>/dev/null || true
     done
   elif command -v ip >/dev/null 2>&1; then              # Linux
     ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]}'
   fi
-  # Always successful: an interface with no address makes the last command fail,
-  # and under  that would abort a launch over a question this only
-  # answers as a courtesy.
+  # An address this cannot discover is one the operator names with --bind
+  # explicitly; none of it is worth failing a launch over.
   return 0
 }
 
@@ -562,16 +644,36 @@ start_api_host() {
     *)                       allow_hosts="$BIND" ;;
   esac
   allow_args=""
-  for h in $allow_hosts; do
+  for h in $allow_hosts $EXTRA_HOSTS; do
     allow_args="$allow_args -allow-host $h"
   done
+  # The origins this script can work out are the local UI's. A proxied
+  # deployment's page is served from a name only the operator knows, so it is
+  # added here rather than derived — and it has to carry its scheme, because a
+  # browser sends `https://studio.example.com` and an origin allowlist compares
+  # the whole string.
+  origin_args=""
+  for o in $EXTRA_ORIGINS; do
+    origin_args="$origin_args -cors-origin $o"
+  done
 
-  # shellcheck disable=SC2086  # allow_args is a deliberately word-split list
+  # Where this run's lines begin. The log is appended to across restarts, so a
+  # plain `tail` on failure shows six previous startups and buries the one
+  # sentence that matters — which is exactly how a config refusal read as a
+  # mystery timeout.
+  # Guarded with -f rather than 2>/dev/null: the input redirect is processed
+  # before the redirection of stderr applies, so on a first run the *shell*
+  # prints "No such file or directory" before `|| echo 0` can recover.
+  API_LOG_OFFSET=0
+  [ -f "$LOGFILE" ] && API_LOG_OFFSET=$(wc -c < "$LOGFILE")
+
+  # shellcheck disable=SC2086  # allow_args and origin_args are deliberately word-split lists
   nohup "$API_BIN" \
     -addr "${BIND}:${API_PORT}" \
     -project "$PROJECT" \
     -config "$CONFIG" \
     $allow_args \
+    $origin_args \
     -cors-origin "http://localhost:${UI_PORT}" \
     -cors-origin "http://127.0.0.1:${UI_PORT}" \
     >>"$LOGFILE" 2>&1 &
@@ -579,11 +681,26 @@ start_api_host() {
 }
 
 start_api_container() {
+  # The same two lists the host path builds. Repeated rather than shared because
+  # the two launches differ in everything else — one is a process, one is a
+  # container published on a port — but a deployment that works one way and not
+  # the other is exactly the kind of difference nobody finds until they switch.
+  #
+  c_allow_args=""
+  for h in $EXTRA_HOSTS; do
+    c_allow_args="$c_allow_args -allow-host $h"
+  done
+  c_origin_args=""
+  for o in $EXTRA_ORIGINS; do
+    c_origin_args="$c_origin_args -cors-origin $o"
+  done
+
   warn "the API container mounts /var/run/docker.sock, which is root on this host:
   anything that can reach it can start a container mounting /. That is the
   boundary sandbox-cli exists to hold. Drop --api-in-docker to run it as an
   ordinary host process instead."
   [ "$NO_PULL" = 1 ] || docker pull -q "$API_REF" >/dev/null
+  # shellcheck disable=SC2086  # c_allow_args and c_origin_args are deliberately word-split
   docker run -d \
     --name "$API_NAME" \
     -p "127.0.0.1:${API_PORT}:8787" \
@@ -600,6 +717,8 @@ start_api_container() {
     -addr 0.0.0.0:8787 \
     -project "$PROJECT" \
     -config "$CONFIG" \
+    $c_allow_args \
+    $c_origin_args \
     -cors-origin "http://localhost:${UI_PORT}" \
     -cors-origin "http://127.0.0.1:${UI_PORT}" >/dev/null
 }
@@ -639,10 +758,16 @@ do_up_api_only() {
   # Probed where it actually listens. A --bind daemon is not on 127.0.0.1, so a
   # hardcoded loopback check reported "did not come up" for a daemon that had
   # come up perfectly — on exactly the flag combination this mode exists for.
-  if wait_for "http://${BIND}:${API_PORT}/v1/health"; then
+  api_pid=$(cat "$PIDFILE" 2>/dev/null || true)
+  api_status=0
+  wait_for_api "http://${BIND}:${API_PORT}/v1/health" "$api_pid" || api_status=$?
+  if [ "$api_status" = 0 ]; then
     info "  api  ${BIND}:${API_PORT}"
   else
-    tail -n 20 "$LOGFILE" 2>/dev/null | sed 's/^/    /' || true
+    if [ "$api_status" = 2 ]; then
+      warn "the daemon exited without answering — it refused to start, rather than being slow"
+    fi
+    api_log_this_run | sed 's/^/    /' || true
     die "the daemon did not come up. The lines above are its own account of why."
   fi
 
@@ -658,7 +783,20 @@ do_up_api_only() {
   info "  Daemon URL   http://${advertise}:${API_PORT}"
   info "  Token        ${TOKEN}"
   info ""
-  if [ "$BIND" = "127.0.0.1" ]; then
+  if [ -n "$EXTRA_HOSTS" ] && [ "$BIND" = "127.0.0.1" ]; then
+    # A name was given, so a proxy is in front and the tunnel advice below is
+    # about a URL nobody will dial. Printing it anyway is how an operator who
+    # chose one shape is talked back into another.
+    for h in $EXTRA_HOSTS; do
+      info "Behind your proxy, the Daemon URL is https://${h} — this process stays"
+      info "on 127.0.0.1:${API_PORT}, so the proxy is the only way in."
+      break
+    done
+    info ""
+    info "The UI half has to run somewhere too. On this machine, beside the daemon:"
+    info "  sh studio.sh up --ui-only --api-url https://${h}"
+    info "which publishes it on 127.0.0.1:${UI_PORT} for the proxy to serve."
+  elif [ "$BIND" = "127.0.0.1" ]; then
     info "This daemon is on loopback, which is the safe default — reach it with a tunnel:"
     info "  ssh -N -L ${API_PORT}:127.0.0.1:${API_PORT} $(id -un)@$(hostname)"
     info "then use http://localhost:${API_PORT} as the Daemon URL."
@@ -674,6 +812,14 @@ do_up_api_only() {
 # container and a URL.
 do_up_ui_only() {
   require_docker
+  # These configure a daemon, and this path starts none. Silence would leave the
+  # operator watching every request refused on the origin check with nothing to
+  # connect it to — the failure mode the flags exist to prevent, arriving through
+  # the flags themselves.
+  if [ -n "$EXTRA_HOSTS" ] || [ -n "$EXTRA_ORIGINS" ]; then
+    warn "--allow-host and --cors-origin configure the daemon, and this starts only the
+  UI. Pass them on the machine running the daemon (sh studio.sh up --api-only …)."
+  fi
   target="${API_URL:-http://localhost:${API_PORT}}"
   docker rm -f "$UI_NAME" >/dev/null 2>&1 || true
   [ "$NO_PULL" = 1 ] || { info "  pulling ${UI_REF}"; docker pull -q "$UI_REF" >/dev/null; }
@@ -712,17 +858,26 @@ do_up() {
     start_api_host
   fi
 
-  if wait_for "http://127.0.0.1:${API_PORT}/v1/health"; then
-    info "  api  http://127.0.0.1:${API_PORT}"
-  else
-    warn "the API did not answer on ${API_PORT} within 20s"
-    if [ "$API_IN_DOCKER" = 1 ]; then
-      docker logs --tail 20 "$API_NAME" 2>&1 | sed 's/^/    /' || true
-    else
-      tail -n 20 "$LOGFILE" 2>/dev/null | sed 's/^/    /' || true
-    fi
-    die "Studio did not come up. The lines above are the API's own account of why."
-  fi
+  api_pid=$(cat "$PIDFILE" 2>/dev/null || true)
+  # Captured with `|| status=$?` rather than read from `$?` after the call: this
+  # script runs under `set -e`, so a bare command returning non-zero ends it
+  # there and then — silently, with the daemon's status as the script's, which
+  # is precisely the mystery this block exists to remove.
+  api_status=0
+  wait_for_api "http://127.0.0.1:${API_PORT}/v1/health" "$api_pid" || api_status=$?
+  case "$api_status" in
+    0) info "  api  http://127.0.0.1:${API_PORT}" ;;
+    2)
+      warn "the daemon exited without answering — it refused to start, rather than being slow"
+      api_log_this_run | sed 's/^/    /' || true
+      die "Studio did not come up. The lines above are the daemon's own account of why."
+      ;;
+    *)
+      warn "the API did not answer on ${API_PORT} within 20s"
+      api_log_this_run | sed 's/^/    /' || true
+      die "Studio did not come up. The lines above are the daemon's own account of why."
+      ;;
+  esac
 
   start_ui
   if wait_for "http://127.0.0.1:${UI_PORT}"; then

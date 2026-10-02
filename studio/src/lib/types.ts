@@ -24,12 +24,7 @@
 
 /** Docker's own container states, as `runtime.ContainerInfo.State` reports them. */
 export type RunState =
-  | "created"
-  | "running"
-  | "paused"
-  | "exited"
-  | "dead"
-  | "removing";
+  "created" | "running" | "paused" | "exited" | "dead" | "removing";
 
 /**
  * `sandbox.fleet` — the label that separates a `fleet run` container from an
@@ -55,7 +50,7 @@ export type Profile = "dev" | "prod";
 
 export type Engine = "docker" | "podman";
 
-/** The fifteen adapters in `cli.agentCmds()`. */
+/** The twelve adapters in `cli.agentCmds()`. */
 export type AgentName =
   | "claude"
   | "codex"
@@ -63,15 +58,12 @@ export type AgentName =
   | "opencode"
   | "cline"
   | "goose"
-  | "crush"
-  | "aider"
   | "copilot"
   | "cursor"
   | "qwen"
-  | "amp"
-  | "continue"
   | "openhands"
-  | "droid";
+  | "devin"
+  | "kilocode";
 
 /** `config.MountSpec`. */
 export interface MountSpec {
@@ -79,7 +71,14 @@ export interface MountSpec {
   container: string;
   mode: "ro" | "rw";
   /** Why this mount exists, for the one place the UI has to justify reach. */
-  origin?: "workspace" | "worktree-git" | "persisted-home" | "history" | "statusline" | "share" | "cache";
+  origin?:
+    | "workspace"
+    | "worktree-git"
+    | "persisted-home"
+    | "history"
+    | "statusline"
+    | "share"
+    | "cache";
 }
 
 /**
@@ -158,6 +157,14 @@ export interface Run {
    * listing and asks why it says codex when they picked claude.
    */
   routedFrom?: string;
+  /**
+   * The agent whose conversation this run was briefed with, and the session it
+   * came from — set when somebody handed the work over, rather than when
+   * routing did. Both look like "codex, after claude" in a listing and answer
+   * different questions, which is why they are separate fields.
+   */
+  handoffFrom?: string;
+  handoffSession?: string;
   routeReason?: string;
 
   /**
@@ -206,12 +213,7 @@ export interface Run {
 
 /** The verdict a row shows, derived rather than stored. */
 export type RunOutcome =
-  | "running"
-  | "passed"
-  | "failed"
-  | "verify-failed"
-  | "stopped"
-  | "created";
+  "running" | "passed" | "failed" | "verify-failed" | "stopped" | "created";
 
 /** `fleet.VerifyFailedExit` — a verify that ran and said no. */
 export const VERIFY_FAILED_EXIT = 91;
@@ -335,6 +337,24 @@ export interface Agent {
    * silently doing nothing.
    */
   canSkipPermissions?: boolean;
+  /**
+   * Whether an *interactive* run of this agent can be handed a first turn on the
+   * command line. False for opencode, which reads a lone positional as the
+   * project directory to open — a seeded console run died inside the container
+   * with `Failed to change directory to /workspace/review the code`.
+   *
+   * POST /runs refuses the combination anyway, so this is not what enforces it;
+   * it is what lets a launch form say so before asking, rather than explaining a
+   * 400 after the fact. Same argument as canSkipPermissions above.
+   */
+  canSeedConsolePrompt?: boolean;
+  /**
+   * Whether a conversation of this agent's can be reopened by id. False for
+   * gemini, whose CLI has no resume argv — the conversations panel
+   * reads this before offering to carry one on, rather than offering a control
+   * the launch would refuse.
+   */
+  canResume?: boolean;
   /**
    * That flag, verbatim — `--dangerously-skip-permissions`, `--yolo`. From the
    * daemon rather than kept here, so the control can name what it adds without
@@ -484,12 +504,7 @@ export interface DoctorCheck {
 
 /** Where a resolved setting came from. Precedence, later wins. */
 export type ConfigLayer =
-  | "default"
-  | "profile"
-  | "user"
-  | "project"
-  | "explicit"
-  | "flag";
+  "default" | "profile" | "user" | "project" | "explicit" | "flag";
 
 export interface ResolvedField {
   key: string;
@@ -572,6 +587,18 @@ export interface AuditRecord {
   exitCode: number;
   durationMs: number;
   detached: boolean;
+  /**
+   * Whether `exitCode` is a result or a placeholder, and the id that pairs a
+   * detached run's launch line with the line written when it ended.
+   *
+   * A detached run has no exit code to wait for, so its launch line carries 0 —
+   * and every Studio run is detached. Reading that as success is what made the
+   * Routing screen report a 100% rescue rate. The daemon collapses the pair, so
+   * a record arriving here with `finished: false` is a run still going, or one
+   * whose ending nobody was around to see.
+   */
+  finished?: boolean;
+  runId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +620,17 @@ export interface LaunchRequest {
    * agent it actually got.
    */
   fallback: string[];
+  /**
+   * Another agent's conversation to start *from*, as a briefing rather than a
+   * resume. Null for an ordinary launch.
+   *
+   * Separate from `resume` because they are opposites: resume reopens a
+   * conversation with the agent that wrote it, this starts a new one carrying
+   * evidence about an old. The daemon refuses them together, so the form never
+   * holds both — picking a conversation to hand over clears the resume, and
+   * vice versa.
+   */
+  handoffFrom: { agent: string; sessionId: string } | null;
 
   /**
    * Which registered repository this run is about, by `Project.id`. Empty means
@@ -613,7 +651,15 @@ export interface LaunchRequest {
   network: { mode: NetworkMode; baseline: boolean; allow: string[] };
   memory: string;
   cpus: string;
-  detach: boolean;
+  /**
+   * Deliberately absent: a Studio run is **always** detached. `runs.go` sets
+   * `Detach: true` on every request, because an HTTP request/response cycle has
+   * nowhere to hold a pty — so a `detach` field here could only ever disagree
+   * with what the daemon does, and the form's copy of it did: it was always
+   * false, which silently turned off a capability warning and made the success
+   * toast say "Attached" about every run. What varies is whether the container
+   * keeps a console (see the daemon's `console`), not whether it detaches.
+   */
   /**
    * Start the agent in its interactive mode on a container that keeps a
    * terminal, so `sandbox-cli attach` can answer it. The prompt seeds the first
@@ -633,7 +679,22 @@ export interface LaunchRequest {
   statusline: boolean;
   verify: string;
   envAllow: string[];
-  share: string[];
+  /**
+   * Mount the shared directory (~/.config/sandbox/shared on the daemon's
+   * machine) at /shared — the only channel two sandboxes have, since everything
+   * else a run sees is scoped to its own project.
+   *
+   * A boolean, not a list of host paths: one well-known directory the daemon
+   * creates and vets, rather than a browser naming what the container reaches.
+   */
+  share: boolean;
+  /** With `share`, narrow it to <shared>/NAME at /shared/NAME. Needs `share`. */
+  shareName: string;
+  /**
+   * Container ports to bind on the daemon's host, in docker's syntax. A bare
+   * port binds 127.0.0.1 there — not 0.0.0.0, which is where sandbox-cli
+   * deliberately differs from `docker -p`.
+   */
   publish: string[];
 }
 
@@ -677,6 +738,207 @@ export interface Project {
    */
   missing?: boolean;
 }
+
+/**
+ * Who asked for a snapshot — mirrors studioapi.SnapshotSource.
+ *
+ * It decides where the snapshot can be restored from rather than merely
+ * describing it: this screen restores what a sandbox run produced, while one
+ * taken through the SDK is restored through the SDK, because a script mid-way
+ * through something is not a thing to undo from a browser tab. The daemon
+ * enforces it; the button only has to agree.
+ */
+export type SnapshotSource = "run" | "sdk";
+
+/**
+ * One recoverable point — mirrors studioapi.SnapshotInfo.
+ *
+ * A commit of a workspace tree under `refs/sandbox/snapshots/`. Files and
+ * nothing else: no container, no image, no credential.
+ */
+export interface Snapshot {
+  id: string;
+  repoId?: string;
+  branch?: string;
+  agent?: string;
+  /** What somebody called it. Without one a checkpoint is a hex id in a list. */
+  label?: string;
+  source?: SnapshotSource;
+  commit?: string;
+  /**
+   * The objects are still in the repository. A snapshot whose ref was deleted
+   * by hand survives in the manifest with its content garbage collected, and
+   * offering to restore that is a promise nothing can keep.
+   */
+  reachable: boolean;
+  createdAt: string;
+  endedAt?: string;
+  /** "snapshot" for a capture, "crashed" for a run nothing closed, and so on. */
+  status?: string;
+  /** This snapshot's own keep-window, empty when it follows the default. */
+  retention?: string;
+  /** The window actually in force, defaults resolved. */
+  retentionEffective?: string;
+  /**
+   * The copy in object storage. Absent means this snapshot lives only on the
+   * daemon's machine — the default, and not a failure.
+   */
+  remote?: SnapshotRemote;
+}
+
+/**
+ * A snapshot's copy in object storage — mirrors studioapi.SnapshotRemote.
+ *
+ * It reports what the *upload* did rather than what the bucket holds now, which
+ * is why `uploaded` is a field and not something this UI infers: a listing that
+ * asked the bucket per row would make one round trip per snapshot to answer a
+ * question that almost never changes. The row's Verify action is what asks.
+ */
+export interface SnapshotRemote {
+  bucket?: string;
+  key?: string;
+  /** There is a key and the last attempt did not fail. */
+  uploaded: boolean;
+  uploadedAt?: string;
+  bytes?: number;
+  /**
+   * Why the last attempt failed, empty on success. Rendered rather than hidden:
+   * a snapshot that never left the machine has to look different from one that
+   * did, or the backup is a belief rather than a fact.
+   */
+  error?: string;
+}
+
+/**
+ * Object storage for snapshots — mirrors studioapi.SnapshotS3Settings.
+ *
+ * **There is nowhere here for a credential, on purpose.** The key fields are the
+ * *names* of environment variables read on the daemon's machine, so this object
+ * can be held in a browser, logged and written to a settings file without any of
+ * those becoming somewhere a secret leaks from. `credentialsResolved` is how the
+ * screen can still say whether the credential is actually there.
+ */
+export interface SnapshotS3Settings {
+  /** Empty means mirroring is off. Clearing it is how the UI turns it off. */
+  bucket: string;
+  region?: string;
+  /** An S3-compatible server — MinIO, R2, Ceph, B2. Empty addresses AWS. */
+  endpoint?: string;
+  prefix?: string;
+  /** Address the bucket in the path rather than the hostname. */
+  pathStyle?: boolean;
+  /** "manual" (the default), "all", or "off". */
+  upload?: SnapshotUploadMode;
+  accessKeyEnv?: string;
+  secretKeyEnv?: string;
+  sessionTokenEnv?: string;
+  maxObjectMb?: number;
+  /** Read-only: the named variables are set in the daemon's environment. */
+  credentialsResolved: boolean;
+  /** Read-only: why they did not resolve, naming the variable to set. */
+  credentialsError?: string;
+  /** Read-only: config.yaml sets this, so this screen cannot change it. */
+  configManaged?: boolean;
+}
+
+/**
+ * Which snapshots leave the machine.
+ *
+ * "manual" is the default and the reason is arithmetic rather than caution: the
+ * crash net commits every two minutes for the length of every run, so "all"
+ * means a bundle sized like a clone leaving the machine every two minutes per
+ * in-flight agent.
+ */
+export type SnapshotUploadMode = "manual" | "all" | "off";
+
+/** What a storage check found — mirrors studioapi.SnapshotS3CheckResponse. */
+export interface SnapshotS3Check {
+  ok: boolean;
+  bucket?: string;
+  endpoint?: string;
+  error?: string;
+}
+
+/**
+ * Every local branch in one repository — mirrors studioapi.BranchList.
+ *
+ * For choosing a base. Not the worktree list: that answers which branches *have*
+ * a worktree, and the base is usually `main`, which most often has none.
+ */
+export interface BranchList {
+  branches: string[];
+  /** The checked-out branch; empty on a detached HEAD. */
+  current?: string;
+}
+
+/** The retention configuration — mirrors studioapi.SnapshotSettings. */
+export interface SnapshotSettings {
+  retention: string;
+  manualRetention: string;
+  /**
+   * What config.yaml sets, empty when it sets none. Non-empty means this daemon
+   * ignores a write to the matching field: Studio's own file is a layer *under*
+   * config.yaml, so a value typed by hand outranks one set here — and a screen
+   * that could not tell them apart would offer an edit that does not survive a
+   * restart.
+   */
+  configRetention?: string;
+  configManualRetention?: string;
+  /** There is somewhere to save at all. False when no config dir resolved. */
+  writable: boolean;
+  /**
+   * Object storage. Absent on a read means no bucket is configured; sent on a
+   * write with an empty bucket, it turns mirroring off. Omitted on a write, the
+   * daemon leaves it alone — so a form that only edits the windows cannot clear
+   * somebody's bucket by not knowing about it.
+   */
+  s3?: SnapshotS3Settings;
+}
+
+/**
+ * The body of a settings write — mirrors studioapi.SnapshotSettingsUpdate.
+ *
+ * Not the read type: absent means "leave it alone", so the storage card sends
+ * only `s3` and the retention card sends only the two windows. Echoing a read
+ * back would write the resolved value — config.yaml's, or the built-in default —
+ * into Studio's own file, where it outlives the line it came from.
+ */
+export interface SnapshotSettingsUpdate {
+  retention?: string;
+  manualRetention?: string;
+  s3?: SnapshotS3Settings;
+}
+
+/** What a restore did — mirrors studioapi.RunRecoverResponse. */
+export interface RestoreResult {
+  sessionId: string;
+  mode: RestoreMode;
+  branch?: string;
+  patch?: string;
+  files: number;
+  /**
+   * The tree on disk already held what the snapshot held, so nothing was
+   * actually rescued. The common case, and worth saying out loud: /workspace is
+   * a bind mount, so the snapshot is the belt rather than the braces.
+   */
+  matchesWorkingTree: boolean;
+  /**
+   * The conversation the restored run was having, when the daemon could
+   * identify one. Empty is the common and honest answer — several sessions in
+   * one window cannot be told apart by the clock, and resuming the wrong one is
+   * worse than offering none.
+   */
+  agent?: string;
+  resumeSessionId?: string;
+  /**
+   * The branch was already there holding this snapshot, so nothing was created.
+   * Saying "restored" for this sends somebody looking for a change made days ago.
+   */
+  alreadyRestored?: boolean;
+}
+
+/** What a restore should do with the snapshot — mirrors studioapi.RestoreMode. */
+export type RestoreMode = "branch" | "patch" | "worktree";
 
 /** One row of a repository's directory listing, from `GET /v1/files`. */
 export interface FileEntry {

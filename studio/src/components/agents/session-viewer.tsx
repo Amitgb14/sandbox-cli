@@ -1,5 +1,6 @@
 "use client";
 
+import { AgentMarkdown } from "@/components/common/agent-markdown";
 import { useState } from "react";
 import { Bot, FileJson, MessagesSquare, User } from "lucide-react";
 import {
@@ -61,12 +62,16 @@ export function SessionViewer({
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2 text-base">
             <MessagesSquare className="size-4" />
-            <span className="truncate">{meta?.title || "Untitled conversation"}</span>
+            <span className="truncate">
+              {meta?.title || "Untitled conversation"}
+            </span>
             {meta?.store && (
               // Which store, because it decides what this conversation *is*: a
               // container wrote the sandbox one, you wrote the host one.
               <Badge variant="outline" className="text-[10px]">
-                {meta.store === "sandbox" ? "sandbox agent" : "your own history"}
+                {meta.store === "sandbox"
+                  ? "sandbox agent"
+                  : "your own history"}
               </Badge>
             )}
             {meta?.partial && (
@@ -84,8 +89,8 @@ export function SessionViewer({
                     cwd <code className="font-mono">{meta.project}</code> ·{" "}
                   </>
                 )}
-                {meta?.turns ?? 0} prompts · {formatBytesShort(meta?.size ?? 0)} ·{" "}
-                {meta?.modified ? formatRelative(meta.modified) : "—"}
+                {meta?.turns ?? 0} prompts · {formatBytesShort(meta?.size ?? 0)}{" "}
+                · {meta?.modified ? formatRelative(meta.modified) : "—"}
               </p>
             </div>
           </DialogDescription>
@@ -135,7 +140,10 @@ export function SessionViewer({
                       <span className="font-medium capitalize">{m.role}</span>
                       {m.at && <span>· {formatRelative(m.at)}</span>}
                     </div>
-                    <p className="whitespace-pre-wrap break-words text-sm">{m.text}</p>
+                    {/* Same renderer as the live console: a stored transcript
+                        and a running one are the same words, and reading them
+                        two different ways is how one of them stays wrong. */}
+                    <AgentMarkdown text={m.text} />
                   </div>
                 ))}
               </div>
@@ -147,7 +155,9 @@ export function SessionViewer({
               <Skeleton className="h-72 w-full" />
             ) : raw.isError ? (
               <p className="text-sm text-destructive">
-                {raw.error instanceof Error ? raw.error.message : String(raw.error)}
+                {raw.error instanceof Error
+                  ? raw.error.message
+                  : String(raw.error)}
               </p>
             ) : (
               <div className="space-y-2">
@@ -157,10 +167,14 @@ export function SessionViewer({
                     // Said out loud: showing the last part of a file as though it
                     // were the file is a claim nobody checked.
                     <Badge variant="outline" className="text-[10px]">
-                      showing the last {formatBytesShort(raw.data.content.length)}
+                      showing the last{" "}
+                      {formatBytesShort(raw.data.content.length)}
                     </Badge>
                   )}
-                  <CopyButton value={raw.data?.session.path ?? ""} label="Copy path" />
+                  <CopyButton
+                    value={raw.data?.session.path ?? ""}
+                    label="Copy path"
+                  />
                 </div>
                 <pre className="max-h-[52vh] overflow-auto rounded-md bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">
                   {raw.data?.content}

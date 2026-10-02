@@ -128,6 +128,15 @@ export const STUDIO_STEPS: StudioStep[] = [
     expect: "The new run in the table within a second or two, and its container visible to `sandbox-cli list` in a terminal — one control plane, two front ends.",
   },
   {
+    title: "Hand a file from one agent to another",
+    side: "browser",
+    body:
+      "Two runs in different repositories cannot see each other — everything a sandbox reaches is scoped to its own project, which is the point and also leaves no way to pass an API contract across. Ticking **Share the handoff directory** mounts the daemon machine's ~/.config/sandbox/shared at /shared, the same thing --share arranges from a shell and through the same code. Then say so in both prompts: write the contract to /shared/openapi.yaml on one side, read it on the other. A namespace narrows it to /shared/NAME so two runs do not clobber the same filename — it prevents collisions, not access, since any run sharing the root reads every namespace in it.",
+    expect: "The file on your own machine under ~/.config/sandbox/shared, still there after both containers exit.",
+    warn:
+      "It is a boolean, not a path you name. An arbitrary host directory chosen in a browser is a different decision from one typed in your own terminal, so Studio offers the one well-known directory the daemon creates and checks — the wider --mount stays a CLI flag.",
+  },
+  {
     title: "Answer an agent that stopped to ask",
     side: "browser",
     body:
@@ -355,9 +364,30 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
   {
     title: "Or bind it to the network, knowing what that costs",
     side: "daemon",
-    code: "sh studio.sh up --api-only --bind 10.0.0.5 --port 3100",
-    body: "Passes -allow-host for that address, because the daemon answers to loopback names only and refuses anything else by design. `--bind 0.0.0.0` works too and allows the machine's own reachable names, since a wildcard is not an address any browser dials. `--port` is not about a UI on this machine: it is the port your *browser's* Studio runs on, and the daemon builds its allowed CORS origins from it. Get it wrong and the network works while every request is refused on the origin check — the UI falls back to fixtures and the header says so, which looks like the daemon being down.",
-    warn: "There is no TLS here: the token and everything it protects cross the network in cleartext. The daemon refuses to bind a routable address with no token at all — an unauthenticated port on a process holding the docker socket is root on that machine for whoever reaches it.",
+    code: "sh studio.sh up --api-only --bind 10.0.0.5",
+    body: "Passes -allow-host for that address, because the daemon answers to loopback names only and refuses anything else by design. `--bind 0.0.0.0` works too and allows the machine's own reachable names, since a wildcard is not an address any browser dials. Two flags to add when they apply, and both fail quietly if you leave them out: `--no-install` if you built the binaries from source, or the script replaces them with the last release; and `--port` if your Studio runs anywhere other than 3100, because the daemon builds its allowed CORS origins from it — mismatch it and the network works while every request is refused on the origin check, so Studio falls back to fixtures and reads like an outage.",
+    warn: "There is no TLS here: the token and everything it protects cross the network in cleartext — use the tunnel above, or the reverse proxy below, unless this is a network you already trust. The daemon refuses to bind a routable address with no token at all — an unauthenticated port on a process holding the docker socket is root on that machine for whoever reaches it.",
+  },
+  {
+    title: "Or put a reverse proxy in front, which is the only shape with a real certificate",
+    side: "daemon",
+    code: [
+      "# Caddyfile — two names, one for each half",
+      "studio.example.com { reverse_proxy 127.0.0.1:3100 }",
+      "api.example.com    { reverse_proxy 127.0.0.1:8787 }",
+      "",
+      "# on the box: the daemon, then the UI beside it on 127.0.0.1:3100",
+      "sh studio.sh up --api-only \\",
+      "  --allow-host api.example.com --cors-origin https://studio.example.com",
+      "",
+      "sh studio.sh up --ui-only --api-url https://api.example.com",
+    ].join("\n"),
+    body:
+      "For a machine more than one person reaches, or one you want to open by name rather than through a tunnel. Both commands run on the box: --api-only starts the daemon and says so — \"no UI on this machine\" — so the browser half has to be started there too, or the name the proxy serves has nothing behind it. --ui-only does not stop the daemon, so the two compose, and your own machine runs nothing but the browser. The daemon stays on 127.0.0.1 so the proxy is the only way in — binding it routable as well would leave the cleartext port open beside the encrypted one. Both flags add to what the script works out for itself, which is what a proxied deployment needs: neither name is derivable from --bind or --port, because the browser dials one name and the page is served from another. -allow-host takes the public name, because a proxy forwards the original Host and the daemon otherwise answers to loopback names only.",
+    expect:
+      "https://studio.example.com loading Studio — served from the box, not from your machine — and https://api.example.com/v1/health answering without a token.",
+    warn:
+      "Both halves must be TLS or neither: a page served over https cannot call an http daemon — the browser blocks it as mixed content, with no request on the wire and nothing in the daemon's log, which reads exactly like the daemon being down. And -cors-origin takes the *page's* origin, https:// and not the API's; get the scheme wrong and the network works while every request is refused on the origin check.",
   },
   {
     title: "Open the port, and check it from the other machine",
@@ -376,7 +406,7 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
   {
     title: "Or set it in the UI, which is what lets one Studio reach several boxes",
     side: "browser",
-    body: "Settings → Connection takes a Daemon URL and a Token and keeps them in the browser. A value typed there outranks the one the UI was started with — the opposite of how the token behaves, and deliberately: an injected token is this server saying what it is running with, while an injected URL is only a default location. Changing it refetches everything, because what is on screen came from a different machine. Connections you use twice can be saved: the list keeps each daemon's URL and its own token together, because a token belongs to exactly one machine — and connecting applies both halves at once, so the pairing cannot drift.",
+    body: "Settings → Connection takes a Daemon URL and a Token and keeps them in the browser. A value typed there outranks the one the UI was started with — the opposite of how the token behaves, and deliberately: an injected token is this server saying what it is running with, while an injected URL is only a default location. Changing it refetches everything, because what is on screen came from a different machine. Connections you use twice can be saved: the list keeps each daemon's URL and its own token together, because a token belongs to exactly one machine — and connecting applies both halves at once, so the pairing cannot drift. Saved ones then appear in the header, with a health dot per machine, because switching is something you do while working rather than while configuring; a machine nobody has heard back from yet shows as checking rather than down. Each machine keeps its own list of recently worked-in repositories, since a repo id from one box means nothing on another.",
     expect: "The header's live badge, and the daemon's own version and engine on the Settings screen.",
   },
   {
@@ -394,7 +424,7 @@ export const STUDIO_REMOTE_STEPS: StudioStep[] = [
       "  mode: default",
       "YAML",
       "",
-      "sh studio.sh down && sh studio.sh up --api-only --bind 10.0.0.5 --port 3100",
+      "sh studio.sh down && sh studio.sh up --api-only --bind 10.0.0.5",
     ].join("\n"),
     body: "The default is an allowlist — default-deny with the built-in baseline — because the agent holds a real credential and github.com is a write endpoint, so open egress is an exfiltration channel for anything it can read. `mode: default` turns the firewall off for every run this daemon starts; `mode: none` is the other end, reaching nothing. It belongs in the *daemon's own* config or the file it was started with under --config, and it takes a restart. A repository's .sandbox.yaml cannot do it: a project file may tighten the posture and never loosen it, because it travels with code you did not write.",
     expect: "`curl http://10.0.0.5:8787/v1/health` reporting `\"egress\":{\"mode\":\"default\"…}`, and the Launch screen reading unrestricted.",

@@ -116,7 +116,17 @@ export function ConfigReference({ className }: { className?: string }) {
             <TabsContent key={s.id} value={s.id} className="p-0">
               <div className="relative bg-[#0b0b0d]">
                 <div className="flex items-center justify-between gap-3 border-b border-white/8 px-4 py-2">
-                  <code className="font-mono text-[0.7rem] text-[#8a8a94]">{CONFIG_FILE}</code>
+                  <span className="flex min-w-0 items-center gap-2">
+                    {/* Decoration, and hidden from a screen reader for it: the
+                        row already names the file, which is the part that
+                        carries meaning. */}
+                    <span aria-hidden className="flex shrink-0 items-center gap-1.5">
+                      <span className="size-2.5 rounded-full bg-[#ff5f57]" />
+                      <span className="size-2.5 rounded-full bg-[#febc2e]" />
+                      <span className="size-2.5 rounded-full bg-[#28c840]" />
+                    </span>
+                    <code className="truncate font-mono text-[0.7rem] text-[#8a8a94]">{CONFIG_FILE}</code>
+                  </span>
                   <CopyButton
                     value={s.yaml}
                     className="text-[#a1a1aa] hover:bg-white/10 hover:text-white"

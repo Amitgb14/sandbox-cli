@@ -2,6 +2,9 @@ import { AGENT_SEEDS, BASELINE_EGRESS } from "@/lib/constants";
 import type {
   Agent,
   AgentName,
+  Snapshot,
+  SnapshotSettings,
+  SnapshotSource,
   AuditRecord,
   DaemonInfo,
   DiffFile,
@@ -212,7 +215,7 @@ function buildRuns(): Run[] {
     { seed: BRANCH_SEEDS[0], kind: "interactive", agent: "claude", startedMs: 41 * MINUTE, verify: null, load: 0.62 },
     { seed: BRANCH_SEEDS[1], kind: "fleet", agent: "claude", startedMs: 18 * MINUTE, verify: VERIFY_CMDS[1], load: 0.88 },
     { seed: BRANCH_SEEDS[2], kind: "fleet", agent: "codex", startedMs: 12 * MINUTE, verify: VERIFY_CMDS[0], load: 0.44 },
-    { seed: BRANCH_SEEDS[4], kind: "fleet", agent: "droid", startedMs: 7 * MINUTE, verify: VERIFY_CMDS[0], load: 1.31 },
+    { seed: BRANCH_SEEDS[4], kind: "fleet", agent: "cline", startedMs: 7 * MINUTE, verify: VERIFY_CMDS[0], load: 1.31 },
     { seed: BRANCH_SEEDS[6], kind: "fleet", agent: "gemini", startedMs: 24 * MINUTE, verify: VERIFY_CMDS[2], load: 0.35 },
     { seed: BRANCH_SEEDS[10], kind: "interactive", agent: null, startedMs: 3 * MINUTE, verify: null, load: 0.19 },
   ];
@@ -249,7 +252,7 @@ function buildRuns(): Run[] {
       network: baselineNetwork("allowlist", l.seed.repo === 1 ? ["fonts.googleapis.com"] : []),
       security: security(l.kind === "fleet" ? "prod" : "dev", `${memLimit / 1024 ** 3}g`, l.kind === "fleet" ? "2" : "4"),
       mounts: mountsFor(workspace, l.agent, l.kind === "fleet" ? "prod" : "dev", true, repo.root),
-      envNames: l.agent === "claude" ? ["ANTHROPIC_API_KEY"] : l.agent === "droid" ? ["FACTORY_API_KEY"] : [],
+      envNames: l.agent === "claude" ? ["ANTHROPIC_API_KEY"] : l.agent === "cline" ? ["OPENROUTER_API_KEY"] : [],
       detached: l.kind === "fleet",
       tty: l.kind === "interactive",
       openStdin: l.kind === "interactive",
@@ -284,8 +287,8 @@ function buildRuns(): Run[] {
     // to render that case.
     const agentPool: Array<AgentName | null> =
       kind === "fleet"
-        ? ["claude", "codex", "gemini", "droid", "opencode"]
-        : ["claude", "claude", "codex", "aider", "cursor", null];
+        ? ["claude", "cline", "codex", "gemini", "opencode"]
+        : ["claude", "claude", "codex", "qwen", "cursor", null];
     const agent = rng.pick(agentPool);
     const profile: Profile = kind === "fleet" ? "prod" : "dev";
     const duration = rng.int(45, 5400) * 1000;
@@ -453,12 +456,50 @@ export const MOCK_WORKTREES: Worktree[] = (() => {
 })();
 
 // ---------------------------------------------------------------------------
+// Snapshots
+// ---------------------------------------------------------------------------
+
+export const MOCK_SNAPSHOTS: Snapshot[] = (() => {
+  const rng = rngFor(0x5a1105);
+  const seeds: Array<{ branch: string; label: string; source: SnapshotSource; agent: string }> = [
+    { branch: "feat/egress-proxy", label: "before the refactor", source: "run", agent: "claude" },
+    { branch: "feat/egress-proxy", label: "", source: "run", agent: "claude" },
+    { branch: "fix/worktree-prune", label: "green build", source: "sdk", agent: "codex" },
+    { branch: "develop", label: "nightly checkpoint", source: "sdk", agent: "" },
+  ];
+  return seeds.map((seed, i) => ({
+    id: `${20260820 + i}-${rng.int(0x100000, 0xffffff).toString(16)}`,
+    repoId: REPOS[i === 3 ? 1 : 0].id,
+    branch: seed.branch,
+    agent: seed.agent,
+    label: seed.label,
+    source: seed.source,
+    commit: rng.int(0x100000, 0xffffff).toString(16).padStart(7, "0"),
+    reachable: true,
+    createdAt: ago(rng.int(1, 5) * DAY),
+    endedAt: ago(rng.int(1, 5) * DAY),
+    status: "snapshot",
+    retention: i === 2 ? "720h" : "",
+    retentionEffective: i === 2 ? "720h0m0s" : "168h0m0s",
+  }));
+})();
+
+export const MOCK_SNAPSHOT_SETTINGS: SnapshotSettings = {
+  retention: "336h0m0s",
+  manualRetention: "168h0m0s",
+  writable: true,
+  // No bucket, which is the real default. A fixture that invented one would
+  // make the storage card render as configured against a daemon that has none —
+  // and the Test button is liveOnly precisely so it cannot then agree.
+};
+
+// ---------------------------------------------------------------------------
 // Agents
 // ---------------------------------------------------------------------------
 
 export const MOCK_AGENTS: Agent[] = AGENT_SEEDS.map((seed, i) => {
   const rng = rngFor(0x5150 + i);
-  const persisted = ["claude", "codex", "gemini", "droid", "opencode"].includes(seed.name);
+  const persisted = ["claude", "cline", "codex", "gemini", "opencode"].includes(seed.name);
   const sessionCount = persisted ? rng.int(3, 148) : 0;
   return {
     name: seed.name,
@@ -472,6 +513,13 @@ export const MOCK_AGENTS: Agent[] = AGENT_SEEDS.map((seed, i) => {
     // disabled without these: it keys off canSkipPermissions, which only the
     // daemon was answering.
     canSkipPermissions: (seed.skipPermissionArgs ?? []).length > 0,
+    // The same gap the comment above describes, one field over: without this the
+    // conversations panel reads canResume as false for every agent offline, says
+    // "claude has no way to reopen a conversation by id", and offers only
+    // "brief and start" on rows that would resume perfectly against a daemon.
+    // The three that can are the three whose stores declare a resume argv
+    // (agentctx/stores.go): claude --resume, codex resume, opencode --session.
+    canResume: ["claude", "codex", "opencode"].includes(seed.name),
     skipPermissionArgs: seed.skipPermissionArgs,
     autonomousInvocation: seed.headlessVerified
       ? autonomousArgv(seed.name)
@@ -502,8 +550,6 @@ function autonomousArgv(name: AgentName): string[] {
       return ["gemini", "--yolo", "-p", "<prompt>"];
     case "opencode":
       return ["opencode", "run", "<prompt>"];
-    case "droid":
-      return ["droid", "exec", "--auto", "high", "<prompt>"];
     default:
       return [name, "<prompt>"];
   }
@@ -898,6 +944,17 @@ export function buildArgv(run: Run): string[] {
     argv.push("--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW");
     argv.push("-e", `SANDBOX_EGRESS_ALLOW=${run.network.allow.join(",")}`);
     argv.push("-e", `SANDBOX_RUN_AS=${run.security.user}`);
+  }
+  // Published ports, and — under an allowlist only — the carve-out that makes
+  // them answer. Both, because the preview exists to show what you are about to
+  // get, and the one launch option that opens a way in is the last thing that
+  // should be missing from it. The pairing is not decoration: without the
+  // carve-out the port is open on the host and refused inside the container.
+  for (const p of run.network.ingressPorts ?? []) {
+    argv.push("-p", `127.0.0.1:${p}:${p}`);
+  }
+  if (run.network.mode === "allowlist" && (run.network.ingressPorts ?? []).length > 0) {
+    argv.push("-e", `SANDBOX_INGRESS_PORTS=${(run.network.ingressPorts ?? []).join(",")}`);
   }
   argv.push("--security-opt", "no-new-privileges");
   argv.push("--cap-drop", "ALL");

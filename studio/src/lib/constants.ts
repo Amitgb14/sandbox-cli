@@ -58,13 +58,15 @@ export function setStoredApiBase(url: string) {
   else window.localStorage.removeItem(API_STORAGE_KEY);
 }
 
-export function apiBase(): string {
-  // A typed endpoint first. Read only in the browser: this function also runs
-  // during SSR, where localStorage does not exist and where returning a
-  // different value than the client would produce a hydration mismatch on every
-  // screen that prints the endpoint.
-  const stored = storedApiBase();
-  if (stored) return stored;
+/**
+ * The daemon this Studio was *served beside*, ignoring any endpoint typed since.
+ *
+ * apiBase() answers "where do requests go", which is the stored endpoint once
+ * one is set — so a switcher offering "this machine" beside saved connections
+ * cannot use it to describe that row, or the row reports the remote's host and
+ * the remote's health while claiming to be local.
+ */
+export function defaultApiBase(): string {
   if (typeof window !== "undefined" && window.__SANDBOX_API__) {
     return window.__SANDBOX_API__;
   }
@@ -72,6 +74,16 @@ export function apiBase(): string {
     return process.env.SANDBOX_API_URL;
   }
   return process.env.NEXT_PUBLIC_SANDBOX_API ?? "http://localhost:8787";
+}
+
+export function apiBase(): string {
+  // A typed endpoint first. Read only in the browser: this function also runs
+  // during SSR, where localStorage does not exist and where returning a
+  // different value than the client would produce a hydration mismatch on every
+  // screen that prints the endpoint.
+  const stored = storedApiBase();
+  if (stored) return stored;
+  return defaultApiBase();
 }
 
 /**
@@ -159,17 +171,32 @@ interface AgentSeed {
 }
 
 /**
- * The fifteen adapters in `cli.agentCmds()`, in that order — newest-supported
- * last. `headlessVerified` is the gate that matters: only those five may be
- * named in a `fleet.yaml`, because a fleet is unattended.
+ * The twelve adapters in `cli.agentCmds()`, in that order — newest-supported
+ * last. `headlessVerified` is the gate that matters: only the agents it marks
+ * may be named in a `fleet.yaml`, because a fleet is unattended. It is a
+ * *fixture*: the daemon answers for real, and this is what offline mode shows —
+ * so a descriptor added in Go has to be reflected here too, or Studio's mock
+ * mode hides an agent live mode offers.
  */
 export const AGENT_SEEDS: AgentSeed[] = [
   {
     name: "claude",
     label: "Claude Code",
-    delivery: "installer",
+    // "baked", not "installer", because this field stands in for what
+    // GET /v1/agents answers and the daemon calls claude baked — it is in the
+    // image. The self-updating copy in the persisted HOME is the more useful
+    // fact and it survives, in the note below, where it does not contradict the
+    // live screen. The other seven adapters keep the richer word ("installer",
+    // "pip"): the daemon never answers for them, so nothing can disagree.
+    delivery: "baked",
     headlessVerified: true,
-    envAllow: ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"],
+    envAllow: [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+    ],
     env: [],
     skipPermissionArgs: ["--dangerously-skip-permissions"],
     statusLine: true,
@@ -181,7 +208,7 @@ export const AGENT_SEEDS: AgentSeed[] = [
     label: "OpenAI Codex",
     delivery: "baked",
     headlessVerified: true,
-    envAllow: ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
+    envAllow: ["CODEX_HOME", "OPENAI_API_KEY", "OPENAI_BASE_URL"],
     env: [],
     note: "Baked into the base image. Headless via `exec --full-auto`.",
   },
@@ -190,7 +217,13 @@ export const AGENT_SEEDS: AgentSeed[] = [
     label: "Gemini CLI",
     delivery: "baked",
     headlessVerified: true,
-    envAllow: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    envAllow: [
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY",
+      "GOOGLE_CLOUD_LOCATION",
+      "GOOGLE_CLOUD_PROJECT",
+      "GOOGLE_GENAI_USE_VERTEXAI",
+    ],
     env: [],
     skipPermissionArgs: ["--yolo"],
     note: "No status-line hook upstream, so nothing is drawn on screen. Use Studio's metrics instead.",
@@ -200,7 +233,15 @@ export const AGENT_SEEDS: AgentSeed[] = [
     label: "OpenCode",
     delivery: "baked",
     headlessVerified: true,
-    envAllow: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"],
+    envAllow: [
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "GROQ_API_KEY",
+      "OPENAI_API_KEY",
+      "OPENCODE_CONFIG",
+      "OPENCODE_DISABLE_AUTOUPDATE",
+      "OPENROUTER_API_KEY",
+    ],
     env: [],
     note: "Baked. No status-line hook upstream.",
   },
@@ -208,44 +249,51 @@ export const AGENT_SEEDS: AgentSeed[] = [
     name: "cline",
     label: "Cline",
     delivery: "npm",
-    headlessVerified: false,
-    envAllow: ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"],
+    headlessVerified: true,
+    skipPermissionArgs: ["--auto-approve", "true"],
+    envAllow: [
+      "AI_GATEWAY_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "CLINE_API_KEY",
+      "OPENAI_API_KEY",
+      "OPENROUTER_API_KEY",
+      "V0_API_KEY",
+    ],
     env: [],
-    note: "Installed lazily into the persisted HOME on first run.",
+    note: "Installed lazily into the persisted HOME on first run. Its prompt is a bare positional and the TUI is behind -i, the inverse of the others.",
   },
   {
     name: "goose",
     label: "Goose",
     delivery: "installer",
     headlessVerified: false,
-    envAllow: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOSE_PROVIDER"],
+    envAllow: [
+      "ANTHROPIC_API_KEY",
+      "GOOGLE_API_KEY",
+      "GOOSE_FAST_MODEL",
+      "GOOSE_MODE",
+      "GOOSE_MODEL",
+      "GOOSE_PROVIDER",
+      "GROQ_API_KEY",
+      "OPENAI_API_KEY",
+      "OPENROUTER_API_KEY",
+    ],
     env: [],
     note: "Block's agent, installed by its own script on first run.",
-  },
-  {
-    name: "crush",
-    label: "Crush",
-    delivery: "npm",
-    headlessVerified: false,
-    envAllow: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
-    env: [],
-    note: "Charm's agent. Lazily installed.",
-  },
-  {
-    name: "aider",
-    label: "Aider",
-    delivery: "pip",
-    headlessVerified: false,
-    envAllow: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AIDER_MODEL"],
-    env: [],
-    note: "Python; needs pypi.org and files.pythonhosted.org, both in the baseline.",
   },
   {
     name: "copilot",
     label: "Copilot CLI",
     delivery: "npm",
     headlessVerified: false,
-    envAllow: ["GITHUB_TOKEN", "GH_TOKEN"],
+    envAllow: [
+      "COPILOT_API_URL",
+      "COPILOT_GITHUB_TOKEN",
+      "COPILOT_MODEL",
+      "GH_HOST",
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+    ],
     env: [],
     note: "Authenticates against github.com, which is in the baseline — and is a write endpoint.",
   },
@@ -254,7 +302,7 @@ export const AGENT_SEEDS: AgentSeed[] = [
     label: "Cursor CLI",
     delivery: "installer",
     headlessVerified: false,
-    envAllow: ["CURSOR_API_KEY"],
+    envAllow: ["CURSOR_API_ENDPOINT", "CURSOR_API_KEY"],
     env: [],
     note: "Installed by its own script on first run.",
   },
@@ -263,45 +311,61 @@ export const AGENT_SEEDS: AgentSeed[] = [
     label: "Qwen Code",
     delivery: "npm",
     headlessVerified: false,
-    envAllow: ["DASHSCOPE_API_KEY", "OPENAI_API_KEY"],
+    envAllow: [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_BASE_URL",
+      "BAILIAN_CODING_PLAN_API_KEY",
+      "DASHSCOPE_API_KEY",
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY",
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL",
+      "OPENAI_MODEL",
+      "OPENROUTER_API_KEY",
+    ],
     env: [],
     note: "A Gemini-CLI fork; same absence of a status-line hook.",
-  },
-  {
-    name: "amp",
-    label: "Amp",
-    delivery: "npm",
-    headlessVerified: false,
-    envAllow: ["AMP_API_KEY"],
-    env: [],
-    note: "Sourcegraph's agent. Lazily installed.",
-  },
-  {
-    name: "continue",
-    label: "Continue CLI",
-    delivery: "npm",
-    headlessVerified: false,
-    envAllow: ["CONTINUE_API_KEY", "ANTHROPIC_API_KEY"],
-    env: [],
-    note: "Lazily installed.",
   },
   {
     name: "openhands",
     label: "OpenHands",
     delivery: "pip",
     headlessVerified: false,
-    envAllow: ["LLM_API_KEY", "LLM_MODEL"],
+    envAllow: [
+      "ANTHROPIC_API_KEY",
+      "LLM_API_KEY",
+      "LLM_BASE_URL",
+      "LLM_MODEL",
+      "OPENAI_API_KEY",
+      "OPENHANDS_CLOUD_URL",
+    ],
     env: [],
     note: "Python; the heaviest adapter, which is why nothing is baked.",
   },
   {
-    name: "droid",
-    label: "Droid",
+    name: "devin",
+    label: "Devin CLI",
+    delivery: "installer",
+    headlessVerified: false,
+    envAllow: ["DEVIN_API_BASE_URL", "DEVIN_API_KEY"],
+    env: [],
+    note: "Installed lazily from Cognition's installer. Paid product; headless mode documented but not yet verified here.",
+  },
+  {
+    name: "kilocode",
+    label: "Kilo Code",
     delivery: "npm",
-    headlessVerified: true,
-    envAllow: ["FACTORY_API_KEY"],
-    env: ["FACTORY_DISABLE_KEYRING=1"],
-    note: "The keyring opt-out lives in the descriptor, not the wrapper — a fleet gets no wrapper, and would otherwise look for a keyring the container does not have with nobody there to log in again.",
+    headlessVerified: false,
+    envAllow: [
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "GROQ_API_KEY",
+      "KILOCODE_API_KEY",
+      "OPENAI_API_KEY",
+      "OPENROUTER_API_KEY",
+    ],
+    env: [],
+    note: "An opencode fork; `kilocode run <message>` is its non-interactive mode, unverified here.",
   },
 ];
 

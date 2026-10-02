@@ -113,11 +113,17 @@ a test restores, say. Run it before pushing anything that starts a goroutine.
 GHCR.
 
 ```sh
+V=$(git describe --tags --always)
 docker build -f studio/Dockerfile     -t ghcr.io/amitgb14/sandbox-studio-ui:local  studio
-docker build -f Dockerfile.studio-api -t ghcr.io/amitgb14/sandbox-studio-api:local .
-go build -o bin/sandbox-cli ./cmd/sandbox-cli
-go build -o bin/sandbox-studio-api ./cmd/sandbox-studio-api
+docker build -f Dockerfile.studio-api -t ghcr.io/amitgb14/sandbox-studio-api:local --build-arg VERSION="$V" .
+make build build-studio-api
 ```
+
+Through `make`, and with `--build-arg VERSION`, because the version is stamped by a
+linker flag: a plain `go build ./cmd/sandbox-studio-api` produces a daemon that
+reports `internal/version`'s compile-time default forever, and Studio's header then
+shows the oldest release number no matter which commit is running. This recipe used
+to say `go build`, which is how that happened to somebody following it.
 
 **3. Start the pair on non-default ports**, so it cannot collide with a compose
 stack or a Studio you already have up. `--config` is needed for *this*

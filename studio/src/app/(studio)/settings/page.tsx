@@ -23,6 +23,8 @@ import { PageHeader } from "@/components/common/page-header";
 import { apiBase, BASELINE_EGRESS, PROFILES } from "@/lib/constants";
 import { ConnectionCard } from "@/components/settings/connection-card";
 import { RepositoriesCard } from "@/components/settings/repositories-card";
+import { SnapshotsCard } from "@/components/settings/snapshots-card";
+import { SnapshotStorageCard } from "@/components/settings/snapshot-storage-card";
 import { useDaemon, useTransportMode } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 import { formatBytes } from "@/lib/format";
@@ -278,6 +280,17 @@ export default function SettingsPage() {
       </Card>
 
       <RepositoriesCard />
+
+      {/* The two snapshot cards are one section, and the anchor names it rather
+          than either card: the Snapshots screen's settings button lands here,
+          and somebody arriving from it is as likely to be after the bucket as
+          the windows. scroll-mt clears the sticky header, without which the
+          heading lands underneath it and the section looks like it starts at
+          the second card. */}
+      <section id="snapshots" className="scroll-mt-20 space-y-4">
+        <SnapshotsCard />
+        <SnapshotStorageCard />
+      </section>
 
       {/* Below the repositories and above the daemon's own facts. Repositories
           are what people come here to change; the connection is set once, on the

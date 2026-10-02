@@ -49,6 +49,16 @@ type SessionMeta struct {
 	// "why is that not what I typed" — and a single field would answer neither
 	// without the other.
 	RoutedFrom string
+	// HandoffFrom is the agent whose conversation this run was briefed with, and
+	// HandoffSession the session it was read from.
+	//
+	// Not RoutedFrom, though a failover sets both: routing records that a
+	// provider stopped answering, this records that a person read a conversation
+	// and decided who should carry it on. In the log they are the same two words
+	// — codex, after claude — and only these fields say which story it was.
+	HandoffFrom    string
+	HandoffSession string
+
 	// RouteReason is why the switch happened, in the words the run printed:
 	// "provider answered 503", "exited 1 having changed nothing". A fact not
 	// stamped is one no later command can recover, and this one is the difference
@@ -171,10 +181,31 @@ type SessionMeta struct {
 	EgressDeniedReported      *int
 	EgressDeniedHostsReported []string
 
+	// RunID identifies the container this line is about, so a detached run's
+	// launch and its ending can be recognised as one run.
+	//
+	// Empty for a foreground run, which needs no such thing: one line carries the
+	// whole story because the process that wrote it waited for the exit.
+	RunID string
+
 	// Outcome, filled in once the run has finished.
 	ExitCode int
 	Duration time.Duration
 	Detached bool
+
+	// Finished says the outcome above is a *result* rather than a placeholder.
+	//
+	// It exists because a detached run has no exit code to wait for, so its line
+	// is written at launch with 0 — and every Studio run is detached, which made
+	// "did this pass" answer yes for all of them. A reader that treats 0 as
+	// success is not wrong about the field; it is wrong to have asked. So the
+	// launch line says false, the daemon writes a second line when the container
+	// actually ends, and the pair is matched by RunID.
+	//
+	// A false with no partner is a real state and stays that way: a daemon
+	// restarted mid-run never sees that ending, and "not recorded" is the honest
+	// answer rather than a guess in either direction.
+	Finished bool
 }
 
 // Sink records session metadata.
@@ -197,6 +228,8 @@ type record struct {
 	Image        string   `json:"image"`
 	Workspace    string   `json:"workspace,omitempty"`
 	RoutedFrom   string   `json:"routed_from,omitempty"`
+	HandoffFrom  string   `json:"handoff_from,omitempty"`
+	HandoffSess  string   `json:"handoff_session,omitempty"`
 	RouteReason  string   `json:"route_reason,omitempty"`
 	RouteID      string   `json:"route_id,omitempty"`
 	RouteAttempt int      `json:"route_attempt,omitempty"`
@@ -217,9 +250,13 @@ type record struct {
 	// vanishing the way a bare int would.
 	EgressDenied      *int     `json:"egress_denied_reported,omitempty"`
 	EgressDeniedHosts []string `json:"egress_denied_hosts_reported,omitempty"`
+	RunID             string   `json:"run_id,omitempty"`
 	ExitCode          int      `json:"exit_code"`
 	DurationMS        int64    `json:"duration_ms"`
 	Detached          bool     `json:"detached,omitempty"`
+	// Absent on the launch line of a detached run, where the exit code above is a
+	// placeholder. See SessionMeta.Finished.
+	Finished bool `json:"finished,omitempty"`
 }
 
 // JSONLSink appends one line per run to a file.
@@ -261,6 +298,8 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 		Image:        meta.Image,
 		Workspace:    meta.Workspace,
 		RoutedFrom:   meta.RoutedFrom,
+		HandoffFrom:  meta.HandoffFrom,
+		HandoffSess:  meta.HandoffSession,
 		RouteReason:  meta.RouteReason,
 		RouteID:      meta.RouteID,
 		RouteAttempt: meta.RouteAttempt,
@@ -279,6 +318,8 @@ func (s *JSONLSink) RecordSession(meta SessionMeta) {
 		EgressDenied:      meta.EgressDeniedReported,
 		EgressDeniedHosts: meta.EgressDeniedHostsReported,
 
+		RunID:      meta.RunID,
+		Finished:   meta.Finished,
 		ExitCode:   meta.ExitCode,
 		DurationMS: meta.Duration.Milliseconds(),
 		Detached:   meta.Detached,

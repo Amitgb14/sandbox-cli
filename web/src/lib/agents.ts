@@ -1,5 +1,5 @@
 /**
- * The fifteen agent wrappers, mirroring `agentCmds()` in internal/cli and the
+ * The twelve agent wrappers, mirroring `agentCmds()` in internal/cli and the
  * per-agent sections of docs/AGENTS.md. Sizes are the on-disk installed sizes
  * measured for arm64 in July 2026 (see docs/AGENTS.md for the caveats).
  *
@@ -125,6 +125,19 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli opencode run 'run the tests'",
   },
   {
+    id: "kilocode",
+    name: "Kilo Code",
+    vendor: "Kilo",
+    delivery: "first-run",
+    size: "372 MB",
+    login: "`kilocode auth`, or forward a provider key.",
+    env: ["KILOCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+          "GROQ_API_KEY", "OPENROUTER_API_KEY"],
+    gotcha:
+      "Its CLI is an opencode fork — the same command surface, and the same provider keys. `kilocode run <message>` is its non-interactive mode, unverified here, so it is not fleet-eligible yet.",
+    example: "sandbox-cli kilocode run 'explain this repository'",
+  },
+  {
     id: "copilot",
     name: "Copilot CLI",
     vendor: "GitHub",
@@ -179,22 +192,17 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli cursor -- --sandbox disabled",
   },
   {
-    id: "droid",
-    name: "Droid",
-    vendor: "Factory",
+    id: "devin",
+    name: "Devin CLI",
+    vendor: "Cognition",
     delivery: "first-run",
-    size: "148 MB",
-    login: "Device-code flow — code and URL printed, opened on your host.",
-    env: [
-      "FACTORY_API_KEY",
-      "FACTORY_API_BASE_URL",
-      "FACTORY_APP_BASE_URL",
-      "FACTORY_AIRGAP_ENABLED",
-      "FACTORY_ENV",
-    ],
+    size: "158 MB",
+    login: "`/login` inside a session, unverified here. Devin is a paid product; the CLI needs an account.",
+    env: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
+    allow: ["cli.devin.ai", "static.devin.ai"],
     gotcha:
-      "The sandbox sets FACTORY_DISABLE_KEYRING=1 so credentials stay in a file in the persisted home even if the upstream default changes.",
-    example: "sandbox-cli droid exec 'run the tests'",
+      "Its headless mode (devin -p PROMPT) and auto-approval (--permission-mode bypass) are documented but unverified here, so Devin cannot be named in a fleet or launched from Studio yet — a descriptor is earned by running the agent, not by reading its docs.",
+    example: "sandbox-cli devin -p 'explain this repository'",
   },
   {
     id: "cline",
@@ -213,19 +221,7 @@ export const AGENTS: Agent[] = [
     ],
     gotcha:
       "With an OAuth provider and no stored credentials it fails with an auth message rather than opening a browser. That's intended, not a crash.",
-    example: "sandbox-cli cline task 'run the tests'",
-  },
-  {
-    id: "amp",
-    name: "Amp",
-    vendor: "Sourcegraph",
-    delivery: "first-run",
-    size: "107 MB",
-    login: "`amp login` prints a URL for your host and takes the code back in the terminal.",
-    env: ["AMP_API_KEY", "AMP_URL", "AMP_LOG_LEVEL", "AMP_SKIP_UPDATE_CHECK"],
-    gotcha:
-      "Leave the native-keyring setting off. Turning it on migrates the token into a keyring and deletes the file — in a container that trades a working login for none.",
-    example: "sandbox-cli amp -x 'run the tests'",
+    example: "sandbox-cli cline 'run the tests'",
   },
   {
     id: "qwen",
@@ -271,59 +267,6 @@ export const AGENTS: Agent[] = [
       "LLM_* only take effect if you also pass --override-with-envs — that's OpenHands' rule, and it's why an exported key can look ignored.",
     example: "sandbox-cli openhands -- --override-with-envs",
   },
-  {
-    id: "crush",
-    name: "Crush",
-    vendor: "Charm",
-    delivery: "first-run",
-    size: "81 MB",
-    login: "`crush login` shows a short code — open the page on your host and paste it.",
-    env: [
-      "ANTHROPIC_API_KEY",
-      "OPENAI_API_KEY",
-      "GEMINI_API_KEY",
-      "OPENROUTER_API_KEY",
-      "GROQ_API_KEY",
-      "HYPER_API_KEY",
-    ],
-    gotcha:
-      "Crush speaks to roughly 25 providers; add any other key with --env-allow NAME rather than editing the wrapper.",
-    example: "sandbox-cli crush --env-allow CEREBRAS_API_KEY",
-  },
-  {
-    id: "continue",
-    name: "Continue CLI",
-    vendor: "Continue",
-    delivery: "first-run",
-    size: "65 MB",
-    login: "None. Hub auth was removed upstream — the key is written into the agent home.",
-    env: ["ANTHROPIC_API_KEY", "CONTINUE_API_BASE", "GOOGLE_CLOUD_PROJECT"],
-    allow: ["api.continue.dev"],
-    gotcha:
-      "`cn login` and CONTINUE_API_KEY in the published docs are stale and do nothing. With --allow, permit api.continue.dev or it has no config to start from.",
-    example: "sandbox-cli continue --allow api.continue.dev",
-  },
-  {
-    id: "aider",
-    name: "Aider",
-    vendor: "Aider AI",
-    delivery: "first-run",
-    size: "~300 MB",
-    login: "None at all — export a provider key on your host.",
-    env: [
-      "OPENAI_API_KEY",
-      "ANTHROPIC_API_KEY",
-      "GEMINI_API_KEY",
-      "DEEPSEEK_API_KEY",
-      "OPENROUTER_API_KEY",
-      "OPENAI_API_BASE",
-      "ANTHROPIC_API_BASE",
-    ],
-    allow: ["astral.sh"],
-    gotcha:
-      "The workspace must be a git repo, and Aider writes into your project: a chat history file, a tags cache, and an appended `.aider*` line in .gitignore. Pass --no-gitignore to stop the last one.",
-    example: "OPENAI_API_KEY=… sandbox-cli aider",
-  },
 ];
 
 export const BAKED_COUNT = AGENTS.filter((a) => a.delivery === "baked").length;
@@ -334,7 +277,7 @@ export const BAKED_COUNT = AGENTS.filter((a) => a.delivery === "baked").length;
  */
 export const FIRST_RUN_NOTE = {
   line: "sandbox-cli: installing qwen 0.21.3 into the sandbox agent home (first run only)...",
-  body: "An agent the base image does not carry is downloaded the first time you run it, into the sandbox-owned home that persists between runs — so it happens once, and it needs network at that moment. The version is pinned rather than resolved to whatever the vendor published that morning, and it is printed as it installs: a pin's cost is going stale, and staleness nobody can see is the kind that lasts. Two agents are deliberately unpinned, because one offers no version to ask for and the other replaces the first install itself.",
+  body: "An agent the base image does not carry is downloaded the first time you run it, into the sandbox-owned home that persists between runs — so it happens once, and it needs network at that moment. The version is pinned rather than resolved to whatever the vendor published that morning, and it is printed as it installs: a pin's cost is going stale, and staleness nobody can see is the kind that lasts. Three agents are deliberately unpinned: one offers no version to ask for, one replaces the first install itself, and Devin publishes no index of versions to pin to.",
   buys: "A hijacked or typosquatted release does not reach a sandbox until the pin is bumped.",
   doesNotBuy:
     "A compromised registry can still serve different bytes for a version it already published — that needs integrity hashes a global install has no lockfile for.",

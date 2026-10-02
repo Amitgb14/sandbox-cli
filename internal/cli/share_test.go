@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
+
+	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
 )
 
 // wantShareMount is the mount entry --share is expected to append, spelled out
@@ -20,7 +22,7 @@ func wantShareMount(t *testing.T) string {
 	if dir == "" {
 		t.Fatal("config.SharedDir() returned empty")
 	}
-	return dir + ":" + sharedTarget + ":rw"
+	return dir + ":" + sandbox.SharedTarget + ":rw"
 }
 
 // TestShareMountsSharedDir proves the flag does the one thing it exists for:
@@ -94,7 +96,7 @@ func TestShareOffByDefault(t *testing.T) {
 		t.Fatalf("newSession: %v", err)
 	}
 	for _, m := range opts.ExtraMounts {
-		if strings.Contains(m, sharedTarget) {
+		if strings.Contains(m, sandbox.SharedTarget) {
 			t.Errorf("shared mount %q present without --share", m)
 		}
 	}
@@ -118,8 +120,8 @@ func TestShareSeedsReadme(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading seeded README: %v", err)
 	}
-	if !strings.Contains(string(b), sharedTarget) {
-		t.Errorf("seeded README does not mention %s:\n%s", sharedTarget, b)
+	if !strings.Contains(string(b), sandbox.SharedTarget) {
+		t.Errorf("seeded README does not mention %s:\n%s", sandbox.SharedTarget, b)
 	}
 }
 

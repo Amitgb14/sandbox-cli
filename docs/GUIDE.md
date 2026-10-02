@@ -457,7 +457,7 @@ sandbox-cli claude --worktree feature-a --detach --dry-run -- -p "implement A"
 container: an agent started in its normal interactive mode will draw a UI nobody
 can see and wait for a keystroke that never comes, until you stop it. Use the
 agent's non-interactive form — `claude -p "…"`, `codex exec "…"`,
-`droid exec "…"` — or an ordinary command like `npm test`.
+`opencode run "…"` — or an ordinary command like `npm test`.
 
 **The container is kept after it exits**, unlike every other sandbox run. That is
 the point: its exit code and its output are the only record that the work
@@ -651,8 +651,8 @@ task needs credentials from the environment instead (`ANTHROPIC_API_KEY`).
 
 **Three constraints worth knowing before you write a fleet file:**
 
-- **Only agents with a verified headless mode may appear** — `claude`, `codex`,
-  `gemini`, `opencode` and `droid` today. Anything else is rejected when the file
+- **Only agents with a verified headless mode may appear** — `claude`, `cline`,
+  `codex`, `gemini` and `opencode` today. Anything else is rejected when the file
   is parsed, before a single container starts, because the alternative is an
   unattended agent waiting forever on a keystroke.
 - **One agent per branch**, enforced by docker's own refusal to reuse a container
@@ -769,6 +769,7 @@ sandbox-cli recover                  # what's broken here, and what there is to 
 sandbox-cli recover list             # every recorded run for this repo, newest first
 sandbox-cli recover show ID          # what's in a snapshot
 sandbox-cli recover restore ID       # put it back, on a branch
+sandbox-cli recover fetch            # what a configured bucket holds, and pull one back
 sandbox-cli recover repair           # fix a repository a crashed sandbox broke
 ```
 
@@ -779,6 +780,43 @@ the tree is clean) and `--patch` writes the changes out as a patch instead.
 
 Run it from your normal checkout even when the crash happened in a `--worktree`
 sandbox — worktrees share the repository the snapshots live in.
+
+#### A copy off this machine
+
+Snapshots live in your own repository, which is the fast, private default and
+also its limit: a lost laptop loses them with everything else. Point
+`snapshot.s3` at a bucket (AWS, or MinIO / R2 / Ceph / B2 through `endpoint:`
+and `path_style:`) and each one is uploaded as a **git bundle** — a packfile git
+alone can read, not an archive that needs this tool:
+
+```sh
+git init recovered && cd recovered
+git fetch ../snap.bundle 'refs/sandbox/snapshots/*:refs/heads/snap/*'
+git checkout snap/<id>
+```
+
+From a machine that still has sandbox-cli, `recover fetch` is the shorter way:
+
+```sh
+sandbox-cli recover fetch                    # what the bucket holds for this repo
+sandbox-cli recover fetch 20260724-224601    # unpack it back under refs/sandbox/
+```
+
+It works on a machine that has never seen these snapshots, because a small
+manifest is stored beside every bundle. After a fetch the snapshot is local and
+`show`, `restore` and the rest treat it as if it had never left.
+
+Two things to know. The bucket is addressed by an id built from the repository's
+**absolute path**, so a clone in a new location looks in a namespace of its own —
+an empty listing names the other ids in the bucket, and `--repo-id` reads one of
+them. And a snapshot this machine has no record of can only be checked against
+the manifest that travelled with it, so `fetch` says so: look at it before you
+restore it.
+
+The credential is **named, never held**: `access_key_env` is the name of an
+environment variable read at the moment of upload, so there is nowhere in the
+config file for a secret to sit. Retention prunes the local copy only — the
+bucket's own lifecycle rules govern the objects in it.
 
 `repair` handles the other half. It rebuilds a deleted worktree administrative
 directory and clears locks a killed git left behind, then rebuilds the index from
@@ -803,7 +841,9 @@ sandbox-cli recover
 ```
 
 It prints two things: what is broken in the repository here, and every run it has
-a record of. A run marked `crashed` is one that nothing closed.
+a record of. A run marked `crashed` is one that nothing closed; one marked
+`baseline` is a Studio run's before-image — the workspace as it *started*, which
+holds nothing the agent went on to write.
 
 **3. If it reported a problem, fix it.**
 
@@ -1100,6 +1140,23 @@ zone is forwarded as `TZ` (read from `$TZ`, `/etc/localtime` or `/etc/timezone`;
 nothing extra is mounted). To run on a different clock, say so — `--env TZ=UTC`,
 or any zone name — and that wins.
 
+Your terminal comes along on the same terms. Docker tells a container it is a
+bare `xterm` — eight colours — so an agent's interface inside the sandbox is
+drawn for a poorer terminal than the one you are looking at: banners disappear,
+diffs lose their colour, and nothing says why. `TERM` and `COLORTERM` cross by
+name whenever the run has a terminal at all, so `tput colors` reports the same
+number inside as out.
+
+If your terminal reports a name the sandbox image has never heard of — Ghostty's
+`xterm-ghostty`, kitty's `xterm-kitty`, `alacritty` — you get `xterm-256color`
+instead of that name. The image carries the common terminfo entries and not the
+exotic ones, and a `TERM` nothing can look up is worse than a plain one: `tput`
+fails and `less` stops to tell you the terminal is not fully functional. The
+colour survives the translation, which is the part you were after.
+
+A piped run gets neither, because there is no terminal to describe and escape
+codes in a captured log are noise; `--env TERM=dumb` opts out.
+
 ### Seeing a web app the agent is running
 The sandbox publishes no ports, so a dev server started inside it is invisible
 from your browser — the container is on Docker's own network, and on Docker
@@ -1130,6 +1187,90 @@ ports:
 
 Flags add to that list rather than replacing it, so `-P 9229` opens a debugger
 port for one run without disturbing the project's own.
+
+### The session server
+
+A second way to look at the same containers, and the first piece of a longer
+track: one daemon per repository that catalogs its sandboxes instead of every
+command re-deriving the grouping from labels.
+
+```sh
+sandbox-cli serve          # foreground; one per repository
+sandbox-cli pane list      # the containers, grouped by worktree
+sandbox-cli session snapshot   # the whole catalog, as the protocol has it
+```
+
+It also **snapshots every running pane** on a ticker, which is the crash safety net
+detached runs never had: a foreground `sandbox-cli claude` snapshots every two
+minutes, a `--detach` run used to snapshot not at all, and a Studio run recorded only
+a before-image. So if an agent writes something and is killed before committing,
+`sandbox-cli recover` has it. Off if `snapshot.enabled` is false in your config, and
+`serve` says which at startup.
+
+It **starts nothing**, and stopping it leaves every container running — the engine
+owns them, which is the same reason `sandbox-cli list` survives a killed CLI. So
+the question worth asking is what it adds over `list`, and there is exactly one
+answer today: `list` can only show you what the engine still has. A container that
+has been reaped is gone from `docker ps -a` and therefore from `list`, while the
+catalog keeps the pane — stopped, with the branch it was on and the conversation it
+belonged to. That is the half the engine cannot give back.
+
+`pane list` works without the daemon too, by reading the engine directly, and says
+so when it does. The two differ only in that one sentence.
+
+Every `--detach` run is a pane, whichever command started it — the pane id is
+printed alongside the container name and stamped as a label, so `kill`, `logs` and
+`attach` all take it:
+
+```sh
+sandbox-cli claude --detach --worktree feat -- -p "do the thing"
+#   pane:  p_4f21c0a9b3de
+sandbox-cli logs p_4f21c0a9b3de -f
+sandbox-cli kill p_4f21c0a9b3de
+```
+
+That is a fourth way to name one container, not a better one. A branch, a name and
+a short id all still work, and a reference matching two panes refuses and lists
+them rather than picking — stopping the wrong agent costs its work.
+
+**Which agent needs me?** With `sandbox-cli serve` running, a pane's state comes from
+the agent's own conversation rather than only from its container:
+
+| State | Means |
+|---|---|
+| `working` | the conversation is moving, or the agent owes an answer to the last prompt |
+| `blocked` | the agent spoke last, has been quiet since, and **this pane has a console** — so it is waiting for you |
+| `idle` | the same quiet, but nothing can type at this pane |
+| `done` / `failed` | the container exited 0 / non-zero |
+| `unknown` | not enough to say: no transcript yet, or no conversation that can be attributed to this pane |
+
+```sh
+sandbox-cli pane wait p_3f21 --state blocked --state done --timeout 10m
+```
+
+`blocked` is never guessed from the *wording* of a prompt — that would be a list of
+claims about other vendors' phrasing, and one reword turns it into a confident lie. It
+is structural: the agent spoke last, it has gone quiet, and there is a keyboard. Where
+the evidence runs out the answer is `unknown`, and `unknown` means go and look.
+
+Two things called a snapshot, and they are not the same layer:
+
+| | `session snapshot` | `recover` |
+|---|---|---|
+| holds | layout — worktrees, panes, state | **files** — the workspace, including untracked ones |
+| lives in | `~/.config/sandbox/sessions/<repo>/session.json` | git, under `refs/sandbox/snapshots/` |
+| restoring it | starts no agent, changes no file | gives you a branch with your work on it |
+
+If you are looking for work an agent lost, you want `recover`. This is the other
+one.
+
+The socket is `0600` in a `0700` directory and carries no token: anyone who can
+open it can already run docker as you, so a token would be a second secret
+protecting nothing. Studio keeps its loopback bind and bearer token — a browser can
+reach Studio, which is a different boundary.
+
+Where this is going, and what each phase may not touch, is
+[the session server](architecture/session-server.md).
 
 ### Sessions
 
@@ -1269,6 +1410,16 @@ security:                     # secure-by-default; tune here
 secrets:                      # resolved at run time, forwarded by name only
   GITHUB_TOKEN: { command: gh auth token }
   ANTHROPIC_API_KEY: { file: ~/.secrets/anthropic }
+
+snapshot:                     # crash safety net (sandbox-cli recover)
+  enabled: true               # or use --no-snapshot
+  interval: 2m                # how often the workspace is snapshotted
+  retention: 336h             # 14d, then old crash snapshots are pruned
+  manual_retention: 168h      # 7d, for the checkpoints you take on purpose
+  s3:                         # optional: a copy off this machine, as a git bundle
+    bucket: my-sandbox-snapshots
+    upload: manual            # manual (default) | all | off
+    access_key_env: AWS_ACCESS_KEY_ID   # the variable NAME, never the value
 ```
 
 ### The project file — `.sandbox.yaml`
@@ -1291,11 +1442,6 @@ hostname: devbox
 
 cache:
   enabled: false              # or use --cache
-
-snapshot:                     # crash safety net (sandbox-cli recover)
-  enabled: true               # or use --no-snapshot
-  interval: 2m                # how often the workspace is snapshotted
-  retention: 336h             # 14d, then old snapshots are pruned
 ```
 
 **`.sandbox.yaml` is treated as untrusted.** It travels with the repository —
@@ -1305,7 +1451,9 @@ could run commands on your machine, reach host paths, or weaken the container ar
 **refused** from it:
 
 > `image`, `workdir`, `user`, `home`, `runtime`, `mounts`, `secrets`, `env`,
-> `env_allow`, `security.*`, `cache.paths`, and any `network.mode` /
+> `env_allow`, `security.*`, `cache.paths`, `snapshot` (including `snapshot.s3`,
+> which names a destination to send the working tree to and which of your
+> credentials is read to get there), and any `network.mode` /
 > `network.baseline` that *weakens* what you already have in force.
 
 A project may ask for stricter confinement than your default; it may not ask for
@@ -1341,15 +1489,12 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli opencode [args]` | Run OpenCode |
 | `sandbox-cli cline [args]` | Run Cline (installed on first use) |
 | `sandbox-cli goose [args]` | Run Goose (installed on first use) |
-| `sandbox-cli crush [args]` | Run Crush (installed on first use) |
-| `sandbox-cli aider [args]` | Run Aider (installed on first use, via uv) |
 | `sandbox-cli copilot [args]` | Run GitHub Copilot CLI (installed on first use) |
 | `sandbox-cli cursor [args]` | Run Cursor CLI (installed on first use) |
 | `sandbox-cli qwen [args]` | Run Qwen Code (installed on first use) |
-| `sandbox-cli amp [args]` | Run Amp (installed on first use) |
-| `sandbox-cli continue [args]` | Run Continue CLI (installed on first use) |
 | `sandbox-cli openhands [args]` | Run OpenHands CLI (installed on first use) |
-| `sandbox-cli droid [args]` | Run Droid (installed on first use) |
+| `sandbox-cli devin [args]` | Run Devin CLI (installed on first use) |
+| `sandbox-cli kilocode [args]` | Run Kilo Code (installed on first use) |
 | `sandbox-cli init` | Scaffold a `.sandbox.yaml` |
 | `sandbox-cli config show\|path\|validate` | Inspect the effective config |
 | `sandbox-cli list` (alias `ps`) | Sandbox sessions running now; `--all` includes finished ones |
@@ -1369,7 +1514,15 @@ Run `sandbox-cli config show` to see the effective, merged config, and
 | `sandbox-cli fleet clean [--worktrees] [--force]` | Reap finished fleet containers (and clean checkouts); `--force` reaps ones whose branch still has work to land |
 | `sandbox-cli recover` | What a crashed run left behind, and what's broken ([runbook](#after-a-crash-step-by-step)) |
 | `sandbox-cli recover list\|show\|restore` | Find and restore work from a crashed run |
+| `sandbox-cli recover fetch` | List or pull back snapshots mirrored to object storage |
 | `sandbox-cli recover repair` | Fix a repository a crashed sandbox broke |
+| `sandbox-cli serve` | Run the session server for this repository — catalogs its sandboxes, starts none ([track](architecture/session-server.md)) |
+| `sandbox-cli serve status\|stop` | Whether one is running; stop it (containers keep running either way) |
+| `sandbox-cli pane list [--all] [--json]` | The same containers as `list`, grouped by worktree, with the pane ids the protocol uses |
+| `sandbox-cli pane spawn [flags] -- <cmd>` | `run --detach` named as a pane; `--dry-run` prints the engine command |
+| `sandbox-cli pane kill <ref>` | Stop a pane, by pane id, container name, short id or branch |
+| `sandbox-cli pane wait <ref> --state …` | Block until a pane is blocked, done, failed … (needs `serve`) |
+| `sandbox-cli session snapshot` | The whole catalog as JSON — layout, not files (`recover` is files) |
 | `sandbox-cli version` | Print the version |
 
 Common flags (work on `run` and on every agent wrapper):
@@ -1409,7 +1562,7 @@ interactive mode. There is no terminal inside a detached container, so it drew a
 UI to nothing and is waiting for a keystroke. `docker logs NAME` shows escape
 codes and a prompt rather than work. Stop it (`docker stop NAME`), remove it
 (`docker rm NAME`) and relaunch with the agent's non-interactive form: `claude -p
-"…"`, `codex exec "…"`, `droid exec "…"`.
+"…"`, `codex exec "…"`, `opencode run "…"`.
 
 **"Conflict. The container name … is already in use"** on a detached run — that
 branch already has an agent, and the refusal is the feature: two agents in one

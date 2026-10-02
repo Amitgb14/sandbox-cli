@@ -136,9 +136,26 @@ variables, and `persist_auth` is re-checked here for the same reason
 ## Contract
 
 `internal/studioapi/types.go` is the source of truth for every request/response
-shape; `types.ts` in this directory is a hand-maintained TypeScript mirror for
-a frontend to import directly. Keep the two in sync when the Go types change —
-there is no code generation step (yet) tying them together.
+shape, and `types.ts` in this directory is **generated from it** by
+`make contract` — the Go types are the contract and their doc comments are its
+documentation, so a client author reads the same prose the server was written
+against.
+
+It is checked in rather than built on demand, because it is documentation as
+much as it is a declaration and a file nobody can read without a Go toolchain is
+neither. `TestContractMirrorIsInSync` regenerates and compares, naming the first
+line that differs and the command that fixes it — which is what the hand-
+maintained version could not do: `AgentInfo` had drifted to three fields against
+ten, and `SessionSummary` was missing entirely, so the one shape whose meaning
+had just changed was the one a client could not read the contract for.
+
+### A typed client
+
+`sdk/typescript` is a published client for this API — `Studio.connect()` finds
+the local daemon from what `studio.sh` writes, and `Workspace.run()` launches a
+container and waits for it. It imports the same generated contract this document
+mirrors, so the two cannot describe different servers. Everything below is what
+it speaks; the endpoints are equally usable with curl.
 
 ### Endpoints
 
@@ -167,12 +184,137 @@ there is no code generation step (yet) tying them together.
 | POST | `/v1/runs/{id}/console/resize` | Tell the container its terminal size — **always needs a token** |
 | POST | `/v1/runs/{id}/stop` | Stop (or `{"force":true}` to kill) a running run |
 | POST | `/v1/runs/{id}/recover` | Restore the crash-recovery snapshot associated with this run's branch |
+| POST | `/v1/runs/{id}/snapshot` | Checkpoint the workspace this run is working in |
+| GET/POST | `/v1/snapshots` | List (`?repo=`, `?repo=all`, `?branch=`) / take a snapshot |
+| POST | `/v1/snapshots/{id}/restore` | Put one back — `branch` (default), `worktree`, or `patch` |
+| POST | `/v1/snapshots/{id}/retention` | How long this one is kept; `""` returns it to the default |
+| POST | `/v1/snapshots/{id}/upload` | Mirror one snapshot to object storage now |
+| POST | `/v1/snapshots/{id}/verify` | Ask the bucket whether the object is really there |
+| GET/POST | `/v1/snapshots/settings` | The retention defaults and the bucket, and which layer set them |
+| POST | `/v1/snapshots/s3/check` | Does the configured bucket answer, and does the credential resolve |
 | GET | `/v1/runs/{id}/logs` | Server-Sent Events log stream (`?follow=1` to keep it open) |
 | GET | `/v1/runs/{id}/metrics` | One resource sample, or a live stream with `?stream=1` |
 | GET | `/v1/stats` | One resource sample per live run, host-wide |
+| GET | `/v1/branches` | Every local branch in one repository, and which is checked out — for choosing a base |
 | GET/POST | `/v1/worktrees` | List (`?repo=`, or `?repo=all` for every registered repository) / create managed git worktrees |
 | GET | `/v1/worktrees/{branch}/diff` | What this branch has beyond its base, plus its uncommitted work |
 | GET/DELETE | `/v1/worktrees/{branch}` | Read / remove (`?repo=`, `?force=1`) one worktree |
+
+### Snapshots
+
+A snapshot is a commit of a working tree under `refs/sandbox/snapshots/`, taken
+through `internal/rescue`: a private `GIT_INDEX_FILE` so the user's index, HEAD,
+branches and working tree are never written, and `internal/githard` so a
+repository an agent controls cannot make the capture run a command on the host.
+It holds **files** — no container, no image and no credential — which is why
+restoring one is cheap and why it is not a way to resume a stopped machine.
+
+Three restore modes, and the default is the only one that cannot destroy
+anything: `branch` points a new branch at the snapshot, `worktree` writes the
+files back and is refused on a dirty tree rather than offering a force, and
+`patch` returns a diff and writes nothing.
+
+Two rules are worth knowing before building against this.
+
+**An unchanged tree is a 422, not an empty success.** A caller handed an id
+pointing at no commit would believe it had a checkpoint it does not have, and
+would find out at the moment it tried to roll back.
+
+**A snapshot records who took it, and that decides who may restore it.**
+`source` is `run` or `sdk`, derived from the request — a browser attaches
+`Origin` to every request and a programmatic client sends none — and never
+accepted from the body, since a caller able to label its own snapshots would be
+choosing its own restore surface. Studio lists both and restores only the `run`
+ones; an SDK-made snapshot is restored through the SDK, because a script part-way
+through something is not a thing to undo from a browser tab.
+
+That last one is a **scoping rule and not a security boundary**. Anything able to
+omit a header can restore anything; the bearer token and the loopback binding are
+what govern who may call this API at all. What it buys is that the two surfaces
+do not silently undo each other's work.
+
+Retention is per snapshot, defaulting to seven days for one somebody asked for
+and fourteen for the crash net. What is stored is the *rule* rather than a
+computed expiry, so raising a default moves every snapshot that never named one.
+The defaults live in `~/.config/sandbox/studio/snapshots.json`, a layer **under**
+the user's `config.yaml` for the same reason `providers.json` is: a value typed
+by hand outranks one set in a UI, and rewriting a hand-maintained YAML file would
+lose its comments and its ordering.
+
+#### Object storage
+
+With `snapshot.s3` configured, a snapshot is also uploaded as a **git bundle**,
+plus its manifest beside it — which is what makes the bucket self-describing: a
+machine that has lost `~/.config/sandbox/rescue` entirely can still be told what
+is in there. The object needs no tooling to open:
+
+```sh
+git init recovered && cd recovered
+git fetch ../snap.bundle 'refs/sandbox/snapshots/*:refs/heads/snap/*'
+git checkout snap/<id>
+```
+
+`git clone` of it does *not* work, and that is a consequence rather than an
+oversight: a snapshot ref lives under `refs/sandbox/`, so the bundle carries no
+branch and no HEAD to check out. Naming one would mean writing a `refs/heads` ref
+into the user's repository, which is the one thing `internal/rescue` promises
+never to do.
+
+Four things a client should know:
+
+**The credential is a name.** `accessKeyEnv` is the name of an environment
+variable read on the daemon's machine. Nothing in this API accepts or returns a
+secret value; `credentialsResolved` and `credentialsError` are the whole of what
+is reported about it.
+
+**`remote` describes the upload, not the bucket.** A lifecycle rule or somebody
+tidying a bucket leaves a snapshot reading as mirrored when it is not, so
+`/verify` is the call that asks. It is per snapshot and on demand — a listing
+that asked per row would make one round trip per snapshot for an answer that
+almost never changes.
+
+**`/s3/check` takes no bucket.** It reports on what the daemon is configured
+with. An endpoint that dialled a host from the request body would be a
+server-side request forgery with a friendly name, so there is no way to give it
+one. A bucket that refuses is `200 {"ok": false, "error": …}` — the request
+succeeded and the storage did not.
+
+**A capture whose upload fails still answers `201`.** The snapshot is real and
+local; what failed is the copy, and `remote.error` carries the reason. Returning
+an error instead would discard the id of a checkpoint that exists.
+
+**A settings write takes `SnapshotSettingsUpdate`, not the shape the read
+returns.** Every field is optional and **absent means leave it alone**: the
+screen that edits the bucket sends only `s3`, the one that edits the windows
+sends only the two durations, and neither can clear the other's setting by not
+knowing about it. Sending a window as `""` clears the daemon's own override,
+which is a different request from not sending it; sending `s3` with an empty
+`bucket` turns mirroring off. Half the read's fields are *reports* — what
+`config.yaml` sets, whether anything is writable — so a client echoing a read
+back would be claiming authorship of values it only observed.
+
+A bucket or window set in `config.yaml` outranks this endpoint. The bucket is
+refused with `409` rather than accepted and silently outranked at the next
+restart; a pinned window comes back as `configRetention` /
+`configManualRetention` and a write to it is ignored — including in the running
+daemon, which is the half that used to be missed.
+
+### Branches, which are not worktrees
+
+`GET /v1/branches` lists one repository's local branches and names the
+checked-out one. It exists because a base branch is not free text: it is stamped
+as a label at launch, and `fleet land` reads that label back to decide what to
+merge into — so a typo survives the run and surfaces at landing, against an
+intent nothing can correct by then.
+
+It is deliberately not `/v1/worktrees`, which answers a different and smaller
+question. A base is usually the repository's default branch, which most often has
+no worktree of its own, so a picker built from that route would omit exactly the
+answer people are looking for.
+
+There is no `?repo=all`. A base belongs to one repository by construction — it is
+what a run there will be landed into — and a union across repositories would
+offer names that mean nothing where they were chosen.
 
 ### Which repository a request is about
 
@@ -225,6 +367,77 @@ with the candidates listed). The worktree routes take a *whole* branch name,
 slashes included, so `GET /worktrees/feat/studio-api` works. Run paths are single
 segment, so address a slash-bearing branch by id or name there — `GET
 /runs?branch=feat/studio-api` finds it.
+
+### Sharing a directory — the one way across
+
+`POST /v1/runs` takes `share: true`, which mounts the daemon machine's
+`~/.config/sandbox/shared` at `/shared`. It is the same thing
+`sandbox-cli claude --share` arranges, through the same code
+(`sandbox.ShareMount`), so there is one answer to what sharing reaches.
+
+**It exists because there is no other channel.** Everything else a run can see
+is scoped to its own project, so two agents in different repositories — which is
+exactly what somebody opens two Studio tabs to arrange — cannot hand a file over
+at all. Tell one agent to write `/shared/contract.json` and the other to read it.
+
+**A boolean, not a list of host paths, and that is the design.** An arbitrary
+directory in a request would be a browser choosing what a container reaches;
+this is one well-known directory, created, seeded and checked by the daemon
+(`RefuseUnsafeHostPath`, and the group bits opened for the container's user on
+Linux). The wider thing is `--mount`, and it is deliberately not offered here.
+
+`shareName: "work"` narrows it to `<shared>/work` at `/shared/work`, so two runs
+that both want a handoff spot do not clobber the same filename. It **requires**
+`share` — sent alone it is a 400, because implying would let one field switch on
+the cross-project channel, and `share: false, shareName: "work"` would be a
+contradiction settled by guessing. A namespace prevents collisions, not access:
+any run sharing the root reads every namespace inside it.
+
+Who may ask is the answer `publish` gives below at length. A request carrying
+`share` is the user driving their own daemon, the same act as typing the flag.
+What may not is a repository: nothing reads this from a `.sandbox.yaml`.
+
+### Publishing a port — the one way in
+
+`POST /v1/runs` takes `publish: ["8000"]`, in docker's syntax, so an agent's dev
+server can be opened in a browser. It is the only launch option that opens a way
+*in* rather than narrowing what goes out, so three things about it are worth
+knowing.
+
+**A bare port binds loopback**, on the machine running the daemon —
+`8000` becomes `127.0.0.1:8000:8000`. This is where sandbox-cli deliberately
+differs from `docker -p`, which would bind every interface: you asked to see the
+port from your machine, not to serve it to the network. Writing an address out
+(`0.0.0.0:8000:8000`) still does exactly what it says.
+
+**Under an allowlist the firewall is told.** The container's `INPUT` chain is
+default-deny, with a carve-out for exactly the ports published
+(`SANDBOX_INGRESS_PORTS`) — without which the port would be open on the host and
+answer nothing.
+
+**A repository still cannot ask for one.** `trust.go` refuses `ports:` from a
+project `.sandbox.yaml`, because declaring a dev-server port is a real use but a
+decision about the boundary, and it belongs to the user. A request carrying
+`publish` *is* the user, driving their own daemon — the same act as typing
+`--publish`. That distinction is the whole of the rule: not *whether* a port may
+be opened, but *who* may decide.
+
+Three refusals arrive before anything starts, rather than as a 502 from the
+launch: a malformed spec (400, from the same normaliser the CLI uses), a `prod`
+daemon (422 — publishing opens the boundary inward, and prod is the profile for
+runs nobody is watching), and `network: none` (422 — no network to publish from).
+
+Runs report their ports back at `GET /v1/runs/{id}/config` →
+`network.ingressPorts`, **when an allowlist is in force**. That is not a gap in
+the reporting: `SANDBOX_INGRESS_PORTS` is what the field is read from, and it
+exists only where there is a default-deny inbound chain to carve. On an
+unrestricted daemon the port is published and nothing was carved, so there is
+nothing to report — the ports are still visible in the run's own argv.
+
+**On a remote daemon**, remember whose loopback it is: a bare port binds
+`127.0.0.1` on that machine, so a browser elsewhere cannot reach it. Publish on a
+reachable address, or tunnel — `ssh -N -L 8000:127.0.0.1:8000 you@box` — which
+keeps the port off the network the way the default intends.
 
 ### Agent routing
 
@@ -306,7 +519,14 @@ purpose: only the **sandbox-owned** store, because that listing feeds a resume
 picker and a session that cannot be reopened is an action that fails. `?scope=all`
 answers the *reading* question instead — it includes the user's own `~/.claude`
 history, and every row reports its `store` (`sandbox` | `host`), whether it is
-`resumable`, and the `project` (working directory) the transcript recorded. That
+`resumable`, and the `project` (working directory) the transcript recorded.
+
+`resumable` needs **both** facts and used to carry only the first: the
+sandbox-owned store, *and* an agent whose CLI can reopen a session by id.
+Gemini declares no resume argv, so a run asking to reopen one of its
+sessions is refused with "no verified resume flag" — reporting those rows
+resumable offered an action that could only 400, after somebody had chosen it.
+`GET /v1/agents` reports the agent half as `canResume`. That
 last field is what tells the two apart at a glance: a container's cwd is always
 `/workspace`, a host session's is the real path.
 
@@ -317,6 +537,12 @@ project history bucket the file sits in, matched forwards from each registered
 repository's root rather than by decoding a bucket name back into a path, which
 is lossy. A session pooled in the shared bucket is genuinely unattributable, and
 absent says so rather than guessing.
+
+Two formats are parsed against a confirmed shape — claude's jsonl and codex's
+rollout — and a session in any other lists `partial`: its id and dates are real,
+its title and turn count are reported unknown rather than as zero. A partial
+session can be read and cannot be handed over, since a briefing built from a
+transcript nothing could parse would carry no conversation at all.
 
 `{id}` returns the parsed turns; `{id}/raw` returns the file. Raw exists because
 parsing is an interpretation — the claude jsonl carries a dozen line kinds and
@@ -332,20 +558,95 @@ back.
 
 ### Running the daemon on another machine
 
-Supported, and the shape that needs no new trust is a tunnel: the daemon keeps
-binding loopback, so the `Host` it sees is a loopback name, the rebinding defence
-holds and the token still governs.
+Binding a routable address requires `-token` — the daemon **refuses to
+start without one**, because it holds the docker socket and an unauthenticated
+routable port is root on that host — plus `-allow-host` for the name the browser
+dials and `-cors-origin` for the page's origin.
+
+The daemon speaks **plain HTTP and has no TLS flags**. That is not an oversight
+to work around with a bare `--bind` on an untrusted network: off loopback, the
+bearer token, every prompt and every diff cross in cleartext, and a token on the
+wire is a token you have published to whoever shares that network. Three shapes
+hold, ranked below by how much new trust each asks for.
+
+#### 1. A tunnel — nothing new to trust
 
 ```sh
 ssh -N -L 8787:127.0.0.1:8787 you@box
+sh studio.sh up --api-url http://localhost:8787
 ```
 
-Binding a routable address instead requires `-token` — the daemon **refuses to
-start without one**, because it holds the docker socket and an unauthenticated
-routable port is root on that host — plus `-allow-host` for the name the browser
-dials and `-cors-origin` for the page's origin. There is no TLS: off loopback the
-token and everything it protects are in cleartext, so this is for a private
-network or a reverse proxy that terminates TLS in front.
+The daemon keeps binding loopback, so the `Host` it sees is a loopback name, the
+rebinding defence in `guard.go` still holds, and the token still governs. The
+transport is SSH's — better than any TLS this repository would grow — and the
+credential is one you already manage. 
+Tailscale and WireGuard are **not** this shape, though they are described as
+tunnels too: the daemon has to bind the tailnet or WireGuard address for anything
+on that network to reach it, which is a routable address — so it needs a token,
+`-allow-host` for the name the browser dials, and the reasoning of shape 3 rather
+than this one.
+
+#### 2. A reverse proxy — a real certificate, no new code here
+
+For a machine several people reach, or one you want to open with a name rather
+than a tunnel, terminate TLS in front and leave the daemon on loopback:
+
+```caddyfile
+studio.example.com {
+    reverse_proxy 127.0.0.1:3100      # the UI
+}
+api.example.com {
+    reverse_proxy 127.0.0.1:8787      # the daemon
+}
+```
+
+`studio.sh` takes both names, because neither is derivable from `--bind` or
+`--port`: the browser dials one and the page is served from another. They **add**
+to what the script works out for itself, the same direction the daemon's own
+`-allow-host` takes with loopback.
+
+**Both commands run on the box.** `--api-only` starts the daemon and says so —
+"no UI on this machine" — so the UI half has to be started there too, or the name
+the proxy serves has nothing behind it. `--ui-only` does not stop the daemon, so
+the two compose:
+
+```sh
+# on the box: the daemon, then the UI beside it on 127.0.0.1:3100
+sh studio.sh up --api-only \
+  --allow-host api.example.com \
+  --cors-origin https://studio.example.com
+
+sh studio.sh up --ui-only --api-url https://api.example.com
+```
+
+Your own machine runs nothing — you open `https://studio.example.com`. That is
+what makes the origin the daemon is told to accept the one the browser actually
+sends, and what keeps both halves on TLS, which the third point below requires.
+
+Three things decide whether this works, and each fails in a way that looks like
+something else:
+
+- **`-allow-host` takes the public name.** A proxy forwards the original `Host`,
+  and the daemon answers to loopback names plus whatever this flag lists. Without
+  it every request is refused and the browser reports an outage.
+- **`-cors-origin` takes the *page's* origin**, `https://…`, not the API's. Get
+  the scheme wrong and the network works while every request is refused on the
+  origin check.
+- **Both halves must be TLS or neither.** A page served over `https://` cannot
+  call an `http://` daemon — the browser blocks it as mixed content, with no
+  request on the wire and nothing in the daemon's log. If you put a certificate
+  in front of Studio, put one in front of the daemon too.
+
+Keep the daemon bound to `127.0.0.1` so the only way in is through the proxy.
+Binding it routable *and* proxying it leaves the cleartext port open beside the
+encrypted one.
+
+#### 3. A private network you already trust
+
+`--bind 10.0.0.5` with a token, on a subnet where you accept that the traffic is
+readable. Scope the firewall to that subnet rather than the world
+(`ufw allow from 10.0.0.0/24 to any port 8787 proto tcp`). This is the shape to
+use knowingly, not by default.
 
 What must *not* be done instead is pointing a local daemon at a remote docker.
 Every refusal here is evaluated against the filesystem this process runs on, so
@@ -650,6 +951,49 @@ load-bearing: every correlation filter assumes a session began around the time
 its container did, and a resumed one began before — without the label a resumed
 run reports no conversation at all.
 
+### Carrying a conversation to another agent
+
+`"handoffFrom": {"agent": "claude", "sessionId": "…"}` starts a run **briefed
+with** somebody else's conversation, which is the answer to "my claude
+conversation, run it via codex". It is not a resume and the two are refused
+together.
+
+The reason is the design decision in `docs/proposals/shared-context.md`: a
+session id is a primary key into one vendor's private store and the schemas
+differ entirely, so transcribing claude's history into codex's would make the
+target believe a fabricated history — confidently, with file-writing tools.
+What crosses instead is `internal/handoff`'s export — `HANDOFF.md`, a
+vendor-neutral `transcript.jsonl` with no tool ids, and a `files.md` derived
+from git rather than from anything the agent said about itself — mounted
+**read-only** at `/sandbox/context`, with a prompt that tells the target it is
+reading a briefing rather than its own history.
+
+Four refusals, each closing a way of asking for a briefing that could only fail
+inside the container: it needs an **agent** (a plain command would never read
+it), it needs a **prompt** (the briefing says what happened before, the prompt
+says what to do now), it needs **both halves** of the reference, and a
+conversation it cannot find is refused rather than launched without one — the
+caller asked for a handoff, and a run with only its prompt is a different job.
+
+A conversation with **no verified reader** is refused too, and that refusal was
+added rather than assumed: `internal/handoff` treats an unparseable transcript as
+normal and still writes an export — right for a failover, where a crashed agent's
+file ledger is the useful part, and wrong when somebody picked *this
+conversation*, who would otherwise get a prompt announcing "0 prompts of that
+conversation" over an empty `transcript.jsonl`.
+
+The source agent may be the **same** agent, and that is not degenerate: gemini
+declares no resume argv, so a briefing from itself is the only way to
+carry one of their conversations on. `GET /v1/agents` reports `canResume` so a
+client knows which case it is in, and a session's `resumable` now accounts for
+both facts — the sandbox-owned store *and* an agent that can reopen by id.
+
+The run records it as `sandbox.handoff_from` / `sandbox.handoff_session`, and
+the audit line as `handoff_from` / `handoff_session` — deliberately **not**
+`routed_from`, though a failover sets both. Routing says a provider stopped
+answering; a handoff says a person chose. In a listing they are the same two
+words, codex after claude, and only these fields say which story it was.
+
 **Resizing is not cosmetic.** A full-screen agent renders *nothing* until it
 knows its terminal size, so `POST /console/resize` is what turns an attached
 console from a blank rectangle into the agent's interface. Measured: a console
@@ -672,7 +1016,7 @@ cannot explain.
 ### Agent selection
 
 `GET /agents` mirrors `internal/agents`, which only registers adapters with a
-*verified* headless mode (`claude`, `codex`, `gemini`, `opencode`, `droid` at
+*verified* headless mode (`claude`, `cline`, `codex`, `gemini`, `opencode` at
 the time of writing). That is not an arbitrary subset — a detached container
 has no terminal, so an agent that stops to ask permission would simply hang
 with nobody able to answer it. `POST /runs` refuses any other agent name.

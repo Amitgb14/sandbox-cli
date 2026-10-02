@@ -99,7 +99,7 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       {
         title: "Turn seccomp back on",
-        body: "Docker Desktop ships some configurations with \"seccomp-profile\": \"unconfined\" in Settings → Docker Engine, which means the container gets the whole syscall table. Remove that line and apply. sandbox-cli warns when it finds this, and refuses under --profile prod.",
+        body: "Some Docker Desktop configurations leave the syscall filter off, so the container gets the whole syscall table. If Settings → Docker Engine sets \"seccomp-profile\": \"unconfined\", remove that line and apply. If it sets nothing — which happens — the containerd image store (Settings → General) has been reported to leave the filter off by itself; check `docker info` for \"Profile: unconfined\" either way. sandbox-cli warns when it finds this, and refuses under --profile prod.",
       },
       INSTALL_STEP,
       CONFIG_STEP,

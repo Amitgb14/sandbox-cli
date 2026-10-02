@@ -132,7 +132,15 @@ func reportDoctor(profile string, checks []check) error {
 		// that still has something to tell you, and dropping its remedy silently
 		// left the actionable half off the screen.
 		if c.Remedy != "" {
-			fmt.Fprintf(tw, "\t\t%s\n", c.Remedy)
+			// Line by line, each as its own indented cell. A remedy carrying a
+			// newline is written straight into a tabwriter cell otherwise, which
+			// puts its second line at column 0 and — a line with no tabs ends a
+			// column block — realigns every check printed after it. Seccomp's
+			// remedy became two lines when it stopped asserting a cause, so the
+			// one host this advice is for is the one that saw the broken table.
+			for _, line := range strings.Split(c.Remedy, "\n") {
+				fmt.Fprintf(tw, "\t\t%s\n", strings.TrimLeft(line, " "))
+			}
 		}
 		if fatal {
 			blocking = append(blocking, c.Name)

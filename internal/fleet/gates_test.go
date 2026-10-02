@@ -56,6 +56,19 @@ const (
 	// no key for any of them on purpose — a task is a prompt and a branch, not a
 	// place to ask for a docker socket.
 	never
+
+	// notYet: the fleet path leaves it zero today, and a named later phase will
+	// set it. Checked exactly like never, so the claim is enforced rather than
+	// asserted — but spelled differently, because `never` means a decision and
+	// this means a schedule. Putting a field here that carries no reach into the
+	// `never` list would dilute the one category whose entries are all about
+	// confinement, and the next reader would take "never" at its word.
+	//
+	// No members at present: the pane fields it was introduced for became `fromSpec`
+	// when phase 5 wired them. Kept rather than deleted because the *next* field in
+	// this position wants it, and because a reader finding `never` used for something
+	// that is merely unscheduled is the mistake it prevents.
+	notYet
 )
 
 var optionsPolicy = map[string]fieldPolicy{
@@ -84,16 +97,24 @@ var optionsPolicy = map[string]fieldPolicy{
 	"RouteReason":  never,
 	"RouteID":      never,
 	"RouteAttempt": never,
-	"Base":         fromSpec,
-	"Fleet":        fromSpec,
-	"ExtraMounts":  fromSpec, // the linked worktree's .git, without which the agent cannot commit
-	"EnvAllow":     fromSpec, // the descriptor's names, forwarded only if the host has them
-	"Env":          fromSpec, // the descriptor's own container settings (a keyring that is not there)
-	"Memory":       fromSpec,
-	"CPUs":         fromSpec,
-	"Allow":        fromSpec,
-	"Cache":        fromSpec,
-	"GitIdentity":  fromSpec,
+
+	// A briefing from somebody else's conversation. `never` for the reason the
+	// fleet's own doc gives about Console: a fleet is unattended, and deciding
+	// whose conversation is worth carrying on is something a person does while
+	// reading one. A fleet.yaml naming a session id would also pin a file in a
+	// vendor's private store into a checked-in configuration.
+	"HandoffFrom":    never,
+	"HandoffSession": never,
+	"Base":           fromSpec,
+	"Fleet":          fromSpec,
+	"ExtraMounts":    fromSpec, // the linked worktree's .git, without which the agent cannot commit
+	"EnvAllow":       fromSpec, // the descriptor's names, forwarded only if the host has them
+	"Env":            fromSpec, // the descriptor's own container settings (a keyring that is not there)
+	"Memory":         fromSpec,
+	"CPUs":           fromSpec,
+	"Allow":          fromSpec,
+	"Cache":          fromSpec,
+	"GitIdentity":    fromSpec,
 
 	// The one gate, and the reason this file exists.
 	"AuthPersistDir": gated,
@@ -121,6 +142,22 @@ var optionsPolicy = map[string]fieldPolicy{
 	"HostGateway": never, // reaching a host service is the opposite of what a fleet is for
 	"TTY":         never, // nothing is attached; BuildSpec resolves this from Detach
 	"NoMetrics":   never, // the live gauge is for foreground runs
+
+	// This container's identity in the session catalog, and `fromSpec` since phase 5:
+	// a fleet task *is* a pane, and the launch records one.
+	//
+	// They carry no reach — a pane id grants nothing, selects no mount, resolves no
+	// path, and is a key into a file in the user's own config directory — so there was
+	// never a confinement question to answer, which is why they were `notYet` rather
+	// than `never` while the wiring was outstanding.
+	//
+	// Set by `session.Spawn` rather than by `Runner.options`, which is why
+	// `fleetOptions` still finds them zero and this says `fromSpec` on the strength of
+	// TestFleetLaunchRecordsAPane instead. The distinction is real: a fleet file cannot
+	// ask for a pane id, and nothing would be served by letting it.
+	"PaneID":      fromSpec,
+	"PaneKind":    fromSpec,
+	"PaneSession": fromSpec,
 }
 
 // fleetOptions builds the Options for a task through the same path Launch uses,
@@ -179,31 +216,45 @@ func TestFleetNeverWidensTheBoundary(t *testing.T) {
 	typ := v.Type()
 	for i := 0; i < typ.NumField(); i++ {
 		name := typ.Field(i).Name
-		if optionsPolicy[name] != never {
-			continue
-		}
-		if !v.Field(i).IsZero() {
-			t.Errorf("fleet set %s = %v; a fleet container must be confined exactly as an interactive one,\n"+
-				"and this field is one of the ways it could be less so", name, v.Field(i).Interface())
+		switch optionsPolicy[name] {
+		case never:
+			if !v.Field(i).IsZero() {
+				t.Errorf("fleet set %s = %v; a fleet container must be confined exactly as an interactive one,\n"+
+					"and this field is one of the ways it could be less so", name, v.Field(i).Interface())
+			}
+		case notYet:
+			// Same check, different sentence. If this fires the wiring has arrived,
+			// and the field's policy should move to fromSpec along with a test that
+			// says what the fleet now does with it — rather than this one being
+			// loosened to let it through.
+			if !v.Field(i).IsZero() {
+				t.Errorf("fleet set %s = %v, which is classified notYet.\n"+
+					"  If the later phase has landed, move it to fromSpec and say what the fleet does with it;\n"+
+					"  do not relax this check to accommodate it.", name, v.Field(i).Interface())
+			}
 		}
 	}
 }
 
 // The descriptor's container settings must reach a fleet container. The
-// interactive wrapper applies them (droid's FACTORY_DISABLE_KEYRING is the
-// standing example); a fleet that dropped them would send the agent looking for
-// a keyring that is not there and, unattended, there is nobody to log in again.
+// interactive wrapper applies them; a fleet that dropped them would send the
+// agent looking for something the container does not have — a keyring was the
+// standing example — and, unattended, there is nobody to log in again.
+//
+// The Env is set on a *copy* of a real descriptor rather than taken from one
+// that ships with it, because as of droid's removal no agent in the table sets
+// the field. Reading it from the table would leave this test skipping quietly on
+// a roster change, which is how plumbing that four call sites depend on ends up
+// with no coverage at all. What is being pinned is the wiring, not the roster.
 func TestOptionsCarryTheDescriptorEnv(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	agent, ok := lookupOrSkip(t, "droid")
+	agent, ok := lookupOrSkip(t, "claude")
 	if !ok {
 		return
 	}
-	if len(agent.Env) == 0 {
-		t.Skip("droid no longer sets container env; nothing to check here")
-	}
+	agent.Env = []string{"SOME_AGENT_SETTING=1"}
 	r := &Runner{Session: sandbox.New(config.Default()), Repo: "/repo", RepoID: testRepoID}
-	spec := Spec{Agent: "droid", Tasks: []Task{{Branch: "b", Prompt: "p"}}}
+	spec := Spec{Agent: "claude", Tasks: []Task{{Branch: "b", Prompt: "p"}}}
 	opts, err := r.options(spec, LaunchOptions{}, agent, spec.Tasks[0], t.TempDir(), "main")
 	if err != nil {
 		t.Fatalf("options: %v", err)

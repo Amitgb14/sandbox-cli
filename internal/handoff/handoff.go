@@ -107,7 +107,14 @@ func Write(dir, from, sessionPath, workspace string, base string) (*Export, erro
 
 	var msgs []agentctx.Message
 	if sessionPath != "" {
-		if m, err := agentctx.Transcript(sessionPath, maxBriefTurns); err == nil {
+		// `from` names the agent, so its recorded format decides the reader — a
+		// briefing built from a sniff that missed would be an empty transcript
+		// handed to the next agent as though the conversation had crossed.
+		format := ""
+		if store, ok := agentctx.Lookup(from); ok {
+			format = store.Format
+		}
+		if m, err := agentctx.TranscriptOf(format, sessionPath, maxBriefTurns); err == nil {
 			msgs = m
 		}
 	}

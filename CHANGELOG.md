@@ -11,6 +11,1061 @@ version is tagged.
 
 ## Unreleased
 
+### Added
+
+- **Runs started from Studio are panes.** A run launched through `POST /v1/runs` now
+  gets a pane id, appears in `sandbox-cli pane list`, and — the reason this is more
+  than bookkeeping — is snapshotted by a running `sandbox-cli serve`. A Studio run is a
+  detached run, and detached runs had no crash safety net.
+
+  The daemon is a *writer* and not a second owner of the catalog: it records panes and
+  runs no adoption loop or snapshot keeper, so a `sandbox-cli serve` (if one is running)
+  stays the only thing that reconciles. A daemon that cannot open a catalog — a project
+  that is not a git repository, `--api-in-docker` — still launches runs exactly as
+  before.
+
+### Fixed
+
+- **Two writers of the session catalog could lose each other's rows.** `Save` wrote the
+  whole catalog from a copy taken when it was opened, so two processes each recording a
+  pane clobbered one another. Running panes were self-healing — the pane id is a
+  container label, so the next refresh recovers the row — but a **stopped** pane's row
+  is the one thing the catalog holds that the engine cannot give back, and it could be
+  lost for good. `Save` is now a read-modify-write under the lock.
+
+
+- **`pane.spawn` over the session socket.** A client can now ask a running
+  `sandbox-cli serve` to start a pane, with `dry_run` to see the engine command first.
+  What it cannot ask for is the point: the request has no `mounts`, `secrets`, `env`,
+  `env_allow`, `user`, `image`, `runtime` or `no_hardening` — the keys a project
+  `.sandbox.yaml` is refused, on the same reasoning. The network posture may only
+  *tighten*, `persist_auth` has no request field at all (the config answers), and every
+  field of the request is classified by a test that fails when the struct grows one
+  nobody decided on.
+
+- **Fleet agents are panes, and so finally have a crash safety net.** `fleet run` now
+  records each launch in the session catalog: a fleet container carries a pane id, is
+  listed by `sandbox-cli pane list`, and — the reason this is more than bookkeeping —
+  is snapshotted by a running `sandbox-cli serve`. A fleet agent is a detached run, and
+  detached runs had no net.
+
+  `fleet status`'s STATE column now says what the *agent* is doing (`working`,
+  `blocked`, `idle`) when a daemon has been watching, instead of only `running`. It
+  reads the catalog rather than correlating again, because every branch of a fleet
+  shares one repository and a second correlation is a chance to show one branch's state
+  on another's row. Without a daemon the column says exactly what it always said.
+
+  `fleet.yaml` is unchanged, `--share` is still a flag rather than a key, and a fleet in
+  a directory where no catalog can be opened launches exactly as before.
+
+
+- **Detached runs finally have a crash safety net.** `sandbox-cli serve` snapshots
+  every running pane on a ticker, so work an agent has not committed is recoverable —
+  which it was not for either detached path. A foreground `sandbox-cli claude`
+  snapshots every two minutes; a `--detach` run snapshotted **not at all**, and a
+  Studio run recorded one *baseline* before the agent started and closed it. That is
+  why a file an agent was watched writing came back missing from `recover restore`
+  ([#163](https://github.com/Amitgb14/sandbox-cli/issues/163)): the only snapshot
+  was the before-image.
+
+  It lives in the session server rather than in Studio's supervisor because that is
+  what answers the two objections on the record against building it. **Whose
+  repository**: a session is scoped to one, by construction — the daemon protects the
+  repository it was started in and no other. **A restart**: the catalog is on disk, so
+  a restarted `serve` rebinds the panes still running and protects them again, in a new
+  rescue session that `recover list` shows — rather than an invisible gap.
+
+  Off if `snapshot.enabled` is false, and `serve` says which at startup. The interval
+  follows `snapshot.interval` with a 30-second floor: the foreground loop is bounded by
+  somebody's patience, this one runs for as long as the machine is on, and the cost is
+  paid per pane.
+
+
+- **`sandbox-cli pane wait`, and agent state that is more than the container's.** A
+  running container used to be reported `unknown`, because an agent editing a file and
+  an agent parked at a permission prompt are the same running container. The session
+  server now reads the tail of the agent's own conversation and distinguishes
+  `working`, `blocked` and `idle`.
+
+  `blocked` means *somebody can answer and the agent is waiting*: it is reported only
+  for a pane with an open stdin — a console run — because a headless pane has no
+  keyboard, and quiet there is `idle`. It is never inferred from the wording of a
+  prompt. Matching "Do you want to proceed?" and friends would be a list of claims
+  about other people's products that cannot be kept current, and a vendor rewording one
+  would turn a confident `blocked` into a confident lie. Where the evidence runs out
+  the answer stays `unknown`.
+
+  ```sh
+  sandbox-cli pane wait p_3f21 --state blocked --state done --timeout 10m
+  ```
+
+  A timeout exits non-zero and says which state the pane was actually in — it is not a
+  failure of the pane, and a script that treats it as one will stop work that was
+  merely slow. `pane wait` needs a running `sandbox-cli serve`, since the wait is the
+  daemon's own poll loop.
+
+### Fixed
+
+- **A worktree a sandbox is still running in can no longer be removed.** The worktree
+  directory is the container's bind-mount source, so removing it leaves an agent
+  writing into a path that no longer has a name. `fleet clean --worktrees` had always
+  skipped a branch whose container was running; `sandbox-cli worktree rm` and Studio's
+  `DELETE /v1/worktrees/{branch}` had not — so a browser could do it to a working
+  agent. All three now share one rule.
+
+  **`--force` does not cover this.** It means "I accept losing the uncommitted work I
+  can see", and an agent that is still running has not finished writing; the refusal
+  says so, and names the pane to stop. An engine that cannot be reached is *not* a
+  refusal — `docker` missing from `PATH` must not block a git operation, and the
+  uncommitted-work check still stands.
+
+  "Still in use" means **not finished**, not "running": a paused or restarting
+  container is somebody's live run in an odd moment, so `docker pause` on an agent
+  does not make its worktree removable. And the match is on what the container
+  actually has *mounted* rather than on its branch label, which goes stale the moment
+  an agent runs `git checkout -b` inside its worktree.
+
+- **A worktree's branch in `session snapshot` was the sanitised form of its id.**
+  `live-one` was reported as `live_one`: the id maps several characters onto `_` and
+  cannot be reversed. The branch now comes from the container's own label, which
+  carries it exactly as git has it.
+
+- **The published `sandbox-studio-api` image always reported version `0.0.1`.**
+  `Dockerfile.studio-api` built with `-ldflags="-s -w"` and no
+  `-X …/internal/version.Version=…`, so the binary inside reported
+  `internal/version`'s compile-time default whatever commit it came from — through
+  every release — and Studio's own header showed it. The Dockerfile now takes an
+  `ARG VERSION` and the image workflow passes `git describe`, so a `main` build says
+  `0.0.1-49-g573d89b` rather than borrowing the last tag's number.
+
+  `internal/version` now has a test that reads the build files and fails when a
+  shipped artefact does not stamp the version — the same guard, one copy over, that
+  `TestSiteVersionMatchesTheBinary` exists for. A plain `go build` is deliberately
+  exempt: a developer's binary reporting the default is honest, a published one is
+  not.
+
+  If you run the control plane as a host process, build it with
+  `make build-studio-api` rather than `go build ./cmd/sandbox-studio-api` — only the
+  former passes the flag.
+
+### Added
+
+- **Every detached run is now a pane.** `--detach` mints a pane id, stamps it on the
+  container, and records a row in the session catalog — so `sandbox-cli serve` can
+  rebind a run across a restart instead of listing it as something it has no id for.
+
+  `sandbox-cli pane spawn` is the same launch named as a pane, and `pane kill` the
+  matching verb. `kill`, `logs` and `attach` now accept a pane id too, alongside the
+  container name, short id and branch they already took — as a fourth *equal* form,
+  not a preferred one, so an ambiguity between kinds of match still refuses out loud.
+
+  The catalog is a courtesy rather than a gate: `run --detach` still works outside a
+  git repository, where there is no session to record in, and a row that cannot be
+  written is reported while the run carries on — the id is on the container, so the
+  next `serve` recovers it.
+
+  Every run also records *what isolated it* (`sandbox.sandbox`), so a catalog read
+  next week does not have to ask what the machine has now.
+
+### Fixed
+
+- **A duplicate container name now explains itself.** Starting a second detached run
+  on one branch is refused by the engine — that atomic refusal is what enforces one
+  agent per branch — and it surfaced as `exit status 125` beneath a line of docker's
+  own help, which says nothing about branches or agents. It now names the container
+  holding the name, whether it is running or merely unreaped, and which pane it is.
+  Said *after* the refusal rather than checked before it: a list-then-launch has a
+  window in which two launches both pass, and two agents in one checkout is silent
+  data loss.
+
+
+- **`sandbox-cli serve`, `pane list` and `session snapshot`** — the first slice of
+  the session-server track ([docs](docs/architecture/session-server.md)). One daemon
+  per repository catalogs its sandboxes instead of every command re-deriving the
+  grouping from container labels.
+
+  It **starts nothing**, and stopping it leaves every container running. What it adds
+  over `list` is one thing: `list` can only show what the engine still has, so a
+  reaped container is gone from both — while the catalog keeps the pane, stopped, with
+  the branch it was on and the conversation it belonged to.
+
+  `pane list` works without the daemon by reading the engine directly, and says so.
+  `session snapshot` is **layout**, not files: `recover` is still the one that gives
+  work back, and the two do not touch.
+
+  Also a `sandbox:` config key (`docker`/`podman`), refused from a project
+  `.sandbox.yaml` for a sharper version of `engine`'s reason — that key chooses which
+  binary runs the container, this one chooses whether there is one. `bwrap` and `none`
+  are declared and refused under **every** profile, dev included: dev is the default,
+  so a dev-only no-isolation mode would be reachable by the ordinary path.
+
+### Changed
+
+- **Studio launches an agent with a console by default, and no longer asks.**
+  "Keep a console I can attach to" was a toggle that started off, so the ordinary
+  way to launch an agent from the browser produced a container with no stdin —
+  and the way you found out was the Terminal tab saying the run could not be
+  typed at, after the agent had already started. It is now derived rather than
+  chosen: an agent run keeps a console, the toggle is gone, and the form states
+  the mode instead of offering it.
+
+  The four exceptions are not a hidden preference. Each is a pair the daemon
+  already refuses, so a console there would be a 400 rather than a different run:
+  a plain command (no interactive mode to swap in), a **verify command** (its
+  exit code is the answer it exists to give, and an interactive session's exit
+  code is whenever you quit), a **fallback agent** (routing retries a run that
+  ended by itself), and a prompt for an agent whose interactive argv cannot carry
+  one — opencode reads a lone positional as the directory to open. The form names
+  whichever of those made a run headless, so the field to clear is on screen.
+
+  Filling in a verify command is therefore now how you ask for a headless run
+  from Studio. The field used to be disabled by the toggle; it is enabled always.
+
+  **"Let it work without asking" now starts checked**, which preserves the
+  default launch rather than widening it: a headless run gets the flag from
+  `Descriptor.Autonomous` whatever the form says, so clicking Launch and walking
+  away always produced work. A console run takes it from the request instead, so
+  leaving it off would have started the agent's interactive UI and stopped it at
+  its first approval, in a detached container with nobody attached. Same autonomy
+  as before, now unlocked rather than locked — untick it and the session waits to
+  be answered, which the box beside it says.
+
+- **"Run detached" is gone from Studio's launch form.** It never travelled: the
+  request has no such field and the daemon detaches every run, because an HTTP
+  request/response cycle has nowhere to hold a pty. The only thing the toggle
+  changed was the preview beside it — and being false by default, it described a
+  container with a pty that nobody was going to get, said "Attached" in the
+  success toast of every run Studio has ever started, and silently suppressed the
+  warning for an agent with no verified headless argv. The preview now says
+  detached because the run is, and that warning fires on a run being *headless*,
+  which is the fact it was about.
+
+### Fixed
+
+- **`recover fetch ID` refused snapshots that `recover fetch` had just listed.**
+  The listing derives its key from the repository and session ids, so it found
+  the object in the bucket; fetching one by id consulted the local manifest
+  first, and refused when that manifest recorded no upload. Two halves of one
+  command disagreeing about the same object.
+
+  A manifest legitimately has no upload recorded — the object may have been
+  uploaded from another machine under the same repository id, or the record
+  rebuilt from the bucket — and neither means there is nothing there. `Fetch`
+  derives the same key when the manifest carries none, so it simply tries, and
+  says *"not in `<bucket>`"* when it is genuinely absent.
+
+  Nothing is given up: the sha the bundle is checked against is still the one
+  this machine recorded, so a bundle holding somebody else's commit is still
+  refused. Studio's restore had the same guard and gets the same fix — leaving
+  one of them would have moved the disagreement rather than closed it.
+
+  A fetch now also **records what it fetched**, so a snapshot just pulled out of
+  a bucket stops being listed as one that never left the machine. And
+  `--repo-id` is honoured when fetching by id, not only when listing: a
+  repository id hashes an absolute path, so a copy uploaded from a machine that
+  kept the repository elsewhere is under a key nothing local can derive.
+
+- **`recover list` called a before-image `clean`, and restoring one said
+  nothing.** A run started from Studio records a *baseline* — the workspace as it
+  was before the agent ran — and closes the session immediately. The CLI knew
+  nothing about that outcome, so a baseline was listed with the same word a
+  finished run's snapshot gets, and `recover restore` handed back the run's
+  starting state without a word about it.
+
+  Reported as work disappearing: an agent wrote a file, was killed before it
+  committed, and the restored branch did not have the file. The restore was
+  correct — the snapshot never held it.
+
+  Baselines are now named as such in the listing, with a line saying what they
+  are, and a restore says plainly that it is the state from *before* the agent
+  ran. Marked rather than hidden, which is the deliberate difference from the
+  daemon: Studio's screen offers a Restore button beside every row, while this
+  listing is what somebody reads while hunting for lost work, where "no snapshots
+  recorded" would be the worse answer.
+
+  The literal is now one shared constant. `runs.go`'s own comment said it "has to
+  match in three places and is one typo away from offering a run's starting state
+  as its work" — it matched in two.
+
+### Added
+
+- **Base branch is a picker, not a text box.** Studio's Launch screen lists the
+  repository's branches and you choose one; blank still means the daemon's own
+  default, and the checked-out branch is named so you can see what that is.
+
+  It was worth fixing because the base is stamped as a *label* at launch and
+  `fleet land` reads it back to decide what to merge into — so a typo was not
+  caught until landing, by which time the run had already happened against the
+  wrong recorded intent.
+
+  The list is the repository's **branches**, not its worktrees. Those are
+  different and smaller questions: a base is usually the default branch, which
+  most often has no worktree of its own, so a picker built from the worktree list
+  would have omitted the answer people want. `GET /v1/branches` is the new route.
+
+- **You can name the branch a restore creates, from Studio as well as the CLI.**
+  The generated name is `sandbox-recover/<branch>-<session>`; leave the new box
+  blank for it, or type your own. The CLI has had `--branch` all along — Studio
+  had no way to pass one, so the refusal it showed you named a flag that did not
+  exist where you were reading it.
+
+- **Restoring a snapshot that is already restored now succeeds.** The generated
+  name embeds the session id, so the branch existing can only mean an earlier
+  restore of *this* snapshot worked — and refusing sent people to invent a second
+  name for a second branch holding a byte-identical tree. It now reports
+  `"<branch>" already holds this snapshot — nothing to do` and creates nothing.
+
+  A name that exists and points somewhere **else** is a real collision and is
+  still refused, without moving anything.
+
+- **A restore in Studio offers to carry the conversation on.** Restoring put
+  files back and stopped, which is correct — a snapshot holds files, not a
+  container — and read as nothing having happened: "I restored and no agent
+  started." Recovering the work and recovering the conversation are two
+  operations, and only the first had a button.
+
+  A restore that lands on a branch now says whose conversation that run was
+  having, and offers **Continue** — one click to the Launch screen with the
+  branch and the session already filled in. The daemon identifies it the way
+  everything else here does: by agent, project and the run's own time window,
+  all three already in the manifest, against the session's *start* rather than
+  its last write.
+
+  It stays quiet whenever it cannot be sure — a plain `run` had no conversation,
+  a store may not be verified, and two sessions inside one window cannot be told
+  apart by the clock. Silence there is the decision, not a gap: resuming the
+  wrong conversation is worse than offering none.
+
+  Following that link also works for a branch that has no worktree yet, which is
+  exactly what a restore hands back. It previously matched only existing
+  worktrees, applied nothing, and launched on `main` — against the files the
+  restore existed to replace.
+
+### Fixed
+
+- **The attached terminal says why a full-screen agent will not scroll.** It was
+  reported as unscrollable. Measured, it is two behaviours and both are correct:
+  the normal buffer scrolls through its 5000-line scrollback, and a full-screen
+  agent runs in the **alternate screen buffer**, which is one screen tall in this
+  and every other terminal — there is nothing above the viewport to reach. The
+  wheel is not dead there either; it is handed to the agent as an arrow key, so
+  the application scrolls its own content, which is the most a terminal can do
+  for a full-screen program.
+
+  Nothing said any of that, so it read as broken. The panel now does, and points
+  at the Console tab, which holds the conversation and does scroll.
+
+
+- **The seccomp refusal named a fix that is often not there.** When a daemon
+  applies no syscall filter, sandbox-cli warned (dev) or refused (prod) and told
+  you to remove `"seccomp-profile": "unconfined"` from Docker Desktop's Settings →
+  Docker Engine — as a statement of fact. Hit on a machine whose `daemon.json`
+  contained no such key, and neither did the Desktop settings store or admin
+  policy, while the daemon reported `profile=unconfined` and a container really
+  did run with `Seccomp: 0`. The refusal was right; only its advice was wrong,
+  which is the worse half — being sent to delete a line that is not there reads
+  as the tool having misdiagnosed, and makes a correct refusal look wrong too.
+
+  It now names the setting **conditionally** and then the other known cause:
+  Docker Desktop's containerd image store has been reported to leave the filter
+  off with nothing configured (docker/for-win#13851). That second one is
+  attributed as a report rather than asserted — the rule `creds.Classify` already
+  keeps, so the sentence stays true when the cause turns out to be something else.
+
+  The text lived in **four** places (the prod refusal, the dev warning, `doctor`,
+  and the site) saying the same wrong thing. It is now one exported function the
+  first three read, which is why they could drift in the first place.
+
+- **Studio's console showed an agent's markdown as literal characters.**
+  `**bold**`, backticked code, headings and fenced blocks all arrived as the
+  symbols an agent typed, so a reply that was mostly a formatted list or a code
+  block was read as source rather than as the answer.
+
+  It was deliberate, and the reason was a good one: transcript text is written by
+  an agent working in a repository whose contents *it* does not control either,
+  so rendering it as markup is how a prompt injection reaches the browser. What
+  changed is the weight — the console is now how a run is *read*, the terminal
+  being for driving one — so the rule is kept and the rendering made safe instead.
+
+  Safe **structurally, not by configuration**: the renderer emits React elements
+  and has no HTML path at all, so `<img onerror=…>` in a reply comes back as
+  those characters because there is nothing that could do anything else with
+  them. That is why it is ~200 lines rather than a library told to disallow HTML
+  — a setting can be changed by someone who does not know what it was for.
+
+  Three consequences worth knowing. An `![alt](url)` renders as **text**, never an
+  image: fetching it would make the browser report when, and whether, somebody
+  read the transcript. A link is a link only for `http:` and `https:` — everything
+  else shows the label *and* the URL, so a reader sees the claim rather than a
+  label that lies about where it goes — and a bare URL in prose is never
+  autolinked. Tables, footnotes and raw HTML are not supported and degrade to
+  their own source text.
+
+  Fenced code gets a copy button, which is most of why rendering code as code is
+  worth doing. The stored-transcript viewer uses the same renderer as the live
+  console: the same words read two different ways is how one of them stays wrong.
+
+  Four things a reader of this codebase would have hit immediately, found in
+  review of the first version and fixed before it shipped. A reply could **hang
+  the tab**: the code-span pattern backtracked cubically, and 13 KB of backticks
+  blocked the main thread for 12.9 seconds — a denial of service with a one-line
+  payload, in a renderer whose premise is that the author is hostile. Every
+  pattern is now line-bounded and linear (220 KB parses in 3 ms). `SANDBOX_RUN_AS`
+  rendered as *RUN* with the underscores **deleted**, so the reader saw a name
+  that does not exist, and `ignore *.go and *.ts` italicised everything between
+  the stars — emphasis now keeps CommonMark's flanking rules. A fenced block
+  inside a numbered step was run through the *inline* parser, which is the one
+  thing the parser promises never to do, so a list item now holds blocks rather
+  than text — which is also what makes a nested list nest instead of flattening
+  into peers of the point it qualifies. And a link's visible text could lie about
+  where it went, so a destination the label does not already name is shown beside
+  it.
+
+  Issue #151.
+
+### Added
+
+- **Snapshots you take on purpose, and restore from by name.** A snapshot was
+  something the crash safety net recorded on a timer and `sandbox-cli recover`
+  found for you; it is now something you can ask for — before a risky migration,
+  around an agent you are not sure about — through Studio's new **Snapshots**
+  screen and through the SDK (`ws.snapshot()`, `ws.restore(id)`).
+
+  It is the same mechanism underneath, which is the point: a commit of the
+  working tree under `refs/sandbox/snapshots/`, written through a private index
+  so your own index, `HEAD`, branches and working tree are never touched. It
+  holds **files** — no container, no image, no credential — so restoring one is
+  cheap, and it is not a way to resume a stopped machine.
+
+  An unchanged tree is **refused** rather than recorded. A snapshot id that
+  points at no commit is worse than none: you find out at the moment you try to
+  roll back.
+
+  Retention is per snapshot — seven days by default for one you took, still
+  fourteen for the crash net, and settable on each one or as a default in Studio
+  → Settings. What is stored is the *rule* rather than a computed expiry, so
+  raising the default moves every snapshot that never named its own.
+
+  A snapshot taken through the SDK is restored through the SDK. Studio lists it
+  but will not put it back, because a script part-way through something is not a
+  thing to undo from a browser tab. Snapshots from a sandbox run restore in
+  either place.
+
+- **Snapshots can be mirrored to S3, and sandbox-cli never holds the key.**
+  `snapshot.s3` in your own config — or Settings → Snapshot storage — names a
+  bucket, and each checkpoint is uploaded as a **git bundle**: not an archive
+  that needs this tool to open, but a packfile git alone can read on a machine
+  that has never seen the repository.
+
+      git init recovered && cd recovered
+      git fetch ../snap.bundle 'refs/sandbox/snapshots/*:refs/heads/snap/*'
+      git checkout snap/<id>
+
+  Works with AWS and anything S3-compatible — MinIO, R2, Ceph, B2 — through
+  `endpoint:` and `path_style:` rather than a list of vendors. The signing is
+  ~120 lines of standard library against a published test vector; the AWS SDK
+  would have been 15MB of transitive dependency for five requests.
+
+  **The credential is named, never held.** `access_key_env:` is the *name* of an
+  environment variable read on the daemon's machine, the same shape `gateway:`
+  uses — so there is nowhere in the config file, the settings file, the API
+  response or the browser for a secret to be. What Studio shows is which variable
+  is read and whether it currently resolves.
+
+  By default only snapshots **you take** are uploaded. `upload: all` adds the
+  crash net, and the reason it is not the default is arithmetic: that loop
+  commits every two minutes for the length of every run.
+
+  Two refusals worth knowing. A bundle that comes back holding a **different
+  commit** than this machine recorded is rejected and the ref rolled back —
+  `git bundle verify` proves a bundle is well formed, not that it is *yours*.
+  And `snapshot.s3` is refused from a project `.sandbox.yaml` like the rest of
+  the `snapshot` key: it names a network destination and which credential is
+  read, which is an exfiltration target and the means to fill it.
+
+  Retention still prunes the **local** copy only. Objects in the bucket are
+  governed by its own lifecycle rules — a backup that expires while your laptop
+  is shut is not one.
+
+- **`sandbox-cli recover fetch` — the way back from the bucket.** The bundle
+  recipe above works with nothing but git, which is the point of storing one;
+  this is the shorter path when the machine still has sandbox-cli.
+
+      sandbox-cli recover fetch                    # what the bucket holds for this repo
+      sandbox-cli recover fetch 20260724-224601    # unpack it back under refs/sandbox/
+
+  It works on a machine that has **never seen these snapshots**, because a small
+  manifest is stored beside every bundle — the branch, the agent, the label and
+  the times, next to the bytes they describe. After a fetch the snapshot is
+  local, and `show`, `restore` and the rest treat it as one that never left.
+
+  Two things it will tell you rather than guess at. A repository is addressed in
+  the bucket by an id derived from its **absolute path**, so a clone in a new
+  location looks in a namespace of its own — an empty listing names the other
+  ids that are in there, and `--repo-id` reads one of them. And a snapshot this
+  machine has no record of can only be checked against the manifest that
+  travelled beside it, which is consistency rather than provenance: `fetch` says
+  so, and says to look before you restore.
+
+### Fixed
+
+- **Studio's "Extra host directories" collected a setting it never sent.** The
+  Launch form had the field, the preview warned that the boundary was being
+  widened, and the request body dropped it — so two agents told to hand a file
+  over through `/shared` were running in containers that had no `/shared` at
+  all, and nothing said so. The daemon had no field to receive it either.
+
+  It is now a **toggle**, and it does what the CLI's `--share` does, through the
+  same code: `~/.config/sandbox/shared` mounted at `/shared`, created, seeded and
+  checked in one place rather than two. `shareName` narrows it to a namespace and
+  is refused without `share`, the same rule `--share-name` keeps.
+
+  A boolean rather than the list of host paths it looked like, and that is the
+  design: an arbitrary directory named in a request is a browser choosing what a
+  container reaches, where this is one well-known directory the daemon vets. The
+  wider thing is `--mount`, and it is deliberately still not offered over HTTP.
+
+  Two runs of this bug are worth recording. The form's own field was inert, which
+  is the same class as a write fixture reporting success against state that never
+  changed. And a worktree launch *assigned* its `.git` mounts over the extras
+  rather than appending — so even once the option arrived, the runs most likely
+  to want sharing would have silently lost it. `internal/fleet` had the test for
+  that rule already; the daemon now has the mirror of it.
+
+- **`studio.sh up --bind 0.0.0.0` started nothing, and said so nowhere.** It
+  printed "starting Studio" and exited: no daemon, no error, an empty `api.log`.
+  Working out which hostnames to allow is the last thing that runs before the
+  launch, and on macOS it asks every interface for its address — including the
+  several that have none (`en4`, `awdl0`, `llw0`), where `ipconfig getifaddr`
+  exits 1. Under `set -e` that killed the loop, and with it the script, before
+  the `return 0` written to make exactly this harmless could be reached. Only
+  `--bind` was affected: a loopback bind never asks the question.
+
+
+- **`POST /v1/runs/{id}/recover` restored the state a Studio run *started*
+  from.** The daemon records a baseline before every launch — a before-image, by
+  design — and that session carried the same branch and agent as the run's own
+  and was the most recent, so it won the match outright. The failure was the bad
+  kind: not an error, but a restore that looked like it worked and handed back
+  the work's starting point. Baselines are now skipped when looking for
+  something to recover, and hidden from the snapshot listing.
+
+- **An agent can be pointed at OpenRouter (or any OpenAI-shaped gateway), and
+  sandbox-cli never supplies the key.** `gateway:` in your own config names the
+  agents, the endpoint, and the *variable* the credential lives in — a name, not
+  a value. There is no bundled account and no fallback: a run configured for a
+  gateway with nothing to read is **refused**, because the alternatives are both
+  silent and both wrong, reaching the gateway unauthenticated or falling through
+  to the vendor on the agent's own credential.
+
+  Four things have to agree or the run is worse than unconfigured, so they are
+  resolved together: the base URL, the key variable (forwarded by name, exactly
+  like every other credential — its value never reaches the rendered argv), the
+  probe host, and the egress allowlist, which gains the gateway's domain because
+  otherwise the run cannot reach the thing it was configured to use and fails as
+  a connection error naming nothing.
+
+  Two refusals carry the design. An agent that speaks its **vendor's own API
+  shape** — claude and gemini — is refused rather than pointed at an
+  OpenAI-shaped endpoint, since that failure lands inside a container as a parse
+  error blamed on the model; the table lists only agents where the wiring is
+  known, and marks codex unverified rather than claiming it. And a plaintext
+  `base_url` is refused: the credential and every prompt cross that connection.
+
+  `gateway:` is **user-config only**. It names the host every prompt travels
+  through and the credential that pays for it — `providers:`'s three objections
+  at once, plus one of its own, since a gateway reads the work.
+
+  Studio's Routing screen draws it. A gateway is a node the traffic passes
+  *through* rather than another agent in the ring, because that is what it is:
+  agents sharing one are sharing a credential, a bill and a single point of
+  failure no chain can route around — putting it beside claude in the ring would
+  say the opposite, that it is one more thing to fall through to. Their nodes
+  carry a dashed ring, the providers list says *via <host>*, and the gateway's own
+  probe result is what is shown, since the vendor behind it being down is the case
+  a gateway survives.
+
+## 0.0.1 — 2026-08-26
+
+**This leaves beta.** Twenty pre-releases and no more: the isolation boundary,
+the profiles, the agent roster and the Studio contract have all been stable for
+several releases, and continuing to ship "beta.N" says less about the software
+than about the habit. Nothing in the boundary changes here — this version is
+`0.0.1beta.20` plus the two fixes below.
+
+Version numbers stay conservative on purpose. `0.0.1` is the first stable tag,
+not a claim of feature-completeness: `docs/security/open-items.md` is still the
+live backlog, and the agent still holds raw credentials inside the container.
+What "stable" means here is that the contracts above do not move without a
+changelog entry saying so.
+
+### Fixed
+
+- **The landing page said "15 agents wrapped".** It had said that since the page
+  was rebuilt, through every roster change since — including the two last week.
+  Twelve. The page description, which is the sentence search results show, said
+  "Claude Code, Codex, Gemini and 12 more agents", which is fifteen. Both are now
+  a checked function of the wrapper list rather than a number somebody remembers
+  to update.
+
+- **Studio's offline agent screen understated what crosses the boundary.**
+  Eleven of the twelve entries in the fixture carried a truncated
+  forwarded-variable list — qwen showed two of ten — on the one screen whose
+  subject is exactly that. Worse in the other direction, claude's listed
+  `ANTHROPIC_MODEL`, which no wrapper and no descriptor has ever forwarded: set
+  it on the host and the container never sees it. The fixture now matches the
+  code, in the order the daemon answers, and a test keeps it there. Live mode was
+  always correct — this only affected the screen shown when the daemon is
+  unreachable.
+
+## 0.0.1beta.20 — 2026-08-26
+
+### Removed
+
+- **Six agents: `aider`, `amp`, `crush`, `continue`, `codebuff` and `droid`.**
+  The roster is twelve. The boundary is untouched, and so is every remaining
+  wrapper.
+
+  **`droid` is the one that can break a file you already have.** The other five
+  were adapters — a `sandbox-cli <agent>` command and nothing more — but droid
+  also had a *descriptor*, which is what made it nameable outside the CLI. So
+  `agent: droid` in a `fleet.yaml` is now refused when the file is parsed,
+  before any container starts; a Studio launch cannot select it; and the
+  TypeScript and Python SDKs no longer list it. Five agents keep a verified
+  headless mode and remain eligible everywhere: `claude`, `codex`, `gemini`,
+  `opencode` and `cline`.
+
+  Logins already on disk are **left alone** — `~/.config/sandbox/agents/droid`
+  and its siblings are yours, and removing an agent is not a reason for this
+  tool to delete a credential you put somewhere. Delete those directories
+  yourself if you want the disk back.
+
+### Added
+
+- **A Kilo Code adapter** — `sandbox-cli kilocode`, installed from npm into the
+  persisted agent home on first use. An adapter, not a descriptor: its
+  non-interactive mode (`kilocode run <message>`) has not been verified here, so
+  Studio, a `fleet.yaml` and the SDKs do not offer it. Its CLI is an opencode
+  fork — its own logs say so — so it forwards opencode's provider keys for that
+  reason rather than by assumption.
+
+## 0.0.1beta.19 — 2026-08-25
+
+### Added
+
+- **`Workspace.start()` in the Python SDK** — launch without waiting, for work
+  that is not supposed to finish: a dev server, a watcher, a queue consumer.
+  `run()` waits, so pointing it at a server means reaching the deadline and then
+  reporting a container somebody stopped, which is a verdict on nothing. It
+  shares `run()`'s conflict recovery, because the commonest sequence there is —
+  set up, then serve — otherwise fails on its last line, with the final setup
+  step still holding the branch's container name.
+
+- **`examples/python_project.py`** — install a repository's requirements once
+  and then run its scripts. The virtualenv lives in the worktree, so the setup is
+  skipped on every run after the first; if the repository is itself a package it
+  is installed editable, without which its own scripts fail with `No module named
+  <the repo>`. Verified against a real repository: 236 of its tests ran in the
+  sandbox.
+
+- **`examples/fastapi_service.py`** — serve a repository's **own** FastAPI app on
+  a published port and health-check it from the host: it finds the app, installs
+  the repository's requirements, and starts it with `start()`. Run end to end rather than compiled: it also documents what
+  the sandbox costs today, since the image has python3 and no pip, so the setup
+  bootstraps pip inside a `--without-pip` venv with three hosts named on the
+  allowlist.
+
+- **A Devin CLI adapter** — `sandbox-cli devin`, installed from Cognition's
+  installer into the persisted agent home on first use. It is an *adapter*, not
+  a descriptor: `devin -p PROMPT` and `--permission-mode bypass` are documented
+  but unverified here, so Devin cannot yet be named in a `fleet.yaml` or launched
+  from Studio. A descriptor is earned by running the agent rather than by reading
+  its documentation.
+
+- **Cline can be used from Studio, a fleet, and both SDKs.** The adapter has
+  shipped for a while, but only agents with a *verified* headless mode get a
+  descriptor — and without one, Studio and the SDKs could not see it. Verified by
+  running it: `cline <prompt>` is the non-interactive mode, with the TUI behind
+  `-i`, which is the inverse of the others. `--auto-approve true` is passed
+  explicitly rather than relying on the upstream default, because an unattended
+  run that starts asking does not fail, it hangs.
+
+### Changed
+
+- **The Python distribution is `sandbox-cli-sdk`**, while the import stays
+  `sandbox_cli`. `sandbox-cli` on PyPI belongs to an unrelated project, so the
+  distribution takes the same shape as the npm package (`@sandbox-cli/sdk`)
+  instead. The two names differing is worth one line at the top of the README
+  rather than a wrong `pip install` as somebody's first minute.
+
+## 0.0.1beta.18 — 2026-08-23
+
+### Added
+
+- **A Python SDK** (`sdk/python`, `import sandbox_cli`), sync and async from one
+  implementation. Zero dependencies — it is imported into somebody's agent
+  process, and an HTTP stack is a bad thing to drag in behind them; the async
+  face runs the same calls in a thread rather than duplicating them against a
+  second stack, with a test that fails when the two surfaces drift. It ships
+  with the four rules the TypeScript client learned the hard way: a second step
+  on one workspace clears only the run whose outcome was already returned, a
+  repository with files and no commits is refused rather than producing empty
+  worktrees, paths are expanded but never symlink-resolved, and a submodule
+  resolves to its own tree. Error names avoid the Python builtins
+  (`RunTimeout`, `DaemonUnreachable`) because shadowing `ConnectionError` in a
+  library people write `except` around is how a caller stops matching socket
+  errors.
+
+- **`studio.addProject(path, { init: true })`** runs `git init` when the
+  directory is not a repository yet. Opt-in, because creating a repository is a
+  larger side effect than registering one — and because the path belongs to the
+  *daemon's* machine while `git init` runs on this one, so doing it
+  automatically would silently make a repository in the wrong place against a
+  remote daemon.
+
+### Fixed
+
+- **A failover no longer looks like a failure** (both SDKs). With `fallback` set,
+  the daemon renames the container of the agent that failed and starts a
+  replacement — but the clients polled the first run's id, so they returned that
+  attempt's non-zero outcome, credited the agent that failed, and left the retry
+  running. The next run on the branch then conflicted with a live container the
+  client could not clear. Both now follow `routedFrom` to the replacement.
+
+- **A misspelled run option is refused rather than ignored** (both SDKs).
+  `alow: [...]` launched with the daemon's default egress posture and reported
+  success — a typo in the one option that is a security control. TypeScript's
+  type checker caught it in a literal; the JavaScript this package also ships did
+  not.
+
+- **A repository with files and no commits is refused, instead of producing
+  empty workspaces.** Studio works from committed state, so `git init` alone is
+  a trap: git makes an orphan worktree, the daemon registers it, the run starts,
+  and the agent finds nothing in `/workspace` — with nothing anywhere saying
+  why. `addProject` now catches it while the person is still at the keyboard and
+  prints the commit to run. It does not commit for you: a directory that was
+  never a repository usually has no `.gitignore`, which is where a helpful tool
+  would commit `node_modules` and a `.env`.
+
+## 0.0.1beta.17 — 2026-08-22
+
+### Added
+
+- **A third SDK example: agents that hand work to each other.**
+  `examples/travel-planner.ts` runs two research agents in parallel and gives a
+  third what they produced. The gap it exists to show is that each agent has its
+  own worktree, so the coordinator cannot see the others' files — artifacts cross
+  through the host, base64-encoded in both directions, and a specialist that
+  produced nothing is named as missing rather than quietly skipped. Telling the
+  coordinator to assume the files exist is the natural thing to write and it
+  fails silently: the agent invents plausible inputs and the report reads exactly
+  like a real one.
+
+### Fixed
+
+- **Two steps on one workspace no longer collide.** `ws.run(...)` twice — or a
+  `run` then an `agent` — was refused with a 409, because the first run keeps the
+  branch's container name until something clears it. That is the right rule for
+  *another* script's run, and wrong for the next line of your own: the SDK now
+  clears the run whose outcome it already handed back, and only that one.
+  Anything else holding the name still refuses. Both published examples had the
+  shape that hit this.
+
+- **`sandbox-cli clean` now actually reaps podman's leaked per-run networks — and
+  says what it could not.** A network with an *exited* container still attached
+  refuses a plain `network rm`; the reaper assumed only a running container held
+  one, and swallowed the failure, so `clean` reported success and left the
+  network behind. That is worse than untidiness: a leaked network with a dead
+  container in its IPAM makes `podman network reload --all` fail for **every**
+  network on the host — the documented repair after firewalld drops netavark's
+  rules — so an unrelated, host-wide problem became unfixable. Networks nothing
+  is on are removed, ones holding only sandbox-cli's own finished containers are
+  removed with them, and anything live, or anything owned by a container this
+  command did not create, is kept and named. Issue #77.
+
+## 0.0.1beta.16 — 2026-08-20
+
+### Added
+
+- **A second SDK example: a workflow, without writing an agent.**
+  `examples/workflow.ts` runs three tasks on three branches in three containers
+  in parallel, then gates on two things that catch different lies — whether git
+  says anything changed, and whether the tests agree. The orchestration is
+  `Promise.all` and an `if`; the only model involved is the one inside each
+  container. Compiled by `npm test` like the first example, and on the site's SDK
+  page.
+- **The TypeScript SDK finds the repository you are standing in.**
+  `studio.project()` with no argument asks git which repository the current
+  directory belongs to — `rev-parse --git-common-dir`, the same question the
+  daemon asks, so a **linked worktree resolves to its main repository** rather
+  than to itself — and matches it against the repositories the daemon knows; a path —
+  `"."`, `"../api"`, an absolute one — works the same way. It stays a *lookup*:
+  a directory nobody registered is refused, and told which roots the daemon does
+  have. Registering is never implicit, because the registry is the list of
+  directories that daemon will touch.
+- **The TypeScript SDK can register a repository** — `studio.addProject()` for the
+  repository the script is in, or `studio.addProject("/abs/path")`,
+  the one call that hands over a path, mirroring the one endpoint that accepts
+  one. Until now the error for an unregistered repository told you to
+  `POST /v1/projects` and the SDK gave you no way to do it. Adding a repository
+  that is already registered returns the existing row, so it is safe on every
+  start. A path names a directory on the *daemon's* machine, so what crosses is
+  expanded (`~`, a relative path) but never symlink-resolved — that resolution
+  describes this disk, not the one the daemon will look on.
+
+
+- **A TypeScript client, so a program can drive sandbox-cli the way a terminal
+  does.** `@sandbox-cli/sdk` connects to the daemon `studio.sh` started with no
+  arguments at all — it reads the port and token that script already writes —
+  and gives three nouns that are the daemon's rather than the package's: a
+  Studio is a daemon, a Project is a repository it knows about, a Workspace is a
+  branch's worktree, and a run is a container over that worktree.
+
+  It is a client and nothing more: no docker socket, no shelling out, no argv
+  assembled here, because every gate that makes a sandbox a sandbox is applied
+  where the container is built. There is no mock mode either — a fake run
+  returning success is the worst default a library like this could have.
+
+  Three behaviours are worth knowing before you rely on them. Every outcome
+  carries `routedFrom` and `handoffFrom`, because a script that cannot see a
+  failover attributes one agent's work to another. A bounded wait **stops** the
+  run when it expires and says `stopped: true`, rather than putting a verdict on
+  a container that was interrupted. And `stop` and `remove` are separate calls
+  that never happen implicitly, since a finished run's logs are the evidence for
+  what it did.
+
+  Its types are generated from the Go contract, and CI fails if the checked-in
+  copy differs from what the generator produces — a published client describing
+  an API the daemon does not have is the failure that would be hardest to
+  notice.
+
+- **Studio remembers where you were working, and which machine runs it.** The
+  repository picker lifts the ones you have actually worked in to the top and
+  reopens on the last one — after the daemon lists its repositories, only if the
+  id is in that list, so a remembered scope can never leave every screen reading
+  empty. Recency is kept **per daemon**: `projects.json` is the machine's
+  registry, while which of them you looked at last is a fact about you, and a
+  repo id from one box means nothing on another.
+
+  A machine switcher sits in the header, because switching is something you do
+  while working rather than while configuring — Settings still owns adding and
+  forgetting. Each entry is probed on `/v1/health`, the one route that needs no
+  token, so a machine whose token may be wrong is not reported down for it. A
+  daemon nobody has heard back from yet shows *checking*, never down: reading
+  silence as failure is how a closed laptop becomes an incident.
+
+- **Codex conversations are readable, and the Conversations panel is no longer
+  claude-only.** sandbox-cli now understands codex's rollout transcripts, so its
+  sessions carry real titles and turn counts instead of listing as `partial`,
+  its runs show their conversation on the run page, and a briefing handed *from*
+  a codex conversation carries what was actually said. The panel picks among the
+  agents whose store this machine has verified; formats with no reader still
+  list honestly, with the id and dates real and the rest shown as unknown.
+
+  Two impostors are dropped, both confirmed against a real rollout, and both are
+  the same rule claude's reader already keeps — a user turn is a prompt somebody
+  typed. Codex's `developer` messages are its own shipped instructions, and it
+  injects an `<environment_context>` block as the first user turn of every
+  session: counting them made a one-prompt session report two and titled every
+  conversation `<environment_context>`.
+
+  Fixes a session id that was wrong wherever a store prefixes its file names: a
+  codex run reported `rollout-<timestamp>-<uuid>` as its conversation id and
+  offered a resume command built from it, which the agent refuses. The rule for
+  reading an id out of a path now lives in one place.
+
+
+- **Carry a conversation on, or hand it to another agent, from the row it is
+  on.** Reading a conversation in Studio and continuing it were two screens
+  apart; every conversation now offers **Continue**, which opens Launch with the
+  agent, the session and a console already set. The console is not a
+  convenience — a headless resume replays one prompt into an old conversation
+  and exits, so the daemon refuses it, and a link that set the session alone
+  would land on a form that cannot be submitted.
+
+  A different agent can pick the work up instead: `handoffFrom` on
+  `POST /v1/runs` starts a run **briefed with** another agent's conversation.
+  It is deliberately not a resume — a session id is a primary key into one
+  vendor's private store, so what crosses is a briefing (`HANDOFF.md`, a
+  vendor-neutral transcript, and a file ledger derived from git), mounted
+  read-only, with a prompt that tells the target it is reading a briefing rather
+  than its own history. The same mechanism a failover has always used, now
+  something a person can ask for. Recorded as `handoff_from` rather than
+  `routed_from`: routing means a provider stopped answering, a handoff means
+  somebody chose, and the two look identical in a listing.
+
+  The source agent may be the same one, which is the only way to continue a
+  **gemini** or **droid** conversation: neither has a resume flag. Studio says
+  so once above the list rather than offering a button that could only fail —
+  `GET /v1/agents` now reports `canResume`, and a session's `resumable` accounts
+  for the agent as well as the store, where before it promised any sandbox-owned
+  session could be reopened.
+
+- **How to reach a remote daemon safely, written down properly.** The daemon
+  speaks plain HTTP and has no TLS flags, and the docs now rank the three shapes
+  that hold rather than leaving it at "there is no TLS": a tunnel (nothing new to
+  trust, and still the recommendation), a **reverse proxy** terminating TLS in
+  front (the only shape with a real certificate — now a Caddyfile and one command
+  either side), or a private network you already trust, knowingly.
+
+  `studio.sh` grew `--allow-host` and `--cors-origin` to make that one command:
+  a proxied deployment's names are not derivable from `--bind` or `--port`,
+  because the browser dials one name and the page is served from another. Both
+  **add** to what the script works out for itself, which is the direction the
+  daemon's own `-allow-host` already takes with loopback.
+
+  Three traps are named because each fails as something else: `-allow-host` takes
+  the *public* name, since a proxy forwards the original `Host`; `-cors-origin`
+  takes the *page's* origin, `https://` and not the API's; and **both halves must
+  be TLS or neither**, because a page served over https cannot call an http
+  daemon — the browser blocks it with no request on the wire and nothing in the
+  daemon's log, which reads exactly like the daemon being down.
+
+- **Studio can publish a port.** An agent that starts a dev server is a real
+  reason to want one, and the Launch form now takes ports in docker's syntax. A
+  bare port binds `127.0.0.1` on the machine running the daemon — not every
+  interface, which is where sandbox-cli deliberately differs from `docker -p` —
+  and under an allowlist the firewall's default-deny inbound chain gains a
+  carve-out for exactly those ports, without which the port would be open on the
+  host and answer nothing.
+
+  A repository still cannot ask for one: `trust.go` refuses `ports:` from a
+  project file because declaring a dev-server port is a decision about the
+  boundary that belongs to the user — and a request from the Launch form *is* the
+  user, on their own daemon. The rule was never about whether a port may be
+  opened; it is about who decides. A malformed spec is now a 400 from the same
+  normaliser the CLI uses, rather than a 502 that reads as "the daemon is broken"
+  when the truth is a typo in a port.
+
+- **The Routing screen answers the question it is opened with: if I launch now,
+  what runs?** Each configured chain is resolved against the probe results on the
+  same page — the join a reader previously had to do in their head, between a
+  provider list saying claude is down and a chain list saying claude falls back to
+  codex. It follows the daemon's own rule, including the part that looks like a
+  bug and is not: **unprobed is not down**, so an agent with no probeable host is
+  taken rather than skipped, because skipping it would act on a measurement nobody
+  made. A chain where nothing answers says *refused*, which is what a launch would
+  do.
+
+- **Why chains fired, and who ends up doing the work.** The reasons are ranked
+  from the run log in the words the runs recorded, because grouping them into
+  categories would be this screen inventing a taxonomy the audit line does not
+  have — and "provider answered 503" and "exited 1 having changed nothing" lead to
+  different actions. Beside it, asked-for versus ran per agent: the gap is the
+  only direct measure of what routing is doing to a setup, and an agent running
+  work it was never asked for is doing it under its own login and its own bill.
+
+### Fixed
+
+- **A submodule is registered as itself, not as its superproject's git directory.**
+  Adding a submodule to Studio — from the UI, the API or the SDK — recorded
+  `<super>/.git/modules/<name>` as the repository root, which is what gets
+  bind-mounted at `/workspace`: the agent would have been handed git's object
+  store instead of the source. `--git-common-dir` names a *git directory* rather
+  than a working tree for a submodule and for `--separate-git-dir`, so the tree
+  is now asked for by name, and only a bare repository — which has none — is its
+  own root.
+- **A submodule no longer inherits its superproject's identity.**
+  `.git/modules/<name>` and `.git/worktrees/<name>` sit at the same depth, so the
+  pointer-file fallback read a submodule as a linked worktree of its
+  superproject: `RepoID` answered with the super's id while the path resolved to
+  the submodule. A registry entry then carried one repository's id and another's
+  path, and container labels — how every later command finds a run — belonged to
+  the wrong repository. The fallback now fires only for a gitdir actually under
+  `worktrees/`. Linked worktrees are unaffected: they carry a `commondir` file,
+  which is read first, and every worktree of a repository still shares one id.
+
+- **`studio.project(".")` works, instead of reporting a missing repository.**
+  It used to fail with "no repository . is registered", which reads as though
+  something had been lost; a path is now resolved on the machine running the
+  script and looked up by root. A name that matches nothing still fails, but now
+  lists what *is* registered, so a typo and an unregistered directory stop
+  looking identical.
+
+- **A daemon that refuses to start says so, instead of looking slow.**
+  `studio.sh` reported "the API did not answer within 20s" for a daemon that had
+  exited in milliseconds — and then printed the last twenty lines of a log that
+  is appended to across restarts, so the one sentence that mattered sat under six
+  previous startups. It now notices the process is gone, says it refused rather
+  than stalled, and prints only what this run wrote.
+
+- **Running the same script twice.** A finished run keeps its branch's container
+  name until somebody reaps it — that is the refusal docker's duplicate-name
+  check provides, and it is what enforces one agent per branch — so a second
+  launch from the SDK failed with a 409 and no way through it except curl.
+  `{ replaceFinished: true }` says the evidence is spent, and `clearFinished()`
+  reaps the holder and reports what went. Both refuse a run that is still going.
+
+- **The client is on npm: `npm install @sandbox-cli/sdk`.** It was documented
+  before it was published, so the install line 404'd for anybody who followed it.
+  Publishing is the fix; the packaging work that made it installable from a
+  checkout stays, because that is still how you use an unreleased change. The
+  docs also say that a script using top-level `await` needs an ES module —
+  `"type": "module"` or an `.mts` file — which is the first thing anybody hits
+  and was nowhere.
+
+- **Agent interfaces look the same inside the sandbox as outside it.** Docker
+  tells a container it is a bare `xterm`, so a TUI drew for eight colours while
+  the terminal it was drawing on had 256 — goose's start-up banner vanished
+  entirely through `sandbox-cli`, and every colourised diff and progress bar was
+  quietly poorer. `TERM` and `COLORTERM` now cross as names, on the same terms
+  the timezone does: only when the run has a terminal at all, and never over
+  anything you set yourself. A piped run is unchanged, because a `TERM` with no
+  terminal behind it only puts escape codes into a log somebody reads as text.
+
+  If your terminal calls itself something the image has never heard of —
+  Ghostty, kitty, alacritty — you get `xterm-256color` rather than that name.
+  The image carries the common terminfo entries and not the exotic ones, and a
+  name nothing can look up is worse than a plain one: `tput` fails, and `less`
+  stops to say the terminal is not fully functional and waits for a keystroke.
+  The colour survives the translation, which is the part you wanted.
+
+
+- **A detached run's outcome is now recorded, so "did it pass" has an answer.**
+  Its audit line is written when the container *launches* — there is no exit code
+  to wait for — and every Studio run is detached, so the log said exit 0 for all
+  of them and every screen built on it agreed. The Routing screen's rescue rate
+  was 100% by construction; the dashboard's outcome counts were the same lie in
+  a different shape.
+
+  The daemon already watches these containers for routing, so it writes the
+  ending too: same `run_id`, the real exit code, and a duration measured from the
+  container's own timestamps rather than from the daemon's uptime. Two lines, one
+  run — the log stays append-only, and `GET /v1/audit` collapses the pair,
+  keeping the half that knows something. Supervision no longer depends on having
+  a fallback chain, because recording what happened needs no chain, only a
+  container that will stop.
+
+  The pairing key is **minted per launch**, not borrowed. A detached container's
+  name is deterministic — that is what lets docker's duplicate-name refusal
+  enforce one agent per branch — so using it would have made every run on a
+  branch one run, with the newest ending swallowing the older records, and would
+  have folded both halves of a failover into a single line: the exact episode
+  the Routing screen exists to show. The container id is unique but is the
+  engine's, and this has to survive the rename a failover performs.
+
+  The index gains two columns and a version bump, which is a rebuild — and
+  `reset()` now drops the table rather than emptying it, because
+  `CREATE TABLE IF NOT EXISTS` is a no-op against the old shape: a v2 file
+  answering v3 queries fails every read with "no such column" for as long as it
+  lives. The aggregates behind the dashboard exclude the launch half explicitly,
+  so a Studio run counts once rather than as one pass plus one failure.
+
+  What it deliberately does not do is guess. A launch line with no partner —
+  a run still going, or one whose ending nobody was around to see because the
+  daemon restarted — stays **unfinished**, and the screens say *not recorded*
+  rather than picking a side.
+
+- **The Routing screen reported every Studio run as rescued.** A detached run's
+  audit line is written when the container *launches* — there is no exit code to
+  wait for — so it carries 0 whatever happens next, and every Studio run is
+  detached. Reading that 0 as success made the rescue rate 100% by construction
+  and the trend's still-failed series unreachable. An episode whose last attempt
+  was detached now reports its outcome as **not recorded**, with its own counter,
+  its own band on the chart and a row badge saying so. It is the same rule the
+  rest of the tool keeps about absent readings: a missing measurement is not a
+  good one, and `sandbox-cli list` is where a detached run's fate actually lives.
+
 ### Security
 
 Four ways a run could reach the host, or a later run, through files it is allowed
@@ -368,6 +1423,15 @@ the previous release.
   changed.
 
 ### Fixed
+
+- **A usage test had an expiry date on it.** `TestFindPrefersTheLiveRecording`
+  wrote a recording file *now* whose reading was stamped at a fixed instant, and
+  `Abandoned()` compares those two — so the gap grew by a day every day until the
+  test failed on a calendar date, on `main`, having asserted nothing new in
+  between. The fixture is anchored to the clock now, which is what the case was
+  always about: a live recording is one whose file and whose figures are the same
+  moment. The same rot as the frozen fixture epoch fixed earlier this cycle, in a
+  different corner.
 
 - **Studio's egress selector did nothing.** The Launch form offered
   Allowlist / None / Unrestricted, and the network mode is **not expressible per

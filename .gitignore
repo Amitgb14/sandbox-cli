@@ -3,6 +3,11 @@
 /dist/
 /.claude/
 __pycache__/
+# Python build artifacts. `python -m build` writes here, and a published wheel
+# committed by accident is a file nobody looks at and everybody trusts.
+sdk/python/dist/
+sdk/python/*.egg-info/
+.pytest_cache/
 docs/proposals/
 
 # docker compose reads this automatically. It names a config file you have
@@ -27,3 +32,11 @@ docs/proposals/
 # own file, and would then also ignore any source directory that happened to
 # be called dist or build.
 node_modules
+
+# The SDK's build outputs. `dist/` is what npm publishes and `dist-test/` is the
+# test build beside it; both are produced by tsc and neither is source.
+/sdk/typescript/dist/
+/sdk/typescript/dist-test/
+
+# npm pack output, which is a build artifact and not source.
+/sdk/typescript/*.tgz

@@ -28,6 +28,10 @@ import type { FailoverDay } from "@/lib/routing-history";
 const config = {
   rescued: { label: "Rescued", color: "var(--status-good)" },
   failed: { label: "Still failed", color: "var(--status-critical)" },
+  // Its own band rather than folded into either: a detached run's audit line is
+  // written at launch, so its exit code is a placeholder. Colouring that as a
+  // rescue is how this chart read 100% success by construction.
+  unknown: { label: "Not recorded", color: "var(--status-idle)" },
 } satisfies ChartConfig;
 
 export function FailoverTrend({ data, height = 160 }: { data: FailoverDay[]; height?: number }) {
@@ -59,6 +63,18 @@ export function FailoverTrend({ data, height = 160 }: { data: FailoverDay[]; hei
           dataKey="rescued"
           stackId="f"
           fill="var(--color-rescued)"
+          stroke="var(--viz-surface)"
+          strokeWidth={1.5}
+        />
+        {/* `unknown` before `failed` so the rounded data-end stays on a series
+            that is actually there. Every episode recorded before outcomes were
+            captured is rescued-or-failed with no unknown at all, and putting the
+            radius on that empty band left their columns square-topped — a
+            regression on all the history the chart was drawn for. */}
+        <Bar
+          dataKey="unknown"
+          stackId="f"
+          fill="var(--color-unknown)"
           stroke="var(--viz-surface)"
           strokeWidth={1.5}
         />

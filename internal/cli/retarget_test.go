@@ -118,17 +118,23 @@ func TestFallbackIsBuiltFromItsOwnDescriptor(t *testing.T) {
 	}
 }
 
-// The container variables a descriptor sets are not decoration: droid without
-// FACTORY_DISABLE_KEYRING looks for a keyring the container does not have, which
-// is the unattended-login failure internal/agents was written to prevent. A
-// fallback that inherited the primary's Env would hit it every time.
+// The container variables a descriptor sets are not decoration: they exist for
+// agents that behave wrongly in a container unless told something about it — a
+// keyring that is not there was the standing example — and that is the
+// unattended-login failure internal/agents was written to prevent. A fallback
+// that inherited the primary's Env instead of its own would hit it every time.
+//
+// The descriptor here is a real one with Env set on the copy, rather than
+// whichever shipped agent happens to declare the field. Since droid's removal
+// none of them does, so a loop over the table would find no work to do and pass
+// without executing its own assertions — a test that cannot fail, guarding
+// plumbing that four call sites still use. The subject is retarget, not the
+// roster.
 func TestFallbackGetsTheContainerEnvItsDescriptorSets(t *testing.T) {
 	rf, user := primaryRun(t)
 	for _, name := range agents.Names() {
 		d, _ := agents.Lookup(name)
-		if len(d.Env) == 0 {
-			continue
-		}
+		d.Env = []string{"SOME_AGENT_SETTING=1", "ANOTHER=2"}
 		got := retarget(rf, d, user, nil)
 		for _, kv := range d.Env {
 			if !slices.Contains(got.env, kv) {
@@ -225,12 +231,16 @@ func TestRetargetChangesExactlyTheAgentsFields(t *testing.T) {
 		env:      []string{"TERM=xterm-256color"},
 		envAllow: []string{"MY_OWN_TOKEN"},
 	}
-	droid, ok := agents.Lookup("droid")
+	d, ok := agents.Lookup("claude")
 	if !ok {
-		t.Fatal("droid is not in the descriptor table")
+		t.Fatal("claude is not in the descriptor table")
 	}
+	// Set on the copy: `env` is classified perAgent below, and with no shipped
+	// descriptor declaring one since droid's removal, an empty Env would satisfy
+	// that assertion only because fill() put something different in the base.
+	d.Env = []string{"SOME_AGENT_SETTING=1"}
 
-	got := retarget(base, droid, user, &handoff.Export{Dir: t.TempDir()})
+	got := retarget(base, d, user, &handoff.Export{Dir: t.TempDir()})
 
 	before, after := reflect.ValueOf(&base).Elem(), reflect.ValueOf(&got).Elem()
 	rt := reflect.TypeOf(runFlags{})

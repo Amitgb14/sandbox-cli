@@ -21,12 +21,22 @@ WORKDIR /src
 ARG TARGETOS
 ARG TARGETARCH
 
+# The version the binary reports, stamped the same way the Makefile stamps it.
+#
+# Without this the image always said `0.0.1` — internal/version's compile-time
+# default — so every published sandbox-studio-api, tagged release included,
+# reported the same version forever, and Studio's own header showed it. The
+# default below is deliberately not a version number: a build that forgot to pass
+# one should say so rather than claim to be the oldest release.
+ARG VERSION=unknown
+
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
-      go build -trimpath -ldflags="-s -w" \
+      go build -trimpath \
+      -ldflags="-s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version=${VERSION}" \
       -o /out/sandbox-studio-api ./cmd/sandbox-studio-api
 
 FROM debian:bookworm-slim

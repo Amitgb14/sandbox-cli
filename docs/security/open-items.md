@@ -755,13 +755,16 @@ does not reach a sandbox until someone bumps a line here.
   published. Closing that needs integrity hashes, which the npm CLI verifies only
   from a lockfile and a `-g` install has none of. No cheap fix; recorded rather
   than solved.
-- **`curl | bash` installers** (`aider` via astral.sh, `cursor`, `goose`,
-  `claude`) execute arbitrary remote shell inside the container. The blast radius
-  is the sandbox and the persisted HOME, which is the radius item 8 already
-  describes — but the code is fetched fresh each first run and is not pinnable for
-  two of them.
-- **`cursor` and `claude` are deliberately unpinned**, with the reason recorded in
-  the table rather than left implicit.
+- **`curl | bash` installers** (`cursor`, `goose`, `claude`, `devin`) execute
+  arbitrary remote shell inside the container. The
+  blast radius is the sandbox and the persisted HOME, which is the radius item 8
+  already describes — but the code is fetched fresh each first run and is not
+  pinnable for three of them.
+- **`cursor`, `claude` and `devin` are deliberately unpinned**, with the reason
+  recorded in the table rather than left implicit. Devin's is the newest and the
+  most recoverable: its installer *does* honour a pinned version, but only through
+  a versioned `cli/<version>/setup.sh` URL, and Cognition publishes no index of
+  versions to choose one from. If such an index appears, this becomes pinnable.
 
 ---
 
@@ -834,6 +837,132 @@ container before suspecting the allowlist.
 
 Note also that the guest becomes PID 1 and so inherits reaping duty for the
 proxy's process.
+
+---
+
+## Detached runs take no periodic snapshots — **closed**, by the session server
+
+> Closed by `sandbox-cli serve`. A running pane is snapshotted on the daemon's own
+> ticker (`internal/session/netkeeper.go`), so both detached paths — `--detach` and
+> every Studio run — now have the net this item says they lack. Issue #163 is the
+> case that cost somebody a file.
+>
+> The two objections below were the reason not to build it in
+> `studioapi/supervisor.go`, and the session server answers them rather than
+> accepting them. **Whose repository**: a session's id derives from
+> `worktree.RepoID`, so a daemon protects the repository it was started in and no
+> other. **A restart**: the catalog is on disk and `Adopt` rebinds live containers
+> from their labels, so a restarted `serve` finds the panes still going and protects
+> them again — in a *new* rescue session, since `rescue.Begin` mints one, which means
+> a pane outliving a restart has two manifests. That is visible in `recover list`
+> rather than being the invisible protection gap this item warned about.
+>
+> Two things it adds that the proposal did not ask for: a floor on the interval
+> (`minKeeperInterval`, 30s), because a config with a typo in it is a timer a daemon
+> honours for as long as the machine is on and the cost is per pane; and the
+> `snapshot` config read from the *user's* file only, which `trust.go` already
+> enforces and which matters more here than on the run path because nobody is
+> watching.
+>
+> Still true, and why the bind mount remains the first line: the files are on the
+> host the instant the agent writes them. A snapshot is the belt.
+>
+> The text below is kept as the record of what the three paths used to do.
+
+### What this used to say
+
+Three paths, three behaviours, and only the first is the safety net people
+picture:
+
+- A **foreground CLI run** snapshots every two minutes (`Begin`/`Start`/`Stop`).
+- A **detached CLI run** snapshots not at all: `internal/cli/run.go` returns via
+  `startDetached` before `beginRescue` is reached, and there is no process left
+  to hold a ticker.
+- A **daemon run** — every Studio run — records one **baseline** before launch
+  and closes it immediately. A before-image, not a net.
+
+So work done by a detached agent is protected by the bind mount and by whatever
+snapshots somebody takes on purpose (`POST /v1/snapshots`), and not by a timer.
+
+The fix is a snapshot loop owned by `studioapi/supervisor.go`, which already
+polls running containers. It is not obviously right: a long-lived daemon writing
+into the user's repository on a schedule is a different proposition from a
+foreground command doing it for the length of one run, and the supervisor's own
+watch set is in memory, so a restart would silently stop protecting runs that are
+still going. Weighed and deferred rather than missed.
+
+Fixed alongside this, and worth recording because the failure mode was the quiet
+kind: `POST /v1/runs/{id}/recover` used to find the *baseline* for a Studio run —
+same branch, same agent, most recent — and restore the state the run started
+from. Not an error; a restore that looked like it worked. Baselines are now
+excluded there and from the snapshot listing.
+
+## Mirroring snapshots to S3 moves the working tree off the machine
+
+`snapshot.s3` uploads a git bundle of the workspace to object storage. That is
+the whole point of it and it is also, plainly, the repository's contents leaving
+the host — so the decisions around it are written down rather than assumed.
+
+**The key is named, not held.** `access_key_env:` is the name of an environment
+variable read on the daemon's machine. There is no field anywhere in this feature
+that takes a secret *value*: not the config file, not Studio's settings file, not
+the API response, not the browser. The daemon reports whether the named variable
+resolves, and nothing more. This is the same shape `gateway:` uses and the same
+reason `audit.SessionMeta` has nowhere to put a value.
+
+**The whole `snapshot` key is refused from a project `.sandbox.yaml`**, and `s3`
+would be refused on its own merits: it names a network destination *and* which of
+this machine's credentials is read, so a hostile repository that could set it
+would be handed an exfiltration target, the means to authenticate to it, and the
+working tree already bundled for the trip. That it holds no secret value is not a
+mitigation — naming somebody else's variable is the attack.
+
+**A returned bundle is verified twice, and the second check is the one that
+matters.** `git bundle verify` establishes that a bundle is internally
+consistent; it would pass just as happily on a well-formed bundle of somebody
+else's commit, served under this key by a bucket that was tampered with, shared
+by mistake, or written by another machine using the same prefix. So `Fetch` also
+compares the fetched sha against the one the local manifest recorded when the
+snapshot was taken, and rolls the ref back on a mismatch. A restore that quietly
+returns the wrong tree is the failure this feature was built in the shadow of.
+
+**The connectivity check asks about the daemon's own configuration, never the
+request's.** `POST /v1/snapshots/s3/check` takes no bucket and no endpoint. One
+that did would be a server-side request forgery with a Test button in front of
+it: the daemon signing a request to any host a caller names and reporting whether
+it answered.
+
+Two costs accepted rather than solved:
+
+- **Retention does not reach the bucket.** The windows prune the local ref;
+  objects in S3 are left to the bucket's own lifecycle rules. Deleting somebody's
+  off-machine backup on a timer that only runs while their laptop is open is a
+  way to lose the copy that was supposed to survive the laptop — but it does mean
+  storage grows until a lifecycle rule is configured, and the Studio card says so
+  rather than leaving it to be discovered from a bill.
+- **The bundle is self-contained**, so it carries history from the root and is
+  sized like a clone rather than like a diff. That is why `upload: manual` is the
+  default and why `max_object_mb` refuses a bundle up front: this client does no
+  multipart, and S3 caps a single PUT at 5 GiB.
+
+---
+
+## Snapshot provenance is a scoping rule, not a boundary
+
+A snapshot records whether it was taken through Studio (`run`) or the SDK
+(`sdk`), derived from whether the request carried an `Origin` header, and the
+daemon refuses a browser-origin restore of an SDK-made snapshot.
+
+**This is not a security control and must not be counted as one.** Anything able
+to omit a header — curl, a script, another local process — can restore anything.
+What actually governs who may call this API at all is the loopback binding, the
+`Origin` refusal in `guard.go`, and the bearer token.
+
+What the split buys is that the two surfaces do not silently undo each other's
+work: a pipeline's checkpoints are not restorable by somebody clicking in a tab
+who cannot see what the script was doing halfway through. It is a usability
+boundary wearing an enforcement mechanism, and it is written down here so nobody
+later reads the 403 as protection.
 
 ---
 

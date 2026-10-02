@@ -1,0 +1,51 @@
+{
+  "name": "@sandbox-cli/sdk",
+  "version": "0.0.5",
+  "description": "Typed client for the sandbox-cli control plane — run agents and commands in isolated containers, from a program.",
+  "keywords": [
+    "sandbox",
+    "agents",
+    "containers",
+    "docker",
+    "claude",
+    "codex",
+    "isolation"
+  ],
+  "homepage": "https://sandbox-cli.vercel.app/sdk/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Amitgb14/sandbox-cli.git",
+    "directory": "sdk/typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/Amitgb14/sandbox-cli/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "examples",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test 'dist-test/test/*.test.js'",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

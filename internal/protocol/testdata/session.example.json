@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "s_01K4EXAMPLE",
+  "name": "default",
+  "root": "/Users/amit/src/opennutri",
+  "profile": "dev",
+  "share": true,
+  "share_path": "/Users/amit/.config/sandbox/shared",
+  "engine": "docker",
+  "created_at": "2026-09-09T19:00:00Z",
+  "updated_at": "2026-09-09T19:05:00Z",
+  "focus": {
+    "workspace": "ws_1",
+    "worktree": "wt_ios",
+    "pane": "p_3"
+  },
+  "workspaces": [
+    {
+      "id": "ws_1",
+      "label": "opennutri",
+      "repo_path": "/Users/amit/src/opennutri",
+      "repo_hash": "a1b2c3d4",
+      "worktrees": [
+        {
+          "id": "wt_main",
+          "branch": "main",
+          "path": "/Users/amit/src/opennutri",
+          "main": true
+        },
+        {
+          "id": "wt_ios",
+          "branch": "ios-recall",
+          "path": "/Users/amit/.config/sandbox/worktrees/opennutri-a1b2c3d4/ios-recall",
+          "main": false,
+          "label": "ios-recall"
+        },
+        {
+          "id": "wt_api",
+          "branch": "api-client",
+          "path": "/Users/amit/.config/sandbox/worktrees/opennutri-a1b2c3d4/api-client",
+          "main": false
+        }
+      ]
+    }
+  ],
+  "panes": [
+    {
+      "id": "p_3",
+      "worktree_id": "wt_ios",
+      "agent": "claude",
+      "sandbox": "docker",
+      "container_name": "sandbox-opennutri-ios-recall",
+      "container_id": "8f2c1ab",
+      "state": "working",
+      "conversation_id": "sess_abc",
+      "last_snapshot": "refs/sandbox/snapshots/20260909T190100Z",
+      "exit_code": null,
+      "legacy": false,
+      "created_at": "2026-09-09T19:01:00Z",
+      "updated_at": "2026-09-09T19:04:00Z",
+      "pane_kind": "agent"
+    }
+  ]
+}

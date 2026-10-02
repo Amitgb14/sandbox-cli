@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/handoff"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/routing"
@@ -101,6 +102,11 @@ type watch struct {
 
 	routeID string
 	attempt int
+
+	// meta is what this run's ending will be recorded as, minus the outcome:
+	// captured at launch because that is when the resolved spec exists, and the
+	// container is only an id afterwards.
+	meta audit.SessionMeta
 
 	// briefings are the export directories mounted into attempts so far,
 	// removed when this run stops being supervised. A mount is held for the
@@ -198,6 +204,11 @@ func (sv *supervisor) tick(ctx context.Context) {
 
 // settle applies the gate to one finished run.
 func (sv *supervisor) settle(ctx context.Context, w *watch, c runtime.ContainerInfo) {
+	// First, what happened — before any decision about what to do next, and
+	// regardless of whether there is a chain. The launch line said a run started;
+	// this is the line that says how it ended, matched to that one by RunID.
+	sv.recordEnding(w, c)
+
 	if c.ExitCode == 0 || len(w.remaining) == 0 {
 		sv.drop(w)
 		return
@@ -255,17 +266,35 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 
 	req := w.req
 	req.Agent, req.Fallback = next, w.remaining[1:]
+	// The *request's* handoff is spent. It was applied when this episode's first
+	// container was built, and leaving it set makes buildRunOptions do the whole
+	// thing again — resolve the source session, write a second export, prepend a
+	// second preamble — on top of the briefing this failover just wrote. Two
+	// mounts then land on /sandbox/context, docker refuses the duplicate mount
+	// point, and the retry never starts: the failover fails in exactly the case
+	// where the run it is rescuing began as a handoff.
+	//
+	// What carries work across from here is `brief`, built from the failed run's
+	// own transcript, which is the conversation that matters now.
+	req.HandoffFrom = nil
 	if brief != nil {
 		req.Prompt = brief.Prompt(w.req.Prompt)
 	}
 
 	opts, err := sv.s.buildRunOptions(ctx, req)
 	if err != nil {
+		// Nothing else knows this directory, and it holds a copy of a
+		// conversation.
+		if brief != nil {
+			os.RemoveAll(brief.Dir)
+		}
 		return err
 	}
-	if brief != nil {
-		opts.ExtraMounts = append(opts.ExtraMounts, brief.Dir+":"+handoff.GuestDir+":ro")
-	}
+	// The mount and the record of whose conversation it was. RoutedFrom below says
+	// the same agent's name for a different reason — this run took over from it —
+	// and both are stamped: a reader asking "why is codex doing claude's work"
+	// wants the outage, and one asking "what is it reading" wants the briefing.
+	applyBriefing(&opts, brief, w.agent, "")
 
 	// The record. buildRunOptions may have skipped further agents on its own
 	// probe, and its reason is kept alongside this one — both are true, and a
@@ -278,7 +307,22 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 	restore := sv.handOverName(ctx, w, opts)
 
 	before := sv.fingerprint(opts.Project)
-	name, err := sv.s.Session.Start(ctx, opts, false)
+	// StartRecorded, for the same reason handleCreateRun uses it: this attempt is
+	// detached too, so its line says only that it launched — and without keeping
+	// that record, the retry's ending is never written. Which would have left
+	// exactly the failover episodes these panels are about sitting in the "not
+	// recorded" bucket: the one case the feature exists to report.
+	// Through the catalog too, so a failover's replacement container is a pane like
+	// the attempt it replaces. Without this the retry would be the one launch in the
+	// daemon that no catalog knew about — and it is the launch most worth finding
+	// later, since the pane it replaced was renamed rather than removed.
+	//
+	// No synthesised request: this used to build a `RunCreateRequest{Agent, Verify}`
+	// and so dropped `Console`, which would have labelled a console run's replacement
+	// `agent`. Unreachable today only because console and fallback are refused
+	// together — which is the kind of safety that stops being true when somebody
+	// relaxes an unrelated rule. `startRun` reads the options it is given.
+	name, launched, err := sv.s.startRun(ctx, opts)
 	if err != nil {
 		restore()
 		return err
@@ -308,6 +352,7 @@ func (sv *supervisor) failOver(ctx context.Context, w *watch, why string) error 
 		routeID:   w.routeID,
 		attempt:   w.attempt + 1,
 		briefings: w.briefings,
+		meta:      launched,
 	}
 	if brief != nil {
 		next2.briefings = append(next2.briefings, brief.Dir)
@@ -357,16 +402,7 @@ func (sv *supervisor) briefing(w *watch) *handoff.Export {
 	// would be confidently wrong in a file the next agent is told to trust.
 	path, _, _ := sv.s.transcriptFor(c)
 
-	dir, err := os.MkdirTemp("", "sandbox-handoff-*")
-	if err != nil {
-		return nil
-	}
-	ex, err := handoff.Write(dir, w.agent, path, w.workspace, w.req.Base)
-	if err != nil {
-		os.RemoveAll(dir)
-		return nil
-	}
-	return ex
+	return writeBriefing(w.agent, path, w.workspace, w.req.Base)
 }
 
 // fingerprint is the workspace as it stands, or "" when it cannot be read.
@@ -415,4 +451,37 @@ func joinReasons(parts ...string) string {
 		}
 	}
 	return strings.Join(kept, "; ")
+}
+
+// recordEnding writes the audit line a detached run could not write for itself.
+//
+// The launch line carries Finished=false and a placeholder exit code, because at
+// that moment there is nothing else true to say. This is its partner: the same
+// RunID, the real exit code, and the duration measured from the container's own
+// timestamps rather than from this process's clock — the daemon may have started
+// after the run did, and it is the container's life being reported.
+//
+// Best-effort, like every other write to the log: the run is what the user asked
+// for and the record is a courtesy. A daemon restarted mid-run never sees the
+// ending, and that is left as "not recorded" rather than guessed — which is why
+// the reader treats an unpartnered launch line as unknown rather than as a pass.
+func (sv *supervisor) recordEnding(w *watch, c runtime.ContainerInfo) {
+	if sv.s.Session == nil || sv.s.Session.Audit == nil || w.meta.RunID == "" {
+		return
+	}
+	meta := w.meta
+	meta.ExitCode = c.ExitCode
+	meta.Finished = true
+	meta.Detached = true
+	// Cleared first. The launch record's duration is how long `docker run` took —
+	// a few hundred milliseconds — which was fine while the line said "not
+	// finished" and is a lie the moment it says otherwise. An engine that reports
+	// no start time leaves this at zero, which every reader already treats as
+	// "not measured" (Summary's median excludes it), rather than shipping the
+	// launch latency as the run's length.
+	meta.Duration = 0
+	if !c.StartedAt.IsZero() && c.FinishedAt.After(c.StartedAt) {
+		meta.Duration = c.FinishedAt.Sub(c.StartedAt)
+	}
+	sv.s.Session.Audit.RecordSession(meta)
 }

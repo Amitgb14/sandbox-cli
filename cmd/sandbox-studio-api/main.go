@@ -20,6 +20,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/history"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/studioapi"
 )
 
@@ -169,6 +170,24 @@ func run() error {
 
 	srv.Token = token
 	srv.AllowedHosts = hosts
+
+	// The session catalog, so a run started from Studio is a pane: it gets a pane id,
+	// `sandbox-cli pane list` shows it, and a running `sandbox-cli serve` snapshots
+	// it — which a Studio run never had, since it is a detached run and detached runs
+	// had no safety net.
+	//
+	// A writer and not an owner: no adoption loop and no snapshot keeper live here.
+	// If a `serve` is running it owns those and reconciles these panes from the
+	// container labels, the same way it reconciles the CLI's.
+	//
+	// Best-effort on purpose. A project that is not a git repository has no session
+	// to open, and `--api-in-docker` mounts only the project — so a failure here must
+	// not stop the daemon serving. The launch path falls back to what it did before.
+	if panes, perr := session.Open(project, cfg.Profile, srv.Engine); perr == nil {
+		srv.Panes = panes
+	} else {
+		log.Printf("sandbox-studio-api: runs will not be catalogued (%v); they still launch", perr)
+	}
 
 	// The index is optional and stays optional. Everything it answers, the log
 	// answers too — more slowly, and always correctly — so a database that

@@ -86,7 +86,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     body:
       "The wrapper consumes a leading run of sandbox flags and forwards everything else to the agent verbatim, so the agent's own flags never collide with sandbox-cli's. That second line is the point of the whole project: 'Allow All' is the mode that makes an agent useful, and it is safe here because the blast radius is a directory that dies on exit. The first run builds the base image, which takes a few minutes once.",
     expect:
-      "Claude Code starts, with a status line showing the container's memory and CPU. Fifteen agents have a wrapper; four are baked into the image and the rest install themselves on first use.",
+      "Claude Code starts, with a status line showing the container's memory and CPU. Twelve agents have a wrapper; four are baked into the image and the rest install themselves on first use.",
   },
   {
     title: "Log in once — the login outlives the container",
@@ -489,8 +489,8 @@ export const CHALLENGES: Challenge[] = [
   {
     symptom: "A new agent's first run fails with exit 127",
     cause:
-      "Eleven of the fifteen agents are not baked into the image — they install themselves into the persisted HOME on first use, which keeps hundreds of megabytes of adapters you will never run out of the image. That install needs the vendor's download host reachable at that moment.",
-    fix: "Allow the agent's install host. docs/AGENTS.md has the per-agent list; cursor, aider, openhands and continue each need one.",
+      "Eight of the twelve agents are not baked into the image — they install themselves into the persisted HOME on first use, which keeps hundreds of megabytes of adapters you will never run out of the image. That install needs the vendor's download host reachable at that moment.",
+    fix: "Allow the agent's install host. docs/AGENTS.md has the per-agent list; cursor and devin each need one, and devin needs two — the script host alone is not enough.",
     fixCode: "sandbox-cli cursor --allow cursor.com --allow downloads.cursor.com",
     scope: "both",
   },
@@ -514,8 +514,8 @@ export const CHALLENGES: Challenge[] = [
   {
     symptom: '"this docker daemon applies no seccomp profile"',
     cause:
-      'Docker Desktop configured with "seccomp-profile": "unconfined". sandbox-cli ships no profile of its own — the daemon default is good and maintaining a custom one is a large ongoing cost — so an absent filter means the container has the full syscall table. It is reported rather than refused under dev, because that is a property of your installation and fixable in its settings.',
-    fix: "Settings → Docker Engine, remove that line, apply and restart. Under prod this is a hard failure, not a warning.",
+      'A Docker Desktop that applies no syscall filter — from "seccomp-profile": "unconfined" in Settings → Docker Engine, or from the containerd image store, which has been reported to leave it off with nothing set. sandbox-cli ships no profile of its own — the daemon default is good and maintaining a custom one is a large ongoing cost — so an absent filter means the container has the full syscall table. It is reported rather than refused under dev, because that is a property of your installation and fixable in its settings.',
+    fix: "If Settings → Docker Engine sets that line, remove it and apply. If it sets nothing, check the containerd image store in Settings → General, which has been reported to leave the filter off on its own — `docker info` shows \"Profile: unconfined\" either way. Under prod this is a hard failure, not a warning.",
     scope: "both",
   },
   {

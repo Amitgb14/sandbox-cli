@@ -3,7 +3,7 @@
 import { Fragment } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Moon, PlugZap, Search, Sun } from "lucide-react";
+import { Check, Laptop, Moon, PlugZap, Search, Server, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -18,10 +18,26 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
-import { apiBase } from "@/lib/constants";
+import { apiBase, defaultApiBase } from "@/lib/constants";
+import { cn } from "@/lib/utils";
 import { crumbsFor } from "@/lib/nav";
 import { useDaemon, useTransportMode } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  useActiveConnection,
+  useConnectionHealth,
+  useConnections,
+  useSwitchConnection,
+  type ProbeState,
+} from "@/hooks/use-connection";
 
 export function AppHeader() {
   const pathname = usePathname();
@@ -76,11 +92,139 @@ export function AppHeader() {
             ⌘K
           </kbd>
         </Button>
+        <ConnectionSwitcher />
         <TransportBadge />
         <ThemeToggle />
       </div>
     </header>
   );
+}
+
+/**
+ * Which machine's daemon this is, and a one-click way to reach another.
+ *
+ * It lives in the header rather than in Settings because switching machines is
+ * something you do *while working*, not while configuring: the whole point of a
+ * saved connection is that the agents are on the Linux box and the browser is
+ * here. Settings still owns adding and forgetting them — this only chooses.
+ *
+ * Rendered only when there is a choice to make. One daemon and no saved
+ * connections is the ordinary case, and a picker with a single entry is chrome
+ * that answers a question nobody asked.
+ */
+function ConnectionSwitcher() {
+  const saved = useConnections();
+  const { key, url, ready } = useActiveConnection();
+  const switchTo = useSwitchConnection();
+  // The *built-in* daemon's own URL, not the active one. apiBase() answers
+  // "where do requests go", which is the remote once you have switched — so a
+  // row labelled "This machine" would otherwise print the remote's host and the
+  // remote's health, and the local daemon would never be probed at all.
+  const builtIn = defaultApiBase();
+  // Both are probed: "this machine" is exactly as capable of being down as any
+  // other, and finding out by watching every panel fail is what this replaces.
+  const health = useConnectionHealth(ready ? [builtIn, url, ...saved.map((c) => c.url)] : []);
+
+  if (!ready || saved.length === 0) return null;
+
+  const active = saved.find((c) => c.url === key);
+  const label = active?.label ?? hostOf(url) ?? "this machine";
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-muted-foreground">
+          {active ? <Server className="size-3.5" /> : <Laptop className="size-3.5" />}
+          <span className="hidden max-w-[10rem] truncate sm:inline">{label}</span>
+          <HealthDot state={health[url]} />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+          Which machine runs the agents
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <ConnectionRow
+          icon={<Laptop className="size-3.5 shrink-0" />}
+          label="This machine"
+          detail={hostOf(builtIn)}
+          active={!key}
+          state={health[builtIn]}
+          onSelect={() => switchTo(null)}
+        />
+        {saved.map((c) => (
+          <ConnectionRow
+            key={c.url}
+            icon={<Server className="size-3.5 shrink-0" />}
+            label={c.label || hostOf(c.url)}
+            detail={c.url}
+            active={c.url === key}
+            state={health[c.url]}
+            onSelect={() => switchTo(c)}
+          />
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function ConnectionRow({
+  icon,
+  label,
+  detail,
+  active,
+  state,
+  onSelect,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  detail: string;
+  active: boolean;
+  state?: ProbeState;
+  onSelect: () => void;
+}) {
+  return (
+    <DropdownMenuItem onClick={onSelect} className="gap-2">
+      {icon}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className={cn("truncate text-sm", active && "font-medium")}>{label}</span>
+        <span className="truncate font-mono text-[10px] text-muted-foreground">{detail}</span>
+      </span>
+      <HealthDot state={state} />
+      {active && <Check className="size-3.5 shrink-0" />}
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * Three states, and the third is the one that matters: a daemon nobody has
+ * heard back from yet is **unknown**, not down. Painting silence as an outage is
+ * how a probe that has been running for 200ms reports every machine as
+ * unreachable.
+ */
+function HealthDot({ state }: { state?: ProbeState }) {
+  const title =
+    state === "up" ? "answering" : state === "down" ? "not answering" : "checking…";
+  return (
+    <span
+      title={title}
+      className={cn(
+        "size-1.5 shrink-0 rounded-full",
+        state === "up" && "bg-contained",
+        state === "down" && "bg-destructive",
+        (state === undefined || state === "checking") && "bg-muted-foreground/40",
+      )}
+    />
+  );
+}
+
+/** The host of a URL, for a label that has to fit in a button. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 /**

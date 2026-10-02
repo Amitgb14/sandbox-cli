@@ -57,11 +57,11 @@ func TestEveryAgentWrapperAnswersContext(t *testing.T) {
 // in that same output, not behind a command the user has to be told about.
 func TestEmptyListingExplainsItself(t *testing.T) {
 	// An agent with no store descriptor says so, and says the agent still runs.
-	err := explainNoStore("aider")
+	err := explainNoStore("cursor")
 	if err == nil {
 		t.Fatal("an agent with no known store must report why the listing is empty")
 	}
-	if !strings.Contains(err.Error(), "does not know where aider") {
+	if !strings.Contains(err.Error(), "does not know where cursor") {
 		t.Errorf("unhelpful message: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestExpandResumeIDLeavesArgsAloneUnlessItIsSure(t *testing.T) {
 		{name: "no resume argument at all", agent: "claude", guest: []string{"-p", "do the thing"}},
 		{name: "resume with no value", agent: "claude", guest: []string{"--resume"}},
 		{name: "value is another flag", agent: "claude", guest: []string{"--resume", "--verbose"}},
-		{name: "agent with no known store", agent: "aider", guest: []string{"--resume", "abc"}},
+		{name: "agent with no known store", agent: "cursor", guest: []string{"--resume", "abc"}},
 		{name: "not an adapter", agent: "", guest: []string{"--resume", "abc"}},
 		{name: "id nothing matches", agent: "claude", guest: []string{"--resume", "zzzzzzzz"}},
 		{

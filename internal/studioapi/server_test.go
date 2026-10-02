@@ -260,6 +260,44 @@ func TestHandleAgentsOnlyListsHeadlessCapable(t *testing.T) {
 	}
 }
 
+// TestAgentsReportResumeCapability pins the field a conversation row reads before
+// it offers to carry a conversation on.
+//
+// The pairing is the point rather than the list: whatever the listing advertises
+// must be what a launch would accept, so this asserts canResume against the same
+// table the run path consults (resumeArgsFor). An agent gaining or losing a
+// resume argv should break this test and the offer together, not one of them.
+func TestAgentsReportResumeCapability(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/v1/agents", nil)
+	got := decodeBody[AgentsResponse](t, rec)
+
+	seen := map[string]bool{}
+	for _, a := range got.Agents {
+		seen[a.Name] = true
+		_, resumable := resumeArgsFor(a.Name)
+		if a.CanResume != resumable {
+			t.Errorf("%s: canResume = %v, but the run path would %s the resume",
+				a.Name, a.CanResume, map[bool]string{true: "accept", false: "refuse"}[resumable])
+		}
+	}
+
+	// Named agents, so that a table losing an entry is a failure here rather than
+	// a control that silently stops being offered. gemini declares no resume
+	// argv: for it, "carry this on" is not expressible, and the row must not
+	// pretend otherwise.
+	for agent, want := range map[string]bool{"claude": true, "codex": true, "gemini": false} {
+		if !seen[agent] {
+			continue // not registered in this build
+		}
+		for _, a := range got.Agents {
+			if a.Name == agent && a.CanResume != want {
+				t.Errorf("%s: canResume = %v, want %v", agent, a.CanResume, want)
+			}
+		}
+	}
+}
+
 func TestCreateRunWithPlainCommand(t *testing.T) {
 	s, fr := newTestServer(t)
 	rec := doRequest(t, s.Handler(), http.MethodPost, "/v1/runs", RunCreateRequest{
