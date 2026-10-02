@@ -1,4 +1,4 @@
-package spec
+package cli
 
 import (
 	"os"
@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// A container built from the base image has no idea where its user is: TZ is
+// A sandbox built from the base image has no idea where its user is: TZ is
 // unset and /etc/localtime is UTC. Everything an agent stamps inside it is then
 // recorded at +0000 while the same person's work on the host records their real
 // offset — most visibly in git, where two commits made minutes apart, one in a
@@ -14,15 +14,14 @@ import (
 // right and the offset is wrong, which is the kind of wrong that surfaces long
 // after the run.
 //
-// The zone is forwarded as a *name*, never by mounting the host's /etc/localtime.
-// A name is a string; a mount is a host path, and the workspace is the only host
-// path this tool reaches for uninvited (see mounts.go). The base image already
-// carries tzdata to interpret it, and a name survives a DST boundary mid-session
-// where a fixed offset would not.
+// The zone is forwarded as a *name*, in the request's environment, never as a
+// host file. The base image carries tzdata to interpret it, and a name survives
+// a DST boundary mid-session where a fixed offset would not. It is the client's
+// zone, read here, because sandboxd may be on another continent: the server's
+// zone is nobody's.
 //
-// hostTimezone is a variable so tests can pin it: BuildSpec is expected to
-// produce the same spec on every machine, and this is the one input that is
-// genuinely different on each.
+// hostTimezone is a variable so tests can pin it: it is the one input to a
+// request that is genuinely different on every machine.
 var hostTimezone = resolveHostTimezone
 
 // resolveHostTimezone reports the host's zone, or "" when it cannot be
@@ -55,9 +54,9 @@ func resolveHostTimezone() string {
 }
 
 // validZoneName rejects anything that does not look like a zone name before it
-// reaches the argv. This value is read off the host's filesystem and rendered
-// into a `docker run -e` argument, so it is checked at the point of use rather
-// than trusted for being local: a name is a short run of unsurprising characters
+// reaches a request. This value is read off the host's filesystem and set in
+// the guest's environment, so it is checked at the point of use rather than
+// trusted for being local: a name is a short run of unsurprising characters
 // and everything else is a file that does not mean what we think it does.
 func validZoneName(s string) bool {
 	if s == "" || len(s) > 64 || strings.HasPrefix(s, "/") {

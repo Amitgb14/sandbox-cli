@@ -90,6 +90,10 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
 - **A volume can be mounted read-only by several sandboxes at once.** A
   writer still has a volume to itself, and a volume being read cannot be
   mounted writable.
+- **A sandbox runs in your time zone.** Each run carries the client's zone as
+  `TZ` (read from `TZ`, `/etc/localtime` or `/etc/timezone`). Commits an agent
+  makes are then stamped with your offset, not `+0000`. A `TZ` you set with
+  `--env` or in your config wins, and a zone that can't be read sends nothing.
 - **Commits inside a sandbox work.** The guest had no git identity, so an
   agent's `git commit` failed with "Author identity unknown". A cloned
   workspace now gets a neutral one (`sandbox <sandbox@localhost>`), and

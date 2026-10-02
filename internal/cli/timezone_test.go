@@ -1,6 +1,8 @@
-package spec
+package cli
 
 import (
+	"github.com/Amitgb14/sandbox-cli/internal/api"
+
 	"testing"
 )
 
@@ -47,5 +49,31 @@ func TestResolveHostTimezoneRejectsNonsense(t *testing.T) {
 	t.Setenv("TZ", "Not A Zone; rm -rf /")
 	if got := resolveHostTimezone(); got == "Not A Zone; rm -rf /" {
 		t.Error("resolveHostTimezone forwarded a value that is not a zone name")
+	}
+}
+
+// Every run carries the client's zone, so a commit made in a sandbox has the
+// offset of the person who asked for it; one the user set wins, and a zone
+// that cannot be established sends nothing rather than a guess.
+func TestRunsCarryTheClientsZone(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	defer func(f func() string) { hostTimezone = f }(hostTimezone)
+	apply := func(env map[string]string) map[string]string {
+		req := api.CreateSandboxRequest{Env: env}
+		if err := applyConfig(&runFlags{}, t.TempDir(), &req, api.Capabilities{}); err != nil {
+			t.Fatal(err)
+		}
+		return req.Env
+	}
+	hostTimezone = func() string { return "Asia/Kolkata" }
+	if got := apply(nil)["TZ"]; got != "Asia/Kolkata" {
+		t.Errorf("TZ = %q", got)
+	}
+	if got := apply(map[string]string{"TZ": "UTC"})["TZ"]; got != "UTC" {
+		t.Errorf("a TZ from --env was replaced: %q", got)
+	}
+	hostTimezone = func() string { return "" }
+	if _, set := apply(nil)["TZ"]; set {
+		t.Error("an unknown zone was sent")
 	}
 }

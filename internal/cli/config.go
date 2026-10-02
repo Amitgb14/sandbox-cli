@@ -63,6 +63,11 @@ func applyConfig(rf *runFlags, project string, req *api.CreateSandboxRequest, ca
 	for k, v := range cfg.Env {
 		set(k, v)
 	}
+	// Before env_allow and secrets but after the config's env: a TZ the user
+	// set, by --env or in their config, is their answer.
+	if tz := hostTimezone(); tz != "" {
+		set("TZ", tz)
+	}
 	for _, name := range cfg.EnvAllow {
 		if v, ok := os.LookupEnv(name); ok {
 			set(name, v)
