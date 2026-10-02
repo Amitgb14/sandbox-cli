@@ -107,13 +107,31 @@ func TestWrapperHelpListsTheSandboxFlags(t *testing.T) {
 	root := NewRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)
-	root.SetArgs([]string{"claude", "--help"})
+	root.SetArgs([]string{"agent", "claude", "--help"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--fallback", "--network", "--no-persist-auth", "goes to claude"} {
+	for _, want := range []string{"--fallback", "--network", "--no-persist-auth", "goes to claude", "sandbox-cli agent claude"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("help does not mention %s:\n%s", want, out.String())
 		}
+	}
+}
+
+// The top level is the sandbox: every command there works for any command run
+// in one. Agents are a layer on top, under `agent`, so none of their names —
+// nor fleet — may appear beside run.
+func TestTopLevelIsAgentNeutral(t *testing.T) {
+	top := map[string]bool{}
+	for _, c := range NewRootCmd().Commands() {
+		top[c.Name()] = true
+	}
+	for _, name := range append(agents.InteractiveNames(), "fleet", "usage") {
+		if top[name] {
+			t.Errorf("%q is a top-level command; it belongs under `agent`", name)
+		}
+	}
+	if !top["agent"] || !top["run"] {
+		t.Errorf("top level: %v", top)
 	}
 }

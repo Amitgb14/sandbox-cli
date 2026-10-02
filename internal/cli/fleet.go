@@ -63,7 +63,7 @@ func newFleetRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "\nlogs: %s\nland: sandbox-cli fleet land --all\n", fleetLogDir(st))
+			fmt.Fprintf(cmd.OutOrStdout(), "\nlogs: %s\nland: sandbox-cli agent fleet land --all\n", fleetLogDir(st))
 			if n := len(st.Unfinished()); n > 0 {
 				return fmt.Errorf("%d of %d tasks did not verify", n, len(st.Tasks))
 			}

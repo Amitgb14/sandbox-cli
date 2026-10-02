@@ -28,6 +28,12 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
 - **The host repository is no longer bind-mounted** by default: it goes in as a
   git bundle, and work comes back into `refs/sandbox/<name>` for you to merge.
   On a local Mac, `--bind` mounts a directory instead.
+- **Agents move under `sandbox-cli agent`.** `sandbox-cli claude` is now
+  `sandbox-cli agent claude`, and likewise for every agent and for `fleet`.
+  The old spellings are gone, with no aliases. The top level is the sandbox
+  itself: every command there works for any command run in one.
+- **`usage` is removed.** It read one agent's private cache file and had
+  nothing to do with sandboxes.
 - **Not yet rebuilt:** `worktree`, `recover`, `context list` (agent
   conversations) and Studio. They return on the new API.
 
@@ -48,10 +54,10 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   defines it.
 - `bring-back`, `attach` with a real terminal, and `doctor` against any
   endpoint.
-- **`fleet` is back, on the API.** `fleet.yaml` is unchanged. Each task runs in
+- **`agent fleet` is back, on the API.** `fleet.yaml` is unchanged. Each task runs in
   a sandbox of its own, and its work comes back into
-  `refs/sandbox/fleet/<branch>`. `fleet land` merges that ref; it no longer
-  merges a worktree. `fleet run` exits non-zero when any task did not verify.
+  `refs/sandbox/fleet/<branch>`. `agent fleet land` merges that ref; it no longer
+  merges a worktree. `agent fleet run` exits non-zero when any task did not verify.
   `fleet stop` and `fleet clean` are gone: a task's sandbox is terminated when
   the task ends, unless you pass `--keep`.
 - **Routing is back** (`--fallback`, `routing:` and `providers:` as before).
@@ -60,11 +66,6 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   `--detach` run with `--fallback` is now refused, because nothing watches a
   detached run fail. Routed runs are not yet recorded in the audit log, which
   the new CLI does not write yet.
-- **`usage` is back.** It reads the copy of claude's usage cache saved with
-  claude's login, or your own `~/.claude.json`. `usage --refresh` runs its
-  throwaway turn in a sandbox with your saved login, so it no longer needs
-  claude installed on the host. It does need a `sandboxd` whose sandboxes can
-  reach the provider.
 
 ### Security
 

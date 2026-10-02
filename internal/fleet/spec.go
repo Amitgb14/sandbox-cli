@@ -1,11 +1,10 @@
-// Package fleet runs several agents at once: one detached container per git
-// branch, launched from a single task file, then supervised and landed by branch
-// name.
+// Package fleet runs several agents at once: one sandbox per git branch,
+// launched from a single task file, then landed by branch name.
 //
-// It owns no isolation policy of its own. Every task is turned into the same
-// sandbox.Options a `sandbox-cli claude --worktree BRANCH` run would produce,
-// with Detach set — so a fleet agent is confined exactly like an interactive one,
-// and any change to the sandbox boundary applies to both without fleet knowing.
+// It owns no isolation policy of its own. Every task is the same create request
+// a `sandbox-cli agent <name>` run makes, so a fleet agent is confined exactly
+// like an interactive one, and any change to the sandbox boundary applies to
+// both without fleet knowing.
 package fleet
 
 import (

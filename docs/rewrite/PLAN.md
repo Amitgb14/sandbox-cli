@@ -69,9 +69,15 @@ customers will compare us with. It is not named here; what matters is its shape.
    agent harness gets the same API on their Mac, offline, at no cost per second.
 2. **Self-hosted with no phone-home.** Their BYOC keeps their control plane. Ours
    runs entirely on the user's machine, for code that cannot leave the building.
-3. **Agent-native, not agent-agnostic.**
-   - Fifteen agents with verified headless modes and login persistence.
-   - Git-safe bring-back: work returns as a verified bundle into
+3. **A general sandbox first, with agents as a first-class layer on top.**
+   The top level of the CLI is the sandbox: every command there works for any
+   command run in one. The agent layer is `sandbox-cli agent`, built from the
+   same API calls, and none of it is required to use the product. *(Decided
+   2026-10-02. It was "agent-native, not agent-agnostic" until then, and the
+   CLI had grown fifteen agent names and a claude-only `usage` command beside
+   `run`.)* What the agent layer carries:
+   - fifteen agents, five with verified headless modes, and login persistence;
+   - git-safe bring-back (general, not agent-specific): work returns as a verified bundle into
      `refs/sandbox/`, and nothing in the guest can plant hooks or config on the
      host.
    - Prod profile: no refresh token in reach of the agent.
@@ -634,24 +640,16 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     Not yet: route ids and `routed_from` in the audit record, because the new
     CLI writes no audit record at all. That is a gap of its own, still open
     for M10.
-  - **Usage: done.** `agentusage` and the `usage` command came across with
-    their tests. What changed:
-    - the cache is read from the saved login directory, since `.claude.json`
-      is one of claude's synced `AuthPaths`;
-    - `Refresh` runs `claude -p ok` in a sandbox, with the saved login restored
-      and copied back out, rather than on the host. It takes a client, and
-      forwards no host API key, because the key would bill instead of the
-      subscription being measured;
-    - its three host-exec tests are replaced by tests against the fake backend:
-      no login, the run restores and saves the login, no API key, and the
-      agent's message is carried;
-    - the agent's message is taken from the **last** line, because the
-      bootstrap talks first.
-
-    The status-line recording (`.sandbox/usage.json`) is no longer looked for.
-    There is no status-line hook yet and the file is not synced, but its reader
-    is kept. `shortenHome` and `humanAge` moved to `cli/format.go`. Real
-    `--refresh` is end-to-end row 20, which needs a logged-in claude.
+  - **Usage: dropped.** It was ported (`a783ae0`) and then removed with the
+    decision above. It read one agent's private cache file and had nothing to
+    do with sandboxes. `agentusage` and its tests are in git history if Studio
+    ever wants the figures; `humanAge` and `shortenHome` went back to `_old/`
+    for `recover` and `context list`.
+  - **Agents under `sandbox-cli agent`.** The fifteen wrappers and `fleet` moved
+    there, with `agent ls` showing which agents can run unattended and whose
+    login is saved. There are no aliases for the old spellings: there is no
+    backward compatibility with beta.15's command line.
+    `TestTopLevelIsAgentNeutral` pins the top level.
 
 ## Risks
 

@@ -37,7 +37,7 @@ func newRunCmd() *cobra.Command {
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(rf.fallback) > 0 {
-				return fmt.Errorf("--fallback is for agent wrappers (sandbox-cli claude --fallback codex …): run has no agent to fall back from")
+				return fmt.Errorf("--fallback is for agents (sandbox-cli agent claude --fallback codex …): run has no agent to fall back from")
 			}
 			code, err := execute(cmd.Context(), rf, runSpec{argv: args})
 			if err != nil {
@@ -53,7 +53,7 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
-// newAgentCmd is a wrapper: `sandbox-cli claude [sandbox flags] [--] [claude args]`.
+// newAgentCmd is a wrapper: `sandbox-cli agent claude [sandbox flags] [--] [claude args]`.
 // Leading recognised sandbox flags are consumed; everything else, from the first
 // argument that is not one (or after "--"), is the agent's — so agent flags never
 // collide with the CLI's.
@@ -87,7 +87,7 @@ func newAgentCmd(d agents.Descriptor) *cobra.Command {
 		rf := &runFlags{}
 		fc := &cobra.Command{}
 		rf.register(fc)
-		fmt.Fprintf(cmd.OutOrStdout(), "%s\n\nUsage: sandbox-cli %s [sandbox-flags] [--] [%s-args...]\n\n"+
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n\nUsage: sandbox-cli agent %s [sandbox-flags] [--] [%s-args...]\n\n"+
 			"Leading sandbox flags are consumed; everything after them, or after --, goes to %s.\n\nSandbox flags:\n%s",
 			cmd.Short, d.Name, d.Name, d.Name, fc.Flags().FlagUsages())
 	})

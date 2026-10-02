@@ -15,15 +15,13 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-
-	"github.com/Amitgb14/sandbox-cli/internal/agents"
 )
 
 // NewRootCmd assembles the command tree.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "sandbox-cli",
-		Short:         "Run AI coding agents inside a disposable, isolated sandbox",
+		Short:         "Isolated microVM sandboxes: run any command on your Mac, a Linux machine you control, or the cloud",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -32,12 +30,7 @@ func NewRootCmd() *cobra.Command {
 		newLogsCmd(), newKillCmd(), newBringBackCmd(), newDoctorCmd(), newTunnelCmd(),
 	)
 	root.AddCommand(newSuspendCmds()...)
-	root.AddCommand(newFleetCmd())
-	root.AddCommand(newUsageCmd())
-	for _, name := range agents.InteractiveNames() {
-		d, _ := agents.LookupInteractive(name)
-		root.AddCommand(newAgentCmd(d))
-	}
+	root.AddCommand(newAgentGroupCmd())
 	return root
 }
 

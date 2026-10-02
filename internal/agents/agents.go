@@ -2,7 +2,7 @@
 // as data rather than as code duplicated per subcommand.
 //
 // Each agent needs the same four things known in two different places: the
-// interactive `sandbox-cli claude` / `sandbox-cli codex` wrappers, and the
+// interactive `sandbox-cli agent claude` / `sandbox-cli agent codex` wrappers, and the
 // headless fleet runner that launches many agents at once. Keeping that
 // knowledge in one table is what stops the two paths from drifting — a fleet run
 // must forward the same environment and persist the same login as the wrapper,

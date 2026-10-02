@@ -1,7 +1,8 @@
 # sandbox-cli
 
-Isolated microVM sandboxes for AI coding agents and any command — on your Mac,
-on a Linux machine you control, or in the cloud, behind one API.
+Isolated microVM sandboxes for any command — on your Mac, on a Linux machine you
+control, or in the cloud, behind one API. Coding agents are a layer on top
+(`sandbox-cli agent`), not a requirement.
 
 Every sandbox is a VM with its own kernel. Your repository goes in as a git
 bundle and the agent's work comes back as one, into `refs/sandbox/<name>`, for
@@ -29,8 +30,7 @@ enforced outside the guest where the agent cannot reach it.
 | **Self-hosted** | a Linux machine with KVM | Firecracker microVMs, egress enforced on the host | [docs/self-hosting.md](docs/self-hosting.md) |
 | **Cloud** | hosted | the same as self-hosted | (coming) |
 
-`sandboxd` serves the API on each machine. The CLI, the agent wrappers and the
-SDKs are clients; they cannot tell which of the three they are talking to,
+`sandboxd` serves the API on each machine. The CLI and the SDKs are clients; they cannot tell which of the three they are talking to,
 beyond what `sandbox-cli doctor` reports.
 
 ## Use it
@@ -40,30 +40,42 @@ sandbox-cli context add box https://sandbox.example.internal:7443 --token-file ~
 sandbox-cli context use box          # or stay on "local"
 
 cd ~/projects/myapp
-sandbox-cli claude                   # Claude Code in a fresh VM, on a clone of this repo
-sandbox-cli run -- npm test          # any command; its exit code is yours
+sandbox-cli run -- npm test          # a fresh VM on a clone of this repo; its exit code is yours
 sandbox-cli run --network none -- make
-sandbox-cli codex --detach -- exec "fix the failing test"
+sandbox-cli run --keep --name dev -- bash
 sandbox-cli list · logs ID · attach ID · kill ID · bring-back ID
+sandbox-cli snapshot · suspend · resume · tunnel
 ```
 
-When a run ends, new commits — including anything the agent left uncommitted —
-are fetched into `refs/sandbox/<name>`. Your branches are never touched:
+When a run ends, new commits — including anything left uncommitted — are
+fetched into `refs/sandbox/<name>`. Your branches are never touched:
 
 ```sh
 git log -p HEAD..refs/sandbox/sbx_…
 git merge refs/sandbox/sbx_…
 ```
 
-Agents with wrappers: claude, codex, gemini, opencode, droid (these also run
-headless), and aider, amp, cline, continue, copilot, crush, cursor, goose,
-openhands and qwen. A wrapper consumes its leading sandbox flags and passes
-everything else to the agent: `sandbox-cli claude --network none --resume`.
+## Coding agents
+
+`sandbox-cli agent <name>` is `run` with a coding agent's conveniences on top:
+its login is restored into the sandbox and saved again afterwards, and its own
+environment variables are forwarded when set.
+
+```sh
+sandbox-cli agent ls                                  # the agents, and whose login is saved
+sandbox-cli agent claude                              # Claude Code in a fresh VM
+sandbox-cli agent claude --network none -- --resume   # sandbox flags first, then the agent's
+sandbox-cli agent codex --detach -- exec "fix the failing test"
+```
+
+Agents: claude, codex, gemini, opencode and droid, which can also run
+unattended, and aider, amp, cline, continue, copilot, crush, cursor, goose,
+openhands and qwen.
 
 When a provider is down, a run can fall through to another agent:
 
 ```sh
-sandbox-cli claude --fallback codex -p "fix the failing test"
+sandbox-cli agent claude --fallback codex -p "fix the failing test"
 ```
 
 Each provider is probed before a sandbox is made for it. A run that fails
@@ -74,9 +86,9 @@ resumed conversation. A run that changed files is never retried. Put
 the default; a project's `.sandbox.yaml` cannot set it.
 
 ```sh
-sandbox-cli fleet run -f fleet.yaml  # one agent per branch, in parallel sandboxes
-sandbox-cli fleet status
-sandbox-cli fleet land --all         # merge what verified
+sandbox-cli agent fleet run -f fleet.yaml  # one agent per branch, in parallel sandboxes
+sandbox-cli agent fleet status
+sandbox-cli agent fleet land --all         # merge what verified
 ```
 
 ## Build
