@@ -8,6 +8,51 @@ the audits — none is speculative.
 Ordered by what I would do next, not by severity alone: an item that is cheap and
 self-contained beats one that is severe but blocked on a decision.
 
+## In the rewrite
+
+The items below were found in beta.15's container design. On the `rewrite`
+branch the boundary is a VM, the host mounts nothing a guest wrote, and work
+comes back as a verified git bundle. Where each item stands there:
+
+| Item | In the rewrite |
+|---|---|
+| 1. Egress by IP | The allowlist is by name (`internal/egressproxy`), enforced on the host, under a root sandboxd (`--network`). Unprivileged, a sandbox has no network at all. |
+| 2. Raw credentials in the agent | **Unchanged.** A secret reaches the guest's environment by name and the agent can read its value. The mitigations listed there still apply. |
+| 3. `.git/config` and hooks | **Obsolete.** The host never mounts the workspace. A run's commits come back as a bundle that is verified and fetched through `githard` into `refs/sandbox/…`, so no hook or config the agent wrote runs on the host. |
+| 4. Sandboxes see each other | **Obsolete.** Each sandbox is its own VM with its own network device, or with none at all. |
+| 5. `host.docker.internal` | **Obsolete.** No such name, and nothing on the host is listening for the guest. |
+| 6. seccomp and limits | **Obsolete as stated.** The boundary is the hypervisor. Memory, CPUs and disk are bounded by sandboxd's policy. |
+| 7. Denial logging on macOS | Waits on the macOS backend's real-runtime run (end-to-end row 15). |
+| 8. Cross-project persistence | **Narrowed further** (see below). No agent HOME persists. Only named login files cross between runs, and since 2026-10-02 they carry only the login (`agents.FilterAuth`). An agent the image lacks runs from a tools volume that its runs mount read-only. A volume the user mounts writable in several projects is a shared channel by design, as `--cache` was. |
+| 9. Agents downloaded on first run | Pins unchanged. The download now happens once per endpoint, in a sandbox that does nothing else, into a volume that runs cannot write. The registry is still trusted as before. |
+| 10. Prompt in a container label | **Moved, not gone.** There are no labels holding it, but sandboxd's audit log records each process's argv, and an agent's argv carries its prompt. That is item 11. |
+
+## 11. The audit log keeps every argv, prompts included — **open, needs a decision**
+
+**Severity: low to medium. Effort: small once decided.**
+
+The rewrite's audit log (`<state-dir>/audit/events.jsonl`, `0600`, rotated) records
+`process.started` with the full argv, and `GET /v1/sandboxes/{ref}/events`
+returns it to any client holding the API token. An agent run's argv carries the
+prompt (`claude -p "<prompt>"`). A routed run's prompt also carries the handoff
+briefing, which quotes the previous agent's conversation.
+
+Rule 6 holds: a brokered secret's value is never in an argv. The concern is item
+10's, with a longer life. A token pasted into a prompt, or typed into
+`sandbox-cli run -- curl -H "Authorization: …"`, is kept for as long as the log
+is. That is longer than the sandbox, by design.
+
+Options, as alternatives:
+
+- **Record the argv, and say so** in `docs/api/v1.md` and the self-hosting
+  guide. An audit log that cannot say what ran is weaker, and the operator owns
+  the file.
+- **Record `argv[0]`, the argument count, and a hash of the rest.** This says
+  what ran and lets a known command be matched later. The text itself is never
+  kept.
+- **Let the client mark arguments as private** (`RunRequest.Redact: [i…]`), and
+  have the CLI mark the prompt. Exact, but a client that forgets keeps the text.
+
 ---
 
 ## 1. Egress matches resolved IPs, not names — **DONE**
