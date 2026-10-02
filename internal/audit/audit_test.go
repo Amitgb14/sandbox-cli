@@ -64,7 +64,7 @@ func TestReadAcrossGenerations(t *testing.T) {
 	if err := os.Rename(path, generationPath(path, 1)); err != nil {
 		t.Fatal(err)
 	}
-	l.Record(api.Event{Type: "b", Sandbox: "sbx_1", Argv: []string{strings.Repeat("x", 2<<20)}})
+	l.Record(api.Event{Type: "b", Sandbox: "sbx_1", Program: strings.Repeat("x", 2<<20)})
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	f.WriteString("not json\n")
 	f.Close()

@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -81,6 +82,7 @@ func Run(t *testing.T, c *api.Client) {
 		{"ATunnelReachesAGuestPort", testTunnel},
 		{"LabelsAreKeptAndFilterTheListing", testLabels},
 		{"TheAuditLogRecordsWhatHappened", testAudit},
+		{"TheAuditLogNeverKeepsAProcesssArguments", testAuditArgs},
 		{"AVolumeOutlivesItsSandbox", testVolumes},
 		{"VolumeMountsAreChecked", testVolumeRefusals},
 		{"AVolumeHasOneWriterOrManyReaders", testVolumeSharing},
@@ -915,6 +917,38 @@ func testLabels(t *testing.T, e *env) {
 // The audit log says what a sandbox was asked to do and how it ended — with
 // environment names, never values — and still answers by id once the sandbox
 // is gone.
+// A process is audited by its program, its argument count and a hash of its
+// arguments. Their text is never kept: an agent's arguments are its prompt, a
+// command line is where a token gets typed, and the log outlives the sandbox.
+// The hash is reproducible from the arguments, so a known command can be
+// matched against the log.
+func testAuditArgs(t *testing.T, e *env) {
+	if !e.caps.Has(api.CapAudit) {
+		t.Skip("endpoint keeps no audit log (capability audit)")
+	}
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	const pasted = "conformance-pasted-token-91c2"
+	e.run(t, sb.ID, api.RunRequest{Argv: []string{"echo", "-n", pasted}})
+	evs, err := e.c.Events(ctxT(t), sb.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(evs)
+	if strings.Contains(string(raw), pasted) {
+		t.Fatalf("an argument is in the audit log: %s", raw)
+	}
+	h := sha256.Sum256([]byte("-n\x00" + pasted + "\x00"))
+	for _, ev := range evs.Events {
+		if ev.Type == api.EventProcessStarted && ev.Program == "echo" {
+			if ev.ArgCount != 2 || ev.ArgsSHA256 != hex.EncodeToString(h[:]) {
+				t.Errorf("process.started %+v, want 2 args and sha256 %x", ev, h)
+			}
+			return
+		}
+	}
+	t.Errorf("no process.started for echo in %s", raw)
+}
+
 func testAudit(t *testing.T, e *env) {
 	if !e.caps.Has(api.CapAudit) {
 		t.Skip("endpoint keeps no audit log (capability audit)")
@@ -965,7 +999,7 @@ func testAudit(t *testing.T, e *env) {
 	if !ok || created.Labels["suite"] != "audit" || !contains(created.EnvNames, "SUITE_SECRET") {
 		t.Errorf("created: %+v", created)
 	}
-	if st := seen[api.EventProcessStarted]; len(st.Argv) != 1 || st.Argv[0] != "false" {
+	if st := seen[api.EventProcessStarted]; st.Program != "false" || st.ArgCount != 0 || st.ArgsSHA256 != "" {
 		t.Errorf("process.started: %+v", st)
 	}
 	if ex := seen[api.EventProcessExited]; ex.ExitCode == nil || *ex.ExitCode != 1 {

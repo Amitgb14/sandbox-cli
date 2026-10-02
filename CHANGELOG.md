@@ -49,12 +49,14 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   because both are namespaces of their own.
 - **The audit log moves to `sandboxd`.** The server records every
   sandbox's events: create with its policy and environment **names**, every
-  process with its argv and exit code, files, network changes, and how it
+  process with its program, argument count and exit code, files, network changes, and how it
   ended. `sandbox-cli events <id>` reads them, as does
   `GET /v1/sandboxes/{ref}/events`. The client-side
   `~/.config/sandbox/audit/sessions.jsonl` is no longer written. The log
   defaults to `<state-dir>/audit/events.jsonl`; `sandboxd --audit-log none`
-  turns it off.
+  turns it off. A process's arguments are never recorded, since an agent's
+  arguments are its prompt. The log keeps a SHA-256 of them instead, which a
+  known command can be matched against (`docs/api/v1.md`).
 - **Labels.** `--label key=value` on `run` and every agent command, and
   `list --label` to filter. Agent runs, routing attempts and fleet tasks are
   labelled automatically (`agent`, `route.id`, `route.attempt`, `route.from`,

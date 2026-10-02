@@ -20,6 +20,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -668,7 +670,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 	rec.procs[pr.info.PID] = pr
 	pid, started := pr.info.PID, pr.info.StartedAt
 	rec.mu.Unlock()
-	s.event(api.Event{Type: api.EventProcessStarted, Sandbox: id, PID: pid, Argv: ps.Argv, Cwd: ps.Cwd, EnvNames: sortedKeys(extra)})
+	s.event(processStarted(id, pid, ps, sortedKeys(extra)))
 
 	go func() {
 		code := proc.Wait()
@@ -1061,4 +1063,23 @@ func containsString(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// processStarted is the audit record of a process: what ran and with how many
+// arguments, never the arguments themselves (api.Event says why).
+func processStarted(id string, pid int, ps backend.ProcSpec, envNames []string) api.Event {
+	ev := api.Event{Type: api.EventProcessStarted, Sandbox: id, PID: pid, Cwd: ps.Cwd, EnvNames: envNames}
+	if len(ps.Argv) == 0 {
+		return ev
+	}
+	ev.Program = ps.Argv[0]
+	if args := ps.Argv[1:]; len(args) > 0 {
+		h := sha256.New()
+		for _, a := range args {
+			h.Write([]byte(a))
+			h.Write([]byte{0})
+		}
+		ev.ArgCount, ev.ArgsSHA256 = len(args), hex.EncodeToString(h.Sum(nil))
+	}
+	return ev
 }

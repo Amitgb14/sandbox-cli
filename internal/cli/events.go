@@ -94,7 +94,10 @@ func eventDetail(ev api.Event) string {
 		}
 	case api.EventProcessStarted:
 		add("pid %d", ev.PID)
-		add("%s", termsafe.Clean(strings.Join(ev.Argv, " ")))
+		add("%s", termsafe.Clean(ev.Program))
+		if ev.ArgCount > 0 {
+			add("%d args sha256 %.12s", ev.ArgCount, ev.ArgsSHA256)
+		}
 	case api.EventProcessExited:
 		if ev.ExitCode != nil {
 			add("pid %d exit %d after %s", ev.PID, *ev.ExitCode, (time.Duration(ev.DurationMS) * time.Millisecond).Round(time.Millisecond))

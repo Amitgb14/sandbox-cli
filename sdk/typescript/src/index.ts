@@ -77,7 +77,10 @@ export interface AuditEvent {
   bind?: string;
   snapshot?: string;
   pid?: number;
-  argv?: string[];
+  /** process.started: the program, how many arguments, and SHA-256 over them (each followed by NUL). Never their text. */
+  program?: string;
+  arg_count?: number;
+  args_sha256?: string;
   cwd?: string;
   exit_code?: number;
   duration_ms?: number;

@@ -21,7 +21,8 @@ function detail(e: AuditEvent): string {
       if (e.volumes?.length) parts.push(`volumes ${e.volumes.map((v) => `${v.name}:${v.path}`).join(", ")}`);
       break;
     case "process.started":
-      parts.push(`pid ${e.pid}`, (e.argv ?? []).join(" "));
+      parts.push(`pid ${e.pid}`, e.program ?? "");
+      if (e.arg_count) parts.push(`${e.arg_count} args sha256 ${e.args_sha256?.slice(0, 12)}`);
       break;
     case "process.exited":
       parts.push(`pid ${e.pid} exit ${e.exit_code} after ${formatDuration(e.duration_ms ?? 0)}`);

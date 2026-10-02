@@ -25,9 +25,19 @@ comes back as a verified git bundle. Where each item stands there:
 | 7. Denial logging on macOS | Waits on the macOS backend's real-runtime run (end-to-end row 15). |
 | 8. Cross-project persistence | **Narrowed further** (see below). No agent HOME persists. Only named login files cross between runs, and since 2026-10-02 they carry only the login (`agents.FilterAuth`). An agent the image lacks runs from a tools volume that its runs mount read-only. A volume the user mounts writable in several projects is a shared channel by design, as `--cache` was. |
 | 9. Agents downloaded on first run | Pins unchanged. The download now happens once per endpoint, in a sandbox that does nothing else, into a volume that runs cannot write. The registry is still trusted as before. |
-| 10. Prompt in a container label | **Moved, not gone.** There are no labels holding it, but sandboxd's audit log records each process's argv, and an agent's argv carries its prompt. That is item 11. |
+| 10. Prompt in a container label | **Closed in the rewrite.** No label holds it. The audit log, where it moved, now keeps a process's program, argument count and a hash, never the arguments (item 11). |
 
-## 11. The audit log keeps every argv, prompts included — **open, needs a decision**
+## 11. The audit log keeps every argv, prompts included — **DONE**
+
+*Decided 2026-10-02: the second option below.* `process.started` carries
+`program`, `arg_count` and `args_sha256` (SHA-256 over the arguments, each
+followed by NUL), and `api.Event` has no field that could hold an argument.
+Pinned by the conformance test `TheAuditLogNeverKeepsAProcesssArguments`, which
+fails if any argument's text reaches the log. The process listing of a live
+sandbox still shows its argv: that lives and dies with the sandbox, and it is
+how `attach` and Studio say what a process is.
+
+<details><summary>As it was recorded</summary>
 
 **Severity: low to medium. Effort: small once decided.**
 
@@ -52,6 +62,8 @@ Options, as alternatives:
   kept.
 - **Let the client mark arguments as private** (`RunRequest.Redact: [i…]`), and
   have the CLI mark the prompt. Exact, but a client that forgets keeps the text.
+
+</details>
 
 ---
 

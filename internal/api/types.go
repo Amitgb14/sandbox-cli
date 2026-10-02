@@ -230,11 +230,20 @@ type Event struct {
 	Snapshot string         `json:"snapshot,omitempty"`
 	Volumes  []VolumeMount  `json:"volumes,omitempty"`
 
-	PID        int      `json:"pid,omitempty"`
-	Argv       []string `json:"argv,omitempty"`
-	Cwd        string   `json:"cwd,omitempty"`
-	ExitCode   *int     `json:"exit_code,omitempty"`
-	DurationMS int64    `json:"duration_ms,omitempty"`
+	PID int `json:"pid,omitempty"`
+	// A process is recorded by its program, its argument count and a hash
+	// of its arguments — never their text. An agent's arguments carry its
+	// prompt, and a prompt or a command line is where a token gets pasted;
+	// the log outlives the sandbox by design. The hash is SHA-256 over the
+	// arguments after the program, each followed by a NUL byte (an argument
+	// cannot hold one), so `printf '%s\0' ARGS… | sha256sum` matches a known
+	// command without the log having kept it.
+	Program    string `json:"program,omitempty"`
+	ArgCount   int    `json:"arg_count,omitempty"`
+	ArgsSHA256 string `json:"args_sha256,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
 
 	Path  string `json:"path,omitempty"`
 	Bytes int64  `json:"bytes,omitempty"`

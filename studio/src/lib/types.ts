@@ -71,7 +71,10 @@ export interface AuditEvent {
   snapshot?: string;
   volumes?: VolumeMount[];
   pid?: number;
-  argv?: string[];
+  /** A process is audited by program, argument count and a hash of the arguments, never their text. */
+  program?: string;
+  arg_count?: number;
+  args_sha256?: string;
   cwd?: string;
   exit_code?: number;
   duration_ms?: number;

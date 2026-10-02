@@ -50,7 +50,7 @@ func TestPrintEventsIsTerminalSafe(t *testing.T) {
 	var out bytes.Buffer
 	err := printEvents(&out, api.EventList{Events: []api.Event{
 		{Type: api.EventSandboxCreated, Image: "img", EnvNames: []string{"TOKEN"}, Labels: map[string]string{"k": "v"}},
-		{Type: api.EventProcessStarted, PID: 1, Argv: []string{"echo", "\x1b]52;c;bad\x07"}},
+		{Type: api.EventProcessStarted, PID: 1, Program: "\x1b]52;c;bad\x07echo", ArgCount: 2, ArgsSHA256: "0123456789abcdef"},
 		{Type: api.EventProcessExited, PID: 1, ExitCode: &code, DurationMS: 1500},
 		{Type: api.EventFileWritten, Path: "/tmp/\x1b[2Jx", Bytes: 3},
 	}})
@@ -61,7 +61,7 @@ func TestPrintEventsIsTerminalSafe(t *testing.T) {
 	if strings.ContainsRune(s, 0x1b) || strings.ContainsRune(s, 0x07) {
 		t.Errorf("an escape reached the output: %q", s)
 	}
-	for _, want := range []string{"env TOKEN", "labels k=v", "pid 1 exit 2 after 1.5s", "3 bytes"} {
+	for _, want := range []string{"env TOKEN", "labels k=v", "pid 1 exit 2 after 1.5s", "3 bytes", "2 args sha256 0123456789ab"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in:\n%s", want, s)
 		}
