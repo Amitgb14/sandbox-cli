@@ -723,12 +723,16 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     refused. That run also found an older bug: an uninstall meeting a file it
     could not remove (root's, in `/usr/local/bin`) aborted under `set -e`
     before `--purge` ran.
-  - **Open: the client config schema still accepts beta.15's docker keys**
-    (`security`, `cache`, `user`, `mounts`, `ports`, `workdir`, `snapshot`, …)
-    and ignores them silently, since nothing reads them. Silently ignoring a
-    security setting someone wrote is the wrong failure: they should be
-    dropped and an unknown key refused, naming what replaced it. Not done with
-    the packaging, because it changes `policy` and its trust tests.
+  - **Done: config keys that do nothing are refused.** The schema still
+    parses beta.15's keys, because the profiles and trust tests are written
+    against them. But every config file a run consults (user, project, and
+    `--config`) is checked once it has loaded, and a key the client does not
+    read is refused, naming what replaced it (`policy.CheckLiveKeys`). A typo
+    is refused with it. The check runs after the trust layer, so a project
+    key that would widen the boundary is still refused as that. It runs
+    before sandboxd is contacted, so a mistake in your files does not wait
+    behind a server. The config beta.15's installer wrote (`profile`,
+    `network.mode: default`) passes.
 
   - **Fixed while reviewing the web site against the code.**
     - `agent claude` downloaded a self-updating Claude Code at the start of

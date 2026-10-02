@@ -90,6 +90,10 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   terminal, watch output, files and events, bring work back, review the diff
   of anything under `refs/sandbox/`, and land a fleet. `sandbox-studio-api`,
   `studio.sh`, the Studio docker images and the compose file are gone.
+- **A config key this version does not read is refused,** naming what
+  replaced it (`security:` → the VM boundary and sandboxd's policy, `mounts:` →
+  `--bind` or a volume, `cache:` → a volume, …), and so is a typo. A beta.15
+  config that sets only `profile` and `network.mode` still loads.
 - **Dropped:** `worktree` (every sandbox is already a clone; fleets are one
   agent per branch) and `context list` (an agent's conversations stay in its
   sandbox now; only its login is carried out).

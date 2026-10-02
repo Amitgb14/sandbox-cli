@@ -13,7 +13,6 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/handoff"
-	"github.com/Amitgb14/sandbox-cli/internal/policy"
 	"github.com/Amitgb14/sandbox-cli/internal/routing"
 	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
@@ -58,7 +57,7 @@ func configuredRouting(rf *runFlags, primary string) (fallbacks []string, provid
 	if project == "" {
 		project, _ = os.Getwd()
 	}
-	cfg, err := policy.LoadProfile(project, rf.configPath, rf.profile)
+	cfg, err := loadConfig(project, rf.configPath, rf.profile)
 	if err != nil {
 		return nil, nil, err
 	}

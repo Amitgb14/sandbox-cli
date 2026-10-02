@@ -134,6 +134,15 @@ var execute = runSandbox
 // login, attach, and on the way out save the login, bring work back and clean
 // up. It returns the command's exit code.
 func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
+	project := rf.project
+	if project == "" {
+		project, _ = os.Getwd()
+	}
+	// The configuration first: a mistake in your own files is yours to fix
+	// whether or not a sandboxd is answering, and should not wait behind one.
+	if _, err := loadConfig(project, rf.configPath, rf.profile); err != nil {
+		return 1, err
+	}
 	c, ctxName, err := newClient(rf.context)
 	if err != nil {
 		return 1, err
@@ -161,10 +170,6 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		req.Volumes = append(req.Volumes, m)
 	}
 	req.Network = buildNetwork(rf, caps)
-	project := rf.project
-	if project == "" {
-		project, _ = os.Getwd()
-	}
 	if err := applyConfig(rf, project, &req, caps); err != nil {
 		return 1, err
 	}

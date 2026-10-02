@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
-	"github.com/Amitgb14/sandbox-cli/internal/policy"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
@@ -53,7 +52,7 @@ func newFleetRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg, err := policy.LoadProfile(repo, "", profile)
+			cfg, err := loadConfig(repo, "", profile)
 			if err != nil {
 				return err
 			}
