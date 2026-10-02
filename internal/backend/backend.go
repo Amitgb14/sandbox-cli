@@ -35,6 +35,15 @@ type Spec struct {
 	// IdleTimeoutSecs is enforced by the server, not the backend; carried here
 	// so the resolved spec is the whole decision.
 	IdleTimeoutSecs int
+	// Bind, when set, is a host directory — already resolved and checked by
+	// hostpath — to mount at /workspace.
+	Bind *Bind
+}
+
+// Bind is a host directory mounted at /workspace.
+type Bind struct {
+	HostPath string // absolute, symlinks resolved, refused if /, home or an ancestor
+	ReadOnly bool
 }
 
 // ProcSpec is one process to start inside a sandbox. Env is merged over the

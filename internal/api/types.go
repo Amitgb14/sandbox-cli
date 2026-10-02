@@ -106,6 +106,17 @@ type CreateSandboxRequest struct {
 	// IdleTimeoutSecs terminates the sandbox after this long with no request
 	// touching it and no process running. 0 takes the server's default.
 	IdleTimeoutSecs int `json:"idle_timeout_secs,omitempty"`
+	// Bind mounts a host directory at /workspace instead of starting empty.
+	// Local endpoints only (capability bind_workspace, and the operator's
+	// allow_bind); the host path is refused if it is /, the home directory or
+	// an ancestor of it.
+	Bind *Bind `json:"bind,omitempty"`
+}
+
+// Bind is a host directory mounted at /workspace.
+type Bind struct {
+	HostPath string `json:"host_path"`
+	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
 // UpdateSandboxRequest changes a running sandbox.
@@ -128,7 +139,8 @@ type Sandbox struct {
 	Network   NetworkPolicy `json:"network"`
 	CreatedAt time.Time     `json:"created_at"`
 	// IdleTimeoutSecs is in force for this sandbox; 0 means it never idles out.
-	IdleTimeoutSecs int `json:"idle_timeout_secs"`
+	IdleTimeoutSecs int   `json:"idle_timeout_secs"`
+	Bind            *Bind `json:"bind,omitempty"`
 }
 
 // SandboxList is the body of GET /v1/sandboxes.

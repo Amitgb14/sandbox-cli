@@ -473,9 +473,38 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     - the full networked suite outside a namespace.
 
     Commands are in `docs/testing/end-to-end.md`.
-- **M6 — local Mac.** `backend/macos` and `sandboxd` under launchd on a unix
-  socket. Bind (option) and clone. Conformance green, minus the capabilities
-  reported off.
+- **M6 — local Mac.** *Written and tested on Linux; not yet run on a Mac.*
+  - **`backend/macos`** drives the `container` CLI through `os/exec`.
+    `BuildRunArgs` is pure, with a golden file:
+    - the guest agent is mounted read-only from beside sandboxd, so any image
+      works and the agent matches the server;
+    - `--network none` unless open egress was asked for;
+    - `--` before the image.
+
+    Each request is one `container exec --interactive … sandbox-guestd serve
+    --stdio`, the same protocol as on Linux. Closing the connection ends the
+    exec, and the guest agent then kills the process it was running.
+    Leftovers carrying the backend's label are removed at start.
+  - **Capabilities:** egress `none` and `open` only, no allowlist until M3
+    measures whether one can be enforced here. Also bind and workspace bundles;
+    no live network change. `spec.FitTo` keeps an operator's `ceiling: open`
+    (the only thing this backend can filter to) and turns an allowlist default
+    into `none`. `BuildRunArgs` refuses an allowlist outright, so it can never
+    be rendered as an open sandbox.
+  - **Bind.** `bind: {host_path, read_only}` on create is honoured only with
+    the operator's `allow_bind` / `--allow-bind` and a backend that can mount.
+    The host path goes through `hostpath.ResolveWorkspace`, the
+    non-overridable refusals of `/`, home and its ancestors.
+  - The guest agent gains `idle`, to be a sandbox's main process.
+  - Also: `sandboxd --backend macos`, a launchd agent, `docs/local-macos.md`,
+    and the M3 macOS script now records each runtime behaviour this backend
+    relies on.
+  - **Verified on Linux:** the golden argv, plus the whole conformance suite
+    through the real driver against a fake `container` that runs the real
+    guest agent in a user-namespace chroot of alpine (all pass; 4 skips that
+    say why: no allowlist, and no git in alpine).
+  - **Not verified:** the runtime itself. `scripts/m3/macos/run-all.sh`, then
+    the conformance suite against `sandboxd --backend macos`, is the hand-over.
 - **M7 — the CLI as a client, and parity.**
   - Contexts (`sandbox-cli context use local|<host>|cloud`).
   - The fifteen agent wrappers, prod profile and persisted auth through the API.

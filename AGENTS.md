@@ -87,6 +87,7 @@ internal/
   vsock/        guest vsock listener, host dial through the VMM's bridge
   image/        OCI pull, safe unpack (paths resolved inside the root), ext4 root disks
 packaging/systemd/      sandboxd unit and an example operator policy (docs/self-hosting.md)
+packaging/launchd/      the macOS launch agent (docs/local-macos.md)
   workspace/    clone-in, bring-back
   state/ cli/ version/
 ```

@@ -30,7 +30,7 @@ try() {
   return $rc
 }
 cleanup() {
-  container rm -f m3mem m3lbl m3own >/dev/null 2>&1 || true
+  container rm -f m3mem m3lbl m3own m3exec >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -119,6 +119,14 @@ try "labels: runtime stop" container system stop
 try "labels: runtime start" container system start
 try "labels: still listed after restart" sh -c 'container ls --all --format json | grep -o "m3lbl" | head -1'
 try "labels: state after restart" sh -c 'container ls --all | grep m3lbl'
+
+say "what the macos backend relies on"
+# The backend renders exactly these; each must work, or it is a backend change.
+try "backend: --network none (a sandbox with no network)" container run --rm --network none "$IMG" sh -c 'wget -q -T 3 -O /dev/null https://example.com && echo REACHED || echo no-network'
+try "backend: read-only --mount of a host directory" sh -c "container run --rm --mount type=bind,source=$WORK,target=/.sbx,readonly $IMG sh -c 'ls /.sbx >/dev/null && (touch /.sbx/x 2>/dev/null && echo WRITABLE || echo read-only)'"
+try "backend: --label and the shape of ls --format json" sh -c 'container ls --all --format json | head -c 1500'
+container run -d --name m3exec "$IMG" sleep 300 >/dev/null 2>&1
+try "backend: exec --interactive (long flag)" sh -c 'echo hi | container exec --interactive m3exec cat'
 
 say "exec stdio: binary-clean and how fast"
 container run -d --name m3own "$IMG" sleep 900 >/dev/null 2>&1

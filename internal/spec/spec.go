@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/egressproxy"
+	"github.com/Amitgb14/sandbox-cli/internal/hostpath"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
 )
 
@@ -58,6 +60,11 @@ type Policy struct {
 	Limits          api.Limits
 
 	Network NetworkPolicy
+
+	// AllowBind lets a request mount a host directory at /workspace. Off by
+	// default, and only meaningful on a local endpoint, where whoever holds the
+	// socket is the person whose directories they are.
+	AllowBind bool
 }
 
 // NetworkPolicy is the server's egress floor and ceiling.
@@ -123,7 +130,16 @@ func (p Policy) Validate() error {
 func (p Policy) FitTo(caps map[string]bool) (Policy, []string) {
 	var notes []string
 	n := p.Network
-	if !caps[api.CapEgressAllowlist] && api.NetworkRank(n.Ceiling) > api.NetworkRank(api.NetworkNone) {
+	if !caps[api.CapEgressAllowlist] && n.Ceiling == api.NetworkOpen && caps[api.CapEgressOpen] {
+		// Open egress is all this backend can filter to; the operator asked for
+		// it, so it stays, and only an allowlist default — unenforceable here —
+		// falls back to none.
+		if n.Default.Mode == api.NetworkAllowlist {
+			notes = append(notes, "this backend cannot enforce an egress allowlist: the default is none, open is available on request")
+			n.Default = api.NetworkPolicy{Mode: api.NetworkNone}
+		}
+		n.MayAllow = nil
+	} else if !caps[api.CapEgressAllowlist] && api.NetworkRank(n.Ceiling) > api.NetworkRank(api.NetworkNone) {
 		notes = append(notes, "this backend cannot enforce an egress allowlist: sandboxes get no network (mode none)")
 		n.Ceiling = api.NetworkNone
 		n.Default = api.NetworkPolicy{Mode: api.NetworkNone}
@@ -136,6 +152,10 @@ func (p Policy) FitTo(caps map[string]bool) (Policy, []string) {
 		}
 	}
 	p.Network = n
+	if p.AllowBind && !caps[api.CapBindWorkspace] {
+		notes = append(notes, "this backend cannot mount host directories: bind is off")
+		p.AllowBind = false
+	}
 	return p, notes
 }
 
@@ -230,6 +250,22 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 		return backend.Spec{}, err
 	}
 	s.Network = net
+
+	if req.Bind != nil {
+		if !pol.AllowBind {
+			return backend.Spec{}, refused("this server does not mount host directories")
+		}
+		if !filepath.IsAbs(req.Bind.HostPath) {
+			return backend.Spec{}, invalid("bind.host_path must be absolute")
+		}
+		// The non-overridable refusals: never /, never home, never an ancestor
+		// of it — compared by identity, after symlinks are resolved.
+		real, err := hostpath.ResolveWorkspace(req.Bind.HostPath)
+		if err != nil {
+			return backend.Spec{}, refused("bind: %v", err)
+		}
+		s.Bind = &backend.Bind{HostPath: real, ReadOnly: req.Bind.ReadOnly}
+	}
 	return s, nil
 }
 

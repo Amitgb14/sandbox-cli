@@ -11,6 +11,8 @@
 //	                        (the system service) it adds host-enforced egress and,
 //	                        with --jailer, the jailer; unprivileged it serves
 //	                        sandboxes with no network, and says so.
+//	--backend macos         macOS 26+ on arm64: every sandbox a VM of the native
+//	                        `container` runtime. Local, on a unix socket.
 //	--backend fake          in memory, no VMs, isolates nothing: for development
 //	                        and the conformance suite.
 //
@@ -36,6 +38,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
+	"github.com/Amitgb14/sandbox-cli/internal/backend/macos"
 	"github.com/Amitgb14/sandbox-cli/internal/server"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
@@ -60,7 +63,9 @@ func run(args []string) error {
 	tlsCert := fl.String("tls-cert", "", "TLS certificate (PEM); required for a non-loopback address")
 	tlsKey := fl.String("tls-key", "", "TLS private key (PEM)")
 	policyFile := fl.String("policy", "", "operator policy (YAML); default: the built-in policy")
-	backendName := fl.String("backend", "", "firecracker or fake")
+	backendName := fl.String("backend", "", "firecracker, macos or fake")
+	containerBin := fl.String("container", "container", "macos: the container CLI")
+	allowBind := fl.Bool("allow-bind", false, "let requests mount a host directory at /workspace (local endpoints)")
 	stateDir := fl.String("state-dir", defaultStateDir(), "images and per-sandbox state")
 	kernel := fl.String("kernel", "", "firecracker: guest kernel (vmlinux)")
 	firecracker := fl.String("firecracker", "firecracker", "firecracker: the VMM binary")
@@ -92,10 +97,14 @@ func run(args []string) error {
 	if *defaultImage != "" {
 		pol.DefaultImage = *defaultImage
 	}
+	if *allowBind {
+		pol.AllowBind = true
+	}
 
 	be, err := newBackend(*backendName, backendOptions{
 		stateDir: *stateDir, kernel: *kernel, firecracker: *firecracker, jailer: *jailer,
 		agent: *agent, network: *network, logf: logf, insecureRegistries: insecureRegistries,
+		container: *containerBin,
 	})
 	if err != nil {
 		return err
@@ -161,6 +170,7 @@ type backendOptions struct {
 	network                                      bool
 	logf                                         func(string, ...any)
 	insecureRegistries                           []string
+	container                                    string
 }
 
 func defaultStateDir() string {
@@ -180,10 +190,17 @@ func newBackend(name string, o backendOptions) (backend.Backend, error) {
 		return fake.New(api.CapNetworkPolicyUpdate, api.CapEgressAllowlist), nil
 	case "firecracker":
 		return newFirecracker(o)
+	case "macos":
+		agent := o.agent
+		if agent == "" {
+			self, _ := os.Executable()
+			agent = filepath.Join(filepath.Dir(self), "sandbox-guestd")
+		}
+		return macos.New(macos.Config{Container: o.container, Agent: agent, Logf: o.logf})
 	case "":
-		return nil, errors.New("--backend is required: firecracker or fake")
+		return nil, errors.New("--backend is required: firecracker, macos or fake")
 	}
-	return nil, fmt.Errorf("unknown backend %q: want firecracker or fake", name)
+	return nil, fmt.Errorf("unknown backend %q: want firecracker, macos or fake", name)
 }
 
 // readToken reads the token file, refusing one other users can read: a token

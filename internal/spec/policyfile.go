@@ -24,6 +24,7 @@ import (
 type policyFile struct {
 	DefaultImage *string  `yaml:"default_image"`
 	Images       []string `yaml:"images"`
+	AllowBind    *bool    `yaml:"allow_bind"`
 	Defaults     *struct {
 		CPUs            *float64 `yaml:"cpus"`
 		MemoryMB        *int     `yaml:"memory_mb"`
@@ -68,6 +69,7 @@ func LoadPolicy(path string) (Policy, error) {
 	if f.Images != nil {
 		p.Images = f.Images
 	}
+	set(&p.AllowBind, f.AllowBind)
 	if d := f.Defaults; d != nil {
 		set(&p.DefaultCPUs, d.CPUs)
 		set(&p.DefaultMemoryMB, d.MemoryMB)

@@ -231,3 +231,28 @@ network:
 		t.Error("a default above the ceiling was accepted")
 	}
 }
+
+// A bind is the one request field naming a host path, so it gets the
+// non-overridable refusals, and only when the operator allowed binds at all.
+func TestBindIsRefusedUnlessAllowedAndSafe(t *testing.T) {
+	p := DefaultPolicy()
+	dir := t.TempDir()
+	if _, err := Resolve(api.CreateSandboxRequest{Bind: &api.Bind{HostPath: dir}}, p, "sbx_1"); !isRefused(err) {
+		t.Errorf("bind with allow_bind off: %v", err)
+	}
+	p.AllowBind = true
+	s, err := Resolve(api.CreateSandboxRequest{Bind: &api.Bind{HostPath: dir, ReadOnly: true}}, p, "sbx_1")
+	if err != nil || s.Bind == nil || !s.Bind.ReadOnly {
+		t.Fatalf("an ordinary directory: %+v, %v", s.Bind, err)
+	}
+	home, _ := os.UserHomeDir()
+	for name, path := range map[string]string{"root": "/", "home": home, "relative": "rel/dir"} {
+		if _, err := Resolve(api.CreateSandboxRequest{Bind: &api.Bind{HostPath: path}}, p, "sbx_1"); err == nil {
+			t.Errorf("bind of %s (%s) was accepted", name, path)
+		}
+	}
+	// FitTo turns it off where the backend cannot mount.
+	if fitted, _ := p.FitTo(map[string]bool{}); fitted.AllowBind {
+		t.Error("FitTo left bind on for a backend without bind_workspace")
+	}
+}

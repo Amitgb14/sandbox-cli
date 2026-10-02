@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  sandboxd on a Mac: a per-user launch agent serving the local API on a unix
+  socket only its owner can open. Install:
+
+    cp packaging/launchd/dev.sandbox.sandboxd.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandbox.sandboxd.plist
+
+  Needs the `container` CLI and its system service (`container system start`),
+  and sandbox-guestd (linux/arm64) installed beside sandboxd.
+  allow-bind is on because this endpoint is local: whoever can open the socket
+  is the person whose directories they are. The home directory and its
+  ancestors are still refused.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.sandbox.sandboxd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/sandboxd</string>
+    <string>--backend</string><string>macos</string>
+    <string>--allow-bind</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>/tmp/sandboxd.log</string>
+</dict>
+</plist>

@@ -192,6 +192,10 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	if !s.canEnforce(w, bs.Network) {
 		return
 	}
+	if bs.Bind != nil && !s.Backend.Capabilities()[api.CapBindWorkspace] {
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot mount host directories")
+		return
+	}
 
 	// The name is claimed before the backend is asked, under the lock, so two
 	// concurrent creates with one name cannot both pass a check-then-create.
@@ -201,6 +205,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			CPUs: bs.CPUs, MemoryMB: bs.MemoryMB, DiskMB: bs.DiskMB,
 			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: s.now().UTC(),
 			IdleTimeoutSecs: bs.IdleTimeoutSecs,
+			Bind:            apiBind(bs.Bind),
 		},
 		env:        bs.Env,
 		procs:      map[int]*procRecord{},
@@ -853,6 +858,13 @@ func writeBackendErr(w http.ResponseWriter, err error) {
 		// and engine detail that are the operator's to read, not the caller's.
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the backend failed")
 	}
+}
+
+func apiBind(b *backend.Bind) *api.Bind {
+	if b == nil {
+		return nil
+	}
+	return &api.Bind{HostPath: b.HostPath, ReadOnly: b.ReadOnly}
 }
 
 func sortedKeys(m map[string]string) []string {

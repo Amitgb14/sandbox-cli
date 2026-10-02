@@ -5,6 +5,7 @@
 //	sandbox-guestd serve --vsock 5000        answer the host over vsock
 //	sandbox-guestd serve --stdio             answer one request on stdin/stdout
 //	                                         (macOS: one `container exec -i` per request)
+//	sandbox-guestd idle                      stay alive as a sandbox's main process (macOS)
 //	sandbox-guestd version
 //
 // It does what the host asks and nothing on its own initiative: it never dials
@@ -19,6 +20,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/guestproto"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
@@ -38,6 +40,13 @@ func main() {
 		err = serve(os.Args[2:])
 	case "version":
 		fmt.Printf("sandbox-guestd %s (protocol %s)\n", version.Version, guestproto.Version)
+	case "idle":
+		// The main process of a sandbox whose runtime starts its own init (the
+		// macOS backend): it only has to stay alive. Each request is a separate
+		// `serve --stdio` exec.
+		for {
+			time.Sleep(time.Hour)
+		}
 	case "init":
 		err = fmt.Errorf("init runs only as PID 1")
 	default:
@@ -50,7 +59,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: sandbox-guestd init | serve (--vsock PORT | --stdio | --unix PATH) | version")
+	fmt.Fprintln(os.Stderr, "usage: sandbox-guestd init | serve (--vsock PORT | --stdio | --unix PATH) | idle | version")
 	os.Exit(2)
 }
 
