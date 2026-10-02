@@ -16,6 +16,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
+	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // exitError carries a guest exit code out of a command, so the CLI's own exit
@@ -262,7 +263,7 @@ func newBringBackCmd() *cobra.Command {
 		Short: "Fetch a sandbox's commits into refs/sandbox/<name> in the repository it was cloned from",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := loadSession(args[0])
+			s, err := workspace.LoadSession(args[0])
 			if err != nil {
 				return fmt.Errorf("no record of a repository cloned into %s on this machine", args[0])
 			}
@@ -273,7 +274,7 @@ func newBringBackCmd() *cobra.Command {
 			if name == "" {
 				name = s.Sandbox
 			}
-			ref, err := bringBack(cmd.Context(), c, s, name)
+			ref, err := workspace.BringBack(cmd.Context(), c, s, name)
 			if err != nil {
 				return err
 			}

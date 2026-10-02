@@ -13,6 +13,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
+	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // A context is an endpoint the CLI talks to: this machine's sandboxd ("local"),
@@ -29,13 +30,7 @@ type contextFile struct {
 	Contexts map[string]endpointContext `json:"contexts"`
 }
 
-func configDir() string {
-	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
-		return filepath.Join(d, "sandbox")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "sandbox")
-}
+func configDir() string { return workspace.ConfigDir() }
 
 func contextsPath() string { return filepath.Join(configDir(), "contexts.json") }
 

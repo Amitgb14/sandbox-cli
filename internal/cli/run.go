@@ -2,10 +2,8 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,6 +16,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
+	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // runFlags are the sandbox options shared by `run` and every agent wrapper.
@@ -135,15 +134,15 @@ func execute(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		}
 	}()
 
-	var sess *session
+	var sess *workspace.Session
 	if rf.bind == "" && !rf.noWorkspace && rf.fromSnapshot == "" {
-		if repo := repoRoot(project); repo != "" {
-			base, err := cloneIn(ctx, c, sb.ID, repo)
+		if repo := workspace.RepoRoot(project); repo != "" {
+			base, err := workspace.CloneIn(ctx, c, sb.ID, repo)
 			if err != nil {
 				return 1, err
 			}
-			sess = &session{Sandbox: sb.ID, Context: ctxName, Repo: repo, Base: base, Branch: sandboxBranch}
-			_ = sess.save()
+			sess = &workspace.Session{Sandbox: sb.ID, Context: ctxName, Repo: repo, Base: base, Branch: workspace.SandboxBranch}
+			_ = sess.Save()
 		} else {
 			fmt.Fprintln(os.Stderr, "sandbox-cli: not in a git repository; /workspace starts empty (use --bind on a local endpoint to mount a directory)")
 		}
@@ -151,7 +150,7 @@ func execute(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 
 	persist := rs.agent != nil && !rf.noPersistAuth && len(rs.agent.AuthPaths) > 0
 	if persist {
-		restoreAuth(ctx, c, sb.ID, *rs.agent)
+		workspace.RestoreLogin(ctx, c, sb.ID, *rs.agent)
 	}
 
 	tty := !rf.detach && isTerminal(os.Stdin) && isTerminal(os.Stdout)
@@ -173,14 +172,14 @@ func execute(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	}
 
 	if persist {
-		saveAuth(context.Background(), c, sb.ID, *rs.agent)
+		workspace.SaveLogin(context.Background(), c, sb.ID, *rs.agent)
 	}
 	if sess != nil && !rf.noBringBack {
 		name := sb.ID
 		if rf.name != "" {
 			name = rf.name
 		}
-		ref, err := bringBack(context.Background(), c, *sess, name)
+		ref, err := workspace.BringBack(context.Background(), c, *sess, name)
 		switch {
 		case err != nil:
 			keep = true
@@ -286,63 +285,4 @@ func buildNetwork(rf *runFlags, caps api.Capabilities) *api.NetworkPolicy {
 		p.Allow = append(append([]string{}, caps.Network.Default.Allow...), rf.allow...)
 	}
 	return p
-}
-
-// The agent's login lives in ~/.config/sandbox/agents/<agent>/ on the host,
-// one file per AuthPath, 0600. It is copied in when a run starts and back out
-// when it ends — the host never mounts anything into the guest for it.
-
-func authDir(d agents.Descriptor) string { return filepath.Join(configDir(), "agents", d.PersistDir) }
-
-const guestHome = "/sandbox/home"
-
-func restoreAuth(ctx context.Context, c *api.Client, sandbox string, d agents.Descriptor) {
-	for _, rel := range d.AuthPaths {
-		data, err := os.ReadFile(filepath.Join(authDir(d), filepath.FromSlash(rel)))
-		if err != nil {
-			continue
-		}
-		_ = c.WriteFile(ctx, sandbox, guestHome+"/"+rel, data)
-	}
-}
-
-func saveAuth(ctx context.Context, c *api.Client, sandbox string, d agents.Descriptor) {
-	for _, rel := range d.AuthPaths {
-		data, err := c.ReadFile(ctx, sandbox, guestHome+"/"+rel)
-		if err != nil {
-			continue
-		}
-		if err := writePrivate(authDir(d), rel, data); err != nil {
-			fmt.Fprintf(os.Stderr, "sandbox-cli: saving the %s login: %v\n", d.Name, err)
-		}
-	}
-}
-
-// writePrivate writes rel under dir, which sandbox-cli owns: owner-only, and
-// never through a symlink — the content came from a guest, and a link planted
-// in this directory must not redirect the write.
-func writePrivate(dir, rel string, data []byte) error {
-	path := filepath.Join(dir, filepath.FromSlash(rel))
-	if !strings.HasPrefix(path, dir+string(filepath.Separator)) {
-		return errors.New("path escapes the login directory")
-	}
-	for d := filepath.Dir(path); ; d = filepath.Dir(d) {
-		if fi, err := os.Lstat(d); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symlink; not writing through it", d)
-		}
-		if d == dir || len(d) <= len(dir) {
-			break
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	if fi, err := os.Lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symlink; not writing through it", path)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }

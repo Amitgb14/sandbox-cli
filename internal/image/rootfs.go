@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
 // GuestAgentPath is where the guest agent lives inside every root disk.
@@ -56,6 +58,12 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 	key := hex.EncodeToString(keySum[:16])
 	out := filepath.Join(dir, "rootfs", key, "rootfs.ext4")
 	res := &RootFS{Path: out, Key: key, Config: pulled.Config, OwnedByHost: os.Geteuid() != 0}
+	// Sandboxes created together ask for the same disk together — a fleet does
+	// it on every run. The second waits for the first build rather than racing
+	// it; across processes, each build writes its own partial file and the
+	// renames are atomic.
+	unlock := lockKey(out)
+	defer unlock()
 	if _, err := os.Stat(out); err == nil {
 		return res, nil
 	}
@@ -93,7 +101,7 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 	if err != nil {
 		return nil, err
 	}
-	tmp := out + ".partial"
+	tmp := out + ".partial" + strings.TrimPrefix(filepath.Base(stage), ".stage")
 	if err := mkfs(ctx, stage, tmp, size); err != nil {
 		os.Remove(tmp)
 		return nil, err
@@ -220,4 +228,21 @@ func fileSHA(p string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+var (
+	keyLocksMu sync.Mutex
+	keyLocks   = map[string]*sync.Mutex{}
+)
+
+func lockKey(k string) func() {
+	keyLocksMu.Lock()
+	m, ok := keyLocks[k]
+	if !ok {
+		m = &sync.Mutex{}
+		keyLocks[k] = m
+	}
+	keyLocksMu.Unlock()
+	m.Lock()
+	return m.Unlock
 }

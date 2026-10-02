@@ -600,7 +600,23 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
   - The compliance groundwork customers will ask for first: audit export and data
     deletion.
 - **M10 — rebuilt on the API.** Fleet, routing and handoff, rescue, context and
-  usage, Studio, pools and durable volumes.
+  usage, Studio, pools and durable volumes. *In progress.*
+  - **Fleet: done.** `fleet run -f fleet.yaml`, `fleet status`, `fleet land`.
+    `spec.go` and `verify.go` came across unchanged with their tests. What
+    changed is what a task *is*:
+    - a task is a sandbox created over the API, cloned into, and run headless
+      with its verify wrapped round the agent;
+    - its work comes back into `refs/sandbox/fleet/<branch>`, and `land` merges
+      that ref, never a worktree an agent could still be writing;
+    - state is a file under the config dir, because the containers whose labels
+      were beta.15's state store are gone;
+    - `land`'s refusals are beta.15's: the branch-versus-base split, the HEAD
+      that is not the recorded base, and a dirty tree;
+    - `run` exits non-zero when any task did not verify.
+
+    The first real run found a bug no unit test had: tasks created together
+    built one root disk together, sharing a partial file. Builds are now
+    serialized per key, and each writes a partial file of its own.
 
 ## Risks
 

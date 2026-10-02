@@ -28,8 +28,8 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
 - **The host repository is no longer bind-mounted** by default: it goes in as a
   git bundle, and work comes back into `refs/sandbox/<name>` for you to merge.
   On a local Mac, `--bind` mounts a directory instead.
-- **Not yet rebuilt:** `fleet`, `worktree`, `recover`, `usage`, `context list`
-  (agent conversations), routing and Studio. They return on the new API.
+- **Not yet rebuilt:** `worktree`, `recover`, `usage`, `context list` (agent
+  conversations), routing and Studio. They return on the new API.
 
 **Changed:**
 
@@ -48,6 +48,12 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   defines it.
 - `bring-back`, `attach` with a real terminal, and `doctor` against any
   endpoint.
+- **`fleet` is back, on the API.** `fleet.yaml` is unchanged. Each task runs in
+  a sandbox of its own, and its work comes back into
+  `refs/sandbox/fleet/<branch>`. `fleet land` merges that ref; it no longer
+  merges a worktree. `fleet run` exits non-zero when any task did not verify.
+  `fleet stop` and `fleet clean` are gone: a task's sandbox is terminated when
+  the task ends, unless you pass `--keep`.
 
 ### Security
 

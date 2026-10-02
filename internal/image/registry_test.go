@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -26,7 +28,7 @@ type registry struct {
 	manifests map[string][]byte // reference -> body
 	types     map[string]string
 	tamper    func(path string, body []byte) []byte
-	tokens    int
+	tokens    atomic.Int32
 }
 
 func newRegistry(t *testing.T, arch string) (*registry, string, string) {
@@ -58,7 +60,7 @@ func newRegistry(t *testing.T, arch string) (*registry, string, string) {
 func (r *registry) handler(host *string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/token" {
-			r.tokens++
+			r.tokens.Add(1)
 			json.NewEncoder(w).Encode(map[string]string{"token": "t0k"})
 			return
 		}
@@ -130,7 +132,7 @@ func TestPullResolvesThePlatformAndVerifies(t *testing.T) {
 		t.Errorf("pulled: %+v", got)
 	}
 	// Cached: a second pull downloads no blob.
-	before := r.tokens
+	before := r.tokens.Load()
 	r.blobs = map[string][]byte{}
 	if _, err := p.Pull(context.Background(), host+"/team/app:1.0"); err != nil {
 		t.Fatalf("second pull needed the network for blobs: %v", err)
@@ -230,6 +232,34 @@ func TestBuildRootFS(t *testing.T) {
 	fs3, err := BuildRootFS(context.Background(), p, host+"/team/app:1.0", agent, dir)
 	if err != nil || fs3.Path == fs1.Path {
 		t.Fatalf("a changed guest agent reused the old disk: %v", err)
+	}
+}
+
+// A fleet creates its sandboxes together, so the first run after a new image
+// or guest agent asks for one disk several times at once. They shared one
+// partial file: mkfs corrupted it and the second rename found nothing.
+func TestBuildRootFSConcurrently(t *testing.T) {
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		if _, err2 := os.Stat("/usr/sbin/mkfs.ext4"); err2 != nil {
+			t.Skip("mkfs.ext4 not available")
+		}
+	}
+	r, _, _ := newRegistry(t, "amd64")
+	p, host := puller(t, r)
+	agent := filepath.Join(t.TempDir(), "agent")
+	os.WriteFile(agent, []byte("#!/bin/sh\n"), 0o755)
+	dir := t.TempDir()
+	errs := make(chan error, 4)
+	for range 4 {
+		go func() {
+			_, err := BuildRootFS(context.Background(), p, host+"/team/app:1.0", agent, dir)
+			errs <- err
+		}()
+	}
+	for range 4 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
