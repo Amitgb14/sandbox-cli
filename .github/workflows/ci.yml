@@ -85,3 +85,34 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
+
+  # Studio's UI: typecheck, lint, the static export sandbox-cli embeds, and the
+  # end-to-end suite against `sandbox-cli studio` in front of an in-memory
+  # sandboxd (studio/e2e). The site in web/ gets the first three.
+  frontends:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Studio — typecheck, lint, build
+        working-directory: studio
+        run: npm ci --no-audit --no-fund && npm run typecheck && npm run lint && npm run build
+
+      - name: Studio — end to end
+        run: |
+          go build -o bin/sandbox-cli ./cmd/sandbox-cli
+          go build -o bin/sandboxd ./cmd/sandboxd
+          cd studio && npx playwright install --with-deps chromium && npm run test:e2e
+
+      - name: Web — typecheck, lint, build
+        working-directory: web
+        run: npm ci --no-audit --no-fund && npx tsc --noEmit && npm run lint && npm run build

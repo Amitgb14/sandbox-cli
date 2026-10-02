@@ -20,6 +20,9 @@ project_name: sandbox-cli
 before:
   hooks:
     - go mod tidy
+    # Studio's UI must already be in internal/studio/ui (make studio); the
+    # release workflow builds it first. Refuse to ship without it.
+    - test -f internal/studio/ui/index.html
 
 builds:
   # The client, everywhere: on a machine that cannot run sandboxes itself it

@@ -101,6 +101,20 @@ sandbox-cli agent fleet status
 sandbox-cli agent fleet land --all         # merge what verified
 ```
 
+## Studio
+
+```sh
+cd ~/projects/myapp
+sandbox-cli studio          # prints http://127.0.0.1:7080/#token=…
+```
+
+The same sandboxes in a browser: launch a command or an agent on a clone of the
+repository, use its terminal, watch its output, files and audit events, bring
+its work back and review the diff, land a fleet. Studio is served by
+`sandbox-cli` itself on a loopback port, needs the token it prints, and talks to
+the current context's `sandboxd` without handing that `sandboxd`'s token to the
+browser. See [studio/README.md](studio/README.md).
+
 ## Build
 
 ```sh

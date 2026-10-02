@@ -29,3 +29,8 @@ docs/proposals/
 # own file, and would then also ignore any source directory that happened to
 # be called dist or build.
 node_modules
+
+# Studio's built UI, embedded by `make studio` and a release build; only the
+# placeholder is tracked.
+internal/studio/ui/*
+!internal/studio/ui/.keep

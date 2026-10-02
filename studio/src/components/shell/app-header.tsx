@@ -18,9 +18,8 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
-import { apiBase } from "@/lib/constants";
 import { crumbsFor } from "@/lib/nav";
-import { useDaemon, useTransportMode } from "@/lib/api/queries";
+import { useInfo } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 
 export function AppHeader() {
@@ -76,7 +75,7 @@ export function AppHeader() {
             ⌘K
           </kbd>
         </Button>
-        <TransportBadge />
+        <ConnectionBadge />
         <ThemeToggle />
       </div>
     </header>
@@ -84,56 +83,35 @@ export function AppHeader() {
 }
 
 /**
- * Whether what is on screen came from the daemon or from a fixture.
- *
- * A control plane that cannot say which it is showing is worse than one showing
- * nothing — so this is a permanent part of the chrome, not a dismissable banner.
+ * Which sandboxd Studio is talking to: the context's name and its backend.
+ * A permanent part of the chrome, because "whose sandboxes are these" is the
+ * first question on any screen, and a red badge when sandboxd is not
+ * answering says why every table is empty.
  */
-function TransportBadge() {
-  const { mode, retry } = useTransportMode();
-  const { data: daemon } = useDaemon();
-
-  if (mode === "live") {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Badge
-            variant="outline"
-            className="h-8 gap-1.5 border-contained/40 bg-contained/10 px-2.5 text-contained"
-          >
-            <span className="size-1.5 rounded-full bg-contained" />
-            <span className="hidden font-mono text-[11px] md:inline">
-              {daemon?.engine ?? "daemon"} {daemon?.version ?? ""}
-            </span>
-          </Badge>
-        </TooltipTrigger>
-        <TooltipContent>
-          Connected to the sandbox daemon. Everything on screen is a live reading.
-        </TooltipContent>
-      </Tooltip>
-    );
-  }
-
+function ConnectionBadge() {
+  const { data, error } = useInfo();
+  const ok = data && !data.error;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
+        <Badge
           variant="outline"
-          size="sm"
-          onClick={retry}
-          className="h-8 gap-1.5 border-caution/40 bg-caution/10 px-2.5 text-caution hover:bg-caution/20 hover:text-caution"
+          className={
+            ok
+              ? "h-8 gap-1.5 border-contained/40 bg-contained/10 px-2.5 text-contained"
+              : "h-8 gap-1.5 border-exposed/40 bg-exposed/10 px-2.5 text-exposed"
+          }
         >
-          <PlugZap className="size-3.5" />
-          <span className="hidden text-[11px] md:inline">Fixture data</span>
-        </Button>
+          {ok ? <span className="size-1.5 rounded-full bg-contained" /> : <PlugZap className="size-3.5" />}
+          <span className="hidden font-mono text-[11px] md:inline">
+            {ok ? `${data.context} · ${data.capabilities?.backend ?? ""}` : "not connected"}
+          </span>
+        </Badge>
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
-        {/* The endpoint actually dialled, not a hardcoded one. This message is
-            read by somebody asking "why is this not my data", and naming a port
-            they never used sends them to look at the wrong process — the whole
-            job of this badge is to be right about where the data came from. */}
-        No daemon answered on {apiBase() || "this machine"}, so these are fixtures. Nothing here
-        reflects a real container. Click to retry.
+        {ok
+          ? `Context ${data.context}: sandboxd's ${data.capabilities?.backend} backend, API ${data.capabilities?.api_version}.`
+          : `sandboxd did not answer: ${data?.error ?? error?.message ?? "no response"}.`}
       </TooltipContent>
     </Tooltip>
   );

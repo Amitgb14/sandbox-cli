@@ -145,6 +145,19 @@ func (c *Client) json(ctx context.Context, method, path string, in, out any) err
 
 func sbx(ref string) string { return "/v1/sandboxes/" + url.PathEscape(ref) }
 
+// Transport is what a reverse proxy needs to reach this endpoint as this client
+// does: the base URL, the transport (a unix socket dialer, or TLS trusting a
+// private CA), and the token to present. Studio's local server uses it so the
+// browser never holds the endpoint's token.
+func (c *Client) Transport() (base *url.URL, rt http.RoundTripper, token string) {
+	u, _ := url.Parse(c.base)
+	rt = c.http.Transport
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	return u, rt, c.token
+}
+
 // Capabilities reports what the endpoint can do.
 func (c *Client) Capabilities(ctx context.Context) (Capabilities, error) {
 	var out Capabilities

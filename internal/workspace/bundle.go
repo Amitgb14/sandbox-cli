@@ -60,6 +60,9 @@ type Session struct {
 	Base    string    `json:"base"`
 	Branch  string    `json:"branch"`
 	Started time.Time `json:"started,omitempty"`
+	// Agent is the agent the run started, if any: its login is saved again
+	// when the work is brought back from a detached run.
+	Agent string `json:"agent,omitempty"`
 
 	// Checkpoint is the last checkpoint fetched, and when.
 	Checkpoint   string    `json:"checkpoint,omitempty"`

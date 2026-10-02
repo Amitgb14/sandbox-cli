@@ -1,74 +1,98 @@
 "use client";
 
-import { useMemo } from "react";
 import Link from "next/link";
-import { Play, RotateCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { History } from "lucide-react";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/common/page-header";
-import { RunsTable } from "@/components/runs/runs-table";
-import { useAudit, useProjects, useRuns } from "@/lib/api/queries";
-import { useUi } from "@/lib/store";
-import { scopeToRepo } from "@/lib/derive";
-import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/common/empty-state";
+import { RepoGate } from "@/components/common/repo-gate";
+import { StatusBadge } from "@/components/common/status-badge";
+import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useBringBack, useForgetRun, useRuns } from "@/lib/api/queries";
+import type { Repo, Run } from "@/lib/types";
+import { formatRelative } from "@/lib/format";
+
+/**
+ * Where each run's work is — the same answer `sandbox-cli recover` gives:
+ * home already, in a sandbox that is still alive, in a checkpoint, or lost.
+ */
+function whereIs(r: Run): React.ReactNode {
+  if (r.done) return r.brought_back ? <span className="font-mono text-xs">{r.brought_back}</span> : "nothing new came back";
+  if (r.state === "running" || r.state === "pending") return "in the sandbox — bring it back";
+  if (r.state === "suspended") return "in a suspended sandbox — resume it, then bring it back";
+  if (r.checkpoint)
+    return (
+      <span>
+        sandbox gone; last checkpoint{" "}
+        <Link href={`/review?ref=${encodeURIComponent(r.checkpoint)}`} className="font-mono text-xs underline">
+          {r.checkpoint}
+        </Link>
+      </span>
+    );
+  return <span className="text-status-critical">sandbox gone and no checkpoint was taken: lost</span>;
+}
+
+function RunsTable({ repo }: { repo: Repo }) {
+  const { data, isLoading } = useRuns();
+  const bring = useBringBack();
+  const forget = useForgetRun();
+  const runs = (data ?? []).filter((r) => r.repo_id === repo.id);
+  if (!isLoading && runs.length === 0)
+    return <EmptyState icon={History} title="No runs on this repository" description="Launch one, or run sandbox-cli run from the checkout." />;
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Sandbox</TableHead>
+          <TableHead>Agent</TableHead>
+          <TableHead>Started</TableHead>
+          <TableHead>Sandbox state</TableHead>
+          <TableHead>The work</TableHead>
+          <TableHead className="text-right" />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {runs.map((r) => (
+          <TableRow key={r.sandbox}>
+            <TableCell className="font-mono text-xs">
+              {r.state === "gone" ? r.sandbox : <Link href={`/sandbox?id=${r.sandbox}`} className="hover:underline">{r.sandbox}</Link>}
+            </TableCell>
+            <TableCell className="font-mono text-xs">{r.agent ?? "—"}</TableCell>
+            <TableCell className="text-xs text-muted-foreground">{formatRelative(r.started)}</TableCell>
+            <TableCell><StatusBadge outcome={r.state} size="sm" /></TableCell>
+            <TableCell className="text-sm">{whereIs(r)}</TableCell>
+            <TableCell className="text-right">
+              {r.state === "running" && (
+                <Button size="sm" variant="outline" disabled={bring.isPending}
+                  onClick={() => bring.mutate(r.sandbox, {
+                    onSuccess: (res) => toast.success(res.ref ? `Brought back to ${res.ref}` : "No new commits"),
+                    onError: (e) => toast.error(e.message),
+                  })}>
+                  Bring back
+                </Button>
+              )}
+              {(r.done || r.state === "gone") && (
+                <Button size="sm" variant="ghost" onClick={() => forget.mutate(r.sandbox)}>
+                  Forget
+                </Button>
+              )}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
 
 export default function RunsPage() {
-  const repoFilter = useUi((s) => s.repoFilter);
-  const { data, isPending, isFetching, refetch } = useRuns();
-  // Memoized because RunsTable feeds it to useReactTable, which requires a
-  // stable reference: a new array every render makes the table think the data
-  // changed, so its auto-reset fires through the microtask queue and calls
-  // setState — sometimes before the component has finished mounting, which
-  // React reports as "a side-effect in your render function".
-  const runs = useMemo(() => scopeToRepo(data ?? [], repoFilter), [data, repoFilter]);
-  const { data: projects } = useProjects();
-  const repoName = projects?.find((r) => r.id === repoFilter)?.name;
-
-  // Only when the table would otherwise be empty, and sharing the dashboard's
-  // query key so visiting both is one fetch. This exists to answer the question
-  // an empty Runs screen raises and cannot answer for itself: a container is
-  // reaped, the run log is not, so "no runs here" and "nothing ever ran here"
-  // are different statements.
-  const { data: history } = useAudit(undefined, 5000, {
-    enabled: !isPending && runs.length === 0,
-  });
-
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Runs"
-        description={
-          <>
-            Every container carrying the <code className="font-mono text-xs">sandbox.cli</code>{" "}
-            label{repoName ? ` for ${repoName}` : ""}, running or finished. A run stays here after
-            it exits — how it ended is the point.
-          </>
-        }
-        actions={
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refetch()}
-              disabled={isFetching}
-              aria-label="Refresh"
-            >
-              <RotateCw className={cn("size-4", isFetching && "animate-spin")} />
-              Refresh
-            </Button>
-            <Button asChild size="sm">
-              <Link href="/launch">
-                <Play className="size-4" />
-                New run
-              </Link>
-            </Button>
-          </>
-        }
+        description="Runs that cloned this repository, from Studio or the CLI. A detached run's work stays in its sandbox until you bring it back; Forget drops the record, never a ref."
       />
-      <RunsTable
-        runs={runs}
-        loading={isPending}
-        history={{ count: history?.length ?? 0, label: repoName }}
-      />
+      <RepoGate>{(repo) => <RunsTable repo={repo} />}</RepoGate>
     </div>
   );
 }

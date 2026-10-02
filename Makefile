@@ -1,20 +1,23 @@
 BINARY := sandbox-cli
-STUDIO_API_BINARY := sandbox-studio-api
 PKG := github.com/Amitgb14/sandbox-cli
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build build-studio-api install test test-sdk test-integration lint fmt clean snapshot release docker-build image
+.PHONY: build studio install test test-sdk test-integration lint fmt clean snapshot release docker-build image
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
 	go build -ldflags "$(LDFLAGS)" -o bin/sandboxd ./cmd/sandboxd
 	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$(LDFLAGS)" -o bin/sandbox-guestd ./cmd/sandbox-guestd
 
-# The local HTTP control plane (internal/studioapi) — see docs/studio-api/.
-# Not ported yet on the rewrite branch (docs/rewrite/PLAN.md, M6).
-build-studio-api:
-	@echo "sandbox-studio-api is not ported to the rewrite yet (M6); its source is in _old/" >&2; exit 1
+# Studio's UI, built as a static export and copied where sandbox-cli embeds it
+# (internal/studio/embed.go). Needs Node 20+. Run it before `make build` for a
+# sandbox-cli whose `studio` command serves the UI; without it, `studio` serves
+# its API and a page saying how to build the rest. A release build runs this.
+studio:
+	cd studio && npm ci --no-audit --no-fund && npm run build
+	find internal/studio/ui -mindepth 1 ! -name .keep -delete
+	cp -R studio/out/. internal/studio/ui/
 
 # --- release engineering (GoReleaser) ----------------------------------------
 # Install once: go install github.com/goreleaser/goreleaser/v2@latest

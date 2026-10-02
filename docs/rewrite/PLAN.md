@@ -746,13 +746,34 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
       flags comes back as `sandbox <sandbox@localhost>`, and with `--git` as
       the repository's own `user.name` and `user.email`. A fleet file's
       `cache: true`, beta.15's cache volumes, is refused rather than ignored.
-  - **Studio: decided 2026-10-02, being rebuilt.** `sandbox-cli studio` is one
+  - **Studio: decided 2026-10-02, and done.** `sandbox-cli studio` is one
     local command that serves the UI and a small local API. Sandbox calls go
     to the current context with the token held by that process, never by the
     browser. Host-side work (launching on your repository, bring-back,
     recover, fleets) reuses the CLI's code. beta.15's `sandbox-studio-api`
     daemon, `studio.sh` and its docker images are retired, and the worktree
     screens go with worktrees.
+    - `internal/studio` serves the UI, a static export built by `make studio`
+      and embedded. It also serves `/api/v1` (proxied, with the context's
+      token added server-side), `/api/ws/attach` (beta.15's hand-rolled
+      WebSocket, now carrying keystrokes) and the host-side endpoints. Its
+      guard is beta.15's three refusals: a loopback `Host`, a same-origin
+      `Origin`, and a token per launch, carried in the URL fragment. Ids,
+      never paths, name repositories; a ref is checked against
+      `refs/sandbox/` before git sees it; diffs run through githard with
+      textconv and external diff off.
+    - The frontend keeps the old shell and UI kit; the data layer and every
+      page are new. Its e2e suite runs against `sandbox-cli studio` in front
+      of a fake sandboxd, and CI runs it.
+    - Verified against a Firecracker sandboxd in a headless browser
+      (end-to-end row 26): launch, output, events, files, bring-back, the
+      review diff, and a browser terminal answering a shell inside the VM.
+  - **Dropped: `worktree` and `context list`.** Every sandbox is a clone, and
+    fleets are one agent per branch, so worktrees have nothing left to do.
+    Listing an agent's conversations needs its transcripts on the host, and
+    only logins come out of a sandbox now. That one could return if an
+    agent's home is kept in a volume, which is the same open question as
+    agents installing on every run.
   - **Open: agents not in the image install on every run.** Eleven of fifteen
     agents are npm installs in the guest's HOME, which is discarded with the
     sandbox. The message now says so. A cache volume per agent, or a wider

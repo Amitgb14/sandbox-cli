@@ -83,8 +83,16 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
 - **A long-lived secret is named again.** A `secrets:` value whose shape says it
   does not expire (a classic personal access token, say) gets a one-line
   warning, once per name, carrying no part of the value.
-- **Not yet rebuilt:** `worktree`, `context list` (agent conversations) and
-  Studio. They return on the new API.
+- **Studio is `sandbox-cli studio`.** One command serves the browser UI on a
+  loopback port, with a token made for that launch, and talks to the current
+  context's sandboxd, holding its token itself. You can launch a command, an
+  unattended agent or an agent's console on your repository, use a real
+  terminal, watch output, files and events, bring work back, review the diff
+  of anything under `refs/sandbox/`, and land a fleet. `sandbox-studio-api`,
+  `studio.sh`, the Studio docker images and the compose file are gone.
+- **Dropped:** `worktree` (every sandbox is already a clone; fleets are one
+  agent per branch) and `context list` (an agent's conversations stay in its
+  sandbox now; only its login is carried out).
 
 **Changed:**
 

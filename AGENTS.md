@@ -174,7 +174,8 @@ support can read them as plain instructions.
 - [ ] `go test -race -count=1 ./...` passes
 - [ ] Help text, CLI usage and web docs updated for user-visible changes
 - [ ] Summary says what was tested, what wasn't, and any skipped bug tests
-- [ ] A new agent's sessions show, resume and delete in the Sessions view
-      *(from M10, when Studio is back; until then, n/a)*
+- [ ] A change Studio shows (the API, a CLI behaviour it reuses) has its screen
+      updated, and `cd studio && npm run typecheck && npm run lint && npm run
+      build && npm run test:e2e` passes
 - [ ] Anything fakes can't prove has a row in
       [docs/testing/end-to-end.md](docs/testing/end-to-end.md)

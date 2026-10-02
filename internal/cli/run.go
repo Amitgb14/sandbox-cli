@@ -103,6 +103,11 @@ type runSpec struct {
 	before, after func(ctx context.Context, c *api.Client, sandbox string)
 	// result, when set, is filled in with what the run did.
 	result *runResult
+	// console, for a detached run, gives the process a terminal of rows x cols
+	// although none is attached now: Studio's browser terminal attaches later,
+	// and an interactive agent started without one draws nothing.
+	console    bool
+	rows, cols uint16
 	// labels are added to the sandbox's, over any --label of the same key:
 	// they are what sandbox-cli itself knows about the run (the agent, the
 	// routing attempt), and a user label should not be able to disguise one
@@ -110,8 +115,12 @@ type runSpec struct {
 	labels map[string]string
 }
 
-// runResult is what routing needs to know about a run that has ended.
+// runResult is what a caller needs to know about a run: routing, once it has
+// ended; Studio, which sandbox it started.
 type runResult struct {
+	sandbox string
+	pid     int
+
 	// changed reports whether the workspace ended differently from how it
 	// began; nil when that could not be determined.
 	changed *bool
@@ -184,6 +193,9 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	if rs.result != nil {
+		rs.result.sandbox = sb.ID
+	}
 	keep := rf.keep || rf.detach
 	defer func() {
 		if !keep {
@@ -199,6 +211,9 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 				return 1, err
 			}
 			sess = &workspace.Session{Sandbox: sb.ID, Context: ctxName, Repo: repo, Base: base, Branch: workspace.SandboxBranch, Started: time.Now().UTC()}
+			if rs.agent != nil {
+				sess.Agent = rs.agent.Name
+			}
 			_ = sess.Save()
 		} else {
 			fmt.Fprintln(os.Stderr, "sandbox-cli: not in a git repository; /workspace starts empty (use --bind on a local endpoint to mount a directory)")
@@ -216,9 +231,15 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 
 	tty := !rf.detach && isTerminal(os.Stdin) && isTerminal(os.Stdout)
 	rows, cols := termSize(os.Stdout)
+	if rs.console {
+		tty, rows, cols = true, rs.rows, rs.cols
+	}
 	p, err := c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: rs.argv, Cwd: "/workspace", Tty: tty, Rows: rows, Cols: cols})
 	if err != nil {
 		return 1, err
+	}
+	if rs.result != nil {
+		rs.result.pid = p.PID
 	}
 	if rf.detach {
 		fmt.Printf("%s\n", sb.ID)
