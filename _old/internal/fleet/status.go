@@ -90,6 +90,15 @@ type Status struct {
 	// none. Read from the container, so it is empty once one is reaped.
 	Verify VerifyState
 
+	// PaneState is what the session catalog says this branch's agent is doing —
+	// `working`, `blocked`, `idle` — rather than what its container is doing.
+	//
+	// Empty when no `sandbox-cli serve` has been watching, which is most of the time,
+	// and the table then says what it always said. It is read from the catalog rather
+	// than correlated here on purpose: every branch of a fleet shares one repository,
+	// so a second correlation is a chance to show one branch's state on another's row.
+	PaneState string
+
 	// WorktreePath is the checkout the agent worked in, empty if it is gone.
 	WorktreePath string
 }
@@ -142,6 +151,16 @@ func (r *Runner) Status(ctx context.Context, base string) ([]Status, error) {
 		branches[b] = true
 	}
 
+	// What the catalog says each pane is doing, by pane id. Read once for the whole
+	// table rather than per row, and only when a catalog is in hand — `fleet status`
+	// is a read-only command and must not start a daemon to answer.
+	paneStates := map[string]string{}
+	if r.Panes != nil {
+		for _, p := range r.Panes.Snapshot().Panes {
+			paneStates[p.ID] = string(p.State)
+		}
+	}
+
 	now := time.Now()
 	out := make([]Status, 0, len(branches))
 	for b := range branches {
@@ -154,6 +173,11 @@ func (r *Runner) Status(ctx context.Context, base string) ([]Status, error) {
 		}
 		if s.Container != nil {
 			s.Agent = s.Container.Labels[sandbox.LabelAgent]
+			// The catalog's view, when there is one. Looked up by the container's own
+			// pane label rather than by branch: that is the join the catalog is keyed
+			// on, and matching by branch would be a second correlation with nothing to
+			// gain from it.
+			s.PaneState = paneStates[s.Container.Labels[sandbox.LabelPane]]
 		}
 		s.Verify = verifyState(s.Container)
 		s.Elapsed = elapsed(s.Container, now)

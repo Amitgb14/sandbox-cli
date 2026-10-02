@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -11,11 +12,15 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
+	"github.com/Amitgb14/sandbox-cli/internal/handoff"
+	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 	"github.com/Amitgb14/sandbox-cli/internal/routing"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
 
@@ -108,6 +113,36 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ports are checked here as well as inside BuildSpec, and the difference is
+	// which answer the caller gets: BuildSpec's refusal arrives through
+	// Session.Start, which this handler reports as a 502 — "the daemon is broken"
+	// for what is a typo in a port. Asking the same normaliser first turns it back
+	// into the 400 it is, with the message that function already writes.
+	if _, err := sandbox.NormalizePublish(req.Publish); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	// The other two ways publishing is refused, asked here for the same reason:
+	// both are decided by this daemon's own configuration, both are stable
+	// answers a request cannot change, and both otherwise arrive through
+	// Session.Start as a 502 — "the daemon is broken" for a request that was
+	// well-formed and deliberately declined.
+	if len(req.Publish) > 0 {
+		if s.Session.Cfg.Profile == config.ProfileProd {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
+				"this daemon runs the prod profile, which refuses published ports: publishing opens the boundary "+
+					"inward, and prod is the profile for runs nobody is watching.\n"+
+					"  Start the daemon with -profile dev to publish from here"))
+			return
+		}
+		if s.Session.Cfg.Network.Mode == "none" {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf(
+				"this daemon is configured to reach nothing (network mode \"none\"), so there is no network to "+
+					"publish from — docker would take the flag and the port would never answer"))
+			return
+		}
+	}
+
 	opts, err := s.buildRunOptions(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -129,7 +164,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// supervisor compares is the tree, both sides of it read the same way.
 	before := s.sv().fingerprint(opts.Project)
 
-	name, err := s.Session.Start(r.Context(), opts, false)
+	// StartRecorded rather than Start: this run is detached, so its line says
+	// only that it launched — and the supervisor needs that same record to write
+	// the partner line when the container ends. See supervisor.recordEnding.
+	name, launched, err := s.startRun(r.Context(), opts)
 	if err != nil {
 		if msg, held := s.nameHeldBy(r.Context(), opts); held {
 			writeError(w, http.StatusConflict, fmt.Errorf("%s", msg))
@@ -147,23 +185,81 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Watch it, when there is somewhere to fall through to. This is the half of
-	// routing a handler cannot do itself: the run outlives the request, so the
-	// decision belongs to something that outlives it too (supervisor.go).
-	if rest := remainingAfter(chainFor(req), opts.Agent); len(rest) > 0 {
-		s.sv().supervise(&watch{
-			container: run.ID,
-			name:      name,
-			req:       req,
-			agent:     opts.Agent,
-			remaining: rest,
-			workspace: opts.Project,
-			before:    before,
-			routeID:   opts.RouteID,
-			attempt:   opts.RouteAttempt,
-		})
-	}
+	// Every run is watched, not only the ones with somewhere to fall through to.
+	//
+	// Two jobs, and the second is why the condition went away. Routing's retry
+	// needs a chain; *recording what happened* needs nothing but a container that
+	// will end. A detached run's audit line is written at launch — there is no
+	// exit code to wait for — so without something watching, the log's answer to
+	// "did it pass" was a placeholder 0 for every run Studio ever started.
+	s.sv().supervise(&watch{
+		container: run.ID,
+		name:      name,
+		req:       req,
+		agent:     opts.Agent,
+		remaining: remainingAfter(chainFor(req), opts.Agent),
+		workspace: opts.Project,
+		before:    before,
+		routeID:   opts.RouteID,
+		attempt:   opts.RouteAttempt,
+		meta:      launched,
+	})
 	writeJSON(w, http.StatusCreated, toRun(run, s.Engine))
+}
+
+// startRun launches the container, through the catalog when there is one.
+//
+// `SpawnRecorded` rather than `Spawn`, for the reason `handleCreateRun` used
+// `StartRecorded`: the audit line of a detached run says only that it launched, and
+// the supervisor writes the partner line when the container ends. Handing the record
+// over is what makes the second line describe the same run.
+//
+// Without a catalog it is the call this replaced, so a daemon that cannot open one
+// still launches — the bookkeeping is a courtesy, and refusing a run because a
+// directory is unwritable would trade the feature for a record of it.
+func (s *Server) startRun(ctx context.Context, opts sandbox.Options) (string, audit.SessionMeta, error) {
+	// The catalog belongs to **one** repository — `-project`'s — and a request may name
+	// another through `repo` or `project`, which `buildRunOptions` resolves and
+	// recomputes the repo id for. Recording such a run here would put a row in
+	// repository A's catalog carrying A's `pane_session` while the container is
+	// labelled with B's repo, so A's `Adopt` would never match it, would take the
+	// "container is gone" branch, and would mark it stopped — leaving a permanent
+	// phantom pane in A for a run it never hosted, and nothing at all in B.
+	//
+	// So a run outside this catalog's repository launches uncatalogued rather than
+	// miscatalogued. Per-repository catalogs are the real answer and are a bigger
+	// change than this: the daemon would need one session per registered project.
+	if s.Panes == nil || (opts.RepoID != "" && s.RepoID != "" && opts.RepoID != s.RepoID) {
+		return s.Session.StartRecorded(ctx, opts, false)
+	}
+	// Derived from the **options**, not from the request. The three classifiers that
+	// came before all do, for the reason `cli.paneKindFor` gives: "a parameter threaded
+	// through every wrapper is a parameter one of them would eventually pass wrongly".
+	// The supervisor's failover proved the point by synthesising a request and dropping
+	// `Console` from it.
+	kind := protocol.PaneAgent
+	switch {
+	case opts.Verify != "":
+		// The exit code is a verdict, which is what `land` reads — so the pane's
+		// purpose is the judging rather than the working.
+		kind = protocol.PaneVerify
+	case opts.Agent == "":
+		kind = protocol.PaneCommand
+	case opts.Console:
+		kind = protocol.PaneConsole
+	}
+	pane, meta, err := s.Panes.SpawnRecorded(ctx, s.Session, opts, kind, false)
+	var saveErr *session.SaveError
+	if errors.As(err, &saveErr) {
+		// The container is up and only the row is missing. Reporting a failure would be
+		// false, and the pane id is a label, so the next `Adopt` recovers the row.
+		log.Printf("sandbox-studio-api: %v", saveErr)
+		return pane.ContainerName, meta, nil
+	}
+	if err != nil {
+		return "", audit.SessionMeta{}, err
+	}
+	return pane.ContainerName, meta, nil
 }
 
 // buildRunOptions turns a request into sandbox.Options, following the same
@@ -171,7 +267,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // created if needed), the agent descriptor supplies its env allowlist and
 // autonomous argv, and the login persistence gate is re-checked here because it
 // is a property of every path that builds Options, not of the config alone.
-func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (sandbox.Options, error) {
+func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (built sandbox.Options, err error) {
 	// Which repository this run is about, before anything else is decided: a
 	// worktree is resolved inside it, and with no worktree it *is* the workspace.
 	// An unregistered id refuses here rather than silently falling back to the
@@ -186,6 +282,26 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 	branch := req.Branch
 	var extraMounts []string
 
+	// Refused before anything is resolved, and refused rather than guessed at:
+	// a namespace is a way of sharing, not an alternative to it, and the wrong
+	// guess is the one that switches the cross-project channel on for somebody
+	// who did not ask. Same rule, same sentence, as the CLI's.
+	if req.ShareName != "" && !req.Share {
+		return sandbox.Options{}, fmt.Errorf(
+			"shareName %q needs share as well: a namespace is a way of sharing, not an alternative to it", req.ShareName)
+	}
+	if req.Share {
+		// Through sandbox.ShareMount, which is the CLI's own resolution: the
+		// directory is created, seeded, checked by RefuseUnsafeHostPath and
+		// opened to the container's group there. A second implementation here
+		// would be a second answer to what sharing reaches.
+		sm, shareErr := sandbox.ShareMount(req.ShareName)
+		if shareErr != nil {
+			return sandbox.Options{}, shareErr
+		}
+		extraMounts = append(extraMounts, sm.Mount)
+	}
+
 	switch {
 	case req.Worktree != "":
 		info, err := worktree.Resolve(sc.Project, req.Worktree)
@@ -196,9 +312,14 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 		if branch == "" {
 			branch = req.Worktree
 		}
-		if extraMounts, err = sandbox.LinkedWorktreeMounts(info.Path); err != nil {
+		// Appended, never assigned: a worktree run may also be sharing, and the
+		// assignment this used to be silently dropped the share mount for exactly
+		// the runs most likely to want one.
+		wtMounts, err := sandbox.LinkedWorktreeMounts(info.Path)
+		if err != nil {
 			return sandbox.Options{}, err
 		}
+		extraMounts = append(extraMounts, wtMounts...)
 		// repoID stays the scope's: a linked worktree belongs to the same
 		// repository, which is the whole point of addressing it by branch.
 	case req.Project != "":
@@ -266,10 +387,37 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 			return sandbox.Options{}, fmt.Errorf(
 				"%s cannot be given a prompt for an interactive session: it has no way to be seeded on the command line, "+
 					"and passing one would be read as a directory rather than a message.\n"+
-					"  Untick console to run it headless — %s spells the prompt correctly there — or leave the prompt empty and type it in the session.",
+					"  Run it headless — %s spells the prompt correctly there — or leave the prompt empty and type it in the session.\n"+
+					"  From Studio: an agent run keeps a console by default, and setting a verify command is how you ask for a headless one.",
 				req.Agent, req.Agent)
 		}
 	}
+	if req.HandoffFrom != nil {
+		if req.Resume != "" {
+			// Two answers to one question, refused the way repo and project are.
+			// They are also opposites: resume reopens a conversation, a briefing
+			// starts a new one carrying evidence about an old.
+			return sandbox.Options{}, errors.New(
+				"resume and handoff_from cannot be combined: one reopens a conversation, the other starts a new one from a briefing about it")
+		}
+		if req.Agent == "" {
+			// A briefing is read by an agent. A plain command is the argv you
+			// gave it, and nothing in it would ever open /sandbox/context.
+			return sandbox.Options{}, errors.New("handoff_from needs an agent: a briefing is something an agent reads")
+		}
+		if req.HandoffFrom.Agent == "" || req.HandoffFrom.SessionID == "" {
+			return sandbox.Options{}, errors.New("handoff_from needs both an agent and a session id: together they name one conversation")
+		}
+		if strings.TrimSpace(req.Prompt) == "" {
+			// The briefing is *prepended* to the task. With no task the target
+			// has been handed evidence and no instruction, and what it does next
+			// is anyone's guess — which is the one thing an unattended run must
+			// not be.
+			return sandbox.Options{}, errors.New(
+				"handoff_from needs a prompt: the briefing says what happened before, and the prompt says what to do now")
+		}
+	}
+
 	if req.Console && req.Agent == "" {
 		// A plain command already reaches a console the same way — it is the argv
 		// the caller chose. This field exists to swap an *agent* out of headless
@@ -277,19 +425,77 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 		return sandbox.Options{}, errors.New("console needs an agent: a plain command is already whatever argv you gave it")
 	}
 
+	// The briefing, before the options: the agent's argv is built from the prompt
+	// below, so a briefing that arrived after it would be mounted for an agent
+	// that was never told to read it.
+	//
+	// Refused rather than skipped when the conversation cannot be found. The
+	// alternative is a run that launches with only its prompt and no sign that
+	// the thing the request was *about* is missing — and the caller asked for a
+	// handoff, which is a different job from the one that would then run.
+	var brief *handoff.Export
+	if req.HandoffFrom != nil {
+		// host: true — this is a *selection*. Somebody read a conversation and
+		// named it, so their own ~/.claude is a legitimate source; the
+		// supervisor's correlation deliberately searches only the sandbox store,
+		// because nothing there was chosen. See briefing.go.
+		sess, _, ok := s.findSession(req.HandoffFrom.Agent, req.HandoffFrom.SessionID, true)
+		if !ok {
+			return sandbox.Options{}, fmt.Errorf(
+				"no conversation %s for %s: it is listed by GET /v1/agents/%s/sessions, and only a verified store is searched",
+				req.HandoffFrom.SessionID, req.HandoffFrom.Agent, req.HandoffFrom.Agent)
+		}
+		// A session sandbox-cli has no verified reader for is refused rather than
+		// exported. handoff.Write treats an unparseable transcript as normal and
+		// still produces a briefing — right for the supervisor, where a crashed
+		// agent's file ledger is the useful part, and wrong here: somebody picked
+		// *this conversation*, and what they would get is a prompt announcing
+		// "0 prompts of that conversation" over an empty transcript.jsonl. The
+		// listing already reports the same fact as `partial`.
+		if sess.Partial {
+			return sandbox.Options{}, fmt.Errorf(
+				"conversation %s cannot be handed over: sandbox-cli has no verified reader for %s's transcript format, "+
+					"so the briefing would carry no conversation at all — its id and dates are real, which is why it is listed",
+				req.HandoffFrom.SessionID, req.HandoffFrom.Agent)
+		}
+		brief = writeBriefing(req.HandoffFrom.Agent, sess.Path, project, req.Base)
+		if brief == nil {
+			return sandbox.Options{}, fmt.Errorf(
+				"conversation %s could not be exported: sandbox-cli has no verified reader for %s's transcript format, or the file could not be read",
+				req.HandoffFrom.SessionID, req.HandoffFrom.Agent)
+		}
+		// Says three things, and the third is the one that keeps this honest:
+		// where the briefing is, what it holds, and that it *is* a briefing.
+		req.Prompt = brief.Prompt(req.Prompt)
+		// Every refusal below this point would otherwise leave the export with
+		// nobody holding its path: a copy of a conversation in /tmp that nothing
+		// removes. Said once here rather than at each `return`.
+		defer func() {
+			if err != nil {
+				os.RemoveAll(brief.Dir)
+			}
+		}()
+	}
+
 	opts := sandbox.Options{
-		Project:     project,
-		Detach:      true,
-		Console:     req.Console,
-		RepoID:      repoID,
-		Branch:      branch,
-		Base:        req.Base,
-		Verify:      req.Verify,
-		Image:       req.Image,
-		Memory:      req.Memory,
-		CPUs:        req.CPUs,
-		Allow:       req.Allow,
+		Project: project,
+		Detach:  true,
+		Console: req.Console,
+		RepoID:  repoID,
+		Branch:  branch,
+		Base:    req.Base,
+		Verify:  req.Verify,
+		Image:   req.Image,
+		Memory:  req.Memory,
+		CPUs:    req.CPUs,
+		Allow:   req.Allow,
+		// Normalised and validated by BuildSpec — a bare port becomes a loopback
+		// bind there, and a malformed spec is refused before a container exists.
+		Publish:     req.Publish,
 		ExtraMounts: extraMounts,
+	}
+	if brief != nil {
+		applyBriefing(&opts, brief, req.HandoffFrom.Agent, req.HandoffFrom.SessionID)
 	}
 	for k, v := range req.Env {
 		if config.IsReservedEnv(k) {
@@ -513,12 +719,12 @@ func baselineFor(workspace, agent string) string {
 	if workspace == "" {
 		return ""
 	}
-	snap := rescue.Begin(workspace, agent, baselineInterval, baselineRetention)
+	snap := rescue.Begin(workspace, agent, baselineInterval, rescue.Retention{Run: baselineRetention})
 	if snap == nil {
 		return "" // not a repository, or snapshots switched off
 	}
 	snap.Start()
-	snap.Stop("baseline", nil)
+	snap.Stop(baselineOutcome, nil)
 	return snap.LastCommit()
 }
 
@@ -529,6 +735,11 @@ const (
 	// The retention rescue itself uses, since these age out through the same
 	// pruning as any other snapshot.
 	baselineRetention = 14 * 24 * time.Hour
+	// baselineOutcome marks the session as a before-image rather than a run's
+	// safety net. Named rather than spelled twice: snapshots.go and recover.go
+	// both have to *exclude* these, and a literal that has to match in three
+	// places is one typo away from offering a run's starting state as its work.
+	baselineOutcome = rescue.OutcomeBaseline
 )
 
 // concatArgs joins argv fragments into one fresh slice.

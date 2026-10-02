@@ -15,8 +15,10 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
 	"github.com/Amitgb14/sandbox-cli/internal/image"
+	"github.com/Amitgb14/sandbox-cli/internal/protocol"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
 	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/session"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 )
@@ -567,6 +569,13 @@ func newFleetRunner(configPath, profile string) (*fleet.Runner, error) {
 	if ctl, ok := sess.Runtime.(runtime.Controller); ok {
 		r.Controller = ctl
 	}
+	// The catalog, when one can be opened. A failure is not fatal and is not reported:
+	// a fleet is a git operation on a repository, and refusing one because the
+	// bookkeeping directory is unwritable would trade a working feature for a record
+	// of it. Without it the launch path is exactly what it was before panes existed.
+	if srv, err := session.Open(repo, sess.Cfg.Profile, sess.Cfg.Engine); err == nil {
+		r.Panes = srv
+	}
 	return r, nil
 }
 
@@ -669,11 +678,27 @@ func printLaunchResults(results []fleet.LaunchResult) {
 }
 
 // fleetState renders the state column, spelling out how an exited agent ended.
+// fleetState is the STATE column, which says more than "running" when the session
+// server has been watching.
+//
+// The detail comes from the catalog rather than from a fresh correlation, and that is
+// the whole reason it can be here at all. Phase 4 declined to put agent state in this
+// table precisely because correlating a *worktree* run to its conversation is not the
+// lookup a project run uses — every branch of a fleet shares one repository, so
+// getting it wrong shows one branch's state on another's row. Now the daemon has
+// already done it, once, for the pane; this reads the answer.
+//
+// Absent when no daemon is running, which is most of the time, and the column then
+// says exactly what it always said. A `running` that could be `working` or `blocked`
+// is not wrong — it is less.
 func fleetState(s fleet.Status) string {
 	if s.Container == nil {
 		return "—"
 	}
 	if s.Container.Running() {
+		if st := s.PaneState; st != "" && st != string(protocol.StateUnknown) {
+			return st
+		}
 		return "running"
 	}
 	if s.Container.State == "exited" {

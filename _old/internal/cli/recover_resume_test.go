@@ -30,6 +30,13 @@ func verifiedClaude() agentctx.Finding {
 	}
 }
 
+// The fixtures carry Started as well as Modified, and that is the whole of a
+// behaviour change worth noticing: the window is applied to when a session
+// *began*. Filtering on the last write let a two-day-old conversation match a
+// run that had just started, because a session still being appended to has a
+// recent mtime and says nothing about which run it belongs to. These tests
+// pinned the old rule by setting Modified alone.
+
 // runSession is a rescue session that ran between start and end.
 func runSession(agent string, start, end time.Time) rescue.Session {
 	return rescue.Session{
@@ -50,8 +57,8 @@ func TestFindConversationMatchesTheRunsOwnWindow(t *testing.T) {
 
 	pinStore(t, verifiedClaude(), []agentctx.Session{
 		// Newest first, as agentctx.List returns them.
-		{ID: "bbbbbbbb-0000-0000-0000-000000000002", Modified: end.Add(-time.Minute)},
-		{ID: "aaaaaaaa-0000-0000-0000-000000000001", Modified: start.Add(time.Minute)},
+		{ID: "bbbbbbbb-0000-0000-0000-000000000002", Started: end.Add(-time.Minute), Modified: end.Add(-time.Minute)},
+		{ID: "aaaaaaaa-0000-0000-0000-000000000001", Started: start.Add(time.Minute), Modified: start.Add(time.Minute)},
 	})
 
 	c, ok := findConversation(runSession("claude", start, end))
@@ -84,7 +91,7 @@ func TestFindConversationIgnoresTranscriptsOutsideTheWindow(t *testing.T) {
 		{"well after the run", end.Add(conversationSlackAfter + time.Minute)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			pinStore(t, verifiedClaude(), []agentctx.Session{{ID: "cccccccc-0000-0000-0000-000000000003", Modified: tc.modified}})
+			pinStore(t, verifiedClaude(), []agentctx.Session{{ID: "cccccccc-0000-0000-0000-000000000003", Started: tc.modified, Modified: tc.modified}})
 			if _, ok := findConversation(runSession("claude", start, end)); ok {
 				t.Error("offered a transcript from outside the run's window")
 			}
@@ -95,7 +102,7 @@ func TestFindConversationIgnoresTranscriptsOutsideTheWindow(t *testing.T) {
 // The cases where saying nothing is the right answer.
 func TestFindConversationDeclinesToGuess(t *testing.T) {
 	now := time.Now()
-	inWindow := []agentctx.Session{{ID: "dddddddd-0000-0000-0000-000000000004", Modified: now}}
+	inWindow := []agentctx.Session{{ID: "dddddddd-0000-0000-0000-000000000004", Started: now, Modified: now}}
 
 	t.Run("a plain run has no agent", func(t *testing.T) {
 		pinStore(t, verifiedClaude(), inWindow)
@@ -141,7 +148,7 @@ func TestFindConversationHandlesAnUnfinishedRun(t *testing.T) {
 		StartedAt: start,
 		// EndedAt nil: crashed, or still running.
 	}
-	pinStore(t, verifiedClaude(), []agentctx.Session{{ID: "eeeeeeee-0000-0000-0000-000000000005", Modified: start.Add(5 * time.Minute)}})
+	pinStore(t, verifiedClaude(), []agentctx.Session{{ID: "eeeeeeee-0000-0000-0000-000000000005", Started: start.Add(5 * time.Minute), Modified: start.Add(5 * time.Minute)}})
 
 	if _, ok := findConversation(s); !ok {
 		t.Error("a crashed run's conversation was not found — this is the case recover exists for")

@@ -101,7 +101,7 @@ export const NAV: NavGroup[] = [
         title: "Agents",
         href: "/agents",
         icon: Bot,
-        hint: "The fifteen agents, which can run unattended, and whose login is saved",
+        hint: "The twelve agents, which can run unattended, and whose login is saved",
         shortcut: "A",
       },
       {

@@ -51,12 +51,26 @@ sandbox-cli recover repair           # fix a repository a crashed sandbox broke
 $ sandbox-cli recover list
 SESSION                 BRANCH     WHEN      SNAPSHOTS  STATE
 20260724-231800-08df8e  feature-a  4m ago    7          crashed
+20260724-224601-1c031e  feature-b  2h ago    1          baseline
 
 $ sandbox-cli recover restore 20260724-231800
 sandbox-cli: created branch "sandbox-recover/feature-a-20260724-231800-08df8e" from branch feature-a (3 file(s) changed)
   Look at it:  git diff HEAD sandbox-recover/feature-a-20260724-231800-08df8e
   Work on it:  git switch sandbox-recover/feature-a-20260724-231800-08df8e
 ```
+
+`STATE` says what the session was, and one value is worth knowing before you act
+on it. **`baseline`** is the before-image a Studio run records at launch: the
+workspace as the run *started*, captured before the agent did anything. It is a
+real snapshot and restoring it works — it simply does not contain whatever the
+agent went on to write, which is usually the thing being looked for. Every
+command that hands one back says so.
+
+The others: `crashed` is a run nothing closed, `interrupted` a Ctrl-C, `snapshot`
+a checkpoint somebody took on purpose, `exit N` a run that ended badly, and
+`clean` a run that finished.
+
+
 
 `restore` creates a branch and changes nothing else — after a crash the files on
 disk may themselves be the newest copy of your work, so nothing overwrites them

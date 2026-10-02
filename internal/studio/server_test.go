@@ -190,7 +190,7 @@ func TestLaunchValidates(t *testing.T) {
 		"both":                  {Repo: rp.ID, Agent: "claude", Prompt: "x", Command: []string{"true"}},
 		"console without agent": {Repo: rp.ID, Console: true, Command: []string{"true"}},
 		"headless, no prompt":   {Repo: rp.ID, Agent: "claude"},
-		"unverified headless":   {Repo: rp.ID, Agent: "aider", Prompt: "x"},
+		"unverified headless":   {Repo: rp.ID, Agent: "goose", Prompt: "x"},
 		"unknown agent":         {Repo: rp.ID, Agent: "nope", Prompt: "x"},
 		"unknown repo":          {Repo: "000000000000", Command: []string{"true"}},
 	} {
@@ -201,7 +201,7 @@ func TestLaunchValidates(t *testing.T) {
 	if launched != 0 {
 		t.Fatalf("an invalid request launched")
 	}
-	if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Repo: rp.ID, Agent: "aider", Console: true}); r.StatusCode != http.StatusCreated {
+	if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Repo: rp.ID, Agent: "goose", Console: true}); r.StatusCode != http.StatusCreated {
 		t.Errorf("a console run of an interactive-only agent: %d %v", r.StatusCode, body)
 	}
 }

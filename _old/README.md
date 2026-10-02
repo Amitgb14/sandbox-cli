@@ -1,7 +1,12 @@
 # _old — the pre-rewrite tree, kept for reference
 
 The whole of beta.15 (plus the host-escape fixes from PR #177), moved here at M0
-of `docs/rewrite/PLAN.md`. The Go tool ignores directories whose name starts
+of `docs/rewrite/PLAN.md`, and brought up to date with `main` when the rewrite
+merged (through PR #175). That later beta.15 work — the session server and panes,
+the generated contract (`internal/contract`, `cmd/gen-contract`), S3 snapshot
+storage, agent-state detection — is here as reference, to port where the new
+design still wants it. Its Studio, web and SDK changes are in git history only:
+those were rebuilt on the API. The Go tool ignores directories whose name starts
 with `_`, so nothing here is built, vetted or tested — `go test ./...` sees only
 the new tree — while it all stays greppable.
 

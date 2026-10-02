@@ -80,9 +80,8 @@ sandbox-cli agent claude --network none -- --resume   # sandbox flags first, the
 sandbox-cli agent codex --detach -- exec "fix the failing test"
 ```
 
-Agents: claude, codex, gemini, opencode and droid, which can also run
-unattended, and aider, amp, cline, continue, copilot, crush, cursor, goose,
-openhands and qwen.
+Agents: claude, codex, gemini, opencode and cline, which can also run
+unattended, and copilot, cursor, devin, goose, kilocode, openhands and qwen.
 
 When a provider is down, a run can fall through to another agent:
 

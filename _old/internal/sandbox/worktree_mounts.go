@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/worktree"
@@ -92,7 +93,10 @@ func LinkedWorktreeMounts(projectDir string) ([]string, error) {
 func hooksDir(p string) (bool, error) {
 	fi, err := os.Lstat(p)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		// ENOTDIR: `.git` is a file, as in a linked worktree, whose hooks live in
+		// the parent's .git and are handled with it (LinkedWorktreeMounts). There
+		// is no hooks directory here to mount or to refuse.
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("checking %s: %w", p, err)

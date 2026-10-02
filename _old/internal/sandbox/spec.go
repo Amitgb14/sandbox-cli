@@ -103,6 +103,17 @@ type Options struct {
 	// to, so an ordinary run carries no id for an episode that cannot happen.
 	RouteID string
 
+	// HandoffFrom and HandoffSession record a run that began from somebody else's
+	// conversation: the agent that held it, and the session id it was read from.
+	//
+	// Separate from RoutedFrom because they answer different questions — see
+	// LabelHandoffFrom. Set by the control plane when a request asks for a
+	// briefing; a fleet task may not (gates_test.go classifies both `never`),
+	// since a fleet is unattended and choosing whose conversation to carry on is
+	// a decision somebody makes while looking at one.
+	HandoffFrom    string
+	HandoffSession string
+
 	// RouteAttempt is 1 for the agent first asked for, 2 for the next, and so on
 	// — the order within the episode, which timestamps alone recover only when
 	// the clock is trusted and the runs are not concurrent.
@@ -139,6 +150,22 @@ type Options struct {
 	// is what makes "we cannot attribute this precisely" a state a client can
 	// see rather than one it has to infer.
 	Baseline string
+
+	// PaneID, PaneKind and PaneSession are this container's identity in the
+	// session catalog (internal/session).
+	//
+	// Stamped as labels, which is what makes the catalog survivable: the engine is
+	// the state store, so a pane whose id is not on the container is one no later
+	// `serve` can rebind after a restart — it would come back as a "legacy"
+	// container addressable only by name.
+	//
+	// They carry no reach. A pane id grants nothing, selects no mount and resolves
+	// no path; it is a key into a file in the user's own config directory. That is
+	// why they sit here rather than behind a gate, and it is the reason the
+	// equivalent question for `fleet` is about bookkeeping rather than confinement.
+	PaneID      string
+	PaneKind    string
+	PaneSession string
 
 	// AuthPersistDir, when non-empty, is a host directory bind-mounted read-write
 	// as the agent's whole HOME so its login/config survives the ephemeral
@@ -665,6 +692,13 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		tty = opts.Console
 	}
 
+	// The terminal the container is drawing on, which docker otherwise describes
+	// as a bare `xterm` — eight colours, where the host that started the run has
+	// 256 (terminal.go). Applied here rather than beside TZ above because it is
+	// the first point at which the answer is known: a run with no pty has no
+	// terminal to describe.
+	applyTerminal(env, seen, tty, opts.Console)
+
 	// Metrics require a terminal to report to. The live gauge is drawn only for
 	// non-interactive runs (an interactive agent TUI owns the terminal); the
 	// post-run summary is printed for all runs, including interactive ones, since
@@ -694,14 +728,24 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 		// Only within an episode: "attempt 1 of 1" is a fact about a run that
 		// could never route, and stamping it would put a routing column on every
 		// container in the listing.
-		LabelRouteAttempt: attemptLabel(opts),
-		LabelBase:         opts.Base,
-		LabelVerify:       opts.Verify,
-		LabelFleet:        boolLabel(opts.Fleet),
-		LabelProfile:      cfg.Profile,
-		LabelPrompt:       truncatePrompt(opts.Prompt),
-		LabelSession:      opts.SessionID,
-		LabelBaseline:     opts.Baseline,
+		LabelRouteAttempt:   attemptLabel(opts),
+		LabelHandoffFrom:    opts.HandoffFrom,
+		LabelHandoffSession: opts.HandoffSession,
+		LabelBase:           opts.Base,
+		LabelVerify:         opts.Verify,
+		LabelFleet:          boolLabel(opts.Fleet),
+		LabelProfile:        cfg.Profile,
+		LabelPrompt:         truncatePrompt(opts.Prompt),
+		LabelSession:        opts.SessionID,
+		LabelBaseline:       opts.Baseline,
+		LabelPane:           opts.PaneID,
+		LabelPaneKind:       opts.PaneKind,
+		LabelPaneSession:    opts.PaneSession,
+		// Read off the config rather than taken from Options, so the label and the
+		// thing that actually isolated the run cannot disagree. There is no
+		// per-invocation override to honour: SandboxKind is a config key, and its
+		// zero value follows the engine.
+		LabelSandbox: string(cfg.Sandbox.Resolve(cfg.Engine)),
 	} {
 		if v != "" {
 			labels[k] = v

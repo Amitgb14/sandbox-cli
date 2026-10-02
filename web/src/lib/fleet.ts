@@ -94,15 +94,15 @@ export const FLEET_AGENTS: FleetAgent[] = [
     delivery: "baked",
   },
   {
-    name: "droid",
-    argv: "droid exec PROMPT",
+    name: "cline",
+    argv: "cline PROMPT --auto-approve true",
     delivery: "first-run",
-    note: "Not in the image: installed in each task's sandbox when it starts (~148 MB).",
+    note: "A bare prompt is its headless mode; its UI is the opt-in. Not in the image: installed once per endpoint into a read-only tools volume.",
   },
 ];
 
 /** Everything else is refused when the file is parsed, before a sandbox starts. */
-export const UNSUPPORTED_AGENT_COUNT = 10;
+export const UNSUPPORTED_AGENT_COUNT = 7;
 
 /** The commented file the page leads with. */
 export const FLEET_YAML = `agent: claude          # the default for tasks that name no agent

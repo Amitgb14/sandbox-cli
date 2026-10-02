@@ -46,8 +46,13 @@ type Descriptor struct {
 	// are constants compiled in here, never anything read from the host.
 	//
 	// In the descriptor rather than in the wrapper because a fleet gets no
-	// wrapper: `agent: droid` with FACTORY_DISABLE_KEYRING left behind is an agent
-	// that logs in every run and, unattended, cannot.
+	// wrapper: a setting left behind there — a keyring the sandbox has no daemon
+	// for is the standing example — is an agent that logs in every run and,
+	// unattended, cannot.
+	//
+	// No agent in this table sets it today; droid, which did, was removed. The
+	// field stays because the wiring behind it does: the next agent needing it
+	// needs the mechanism and not a rediscovery of why it exists.
 	Env []string
 
 	// Command is the container argv that starts the agent, to which caller
@@ -66,6 +71,16 @@ type Descriptor struct {
 	// autonomous are the same decision; see docs/GUIDE.md.
 	AutonomousArgs func(prompt string) []string
 
+	// ConsoleArgs are the arguments that make the agent start its interactive UI.
+	//
+	// Empty for almost every agent, because the bare binary *is* the UI. Cline
+	// inverts it: a bare invocation is the headless mode and the TUI is opt-in
+	// behind `-i`, so without this a console run started an agent with no prompt
+	// and no UI. A separate field rather than a second Command, because the
+	// bootstrap, the install and the PATH are identical in both modes, and two
+	// argvs differing by one flag drift.
+	ConsoleArgs []string
+
 	// SkipPermissionArgs turns off the agent's approval prompts.
 	//
 	// Held apart from AutonomousArgs, and appended by Autonomous, so the flag
@@ -75,7 +90,7 @@ type Descriptor struct {
 	// how a security-relevant argv drifts.
 	//
 	// Empty for the agents whose non-interactive mode is a *subcommand* rather
-	// than a flag (`codex exec`, `opencode run`, `droid exec`): there is nothing
+	// than a flag (`codex exec`, `opencode run`): there is nothing
 	// to add to an interactive session, so those simply cannot be launched this
 	// way, which is the honest answer rather than a flag that does nothing.
 	SkipPermissionArgs []string
@@ -114,7 +129,7 @@ type Descriptor struct {
 	// container.
 	//
 	// Only claude's positional is *verified* here — it is the agent the console
-	// feature was built and attached against. codex, gemini and droid keep the
+	// feature was built and attached against. codex and gemini keep the
 	// behaviour they had, marked unverified, because changing them on a hunch
 	// would regress runs that may be working; opencode is the one this was
 	// written for.
@@ -138,7 +153,9 @@ func (d Descriptor) Autonomous(prompt string, extra []string) []string {
 // the caller is expected to have refused already, and quietly doing something
 // other than what was asked is worse than doing nothing.
 func (d Descriptor) Console(prompt string, skipPermissions bool) []string {
-	argv := d.Command
+	// ConsoleArgs first: where an agent has any, they are what selects the UI at
+	// all, and a flag that changes the mode belongs before ones that configure it.
+	argv := concat(d.Command, d.ConsoleArgs)
 	if skipPermissions {
 		argv = concat(argv, d.SkipPermissionArgs)
 	}
@@ -275,30 +292,49 @@ var registry = map[string]Descriptor{
 			return []string{"run", prompt}
 		},
 	},
-	"droid": {
-		Name: "droid",
-		// Unverified, and kept as it was.
-		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
-		PersistDir:        "droid",
-		ProviderHost:      "api.factory.ai",
+	"cline": {
+		Name:       "cline",
+		PersistDir: "cline",
+		// Empty for the reason opencode's is: Cline drives several providers and
+		// its default one is its own, so there is no single host whose silence
+		// means "this agent cannot work". Routing reports it unprobed rather than
+		// down, which is the honest answer — guessing api.anthropic.com would fail
+		// over an agent configured against another provider for an outage it never had.
+		ProviderHost: "",
 		EnvAllow: []string{
-			"FACTORY_API_KEY",
-			"FACTORY_API_BASE_URL",
-			"FACTORY_APP_BASE_URL",
-			"FACTORY_AIRGAP_ENABLED",
-			"FACTORY_ENV",
+			"ANTHROPIC_API_KEY",
+			"CLINE_API_KEY",
+			"OPENAI_API_KEY",
+			"OPENROUTER_API_KEY",
+			"AI_GATEWAY_API_KEY",
+			"V0_API_KEY",
 		},
-		// Droid stores credentials in a file today, which persists correctly in the
-		// agent HOME; this keeps that true if the upstream default ever flips to a
-		// keyring, which a container has no daemon for. Goose demonstrated how
-		// easily that ships unnoticed.
-		Env:     []string{"FACTORY_DISABLE_KEYRING=1"},
-		Command: NpmBootstrap("droid", "droid"),
+		Command: NpmBootstrap("cline", "cline"),
 		AutonomousArgs: func(prompt string) []string {
-			// `droid exec` is Factory's documented headless mode — the one the
-			// FACTORY_API_KEY path exists for.
-			return []string{"exec", prompt}
+			// Verified by running it, 2026-08-24: `cline <prompt>` is the
+			// non-interactive mode — a bare positional runs in act mode and the TUI
+			// is opt-in behind `-i/--tui`, which is the inverse of claude's `-p`.
+			// One real run wrote its file and exited 0 in sixteen seconds with
+			// nothing attached.
+			return []string{prompt}
 		},
+		// `--auto-approve` defaults to true, and this passes it anyway. A default
+		// is a decision upstream can revisit; an unattended run that starts asking
+		// does not fail, it hangs, and the flag costs two tokens. Verified accepted
+		// in the same session.
+		SkipPermissionArgs: []string{"--auto-approve", "true"},
+		// Verified with a pty on 2026-08-24: `cline -i` starts the full-screen UI.
+		// Without it a console run gets the headless mode with no prompt, which
+		// prints usage and exits — an attached terminal watching a dead container.
+		ConsoleArgs: []string{"-i"},
+		// Not seeded: whether a positional reaches the TUI as a first turn was not
+		// verified. nil means Studio refuses the combination rather than building
+		// an argv that dies inside the container.
+		ConsolePromptArgs: nil,
+		// Resuming lives in internal/agentctx rather than here, and needs the
+		// transcript store's location *and* format verified before a reader can
+		// claim to understand it. Cline's help documents `--id <session-id>`, so
+		// the capability exists; it is not claimed until somebody has read one.
 	},
 }
 

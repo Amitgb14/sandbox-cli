@@ -1,5 +1,5 @@
 /**
- * The fifteen agents under `sandbox-cli agent`, mirroring internal/agents.
+ * The twelve agents under `sandbox-cli agent`, mirroring internal/agents.
  * Sizes are the on-disk installed sizes measured for arm64 in July 2026.
  *
  * No vendor names: the page describes what each agent needs inside a sandbox,
@@ -120,6 +120,17 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli agent opencode run 'run the tests'",
   },
   {
+    id: "kilocode",
+    name: "Kilo Code",
+    delivery: "first-run",
+    size: "372 MB",
+    login: "`kilocode auth`, or forward a provider key.",
+    env: ["KILOCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"],
+    gotcha:
+      "Its CLI is an opencode fork — the same command surface, and the same provider keys. `kilocode run <message>` is its non-interactive mode, unverified here, so a fleet cannot name it yet.",
+    example: "sandbox-cli agent kilocode run 'explain this repository'",
+  },
+  {
     id: "copilot",
     name: "Copilot CLI",
     delivery: "first-run",
@@ -171,21 +182,16 @@ export const AGENTS: Agent[] = [
     example: "sandbox-cli agent cursor -- --sandbox disabled",
   },
   {
-    id: "droid",
-    name: "Droid",
+    id: "devin",
+    name: "Devin CLI",
     delivery: "first-run",
-    size: "148 MB",
-    login: "Device-code flow — code and URL printed, opened on your host.",
-    env: [
-      "FACTORY_API_KEY",
-      "FACTORY_API_BASE_URL",
-      "FACTORY_APP_BASE_URL",
-      "FACTORY_AIRGAP_ENABLED",
-      "FACTORY_ENV",
-    ],
+    size: "158 MB",
+    login: "`/login` inside a session, unverified here. It is a paid product; the CLI needs an account.",
+    env: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
+    allow: ["cli.devin.ai", "static.devin.ai"],
     gotcha:
-      "The sandbox sets FACTORY_DISABLE_KEYRING=1 so credentials stay in a file the sandbox can copy back out, even if the upstream default changes.",
-    example: "sandbox-cli agent droid exec 'run the tests'",
+      "Its headless mode (devin -p PROMPT) and auto-approval (--permission-mode bypass) are documented but unverified here, so a fleet cannot name it yet — a descriptor is earned by running the agent, not by reading its docs.",
+    example: "sandbox-cli agent devin -p 'explain this repository'",
   },
   {
     id: "cline",
@@ -203,18 +209,7 @@ export const AGENTS: Agent[] = [
     ],
     gotcha:
       "With an OAuth provider and no stored credentials it fails with an auth message rather than opening a browser. That's intended, not a crash.",
-    example: "sandbox-cli agent cline task 'run the tests'",
-  },
-  {
-    id: "amp",
-    name: "Amp",
-    delivery: "first-run",
-    size: "107 MB",
-    login: "`amp login` prints a URL for your host and takes the code back in the terminal.",
-    env: ["AMP_API_KEY", "AMP_URL", "AMP_LOG_LEVEL", "AMP_SKIP_UPDATE_CHECK"],
-    gotcha:
-      "Leave the native-keyring setting off. Turning it on migrates the token into a keyring and deletes the file — in a sandbox that trades a working login for none.",
-    example: "sandbox-cli agent amp -x 'run the tests'",
+    example: "sandbox-cli agent cline 'run the tests'",
   },
   {
     id: "qwen",
@@ -257,56 +252,6 @@ export const AGENTS: Agent[] = [
     gotcha:
       "LLM_* only take effect if you also pass --override-with-envs — that's OpenHands' rule, and it's why an exported key can look ignored.",
     example: "sandbox-cli agent openhands -- --override-with-envs",
-  },
-  {
-    id: "crush",
-    name: "Crush",
-    delivery: "first-run",
-    size: "81 MB",
-    login: "`crush login` shows a short code — open the page on your host and paste it.",
-    env: [
-      "ANTHROPIC_API_KEY",
-      "OPENAI_API_KEY",
-      "GEMINI_API_KEY",
-      "OPENROUTER_API_KEY",
-      "GROQ_API_KEY",
-      "HYPER_API_KEY",
-    ],
-    gotcha:
-      "Crush speaks to roughly 25 providers; forward any other key with -e NAME.",
-    example: "sandbox-cli agent crush -e CEREBRAS_API_KEY",
-  },
-  {
-    id: "continue",
-    name: "Continue CLI",
-    delivery: "first-run",
-    size: "65 MB",
-    login: "None. Hub auth was removed upstream — the key is written into the agent home.",
-    env: ["ANTHROPIC_API_KEY", "CONTINUE_API_BASE", "GOOGLE_CLOUD_PROJECT"],
-    allow: ["api.continue.dev"],
-    gotcha:
-      "`cn login` and CONTINUE_API_KEY in the published docs are stale and do nothing. With --allow, permit api.continue.dev or it has no config to start from.",
-    example: "sandbox-cli agent continue --allow api.continue.dev",
-  },
-  {
-    id: "aider",
-    name: "Aider",
-    delivery: "first-run",
-    size: "~300 MB",
-    login: "None at all — export a provider key on your host.",
-    env: [
-      "OPENAI_API_KEY",
-      "ANTHROPIC_API_KEY",
-      "GEMINI_API_KEY",
-      "DEEPSEEK_API_KEY",
-      "OPENROUTER_API_KEY",
-      "OPENAI_API_BASE",
-      "ANTHROPIC_API_BASE",
-    ],
-    allow: ["astral.sh"],
-    gotcha:
-      "The workspace must be a git repo, and Aider writes into your project: a chat history file, a tags cache, and an appended `.aider*` line in .gitignore. Pass --no-gitignore to stop the last one.",
-    example: "OPENAI_API_KEY=… sandbox-cli agent aider",
   },
 ];
 

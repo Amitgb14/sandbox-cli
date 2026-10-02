@@ -648,7 +648,9 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     do with sandboxes. `agentusage` and its tests are in git history if Studio
     ever wants the figures; `humanAge` and `shortenHome` went back to `_old/`
     for `recover` and `context list`.
-  - **Agents under `sandbox-cli agent`.** The fifteen wrappers and `fleet` moved
+  - **Agents under `sandbox-cli agent`.** (Twelve since the rewrite merged with
+    `main`, whose roster removed six and added Kilo Code, Devin CLI and a
+    verified headless cline.) The fifteen wrappers and `fleet` moved
     there, with `agent ls` showing which agents can run unattended and whose
     login is saved. There are no aliases for the old spellings: there is no
     backward compatibility with beta.15's command line.
@@ -817,6 +819,20 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     never honoured. sandboxd cannot take them itself: the repository a
     checkpoint lands in is on the client's machine, which need not be the
     server's.
+
+  - **Merged with `main` (2026-10-02).** `main` released 0.0.1 and carried
+    beta.15's line on after it. That later work is in `_old/` as reference.
+    What it offers this design, to port when wanted:
+    - a codex transcript reader (`_old/internal/agentctx`), so a codex
+      conversation can brief the next agent;
+    - the session server's agent states (`working` / `blocked` / `idle`, from
+      the agent's own transcript) and `pane wait`;
+    - S3 mirroring of checkpoints, whose trust reasoning
+      (`docs/security/open-items.md`) applies unchanged;
+    - testing the Python SDK on 3.9 and 3.13 in CI.
+
+    The agent roster came across now, because it was a decision rather than a
+    feature: twelve agents, with cline headless.
 
 ## Risks
 

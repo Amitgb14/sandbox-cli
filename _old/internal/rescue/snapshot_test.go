@@ -66,7 +66,7 @@ func writeFile(t *testing.T, path, content string) {
 // snapshot by snapshot.
 func begin(t *testing.T, dir string) *Snapshotter {
 	t.Helper()
-	s := Begin(dir, "test", time.Minute, 14*24*time.Hour)
+	s := Begin(dir, "test", time.Minute, Retention{Run: 14 * 24 * time.Hour})
 	if s == nil {
 		t.Fatal("Begin returned nil for a git repository")
 	}
@@ -245,9 +245,35 @@ func TestRestoreOntoABranchChangesNothingElse(t *testing.T) {
 		t.Error("restore changed the working tree")
 	}
 
-	// A second restore must not silently clobber the first.
-	if _, err := Restore(repo, s.Session().ID, RestoreOptions{Branch: res.Branch}); err == nil {
-		t.Error("restoring onto an existing branch was allowed")
+	// A second restore of the same snapshot is the same restore, already done —
+	// the generated name embeds the session id, so the branch existing can only
+	// mean an earlier one succeeded. It reports that rather than refusing, and
+	// the assertion that matters is that it *clobbered nothing*: the branch still
+	// points where it did.
+	target := git(t, repo, "rev-parse", res.Branch)
+	again, err := Restore(repo, s.Session().ID, RestoreOptions{Branch: res.Branch})
+	if err != nil {
+		t.Fatalf("restoring a snapshot that is already on its branch: %v", err)
+	}
+	if !again.AlreadyRestored {
+		t.Error("a restore that created nothing did not say so")
+	}
+	if again.Branch != res.Branch {
+		t.Errorf("second restore reported branch %q, want %q", again.Branch, res.Branch)
+	}
+	if got := git(t, repo, "rev-parse", res.Branch); got != target {
+		t.Errorf("the existing branch was moved: %s -> %s", target, got)
+	}
+
+	// A name that exists and points somewhere *else* is a real collision —
+	// something took the name — and is still refused rather than moved.
+	git(t, repo, "branch", "taken", "HEAD")
+	takenAt := git(t, repo, "rev-parse", "taken")
+	if _, err := Restore(repo, s.Session().ID, RestoreOptions{Branch: "taken"}); err == nil {
+		t.Error("restoring over a branch pointing elsewhere was allowed")
+	}
+	if got := git(t, repo, "rev-parse", "taken"); got != takenAt {
+		t.Error("a refused restore moved the branch anyway")
 	}
 }
 
@@ -329,7 +355,7 @@ func TestRestorePatchFromAnUnbornRepository(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(repo, "first.txt"), "before any commit\n")
 
-	s := Begin(repo, "test", time.Minute, time.Hour)
+	s := Begin(repo, "test", time.Minute, Retention{Run: time.Hour})
 	if s == nil {
 		t.Fatal("Begin returned nil for a repository with no commits")
 	}
@@ -467,7 +493,7 @@ func TestPruneLeavesALiveSessionAlone(t *testing.T) {
 // the run path calls Start/Stop unconditionally, so nil has to be safe.
 func TestBeginIsNilOutsideAGitRepository(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	s := Begin(t.TempDir(), "test", time.Minute, time.Hour)
+	s := Begin(t.TempDir(), "test", time.Minute, Retention{Run: time.Hour})
 	if s != nil {
 		t.Fatal("Begin returned a Snapshotter for a directory that is not a repository")
 	}
@@ -563,7 +589,7 @@ func TestSnapshotSkipsOversizedFiles(t *testing.T) {
 // conversation) is never mentioned.
 func TestRestoreReportsWhenTheWorkingTreeAlreadyMatches(t *testing.T) {
 	repo := initRepo(t)
-	s := Begin(repo, "test", time.Minute, time.Hour)
+	s := Begin(repo, "test", time.Minute, Retention{Run: time.Hour})
 
 	writeFile(t, filepath.Join(repo, "work.txt"), "the agent's work\n")
 	if _, err := s.Once(); err != nil {

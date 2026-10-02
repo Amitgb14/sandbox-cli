@@ -134,7 +134,7 @@ export const ROWS: Row[] = [
     label: "Coding agents",
     note: "Logins, fleets, fallbacks",
     cells: {
-      sandbox: s("Fifteen agents; logins kept; fleets and fallbacks"),
+      sandbox: s("Twelve agents; logins kept; fleets and fallbacks"),
       builtin: s("Built for one agent"),
       container: o("Some, per tool"),
       os: n("You wire it yourself"),

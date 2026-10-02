@@ -3,100 +3,13 @@ package agents
 import "sort"
 
 // The interactive-only agents: started in a terminal, with no verified headless
-// mode, so they are wrappers (`sandbox-cli agent aider`) and never fleet or routing
+// mode, so they are wrappers (`sandbox-cli agent goose`) and never fleet or routing
 // targets — an unattended agent that stops to ask does not fail, it hangs.
 //
 // Ported verbatim from beta.15's per-agent wrappers (_old/internal/cli/<agent>.go):
 // each env allowlist and install line keeps the comment that says why it is the
 // way it is. They install into the agent's HOME on first use, so the base image
 // carries none of them.
-
-// aiderEnvAllow is the suggested (opt-in) set of host env vars forwarded to an
-// Aider session, applied only if present in the host environment. Aider talks to
-// providers through litellm, so the list is provider keys and their base URLs.
-//
-// Aider derives an AIDER_* variable from every one of its flags, and the ones
-// naming files are deliberately absent — AIDER_CONFIG, AIDER_ENV_FILE,
-// AIDER_MODEL_SETTINGS_FILE, AIDER_MODEL_METADATA_FILE, AIDER_AIDERIGNORE,
-// AIDER_INPUT_HISTORY_FILE, AIDER_CHAT_HISTORY_FILE, AIDER_LLM_HISTORY_FILE,
-// AIDER_ANALYTICS_LOG. Each points at a host path that is not mounted.
-var aiderEnvAllow = []string{
-	"OPENAI_API_KEY",
-	"ANTHROPIC_API_KEY",
-	"GEMINI_API_KEY",
-	"DEEPSEEK_API_KEY",
-	"OPENROUTER_API_KEY",
-	"OPENAI_API_BASE",
-	"ANTHROPIC_API_BASE",
-}
-
-// aiderInstall installs Aider with uv, which is a single static binary that puts
-// both itself and the tools it installs under ~/.local — the persisted HOME —
-// with no root and no system Python packages touched.
-//
-// --python pins the interpreter to the image's own python3. Without it uv is
-// free to download a managed CPython, which is another ~87MB for an interpreter
-// already sitting in the image; bookworm ships 3.11 and Aider wants >=3.10,<3.13.
-//
-// The `==` version comes from the pin table (internal/agents/pins.go). uv itself
-// is still fetched unversioned from astral.sh: it is the installer, so pinning it
-// would mean pinning the thing that decides what a pin means, and astral's script
-// offers no version parameter to pass anyway. That half is recorded rather than
-// solved.
-var aiderInstall = `curl -LsSf https://astral.sh/uv/install.sh | sh && ` +
-	`uv tool install --python "$(command -v python3)" aider-chat` + pinnedSpec("aider", "==")
-
-// ampEnvAllow is the suggested (opt-in) set of host env vars forwarded to an Amp
-// session, applied only if present in the host environment.
-//
-// Amp's path-valued variables are deliberately absent — AMP_SETTINGS_FILE,
-// AMP_HOME, AMP_RIPGREP_PATH, AMP_LOG_FILE, AMP_PLUGIN_RUNTIME_LOG_FILE. AMP_HOME
-// relocates everything Amp stores, the access token included.
-var ampEnvAllow = []string{
-	"AMP_API_KEY",
-	"AMP_URL",
-	"AMP_LOG_LEVEL",
-	"AMP_SKIP_UPDATE_CHECK",
-}
-
-// clineEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
-// Cline session, applied only if present in the host environment. Cline drives
-// several providers, so the list spans them rather than naming one vendor.
-//
-// Cline's several path-valued variables are deliberately absent — CLINE_DATA_DIR,
-// CLINE_SANDBOX_DATA_DIR, CLINE_TEAM_DATA_DIR, CLINE_TOOL_APPROVAL_DIR,
-// CLINE_LOG_PATH, NODE_EXTRA_CA_CERTS. Each names a host directory that is not
-// mounted; forwarding one would point Cline's state at a path that does not
-// exist in the container, and CLINE_DATA_DIR in particular would move the login
-// out of the persisted HOME, quietly costing you the session on every run.
-var clineEnvAllow = []string{
-	"ANTHROPIC_API_KEY",
-	"CLINE_API_KEY",
-	"OPENAI_API_KEY",
-	"OPENROUTER_API_KEY",
-	"AI_GATEWAY_API_KEY",
-	"V0_API_KEY",
-}
-
-// continueEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
-// Continue CLI session, applied only if present in the host environment.
-//
-// CONTINUE_API_KEY is deliberately absent despite being the obvious candidate
-// and still documented upstream: it appears nowhere in the shipped CLI, so
-// forwarding it would do nothing while implying it did something. ANTHROPIC_API_KEY
-// is what the CLI actually reads.
-//
-// The path-valued CONTINUE_GLOBAL_DIR, GOOGLE_APPLICATION_CREDENTIALS and
-// AWS_LOGIN_CACHE_DIRECTORY are excluded for the usual reason.
-var continueEnvAllow = []string{
-	"ANTHROPIC_API_KEY",
-	"CONTINUE_API_BASE",
-	"AWS_ACCESS_KEY_ID",
-	"AWS_SECRET_ACCESS_KEY",
-	"AWS_SESSION_TOKEN",
-	"AWS_REGION",
-	"GOOGLE_CLOUD_PROJECT",
-}
 
 // copilotEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
 // GitHub Copilot CLI session, applied only if present in the host environment.
@@ -116,31 +29,6 @@ var copilotEnvAllow = []string{
 	"GH_HOST",
 	"COPILOT_MODEL",
 	"COPILOT_API_URL",
-}
-
-// crushEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
-// Crush session, applied only if present in the host environment. Crush speaks
-// to a long list of providers; the common ones are here, and anything else it
-// supports can be added per-run with --env-allow rather than carried by every
-// user forever.
-//
-// Crush's path-valued variables are deliberately absent — CRUSH_GLOBAL_CONFIG,
-// CRUSH_GLOBAL_DATA, CRUSH_CACHE_DIR, CRUSH_SKILLS_DIR, and the XDG_* trio that
-// Crush also honours. CRUSH_GLOBAL_DATA is the one to watch: credentials live
-// under it, so a forwarded host path would move the login somewhere the
-// container cannot see and lose it every run.
-var crushEnvAllow = []string{
-	"ANTHROPIC_API_KEY",
-	"OPENAI_API_KEY",
-	"GEMINI_API_KEY",
-	"OPENROUTER_API_KEY",
-	"GROQ_API_KEY",
-	"HYPER_API_KEY",
-	"AWS_ACCESS_KEY_ID",
-	"AWS_SECRET_ACCESS_KEY",
-	"AWS_REGION",
-	"AZURE_OPENAI_API_KEY",
-	"AZURE_OPENAI_API_ENDPOINT",
 }
 
 // cursorEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
@@ -304,6 +192,43 @@ var qwenEnvAllow = []string{
 // NO_BROWSER stops it trying to open a browser that cannot exist here.
 var qwenForcedEnv = []string{"SANDBOX=1", "NO_BROWSER=1"}
 
+// devinEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
+// Devin CLI session, applied only if present in the host environment.
+//
+// Deliberately short. The vendor documents `/login` inside the session as the
+// auth route and names no environment variable for a key, so guessing one here
+// would forward nothing and imply a route that may not exist. `DEVIN_API_KEY` is
+// listed because the product's HTTP API uses it; if the CLI ignores it, the cost
+// is a variable that crosses and is not read, which is the harmless direction.
+// No path-valued variables, for the reason no adapter here forwards one.
+var devinEnvAllow = []string{
+	"DEVIN_API_KEY",
+	"DEVIN_API_BASE_URL",
+}
+
+// devinInstall runs the vendor installer, the only route documented for macOS
+// and Linux outside its desktop bundle. Unpinned, and recorded as such in
+// pins.go: the installer takes the latest promoted version and offers no
+// switch.
+const devinInstall = `curl -fsSL https://cli.devin.ai/install.sh | bash`
+
+// kilocodeEnvAllow is the suggested (opt-in) set of host env vars forwarded to a
+// Kilo Code session.
+//
+// Kilo Code's CLI is an opencode fork — its command surface (`run`, `auth`,
+// `serve`, `mcp`, `models`) is opencode's — so it reads the same provider keys,
+// and this list is opencode's for that reason. `KILOCODE_API_KEY` is its own
+// gateway's name and the one unverified entry. Its `run` mode is unverified too,
+// so it is a console agent until somebody runs one.
+var kilocodeEnvAllow = []string{
+	"KILOCODE_API_KEY",
+	"ANTHROPIC_API_KEY",
+	"OPENAI_API_KEY",
+	"GEMINI_API_KEY",
+	"GROQ_API_KEY",
+	"OPENROUTER_API_KEY",
+}
+
 // pinnedSpec renders a pinned version into an install line, sep first, or
 // nothing when the agent has no pin.
 func pinnedSpec(bin, sep string) string {
@@ -314,14 +239,13 @@ func pinnedSpec(bin, sep string) string {
 }
 
 var interactive = map[string]Descriptor{
-	"aider":     {Name: "aider", PersistDir: "aider", EnvAllow: aiderEnvAllow, Command: Bootstrap("aider", aiderInstall)},
-	"amp":       {Name: "amp", PersistDir: "amp", EnvAllow: ampEnvAllow, Command: NpmBootstrap("amp", "@ampcode/cli")},
-	"cline":     {Name: "cline", PersistDir: "cline", EnvAllow: clineEnvAllow, Command: NpmBootstrap("cline", "cline")},
-	"continue":  {Name: "continue", PersistDir: "continue", EnvAllow: continueEnvAllow, Command: NpmBootstrap("cn", "@continuedev/cli")},
-	"copilot":   {Name: "copilot", PersistDir: "copilot", EnvAllow: copilotEnvAllow, Command: NpmBootstrap("copilot", "@github/copilot")},
-	"crush":     {Name: "crush", PersistDir: "crush", EnvAllow: crushEnvAllow, Command: NpmBootstrap("crush", "@charmland/crush")},
-	"cursor":    {Name: "cursor", PersistDir: "cursor", EnvAllow: cursorEnvAllow, Command: Bootstrap("cursor-agent", cursorInstall), Env: []string{cursorNoBrowser}},
-	"goose":     {Name: "goose", PersistDir: "goose", EnvAllow: gooseEnvAllow, Command: Bootstrap("goose", gooseInstall), Env: []string{gooseDisableKeyring}},
+	"copilot": {Name: "copilot", PersistDir: "copilot", EnvAllow: copilotEnvAllow, Command: NpmBootstrap("copilot", "@github/copilot")},
+	"cursor":  {Name: "cursor", PersistDir: "cursor", EnvAllow: cursorEnvAllow, Command: Bootstrap("cursor-agent", cursorInstall), Env: []string{cursorNoBrowser}},
+	"devin":   {Name: "devin", PersistDir: "devin", EnvAllow: devinEnvAllow, Command: Bootstrap("devin", devinInstall)},
+	"goose":   {Name: "goose", PersistDir: "goose", EnvAllow: gooseEnvAllow, Command: Bootstrap("goose", gooseInstall), Env: []string{gooseDisableKeyring}},
+	// The binary is `kilocode`; its own help calls the command `kilo`, which is
+	// the name inside the tool rather than on disk.
+	"kilocode":  {Name: "kilocode", PersistDir: "kilocode", EnvAllow: kilocodeEnvAllow, Command: NpmBootstrap("kilocode", "@kilocode/cli")},
 	"openhands": {Name: "openhands", PersistDir: "openhands", EnvAllow: openhandsEnvAllow, Command: Bootstrap("openhands", openhandsInstall)},
 	"qwen":      {Name: "qwen", PersistDir: "qwen", EnvAllow: qwenEnvAllow, Command: NpmBootstrap("qwen", "@qwen-code/qwen-code"), Env: qwenForcedEnv},
 }

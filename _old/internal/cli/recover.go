@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/rescue"
 )
 
@@ -30,6 +32,7 @@ func newRecoverCmd() *cobra.Command {
 		Example: "  sandbox-cli recover\n" +
 			"  sandbox-cli recover list\n" +
 			"  sandbox-cli recover restore 20260724-224601\n" +
+			"  sandbox-cli recover fetch\n" +
 			"  sandbox-cli recover repair",
 		RunE: func(cmd *cobra.Command, args []string) error { return runRecoverStatus() },
 	}
@@ -37,6 +40,7 @@ func newRecoverCmd() *cobra.Command {
 		newRecoverListCmd(),
 		newRecoverShowCmd(),
 		newRecoverRestoreCmd(),
+		newRecoverFetchCmd(),
 		newRecoverRepairCmd(),
 		newRecoverPruneCmd(),
 	)
@@ -139,7 +143,11 @@ func printSnapshots(snaps []rescue.Snapshot, all bool) error {
 	}
 	fmt.Fprintln(tw, header)
 	withAgent := false
+	baselines := 0
 	for _, s := range snaps {
+		if s.IsBaseline() {
+			baselines++
+		}
 		branch := s.Branch
 		if branch == "" {
 			branch = "-"
@@ -162,6 +170,23 @@ func printSnapshots(snaps []rescue.Snapshot, all bool) error {
 	}
 	if err := tw.Flush(); err != nil {
 		return err
+	}
+	if baselines > 0 {
+		// Marked rather than hidden. The daemon hides these because its screen
+		// offers a Restore button beside each row, and offering to restore a
+		// before-image is the trap; this listing is what somebody reads while
+		// hunting for lost work, and "no snapshots recorded" would be a worse
+		// answer than "there was a run, and this is all it left".
+		// "1 of these are baselines" is the *common* case — a daemon run leaves
+		// exactly one session — so the singular is not an edge worth skipping.
+		// ANSI rather than markdown asterisks, which a terminal prints literally;
+		// printFindings above already uses \033[1m for the same job.
+		subject := fmt.Sprintf("%d of these are baselines", baselines)
+		if baselines == 1 {
+			subject = "one of these is a baseline"
+		}
+		fmt.Printf("\n%s: the workspace as the run \033[1mstarted\033[0m, captured before the\n", subject)
+		fmt.Println("agent ran. Restoring one gives you the starting state, not the work.")
 	}
 	if withAgent {
 		// Not a per-row lookup: resolving each run's transcript means probing the
@@ -202,6 +227,13 @@ func newRecoverShowCmd() *cobra.Command {
 			wd, err := os.Getwd()
 			if err != nil {
 				return err
+			}
+			if snap, ferr := rescue.Find(wd, args[0]); ferr == nil && snap.IsBaseline() {
+				// Before the diff, because git streams its own output and anything
+				// after it scrolls past. A baseline's diff is the workspace as the
+				// run *started*, and nothing in git's output says so.
+				fmt.Fprintf(os.Stderr, "sandbox-cli: \033[1mthis is a baseline\033[0m — what follows is the workspace\n")
+				fmt.Fprintf(os.Stderr, "  as the run started, not as the agent left it.\n\n")
 			}
 			err = rescue.Show(wd, args[0], patch)
 			// git streams its own output, including its diagnostics, so a non-zero
@@ -277,6 +309,17 @@ func reportRestore(res rescue.RestoreResult, mode rescue.RestoreMode) {
 	} else {
 		was = "branch " + was
 	}
+	// Before the mode-specific output, so it reaches every mode. It used to live
+	// in the branch case alone, which left it out of the two where it costs most:
+	// `--into-worktree` *overwrites*, so restoring a baseline there replaces the
+	// agent's work with the state from before the run and then prints "Keep it
+	// with: git commit" — committing that reverts exactly what somebody was
+	// hunting for. `--patch` writes a diff nothing labels either.
+	if res.Snapshot.IsBaseline() {
+		fmt.Fprintf(os.Stderr, "sandbox-cli: \033[1mthis is a baseline\033[0m — the workspace as the run started,\n")
+		fmt.Fprintf(os.Stderr, "  captured before the agent ran. It holds nothing the agent went on to write.\n")
+	}
+
 	switch mode {
 	case rescue.RestorePatch:
 		if res.Patch != "-" {
@@ -289,7 +332,15 @@ func reportRestore(res rescue.RestoreResult, mode rescue.RestoreMode) {
 		fmt.Fprintf(os.Stderr, "  Keep it with: git commit\n")
 	default:
 		fmt.Println(res.Branch)
-		fmt.Fprintf(os.Stderr, "sandbox-cli: created branch %q from %s", res.Branch, was)
+		if res.AlreadyRestored {
+			// Not "created": nothing was. The branch name embeds the session id, so
+			// this snapshot had been restored before and the branch already holds
+			// it — saying "created" would send somebody looking for a change that
+			// happened days ago.
+			fmt.Fprintf(os.Stderr, "sandbox-cli: %q already holds this snapshot — nothing to do", res.Branch)
+		} else {
+			fmt.Fprintf(os.Stderr, "sandbox-cli: created branch %q from %s", res.Branch, was)
+		}
 		if res.Files > 0 {
 			fmt.Fprintf(os.Stderr, " (%d file(s) changed)", res.Files)
 		}
@@ -433,4 +484,290 @@ func newRecoverPruneCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&olderThan, "older-than", 14*24*time.Hour, "delete sessions with no activity for longer than this")
 	cmd.Flags().BoolVar(&superseded, "superseded", true, "also delete sessions whose work is already committed in this repository")
 	return cmd
+}
+
+// newRecoverFetchCmd is the way back from the bucket, and it exists because the
+// local ref is what every restore mode reads: bringing a snapshot home means
+// putting the objects where they always were, not teaching restore that a
+// network exists.
+//
+// Two shapes, because a machine that has lost its snapshots has also lost the
+// ids that name them. With no argument it reads the bucket's manifests — the few
+// hundred bytes per snapshot that make the bucket self-describing — and says
+// what is in there. With one, it fetches.
+func newRecoverFetchCmd() *cobra.Command {
+	var repoID string
+	cmd := &cobra.Command{
+		Use:   "fetch [ID]",
+		Short: "List or pull back snapshots mirrored to object storage",
+		Long: "With no ID, lists what the configured bucket holds for this repository —\n" +
+			"read from the manifests stored beside the bundles, so it works on a machine\n" +
+			"that has never seen these snapshots before.\n\n" +
+			"With an ID, downloads that snapshot's bundle and unpacks it back under\n" +
+			"refs/sandbox/snapshots/, after which `recover show`, `recover restore` and\n" +
+			"everything else work on it as if it had never left.\n\n" +
+			"A repository is addressed in the bucket by an id derived from its absolute\n" +
+			"path, so a clone in a new location looks in a namespace of its own. When\n" +
+			"that finds nothing, this reports which namespaces the bucket does hold and\n" +
+			"--repo-id reads one of them.\n\n" +
+			"  sandbox-cli recover fetch\n" +
+			"  sandbox-cli recover fetch 20260724-224601\n" +
+			"  sandbox-cli recover fetch --repo-id sandbox-cli-1f2e3d4c",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			wd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			root, err := rescue.MainRepoRoot(wd)
+			if err != nil {
+				return err
+			}
+			spec, err := snapshotBucket(wd)
+			if err != nil {
+				return err
+			}
+			if len(args) == 0 {
+				return listRemoteSnapshots(cmd.Context(), spec, wd, root, repoID)
+			}
+			return fetchRemoteSnapshot(cmd.Context(), spec, wd, root, repoID, args[0])
+		},
+	}
+	cmd.Flags().StringVar(&repoID, "repo-id", "",
+		"read the bucket namespace of another repository (default: this one's)")
+	return cmd
+}
+
+// snapshotBucket resolves the configured bucket, or explains where to configure
+// one. `snapshot.s3` is refused from a project .sandbox.yaml, so this is
+// deliberately the user's own config and never the repository's.
+func snapshotBucket(wd string) (*config.S3Spec, error) {
+	cfg, err := config.Load(wd, "")
+	if err != nil {
+		return nil, err
+	}
+	spec := cfg.Snapshot.S3
+	if spec == nil || spec.Bucket == "" {
+		return nil, fmt.Errorf("no snapshot bucket is configured; set snapshot.s3.bucket in %s",
+			config.UserConfigPath())
+	}
+	return spec, nil
+}
+
+// listRemoteSnapshots prints what the bucket holds, marking the ones that are
+// already here — a fetch of those would spend a download to arrive at bytes that
+// are on disk.
+func listRemoteSnapshots(ctx context.Context, spec *config.S3Spec, wd, root, repoID string) error {
+	found, total, err := rescue.RemoteSessions(ctx, spec, root, repoID)
+	if err != nil {
+		return err
+	}
+	if len(found) == 0 {
+		ns := repoID
+		if ns == "" {
+			ns = rescue.RemoteNamespace(root)
+		}
+		fmt.Printf("no snapshots in %s under %s\n", spec.Bucket, ns)
+		return reportOtherNamespaces(ctx, spec, root, repoID)
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "SESSION\tBRANCH\tAGENT\tUPLOADED\tSIZE\tWHERE")
+	for _, s := range found {
+		branch := s.Branch
+		if branch == "" {
+			branch = "-"
+		}
+		agent := s.Agent
+		if agent == "" {
+			agent = "-"
+		}
+		where := "bucket only"
+		if snap, err := rescue.Find(wd, s.ID); err == nil && snap.Reachable {
+			where = "here"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			s.ID, branch, agent, humanAge(s.Remote.UploadedAt), rescue.HumanBytes(s.Remote.Bytes), where)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	// Said rather than silently applied: a listing that stops without saying so
+	// reads as "this is everything".
+	if total > len(found) {
+		fmt.Printf("\nshowing %d of %d; the rest are in %s\n", len(found), total, spec.Bucket)
+	}
+	fmt.Println("\npull one back with: sandbox-cli recover fetch ID")
+	return nil
+}
+
+// reportOtherNamespaces answers the question an empty listing raises on a
+// machine that has just cloned the repository: the snapshots are in the bucket,
+// under the id the *old* path produced. Nothing can derive that here, so it
+// names what is there.
+func reportOtherNamespaces(ctx context.Context, spec *config.S3Spec, root, repoID string) error {
+	if repoID != "" {
+		return nil
+	}
+	ids, err := rescue.RemoteRepoIDs(ctx, spec)
+	if err != nil {
+		// The listing already answered the question that was asked. A second
+		// failure explaining why the hint is missing is noise on top of an empty
+		// result.
+		return nil
+	}
+	mine := rescue.RemoteNamespace(root)
+	var others []string
+	for _, id := range ids {
+		if id != mine {
+			others = append(others, id)
+		}
+	}
+	if len(others) == 0 {
+		return nil
+	}
+	fmt.Printf("\nthe bucket holds snapshots under %d other repository id(s):\n", len(others))
+	for _, id := range others {
+		fmt.Printf("  %s\n", id)
+	}
+	fmt.Println("\nA repository id is derived from its absolute path, so a clone in a new")
+	fmt.Println("location has one of its own. If this repository moved, read the old one:")
+	fmt.Printf("  sandbox-cli recover fetch --repo-id %s\n", others[0])
+	return nil
+}
+
+// fetchRemoteSnapshot brings one snapshot back into refs/sandbox/.
+//
+// The local record is preferred over the bucket's copy of it, and not for
+// speed. Fetch compares the commit that arrives against the sha the manifest
+// recorded, which is the check that turns a tampered, shared or overwritten key
+// into a refusal instead of a restore of somebody else's tree. That comparison
+// is only worth something when the sha came from *this* machine — so a session
+// this machine still remembers is fetched against its own record, and one read
+// out of the bucket is fetched against a sha from the same bucket, which is
+// consistency rather than provenance. Said out loud below, because the
+// difference is invisible in a successful run.
+func fetchRemoteSnapshot(ctx context.Context, spec *config.S3Spec, wd, root, repoID, id string) error {
+	// Find returns a populated snapshot *beside* its error whenever it found the
+	// manifest, so the id is the discriminator between "this machine has no
+	// record of it" — the bucket's job, below — and "the record is here and
+	// something else is wrong", which the bucket cannot improve on.
+	snap, err := rescue.Find(wd, id)
+	switch {
+	case err == nil:
+		fmt.Printf("%s is already in this repository\n", snap.ID)
+		fmt.Printf("  Look at it:  sandbox-cli recover show %s\n", snap.ID)
+		fmt.Printf("  Put it back: sandbox-cli recover restore %s\n", snap.ID)
+		return nil
+
+	case errors.Is(err, rescue.ErrSnapshotGone):
+		// The record is here and the objects are not. This is the path worth
+		// preferring: the sha to check the bundle against was written by this
+		// machine, so the comparison proves provenance rather than the bundle
+		// merely agreeing with the manifest that travelled beside it.
+		//
+		// Attempted whether or not the manifest records an upload. It used to
+		// refuse without one, which made the two halves of this command disagree:
+		// `recover fetch` listed the snapshot as being in the bucket — the
+		// listing derives its key from the repository and session ids — while
+		// `recover fetch <id>` said it was gone. A manifest has no remote after an
+		// interrupted mirror, which puts the object and then records it, and after
+		// a record rebuilt from the bucket; neither means the bucket is empty.
+		// Fetch derives the same key when the manifest carries none and reports a
+		// clean "not in <bucket>" when nothing is there, so trying costs one round
+		// trip and the local sha still gates what comes back.
+		sess := snap.Session
+		if repoID != "" {
+			// An explicitly named namespace wins over the derived one, because the
+			// derived one cannot be right here: a repository id hashes its
+			// **absolute path**, so a copy uploaded from a machine that kept the
+			// repository elsewhere is under a key nothing local can compute. Left
+			// alone, --repo-id steered the listing and was silently ignored by the
+			// fetch beside it.
+			sess.Remote = &rescue.RemoteRef{
+				Bucket: spec.Bucket,
+				Key:    rescue.RemoteBundleKey(repoID, sess.ID),
+			}
+		}
+		if err := rescue.Fetch(ctx, &sess, spec); err != nil {
+			return err
+		}
+		if err := sess.Save(); err != nil {
+			return err
+		}
+		reportFetched(sess, true)
+		return nil
+
+	case snap.ID != "":
+		// Found, and unfetchable for a reason the bucket does not address — a
+		// session that captured nothing has nothing in there either.
+		return err
+	}
+
+	found, _, err := rescue.RemoteSessions(ctx, spec, root, repoID)
+	if err != nil {
+		return err
+	}
+	sess, err := pickRemote(found, id)
+	if err != nil {
+		return err
+	}
+	if err := rescue.Fetch(ctx, &sess, spec); err != nil {
+		return err
+	}
+	// Adopted only after the objects are here. A manifest written first would
+	// advertise a snapshot that a failed download left unrestorable — the state
+	// Mirror orders its two uploads to avoid, from the other end.
+	if err := sess.Save(); err != nil {
+		return err
+	}
+	reportFetched(sess, false)
+	return nil
+}
+
+// pickRemote resolves an id or unambiguous prefix against the bucket listing.
+// Ambiguity refuses and names the candidates, the rule resolveSession keeps: the
+// cost of guessing here is restoring the wrong work.
+func pickRemote(found []rescue.Session, id string) (rescue.Session, error) {
+	var matches []rescue.Session
+	for _, s := range found {
+		if s.ID == id {
+			return s, nil
+		}
+		if strings.HasPrefix(s.ID, id) {
+			matches = append(matches, s)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return rescue.Session{}, fmt.Errorf(
+			"no snapshot %q in this repository or in the bucket; `sandbox-cli recover fetch` lists what is there", id)
+	default:
+		var ids []string
+		for _, m := range matches {
+			ids = append(ids, m.ID)
+		}
+		return rescue.Session{}, fmt.Errorf("%q matches %s; name one", id, strings.Join(ids, ", "))
+	}
+}
+
+func reportFetched(sess rescue.Session, wasLocal bool) {
+	bucket := "the bucket"
+	if sess.Remote != nil && sess.Remote.Bucket != "" {
+		bucket = sess.Remote.Bucket
+	}
+	fmt.Println(sess.ID)
+	fmt.Fprintf(os.Stderr, "sandbox-cli: fetched %s from %s into %s\n", sess.ID, bucket, sess.Ref)
+	if !wasLocal {
+		// The one thing a successful fetch cannot show. A snapshot this machine
+		// never recorded was checked against a sha that travelled with it, so what
+		// held is that the bundle and its manifest agree — not that either is the
+		// work this repository once had.
+		fmt.Fprintf(os.Stderr, "  This machine had no record of it, so the commit was checked only against\n")
+		fmt.Fprintf(os.Stderr, "  the manifest beside it in the bucket. Look before you restore.\n")
+	}
+	fmt.Fprintf(os.Stderr, "  Look at it:  sandbox-cli recover show %s\n", sess.ID)
+	fmt.Fprintf(os.Stderr, "  Put it back: sandbox-cli recover restore %s\n", sess.ID)
 }

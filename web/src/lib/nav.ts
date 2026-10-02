@@ -83,7 +83,7 @@ export const NAV: NavEntry[] = [
       {
         href: "#agents",
         label: "Coding agents",
-        hint: "fifteen of them, under one prefix, logins kept between runs",
+        hint: "twelve of them, under one prefix, logins kept between runs",
       },
       {
         href: MULTI_AGENT_PATH,

@@ -127,11 +127,15 @@ func TestCodexAutonomousUsesExec(t *testing.T) {
 func TestEveryAgentHasAVerifiedHeadlessArgv(t *testing.T) {
 	// agent -> the tokens that make its run non-interactive.
 	headless := map[string][]string{
+		// Verified 2026-08-24 by running it: a bare positional prompt is cline's
+		// non-interactive mode — act mode with auto-approve on, TUI behind `-i` —
+		// so the recorded token is the prompt itself. The run wrote its file and
+		// exited 0 with nothing attached.
+		"cline":    {"do the thing", "--auto-approve"},
 		"claude":   {"-p", "--dangerously-skip-permissions"},
 		"codex":    {"exec"},
 		"gemini":   {"-p", "--yolo"},
 		"opencode": {"run"},
-		"droid":    {"exec"},
 	}
 	for _, name := range Names() {
 		want, ok := headless[name]
@@ -203,7 +207,7 @@ func TestInteractiveAgentsAreComplete(t *testing.T) {
 			t.Errorf("%s claims a headless mode from the interactive table", name)
 		}
 	}
-	if got := len(InteractiveNames()); got != 15 {
-		t.Errorf("%d agents have wrappers, want 15", got)
+	if got := len(InteractiveNames()); got != 12 {
+		t.Errorf("%d agents have wrappers, want 12", got)
 	}
 }

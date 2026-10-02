@@ -10,8 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`sandbox-cli` runs AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose, Crush, Aider,
-Copilot CLI, Cursor, Qwen, Amp, Continue, OpenHands, Droid) or any command inside a disposable,
+`sandbox-cli` runs AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose,
+Copilot CLI, Cursor, Qwen, OpenHands, Devin, Kilo Code) or any command inside a disposable,
 isolated Docker container. Only the chosen project is bind-mounted at `/workspace`; `HOME` is a
 fake ephemeral path (`/sandbox/home`) and the container is `--rm` (the single exception is
 `--detach`, below). The goal is to give an agent "Allow All" autonomy while limiting the blast
@@ -54,6 +54,25 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   mount of `/etc/localtime`, since a name is a string and a mount is another host path. It
   yields to any `TZ` the user set themselves, and an unresolvable zone forwards nothing rather
   than guessing. `hostTimezone` is a var so tests can pin the one input that differs per machine.
+  `terminal.go` does the same for the **terminal**: `docker run -t` says `TERM=xterm` and
+  nothing else, so an agent's TUI inside the sandbox draws for eight colours while the same
+  agent on the host has 256 and truecolor — goose's banner is the visible case, and every
+  colourised diff the quiet one. `TERM` and `COLORTERM` cross **by name**, **only when a pty
+  exists** (without one there is no terminal to describe, and a `TERM` in a pipe invites escape
+  codes into a log read as text), and they yield both to `--env` and to forwarding by name.
+  The half that is easy to get wrong is that **a name is only useful if the container can
+  resolve it**: the image ships `ncurses-base`, which knows `xterm`, `screen`, `tmux` and
+  friends and not `xterm-ghostty` or `alacritty`. Forwarded verbatim, those leave `tput`
+  answering "unknown terminal" and `less` — git's pager — printing "not fully functional" and
+  **waiting for a keystroke**, which is worse than the eight colours this fixes. So a name the
+  image knows passes through, and anything else becomes `xterm-256color` when the host can
+  prove it has the colour (`256color` in the name, or a `COLORTERM`), else nothing at all —
+  leaving docker's own `xterm`, which is where this started. `knownTerminfo` is that list, kept
+  small on purpose: a missing name costs a downgrade, a wrongly-assumed one costs a hung pager.
+  A **console** run ignores the host entirely and is told `xterm-256color` + `truecolor`, because
+  what attaches is xterm.js — and the daemon inherits the shell that started it, so "the host
+  has no terminal" is exactly the assumption that does not hold. Neither name is privileged:
+  both are read by the agent long after the drop.
 - **`internal/runtime`** — `BuildArgs(RunSpec) []string` is a **pure, deterministic function** that
   produces the `docker` argv. `engine.go` holds the **podman dialect**: the engines differ in only
   three places — how they answer questions about the host, how they isolate containers from each
@@ -63,7 +82,19 @@ cmd/sandbox-cli  →  internal/cli  →  config.Load + sandbox.BuildSpec  →  r
   allowlist needs no weaker mode. And netavark has no `enable_icc`: its `isolate=true` blocks traffic
   between *different* networks while leaving same-network peers reachable — confirmed by reading one
   container's data from another — so podman gets **one isolated network per sandbox**, where docker
-  shares one. Podman answers `info` with different shapes too, and via JSON keys rather than template
+  shares one. That per-sandbox network is the one thing in the podman dialect with an upkeep cost,
+  and `netreap.go` is it: a **detached** run deliberately leaves its network with machine lifetime,
+  so `clean` is the only collector, and an uncollected one is not merely untidy — a network holding
+  a dead container's IPAM entry makes `podman network reload --all` fail for *every* network on the
+  host, which is the documented repair after firewalld drops netavark's rules. Reaping is therefore
+  three cases rather than one, all measured on podman 6.0.2: nothing attached is a plain `network
+  rm`, **an exited container still holds a network** (plain `rm` refuses — the assumption that only
+  a *running* container does is what let the leak survive a `clean` that reported success) and needs
+  `-f`, and anything live, or any container this command does not own, is left alone and **named**
+  in the output. `-f` removes containers along with the network, which is why ownership is decided
+  by the `sandbox.cli` label filter rather than by parsing the label column: a label value
+  containing `,sandbox.cli=` would otherwise make somebody else's container look like ours, and that
+  is the one mistake that would delete it. Issue #77. Podman answers `info` with different shapes too, and via JSON keys rather than template
   field names, because its Go struct names and JSON keys disagree. A **fourth** difference showed up
 later and only on native Linux, which is why the first version looked complete: rootless podman maps
 the host user to container **uid 0**, so a bind-mounted workspace appears root-owned and the sandbox
@@ -224,6 +255,66 @@ rather than merely passing.
   Session manifests live outside every repo (`~/.config/sandbox/rescue/<repo-id>/`) because the
   repo is often the broken thing. Keep the rule: rescue only ever *creates* objects and refs
   under `refs/sandbox/`. Design and rejected alternatives: `docs/proposals/crash-recovery.md`.
+
+  `remote.go` mirrors a snapshot to object storage, and the format is the decision: a
+  **git bundle**, so the object in the bucket is a packfile git alone can read on a
+  machine that has never seen the repository — `git init && git fetch <bundle>` — rather
+  than an archive that needs this tool. A `git clone` of it does *not* work, and that is a
+  consequence of the rule above rather than an oversight: a snapshot ref is not a branch,
+  so the bundle carries no HEAD, and giving it one would mean writing a `refs/heads` ref
+  to bundle it from. The accepted cost is that the bundle is **self-contained** — sized
+  like a clone, not like a diff — which is why the default is `upload: manual` and why
+  `max_object_mb` refuses one up front rather than at the far end of a transfer S3 was
+  always going to reject at 5 GiB. Mirroring is a **backup, never an offload**: the local
+  ref stays and is what `Restore` reads, so `Fetch` puts the objects back where they
+  always were and none of the three restore modes learns that a network exists. Two
+  refusals are load-bearing. `Fetch` validates the manifest's ref **before** spending a
+  download, since a manifest is a file on disk and is never allowed to name a branch. And
+  it compares the fetched sha against the one recorded locally — `git bundle verify` proves
+  a bundle is well formed, not that it is *yours*, and a well-formed bundle of somebody
+  else's commit served under this key restores as silent success. The manual path
+  **returns** a mirror failure while the loop **swallows** it, which is the same asymmetry
+  `Capture` and `Begin` already have: somebody who asked in as many words is owed the
+  answer, and a run whose network died still has a working local safety net. Retention
+  prunes the **local** copy only — deleting an off-machine backup on a timer that runs
+  only while the laptop is open loses the copy that was meant to survive the laptop — so
+  the bucket's own lifecycle rules govern the objects, and the Studio card says so.
+  Nothing here deletes a remote object at all: a `DeleteRemote` helper existed with no
+  caller and a doc comment reading "for pruning", which is a trap rather than a loose
+  end — the next reader wires it into `Prune` and the backup vanishes on the timer it
+  was meant to outlive. `sandbox-cli recover fetch` (`cli/recover.go`) is the way back
+  on a machine that still has this tool, and the two things it refuses to guess at are
+  both consequences of decisions made elsewhere. A repository is addressed in the bucket
+  by `worktree.RepoID`, a hash of its **absolute path**, so a clone in a new location
+  looks in an empty namespace of its own — an empty listing therefore names the other
+  ids that are in the bucket instead of reporting nothing, and `--repo-id` reads one.
+  And a session read *out of* the bucket is fetched against a sha that came from the
+  same bucket, so `Fetch`'s comparison then proves the bundle and its manifest agree
+  rather than that either is yours; the command says which of the two checks ran,
+  because a successful fetch looks identical either way.
+
+  `rescue.Find` returns a **populated snapshot beside its error** when the manifest
+  is here and the objects are not, and `ErrSnapshotGone` is the sentinel that says
+  which of its refusals is recoverable. That shape is load-bearing rather than
+  incidental: both callers with somewhere to look — the daemon's restore and
+  `recover fetch` — were originally written against `err != nil`, which made the
+  entire object-storage restore path unreachable, so a snapshot with a good copy in
+  the bucket answered 404. A refusal that carries the means to undo it has to be
+  matched on, not merely reported.
+- **`internal/s3`** — the smallest S3 client that can hold a snapshot: put, get, stat,
+  delete, list. Hand-rolled SigV4 against a published AWS test vector rather than the AWS
+  SDK, for the reason the module depends only on cobra and yaml.v3 — 15MB of transitive
+  code and a release cadence to track, in exchange for five requests whose signing has
+  been stable since 2012. The costs are named rather than hidden: no IMDS, no SSO, no
+  config-file profiles, no multipart. Vendors are **configuration, not a list**
+  (`Endpoint`, `PathStyle`), the same reason `creds`' prefix table stays short. Two things
+  are easy to get wrong twice: `Host` is not in `http.Request.Header`, so a signer walking
+  the map alone omits it and every server rejects the result while nothing local
+  complains; and `Stat` is a HEAD, whose response may carry no body, so it is the one
+  operation that can never surface an S3 error *code* — pinned by test so nobody spends an
+  afternoon looking for one. `Config` holds the **names** of the environment variables a
+  credential is read from and has nowhere to put a value, which is what lets the whole
+  struct cross the wire to a browser.
 - **`internal/agentctx`** — where each agent keeps its conversation transcripts, and the
   persisted record of what has actually been confirmed. The paths in `stores.go` are
   *candidates*, not facts: `Probe` looks for them on this machine and the `Registry`
@@ -231,9 +322,19 @@ rather than merely passing.
   deliberately **sticky** — a probe that finds nothing never erases a store verified
   earlier, because an agent HOME that is not mounted today is not the same as a store that
   never existed. `sessions.go` reads a verified store into `Session` values —
-  the claude-jsonl reader is the only one written against a confirmed format, so
-  everything else lists `Partial` (id and dates real, title and turn count shown as
-  `?`). Surfaced by the single command `sandbox-cli context list` — where a store
+  two formats have readers written against a confirmed shape, claude-jsonl and
+  codex's rollout JSONL, and everything else lists `Partial` (id and dates real,
+  title and turn count shown as `?`). The rule each reader keeps is the same one
+  wearing different clothes: **a user turn is a prompt somebody typed**. In
+  claude's transcripts the impostors are tool results arriving as user messages;
+  in codex's they are the `developer` messages it ships with and an injected
+  `<environment_context>` block written as the first user turn of every session
+  — counting those made a one-prompt session report two and titled every
+  conversation `<environment_context>`. A file a reader does not recognise stays
+  `Partial` rather than coming back as an empty conversation: no answer, never a
+  zero. Which reader runs is the store descriptor's `Format`, and
+  `agentctx.TranscriptOf` takes it from callers that know the agent — the sniff
+  in `Transcript` is for the ones holding only a path. Surfaced by the single command `sandbox-cli context list` — where a store
   lives is reported *inside* that listing (inline when it is empty, under `--verbose`
   when it is not) rather than by a second command, which read as two overlapping
   things to learn. First step of
@@ -278,7 +379,7 @@ rather than merely passing.
   run is what the user asked for, the record is a courtesy.
 - **`internal/agents`** — the agents the fleet knows how to start, as data: guest argv,
   `EnvAllow`, container `Env`, persisted-HOME name, and `Autonomous(prompt)`. Only agents with
-  a **verified headless mode** are in it (claude, codex, gemini, opencode, droid), because a
+  a **verified headless mode** are in it (claude, cline, codex, gemini, opencode), because a
   fleet is unattended and an agent that stops to ask permission does not fail — it hangs.
   `TestEveryAgentHasAVerifiedHeadlessArgv` is where that stops being a convention: a new
   descriptor with no recorded non-interactive argv fails the test rather than quietly widening
@@ -287,9 +388,13 @@ rather than merely passing.
   second copy of Claude's bootstrap script and the two had already diverged, one *prepending*
   the agent-writable HOME to `PATH` where the other appended. Two copies of a
   security-relevant script drift silently — which is also why `Bootstrap`/`NpmBootstrap` live
-  here rather than in `cli`, and why `Env` does: droid's `FACTORY_DISABLE_KEYRING` sat in the
-  wrapper, so a fleet running droid would have got an agent looking for a keyring the
-  container does not have, with nobody there to log in again. Deliberately **not** in a
+  here rather than in `cli`, and why `Env` does: a keyring opt-out that sat in the
+  wrapper meant a fleet running that agent got one looking for a keyring the
+  container does not have, with nobody there to log in again. No descriptor sets
+  `Env` today — droid, the one that did, was removed — so the tests that pin the
+  field set it on a copy rather than reading it from the table, which is what
+  keeps four call sites' worth of wiring from losing its coverage to a roster
+  change. Deliberately **not** in a
   descriptor: anything producing host paths — the status-line mount, the history mount, the
   persisted HOME itself. A descriptor says what runs inside the container and which host
   variable *names* may cross.
@@ -376,7 +481,7 @@ rather than merely passing.
   `-p <prompt>` where codex's is `exec <prompt>`, so replaying one agent's argv at another
   produces nonsense that fails in a way nobody would connect to routing. A chain therefore
   needs a prompt it can recover, and refuses rather than guessing when the last argument is a
-  flag. Only agents with a **verified headless mode** may be routed to; the ten adapters
+  flag. Only agents with a **verified headless mode** may be routed to; the seven adapters
   without a descriptor are untouched, and asking for a fallback on one is refused.
 
   `internal/handoff` is the conversation carried across, and it is a **briefing, not a
@@ -651,7 +756,10 @@ has the phased design notes, and is gitignored. The rules that follow from it:
 
 - **A project `.sandbox.yaml` is untrusted input** and the privilege-relevant keys are
   *refused* from it (`internal/config/trust.go`): `image`, `workdir`, `user`, `home`,
-  `runtime`, `mounts`, `secrets`, `env`, `env_allow`, `security.*`, `cache.paths`, and
+  `runtime`, `mounts`, `secrets`, `env`, `env_allow`, `security.*`, `cache.paths`,
+  `snapshot` (`enabled: false` silently removes crash protection, `interval: 1ms` is a
+  host busy-loop, and `s3:` names both an exfiltration destination and which of this
+  machine's credentials is read to reach it), and
   any `network.mode`/`network.baseline` that **weakens** what is already in force. A
   project may tighten (`default` → `allowlist` → `none`), never loosen. The escape
   hatches are the user's own config and an explicit `--config <path>`, where typing the
@@ -754,6 +862,67 @@ somebody quit — and `fleet` may never set it (`gates_test.go` classifies it `n
 unattended, which is the same reason `internal/agents` only admits agents with a verified headless
 mode. An agent that stops to ask does not fail, it hangs, holding a `max_parallel` slot.
 
+Studio no longer *asks* for it. The toggle started off, so the ordinary way to launch an
+agent from the browser produced a container with no stdin, and the way you found out was
+the Terminal tab refusing to be typed at after the agent had started. `consoleRun`
+(`launch-form.tsx`) derives it instead, and the rule is that **every exception is a pair
+the daemon already refuses** rather than a preference somebody encoded in the UI: no
+agent, a `verify` command, a `fallback` chain, or a prompt for an agent whose
+`ConsolePromptArgs` is nil. That is what makes deriving it honest — the form cannot pick
+a mode the daemon would 400, and it names which field chose the mode so the one to clear
+is on screen. It also inverts one control: `verify` used to be disabled by the toggle,
+and is now how you ask for a headless run. `console` is omitted from the form's own state
+type (`FormState = Omit<LaunchRequest, "console">`) rather than defaulted, since a field
+nothing may set is one the next reader wires a control back onto.
+
+The default had to move with it, and that is the half worth remembering: a **headless** run
+takes its skip-permissions flag from `Descriptor.Autonomous` whatever the form says, while a
+**console** run takes it from the request (`agent.Console(prompt, skipPermissions)`). So
+making the console the default without defaulting `skipPermissions` to true would have
+turned every launch-and-walk-away into an agent parked at its first approval in a container
+nobody is attached to — the same autonomy as before, lost by moving where it comes from.
+Checked rather than locked is strictly more control than the old form had; what the change
+costs is that the box has to *say* which, since "the prompt seeds the first turn" reads as
+"the run proceeds".
+
+`detach` was removed from `LaunchRequest` in the same pass, and the reason generalises: it
+was a form field the request had no home for, so it could only ever disagree with the
+daemon — and it did, silently, in three places (the preview, the success toast, and the
+`headlessVerified` warning, which never rendered because the field was always false). A
+control for something the daemon decides unconditionally is worse than no control.
+
+An agent's words are **formatted, never as markup it supplied**
+(`studio/src/components/common/agent-markdown.tsx`, shared by the live console and
+the stored-transcript viewer). Transcript text is untrusted twice over — written by
+an agent working in a repository whose contents it does not control either — so the
+renderer emits React elements and has **no HTML path at all**: not a library
+configured to disallow HTML, since a configuration can be changed by someone who
+does not know what it was for, and the absence of a code path cannot. Three rules
+follow and are pinned by `studio/e2e/md.spec.ts`, which stubs its own routes so the
+hostile input is written by hand rather than waited for: an image renders as *text*
+(fetching one reports when a transcript was read), a link is a link only for
+`http:`/`https:` with a bare URL never autolinked, and anything else shows its own
+source — and a destination the label does not already name is printed beside it,
+since a clickable label that is itself a trusted-looking URL is the shape that
+lies. A fourth rule is about the parser rather than the output: **every inline
+pattern is line-bounded and linear.** The first version matched code spans with a
+backreference to a variable-length run wrapped around a lazy match-anything, which
+backtracks cubically — 13 KB of backticks froze the tab for 12.9 seconds, so a
+renderer built on the assumption that the author is hostile could be hung by one.
+Bounded classes cost a code span containing a backtick and emphasis crossing a
+line; neither is something agents write — and the bound has to be on **every**
+class, which the first fix missed: the link label stayed `[^\]]*`, unbounded in
+both directions, so an unclosed `[` still scanned the whole message at every `[`
+(80 000 of them, 2.2s, cleanly quadratic). Caps on the label and the href make a
+failed attempt cost the cap rather than the message. Two further rules the first
+version claimed and did not keep: **code spans are found in a pass of their own**,
+because "code first" as an *alternation* is a different claim — a regex engine
+tries alternatives per position, not per priority, so an emphasis marker earlier
+in the line beat a code span later in it and swallowed its opening backtick; and
+**emphasis content must contain a letter or a digit**, since `ls -la **/*.go`
+otherwise matches `*/*` and renders a path that does not exist, which is the
+intraword-`_` failure one character class over. Issue #151.
+
 Reading and answering a console run over HTTP is `internal/studioapi/console.go`.
 Two halves, two mechanisms, and the split is the point: **reading** comes from the
 agent's transcript (`agentctx.Transcript`) because a TUI's stdout is repaints and
@@ -787,7 +956,7 @@ had, a keyboard on a live session is not.
 
 ### Agent wrappers
 
-Each wrapper is one file in `internal/cli` (`claude.go`, `gemini.go`, `aider.go`, …), listed in
+Each wrapper is one file in `internal/cli` (`claude.go`, `gemini.go`, `cline.go`, …), listed in
 `agentCmds()`, carrying a suggested opt-in env allowlist (e.g. `ANTHROPIC_API_KEY`, applied only if set) and ending
 in `finishAgentCmd(cmd, rf, "<agent>")` (`agents.go`), which adds the shared sandbox flags and
 **persists the agent login by default** by bind-mounting a sandbox-owned host dir
@@ -820,7 +989,7 @@ dies inside the container.
 deliberately the one that does not.** A *headless* run gets it from
 `Descriptor.Autonomous`, which appends `SkipPermissionArgs` — for the agents that have such a
 flag, because an agent that stops to ask with nobody attached does not fail, it hangs, holding
-a `max_parallel` slot. For codex, opencode and droid that list is **empty**: their
+a `max_parallel` slot. For codex and opencode that list is **empty**: their
 non-interactive mode is a subcommand, and codex "applies its own approval policy on top" which
 sandbox-cli does not relax. So "headless means no approvals" is true of claude and gemini and
 an assumption about the other three — Studio's toggle is keyed on `CanSkipPermissions` for

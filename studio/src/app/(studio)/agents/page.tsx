@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useAgents } from "@/lib/api/queries";
 
 /**
- * The fifteen agents. Unattended means a verified headless mode — the only
+ * The twelve agents. Unattended means a verified headless mode — the only
  * agents a fleet, a fallback or an unattended launch may use, because one that
  * stops to ask with nobody there does not fail, it hangs.
  */

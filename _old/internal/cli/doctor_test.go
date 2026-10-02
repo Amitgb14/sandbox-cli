@@ -33,6 +33,9 @@ func (f fakeHost) Available(context.Context) error { return f.unavailable }
 func (f fakeHost) SeccompUnavailable(context.Context) (bool, bool) {
 	return f.seccompOff, f.seccompKnow
 }
+func (f fakeHost) SeccompRemedy() string {
+	return runtime.SeccompRemedy(runtime.EngineDocker)
+}
 func (f fakeHost) Runtimes(context.Context) ([]string, error) { return f.runtimes, f.runtimesErr }
 func (f fakeHost) FirewallProgrammable(context.Context, string) (runtime.FirewallProbe, string) {
 	return f.firewall, f.firewallWhy
