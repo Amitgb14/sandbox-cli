@@ -15,7 +15,10 @@ import (
 var (
 	errnoNotDir   = errors.New("not a directory")
 	errnoNotEmpty = errors.New("directory not empty")
+	errnoReadOnly = errors.New("read-only file system")
 )
+
+func syncFilesystems(bool) {}
 
 func (s *Server) procAttr() *syscall.SysProcAttr { return nil }
 func (s *Server) chown(string)                   {}

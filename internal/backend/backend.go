@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
@@ -41,6 +42,25 @@ type Spec struct {
 	// FromSnapshot, when set, starts the sandbox from a snapshot of another —
 	// memory, processes and disk as they were — instead of booting the image.
 	FromSnapshot string
+	// Volumes are mounted at their paths. The server has checked that each
+	// exists, is attached nowhere else, and that the paths are allowed.
+	Volumes []api.VolumeMount
+}
+
+// VolumeStore keeps named volumes: filesystems that outlive the sandboxes they
+// are mounted in. The backend's own storage is the record of what exists, so
+// volumes survive a restart of sandboxd, which keeps no sandbox records.
+type VolumeStore interface {
+	CreateVolume(ctx context.Context, name string, sizeMB int) error
+	DeleteVolume(ctx context.Context, name string) error
+	Volumes(ctx context.Context) ([]VolumeInfo, error)
+}
+
+// VolumeInfo is one stored volume.
+type VolumeInfo struct {
+	Name      string
+	SizeMB    int
+	CreatedAt time.Time
 }
 
 // Suspender can stop a sandbox and bring it back later with its memory,
@@ -145,6 +165,7 @@ var (
 	ErrIsDir       = errors.New("is a directory")
 	ErrNotDir      = errors.New("not a directory")
 	ErrNotEmpty    = errors.New("directory not empty")
+	ErrReadOnly    = errors.New("read-only file system")
 	ErrNoSuchCmd   = errors.New("no such command")
 	ErrBadSignal   = errors.New("unsupported signal")
 	ErrUnavailable = errors.New("backend unavailable")

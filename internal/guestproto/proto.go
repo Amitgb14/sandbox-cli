@@ -42,6 +42,10 @@ const (
 	// OpDial connects to a port on the guest's loopback and, after the answer
 	// line, carries that connection's raw bytes both ways.
 	OpDial = "dial"
+	// OpSync flushes the guest's filesystems to their disks. The host asks
+	// before it stops a VM that has volumes: a VMM that is killed takes the
+	// guest's page cache with it, and a volume is meant to outlive the VM.
+	OpSync = "sync"
 )
 
 // Request is the first line of every connection.
@@ -58,6 +62,11 @@ type Request struct {
 	Tty  bool   `json:"tty,omitempty"`
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`
+	// Final, on a sync, says the VM is about to stop for good: the guest also
+	// remounts its volumes read-only, which commits their journals and marks
+	// them clean, so the next VM can mount one read-only. A sync before a
+	// suspend is not final — the sandbox runs again afterwards.
+	Final bool `json:"final,omitempty"`
 }
 
 // Response is the guest's answer line.
@@ -82,6 +91,7 @@ const (
 	CodeIsDir         = "is_dir"
 	CodeNotDir        = "not_dir"
 	CodeNotEmpty      = "not_empty"
+	CodeReadOnly      = "read_only"
 	CodeNoSuchCommand = "no_such_command"
 	CodeBadRequest    = "bad_request"
 	CodeTooLarge      = "too_large"

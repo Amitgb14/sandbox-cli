@@ -107,6 +107,10 @@ func (b *Backend) Suspend(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	// Volumes are written out first, so what is on their disks while the VM
+	// is suspended is complete: another process may read the image, and a
+	// suspended sandbox may be terminated without ever running again.
+	b.flushVolumes(v, false)
 	if err := b.snapshotTo(ctx, v, "suspend.state", "suspend.mem"); err != nil {
 		return err
 	}
@@ -240,7 +244,7 @@ func (b *Backend) createFromSnapshot(ctx context.Context, s backend.Spec) (err e
 		if rerr != nil {
 			return rerr
 		}
-		if _, err = b.cfg.Jailer.prepare(s.ID, b.cfg.Kernel, rootfs, ""); err != nil {
+		if _, err = b.cfg.Jailer.prepare(s.ID, b.cfg.Kernel, rootfs, "", nil); err != nil {
 			return err
 		}
 	}

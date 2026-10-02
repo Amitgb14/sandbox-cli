@@ -128,17 +128,20 @@ class Client:
                        disk_mb: int = 0, env: Optional[Dict[str, str]] = None,
                        network: Optional[Dict[str, Any]] = None, idle_timeout_secs: int = 0,
                        snapshot_id: str = "", bind: Optional[Dict[str, Any]] = None,
-                       labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                       labels: Optional[Dict[str, str]] = None,
+                       volumes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """Create a sandbox. ``network`` is ``{"mode": "none"|"allowlist"|"open",
         "allow": [...], "deny": [...]}``; ``"allow": None`` (or absent) means the
         server's default list, ``[]`` means nothing — which is refused.
         ``labels`` are your own metadata: returned with the sandbox, usable to
-        filter ``sandboxes()``, and recorded in its audit events."""
+        filter ``sandboxes()``, and recorded in its audit events. ``volumes`` is
+        ``[{"name": ..., "path": ..., "read_only": bool}]`` (capability
+        ``volumes``)."""
         req: Dict[str, Any] = {}
         for k, v in (("name", name), ("image", image), ("cpus", cpus), ("memory_mb", memory_mb),
                      ("disk_mb", disk_mb), ("env", env), ("network", network),
                      ("idle_timeout_secs", idle_timeout_secs), ("snapshot_id", snapshot_id), ("bind", bind),
-                     ("labels", labels)):
+                     ("labels", labels), ("volumes", volumes)):
             if v:
                 req[k] = v
         if network is not None and "allow" not in network:
@@ -154,6 +157,20 @@ class Client:
         if labels:
             path += "?" + urllib.parse.urlencode([("label", f"{k}={v}") for k, v in labels.items()])
         return self._json("GET", path)["sandboxes"]
+
+    def create_volume(self, name: str, size_mb: int = 0) -> Dict[str, Any]:
+        """A named filesystem that outlives the sandboxes it is mounted in."""
+        req: Dict[str, Any] = {"name": name}
+        if size_mb:
+            req["size_mb"] = size_mb
+        return self._json("POST", "/v1/volumes", req)
+
+    def volumes(self) -> List[Dict[str, Any]]:
+        return self._json("GET", "/v1/volumes")["volumes"]
+
+    def delete_volume(self, name: str) -> None:
+        """Deletes the volume and everything on it; refused while it is mounted."""
+        self._json("DELETE", "/v1/volumes/" + urllib.parse.quote(name, safe=""))
 
     def events(self, ref: str) -> Dict[str, Any]:
         """The sandbox's audit events, oldest first: ``{"events": [...],

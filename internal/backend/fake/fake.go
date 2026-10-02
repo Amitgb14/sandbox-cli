@@ -34,6 +34,16 @@ type Backend struct {
 	sandboxes map[string]*sandbox
 	caps      map[string]bool
 	snapshots map[string]fakeSnapshot
+	volumes   map[string]*fakeVolume
+}
+
+// fakeVolume holds a volume's files by path relative to its mount point. A
+// sandbox gets a copy at create and hands its changes back at terminate,
+// which is what a real one looks like from outside: what the last sandbox
+// left is what the next one finds.
+type fakeVolume struct {
+	info  backend.VolumeInfo
+	files map[string]*node
 }
 
 type fakeSnapshot struct {
@@ -56,7 +66,8 @@ type sandbox struct {
 
 // New returns an empty fake with the capabilities given (api.Cap* names).
 func New(caps ...string) *Backend {
-	b := &Backend{sandboxes: map[string]*sandbox{}, caps: map[string]bool{}, snapshots: map[string]fakeSnapshot{}}
+	b := &Backend{sandboxes: map[string]*sandbox{}, caps: map[string]bool{}, snapshots: map[string]fakeSnapshot{},
+		volumes: map[string]*fakeVolume{}}
 	for _, c := range caps {
 		b.caps[c] = true
 	}
@@ -64,6 +75,24 @@ func New(caps ...string) *Backend {
 }
 
 func (b *Backend) Name() string { return "fake" }
+
+// Count is how many sandboxes the fake holds, for tests.
+func (b *Backend) Count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.sandboxes)
+}
+
+// IDs is the set of sandboxes the fake holds, for tests.
+func (b *Backend) IDs() map[string]bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := map[string]bool{}
+	for id := range b.sandboxes {
+		out[id] = true
+	}
+	return out
+}
 
 func (b *Backend) Capabilities() map[string]bool {
 	out := map[string]bool{}
@@ -109,8 +138,61 @@ func (b *Backend) Create(_ context.Context, spec backend.Spec) error {
 		}
 		files = copyFiles(snap.files)
 	}
+	for _, m := range spec.Volumes {
+		v, ok := b.volumes[m.Name]
+		if !ok {
+			return backend.ErrNotFound
+		}
+		for dir := m.Path; dir != "/"; dir = path.Dir(dir) {
+			files[dir] = &node{dir: true}
+		}
+		for rel, n := range v.files {
+			files[path.Join(m.Path, rel)] = &node{dir: n.dir, data: append([]byte(nil), n.data...)}
+		}
+	}
 	b.sandboxes[spec.ID] = &sandbox{spec: spec, files: files}
 	return nil
+}
+
+// readOnly reports whether p is under one of the sandbox's read-only mounts.
+// Caller holds s.mu.
+func (s *sandbox) readOnly(p string) bool {
+	for _, m := range s.spec.Volumes {
+		if m.ReadOnly && (p == m.Path || strings.HasPrefix(p, m.Path+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Backend) CreateVolume(_ context.Context, name string, sizeMB int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.volumes[name]; ok {
+		return fmt.Errorf("fake: volume %s exists", name)
+	}
+	b.volumes[name] = &fakeVolume{info: backend.VolumeInfo{Name: name, SizeMB: sizeMB, CreatedAt: time.Now().UTC()}, files: map[string]*node{}}
+	return nil
+}
+
+func (b *Backend) DeleteVolume(_ context.Context, name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.volumes[name]; !ok {
+		return backend.ErrNotFound
+	}
+	delete(b.volumes, name)
+	return nil
+}
+
+func (b *Backend) Volumes(context.Context) ([]backend.VolumeInfo, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]backend.VolumeInfo, 0, len(b.volumes))
+	for _, v := range b.volumes {
+		out = append(out, v.info)
+	}
+	return out, nil
 }
 
 func copyFiles(in map[string]*node) map[string]*node {
@@ -179,7 +261,28 @@ func (b *Backend) Terminate(_ context.Context, id string) error {
 	s.mu.Lock()
 	s.stopped = true
 	procs := append([]*proc(nil), s.procs...)
+	// What the sandbox left under each writable mount becomes the volume.
+	saved := map[string]map[string]*node{}
+	for _, m := range s.spec.Volumes {
+		if m.ReadOnly {
+			continue
+		}
+		files := map[string]*node{}
+		for p, n := range s.files {
+			if strings.HasPrefix(p, m.Path+"/") {
+				files[strings.TrimPrefix(p, m.Path+"/")] = n
+			}
+		}
+		saved[m.Name] = files
+	}
 	s.mu.Unlock()
+	b.mu.Lock()
+	for name, files := range saved {
+		if v, ok := b.volumes[name]; ok {
+			v.files = files
+		}
+	}
+	b.mu.Unlock()
 	for _, p := range procs {
 		_ = p.Signal("KILL")
 	}
@@ -217,6 +320,9 @@ func (b *Backend) WriteFile(_ context.Context, id, p string, data []byte) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p = path.Clean(p)
+	if s.readOnly(p) {
+		return backend.ErrReadOnly
+	}
 	if n, ok := s.files[p]; ok && n.dir {
 		return backend.ErrIsDir
 	}
@@ -245,6 +351,9 @@ func (b *Backend) Remove(_ context.Context, id, p string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p = path.Clean(p)
+	if s.readOnly(p) {
+		return backend.ErrReadOnly
+	}
 	n, ok := s.files[p]
 	if !ok {
 		return backend.ErrNotFound

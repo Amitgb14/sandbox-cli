@@ -46,6 +46,7 @@ type runFlags struct {
 	fallback      []string
 	checkpoint    time.Duration
 	labels        []string
+	volumes       []string
 }
 
 func (rf *runFlags) register(cmd *cobra.Command) {
@@ -73,6 +74,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.fromSnapshot, "from-snapshot", "", "start from a snapshot (sandbox-cli snapshot) instead of the image")
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
 	f.DurationVar(&rf.checkpoint, "checkpoint-every", 5*time.Minute, "fetch the sandbox's working tree to refs/sandbox/checkpoints/<id> this often while attached, so a dead VM loses minutes rather than the run (0: never)")
+	f.StringArrayVar(&rf.volumes, "volume", nil, "mount a named volume, NAME:/path or NAME:/path:ro (repeatable; sandbox-cli volume)")
 	f.StringArrayVar(&rf.labels, "label", nil, "label the sandbox, key=value (repeatable); shown by list and recorded in its audit events")
 	f.StringArrayVar(&rf.fallback, "fallback", nil, "an agent to try next if this one's provider is down or it fails having changed nothing (repeatable; agent wrappers only)")
 }
@@ -139,6 +141,13 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	}
 	if req.Labels, err = buildLabels(rf.labels, rs); err != nil {
 		return 1, err
+	}
+	for _, v := range rf.volumes {
+		m, err := parseVolumeFlag(v)
+		if err != nil {
+			return 1, err
+		}
+		req.Volumes = append(req.Volumes, m)
 	}
 	req.Network = buildNetwork(rf, caps)
 	project := rf.project

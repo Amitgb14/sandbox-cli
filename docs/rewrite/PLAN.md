@@ -688,6 +688,28 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
       `docs/self-hosting.md` says so as a decision an operator may want
       reversed.
 
+  - **Volumes: done on Firecracker.** Each volume is a sparse ext4 file
+    attached as one more drive. The guest agent mounts it at boot from
+    `sbx.volumes`, and **the host never mounts one**. A volume is attached to
+    one live sandbox at a time. It cannot go in `/workspace`, `/tmp` or a
+    system directory, and cannot be snapshotted, since a fork would share it.
+    `read_only` is the drive's, not just the mount's.
+    - Two things real VMs found that the fake could not. A volume left with
+      its journal unreplayed could not be mounted from a read-only drive, so
+      stopping now flushes and remounts volumes read-only (`sync` with
+      `final`), and a read-only mount falls back to `noload` after a crash.
+      And killing a VMM drops the guest's page cache, so terminate and
+      suspend flush first.
+    - Conformance: `AVolumeOutlivesItsSandbox`, `VolumeMountsAreChecked`. Both
+      pass on the fake and on a real Firecracker sandboxd, 36 tests in all.
+    - The macOS backend reports no `volumes` capability. Whether the
+      `container` runtime's volumes fit is a question for a real Mac.
+  - **Pools: done.** `pools:` in the policy keeps sandboxes of one image's
+    default shape booted. A create resolving to exactly that shape claims
+    one; env, name, labels and the idle timeout are the server's and apply
+    as usual. Anything fixed at boot that differs boots fresh. Measured on
+    the dev host: under 1 ms against 95 ms for a boot.
+
     Not yet: checkpoints run only while a CLI is attached. Detached runs and
     fleet tasks have nothing driving them, so a detached run's protection is
     still bring-back before the idle timeout.

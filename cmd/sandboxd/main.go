@@ -146,12 +146,19 @@ func run(args []string) error {
 	}
 	srv := &http.Server{
 		Handler: (&server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts,
-			Audit: audit.NewLog(logPath)}).Handler(),
+			Audit: audit.NewLog(logPath), Logf: logf}).Handler(),
 		// Output streams are long-lived, so there is no WriteTimeout; a client that
 		// stops reading is noticed through its context.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	for _, pl := range pol.Pools {
+		img := pl.Image
+		if img == "" {
+			img = pol.DefaultImage
+		}
+		logf("pool: keeping %d sandboxes of %s booted ahead of requests", pl.Size, img)
+	}
 	auditNote := logPath
 	if auditNote == "" {
 		auditNote = "off"
@@ -203,7 +210,7 @@ func defaultStateDir() string {
 func newBackend(name string, o backendOptions) (backend.Backend, error) {
 	switch name {
 	case "fake":
-		return fake.New(api.CapNetworkPolicyUpdate, api.CapEgressAllowlist), nil
+		return fake.New(api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapVolumes), nil
 	case "firecracker":
 		return newFirecracker(o)
 	case "macos":

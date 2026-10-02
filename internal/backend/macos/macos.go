@@ -306,6 +306,8 @@ func mapErr(err error) error {
 		return backend.ErrNotDir
 	case guestproto.CodeNotEmpty:
 		return backend.ErrNotEmpty
+	case guestproto.CodeReadOnly:
+		return backend.ErrReadOnly
 	case guestproto.CodeNoSuchCommand:
 		return backend.ErrNoSuchCmd
 	}

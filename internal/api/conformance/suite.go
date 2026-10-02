@@ -81,6 +81,8 @@ func Run(t *testing.T, c *api.Client) {
 		{"ATunnelReachesAGuestPort", testTunnel},
 		{"LabelsAreKeptAndFilterTheListing", testLabels},
 		{"TheAuditLogRecordsWhatHappened", testAudit},
+		{"AVolumeOutlivesItsSandbox", testVolumes},
+		{"VolumeMountsAreChecked", testVolumeRefusals},
 	} {
 		t.Run(tc.name, func(t *testing.T) { tc.fn(t, e) })
 	}
@@ -985,4 +987,102 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func (e *env) newVolume(t *testing.T) string {
+	t.Helper()
+	name := uniqueName("vol")
+	if _, err := e.c.CreateVolume(ctxT(t), api.CreateVolumeRequest{Name: name, SizeMB: 64}); err != nil {
+		t.Fatalf("create volume: %v", err)
+	}
+	t.Cleanup(func() { _ = e.c.DeleteVolume(context.Background(), name) })
+	return name
+}
+
+// What one sandbox writes to a volume, the next one mounting it reads; while
+// it is mounted, nobody else may mount it or delete it; read-only means it.
+func testVolumes(t *testing.T, e *env) {
+	if !e.caps.Has(api.CapVolumes) {
+		_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: "x", Path: "/data"}}})
+		wantCode(t, err, api.CodeUnsupported)
+		t.Skip("endpoint has no volumes (capability volumes)")
+	}
+	name := e.newVolume(t)
+	_, err := e.c.CreateVolume(ctxT(t), api.CreateVolumeRequest{Name: name})
+	wantCode(t, err, api.CodeConflict)
+
+	a := e.newSandbox(t, api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: name, Path: "/data"}}})
+	if len(a.Volumes) != 1 || a.Volumes[0].Path != "/data" {
+		t.Fatalf("sandbox volumes %+v", a.Volumes)
+	}
+	if err := e.c.WriteFile(ctxT(t), a.ID, "/data/kept.txt", []byte("kept")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: name, Path: "/data"}}})
+	wantCode(t, err, api.CodeConflict)
+	wantCode(t, e.c.DeleteVolume(ctxT(t), name), api.CodeConflict)
+	vols, err := e.c.Volumes(ctxT(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached := ""
+	for _, v := range vols {
+		if v.Name == name {
+			attached = v.AttachedTo
+		}
+	}
+	if attached != a.ID {
+		t.Errorf("attached_to = %q, want %s", attached, a.ID)
+	}
+	if e.caps.Has(api.CapMemorySnapshot) {
+		_, err := e.c.CreateSnapshot(ctxT(t), a.ID)
+		wantCode(t, err, api.CodeConflict)
+	}
+	if err := e.c.TerminateSandbox(ctxT(t), a.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	b := e.newSandbox(t, api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: name, Path: "/srv/data", ReadOnly: true}}})
+	got, err := e.c.ReadFile(ctxT(t), b.ID, "/srv/data/kept.txt")
+	if err != nil || string(got) != "kept" {
+		t.Fatalf("the next sandbox read %q, %v", got, err)
+	}
+	err = e.c.WriteFile(ctxT(t), b.ID, "/srv/data/new.txt", []byte("x"))
+	wantCode(t, err, api.CodeConflict)
+	if err := e.c.TerminateSandbox(ctxT(t), b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.c.DeleteVolume(ctxT(t), name); err != nil {
+		t.Fatalf("delete a detached volume: %v", err)
+	}
+	wantCode(t, e.c.DeleteVolume(ctxT(t), name), api.CodeNotFound)
+}
+
+// Mount paths stay out of the system's directories and /workspace, are
+// absolute and plain, and do not nest; an unknown volume is not found.
+func testVolumeRefusals(t *testing.T, e *env) {
+	if !e.caps.Has(api.CapVolumes) {
+		t.Skip("endpoint has no volumes (capability volumes)")
+	}
+	name := e.newVolume(t)
+	other := e.newVolume(t)
+	for _, mounts := range [][]api.VolumeMount{
+		{{Name: name, Path: "/workspace"}},
+		{{Name: name, Path: "/workspace/node_modules"}},
+		{{Name: name, Path: "/proc/x"}},
+		{{Name: name, Path: "/etc"}},
+		{{Name: name, Path: "data"}},
+		{{Name: name, Path: "/data/../etc"}},
+		{{Name: name, Path: "/"}},
+		{{Name: name, Path: "/data"}, {Name: other, Path: "/data/inner"}},
+		{{Name: name, Path: "/a"}, {Name: name, Path: "/b"}},
+		{{Name: "Bad_Name", Path: "/data"}},
+	} {
+		_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Volumes: mounts})
+		wantCode(t, err, api.CodeInvalidRequest)
+	}
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: uniqueName("none"), Path: "/data"}}})
+	wantCode(t, err, api.CodeNotFound)
+	_, err = e.c.CreateVolume(ctxT(t), api.CreateVolumeRequest{Name: "Bad_Name"})
+	wantCode(t, err, api.CodeInvalidRequest)
 }

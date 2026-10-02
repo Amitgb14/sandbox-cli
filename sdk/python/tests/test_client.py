@@ -65,6 +65,16 @@ class ClientTest(unittest.TestCase):
         self.assertNotIn("py-secret-value", json.dumps(events))
         self.assertIn("process.started", [e["type"] for e in events])
 
+    def test_volumes(self):
+        self.c.create_volume("pyvol", size_mb=8)
+        self.addCleanup(lambda: self.c.delete_volume("pyvol"))
+        a = self.c.create_sandbox(volumes=[{"name": "pyvol", "path": "/data"}])
+        self.c.write_file(a["id"], "/data/x", b"kept")
+        self.c.terminate_sandbox(a["id"])
+        b = self.new(volumes=[{"name": "pyvol", "path": "/data", "read_only": True}])
+        self.assertEqual(self.c.read_file(b["id"], "/data/x"), b"kept")
+        self.assertEqual([v["attached_to"] for v in self.c.volumes() if v["name"] == "pyvol"], [b["id"]])
+
     def test_run_and_files(self):
         sb = self.new(env={"GREETING": "hello"})
         self.assertNotIn("hello", str(sb))  # values never come back

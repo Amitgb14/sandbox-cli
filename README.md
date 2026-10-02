@@ -46,6 +46,7 @@ sandbox-cli run --keep --name dev -- bash
 sandbox-cli list · logs ID · attach ID · kill ID · bring-back ID
 sandbox-cli snapshot · suspend · resume · tunnel
 sandbox-cli events ID                # what the sandbox was asked to do, and how it ended
+sandbox-cli volume create cache; sandbox-cli run --volume cache:/sandbox/home/.cache -- npm ci
 sandbox-cli run --label team=infra -- make; sandbox-cli list --label team=infra
 ```
 

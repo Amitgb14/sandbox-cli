@@ -58,7 +58,7 @@ func (j *Jailer) uid(id string) int {
 
 // prepare puts the kernel, the shared root disk and the scratch disk into the
 // chroot and returns the paths as the VMM will see them.
-func (j *Jailer) prepare(id, kernel, rootfs, scratch string) (vmPaths, error) {
+func (j *Jailer) prepare(id, kernel, rootfs, scratch string, volumes []string) (vmPaths, error) {
 	if os.Geteuid() != 0 {
 		return vmPaths{}, errors.New("the jailer needs root")
 	}
@@ -84,7 +84,21 @@ func (j *Jailer) prepare(id, kernel, rootfs, scratch string) (vmPaths, error) {
 			return vmPaths{}, err
 		}
 	}
-	return vmPaths{Kernel: "/vmlinux", RootFS: "/rootfs.ext4", Scratch: "/scratch.ext4", VsockUDS: "/v.sock"}, nil
+	// Volumes are hard links too — they outlive the jail — owned by this VM's
+	// uid while it runs. destroy hands them back to sandboxd.
+	var vols []string
+	for i, src := range volumes {
+		name := fmt.Sprintf("vol%d.ext4", i)
+		dst := filepath.Join(root, name)
+		if err := os.Link(src, dst); err != nil {
+			return vmPaths{}, fmt.Errorf("linking a volume into the jail (the jail must be on the same filesystem as the state directory): %w", err)
+		}
+		if err := os.Chown(dst, uid, uid); err != nil {
+			return vmPaths{}, err
+		}
+		vols = append(vols, "/"+name)
+	}
+	return vmPaths{Kernel: "/vmlinux", RootFS: "/rootfs.ext4", Scratch: "/scratch.ext4", VsockUDS: "/v.sock", Volumes: vols}, nil
 }
 
 func (j *Jailer) own(id, path string) {

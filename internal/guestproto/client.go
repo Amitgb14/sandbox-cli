@@ -168,6 +168,18 @@ func (c *Client) Remove(ctx context.Context, path string) error {
 	return err
 }
 
+// Sync flushes the guest's filesystems to disk. final says the VM is about to
+// stop for good (see Request.Final).
+func (c *Client) Sync(ctx context.Context, final bool) error {
+	cn, done, err := c.open(ctx, Request{Op: OpSync, Final: final})
+	if err != nil {
+		return err
+	}
+	defer done()
+	_, err = cn.response()
+	return err
+}
+
 // List lists a guest directory.
 func (c *Client) List(ctx context.Context, path string) ([]DirEntry, error) {
 	cn, done, err := c.open(ctx, Request{Op: OpList, Path: path})

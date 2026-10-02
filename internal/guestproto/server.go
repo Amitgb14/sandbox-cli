@@ -73,6 +73,9 @@ func (s *Server) ServeConn(c io.ReadWriteCloser) {
 		s.exec(c, br, req)
 	case OpDial:
 		s.dial(c, br, req)
+	case OpSync:
+		syncFilesystems(req.Final)
+		reply(c, Response{OK: true})
 	default:
 		reply(c, fail(CodeBadRequest, "unknown op "+req.Op))
 	}
@@ -96,6 +99,8 @@ func failErr(err error) Response {
 		return fail(CodeNotDir, "not a directory")
 	case isNotEmpty(err):
 		return fail(CodeNotEmpty, "directory not empty")
+	case errors.Is(err, errnoReadOnly):
+		return fail(CodeReadOnly, "read-only file system")
 	}
 	return fail(CodeInternal, err.Error())
 }

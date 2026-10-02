@@ -78,6 +78,9 @@ const (
 	CapWorkspaceBundle = "workspace_bundle"
 	// CapTunnel: a TCP port on the guest's loopback can be reached through the API.
 	CapTunnel = "tunnel"
+	// CapVolumes: named volumes persist across sandboxes and are mounted at a
+	// path on create.
+	CapVolumes = "volumes"
 	// CapAudit: the server keeps an event log, served per sandbox at
 	// GET /v1/sandboxes/{ref}/events. A property of the server, not the backend.
 	CapAudit = "audit"
@@ -127,6 +130,36 @@ type CreateSandboxRequest struct {
 	// (?label=k=v), and are recorded in its audit events, so a client can say
 	// why a sandbox exists — which agent, which fleet task, which retry.
 	Labels map[string]string `json:"labels,omitempty"`
+	// Volumes mounts named volumes (capability volumes). A volume is attached
+	// to one live sandbox at a time.
+	Volumes []VolumeMount `json:"volumes,omitempty"`
+}
+
+// VolumeMount attaches a volume at a path inside the sandbox.
+type VolumeMount struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	ReadOnly bool   `json:"read_only,omitempty"`
+}
+
+// Volume is a named filesystem that outlives the sandboxes it is mounted in.
+type Volume struct {
+	Name      string    `json:"name"`
+	SizeMB    int       `json:"size_mb"`
+	CreatedAt time.Time `json:"created_at"`
+	// AttachedTo is the live sandbox it is mounted in, if any.
+	AttachedTo string `json:"attached_to,omitempty"`
+}
+
+// CreateVolumeRequest creates a volume.
+type CreateVolumeRequest struct {
+	Name   string `json:"name"`
+	SizeMB int    `json:"size_mb,omitempty"`
+}
+
+// VolumeList is the body of GET /v1/volumes.
+type VolumeList struct {
+	Volumes []Volume `json:"volumes"`
 }
 
 // Bind is a host directory mounted at /workspace.
@@ -158,6 +191,7 @@ type Sandbox struct {
 	IdleTimeoutSecs int               `json:"idle_timeout_secs"`
 	Bind            *Bind             `json:"bind,omitempty"`
 	Labels          map[string]string `json:"labels,omitempty"`
+	Volumes         []VolumeMount     `json:"volumes,omitempty"`
 }
 
 // Event types in the audit log.
@@ -194,6 +228,7 @@ type Event struct {
 	EnvNames []string       `json:"env_names,omitempty"`
 	Bind     string         `json:"bind,omitempty"`
 	Snapshot string         `json:"snapshot,omitempty"`
+	Volumes  []VolumeMount  `json:"volumes,omitempty"`
 
 	PID        int      `json:"pid,omitempty"`
 	Argv       []string `json:"argv,omitempty"`

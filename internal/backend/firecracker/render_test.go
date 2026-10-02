@@ -52,3 +52,22 @@ func TestBuildConfigGolden(t *testing.T) {
 func TestRulesetGolden(t *testing.T) {
 	golden(t, "ruleset.nft", []byte(Ruleset("sandboxd", 3128, 5353)))
 }
+
+// Volumes are drives after the root and scratch disks, writable unless mounted
+// read-only, never the root device — and the guest is told which drive goes
+// where in the same order.
+func TestBuildConfigWithVolumesGolden(t *testing.T) {
+	s := backend.Spec{ID: "sbx_0123456789abcdef", Image: "img", CPUs: 1, MemoryMB: 1024, DiskMB: 4096,
+		Network: api.NetworkPolicy{Mode: api.NetworkNone},
+		Volumes: []api.VolumeMount{{Name: "cache", Path: "/sandbox/home/.cache"}, {Name: "models", Path: "/models", ReadOnly: true}}}
+	p := vmPaths{Kernel: "/k/vmlinux", RootFS: "/i/rootfs.ext4", Scratch: "scratch.ext4", VsockUDS: "v.sock",
+		Volumes: []string{"/state/volumes/cache.ext4", "/state/volumes/models.ext4"}}
+	got, _ := json.MarshalIndent(BuildConfig(s, p, "console=ttyS0 ro "+volumeBootArg(s), nil), "", "  ")
+	golden(t, "vmconfig-volumes.json", append(got, '\n'))
+	if arg := volumeBootArg(s); arg != "sbx.volumes=vdc:/sandbox/home/.cache:rw,vdd:/models:ro" {
+		t.Errorf("boot arg %q", arg)
+	}
+	if volumeBootArg(backend.Spec{}) != "" {
+		t.Error("no volumes should add no boot argument")
+	}
+}

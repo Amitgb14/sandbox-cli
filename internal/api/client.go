@@ -175,6 +175,24 @@ func (c *Client) Sandboxes(ctx context.Context, labels ...string) ([]Sandbox, er
 	return out.Sandboxes, err
 }
 
+// CreateVolume creates a named volume (capability volumes).
+func (c *Client) CreateVolume(ctx context.Context, req CreateVolumeRequest) (Volume, error) {
+	var out Volume
+	return out, c.json(ctx, http.MethodPost, "/v1/volumes", req, &out)
+}
+
+// Volumes lists the endpoint's volumes, with the sandbox each is attached to.
+func (c *Client) Volumes(ctx context.Context) ([]Volume, error) {
+	var out VolumeList
+	err := c.json(ctx, http.MethodGet, "/v1/volumes", nil, &out)
+	return out.Volumes, err
+}
+
+// DeleteVolume deletes a volume and everything on it. Refused while attached.
+func (c *Client) DeleteVolume(ctx context.Context, name string) error {
+	return c.json(ctx, http.MethodDelete, "/v1/volumes/"+url.PathEscape(name), nil, nil)
+}
+
 // Events returns a sandbox's audit events, oldest first (capability audit).
 func (c *Client) Events(ctx context.Context, ref string) (EventList, error) {
 	var out EventList

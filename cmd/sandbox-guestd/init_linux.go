@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +37,14 @@ func runInit() {
 		_ = os.WriteFile("/etc/resolv.conf", []byte("nameserver "+dns+"\n"), 0o644)
 	}
 	sandboxDirs()
+	for _, v := range parseVolumes(args["sbx.volumes"]) {
+		// A volume that cannot be mounted fails the boot: running without it
+		// would put the agent's writes on the scratch disk, to vanish with the
+		// VM, while it believed they were kept.
+		if err := mountVolume(v); err != nil {
+			fail("volume %s at %s: %v", v.dev, v.path, err)
+		}
+	}
 	if err := loopbackUp(); err != nil {
 		fmt.Printf("sandbox-guestd: loopback: %v\n", err)
 	}
@@ -150,6 +159,52 @@ func sandboxDirs() {
 		}
 		_ = os.Chown(d, defaultUID, defaultGID)
 	}
+}
+
+// mountVolume mounts one volume drive. Its root goes to the sandbox user on a
+// writable mount — a new volume's root belongs to whoever formatted it — and so
+// does any directory this made to reach the mount point under the sandbox
+// user's home, which would otherwise be root's and unwritable beside it.
+func mountVolume(v volumeMount) error {
+	var made []string
+	for d := v.path; d != "/"; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil {
+			break
+		}
+		made = append(made, d)
+	}
+	if err := os.MkdirAll(v.path, 0o755); err != nil {
+		return err
+	}
+	for _, d := range made {
+		if strings.HasPrefix(d, defaultHome+"/") {
+			_ = os.Chown(d, defaultUID, defaultGID)
+		}
+	}
+	flags := uintptr(syscall.MS_NOSUID | syscall.MS_NODEV)
+	if v.readOnly {
+		flags |= syscall.MS_RDONLY
+	}
+	if err := syscall.Mount(v.dev, v.path, "ext4", flags, ""); err != nil {
+		if !v.readOnly || err != syscall.EROFS {
+			return err
+		}
+		// A volume left dirty — its last VM crashed rather than stopping —
+		// needs its journal replayed, which a read-only drive cannot do.
+		// noload skips the journal and shows the last committed state.
+		if err := syscall.Mount(v.dev, v.path, "ext4", flags, "noload"); err != nil {
+			return err
+		}
+		fmt.Printf("sandbox-guestd: volume %s was not cleanly stopped; mounted read-only without replaying its journal\n", v.path)
+	}
+	if !v.readOnly {
+		if fi, err := os.Stat(v.path); err == nil {
+			if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid != defaultUID {
+				_ = os.Chown(v.path, defaultUID, defaultGID)
+			}
+		}
+	}
+	return nil
 }
 
 // loopbackUp brings lo up — the kernel's ip= configuration sets up eth0 only,

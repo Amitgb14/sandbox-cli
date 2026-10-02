@@ -154,6 +154,7 @@ func (b *Backend) Capabilities() map[string]bool {
 		api.CapSuspend:             true,
 		api.CapMemorySnapshot:      true,
 		api.CapTunnel:              true,
+		api.CapVolumes:             true,
 	}
 }
 
@@ -209,6 +210,17 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 		"init=" + image.GuestAgentPath, "sbx.overlay=/dev/vdb",
 		fmt.Sprintf("sbx.vsock=%d", guestPort), "sbx.hostname=" + hostname(s.ID),
 	}
+	if arg := volumeBootArg(s); arg != "" {
+		bootArgs = append(bootArgs, arg)
+	}
+	var volumes []string
+	for _, m := range s.Volumes {
+		p := b.volumePath(m.Name)
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("volume %s: %w", m.Name, backend.ErrNotFound)
+		}
+		volumes = append(volumes, p)
+	}
 	if b.cfg.Network != nil {
 		t, err := b.cfg.Network.attach(s.ID, s.Network, b.ownerFor(s.ID))
 		if err != nil {
@@ -222,9 +234,9 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 	// (its sandbox directory, or the jail's root), and the shared ones by
 	// absolute path. A snapshot records these paths, so relative ones are what
 	// let it be restored into another sandbox's directory.
-	paths := vmPaths{Kernel: b.cfg.Kernel, RootFS: rootfs.Path, Scratch: "scratch.ext4", VsockUDS: "v.sock"}
+	paths := vmPaths{Kernel: b.cfg.Kernel, RootFS: rootfs.Path, Scratch: "scratch.ext4", VsockUDS: "v.sock", Volumes: volumes}
 	if b.cfg.Jailer != nil {
-		if paths, err = b.cfg.Jailer.prepare(s.ID, b.cfg.Kernel, rootfs.Path, scratch); err != nil {
+		if paths, err = b.cfg.Jailer.prepare(s.ID, b.cfg.Kernel, rootfs.Path, scratch, volumes); err != nil {
 			return err
 		}
 	}
@@ -344,6 +356,7 @@ func (b *Backend) Terminate(_ context.Context, id string) error {
 	delete(b.vms, id)
 	b.mu.Unlock()
 	if ok {
+		b.flushVolumes(v, true)
 		b.destroy(v)
 	}
 	return nil
@@ -363,6 +376,11 @@ func (b *Backend) destroy(v *vm) {
 	}
 	if b.cfg.Jailer != nil {
 		b.cfg.Jailer.cleanup(v.id)
+		// The jail held a hard link to each volume, chowned to its uid; the
+		// volume itself goes back to sandboxd once no VM has it.
+		for _, m := range v.spec.Volumes {
+			_ = os.Chown(b.volumePath(m.Name), os.Geteuid(), os.Getegid())
+		}
 	}
 	_ = os.RemoveAll(v.dir)
 }
@@ -442,6 +460,8 @@ func mapErr(err error) error {
 		return backend.ErrNotDir
 	case guestproto.CodeNotEmpty:
 		return backend.ErrNotEmpty
+	case guestproto.CodeReadOnly:
+		return backend.ErrReadOnly
 	case guestproto.CodeNoSuchCommand:
 		return backend.ErrNoSuchCmd
 	}
@@ -452,6 +472,8 @@ func mapErr(err error) error {
 
 type vmPaths struct {
 	Kernel, RootFS, Scratch, VsockUDS, APISock string
+	// Volumes are the volume images, in the spec's order.
+	Volumes []string
 }
 
 // VMConfig is Firecracker's --config-file document.
@@ -492,7 +514,8 @@ type vsockConfig struct {
 // BuildConfig renders a VM's configuration from a resolved spec. It is a pure
 // function of its inputs — the property the golden test pins — and the only
 // place a sandbox's resources, disks and devices are decided. The root disk is
-// always read-only; the scratch disk is the only writable one.
+// always read-only; the scratch disk and the volumes not mounted read-only are
+// the only writable ones, and a volume is never the root device.
 func BuildConfig(s backend.Spec, p vmPaths, bootArgs string, t *tap) VMConfig {
 	var c VMConfig
 	c.BootSource.KernelImagePath = p.Kernel
@@ -500,6 +523,10 @@ func BuildConfig(s backend.Spec, p vmPaths, bootArgs string, t *tap) VMConfig {
 	c.Drives = []drive{
 		{DriveID: "rootfs", PathOnHost: p.RootFS, IsRootDevice: true, IsReadOnly: true},
 		{DriveID: "scratch", PathOnHost: p.Scratch, IsReadOnly: false},
+	}
+	for i, path := range p.Volumes {
+		ro := i < len(s.Volumes) && s.Volumes[i].ReadOnly
+		c.Drives = append(c.Drives, drive{DriveID: fmt.Sprintf("vol%d", i), PathOnHost: path, IsReadOnly: ro})
 	}
 	vcpus := int(math.Ceil(s.CPUs))
 	if vcpus < 1 {

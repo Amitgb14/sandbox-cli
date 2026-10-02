@@ -11,7 +11,15 @@ import (
 var (
 	errnoNotDir   = syscall.ENOTDIR
 	errnoNotEmpty = syscall.ENOTEMPTY
+	errnoReadOnly = syscall.EROFS
 )
+
+func syncFilesystems(final bool) {
+	syscall.Sync()
+	if final {
+		finalizeVolumes()
+	}
+}
 
 var signals = map[string]syscall.Signal{
 	"INT": syscall.SIGINT, "TERM": syscall.SIGTERM, "KILL": syscall.SIGKILL, "HUP": syscall.SIGHUP,

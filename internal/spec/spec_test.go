@@ -230,6 +230,21 @@ network:
 	if _, err := LoadPolicy(write("network: {default: {mode: open}, ceiling: allowlist}\n")); err == nil {
 		t.Error("a default above the ceiling was accepted")
 	}
+	// Pools: parsed, bounded, one per image, and only for permitted images.
+	p, err = LoadPolicy(write("pools: [{size: 2}, {image: other:1, size: 1}]\n"))
+	if err != nil || len(p.Pools) != 2 || p.Pools[0].Size != 2 || p.Pools[1].Image != "other:1" {
+		t.Errorf("pools: %+v %v", p.Pools, err)
+	}
+	for _, bad := range []string{
+		"pools: [{size: 0}]\n",
+		"pools: [{size: 33}]\n",
+		"pools: [{size: 1}, {size: 2}]\n",
+		"images: [a:1]\ndefault_image: a:1\npools: [{image: b:1, size: 1}]\n",
+	} {
+		if _, err := LoadPolicy(write(bad)); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
 }
 
 // A bind is the one request field naming a host path, so it gets the

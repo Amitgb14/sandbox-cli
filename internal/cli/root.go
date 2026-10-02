@@ -30,7 +30,7 @@ func NewRootCmd() *cobra.Command {
 		newLogsCmd(), newKillCmd(), newBringBackCmd(), newRecoverCmd(), newEventsCmd(), newDoctorCmd(), newTunnelCmd(),
 	)
 	root.AddCommand(newSuspendCmds()...)
-	root.AddCommand(newAgentGroupCmd())
+	root.AddCommand(newAgentGroupCmd(), newVolumeCmd())
 	return root
 }
 

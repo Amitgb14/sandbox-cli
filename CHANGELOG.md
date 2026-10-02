@@ -57,6 +57,13 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   labelled automatically (`agent`, `route.id`, `route.attempt`, `route.from`,
   `route.reason`, `fleet.branch`), so a failover's two sandboxes read as one
   episode in the listing and in the audit log.
+- **Volumes.** `sandbox-cli volume create|ls|rm` and
+  `--volume NAME:/path[:ro]`. A volume is a filesystem that outlives the
+  sandbox it is mounted in, one live sandbox at a time, never in
+  `/workspace` or a system directory. Firecracker only for now; the macOS
+  backend says it has no `volumes` capability until it is verified there.
+- **Pools.** `pools:` in the sandboxd policy keeps sandboxes booted ahead of
+  requests, so a create of that shape takes under a millisecond.
 - **Not yet rebuilt:** `worktree`, `context list` (agent conversations) and
   Studio. They return on the new API.
 

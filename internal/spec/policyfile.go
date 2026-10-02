@@ -21,6 +21,8 @@ import (
 //	  default: {mode: allowlist, allow: [github.com, registry.npmjs.org]}
 //	  ceiling: allowlist
 //	  may_allow: ["*.internal.example.com"]
+//	pools:                                     # sandboxes booted ahead of time
+//	  - {image: ghcr.io/you/sandbox-base:1, size: 2}
 type policyFile struct {
 	DefaultImage *string  `yaml:"default_image"`
 	Images       []string `yaml:"images"`
@@ -46,6 +48,10 @@ type policyFile struct {
 		Ceiling  *string  `yaml:"ceiling"`
 		MayAllow []string `yaml:"may_allow"`
 	} `yaml:"network"`
+	Pools []struct {
+		Image string `yaml:"image"`
+		Size  int    `yaml:"size"`
+	} `yaml:"pools"`
 }
 
 // LoadPolicy reads an operator policy file over DefaultPolicy and validates the
@@ -92,6 +98,9 @@ func LoadPolicy(path string) (Policy, error) {
 		if n.MayAllow != nil {
 			p.Network.MayAllow = n.MayAllow
 		}
+	}
+	for _, pl := range f.Pools {
+		p.Pools = append(p.Pools, Pool{Image: pl.Image, Size: pl.Size})
 	}
 	// The default itself goes through the same normalisation a request does.
 	norm, err := resolveNetwork(&p.Network.Default, NetworkPolicy{Default: p.Network.Default, Ceiling: p.Network.Ceiling, MayAllow: []string{"*"}})

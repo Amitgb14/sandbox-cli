@@ -53,6 +53,35 @@ put into every image's root disk, so the guest agent always matches the server.
   ceiling becomes `none` and the startup line says so. A request for an
   allowlist is then refused, never served open.
 
+## Pools
+
+`pools: [{size: 2}]` in the policy file keeps two sandboxes of the default image
+booted ahead of requests. A create that names nothing fixed at boot beyond
+that image is then a claim rather than a boot, under a millisecond rather than
+about 100 ms, and the pool refills behind it. Requests may still differ in
+environment, name, labels and idle timeout, because the server applies those.
+Anything else boots fresh: other resources, another network policy, volumes, a
+bind or a snapshot.
+
+```yaml
+pools:
+  - {size: 2}                                   # the default image
+  - {image: ghcr.io/you/sandbox-base:1, size: 1}
+```
+
+Every pooled sandbox holds its memory while it waits, so size pools to the
+traffic you have. A restart of sandboxd discards them with every other VM.
+
+## Volumes
+
+Volumes are sparse ext4 files under `<state-dir>/volumes/`, attached to a VM as
+one more drive. **sandboxd never mounts one on the host.** It is a filesystem a
+guest wrote, and parsing it is a guest kernel's job, where a malformed one costs
+that VM and nothing else. Back them up by copying the `.ext4` file while no
+sandbox has it mounted (`sandbox-cli volume ls` shows which do). Under the
+jailer, the state directory must be on the same filesystem as the jail, because
+each volume is hard-linked in.
+
 ## The audit log
 
 Every sandbox's events are appended to `<state-dir>/audit/events.jsonl` (mode

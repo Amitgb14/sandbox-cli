@@ -57,11 +57,16 @@ type Server struct {
 	// Audit, when set, records every sandbox's events and serves them at
 	// GET /v1/sandboxes/{ref}/events.
 	Audit *audit.Log
+	// Logf, when set, receives the operator's messages (pool trouble).
+	Logf func(format string, a ...any)
 
 	now func() time.Time
 
 	mu            sync.Mutex
 	sandboxes     map[string]*record // id -> record
+	deleting      map[string]bool    // volumes being deleted, under mu
+	pools         []*pool
+	poolsOnce     sync.Once
 	reaper        sync.Once
 	snapshotStore *snapshots
 }
@@ -133,7 +138,11 @@ func (s *Server) Handler() http.Handler {
 	route("POST /v1/sandboxes/{ref}/workspace", true, s.putWorkspace)
 	route("GET /v1/sandboxes/{ref}/workspace/bundle", false, s.getWorkspaceBundle)
 	route("GET /v1/sandboxes/{ref}/events", false, s.events)
+	route("POST /v1/volumes", false, s.createVolume)
+	route("GET /v1/volumes", false, s.listVolumes)
+	route("DELETE /v1/volumes/{name}", false, s.deleteVolume)
 	s.reaper.Do(func() { go s.reapIdle() })
+	s.poolsOnce.Do(s.startPools)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")
 	})
@@ -225,6 +234,15 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot mount host directories")
 		return
 	}
+	if len(bs.Volumes) > 0 {
+		if bs.FromSnapshot != "" {
+			writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "a sandbox started from a snapshot cannot mount volumes")
+			return
+		}
+		if !s.volumesExist(w, r, bs.Volumes) {
+			return
+		}
+	}
 
 	// The name is claimed before the backend is asked, under the lock, so two
 	// concurrent creates with one name cannot both pass a check-then-create.
@@ -236,6 +254,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			IdleTimeoutSecs: bs.IdleTimeoutSecs,
 			Bind:            apiBind(bs.Bind),
 			Labels:          copyLabels(req.Labels),
+			Volumes:         bs.Volumes,
 		},
 		env:        bs.Env,
 		procs:      map[int]*procRecord{},
@@ -251,10 +270,38 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Claimed under the same lock as the name, for the same reason: a
+	// volume is one sandbox's at a time, and check-then-attach would let two
+	// creates both pass.
+	for _, m := range bs.Volumes {
+		if s.deleting[m.Name] {
+			s.mu.Unlock()
+			writeErr(w, http.StatusConflict, api.CodeConflict, "volume "+m.Name+" is being deleted")
+			return
+		}
+		if holder := s.attachedTo(m.Name); holder != "" {
+			s.mu.Unlock()
+			writeErr(w, http.StatusConflict, api.CodeConflict, "volume "+m.Name+" is attached to "+holder)
+			return
+		}
+	}
 	s.sandboxes[id] = rec
 	s.mu.Unlock()
 
-	if err := s.Backend.Create(r.Context(), bs); err != nil {
+	// A pooled sandbox of this exact shape, if one is ready, takes the place
+	// of a boot: the record moves to its id.
+	from := ""
+	if pooled := s.claimPooled(bs); pooled != "" {
+		s.mu.Lock()
+		delete(s.sandboxes, id)
+		id = pooled
+		rec.mu.Lock()
+		rec.sbx.ID = id
+		rec.mu.Unlock()
+		s.sandboxes[id] = rec
+		s.mu.Unlock()
+		from = "pool"
+	} else if err := s.Backend.Create(r.Context(), bs); err != nil {
 		s.mu.Lock()
 		delete(s.sandboxes, id)
 		s.mu.Unlock()
@@ -266,7 +313,8 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	out := rec.sbx
 	rec.mu.Unlock()
 	ev := api.Event{Type: api.EventSandboxCreated, Sandbox: id, Name: out.Name, Image: out.Image,
-		Labels: out.Labels, Network: &out.Network, EnvNames: out.EnvNames, Snapshot: req.SnapshotID}
+		Labels: out.Labels, Network: &out.Network, EnvNames: out.EnvNames, Snapshot: req.SnapshotID, Volumes: out.Volumes,
+		Reason: from}
 	if out.Bind != nil {
 		ev.Bind = out.Bind.HostPath
 	}
@@ -970,6 +1018,8 @@ func writeBackendErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "not a directory")
 	case errors.Is(err, backend.ErrNotEmpty):
 		writeErr(w, http.StatusConflict, api.CodeConflict, "directory not empty")
+	case errors.Is(err, backend.ErrReadOnly):
+		writeErr(w, http.StatusConflict, api.CodeConflict, "read-only file system")
 	case errors.Is(err, backend.ErrNoSuchCmd):
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "no such command")
 	case errors.Is(err, backend.ErrBadSignal):

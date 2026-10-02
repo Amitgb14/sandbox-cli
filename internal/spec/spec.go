@@ -66,7 +66,21 @@ type Policy struct {
 	// default, and only meaningful on a local endpoint, where whoever holds the
 	// socket is the person whose directories they are.
 	AllowBind bool
+
+	// Pools keep sandboxes booted ahead of the requests that will want them.
+	Pools []Pool
 }
+
+// Pool is a number of sandboxes kept ready for one image, in the shape a
+// request that names only that image resolves to.
+type Pool struct {
+	Image string // empty: the default image
+	Size  int
+}
+
+// MaxPoolSize bounds one pool; every pooled sandbox holds its memory while
+// it waits.
+const MaxPoolSize = 32
 
 // NetworkPolicy is the server's egress floor and ceiling.
 type NetworkPolicy struct {
@@ -114,6 +128,23 @@ func (p Policy) Validate() error {
 	ceilingOnly.Network.MayAllow = nil
 	if _, err := resolveNetwork(&p.Network.Default, ceilingOnly.Network); err != nil {
 		return fmt.Errorf("policy: the default network policy is not permitted by the policy itself: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, pl := range p.Pools {
+		img := pl.Image
+		if img == "" {
+			img = p.DefaultImage
+		}
+		if pl.Size < 1 || pl.Size > MaxPoolSize {
+			return fmt.Errorf("policy: pool %s: size must be between 1 and %d", img, MaxPoolSize)
+		}
+		if seen[img] {
+			return fmt.Errorf("policy: two pools for %s", img)
+		}
+		seen[img] = true
+		if len(p.Images) > 0 && !contains(p.Images, img) {
+			return fmt.Errorf("policy: pool %s: not one of the permitted images", img)
+		}
 	}
 	if p.DefaultCPUs <= 0 || p.DefaultCPUs > p.Limits.MaxCPUs ||
 		p.DefaultMemoryMB <= 0 || p.DefaultMemoryMB > p.Limits.MaxMemoryMB ||
@@ -198,6 +229,52 @@ func ValidID(s string) bool { return idRE.MatchString(s) }
 // ValidName reports whether s is a legal sandbox name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
+// MaxVolumeMounts bounds one sandbox's volumes.
+const MaxVolumeMounts = 8
+
+var volumePathRE = regexp.MustCompile(`^(/[A-Za-z0-9._-]+)+$`)
+
+// reservedMountRoots are where a volume may not be mounted, nor anywhere
+// under: the system's own directories, and /workspace, which a clone needs
+// empty — a mount point inside it would make every clone fail.
+var reservedMountRoots = []string{"/proc", "/sys", "/dev", "/run", "/etc", "/usr", "/bin", "/sbin",
+	"/lib", "/lib32", "/lib64", "/libx32", "/boot", "/workspace", "/tmp"}
+
+// ValidateVolumeMounts checks the shape of a request's volume mounts: names,
+// paths that are absolute, plain and outside the reserved roots, and no two
+// mounts sharing a volume or nesting one inside the other. Whether each volume
+// exists and is free is the server's question.
+func ValidateVolumeMounts(mounts []api.VolumeMount) error {
+	if len(mounts) > MaxVolumeMounts {
+		return invalid("volumes: at most %d", MaxVolumeMounts)
+	}
+	names := map[string]bool{}
+	for i, m := range mounts {
+		if !ValidName(m.Name) {
+			return invalid("volume %q: lowercase letters, digits and dashes, at most 63", m.Name)
+		}
+		if names[m.Name] {
+			return invalid("volume %s is mounted twice", m.Name)
+		}
+		names[m.Name] = true
+		if !volumePathRE.MatchString(m.Path) || strings.Contains(m.Path, "/./") || strings.Contains(m.Path, "/../") ||
+			strings.HasSuffix(m.Path, "/.") || strings.HasSuffix(m.Path, "/..") {
+			return invalid("volume %s: path %q must be absolute and plain (letters, digits, . _ - and /)", m.Name, m.Path)
+		}
+		for _, r := range reservedMountRoots {
+			if m.Path == r || strings.HasPrefix(m.Path, r+"/") {
+				return invalid("volume %s: %s is reserved; mount it elsewhere (/data, or under /sandbox/home)", m.Name, r)
+			}
+		}
+		for _, o := range mounts[:i] {
+			if m.Path == o.Path || strings.HasPrefix(m.Path, o.Path+"/") || strings.HasPrefix(o.Path, m.Path+"/") {
+				return invalid("volumes %s and %s: one path is inside the other", o.Name, m.Name)
+			}
+		}
+	}
+	return nil
+}
+
 // Labels decide nothing about a sandbox, but they are printed in listings and
 // written to the audit log, so they are bounded and printable: a label is not a
 // way to put an escape sequence in front of the operator reading the log.
@@ -240,6 +317,9 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 	if err := ValidateLabels(req.Labels); err != nil {
 		return backend.Spec{}, err
 	}
+	if err := ValidateVolumeMounts(req.Volumes); err != nil {
+		return backend.Spec{}, err
+	}
 
 	img := req.Image
 	if img == "" {
@@ -252,7 +332,8 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 		return backend.Spec{}, refused("image %q is not one this server permits", img)
 	}
 
-	s := backend.Spec{ID: id, Image: img, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB}
+	s := backend.Spec{ID: id, Image: img, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,
+		Volumes: append([]api.VolumeMount(nil), req.Volumes...)}
 	if s.CPUs == 0 {
 		s.CPUs = pol.DefaultCPUs
 	}

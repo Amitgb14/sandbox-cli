@@ -67,3 +67,20 @@ func TestPrintEventsIsTerminalSafe(t *testing.T) {
 		}
 	}
 }
+
+func TestParseVolumeFlag(t *testing.T) {
+	for in, want := range map[string]api.VolumeMount{
+		"cache:/data":    {Name: "cache", Path: "/data"},
+		"cache:/data:ro": {Name: "cache", Path: "/data", ReadOnly: true},
+		"cache:/data:rw": {Name: "cache", Path: "/data"},
+	} {
+		if got, err := parseVolumeFlag(in); err != nil || got != want {
+			t.Errorf("%s: %+v %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"cache", "cache:/data:maybe", "a:b:c:d"} {
+		if _, err := parseVolumeFlag(bad); err == nil {
+			t.Errorf("%s was accepted", bad)
+		}
+	}
+}

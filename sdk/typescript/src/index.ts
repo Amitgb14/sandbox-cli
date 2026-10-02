@@ -47,6 +47,21 @@ export interface CreateSandboxRequest {
   bind?: { host_path: string; read_only?: boolean };
   /** Your own metadata: returned with the sandbox, filters `sandboxes()`, recorded in its audit events. */
   labels?: Record<string, string>;
+  /** Named volumes to mount (capability `volumes`); one live sandbox at a time. */
+  volumes?: VolumeMount[];
+}
+
+export interface VolumeMount {
+  name: string;
+  path: string;
+  read_only?: boolean;
+}
+
+export interface Volume {
+  name: string;
+  size_mb: number;
+  created_at: string;
+  attached_to?: string;
 }
 
 /** One audit event. Environment variables appear by name only. */
@@ -224,6 +239,20 @@ export class Client {
       path += "?" + q.toString();
     }
     return (await this.json<{ sandboxes: Sandbox[] }>("GET", path)).sandboxes;
+  }
+
+  /** A named filesystem that outlives the sandboxes it is mounted in. */
+  createVolume(name: string, sizeMB?: number): Promise<Volume> {
+    return this.json("POST", "/v1/volumes", sizeMB ? { name, size_mb: sizeMB } : { name });
+  }
+
+  async volumes(): Promise<Volume[]> {
+    return (await this.json<{ volumes: Volume[] }>("GET", "/v1/volumes")).volumes;
+  }
+
+  /** Deletes the volume and everything on it; refused while it is mounted. */
+  async deleteVolume(name: string): Promise<void> {
+    await this.json("DELETE", "/v1/volumes/" + encodeURIComponent(name));
   }
 
   /** The sandbox's audit events, oldest first (capability `audit`). */

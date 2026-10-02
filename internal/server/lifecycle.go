@@ -122,6 +122,12 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sb := rec.snapshot()
+	if len(sb.Volumes) > 0 {
+		// A fork would boot with the same volume drive as its parent: two
+		// kernels writing one filesystem.
+		writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox with volumes cannot be snapshotted; its forks would share them")
+		return
+	}
 	id := newSnapshotID()
 	info, err := sn.Snapshot(r.Context(), sb.ID, id)
 	if err != nil {
