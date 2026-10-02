@@ -63,7 +63,12 @@ function Fleet({ repo }: { repo: Repo }) {
               <TableCell className="font-mono text-xs">{t.branch}</TableCell>
               <TableCell className="font-mono text-xs">{t.agent}</TableCell>
               <TableCell><StatusBadge outcome={t.state} exitCode={t.exit_code} size="sm" /></TableCell>
-              <TableCell className="font-mono text-xs">{t.ref ?? t.error ?? "—"}</TableCell>
+              <TableCell className="font-mono text-xs">
+                {t.ref ?? (t.checkpoint ? `${t.checkpoint} (checkpoint)` : t.error ?? "—")}
+                {!t.ref && t.checkpoint && t.error && (
+                  <div className="text-muted-foreground">{t.error}</div>
+                )}
+              </TableCell>
               <TableCell className="text-right">
                 {t.ref && t.state === "verified" && (
                   <Button size="sm" variant="outline" disabled={land.isPending} onClick={() => doLand({ branch: t.branch })}>Land</Button>

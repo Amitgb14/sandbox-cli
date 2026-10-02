@@ -12,7 +12,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useCreateVolume, useDeleteVolume, useInfo, useVolumes } from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
 
-/** Named filesystems that outlive the sandboxes they are mounted in, one at a time. */
+/**
+ * An agent's tools volume, which sandbox-cli makes on the first run of an agent
+ * the image does not carry: agent-<name>-<8 hex>, the hash of its install.
+ */
+const TOOLS_VOLUME = /^agent-([a-z0-9-]+)-[0-9a-f]{8}$/;
+
+/** Named filesystems that outlive the sandboxes they are mounted in: one writer, or any number of readers. */
 export default function VolumesPage() {
   const { data: info } = useInfo();
   const supported = info?.capabilities?.capabilities.volumes;
@@ -26,7 +32,7 @@ export default function VolumesPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Volumes"
-        description="Mount one at launch (Sandbox options → Volumes). A volume is in one live sandbox at a time, never in /workspace, and the host never mounts it."
+        description="Mount one at launch (Sandbox options → Volumes). A volume has one writer or any number of read-only readers, is never in /workspace, and the host never mounts it. agent-… volumes hold an agent the image lacks, installed once and mounted read-only by its runs."
       />
       {info && !supported ? (
         <EmptyState icon={HardDrive} title="This sandboxd has no volumes" description="Its backend does not offer them (capability volumes)." />
@@ -60,7 +66,14 @@ export default function VolumesPage() {
             <TableBody>
               {(data ?? []).map((v) => (
                 <TableRow key={v.name}>
-                  <TableCell className="font-mono text-sm">{v.name}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    {v.name}
+                    {TOOLS_VOLUME.test(v.name) && (
+                      <span className="ml-2 font-sans text-xs text-muted-foreground">
+                        {TOOLS_VOLUME.exec(v.name)?.[1]}&apos;s tools · read-only in runs
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-sm">{v.size_mb} MiB</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{formatRelative(v.created_at)}</TableCell>
                   <TableCell className="font-mono text-xs">

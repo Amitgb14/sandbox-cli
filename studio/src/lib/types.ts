@@ -158,6 +158,8 @@ export interface TaskState {
   state: TaskStateName;
   exit_code: number;
   ref?: string;
+  /** The latest checkpoint taken while it ran: where a lost task's work is. */
+  checkpoint?: string;
   log: string;
   error?: string;
 }
