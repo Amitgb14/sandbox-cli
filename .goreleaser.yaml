@@ -22,6 +22,8 @@ before:
     - go mod tidy
 
 builds:
+  # The client, everywhere: on a machine that cannot run sandboxes itself it
+  # talks to one that can (sandbox-cli context add).
   - id: sandbox-cli
     main: ./cmd/sandbox-cli
     binary: sandbox-cli
@@ -39,18 +41,12 @@ builds:
       - amd64
       - arm64
 
-  # Studio's control plane, shipped in the same archive as the CLI.
-  #
-  # It is released as a *binary* rather than only as an image because that is the
-  # recommended way to run it: this server launches containers, so running it
-  # inside one means mounting the host's docker socket into that container, which
-  # is root on the host. A host process already has the access it needs and hands
-  # nothing to anybody. The image exists for people who want the container shape
-  # anyway (studio.sh --api-in-docker), and it should not be the only option a
-  # release offers.
-  - id: sandbox-studio-api
-    main: ./cmd/sandbox-studio-api
-    binary: sandbox-studio-api
+  # The server, where sandboxes can run: Linux with KVM (Firecracker), and
+  # Apple-silicon macOS (the native container runtime). Intel Macs and Windows
+  # get the client only.
+  - id: sandboxd
+    main: ./cmd/sandboxd
+    binary: sandboxd
     env:
       - CGO_ENABLED=0
     flags:
@@ -60,25 +56,38 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: darwin
+        goarch: amd64
+
+  # The guest agent runs inside every VM, so it is always a Linux binary —
+  # on a Mac too, where the VM is linux/arm64. Static, because it is PID 1 of
+  # a guest and the image may have no libc it could link against.
+  - id: sandbox-guestd
+    main: ./cmd/sandbox-guestd
+    binary: sandbox-guestd
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version={{ .Version }}
+    goos:
+      - linux
     goarch:
       - amd64
       - arm64
 
 archives:
+  # sandbox-cli and, where it runs, sandboxd: one archive per platform, so the
+  # client and server of one release cannot end up at different versions.
   - id: default
-    # One archive carrying both binaries, rather than one archive each.
-    #
-    # The name and layout are unchanged, which is what keeps install.sh working
-    # untouched: it extracts `sandbox-cli` by name and ignores whatever else is
-    # in there. studio.sh extracts the other one from the same file, so a Studio
-    # install is one download rather than two, and the two halves cannot end up
-    # at different versions.
     ids:
       - sandbox-cli
-      - sandbox-studio-api
-    # tar.gz everywhere except Windows, which gets a zip — the convention most
-    # installers and package managers expect.
+      - sandboxd
     formats: [tar.gz]
     format_overrides:
       - goos: windows
@@ -88,6 +97,16 @@ archives:
     files:
       - README.md
       - LICENSE
+
+  # The guest agent, per guest architecture. install.sh fetches the one for the
+  # host's architecture and puts it beside sandboxd, which is where sandboxd
+  # looks for it.
+  - id: guestd
+    ids:
+      - sandbox-guestd
+    formats: [tar.gz]
+    name_template: >-
+      sandbox-guestd_{{ .Version }}_linux_{{ .Arch }}
 
 checksum:
   name_template: checksums.txt
@@ -119,4 +138,7 @@ release:
     curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh
     ```
 
+    On Linux and Apple-silicon macOS this installs `sandbox-cli`, `sandboxd` and
+    the guest agent; elsewhere, the client only. Then follow
+    [local-macos.md](docs/local-macos.md) or [self-hosting.md](docs/self-hosting.md).
     Verify downloads against `checksums.txt`.

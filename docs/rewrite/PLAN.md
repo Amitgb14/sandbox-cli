@@ -710,6 +710,21 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     as usual. Anything fixed at boot that differs boots fresh. Measured on
     the dev host: under 1 ms against 95 ms for a boot.
 
+  - **Packaging: done.** Releases build `sandbox-cli` everywhere, `sandboxd`
+    for Linux and Apple-silicon macOS, and the guest agent for linux/amd64 and
+    linux/arm64 in an archive of its own (a Mac's VM is linux/arm64).
+    `install.sh` installs the three where sandboxes can run and verifies each
+    archive. Checked against a simulated release: a tampered guest archive is
+    refused. That run also found an older bug: an uninstall meeting a file it
+    could not remove (root's, in `/usr/local/bin`) aborted under `set -e`
+    before `--purge` ran.
+  - **Open: the client config schema still accepts beta.15's docker keys**
+    (`security`, `cache`, `user`, `mounts`, `ports`, `workdir`, `snapshot`, …)
+    and ignores them silently, since nothing reads them. Silently ignoring a
+    security setting someone wrote is the wrong failure: they should be
+    dropped and an unknown key refused, naming what replaced it. Not done with
+    the packaging, because it changes `policy` and its trust tests.
+
     Not yet: checkpoints run only while a CLI is attached. Detached runs and
     fleet tasks have nothing driving them, so a detached run's protection is
     still bring-back before the idle timeout.

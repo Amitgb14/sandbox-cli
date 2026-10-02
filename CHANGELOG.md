@@ -64,6 +64,13 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   backend says it has no `volumes` capability until it is verified there.
 - **Pools.** `pools:` in the sandboxd policy keeps sandboxes booted ahead of
   requests, so a create of that shape takes under a millisecond.
+- **`install.sh` installs the server too.** On Linux and Apple-silicon macOS it
+  installs `sandbox-cli`, `sandboxd` and the guest agent beside it, each
+  verified against the release checksums. Elsewhere it installs the client
+  only; `--client-only` asks for that anywhere. `--with-studio-api` is gone.
+  `--uninstall --purge` now also removes sandboxd's state directory,
+  including volumes. The `config.yaml` a first install writes describes only
+  settings the new client reads.
 - **Not yet rebuilt:** `worktree`, `context list` (agent conversations) and
   Studio. They return on the new API.
 

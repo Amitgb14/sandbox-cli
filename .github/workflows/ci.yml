@@ -55,9 +55,10 @@ jobs:
   # verdict is legible on its own: "the release would not build" is a different
   # sentence from "a test failed".
   #
-  # Mirrors .goreleaser.yaml's builds block — {linux,darwin,windows} ×
-  # {amd64,arm64}, CGO_ENABLED=0. If that list changes, change this one; a sweep
-  # that has drifted from what ships is worse than none, because it reassures.
+  # Covers .goreleaser.yaml's builds — sandbox-cli on {linux,darwin,windows} ×
+  # {amd64,arm64}, sandboxd and the guest agent on a subset of those — by
+  # building every package for every pair, CGO_ENABLED=0. If a target is added
+  # there, add it here; a sweep that has drifted from what ships reassures.
   build-matrix:
     runs-on: ubuntu-latest
     strategy:
