@@ -83,6 +83,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   settings the new client reads.
 - **`agent claude` runs the image's Claude Code.** It no longer downloads a
   self-updating copy at the start of each run.
+- **A routed run carries codex's conversation forward, as it did claude's.**
+  When codex fails having changed nothing and the run falls through, the next
+  agent's briefing quotes what was asked and answered in codex's session. It
+  leaves out codex's own instructions and the context it injects into every
+  session. Before, only claude's conversation crossed.
 - **Twelve agents, as on beta.15's `main`.** aider, amp, codebuff, continue,
   crush and droid are gone; Kilo Code and Devin CLI are console agents; cline
   has a verified headless mode (a bare prompt, with its UI behind `-i`), so a

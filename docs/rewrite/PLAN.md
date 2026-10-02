@@ -823,8 +823,8 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
   - **Merged with `main` (2026-10-02).** `main` released 0.0.1 and carried
     beta.15's line on after it. That later work is in `_old/` as reference.
     What it offers this design, to port when wanted:
-    - a codex transcript reader (`_old/internal/agentctx`), so a codex
-      conversation can brief the next agent;
+    - ~~a codex transcript reader~~ *ported*: a codex conversation briefs the
+      next agent (`agentctx.ParseCodexTranscript`);
     - the session server's agent states (`working` / `blocked` / `idle`, from
       the agent's own transcript) and `pane wait`;
     - S3 mirroring of checkpoints, whose trust reasoning

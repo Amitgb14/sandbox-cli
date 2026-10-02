@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -34,19 +35,34 @@ import (
 //   - The briefing is read out of the failed sandbox before it is terminated,
 //     and written into the next one over the API (handoff.GuestDir).
 
-// transcriptDirs is where an agent keeps this run's conversation inside the
-// sandbox. Only claude's format is verified (agentctx), so only claude's
-// conversation crosses; any other agent's briefing is the file ledger alone,
-// which handoff treats as an ordinary case rather than a failure. The bucket
-// name is Claude Code's spelling of the working directory, /workspace.
-var transcriptDirs = map[string]string{
-	"claude": workspace.GuestHome + "/.claude/projects/-workspace",
+// transcriptStore is where an agent keeps this run's conversation inside the
+// sandbox, and the reader for its format. Only agents whose format is verified
+// (agentctx) are here, so only their conversation crosses; any other agent's
+// briefing is the file ledger alone, which handoff treats as an ordinary case
+// rather than a failure.
+type transcriptStore struct {
+	dir    string
+	depth  int    // directories below dir that sessions are sharded into
+	prefix string // a session file's name starts with this
+	parse  func(io.Reader, int) ([]agentctx.Message, error)
 }
 
-// maxTranscripts bounds how many files are read looking for this run's
+var transcriptStores = map[string]transcriptStore{
+	// The bucket name is Claude Code's spelling of the working directory.
+	"claude": {dir: workspace.GuestHome + "/.claude/projects/-workspace", parse: agentctx.ParseTranscript},
+	// Sharded by date, YYYY/MM/DD, not by project; a fresh sandbox holds only
+	// this run's sessions, so the shard is not a question.
+	"codex": {dir: workspace.GuestHome + "/.codex/sessions", depth: 3, prefix: "rollout-", parse: agentctx.ParseCodexTranscript},
+}
+
+// maxTranscripts and maxTranscriptDirs bound the search for this run's
 // conversation. A fresh sandbox holds one; the directory is the agent's to
-// write, and a thousand planted files should not mean a thousand reads.
-const maxTranscripts = 8
+// write, and a thousand planted files or directories should not mean a
+// thousand reads.
+const (
+	maxTranscripts    = 8
+	maxTranscriptDirs = 16
+)
 
 // configuredRouting is the chain's fallbacks and the probe overrides: flags
 // first, then the user's config. routing: and providers: are refused from a
@@ -256,35 +272,51 @@ func writeBriefing(ex *handoff.Export) func(context.Context, *api.Client, string
 // by the protocol's read limit) and only ever quoted into a briefing for the
 // next agent — never acted on by the host.
 func readTranscript(ctx context.Context, c *api.Client, sandbox, agent string) []agentctx.Message {
-	dir, ok := transcriptDirs[agent]
+	st, ok := transcriptStores[agent]
 	if !ok {
 		return nil
 	}
-	entries, err := c.ListDir(ctx, sandbox, dir)
-	if err != nil {
-		return nil
-	}
 	var best []agentctx.Message
-	read := 0
-	for _, e := range entries {
-		if e.Type != "file" || !strings.HasSuffix(e.Name, ".jsonl") || strings.Contains(e.Name, "/") {
-			continue
+	read, listed := 0, 0
+	var walk func(dir string, depth int)
+	walk = func(dir string, depth int) {
+		if listed++; listed > maxTranscriptDirs {
+			return
 		}
-		if read++; read > maxTranscripts {
-			break
-		}
-		data, err := c.ReadFile(ctx, sandbox, dir+"/"+e.Name)
+		entries, err := c.ListDir(ctx, sandbox, dir)
 		if err != nil {
-			continue
+			return
 		}
-		msgs, err := agentctx.ParseTranscript(bytes.NewReader(data), 0)
-		if err != nil || len(msgs) == 0 {
-			continue
-		}
-		// The conversation that ended last is the one that failed.
-		if best == nil || msgs[len(msgs)-1].At.After(best[len(best)-1].At) {
-			best = msgs
+		for _, e := range entries {
+			// Names come from the guest: one carrying a slash or naming a
+			// parent is not a directory entry this walk will follow.
+			if e.Name == "" || e.Name == "." || e.Name == ".." || strings.Contains(e.Name, "/") {
+				continue
+			}
+			if e.Type == "dir" && depth > 0 {
+				walk(dir+"/"+e.Name, depth-1)
+				continue
+			}
+			if e.Type != "file" || depth != 0 || !strings.HasPrefix(e.Name, st.prefix) || !strings.HasSuffix(e.Name, ".jsonl") {
+				continue
+			}
+			if read++; read > maxTranscripts {
+				return
+			}
+			data, err := c.ReadFile(ctx, sandbox, dir+"/"+e.Name)
+			if err != nil {
+				continue
+			}
+			msgs, err := st.parse(bytes.NewReader(data), 0)
+			if err != nil || len(msgs) == 0 {
+				continue
+			}
+			// The conversation that ended last is the one that failed.
+			if best == nil || msgs[len(msgs)-1].At.After(best[len(best)-1].At) {
+				best = msgs
+			}
 		}
 	}
+	walk(st.dir, st.depth)
 	return best
 }

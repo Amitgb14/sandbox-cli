@@ -147,7 +147,23 @@ func TestReadTranscriptFromTheSandbox(t *testing.T) {
 	if len(msgs) != 1 || msgs[0].Text != "this session" {
 		t.Fatalf("got %+v", msgs)
 	}
-	if readTranscript(ctx, c, sb.ID, "codex") != nil {
+	if readTranscript(ctx, c, sb.ID, "gemini") != nil {
 		t.Error("an agent whose format is unverified had its transcript read")
+	}
+
+	// codex keeps sessions sharded by date, and its reader drops the context
+	// it injects: what crosses is the typed prompt and the answer.
+	rollout := func(prompt, answer, at string) []byte {
+		return []byte(`{"timestamp":"` + at + `","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>x</environment_context>"}]}}` + "\n" +
+			`{"timestamp":"` + at + `","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + prompt + `"}]}}` + "\n" +
+			`{"timestamp":"` + at + `","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + answer + `"}]}}` + "\n")
+	}
+	codex := workspace.GuestHome + "/.codex/sessions/2026/10/02"
+	c.WriteFile(ctx, sb.ID, codex+"/rollout-2026-10-02T09-00-00-a.jsonl", rollout("earlier", "ok", "2026-10-02T09:00:00Z"))
+	c.WriteFile(ctx, sb.ID, codex+"/rollout-2026-10-02T10-00-00-b.jsonl", rollout("fix the tests", "they pass", "2026-10-02T10:00:00Z"))
+	c.WriteFile(ctx, sb.ID, codex+"/notes.jsonl", rollout("not a session", "x", "2026-10-02T11:00:00Z"))
+	msgs = readTranscript(ctx, c, sb.ID, "codex")
+	if len(msgs) != 2 || msgs[0].Text != "fix the tests" || msgs[1].Text != "they pass" {
+		t.Fatalf("codex: got %+v", msgs)
 	}
 }
