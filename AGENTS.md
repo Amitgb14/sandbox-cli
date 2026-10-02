@@ -50,6 +50,10 @@ go test -race ./...
 go test ./internal/policy -run TestProjectConfigRefusesPrivilegedKeys   # one test
 go build -o bin/sandboxd ./cmd/sandboxd
 
+# a real microVM: needs /dev/kvm, mkfs.ext4, network, a guest kernel and firecracker
+SANDBOX_TEST_KERNEL=/path/to/vmlinux SANDBOX_TEST_FIRECRACKER=/path/to/firecracker \
+  go test -tags vm -v ./internal/backend/firecracker
+
 # the conformance suite against a running sandboxd
 SANDBOX_CONFORMANCE_ENDPOINT=unix:///run/user/$UID/sandboxd.sock \
 SANDBOX_CONFORMANCE_TOKEN=… go test ./internal/api/conformance -run TestEndpoint -v
@@ -64,6 +68,8 @@ else without a decision recorded in the plan.
 ```
 cmd/sandbox-cli         client
 cmd/sandboxd            the API server
+cmd/sandbox-guestd      the guest agent: PID 1 of a Firecracker guest, and the only thing the host talks to
+images/base/            the base image's Dockerfile (built in CI only)
 internal/
   api/          v1 wire types and client; api/conformance is the suite every endpoint must pass
   server/       HTTP handlers and the request guard
@@ -77,6 +83,9 @@ internal/
   audit/        run log — environment variables by name only
   termsafe/     printing repository-controlled text safely
   backend/      Backend interface + capabilities; macos/, firecracker/, fake/
+  guestproto/   host <-> guest agent protocol; the host treats the guest as hostile
+  vsock/        guest vsock listener, host dial through the VMM's bridge
+  image/        OCI pull, safe unpack (paths resolved inside the root), ext4 root disks
   workspace/    clone-in, bring-back
   state/ cli/ version/
 ```

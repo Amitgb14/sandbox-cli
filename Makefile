@@ -9,6 +9,7 @@ LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
 	go build -ldflags "$(LDFLAGS)" -o bin/sandboxd ./cmd/sandboxd
+	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$(LDFLAGS)" -o bin/sandbox-guestd ./cmd/sandbox-guestd
 
 # The local HTTP control plane (internal/studioapi) — see docs/studio-api/.
 # Not ported yet on the rewrite branch (docs/rewrite/PLAN.md, M6).

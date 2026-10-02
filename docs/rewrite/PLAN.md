@@ -342,10 +342,59 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
          registers its tap devices with a running firewalld (or ufw) rather than
          hoping that defaults line up. This belongs in `doctor` too.
     - **Still to run:** macOS, the whole of `scripts/m3/macos/run-all.sh`.
-- **M4 — guestd and images.**
-  - `sandbox-guestd` and `guestproto`, tested over a unix socket with no VM.
-  - Image pipeline: OCI pull → ext4 rootfs (Linux) and OCI pull (macOS).
-  - CI publishes the base image.
+- **M4 — guestd and images.** *Done.*
+  - **`internal/guestproto`** is the host↔guest protocol, over any byte stream:
+    one request per connection, a JSON line each way, then length-prefixed
+    frames for process I/O. The host treats the guest as hostile: every line,
+    frame and announced size is bounded before it is read or allocated. A
+    dropped connection kills the process, so a host that goes away leaves
+    nothing running. Tested end to end over a unix socket, including a fake
+    hostile guest.
+  - **`cmd/sandbox-guestd`** is the guest agent. `serve` answers over vsock,
+    stdio (macOS) or a unix socket. Processes run as uid 1001 in their own
+    process group, with the image's environment. `init` is a Firecracker
+    guest's PID 1:
+    - it mounts the essentials;
+    - it makes the root an overlay of the shared read-only image disk plus a
+      per-sandbox sparse scratch disk;
+    - it creates the workspace and home for uid 1001, brings up loopback and
+      sets the hostname;
+    - it supervises `serve` and reaps orphans.
+  - **`internal/vsock`**: the guest listener, and the host dial through the
+    VMM's unix-socket bridge.
+  - **`internal/image`** pulls an OCI image anonymously, unpacks it on the
+    host, and builds a read-only ext4 disk with the agent injected:
+    - every blob is verified against its digest and declared size before it
+      is cached;
+    - a manifest pinned by digest must hash to it;
+    - the platform is resolved from the index;
+    - layers are unpacked with every path resolved *inside* the root, with
+      symlinks followed only within it and `..` clamped at it;
+    - device nodes are never created on the host;
+    - disks are cached by image digest plus a hash of the agent, so a changed
+      agent rebuilds the disk.
+
+    Ten escape attempts are tested, and a mutation check showed that a naive
+    resolver fails five of them. Built without root, the disk's files belong
+    to the building user; that is reported, not hidden.
+  - **`images/base/Dockerfile`** has the agents, the tools and uid 1001, and
+    none of beta.15's root-phase firewall: egress is enforced on the host now.
+    `.github/workflows/base-image.yml` publishes it for amd64 and arm64.
+  - **Proved on a real microVM** (`internal/backend/firecracker/vm_test.go`,
+    tag `vm`). It builds the disk from the public `alpine:3.20` image (1.2 s),
+    and a 2 GiB scratch disk (28 ms). Then:
+    - the guest agent answered **56 ms** after the VMM started;
+    - processes run as uid 1001;
+    - the root is a writable overlay while the shared image disk stays
+      byte-identical, and the sandbox user cannot write `/etc/passwd`;
+    - loopback is up;
+    - 16 MiB written and read back over vsock in 47 ms.
+
+    The same test passed on the real base image, built locally and served from
+    a throwaway local registry. The disk build took 14 s from 3.6 GB, and is
+    cached after that. The agent answered at 56 ms, `whoami` is `sandbox`, and
+    node 22, git, Claude Code 2.1.287 and codex 0.160.0 all run inside the
+    microVM.
 - **M5 — self-hosted Linux.** `backend/firecracker` and `sandboxd` under systemd
   with TLS and tokens. Clone-in and bring-back. Network policy enforced on the
   host. Idle timeout. Conformance green.
