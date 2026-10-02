@@ -173,21 +173,7 @@ func printSnapshots(snaps []rescue.Snapshot, all bool) error {
 	return nil
 }
 
-// humanAge renders "how long ago" at the resolution someone hunting for lost
-// work actually cares about.
-func humanAge(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-	}
-}
+// humanAge moved to internal/cli/format.go in rewrite M10.
 
 func newRecoverShowCmd() *cobra.Command {
 	var patch bool

@@ -18,6 +18,10 @@
 //     recognizes yields *no windows* rather than a zero or a guess — the same
 //     bargain internal/agentctx makes with transcripts.
 //
+// In the rewrite the cache reaches the host the way the login does: ".claude.json"
+// is one of claude's AuthPaths, so it is copied out of every sandbox claude runs
+// in, into the saved login directory (workspace.LoginDir).
+//
 // Inside the sandbox the status line does not use any of this: Claude pipes it a
 // documented rate_limits object on stdin. This package is for the host side,
 // where there is no such pipe.
@@ -33,9 +37,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Amitgb14/sandbox-cli/internal/config"
-
+	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
+	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // Window kinds — the two periods usage is metered over. A plan may report each
@@ -428,19 +432,19 @@ func Read(path string) (Snapshot, error) {
 }
 
 // ClaudePaths lists the ~/.claude.json files a host may have, newest-wins order
-// resolved by Find rather than by this order: the sandbox-owned HOME the claude
-// wrapper persists, and the user's real home for sessions run outside the
-// sandbox. Both describe the same account and therefore the same server-side
+// resolved by Find rather than by this order: the saved login the claude
+// wrapper copies out of each sandbox, and the user's real home for sessions run
+// outside one. Both describe the same account and therefore the same server-side
 // quota, so whichever was refreshed last is the better answer. Paths that cannot
 // be resolved are omitted.
 func ClaudePaths() []string {
 	var out []string
-	if dir := config.AgentStateDir("claude"); dir != "" {
-		// The status-line recording first, because it is the live one — though
-		// order decides nothing: Find compares stamps, so a cache that somehow
-		// updates again still wins on merit rather than on position.
-		out = append(out, filepath.Join(dir, ".sandbox", "usage.json"))
-		out = append(out, filepath.Join(dir, ".claude.json"))
+	if d, ok := agents.Lookup("claude"); ok {
+		// beta.15 also read the status line's recording here
+		// (.sandbox/usage.json). The rewrite has no status-line hook yet, and the
+		// recording is not among the synced files, so it cannot exist; its reader
+		// (parseRecord) stays for when the hook comes back with it.
+		out = append(out, filepath.Join(workspace.LoginDir(d), ".claude.json"))
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		out = append(out, filepath.Join(home, ".claude.json"))

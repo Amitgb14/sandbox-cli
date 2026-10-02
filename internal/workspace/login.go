@@ -17,7 +17,13 @@ import (
 // one file per AuthPath, 0600. It is copied in when a run starts and back out
 // when it ends — the host never mounts anything into the guest for it.
 
-func authDir(d agents.Descriptor) string { return filepath.Join(ConfigDir(), "agents", d.PersistDir) }
+func authDir(d agents.Descriptor) string { return LoginDir(d) }
+
+// LoginDir is where an agent's saved login lives on the host: the files named
+// by its AuthPaths, copied out of the last sandbox that ran it.
+func LoginDir(d agents.Descriptor) string {
+	return filepath.Join(ConfigDir(), "agents", d.PersistDir)
+}
 
 // GuestHome is the sandbox user's HOME in the base image.
 const GuestHome = "/sandbox/home"

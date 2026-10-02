@@ -101,18 +101,4 @@ func wrapperHandles(agent string, guest []string, explicit bool) bool {
 	return false
 }
 
-// shortenHome renders a path under the user's home as ~/…, which keeps output
-// readable without hiding which home a store is actually in.
-func shortenHome(p string) string {
-	if p == "" {
-		return "-"
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return p
-	}
-	if rel, err := filepath.Rel(home, p); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return filepath.Join("~", rel)
-	}
-	return p
-}
+// shortenHome moved to internal/cli/usage.go in rewrite M10.

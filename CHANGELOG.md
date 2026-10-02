@@ -28,7 +28,7 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
 - **The host repository is no longer bind-mounted** by default: it goes in as a
   git bundle, and work comes back into `refs/sandbox/<name>` for you to merge.
   On a local Mac, `--bind` mounts a directory instead.
-- **Not yet rebuilt:** `worktree`, `recover`, `usage`, `context list` (agent
+- **Not yet rebuilt:** `worktree`, `recover`, `context list` (agent
   conversations) and Studio. They return on the new API.
 
 **Changed:**
@@ -60,6 +60,11 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   `--detach` run with `--fallback` is now refused, because nothing watches a
   detached run fail. Routed runs are not yet recorded in the audit log, which
   the new CLI does not write yet.
+- **`usage` is back.** It reads the copy of claude's usage cache saved with
+  claude's login, or your own `~/.claude.json`. `usage --refresh` runs its
+  throwaway turn in a sandbox with your saved login, so it no longer needs
+  claude installed on the host. It does need a `sandboxd` whose sandboxes can
+  reach the provider.
 
 ### Security
 

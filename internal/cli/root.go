@@ -33,6 +33,7 @@ func NewRootCmd() *cobra.Command {
 	)
 	root.AddCommand(newSuspendCmds()...)
 	root.AddCommand(newFleetCmd())
+	root.AddCommand(newUsageCmd())
 	for _, name := range agents.InteractiveNames() {
 		d, _ := agents.LookupInteractive(name)
 		root.AddCommand(newAgentCmd(d))

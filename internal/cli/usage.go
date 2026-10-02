@@ -17,12 +17,14 @@ import (
 type usageOpts struct {
 	json    bool
 	refresh bool
+	context string
 }
 
-// refreshTimeout bounds the throwaway request --refresh makes. Generous enough
-// for a cold start on a slow link, short enough that a hung agent does not hold
-// a terminal open indefinitely.
-const refreshTimeout = 2 * time.Minute
+// refreshTimeout bounds --refresh as a whole: a sandbox to boot, a login to
+// restore, the turn itself (which agentusage bounds on its own) and the login
+// copied back. Short enough that a hung agent does not hold a terminal open
+// indefinitely.
+const refreshTimeout = 3 * time.Minute
 
 func newUsageCmd() *cobra.Command {
 	o := usageOpts{}
@@ -31,17 +33,17 @@ func newUsageCmd() *cobra.Command {
 		Short: "Show how much of the subscription window is left, and when it resets",
 		Long: "Shows the two usage windows Claude Code reports — the 5-hour session window\n" +
 			"and the weekly one — as a percentage spent and the time each resets.\n\n" +
-			"Inside a `sandbox-cli claude` session the same numbers ride along on the\n" +
-			"sandbox status line. This is for everywhere else: a second terminal, a run\n" +
-			"that has already finished, or an agent whose UI has nowhere to put them.\n\n" +
 			"These are cached numbers: this reads the cache Claude Code keeps for its own\n" +
-			"/usage display, and always prints how old that reading is. The cache only\n" +
+			"/usage display — copied out of each sandbox claude runs in, along with its\n" +
+			"login, or from your own ~/.claude.json — and always prints how old it is. The cache only\n" +
 			"refreshes when the agent talks to the server, so on an idle machine it can be\n" +
 			"hours old — old enough that a window has since started over, in which case the\n" +
 			"figure shown is the last one from the window before it. Those rows say `rolled\n" +
 			"over` and show no percentage rather than a number about the wrong period.\n\n" +
-			"--refresh asks claude for one throwaway turn first, which is the only way to\n" +
-			"make the numbers current: it costs a request against the subscription being\n" +
+			"--refresh asks claude for one throwaway turn first, in a sandbox with your\n" +
+			"saved login, which is the only way to make the numbers current. It needs a\n" +
+			"sandboxd that lets the sandbox reach the provider, and it costs a request\n" +
+			"against the subscription being\n" +
 			"measured, which is why it is opt-in. Claude Code still decides when to refetch,\n" +
 			"so this makes a reading minutes old rather than hours — never stamped now.\n\n" +
 			"Only claude's windows are read. Codex records the same kind of figure, but\n" +
@@ -56,7 +58,8 @@ func newUsageCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&o.json, "json", false, "emit the windows as JSON")
 	cmd.Flags().BoolVar(&o.refresh, "refresh", false,
-		"ask claude for one throwaway turn first, so the reading is current (costs a request)")
+		"ask claude for one throwaway turn first, in a sandbox, so the reading is current (costs a request)")
+	cmd.Flags().StringVar(&o.context, "context", "", "which sandboxd --refresh uses")
 	return cmd
 }
 
@@ -67,7 +70,7 @@ func runUsage(o usageOpts) error {
 		return err
 	}
 	if o.refresh {
-		snap = refreshUsage(snap, paths)
+		snap = refreshUsage(snap, paths, o.context)
 	}
 	if o.json {
 		enc := json.NewEncoder(os.Stdout)
@@ -87,7 +90,7 @@ func runUsage(o usageOpts) error {
 // command: the cached numbers are still worth printing, and since every printing
 // carries its own age, falling back to them cannot pass stale figures off as
 // fresh.
-func refreshUsage(snap agentusage.Snapshot, paths []string) agentusage.Snapshot {
+func refreshUsage(snap agentusage.Snapshot, paths []string, ctxName string) agentusage.Snapshot {
 	// The two cases where a refresh is known to change nothing, refused before
 	// the request rather than explained after it.
 	//
@@ -111,9 +114,14 @@ func refreshUsage(snap agentusage.Snapshot, paths []string) agentusage.Snapshot 
 		// would spend from the window it is trying to measure and change nothing.
 		return snap
 	}
+	c, _, err := newClient(ctxName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return snap
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
 	defer cancel()
-	if err := agentusage.Refresh(ctx); err != nil {
+	if err := agentusage.Refresh(ctx, c); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return snap
 	}

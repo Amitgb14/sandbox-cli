@@ -634,6 +634,24 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     Not yet: route ids and `routed_from` in the audit record, because the new
     CLI writes no audit record at all. That is a gap of its own, still open
     for M10.
+  - **Usage: done.** `agentusage` and the `usage` command came across with
+    their tests. What changed:
+    - the cache is read from the saved login directory, since `.claude.json`
+      is one of claude's synced `AuthPaths`;
+    - `Refresh` runs `claude -p ok` in a sandbox, with the saved login restored
+      and copied back out, rather than on the host. It takes a client, and
+      forwards no host API key, because the key would bill instead of the
+      subscription being measured;
+    - its three host-exec tests are replaced by tests against the fake backend:
+      no login, the run restores and saves the login, no API key, and the
+      agent's message is carried;
+    - the agent's message is taken from the **last** line, because the
+      bootstrap talks first.
+
+    The status-line recording (`.sandbox/usage.json`) is no longer looked for.
+    There is no status-line hook yet and the file is not synced, but its reader
+    is kept. `shortenHome` and `humanAge` moved to `cli/format.go`. Real
+    `--refresh` is end-to-end row 20, which needs a logged-in claude.
 
 ## Risks
 
