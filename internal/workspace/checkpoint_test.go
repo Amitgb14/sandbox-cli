@@ -91,3 +91,21 @@ func TestBringBackRefusesReservedNames(t *testing.T) {
 		}
 	}
 }
+
+// Commits in a sandbox need an identity. The neutral one is the default; the
+// repository's own is used only when asked for.
+func TestIdentity(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	gitIn(t, dir, "config", "user.name", "Ada Lovelace")
+	gitIn(t, dir, "config", "user.email", "ada@example.com")
+	if id := Identity(dir, false); id["GIT_AUTHOR_NAME"] != "sandbox" || id["GIT_COMMITTER_EMAIL"] != "sandbox@localhost" {
+		t.Errorf("default identity %v", id)
+	}
+	if id := Identity(dir, true); id["GIT_AUTHOR_NAME"] != "Ada Lovelace" || id["GIT_COMMITTER_EMAIL"] != "ada@example.com" {
+		t.Errorf("own identity %v", id)
+	}
+}

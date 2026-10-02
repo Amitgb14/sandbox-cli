@@ -74,6 +74,12 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
 - **`agent claude` runs the image's Claude Code.** It no longer downloads a
   self-updating copy at the start of each run. Agents not in the image
   (eleven of fifteen) are installed in the sandbox on every run, and say so.
+- **Commits inside a sandbox work.** The guest had no git identity, so an
+  agent's `git commit` failed with "Author identity unknown". A cloned
+  workspace now gets a neutral one (`sandbox <sandbox@localhost>`), and
+  `--git` (or `git: true` in a fleet) uses your own `user.name` and
+  `user.email` instead. A fleet file with `defaults.cache: true` is refused
+  with what to use instead, rather than accepted and ignored.
 - **A long-lived secret is named again.** A `secrets:` value whose shape says it
   does not expire (a classic personal access token, say) gets a one-line
   warning, once per name, carrying no part of the value.

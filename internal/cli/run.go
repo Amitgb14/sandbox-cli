@@ -47,6 +47,7 @@ type runFlags struct {
 	checkpoint    time.Duration
 	labels        []string
 	volumes       []string
+	git           bool
 }
 
 func (rf *runFlags) register(cmd *cobra.Command) {
@@ -74,6 +75,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.fromSnapshot, "from-snapshot", "", "start from a snapshot (sandbox-cli snapshot) instead of the image")
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
 	f.DurationVar(&rf.checkpoint, "checkpoint-every", 5*time.Minute, "fetch the sandbox's working tree to refs/sandbox/checkpoints/<id> this often while attached, so a dead VM loses minutes rather than the run (0: never)")
+	f.BoolVar(&rf.git, "git", false, "make the sandbox's commits with your own git user.name and user.email (default: a neutral sandbox identity)")
 	f.StringArrayVar(&rf.volumes, "volume", nil, "mount a named volume, NAME:/path or NAME:/path:ro (repeatable; sandbox-cli volume)")
 	f.StringArrayVar(&rf.labels, "label", nil, "label the sandbox, key=value (repeatable); shown by list and recorded in its audit events")
 	f.StringArrayVar(&rf.fallback, "fallback", nil, "an agent to try next if this one's provider is down or it fails having changed nothing (repeatable; agent wrappers only)")
@@ -157,6 +159,19 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	if err := applyConfig(rf, project, &req, caps); err != nil {
 		return 1, err
 	}
+	// A cloned workspace needs an identity for its commits; one set by the
+	// user (--env, or env: in their config) wins.
+	repo := ""
+	if rf.bind == "" && !rf.noWorkspace && rf.fromSnapshot == "" {
+		repo = workspace.RepoRoot(project)
+	}
+	if repo != "" {
+		for k, v := range workspace.Identity(repo, rf.git) {
+			if _, set := req.Env[k]; !set {
+				req.Env[k] = v
+			}
+		}
+	}
 	if rf.bind != "" {
 		abs, err := filepath.Abs(policy.ExpandTilde(rf.bind))
 		if err != nil {
@@ -178,7 +193,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 
 	var sess *workspace.Session
 	if rf.bind == "" && !rf.noWorkspace && rf.fromSnapshot == "" {
-		if repo := workspace.RepoRoot(project); repo != "" {
+		if repo != "" {
 			base, err := workspace.CloneIn(ctx, c, sb.ID, repo)
 			if err != nil {
 				return 1, err

@@ -197,7 +197,13 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 		return
 	}
 	lim := spec.LimitsFor(t)
-	req := api.CreateSandboxRequest{Name: sandboxName(t.Branch), Env: agentEnv(d),
+	env := agentEnv(d)
+	for k, v := range workspace.Identity(r.Repo, spec.Defaults.Git) {
+		if _, set := env[k]; !set {
+			env[k] = v
+		}
+	}
+	req := api.CreateSandboxRequest{Name: sandboxName(t.Branch), Env: env,
 		Labels: map[string]string{"agent": d.Name, "fleet.branch": labelValue(t.Branch)}}
 	req.MemoryMB, req.CPUs = parseMemoryMiB(lim.Memory), parseCPUs(lim.CPUs)
 	if len(lim.Allow) > 0 {

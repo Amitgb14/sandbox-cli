@@ -219,3 +219,30 @@ func ConfigDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "sandbox")
 }
+
+// Identity is the git identity a sandbox's commits are made with, as the
+// environment variables git reads. Without one, git in the guest refuses every
+// commit ("Author identity unknown") — the image sets none, and should not:
+// whose name goes on the work is the person's choice, not the image's.
+//
+// The default is neutral, the same one bring-back's own commit uses. Your own
+// user.name and user.email are used only when asked for (--git, or git: true in
+// a fleet), because they are personal data crossing into a guest that may be
+// running somebody else's instructions. They are read from the repository's
+// config through githard, which reading a value does not need but every host
+// git call gets.
+func Identity(repo string, own bool) map[string]string {
+	name, email := "sandbox", "sandbox@localhost"
+	if own {
+		if n, err := Git(repo, "config", "--get", "user.name"); err == nil && n != "" {
+			name = n
+		}
+		if e, err := Git(repo, "config", "--get", "user.email"); err == nil && e != "" {
+			email = e
+		}
+	}
+	return map[string]string{
+		"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email,
+		"GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email,
+	}
+}

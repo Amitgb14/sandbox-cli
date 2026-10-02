@@ -734,6 +734,13 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     - The long-lived-secret warning: `creds.Classify` was ported in M1 and
       nothing called it. It now runs where `secrets:` resolve, with beta.15's
       tests and a wiring test that fails without the call.
+    - Commits in a sandbox failed: nothing gave the guest a git identity,
+      and beta.15's `--git` forwarding had not been rebuilt. Every cloned
+      workspace now gets a neutral one, or your own with `--git`, through
+      `workspace.Identity`. Verified in a real VM: a commit made with no
+      flags comes back as `sandbox <sandbox@localhost>`, and with `--git` as
+      the repository's own `user.name` and `user.email`. A fleet file's
+      `cache: true`, beta.15's cache volumes, is refused rather than ignored.
   - **Open: agents not in the image install on every run.** Eleven of fifteen
     agents are npm installs in the guest's HOME, which is discarded with the
     sandbox. The message now says so. A cache volume per agent, or a wider
