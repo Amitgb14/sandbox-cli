@@ -829,7 +829,9 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
       the agent's own transcript) and `pane wait`;
     - S3 mirroring of checkpoints, whose trust reasoning
       (`docs/security/open-items.md`) applies unchanged;
-    - testing the Python SDK on 3.9 and 3.13 in CI.
+    - ~~testing the Python SDK on 3.9 and 3.13 in CI~~ *done*: CI had not run
+      the SDKs at all; the `sdks` job runs the Python tests against sandboxd on
+      both, and typechecks the TypeScript SDK.
 
     The agent roster came across now, because it was a decision rather than a
     feature: twelve agents, with cline headless.
