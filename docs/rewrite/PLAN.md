@@ -598,7 +598,12 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     tests share. Every VM test run had been rebuilding a 3.6 GB disk into a
     fresh state directory, and the runs killed while debugging filled the disk.
   - **Not verified:** suspend and fork under the jailer (real root).
-- **M9 — cloud.**
+- **M9 — cloud.** *Decided 2026-10-02: the control plane is built in a separate,
+  private repository.* This repository keeps `sandboxd`, the guest agent, the
+  clients, the SDKs and the conformance suite, all open. M9 here is only what
+  that control plane needs from them (registering a node, per-tenant labels
+  and limits), added when it asks for it. The items below are the control
+  plane's, listed for the record.
   - Control plane: tenants, API keys, scheduling across nodes, metering, quotas.
   - Image and snapshot storage in object storage.
   - Per-tenant network isolation, abuse controls (egress rate limits, mining
@@ -741,6 +746,13 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
       flags comes back as `sandbox <sandbox@localhost>`, and with `--git` as
       the repository's own `user.name` and `user.email`. A fleet file's
       `cache: true`, beta.15's cache volumes, is refused rather than ignored.
+  - **Studio: decided 2026-10-02, being rebuilt.** `sandbox-cli studio` is one
+    local command that serves the UI and a small local API. Sandbox calls go
+    to the current context with the token held by that process, never by the
+    browser. Host-side work (launching on your repository, bring-back,
+    recover, fleets) reuses the CLI's code. beta.15's `sandbox-studio-api`
+    daemon, `studio.sh` and its docker images are retired, and the worktree
+    screens go with worktrees.
   - **Open: agents not in the image install on every run.** Eleven of fifteen
     agents are npm installs in the guest's HOME, which is discarded with the
     sandbox. The message now says so. A cache volume per agent, or a wider
@@ -771,9 +783,10 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
 
 ## Open questions
 
-1. **Open source boundary.** Recommendation: `sandboxd`, `sandbox-guestd`, the
-   CLI and the SDKs open; the cloud control plane closed. Self-hosting is what
-   earns trust for a sandbox, and the reference product's runtime is already open source.
+1. ~~**Open source boundary.**~~ *Decided 2026-10-02, as recommended:*
+   `sandboxd`, `sandbox-guestd`, the CLI and the SDKs are open; the cloud
+   control plane is closed, in a separate repository. Self-hosting is what
+   earns trust for a sandbox.
 2. **Multi-node self-hosted.** One node at M5. Does a customer with five Linux
    boxes get the control plane too (open, closed, or paid)?
 3. **API compatibility.** Our own API, shaped like the reference product's where it is
