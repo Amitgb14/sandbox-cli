@@ -317,8 +317,8 @@ export const BAKED_COUNT = AGENTS.filter((a) => a.delivery === "baked").length;
  * See the note on AGENTS above for why no version numbers appear here.
  */
 export const FIRST_RUN_NOTE = {
-  line: "sandbox-cli: installing qwen 0.21.3 into this sandbox (it is not in the image, so every run installs it)...",
-  body: "An agent the base image does not carry is installed at the start of every run: a sandbox's home is discarded with it, and only the agent's login files are carried between runs. So it costs the download each time, and it needs network to the package registry, which the default allowlist includes. The version is pinned rather than resolved to whatever was published that morning, and it is printed as it installs: a pin's cost is going stale, and staleness nobody can see is the kind that lasts.",
+  line: "sandbox-cli: preparing volume agent-qwen-cfca24e1 for qwen, once: if the image does not carry it, it is installed there for every later run on this endpoint",
+  body: "An agent the base image does not carry is installed once per endpoint, into a volume of its own, by a sandbox that does nothing else: no repository, no secrets, no agent running. Every later run mounts that volume read-only, so an agent cannot change what its next run executes. The first install needs network to the package registry, which the default allowlist includes; where an endpoint has no volumes, each run installs the agent itself. The version is pinned rather than resolved to whatever was published that morning, and it is printed as it installs: a pin's cost is going stale, and staleness nobody can see is the kind that lasts.",
   buys: "A hijacked or typosquatted release does not reach a sandbox until the pin is bumped.",
   doesNotBuy:
     "A compromised registry can still serve different bytes for a version it already published — that needs integrity hashes a global install has no lockfile for.",

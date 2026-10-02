@@ -30,8 +30,15 @@ func (s *Server) volumeStore(w http.ResponseWriter) (backend.VolumeStore, bool) 
 	return vs, true
 }
 
-// attachedTo is the live sandbox a volume is mounted in, or "". Caller holds mu.
+// attachedTo is a live sandbox a volume is mounted in, or "". Caller holds mu.
 func (s *Server) attachedTo(name string) string {
+	id, _ := s.holders(name)
+	return id
+}
+
+// holders reports a live sandbox a volume is mounted in, or "", and whether
+// any live sandbox has it writable. Caller holds mu.
+func (s *Server) holders(name string) (id string, writer bool) {
 	for _, rec := range s.sandboxes {
 		sb := rec.snapshot()
 		if sb.State == api.StateTerminated {
@@ -39,9 +46,30 @@ func (s *Server) attachedTo(name string) string {
 		}
 		for _, m := range sb.Volumes {
 			if m.Name == name {
-				return sb.ID
+				if id == "" || !m.ReadOnly {
+					id = sb.ID
+				}
+				writer = writer || !m.ReadOnly
 			}
 		}
+	}
+	return id, writer
+}
+
+// volumeBusy says why a mount cannot be had now, or "". A volume has one
+// writer or any number of readers: readers alone share it — the drive is
+// read-only to each of their kernels, so none can change what another reads
+// — but a writer's filesystem is live in its kernel, and another kernel
+// reading the same blocks sees it half-written. Caller holds mu.
+func (s *Server) volumeBusy(m api.VolumeMount) string {
+	holder, writer := s.holders(m.Name)
+	switch {
+	case holder == "":
+		return ""
+	case writer:
+		return "volume " + m.Name + " is attached writable to " + holder
+	case !m.ReadOnly:
+		return "volume " + m.Name + " is attached read-only to " + holder + "; it can be shared read-only, never written while read"
 	}
 	return ""
 }

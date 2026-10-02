@@ -776,13 +776,35 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     fleets are one agent per branch, so worktrees have nothing left to do.
     Listing an agent's conversations needs its transcripts on the host, and
     only logins come out of a sandbox now. That one could return if an
-    agent's home is kept in a volume, which is the same open question as
-    agents installing on every run.
-  - **Open: agents not in the image install on every run.** Eleven of fifteen
-    agents are npm installs in the guest's HOME, which is discarded with the
-    sandbox. The message now says so. A cache volume per agent, or a wider
-    base image, would make it once; that is a decision about image size and
-    about sharing a writable volume across an agent's runs.
+    agent's home were kept in a volume. The tools volume below is not that:
+    it is read-only in runs on purpose.
+  - **Done: an agent not in the image installs once per endpoint**
+    (decided 2026-10-02: a volume per agent, not a wider image).
+    - **Naming:** the volume is `agent-<name>-<hash of the install script>`,
+      so a new pin is a new volume.
+    - **Who writes it:** only an installer sandbox. It has no workspace, no
+      secrets, and runs no agent. It runs the pinned install with `HOME` at
+      the volume and writes a ready marker last.
+    - **Runs:** every run mounts the volume read-only at `/sandbox/tools`,
+      and the drive enforces read-only below the guest kernel. Without
+      that, an agent compromised in one repository could rewrite its own
+      binary for every other repository.
+    - **Image copies win:** an agent the image carries is still taken from
+      the image.
+    - **Fallback:** the run installs the agent itself, as before, when:
+      - the endpoint has no volumes or gives sandboxes no network;
+      - an installer holds the volume;
+      - the install failed (its volume is removed so the next run retries).
+    - **Sharing:** sandboxd now lets a volume have many readers or one
+      writer (conformance `AVolumeHasOneWriterOrManyReaders`), so a fleet's
+      tasks share one. Under the jailer, boots that share a volume are
+      serialised until their VMM has opened its drives. Each jail's link is
+      chowned to its own uid, and that ownership matters only at open time.
+    - **Open:**
+      - an old pin's volume is left behind (`sandbox-cli volume rm` removes
+        it);
+      - an agent run with a tools volume is not served from a pool, whose
+        sandboxes have no volumes.
 
     **Done: checkpoints wherever a client is connected.** One loop
     (`workspace.Checkpoints`) serves `run`, `attach` and each fleet task.

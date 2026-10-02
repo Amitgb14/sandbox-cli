@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -60,6 +61,49 @@ type Backend struct {
 
 	mu  sync.Mutex
 	vms map[string]*vm
+
+	// volBoot serialises boots that share a volume, under the jailer only.
+	// Each jailed VM's link to a volume is chowned to that VM's uid, and the
+	// link is one inode with the volume itself: two VMs booting on one
+	// read-only volume at once could each chown it before the other's VMM had
+	// opened it, and one would be refused its own drive. The owner matters
+	// only when the VMM opens the drive, which is done by the time the guest
+	// answers; an open descriptor survives the next VM's chown.
+	volBootMu sync.Mutex
+	volBoot   map[string]*sync.Mutex
+}
+
+// lockVolumes takes the boot lock of each volume s mounts, in name order so
+// two boots cannot each hold one the other wants, and returns its release.
+func (b *Backend) lockVolumes(s backend.Spec) func() {
+	if b.cfg.Jailer == nil || len(s.Volumes) == 0 {
+		return func() {}
+	}
+	names := make([]string, 0, len(s.Volumes))
+	for _, m := range s.Volumes {
+		names = append(names, m.Name)
+	}
+	sort.Strings(names)
+	var held []*sync.Mutex
+	for _, n := range names {
+		b.volBootMu.Lock()
+		if b.volBoot == nil {
+			b.volBoot = map[string]*sync.Mutex{}
+		}
+		l := b.volBoot[n]
+		if l == nil {
+			l = &sync.Mutex{}
+			b.volBoot[n] = l
+		}
+		b.volBootMu.Unlock()
+		l.Lock()
+		held = append(held, l)
+	}
+	return func() {
+		for _, l := range held {
+			l.Unlock()
+		}
+	}
 }
 
 type vm struct {
@@ -213,6 +257,8 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 	if arg := volumeBootArg(s); arg != "" {
 		bootArgs = append(bootArgs, arg)
 	}
+	unlockVolumes := b.lockVolumes(s)
+	defer unlockVolumes()
 	var volumes []string
 	for _, m := range s.Volumes {
 		p := b.volumePath(m.Name)

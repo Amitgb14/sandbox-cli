@@ -271,17 +271,17 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Claimed under the same lock as the name, for the same reason: a
-	// volume is one sandbox's at a time, and check-then-attach would let two
-	// creates both pass.
+	// volume has one writer or only readers (volumeBusy), and
+	// check-then-attach would let two creates both pass.
 	for _, m := range bs.Volumes {
 		if s.deleting[m.Name] {
 			s.mu.Unlock()
 			writeErr(w, http.StatusConflict, api.CodeConflict, "volume "+m.Name+" is being deleted")
 			return
 		}
-		if holder := s.attachedTo(m.Name); holder != "" {
+		if why := s.volumeBusy(m); why != "" {
 			s.mu.Unlock()
-			writeErr(w, http.StatusConflict, api.CodeConflict, "volume "+m.Name+" is attached to "+holder)
+			writeErr(w, http.StatusConflict, api.CodeConflict, why)
 			return
 		}
 	}

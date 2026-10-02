@@ -83,6 +83,7 @@ func Run(t *testing.T, c *api.Client) {
 		{"TheAuditLogRecordsWhatHappened", testAudit},
 		{"AVolumeOutlivesItsSandbox", testVolumes},
 		{"VolumeMountsAreChecked", testVolumeRefusals},
+		{"AVolumeHasOneWriterOrManyReaders", testVolumeSharing},
 	} {
 		t.Run(tc.name, func(t *testing.T) { tc.fn(t, e) })
 	}
@@ -1000,7 +1001,8 @@ func (e *env) newVolume(t *testing.T) string {
 }
 
 // What one sandbox writes to a volume, the next one mounting it reads; while
-// it is mounted, nobody else may mount it or delete it; read-only means it.
+// it is mounted writable, nobody else may mount it or delete it; read-only
+// means it.
 func testVolumes(t *testing.T, e *env) {
 	if !e.caps.Has(api.CapVolumes) {
 		_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: "x", Path: "/data"}}})
@@ -1056,6 +1058,48 @@ func testVolumes(t *testing.T, e *env) {
 		t.Fatalf("delete a detached volume: %v", err)
 	}
 	wantCode(t, e.c.DeleteVolume(ctxT(t), name), api.CodeNotFound)
+}
+
+// Readers share a volume: each one's drive is read-only to its kernel, so none
+// can change what another reads. A writer has it alone, since a filesystem live
+// in one kernel is half-written to another; and a volume being read cannot be
+// written, or deleted, until the last reader is gone.
+func testVolumeSharing(t *testing.T, e *env) {
+	if !e.caps.Has(api.CapVolumes) {
+		t.Skip("endpoint has no volumes (capability volumes)")
+	}
+	name := e.newVolume(t)
+	w := e.newSandbox(t, api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: name, Path: "/data"}}})
+	if err := e.c.WriteFile(ctxT(t), w.ID, "/data/shared.txt", []byte("shared")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: name, Path: "/data", ReadOnly: true}}})
+	wantCode(t, err, api.CodeConflict) // a reader while it is written
+	if err := e.c.TerminateSandbox(ctxT(t), w.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	ro := []api.VolumeMount{{Name: name, Path: "/data", ReadOnly: true}}
+	a := e.newSandbox(t, api.CreateSandboxRequest{Volumes: ro})
+	b := e.newSandbox(t, api.CreateSandboxRequest{Volumes: ro})
+	for _, sb := range []api.Sandbox{a, b} {
+		got, err := e.c.ReadFile(ctxT(t), sb.ID, "/data/shared.txt")
+		if err != nil || string(got) != "shared" {
+			t.Errorf("reader %s read %q, %v", sb.ID, got, err)
+		}
+	}
+	_, err = e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: name, Path: "/data"}}})
+	wantCode(t, err, api.CodeConflict) // a writer while it is read
+	if err := e.c.TerminateSandbox(ctxT(t), a.ID); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, e.c.DeleteVolume(ctxT(t), name), api.CodeConflict) // b still reads it
+	if err := e.c.TerminateSandbox(ctxT(t), b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.c.DeleteVolume(ctxT(t), name); err != nil {
+		t.Fatalf("delete once the last reader is gone: %v", err)
+	}
 }
 
 // Mount paths stay out of the system's directories and /workspace, are

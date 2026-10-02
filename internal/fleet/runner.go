@@ -122,7 +122,10 @@ type Runner struct {
 	// A fleet runs unattended for longer than anything else, and a VM lost an
 	// hour in should not take the hour with it.
 	CheckpointEvery time.Duration
-	Out             io.Writer // progress lines
+
+	toolsMu  sync.Mutex
+	toolsFor map[string]*api.VolumeMount
+	Out      io.Writer // progress lines
 }
 
 var nameUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
@@ -135,6 +138,27 @@ func sandboxName(branch string) string {
 		n = n[:40]
 	}
 	return "fleet-" + n
+}
+
+// tools installs each agent's tools volume once per fleet run, before its
+// tasks are created: tasks start together, and each one finding no volume would
+// make an installer race the others, all but one of them installing the agent
+// themselves after all. Once installed, every task of that agent mounts it
+// read-only, together.
+func (r *Runner) tools(ctx context.Context, d agents.Descriptor, caps api.Capabilities) *api.VolumeMount {
+	r.toolsMu.Lock()
+	defer r.toolsMu.Unlock()
+	if m, ok := r.toolsFor[d.Name]; ok {
+		return m
+	}
+	m := workspace.AgentTools(ctx, r.Client, caps, d, func(format string, args ...any) {
+		fmt.Fprintf(r.Out, format+"\n", args...)
+	})
+	if r.toolsFor == nil {
+		r.toolsFor = map[string]*api.VolumeMount{}
+	}
+	r.toolsFor[d.Name] = m
+	return m
 }
 
 // Run runs every task, at most spec.Concurrency() at a time, and returns once
@@ -219,6 +243,9 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 	if len(lim.Allow) > 0 {
 		req.Network = &api.NetworkPolicy{Mode: api.NetworkAllowlist,
 			Allow: append(append([]string{}, caps.Network.Default.Allow...), lim.Allow...)}
+	}
+	if m := r.tools(ctx, d, caps); m != nil {
+		req.Volumes = append(req.Volumes, *m)
 	}
 	sb, err := r.Client.CreateSandbox(ctx, req)
 	if err != nil {

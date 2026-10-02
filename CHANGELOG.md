@@ -75,8 +75,18 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   including volumes. The `config.yaml` a first install writes describes only
   settings the new client reads.
 - **`agent claude` runs the image's Claude Code.** It no longer downloads a
-  self-updating copy at the start of each run. Agents not in the image
-  (eleven of fifteen) are installed in the sandbox on every run, and say so.
+  self-updating copy at the start of each run.
+- **An agent not in the image installs once per endpoint, not every run.**
+  The first run of such an agent (eleven of fifteen) installs its pinned
+  version into a volume, `agent-<name>-<hash>`. Every later run mounts that
+  volume read-only, so an agent cannot change what its next run executes.
+  The install runs in a sandbox of its own, with no repository and no
+  secrets. Where volumes or a network are not available, the run installs
+  the agent itself, as before. `sandbox-cli volume ls` shows these volumes,
+  and `volume rm` removes one left behind by an older pin.
+- **A volume can be mounted read-only by several sandboxes at once.** A
+  writer still has a volume to itself, and a volume being read cannot be
+  mounted writable.
 - **Commits inside a sandbox work.** The guest had no git identity, so an
   agent's `git commit` failed with "Author identity unknown". A cloned
   workspace now gets a neutral one (`sandbox <sandbox@localhost>`), and

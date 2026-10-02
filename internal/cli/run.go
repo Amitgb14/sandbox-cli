@@ -181,6 +181,14 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		}
 		req.Volumes = append(req.Volumes, m)
 	}
+	// An agent the image does not carry runs from its tools volume, installed
+	// on this endpoint once. Not for a sandbox from a snapshot, which brings
+	// its own disk, nor where the user mounted something of their own.
+	if rs.agent != nil && rf.fromSnapshot == "" && !mountsNear(req.Volumes, agents.ToolsDir) {
+		if m := workspace.AgentTools(ctx, c, caps, *rs.agent, stderrf); m != nil {
+			req.Volumes = append(req.Volumes, *m)
+		}
+	}
 	req.Network = buildNetwork(rf, caps)
 	if err := applyConfig(rf, project, &req, caps); err != nil {
 		return 1, err
@@ -446,4 +454,18 @@ func buildNetwork(rf *runFlags, caps api.Capabilities) *api.NetworkPolicy {
 		p.Allow = append(append([]string{}, caps.Network.Default.Allow...), rf.allow...)
 	}
 	return p
+}
+
+// mountsNear reports whether any mount is at path, inside it, or around it.
+func mountsNear(mounts []api.VolumeMount, path string) bool {
+	for _, m := range mounts {
+		if m.Path == path || strings.HasPrefix(m.Path, path+"/") || strings.HasPrefix(path, m.Path+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func stderrf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "sandbox-cli: "+format+"\n", args...)
 }
