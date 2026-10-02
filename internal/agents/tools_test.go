@@ -81,3 +81,24 @@ func TestBootstrapUsesAReadyToolsVolume(t *testing.T) {
 		t.Errorf("with the agent in the image: %q", got)
 	}
 }
+
+// Every file the login filter knows is one some agent saves: a filter keyed
+// by a path nobody saves protects nothing, and a renamed AuthPath would slip
+// past it silently.
+func TestAuthFilterNamesSavedFiles(t *testing.T) {
+	saved := map[string]bool{}
+	for _, n := range InteractiveNames() {
+		d, _ := LookupInteractive(n)
+		for _, p := range d.AuthPaths {
+			saved[p] = true
+		}
+	}
+	for _, rel := range authFiltered() {
+		if !saved[rel] {
+			t.Errorf("%s is filtered but no agent saves it", rel)
+		}
+	}
+	if _, ok := FilterAuth(".claude.json", []byte(`["not","an","object"]`)); ok {
+		t.Error("a settings file that is not an object was let through")
+	}
+}

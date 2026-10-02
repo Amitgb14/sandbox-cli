@@ -170,6 +170,18 @@ the previous release.
   ~/.ssh`, opened the target's files to your group on the next run. It is now
   reported and left alone.
 
+In the rewrite:
+
+- **A saved login carries the login and nothing else.** Claude Code's
+  `~/.claude.json` and Gemini CLI's `settings.json` are saved with the login
+  because they hold part of it, but they also hold MCP servers: commands the
+  agent starts at launch. An agent compromised in one repository could add one,
+  and every later run of that agent, in any repository, would start it. These
+  files now keep only their login keys (account, onboarding, the chosen
+  sign-in method) when saved and again when restored, so a file saved before
+  this change is cleaned on its next use. An MCP server you configured in a
+  sandbox no longer outlives it; put it in the repository's own config instead.
+
 ### Changed
 
 - **The site's Studio setup answers two questions it used to leave to a bad

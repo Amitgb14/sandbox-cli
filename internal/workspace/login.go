@@ -35,7 +35,11 @@ func RestoreLogin(ctx context.Context, c *api.Client, sandbox string, d agents.D
 		if err != nil {
 			continue
 		}
-		_ = c.WriteFile(ctx, sandbox, GuestHome+"/"+rel, data)
+		// Filtered here too: a file saved before the filter existed may
+		// carry what it now drops (agents.FilterAuth).
+		if data, ok := agents.FilterAuth(rel, data); ok {
+			_ = c.WriteFile(ctx, sandbox, GuestHome+"/"+rel, data)
+		}
 	}
 }
 
@@ -44,6 +48,11 @@ func SaveLogin(ctx context.Context, c *api.Client, sandbox string, d agents.Desc
 	for _, rel := range d.AuthPaths {
 		data, err := c.ReadFile(ctx, sandbox, GuestHome+"/"+rel)
 		if err != nil {
+			continue
+		}
+		data, ok := agents.FilterAuth(rel, data)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "sandbox-cli: not saving the %s login's %s: it is not the JSON object it should be\n", d.Name, rel)
 			continue
 		}
 		if err := WritePrivate(authDir(d), rel, data); err != nil {
