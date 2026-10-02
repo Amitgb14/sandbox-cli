@@ -30,9 +30,14 @@ jobs:
       # Cheapest first: a formatting or vet failure should not wait behind the
       # suite. `gofmt -l` prints offending files and exits 0, so the file list
       # is what has to fail the step.
+      #
+      # cmd and internal only: _old/ is the beta.15 tree kept to port from. The
+      # Go tool skips it (vet, test and build never see it), it is frozen, and
+      # it is deleted when the rewrite is done, so formatting it is not worth a
+      # red build.
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l .)"
+          unformatted="$(gofmt -l cmd internal)"
           if [ -n "$unformatted" ]; then
             echo "not gofmt'd:"; echo "$unformatted"; exit 1
           fi

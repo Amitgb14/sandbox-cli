@@ -43,7 +43,7 @@ carries that over; it is not an occasion to rewrite the rule from memory.
    variable rather than an import of `image` for this reason.
 7. **Verify:**
    ```sh
-   gofmt -l .; go vet ./...; go test -race -count=1 ./...
+   gofmt -l cmd internal; go vet ./...; go test -race -count=1 ./...
    ```
 8. **Record it.** Update the milestone in `docs/rewrite/PLAN.md` with what moved,
    what was dropped and what was left behind, and why.

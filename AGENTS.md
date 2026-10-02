@@ -57,7 +57,7 @@ SANDBOX_TEST_KERNEL=/path/to/vmlinux SANDBOX_TEST_FIRECRACKER=/path/to/firecrack
 # the conformance suite against a running sandboxd
 SANDBOX_CONFORMANCE_ENDPOINT=unix:///run/user/$UID/sandboxd.sock \
 SANDBOX_CONFORMANCE_TOKEN=… go test ./internal/api/conformance -run TestEndpoint -v
-gofmt -w .                  # CI checks the whole tree, _old/ included
+gofmt -w cmd internal
 ```
 
 Go 1.25+. Dependencies are the standard library, `cobra` and `yaml.v3` — nothing
@@ -170,7 +170,7 @@ support can read them as plain instructions.
 ## Before you finish
 
 - [ ] Tests added or updated for the change, covering edge cases
-- [ ] `gofmt -l .` prints nothing (CI checks `_old/` too); `go vet ./...` is clean
+- [ ] `gofmt -l cmd internal` prints nothing; `go vet ./...` is clean
 - [ ] `go test -race -count=1 ./...` passes
 - [ ] Help text, CLI usage and web docs updated for user-visible changes
 - [ ] Summary says what was tested, what wasn't, and any skipped bug tests
