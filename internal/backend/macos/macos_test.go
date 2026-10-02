@@ -171,7 +171,13 @@ func TestConformanceThroughAFakeRuntime(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	defer be.Close()
-	conformance.Run(t, api.NewClientWithHTTP(ts.URL, "macos-fake", ts.Client()))
+	conformance.RunExcept(t, api.NewClientWithHTTP(ts.URL, "macos-fake", ts.Client()), map[string]string{
+		// The real runtime runs sandbox-guestd as the guest's root, and it drops
+		// to its unprivileged uid; an unprivileged user namespace maps only one
+		// uid, so here the agent keeps the mapped root (--uid -1). End-to-end
+		// row 15 runs this on the real runtime.
+		"ProcessesDoNotRunAsRoot": "the fake runtime's user namespace maps one uid, so processes keep its root",
+	})
 }
 
 // The runtime's argv is visible to every process on the Mac (ps), so a
@@ -186,5 +192,41 @@ func TestBuildRunArgsCarryNoEnvironmentValue(t *testing.T) {
 	}
 	if j := strings.Join(args, " "); strings.Contains(j, secret) || strings.Contains(j, "API_TOKEN") {
 		t.Errorf("an environment variable reached the runtime's argv: %s", j)
+	}
+}
+
+// The runtime is shared with whatever else the user runs in it, so this
+// backend removes only what it started: on startup, the containers carrying
+// its label that an earlier sandboxd left; afterwards, only ids it created. A
+// reference to someone's `postgres` never becomes a `container rm`.
+func TestOnlyItsOwnContainersAreRemoved(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script stands in for the runtime")
+	}
+	work := t.TempDir()
+	logf := filepath.Join(work, "calls")
+	script := filepath.Join(work, "container")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo "$*" >> "`+logf+`"
+case "$1" in
+ls) echo '[{"configuration":{"id":"sbx_left","labels":{"sbx.managed":"1"}}},{"configuration":{"id":"postgres","labels":{"app":"db"}}}]' ;;
+esac
+`), 0o755)
+	agent := filepath.Join(work, "sandbox-guestd")
+	os.WriteFile(agent, []byte("x"), 0o755)
+	be, err := New(Config{Container: script, Agent: agent, Logf: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer be.Close()
+	if err := be.Terminate(context.Background(), "postgres"); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ := os.ReadFile(logf)
+	if !strings.Contains(string(calls), "rm --force sbx_left") {
+		t.Errorf("a sandbox an earlier run left was not removed:\n%s", calls)
+	}
+	if strings.Contains(string(calls), "postgres") {
+		t.Errorf("a container this backend did not start was touched:\n%s", calls)
 	}
 }

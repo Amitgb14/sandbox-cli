@@ -102,3 +102,26 @@ func TestAuthFilterNamesSavedFiles(t *testing.T) {
 		t.Error("a settings file that is not an object was let through")
 	}
 }
+
+// The agent-writable bin directories are appended to PATH, never prepended:
+// ahead of /usr/bin, a file the agent drops there named git, node or sh would
+// shadow that command in every later run (open item 8 in the security
+// backlog). The agent itself is exec'd by absolute path, so appending costs
+// nothing.
+func TestBootstrapAppendsToPath(t *testing.T) {
+	for _, n := range InteractiveNames() {
+		d, _ := LookupInteractive(n)
+		if _, ok := d.Tools(); !ok {
+			continue
+		}
+		script := d.Command[2]
+		for _, dir := range []string{"$HOME/.local/bin", ToolsDir + "/.local/bin"} {
+			if strings.Contains(script, `PATH="`+dir) {
+				t.Errorf("%s: %s is prepended to PATH", n, dir)
+			}
+			if !strings.Contains(script, `PATH="$PATH:`+dir+`"`) {
+				t.Errorf("%s: %s is not appended to PATH", n, dir)
+			}
+		}
+	}
+}

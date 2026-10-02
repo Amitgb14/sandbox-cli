@@ -36,6 +36,16 @@ import (
 // Run runs the whole suite against the endpoint behind c.
 func Run(t *testing.T, c *api.Client) {
 	t.Helper()
+	RunExcept(t, c, nil)
+}
+
+// RunExcept is Run for a test harness that stands in for part of an endpoint
+// and cannot do what one test asks: except names that test and why, and the
+// reason is the skip message, so it is read every time the suite runs. Not for
+// a real endpoint — what an endpoint cannot do, its capabilities say — and a
+// name that is not a test fails, so an exception cannot outlive its test.
+func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
+	t.Helper()
 	ctx := context.Background()
 	caps, err := c.Capabilities(ctx)
 	if err != nil {
@@ -83,11 +93,23 @@ func Run(t *testing.T, c *api.Client) {
 		{"LabelsAreKeptAndFilterTheListing", testLabels},
 		{"TheAuditLogRecordsWhatHappened", testAudit},
 		{"TheAuditLogNeverKeepsAProcesssArguments", testAuditArgs},
+		{"ProcessesDoNotRunAsRoot", testNotRoot},
+		{"SandboxesCannotReachEachOther", testPeerIsolation},
 		{"AVolumeOutlivesItsSandbox", testVolumes},
 		{"VolumeMountsAreChecked", testVolumeRefusals},
 		{"AVolumeHasOneWriterOrManyReaders", testVolumeSharing},
 	} {
-		t.Run(tc.name, func(t *testing.T) { tc.fn(t, e) })
+		why, skip := except[tc.name]
+		delete(except, tc.name)
+		t.Run(tc.name, func(t *testing.T) {
+			if skip {
+				t.Skip("excepted by the harness: " + why)
+			}
+			tc.fn(t, e)
+		})
+	}
+	for name := range except {
+		t.Errorf("RunExcept names %q, which is not a test in the suite", name)
 	}
 }
 
@@ -917,6 +939,53 @@ func testLabels(t *testing.T, e *env) {
 // The audit log says what a sandbox was asked to do and how it ended — with
 // environment names, never values — and still answers by id once the sandbox
 // is gone.
+// A process runs as the image's unprivileged user. Root in the guest is not
+// root on the host, but it is the guest's own kernel interface: mount, raw
+// sockets, the drive's device nodes, and every defence a guest-side rule is
+// meant to add.
+func testNotRoot(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	res, err := e.c.Run(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"id", "-u"}})
+	if err != nil || res.ExitCode != 0 {
+		t.Skip("the sandbox image has no id")
+	}
+	if uid := strings.TrimSpace(string(res.Stdout)); uid == "0" || uid == "" {
+		t.Errorf("a process runs as uid %q", uid)
+	}
+}
+
+// One sandbox cannot connect to another: each is its own boundary, and two
+// agents on one endpoint (a fleet, two users) must not be a network to each
+// other. The listener is checked from inside its own sandbox first, so a
+// refusal from the peer means isolation and not a listener that never
+// started.
+func testPeerIsolation(t *testing.T, e *env) {
+	a := e.newSandbox(t, api.CreateSandboxRequest{})
+	b := e.newSandbox(t, api.CreateSandboxRequest{})
+	py := func(sb, code string) (api.RunResult, error) {
+		return e.c.Run(ctxT(t), sb, api.RunRequest{Argv: []string{"python3", "-c", code}, TimeoutSecs: 20})
+	}
+	if res, err := py(a.ID, "print(1)"); err != nil || res.ExitCode != 0 {
+		t.Skip("the sandbox image has no python3")
+	}
+	res, err := py(a.ID, "import socket\ns=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\ns.connect(('192.0.2.1',9))\nprint(s.getsockname()[0])")
+	addr := strings.TrimSpace(string(res.Stdout))
+	if err != nil || res.ExitCode != 0 || addr == "" || strings.HasPrefix(addr, "127.") {
+		t.Skip("the sandbox has no network interface (network none), so there is no peer to reach")
+	}
+	const listen = "import socket\ns=socket.socket()\ns.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\ns.bind(('0.0.0.0',8765))\ns.listen(8)\nwhile True:\n  c,_=s.accept()\n  c.close()"
+	if _, err := e.c.StartProcess(ctxT(t), a.ID, api.RunRequest{Argv: []string{"python3", "-c", listen}}); err != nil {
+		t.Fatal(err)
+	}
+	connect := "import socket,sys,time\nfor i in range(10):\n  try:\n    socket.create_connection(('" + addr + "',8765),timeout=2).close(); sys.exit(0)\n  except OSError:\n    time.sleep(0.3)\nsys.exit(1)"
+	if res, err := py(a.ID, connect); err != nil || res.ExitCode != 0 {
+		t.Fatalf("precondition: the listener in %s is not reachable from itself at %s", a.ID, addr)
+	}
+	if res, err := py(b.ID, connect); err == nil && res.ExitCode == 0 {
+		t.Errorf("%s reached %s at %s:8765", b.ID, a.ID, addr)
+	}
+}
+
 // A process is audited by its program, its argument count and a hash of its
 // arguments. Their text is never kept: an agent's arguments are its prompt, a
 // command line is where a token gets typed, and the log outlives the sandbox.

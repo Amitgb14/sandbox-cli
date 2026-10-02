@@ -143,3 +143,28 @@ func TestFollowAfterExit(t *testing.T) {
 		t.Fatalf("events: %+v", got)
 	}
 }
+
+// A name reaches the live sandbox that has it, even when a terminated one had
+// it first: `kill db` must stop the running db, not report the dead one
+// already gone and leave the live one running.
+func TestANameResolvesToTheLiveSandbox(t *testing.T) {
+	srv := httptest.NewServer((&Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy()}).Handler())
+	defer srv.Close()
+	c, _ := api.NewClient(srv.URL, "")
+	ctx := context.Background()
+	old, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{Name: "db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.TerminateSandbox(ctx, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	live, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{Name: "db"})
+	if err != nil {
+		t.Fatalf("the name of a terminated sandbox: %v", err)
+	}
+	got, err := c.Sandbox(ctx, "db")
+	if err != nil || got.ID != live.ID {
+		t.Errorf("db resolved to %s (%v), want the live %s", got.ID, err, live.ID)
+	}
+}
