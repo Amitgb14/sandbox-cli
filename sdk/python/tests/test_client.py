@@ -6,6 +6,7 @@ Starts its own sandboxd on a temporary unix socket. Skipped when SANDBOXD is
 not set; `make test-sdk` sets it.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -29,7 +30,8 @@ class ClientTest(unittest.TestCase):
         with open(tok, "w") as f:
             f.write("python-sdk-test-token")
         os.chmod(tok, 0o600)
-        cls.proc = subprocess.Popen([SANDBOXD, "--backend", "fake", "--listen", "unix://" + sock, "--token-file", tok],
+        cls.proc = subprocess.Popen([SANDBOXD, "--backend", "fake", "--listen", "unix://" + sock, "--token-file", tok,
+                                     "--state-dir", os.path.join(cls.dir, "state")],
                                     stderr=subprocess.DEVNULL)
         for _ in range(100):
             if os.path.exists(sock):
@@ -51,6 +53,17 @@ class ClientTest(unittest.TestCase):
         caps = self.c.capabilities()
         self.assertEqual(caps["api_version"], "v1")
         self.assertEqual(caps["backend"], "fake")
+
+    def test_labels_and_events(self):
+        sb = self.new(labels={"sdk": "python"}, env={"SDK_SECRET": "py-secret-value"})
+        self.assertEqual(sb["labels"], {"sdk": "python"})
+        self.assertEqual([s["id"] for s in self.c.sandboxes(labels={"sdk": "python"})], [sb["id"]])
+        self.c.run(sb["id"], ["true"])
+        events = self.c.events(sb["id"])["events"]
+        self.assertEqual(events[0]["type"], "sandbox.created")
+        self.assertIn("SDK_SECRET", events[0]["env_names"])
+        self.assertNotIn("py-secret-value", json.dumps(events))
+        self.assertIn("process.started", [e["type"] for e in events])
 
     def test_run_and_files(self):
         sb = self.new(env={"GREETING": "hello"})

@@ -163,11 +163,22 @@ func (c *Client) Sandbox(ctx context.Context, ref string) (Sandbox, error) {
 	return out, c.json(ctx, http.MethodGet, sbx(ref), nil, &out)
 }
 
-// Sandboxes lists this endpoint's sandboxes, newest first.
-func (c *Client) Sandboxes(ctx context.Context) ([]Sandbox, error) {
+// Sandboxes lists this endpoint's sandboxes, newest first. labels, when
+// given as key=value strings, keep only sandboxes carrying every one.
+func (c *Client) Sandboxes(ctx context.Context, labels ...string) ([]Sandbox, error) {
 	var out SandboxList
-	err := c.json(ctx, http.MethodGet, "/v1/sandboxes", nil, &out)
+	path := "/v1/sandboxes"
+	if len(labels) > 0 {
+		path += "?" + url.Values{"label": labels}.Encode()
+	}
+	err := c.json(ctx, http.MethodGet, path, nil, &out)
 	return out.Sandboxes, err
+}
+
+// Events returns a sandbox's audit events, oldest first (capability audit).
+func (c *Client) Events(ctx context.Context, ref string) (EventList, error) {
+	var out EventList
+	return out, c.json(ctx, http.MethodGet, sbx(ref)+"/events", nil, &out)
 }
 
 // UpdateSandbox changes a running sandbox.

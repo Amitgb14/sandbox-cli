@@ -79,6 +79,8 @@ func Run(t *testing.T, c *api.Client) {
 		{"SuspendKeepsTheSandbox", testSuspend},
 		{"ASnapshotForksTheSandbox", testSnapshot},
 		{"ATunnelReachesAGuestPort", testTunnel},
+		{"LabelsAreKeptAndFilterTheListing", testLabels},
+		{"TheAuditLogRecordsWhatHappened", testAudit},
 	} {
 		t.Run(tc.name, func(t *testing.T) { tc.fn(t, e) })
 	}
@@ -881,4 +883,106 @@ c, _ = s.accept(); c.sendall(b"hello from the guest:" + c.recv(64)); c.close()`
 	if _, err := e.c.Tunnel(ctx, sb.ID, 0); !api.IsCode(err, api.CodeInvalidRequest) {
 		t.Errorf("port 0: %v; want invalid_request", err)
 	}
+}
+
+// Labels decide nothing about the sandbox; they come back with it, filter the
+// listing, and are bounded and printable.
+func testLabels(t *testing.T, e *env) {
+	mark := uniqueName("mark")
+	sb := e.newSandbox(t, api.CreateSandboxRequest{Labels: map[string]string{"suite.mark": mark, "agent": "none"}})
+	if sb.Labels["suite.mark"] != mark {
+		t.Fatalf("labels %v", sb.Labels)
+	}
+	_ = e.newSandbox(t, api.CreateSandboxRequest{Labels: map[string]string{"suite.mark": mark + "-other"}})
+	list, err := e.c.Sandboxes(ctxT(t), "suite.mark="+mark)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != sb.ID {
+		t.Fatalf("filtered listing: %d sandboxes", len(list))
+	}
+	for _, bad := range []map[string]string{
+		{"Upper": "x"}, {"-lead": "x"}, {"k": "esc\x1b[2J"}, {"k": strings.Repeat("v", 257)},
+	} {
+		_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{Labels: bad})
+		wantCode(t, err, api.CodeInvalidRequest)
+	}
+}
+
+// The audit log says what a sandbox was asked to do and how it ended — with
+// environment names, never values — and still answers by id once the sandbox
+// is gone.
+func testAudit(t *testing.T, e *env) {
+	if !e.caps.Has(api.CapAudit) {
+		t.Skip("endpoint keeps no audit log (capability audit)")
+	}
+	const secret = "conformance-secret-value-7f3a"
+	sb, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{
+		Env: map[string]string{"SUITE_SECRET": secret}, Labels: map[string]string{"suite": "audit"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"false"}}); res.ExitCode != 1 {
+		t.Fatalf("false exited %d", res.ExitCode)
+	}
+	if err := e.c.WriteFile(ctxT(t), sb.ID, "/tmp/audited.txt", []byte("12345")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.c.TerminateSandbox(ctxT(t), sb.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The exit is recorded when the process is reaped, which can trail the
+	// response to the run that waited for it.
+	var list api.EventList
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		list, err = e.c.Events(ctxT(t), sb.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(list.Events) > 0 && list.Events[len(list.Events)-1].Type == api.EventSandboxTerminated || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	raw, _ := json.Marshal(list)
+	if strings.Contains(string(raw), secret) {
+		t.Fatal("an environment value is in the audit log")
+	}
+	seen := map[string]api.Event{}
+	for _, ev := range list.Events {
+		if ev.Sandbox != sb.ID {
+			t.Errorf("an event for %s in %s's log", ev.Sandbox, sb.ID)
+		}
+		seen[ev.Type] = ev
+	}
+	created, ok := seen[api.EventSandboxCreated]
+	if !ok || created.Labels["suite"] != "audit" || !contains(created.EnvNames, "SUITE_SECRET") {
+		t.Errorf("created: %+v", created)
+	}
+	if st := seen[api.EventProcessStarted]; len(st.Argv) != 1 || st.Argv[0] != "false" {
+		t.Errorf("process.started: %+v", st)
+	}
+	if ex := seen[api.EventProcessExited]; ex.ExitCode == nil || *ex.ExitCode != 1 {
+		t.Errorf("process.exited: %+v", ex)
+	}
+	if fw := seen[api.EventFileWritten]; fw.Path != "/tmp/audited.txt" || fw.Bytes != 5 {
+		t.Errorf("file.written: %+v", fw)
+	}
+	if term := seen[api.EventSandboxTerminated]; term.Reason != "request" {
+		t.Errorf("terminated: %+v", term)
+	}
+	_, err = e.c.Events(ctxT(t), "sbx_0000000000000000")
+	wantCode(t, err, api.CodeNotFound)
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

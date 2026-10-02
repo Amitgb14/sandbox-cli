@@ -69,6 +69,14 @@ func TestRoutedRunFallsThroughOnlyWhenNothingChanged(t *testing.T) {
 	if !strings.Contains(last, "briefing, not a resumed conversation") || !strings.HasSuffix(last, "fix the bug") {
 		t.Errorf("fallback prompt:\n%s", last)
 	}
+	// One episode, one id; the fallback says where it came from and why.
+	first, fb := (*seen)[0].labels, second.labels
+	if first["route.id"] == "" || first["route.id"] != fb["route.id"] || first["route.attempt"] != "1" || fb["route.attempt"] != "2" {
+		t.Errorf("route labels: %v / %v", first, fb)
+	}
+	if fb["route.from"] != "claude" || !strings.Contains(fb["route.reason"], "changed nothing") || first["route.from"] != "" {
+		t.Errorf("route.from/reason: %v / %v", first, fb)
+	}
 	// The primary ran exactly what was typed.
 	if first := (*seen)[0].argv; first[len(first)-1] != "fix the bug" || first[len(first)-2] != "-p" {
 		t.Errorf("primary argv %q", first)

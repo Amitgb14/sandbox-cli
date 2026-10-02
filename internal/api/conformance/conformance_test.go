@@ -3,18 +3,24 @@ package conformance
 import (
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/server"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
 )
 
-// serveFake runs sandboxd's handler over the fake backend in-process.
-func serveFake(t *testing.T, pol spec.Policy, caps ...string) *api.Client {
+// serveFake runs sandboxd's handler over the fake backend in-process, with an
+// audit log when withAudit is set.
+func serveFake(t *testing.T, pol spec.Policy, withAudit bool, caps ...string) *api.Client {
 	t.Helper()
 	s := &server.Server{Backend: fake.New(caps...), Policy: pol, Token: "conformance-token"}
+	if withAudit {
+		s.Audit = audit.NewLog(filepath.Join(t.TempDir(), "events.jsonl"))
+	}
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return api.NewClientWithHTTP(ts.URL, "conformance-token", ts.Client())
@@ -23,7 +29,7 @@ func serveFake(t *testing.T, pol spec.Policy, caps ...string) *api.Client {
 // The suite against the fake, with the default policy and every capability the
 // fake can pretend to have.
 func TestFakeDefaultPolicy(t *testing.T) {
-	Run(t, serveFake(t, spec.DefaultPolicy(), api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot))
+	Run(t, serveFake(t, spec.DefaultPolicy(), true, api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot))
 }
 
 // An endpoint that cannot filter egress — a backend without host networking.
@@ -31,7 +37,7 @@ func TestFakeDefaultPolicy(t *testing.T) {
 // must hold there too: every allowlist request refused, nothing served open.
 func TestFakeNoEgress(t *testing.T) {
 	pol, _ := spec.DefaultPolicy().FitTo(map[string]bool{})
-	Run(t, serveFake(t, pol))
+	Run(t, serveFake(t, pol, false))
 }
 
 // The same suite against an endpoint that cannot update network policy and
@@ -40,7 +46,7 @@ func TestFakeNoEgress(t *testing.T) {
 func TestFakeNarrowPolicy(t *testing.T) {
 	pol := spec.DefaultPolicy()
 	pol.Network.MayAllow = nil
-	Run(t, serveFake(t, pol, api.CapEgressAllowlist))
+	Run(t, serveFake(t, pol, false, api.CapEgressAllowlist))
 }
 
 // TestEndpoint runs the suite against a real sandboxd, when one is named. It is

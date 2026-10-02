@@ -118,6 +118,7 @@ func splitWrapperArgs(args []string) (sandbox, agent []string) {
 
 func newListCmd() *cobra.Command {
 	var ctxFlag string
+	var labels []string
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -128,20 +129,21 @@ func newListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			list, err := c.Sandboxes(cmd.Context())
+			list, err := c.Sandboxes(cmd.Context(), labels...)
 			if err != nil {
 				return err
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tNAME\tSTATE\tIMAGE\tNETWORK\tCREATED")
+			fmt.Fprintln(tw, "ID\tNAME\tSTATE\tIMAGE\tNETWORK\tCREATED\tLABELS")
 			for _, s := range list {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, termsafe.Clean(s.Name), s.State,
-					termsafe.Clean(s.Image), s.Network.Mode, s.CreatedAt.Local().Format(time.DateTime))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, termsafe.Clean(s.Name), s.State,
+					termsafe.Clean(s.Image), s.Network.Mode, s.CreatedAt.Local().Format(time.DateTime), formatLabels(s.Labels))
 			}
 			return tw.Flush()
 		},
 	}
 	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
+	cmd.Flags().StringArrayVar(&labels, "label", nil, "only sandboxes with this label, key=value (repeatable)")
 	return cmd
 }
 

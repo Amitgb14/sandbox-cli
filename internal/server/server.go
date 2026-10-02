@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
 )
@@ -53,6 +54,9 @@ type Server struct {
 	AllowedHosts []string
 	// CORSOrigins are browser origins allowed to call this server.
 	CORSOrigins []string
+	// Audit, when set, records every sandbox's events and serves them at
+	// GET /v1/sandboxes/{ref}/events.
+	Audit *audit.Log
 
 	now func() time.Time
 
@@ -128,6 +132,7 @@ func (s *Server) Handler() http.Handler {
 	route("GET /v1/sandboxes/{ref}/dirs", false, s.listDir)
 	route("POST /v1/sandboxes/{ref}/workspace", true, s.putWorkspace)
 	route("GET /v1/sandboxes/{ref}/workspace/bundle", false, s.getWorkspaceBundle)
+	route("GET /v1/sandboxes/{ref}/events", false, s.events)
 	s.reaper.Do(func() { go s.reapIdle() })
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")
@@ -177,6 +182,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	for k, v := range s.Backend.Capabilities() {
 		caps[k] = v
 	}
+	caps[api.CapAudit] = s.Audit != nil
 	writeJSON(w, http.StatusOK, api.Capabilities{
 		APIVersion:   api.Version,
 		Backend:      s.Backend.Name(),
@@ -229,6 +235,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: s.now().UTC(),
 			IdleTimeoutSecs: bs.IdleTimeoutSecs,
 			Bind:            apiBind(bs.Bind),
+			Labels:          copyLabels(req.Labels),
 		},
 		env:        bs.Env,
 		procs:      map[int]*procRecord{},
@@ -258,7 +265,65 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	rec.sbx.State = api.StateRunning
 	out := rec.sbx
 	rec.mu.Unlock()
+	ev := api.Event{Type: api.EventSandboxCreated, Sandbox: id, Name: out.Name, Image: out.Image,
+		Labels: out.Labels, Network: &out.Network, EnvNames: out.EnvNames, Snapshot: req.SnapshotID}
+	if out.Bind != nil {
+		ev.Bind = out.Bind.HostPath
+	}
+	s.event(ev)
 	writeJSON(w, http.StatusCreated, out)
+}
+
+// event records one audit event, if the server keeps a log.
+func (s *Server) event(e api.Event) {
+	if s.Audit == nil {
+		return
+	}
+	e.Time = s.now().UTC()
+	s.Audit.Record(e)
+}
+
+func copyLabels(l map[string]string) map[string]string {
+	if len(l) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(l))
+	for k, v := range l {
+		out[k] = v
+	}
+	return out
+}
+
+// maxEvents bounds one events response; the newest are kept.
+const maxEvents = 5000
+
+// events serves a sandbox's audit events. A sandbox this server has already
+// forgotten is still answered by id, since the log outlives the record —
+// but only by id, the one reference that cannot name somebody else's
+// sandbox; a name is matched against live records only.
+func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	if s.Audit == nil {
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this server keeps no audit log")
+		return
+	}
+	ref := r.PathValue("ref")
+	id := ref
+	if rec, ok := s.find(ref); ok {
+		id = rec.snapshot().ID
+	} else if !spec.ValidID(ref) {
+		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
+		return
+	}
+	events, truncated, err := s.Audit.Read(id, maxEvents)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "reading the audit log failed")
+		return
+	}
+	if len(events) == 0 {
+		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
+		return
+	}
+	writeJSON(w, http.StatusOK, api.EventList{Events: events, Truncated: truncated})
 }
 
 func (r *record) snapshot() api.Sandbox {
@@ -268,10 +333,29 @@ func (r *record) snapshot() api.Sandbox {
 }
 
 func (s *Server) listSandboxes(w http.ResponseWriter, r *http.Request) {
+	// ?label=k=v, repeatable: every one must match.
+	want := map[string]string{}
+	for _, l := range r.URL.Query()["label"] {
+		k, v, ok := strings.Cut(l, "=")
+		if !ok || k == "" {
+			writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "label: want key=value")
+			return
+		}
+		want[k] = v
+	}
 	s.mu.Lock()
 	list := make([]api.Sandbox, 0, len(s.sandboxes))
 	for _, rec := range s.sandboxes {
-		list = append(list, rec.snapshot())
+		sb := rec.snapshot()
+		match := true
+		for k, v := range want {
+			if got, ok := sb.Labels[k]; !ok || got != v {
+				match = false
+			}
+		}
+		if match {
+			list = append(list, sb)
+		}
 	}
 	s.mu.Unlock()
 	sort.Slice(list, func(i, j int) bool {
@@ -375,6 +459,7 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 	rec.sbx.Network = pol
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.event(api.Event{Type: api.EventNetworkUpdated, Sandbox: id, Network: &pol})
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -393,6 +478,7 @@ func (s *Server) terminateSandbox(w http.ResponseWriter, r *http.Request) {
 		rec.mu.Lock()
 		rec.sbx.State = api.StateTerminated
 		rec.mu.Unlock()
+		s.event(api.Event{Type: api.EventSandboxTerminated, Sandbox: sb.ID, Reason: "request"})
 		s.forgetOldTerminated()
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -469,6 +555,7 @@ func (s *Server) reapIdle() {
 			rec.mu.Lock()
 			rec.sbx.State = api.StateTerminated
 			rec.mu.Unlock()
+			s.event(api.Event{Type: api.EventSandboxTerminated, Sandbox: id, Reason: "idle"})
 		}
 		if len(due) > 0 {
 			s.forgetOldTerminated()
@@ -531,7 +618,9 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 		log:  log,
 	}
 	rec.procs[pr.info.PID] = pr
+	pid, started := pr.info.PID, pr.info.StartedAt
 	rec.mu.Unlock()
+	s.event(api.Event{Type: api.EventProcessStarted, Sandbox: id, PID: pid, Argv: ps.Argv, Cwd: ps.Cwd, EnvNames: sortedKeys(extra)})
 
 	go func() {
 		code := proc.Wait()
@@ -540,6 +629,8 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 		pr.info.ExitCode = &code
 		rec.mu.Unlock()
 		log.finish(code)
+		s.event(api.Event{Type: api.EventProcessExited, Sandbox: id, PID: pid, ExitCode: &code,
+			DurationMS: s.now().Sub(started).Milliseconds()})
 	}()
 	return pr, true
 }
@@ -783,6 +874,7 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 		writeBackendErr(w, err)
 		return
 	}
+	s.event(api.Event{Type: api.EventFileRead, Sandbox: rec.snapshot().ID, Path: p, Bytes: int64(len(data))})
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
@@ -803,6 +895,7 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		writeBackendErr(w, err)
 		return
 	}
+	s.event(api.Event{Type: api.EventFileWritten, Sandbox: rec.snapshot().ID, Path: p, Bytes: int64(len(data))})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -815,6 +908,7 @@ func (s *Server) removeFile(w http.ResponseWriter, r *http.Request) {
 		writeBackendErr(w, err)
 		return
 	}
+	s.event(api.Event{Type: api.EventFileRemoved, Sandbox: rec.snapshot().ID, Path: p})
 	w.WriteHeader(http.StatusNoContent)
 }
 

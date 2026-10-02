@@ -79,6 +79,7 @@ func (s *Server) suspend(w http.ResponseWriter, r *http.Request) {
 	rec.sbx.State = api.StateSuspended
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.event(api.Event{Type: api.EventSandboxSuspended, Sandbox: out.ID})
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -106,6 +107,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	rec.lastActive = s.now()
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.event(api.Event{Type: api.EventSandboxResumed, Sandbox: out.ID})
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -131,6 +133,7 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	st.mu.Lock()
 	st.m[id] = &snapshotRecord{info: out, spec: info}
 	st.mu.Unlock()
+	s.event(api.Event{Type: api.EventSnapshotCreated, Sandbox: sb.ID, Snapshot: id, Bytes: info.Bytes})
 	writeJSON(w, http.StatusCreated, out)
 }
 
@@ -219,6 +222,7 @@ func (s *Server) tunnel(w http.ResponseWriter, r *http.Request) {
 		writeBackendErr(w, err)
 		return
 	}
+	s.event(api.Event{Type: api.EventTunnelOpened, Sandbox: rec.snapshot().ID, Port: port})
 	defer guest.Close()
 	hj, ok := w.(http.Hijacker)
 	if !ok {

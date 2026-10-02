@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
@@ -196,7 +197,8 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 		return
 	}
 	lim := spec.LimitsFor(t)
-	req := api.CreateSandboxRequest{Name: sandboxName(t.Branch), Env: agentEnv(d)}
+	req := api.CreateSandboxRequest{Name: sandboxName(t.Branch), Env: agentEnv(d),
+		Labels: map[string]string{"agent": d.Name, "fleet.branch": labelValue(t.Branch)}}
 	req.MemoryMB, req.CPUs = parseMemoryMiB(lim.Memory), parseCPUs(lim.CPUs)
 	if len(lim.Allow) > 0 {
 		req.Network = &api.NetworkPolicy{Mode: api.NetworkAllowlist,
@@ -265,6 +267,20 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 	default:
 		ts.State = TaskFailed
 	}
+}
+
+// labelValue keeps a branch name inside a label's bound; branch names are
+// git's, and git allows longer ones than a label does.
+func labelValue(s string) string {
+	const max = 256
+	if len(s) <= max {
+		return s
+	}
+	i := max
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return s[:i]
 }
 
 // agentEnv is an agent's constant settings and the host values of its

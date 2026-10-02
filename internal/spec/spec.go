@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
@@ -189,13 +190,55 @@ func NewID() string {
 	return "sbx_" + hex.EncodeToString(b[:])
 }
 
+var idRE = regexp.MustCompile(`^sbx_[0-9a-f]{16}$`)
+
+// ValidID reports whether s has the shape NewID gives.
+func ValidID(s string) bool { return idRE.MatchString(s) }
+
 // ValidName reports whether s is a legal sandbox name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
+
+// Labels decide nothing about a sandbox, but they are printed in listings and
+// written to the audit log, so they are bounded and printable: a label is not a
+// way to put an escape sequence in front of the operator reading the log.
+const (
+	MaxLabels          = 32
+	MaxLabelValueBytes = 256
+)
+
+var labelKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,62}$`)
+
+// ValidateLabels checks a request's labels.
+func ValidateLabels(labels map[string]string) error {
+	if len(labels) > MaxLabels {
+		return invalid("labels: at most %d", MaxLabels)
+	}
+	for k, v := range labels {
+		if !labelKeyRE.MatchString(k) {
+			return invalid("label %q: keys are lowercase letters, digits and . _ / -, at most 63", k)
+		}
+		if len(v) > MaxLabelValueBytes {
+			return invalid("label %s: values are at most %d bytes", k, MaxLabelValueBytes)
+		}
+		if !utf8.ValidString(v) {
+			return invalid("label %s: the value is not valid UTF-8", k)
+		}
+		for _, r := range v {
+			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+				return invalid("label %s: the value has a control character", k)
+			}
+		}
+	}
+	return nil
+}
 
 // Resolve turns a create request into a backend.Spec with the given id.
 func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec, error) {
 	if req.Name != "" && !ValidName(req.Name) {
 		return backend.Spec{}, invalid("name %q: lowercase letters, digits and dashes, starting with a letter or digit, at most 63", req.Name)
+	}
+	if err := ValidateLabels(req.Labels); err != nil {
+		return backend.Spec{}, err
 	}
 
 	img := req.Image

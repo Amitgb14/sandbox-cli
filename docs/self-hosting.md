@@ -53,6 +53,24 @@ put into every image's root disk, so the guest agent always matches the server.
   ceiling becomes `none` and the startup line says so. A request for an
   allowlist is then refused, never served open.
 
+## The audit log
+
+Every sandbox's events are appended to `<state-dir>/audit/events.jsonl` (mode
+0600): each create with its policy, labels and environment variable **names**,
+every process with its argv and exit code, files read and written, network
+changes, and how the sandbox ended. Clients read a sandbox's events with
+`GET /v1/sandboxes/{ref}/events`, or `sandbox-cli events <id>`. Values are never
+written. An argv is written as given, so treat the file as sensitive.
+
+- `--audit-log /var/log/sandboxd/events.jsonl` puts it elsewhere;
+  `--audit-log none` keeps no log, and capabilities then say `audit: false`.
+- It rotates at 8 MiB and keeps five old generations (`events.jsonl.1` … `.5`),
+  about 40 MiB in all. Ship it elsewhere if you need more history than that.
+- It is **best-effort**: if the file cannot be written, the request still
+  succeeds. If your compliance rules say an unrecorded action must not happen,
+  that is the wrong trade for you. Tell us, because it would be a flag, not a
+  rewrite.
+
 ## How egress is enforced
 
 Each sandbox gets a tap device on its own /30. In nftables table

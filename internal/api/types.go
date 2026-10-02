@@ -78,6 +78,9 @@ const (
 	CapWorkspaceBundle = "workspace_bundle"
 	// CapTunnel: a TCP port on the guest's loopback can be reached through the API.
 	CapTunnel = "tunnel"
+	// CapAudit: the server keeps an event log, served per sandbox at
+	// GET /v1/sandboxes/{ref}/events. A property of the server, not the backend.
+	CapAudit = "audit"
 )
 
 // Limits are the largest resources a sandbox may ask for.
@@ -118,6 +121,12 @@ type CreateSandboxRequest struct {
 	// allow_bind); the host path is refused if it is /, the home directory or
 	// an ancestor of it.
 	Bind *Bind `json:"bind,omitempty"`
+	// Labels are the client's own metadata: up to 32 keys of lowercase letters,
+	// digits and . _ / -, values up to 256 printable bytes. They decide nothing
+	// about the sandbox; they are returned with it, filter the listing
+	// (?label=k=v), and are recorded in its audit events, so a client can say
+	// why a sandbox exists — which agent, which fleet task, which retry.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // Bind is a host directory mounted at /workspace.
@@ -146,8 +155,64 @@ type Sandbox struct {
 	Network   NetworkPolicy `json:"network"`
 	CreatedAt time.Time     `json:"created_at"`
 	// IdleTimeoutSecs is in force for this sandbox; 0 means it never idles out.
-	IdleTimeoutSecs int   `json:"idle_timeout_secs"`
-	Bind            *Bind `json:"bind,omitempty"`
+	IdleTimeoutSecs int               `json:"idle_timeout_secs"`
+	Bind            *Bind             `json:"bind,omitempty"`
+	Labels          map[string]string `json:"labels,omitempty"`
+}
+
+// Event types in the audit log.
+const (
+	EventSandboxCreated    = "sandbox.created"
+	EventSandboxTerminated = "sandbox.terminated" // Reason: "request" or "idle"
+	EventNetworkUpdated    = "sandbox.network_updated"
+	EventSandboxSuspended  = "sandbox.suspended"
+	EventSandboxResumed    = "sandbox.resumed"
+	EventSnapshotCreated   = "snapshot.created"
+	EventProcessStarted    = "process.started"
+	EventProcessExited     = "process.exited"
+	EventFileRead          = "file.read"
+	EventFileWritten       = "file.written"
+	EventFileRemoved       = "file.removed"
+	EventWorkspaceIn       = "workspace.in"  // a bundle cloned into /workspace
+	EventWorkspaceOut      = "workspace.out" // a bundle taken out of it
+	EventTunnelOpened      = "tunnel.opened"
+)
+
+// Event is one line of the audit log: something a client asked a sandbox to
+// do, or something that happened to it. Environment variables appear by name
+// only — a value is never recorded. An argv is recorded as given, so a token
+// typed on a command line is in the log; treat the log as sensitive.
+type Event struct {
+	Time    time.Time         `json:"time"`
+	Type    string            `json:"type"`
+	Sandbox string            `json:"sandbox"`
+	Name    string            `json:"name,omitempty"`
+	Image   string            `json:"image,omitempty"`
+	Labels  map[string]string `json:"labels,omitempty"`
+	// Network is the policy in force after the event (created, updated).
+	Network  *NetworkPolicy `json:"network,omitempty"`
+	EnvNames []string       `json:"env_names,omitempty"`
+	Bind     string         `json:"bind,omitempty"`
+	Snapshot string         `json:"snapshot,omitempty"`
+
+	PID        int      `json:"pid,omitempty"`
+	Argv       []string `json:"argv,omitempty"`
+	Cwd        string   `json:"cwd,omitempty"`
+	ExitCode   *int     `json:"exit_code,omitempty"`
+	DurationMS int64    `json:"duration_ms,omitempty"`
+
+	Path  string `json:"path,omitempty"`
+	Bytes int64  `json:"bytes,omitempty"`
+	Port  int    `json:"port,omitempty"`
+
+	Reason string `json:"reason,omitempty"`
+}
+
+// EventList is the body of GET /v1/sandboxes/{ref}/events.
+type EventList struct {
+	Events []Event `json:"events"`
+	// Truncated is set when older events exist than the ones returned.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // Snapshot is a capture of a sandbox's memory and disk.

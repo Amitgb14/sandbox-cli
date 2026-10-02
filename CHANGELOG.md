@@ -44,6 +44,19 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   `show` and `repair` are gone: a checkpoint is already a ref you can review
   and merge. `bring-back --name fleet` and `--name checkpoints` are refused,
   because both are namespaces of their own.
+- **The audit log moves to `sandboxd`.** The server records every
+  sandbox's events: create with its policy and environment **names**, every
+  process with its argv and exit code, files, network changes, and how it
+  ended. `sandbox-cli events <id>` reads them, as does
+  `GET /v1/sandboxes/{ref}/events`. The client-side
+  `~/.config/sandbox/audit/sessions.jsonl` is no longer written. The log
+  defaults to `<state-dir>/audit/events.jsonl`; `sandboxd --audit-log none`
+  turns it off.
+- **Labels.** `--label key=value` on `run` and every agent command, and
+  `list --label` to filter. Agent runs, routing attempts and fleet tasks are
+  labelled automatically (`agent`, `route.id`, `route.attempt`, `route.from`,
+  `route.reason`, `fleet.branch`), so a failover's two sandboxes read as one
+  episode in the listing and in the audit log.
 - **Not yet rebuilt:** `worktree`, `context list` (agent conversations) and
   Studio. They return on the new API.
 

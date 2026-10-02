@@ -126,6 +126,7 @@ func (s *Server) putWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "cloning the bundle in the sandbox failed (it must carry HEAD): "+gitMessage(msg))
 		return
 	}
+	s.event(api.Event{Type: api.EventWorkspaceIn, Sandbox: id, Path: "/workspace", Reason: "branch " + branch})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -168,7 +169,9 @@ func (s *Server) getWorkspaceBundle(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
-	_, _, _ = s.execIn(ctx, id, []string{"cat", bundleOut}, nil, &capWriter{w: w, left: maxBundle})
+	cw := &capWriter{w: w, left: maxBundle}
+	_, _, _ = s.execIn(ctx, id, []string{"cat", bundleOut}, nil, cw)
+	s.event(api.Event{Type: api.EventWorkspaceOut, Sandbox: id, Reason: base + ".." + branch, Bytes: maxBundle - cw.left})
 	_, _, _ = s.execIn(context.WithoutCancel(ctx), id, []string{"rm", "-f", bundleOut}, nil, nil)
 }
 

@@ -637,9 +637,7 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
       nothing cannot pass work to the next agent;
     - `--detach --fallback` is refused rather than left unwatched.
 
-    Not yet: route ids and `routed_from` in the audit record, because the new
-    CLI writes no audit record at all. That is a gap of its own, still open
-    for M10.
+    Route ids and `route.from` reach the audit log as labels; see below.
   - **Usage: dropped.** It was ported (`a783ae0`) and then removed with the
     decision above. It read one agent's private cache file and had nothing to
     do with sandboxes. `agentusage` and its tests are in git history if Studio
@@ -669,6 +667,26 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     (`recover_resume`) is dropped too: transcripts stay in the guest and are
     not synced. `_old/internal/rescue` stays as the reference until `_old/`
     goes.
+
+  - **Audit: done, on the server, as the port table said** ("audit becomes
+    per-sandbox events served by the API"). `sandboxd` appends an event per
+    action to `<state-dir>/audit/events.jsonl` and serves a sandbox's events at
+    `GET /v1/sandboxes/{ref}/events` (capability `audit`, on by default). It
+    records whatever the client was: the CLI, Studio, an SDK or curl. The
+    `audit` package kept its rotation and generations code and their tests.
+    beta.15's per-run record and its docker-specific tests (firewall denial
+    reports, OCI runtimes) are dropped with the client-side log.
+    - **Labels** are how a client says why a sandbox exists without the server
+      learning what an agent is. They are generic metadata on create, filter
+      the listing, and are recorded in `sandbox.created`. sandbox-cli's own
+      labels (`agent`, `route.*`, `fleet.branch`) win over a user's `--label`.
+    - Conformance: `LabelsAreKeptAndFilterTheListing` and
+      `TheAuditLogRecordsWhatHappened`, the second asserting that an env value
+      appears nowhere in the events. The Python SDK is tested; the TypeScript
+      SDK is changed but untested here (no Node).
+    - The log is **best-effort**, so an unwritable file never fails a request.
+      `docs/self-hosting.md` says so as a decision an operator may want
+      reversed.
 
     Not yet: checkpoints run only while a CLI is attached. Detached runs and
     fleet tasks have nothing driving them, so a detached run's protection is

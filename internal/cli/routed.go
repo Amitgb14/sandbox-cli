@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
@@ -104,11 +105,20 @@ func routedRun(ctx context.Context, rf *runFlags, primary agents.Descriptor, age
 
 	var skipped []string
 	var carried *handoff.Export
+	// One id for the whole episode, on every attempt including the first:
+	// without it the two sandboxes of a failover read as two unrelated runs,
+	// and "did routing help" is unanswerable.
+	routeID := routing.NewID()
+	var routedFrom, routeReason string
 	for i, name := range chain {
 		d, _ := agents.Lookup(name)
 		if avail := routing.Probe(ctx, name, providers); !avail.Reachable {
 			skipped = append(skipped, fmt.Sprintf("%s (%s)", name, avail.Reason))
 			fmt.Fprintf(os.Stderr, "sandbox-cli: skipping %s — %s\n", name, avail.Reason)
+			if routedFrom == "" {
+				routedFrom = name
+			}
+			routeReason = strings.Join(skipped, "; ")
 			if i == len(chain)-1 {
 				return 1, fmt.Errorf("no agent in the chain %s is available: %s", chain, strings.Join(skipped, ", "))
 			}
@@ -122,7 +132,13 @@ func routedRun(ctx context.Context, rf *runFlags, primary agents.Descriptor, age
 			fmt.Fprintf(os.Stderr, "\nsandbox-cli: %s runs with its own login; this is a different agent, not a resumed one\n", name)
 		}
 
-		rs := runSpec{argv: argv, agent: &d, result: &runResult{}}
+		rs := runSpec{argv: argv, agent: &d, result: &runResult{}, labels: map[string]string{
+			"route.id": routeID, "route.attempt": fmt.Sprint(i + 1),
+		}}
+		if routedFrom != "" {
+			rs.labels["route.from"] = routedFrom
+			rs.labels["route.reason"] = truncateLabel(routeReason)
+		}
 		if i == 0 {
 			// The wrapper's descriptor, which may carry interactive-only
 			// settings the headless table does not.
@@ -154,9 +170,25 @@ func routedRun(ctx context.Context, rf *runFlags, primary agents.Descriptor, age
 		}
 		fmt.Fprintf(os.Stderr, "sandbox-cli: %s %s — trying %s\n", name, why, chain[i+1])
 		skipped = append(skipped, fmt.Sprintf("%s (exit %d, nothing written)", name, code))
+		routedFrom, routeReason = name, why
 		carried = handoff.Build(name, collected, nil)
 	}
 	return 1, nil
+}
+
+// truncateLabel keeps a label value inside the server's bound, on a rune
+// boundary.
+func truncateLabel(s string) string {
+	const max = 256
+	if len(s) <= max {
+		return s
+	}
+	for i := max - len("…"); i > 0; i-- {
+		if utf8.RuneStart(s[i]) {
+			return s[:i] + "…"
+		}
+	}
+	return ""
 }
 
 // promptFrom recovers the task from the user's own arguments: the last one,

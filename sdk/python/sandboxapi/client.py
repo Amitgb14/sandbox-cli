@@ -127,14 +127,18 @@ class Client:
     def create_sandbox(self, *, name: str = "", image: str = "", cpus: float = 0, memory_mb: int = 0,
                        disk_mb: int = 0, env: Optional[Dict[str, str]] = None,
                        network: Optional[Dict[str, Any]] = None, idle_timeout_secs: int = 0,
-                       snapshot_id: str = "", bind: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       snapshot_id: str = "", bind: Optional[Dict[str, Any]] = None,
+                       labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Create a sandbox. ``network`` is ``{"mode": "none"|"allowlist"|"open",
         "allow": [...], "deny": [...]}``; ``"allow": None`` (or absent) means the
-        server's default list, ``[]`` means nothing — which is refused."""
+        server's default list, ``[]`` means nothing — which is refused.
+        ``labels`` are your own metadata: returned with the sandbox, usable to
+        filter ``sandboxes()``, and recorded in its audit events."""
         req: Dict[str, Any] = {}
         for k, v in (("name", name), ("image", image), ("cpus", cpus), ("memory_mb", memory_mb),
                      ("disk_mb", disk_mb), ("env", env), ("network", network),
-                     ("idle_timeout_secs", idle_timeout_secs), ("snapshot_id", snapshot_id), ("bind", bind)):
+                     ("idle_timeout_secs", idle_timeout_secs), ("snapshot_id", snapshot_id), ("bind", bind),
+                     ("labels", labels)):
             if v:
                 req[k] = v
         if network is not None and "allow" not in network:
@@ -144,8 +148,18 @@ class Client:
     def sandbox(self, ref: str) -> Dict[str, Any]:
         return self._json("GET", self._sbx(ref))
 
-    def sandboxes(self) -> List[Dict[str, Any]]:
-        return self._json("GET", "/v1/sandboxes")["sandboxes"]
+    def sandboxes(self, labels: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+        """Newest first; with ``labels``, only sandboxes carrying every one."""
+        path = "/v1/sandboxes"
+        if labels:
+            path += "?" + urllib.parse.urlencode([("label", f"{k}={v}") for k, v in labels.items()])
+        return self._json("GET", path)["sandboxes"]
+
+    def events(self, ref: str) -> Dict[str, Any]:
+        """The sandbox's audit events, oldest first: ``{"events": [...],
+        "truncated": bool}`` (capability ``audit``). Environment variables
+        appear by name only."""
+        return self._json("GET", self._sbx(ref) + "/events")
 
     def update_network(self, ref: str, network: Dict[str, Any]) -> Dict[str, Any]:
         return self._json("PATCH", self._sbx(ref), {"network": network})

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/macos"
@@ -76,6 +77,7 @@ func run(args []string) error {
 	var allowedHosts, insecureRegistries listFlag
 	fl.Var(&allowedHosts, "allowed-host", "a Host name to answer besides loopback (repeatable)")
 	fl.Var(&insecureRegistries, "insecure-registry", "a registry (host:port) to pull from over plain HTTP — a local one; repeatable")
+	auditLog := fl.String("audit-log", "", `every sandbox's events, as JSONL (default: <state-dir>/audit/events.jsonl; "none" keeps no log)`)
 	showVersion := fl.Bool("version", false, "print the version and exit")
 	if err := fl.Parse(args); err != nil {
 		return err
@@ -133,16 +135,30 @@ func run(args []string) error {
 		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
 		where = "https://" + strings.TrimPrefix(where, "tcp://")
 	}
+	// On by default: a run log is the record of what an agent did after its
+	// sandbox is gone, and opting in to one after the fact is not possible.
+	logPath := *auditLog
+	switch logPath {
+	case "":
+		logPath = filepath.Join(*stateDir, "audit", "events.jsonl")
+	case "none":
+		logPath = ""
+	}
 	srv := &http.Server{
-		Handler: (&server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts}).Handler(),
+		Handler: (&server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts,
+			Audit: audit.NewLog(logPath)}).Handler(),
 		// Output streams are long-lived, so there is no WriteTimeout; a client that
 		// stops reading is noticed through its context.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	logf("%s serving API %s on %s; backend %s; token %s; network ceiling %s; default image %s",
+	auditNote := logPath
+	if auditNote == "" {
+		auditNote = "off"
+	}
+	logf("%s serving API %s on %s; backend %s; token %s; network ceiling %s; default image %s; audit log %s",
 		version.Version, api.Version, where, be.Name(),
-		map[bool]string{true: "required", false: "not required"}[token != ""], pol.Network.Ceiling, pol.DefaultImage)
+		map[bool]string{true: "required", false: "not required"}[token != ""], pol.Network.Ceiling, pol.DefaultImage, auditNote)
 	if be.Name() == "fake" {
 		logf("the fake backend runs no VMs and isolates nothing; it is for development and the conformance suite")
 	}

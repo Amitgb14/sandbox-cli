@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
@@ -43,6 +45,7 @@ type runFlags struct {
 	configPath    string
 	fallback      []string
 	checkpoint    time.Duration
+	labels        []string
 }
 
 func (rf *runFlags) register(cmd *cobra.Command) {
@@ -70,6 +73,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.fromSnapshot, "from-snapshot", "", "start from a snapshot (sandbox-cli snapshot) instead of the image")
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
 	f.DurationVar(&rf.checkpoint, "checkpoint-every", 5*time.Minute, "fetch the sandbox's working tree to refs/sandbox/checkpoints/<id> this often while attached, so a dead VM loses minutes rather than the run (0: never)")
+	f.StringArrayVar(&rf.labels, "label", nil, "label the sandbox, key=value (repeatable); shown by list and recorded in its audit events")
 	f.StringArrayVar(&rf.fallback, "fallback", nil, "an agent to try next if this one's provider is down or it fails having changed nothing (repeatable; agent wrappers only)")
 }
 
@@ -95,6 +99,11 @@ type runSpec struct {
 	before, after func(ctx context.Context, c *api.Client, sandbox string)
 	// result, when set, is filled in with what the run did.
 	result *runResult
+	// labels are added to the sandbox's, over any --label of the same key:
+	// they are what sandbox-cli itself knows about the run (the agent, the
+	// routing attempt), and a user label should not be able to disguise one
+	// routing attempt as another.
+	labels map[string]string
 }
 
 // runResult is what routing needs to know about a run that has ended.
@@ -126,6 +135,9 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		IdleTimeoutSecs: rf.idle, SnapshotID: rf.fromSnapshot,
 	}
 	if req.Env, err = buildEnv(rf.env, rs.agent); err != nil {
+		return 1, err
+	}
+	if req.Labels, err = buildLabels(rf.labels, rs); err != nil {
 		return 1, err
 	}
 	req.Network = buildNetwork(rf, caps)
@@ -350,6 +362,47 @@ func buildEnv(flags []string, agent *agents.Descriptor) (map[string]string, erro
 		env[k] = v
 	}
 	return env, nil
+}
+
+// buildLabels is the sandbox's labels: --label, then what sandbox-cli knows
+// about the run. The server validates them.
+func buildLabels(flags []string, rs runSpec) (map[string]string, error) {
+	out := map[string]string{}
+	for _, l := range flags {
+		k, v, ok := strings.Cut(l, "=")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("--label %q: want key=value", l)
+		}
+		out[k] = v
+	}
+	if rs.agent != nil {
+		out["agent"] = rs.agent.Name
+	}
+	for k, v := range rs.labels {
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// formatLabels renders labels for a table cell, sorted, with their text made
+// safe to print.
+func formatLabels(l map[string]string) string {
+	if len(l) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(l))
+	for k := range l {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + termsafe.Clean(l[k])
+	}
+	return strings.Join(parts, ",")
 }
 
 // buildNetwork turns the flags into a policy request, or nil for the server's

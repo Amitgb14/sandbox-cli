@@ -31,6 +31,7 @@ export interface Sandbox {
   network: NetworkPolicy;
   created_at: string;
   idle_timeout_secs: number;
+  labels?: Record<string, string>;
 }
 
 export interface CreateSandboxRequest {
@@ -44,6 +45,31 @@ export interface CreateSandboxRequest {
   idle_timeout_secs?: number;
   snapshot_id?: string;
   bind?: { host_path: string; read_only?: boolean };
+  /** Your own metadata: returned with the sandbox, filters `sandboxes()`, recorded in its audit events. */
+  labels?: Record<string, string>;
+}
+
+/** One audit event. Environment variables appear by name only. */
+export interface AuditEvent {
+  time: string;
+  type: string;
+  sandbox: string;
+  name?: string;
+  image?: string;
+  labels?: Record<string, string>;
+  network?: NetworkPolicy;
+  env_names?: string[];
+  bind?: string;
+  snapshot?: string;
+  pid?: number;
+  argv?: string[];
+  cwd?: string;
+  exit_code?: number;
+  duration_ms?: number;
+  path?: string;
+  bytes?: number;
+  port?: number;
+  reason?: string;
 }
 
 export interface RunOptions {
@@ -189,8 +215,20 @@ export class Client {
     return this.json("GET", this.sbx(ref));
   }
 
-  async sandboxes(): Promise<Sandbox[]> {
-    return (await this.json<{ sandboxes: Sandbox[] }>("GET", "/v1/sandboxes")).sandboxes;
+  /** Newest first; with `labels`, only sandboxes carrying every one. */
+  async sandboxes(labels?: Record<string, string>): Promise<Sandbox[]> {
+    let path = "/v1/sandboxes";
+    if (labels && Object.keys(labels).length > 0) {
+      const q = new URLSearchParams();
+      for (const [k, v] of Object.entries(labels)) q.append("label", `${k}=${v}`);
+      path += "?" + q.toString();
+    }
+    return (await this.json<{ sandboxes: Sandbox[] }>("GET", path)).sandboxes;
+  }
+
+  /** The sandbox's audit events, oldest first (capability `audit`). */
+  events(ref: string): Promise<{ events: AuditEvent[]; truncated?: boolean }> {
+    return this.json("GET", this.sbx(ref) + "/events");
   }
 
   updateNetwork(ref: string, network: NetworkPolicy): Promise<Sandbox> {

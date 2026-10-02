@@ -45,6 +45,8 @@ sandbox-cli run --network none -- make
 sandbox-cli run --keep --name dev -- bash
 sandbox-cli list · logs ID · attach ID · kill ID · bring-back ID
 sandbox-cli snapshot · suspend · resume · tunnel
+sandbox-cli events ID                # what the sandbox was asked to do, and how it ended
+sandbox-cli run --label team=infra -- make; sandbox-cli list --label team=infra
 ```
 
 When a run ends, new commits — including anything left uncommitted — are
