@@ -51,12 +51,12 @@ if [ -x "$HOME/.local/bin/` + bin + `" ]; then
   exec "$HOME/.local/bin/` + bin + `" "$@"
 fi
 if ! command -v ` + bin + ` >/dev/null 2>&1; then
-  echo "sandbox-cli: installing ` + bin + installedVersionSuffix(bin) + ` into the sandbox agent home (first run only)..." >&2
+  echo "sandbox-cli: installing ` + bin + installedVersionSuffix(bin) + ` into this sandbox (it is not in the image, so every run installs it)..." >&2
   ` + install + ` >/dev/null 2>&1 || true
 fi
 if ! command -v ` + bin + ` >/dev/null 2>&1; then
   echo "sandbox-cli: ` + bin + ` is not installed, and installing it just now failed." >&2
-  echo "sandbox-cli: the sandbox needs network access on an agent's first run." >&2
+  echo "sandbox-cli: an agent that is not in the image needs network access to install." >&2
   echo "sandbox-cli: with --allow, the install host must be on the allowlist." >&2
   exit 127
 fi

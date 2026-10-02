@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/creds"
@@ -51,6 +52,7 @@ func applyConfig(rf *runFlags, project string, req *api.CreateSandboxRequest, ca
 		if err != nil {
 			return fmt.Errorf("secrets: %w", err)
 		}
+		warnLongLivedSecrets(vals, time.Now())
 		for _, v := range vals {
 			set(v.Name, v.Value)
 		}

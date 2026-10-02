@@ -1,13 +1,15 @@
-package sandbox
+package cli
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/Amitgb14/sandbox-cli/internal/config"
+	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/creds"
 )
 
@@ -93,22 +95,29 @@ func TestNoWarningWithoutALongLivedSecret(t *testing.T) {
 	}
 }
 
-// The wiring: a real resolution through forwardedValues warns, so the check
-// cannot be left connected to nothing. --dry-run is the other half of this and
-// is pinned in spec_test.go: Prepare never resolves a secret, so it never warns.
-func TestForwardedValuesWarnsOnALongLivedSecret(t *testing.T) {
+// The wiring: a real resolution through applyConfig warns, so the check cannot
+// be left connected to nothing — which is what the rewrite had until this was
+// ported: the classifier came across, and nothing called it.
+func TestApplyConfigWarnsOnALongLivedSecret(t *testing.T) {
 	got := captureSecretWarnings(t)
 
 	pat := "ghp_" + strings.Repeat("w", 36)
 	t.Setenv("SANDBOX_TEST_LONG_LIVED", pat)
-	vals, err := forwardedValues(config.Default(), Options{
-		Secrets: []string{"GITHUB_TOKEN=env:SANDBOX_TEST_LONG_LIVED"},
-	})
-	if err != nil {
+	cfgDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+	if err := os.MkdirAll(filepath.Join(cfgDir, "sandbox"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if vals["GITHUB_TOKEN"] != pat {
-		t.Fatalf("the secret did not reach the container: %q", vals["GITHUB_TOKEN"])
+	if err := os.WriteFile(filepath.Join(cfgDir, "sandbox", "config.yaml"),
+		[]byte("secrets:\n  GITHUB_TOKEN: {env: SANDBOX_TEST_LONG_LIVED}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req := api.CreateSandboxRequest{}
+	if err := applyConfig(&runFlags{}, t.TempDir(), &req, api.Capabilities{}); err != nil {
+		t.Fatal(err)
+	}
+	if req.Env["GITHUB_TOKEN"] != pat {
+		t.Fatalf("the secret did not reach the request: %q", req.Env["GITHUB_TOKEN"])
 	}
 	if len(*got) != 1 || !strings.Contains((*got)[0], "GITHUB_TOKEN") {
 		t.Errorf("warnings = %v, want one naming GITHUB_TOKEN", *got)

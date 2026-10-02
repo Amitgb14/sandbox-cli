@@ -725,6 +725,21 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     dropped and an unknown key refused, naming what replaced it. Not done with
     the packaging, because it changes `policy` and its trust tests.
 
+  - **Fixed while reviewing the web site against the code.**
+    - `agent claude` downloaded a self-updating Claude Code at the start of
+      **every** run, saying "first run only". The install lived in beta.15's
+      persisted HOME; in the rewrite only login files are carried, so the
+      image's own `claude` now runs directly. In a disposable VM the image is
+      where an agent's version lives.
+    - The long-lived-secret warning: `creds.Classify` was ported in M1 and
+      nothing called it. It now runs where `secrets:` resolve, with beta.15's
+      tests and a wiring test that fails without the call.
+  - **Open: agents not in the image install on every run.** Eleven of fifteen
+    agents are npm installs in the guest's HOME, which is discarded with the
+    sandbox. The message now says so. A cache volume per agent, or a wider
+    base image, would make it once; that is a decision about image size and
+    about sharing a writable volume across an agent's runs.
+
     Not yet: checkpoints run only while a CLI is attached. Detached runs and
     fleet tasks have nothing driving them, so a detached run's protection is
     still bring-back before the idle timeout.

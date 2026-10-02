@@ -71,6 +71,12 @@ Firecracker on Linux, the native `container` runtime on macOS — served by
   `--uninstall --purge` now also removes sandboxd's state directory,
   including volumes. The `config.yaml` a first install writes describes only
   settings the new client reads.
+- **`agent claude` runs the image's Claude Code.** It no longer downloads a
+  self-updating copy at the start of each run. Agents not in the image
+  (eleven of fifteen) are installed in the sandbox on every run, and say so.
+- **A long-lived secret is named again.** A `secrets:` value whose shape says it
+  does not expire (a classic personal access token, say) gets a one-line
+  warning, once per name, carrying no part of the value.
 - **Not yet rebuilt:** `worktree`, `context list` (agent conversations) and
   Studio. They return on the new API.
 
