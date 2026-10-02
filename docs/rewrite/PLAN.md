@@ -833,8 +833,15 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
   lose local support at M7. Linux users get self-hosted instead; the others get
   the cloud.
 - **Rewrite drift.** Before `_old/` is deleted, every CLAUDE.md invariant needs a
-  test in the new tree, or a note that the backend change made it obsolete. Most
-  of the docker ones are obsolete: icc, userns, uid mapping, the umask.
+  test in the new tree, or a note that the backend change made it obsolete.
+  *Checked 2026-10-02:* [`invariants.md`](invariants.md) records all 97.
+  - The check found five rules failing open in the new tree: the network
+    config and profile, fleet config, a tokenless loopback listener, Ctrl-C
+    on a watched run, and unvalidated config. All five are fixed, each with a
+    test that fails on the code before it.
+  - What remains: six code-only rows, each saying why that is acceptable,
+    and three rows only a real host can show (end-to-end rows 15 and 31).
+  - Deleting `_old/` waits on those host runs and on the merge itself.
 
 ## Open questions
 
