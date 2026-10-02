@@ -1,4 +1,4 @@
-package config
+package policy
 
 import (
 	"errors"
@@ -65,8 +65,6 @@ func TestProjectConfigRefusesPrivilegedKeys(t *testing.T) {
 			"workdir: /usr/local/bin\n", "workdir"},
 		"relocate the container HOME": {
 			"home: /tmp/elsewhere\n", "home"},
-		"weaken the isolation runtime": {
-			"runtime: some-runtime\n", "runtime"},
 		"hijack the interpreter via PATH": {
 			"env:\n  PATH: /workspace/.bin:/usr/bin\n", "env"},
 		"forward a host credential": {
@@ -212,12 +210,12 @@ func TestExplicitConfigIsTrusted(t *testing.T) {
 // config is the place these keys are supposed to live, so if it were caught too
 // the refusal would have no escape at all.
 func TestUserConfigIsTrusted(t *testing.T) {
-	withUserConfig(t, "user: root\nruntime: runsc\nsecrets:\n  TOK:\n    command: echo hi\n")
+	withUserConfig(t, "user: root\nsecrets:\n  TOK:\n    command: echo hi\n")
 	cfg, err := Load(t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("the user's own config must be trusted: %v", err)
 	}
-	if cfg.User != "root" || cfg.Runtime != "runsc" || cfg.Secrets["TOK"].Command != "echo hi" {
+	if cfg.User != "root" || cfg.Secrets["TOK"].Command != "echo hi" {
 		t.Errorf("user config did not apply: %+v", cfg)
 	}
 }
@@ -297,8 +295,6 @@ var projectKeyPolicy = map[string]bool{ // field name -> may a project file set 
 	"Cache":    false, // enabled permitted, paths refused — see the subkey cases below
 	"Snapshot": false,
 	"Secrets":  false,
-	"Runtime":  false,
-	"Engine":   false,
 	// Chooses which agent runs, and with it which persisted login and which
 	// forwarded variables the run can reach.
 	"Routing": false,
@@ -353,8 +349,6 @@ func TestClassifiedFieldsAreActuallyEnforced(t *testing.T) {
 		"Cache":     "cache:\n  paths:\n    - /x\n",
 		"Snapshot":  "snapshot:\n  enabled: false\n",
 		"Secrets":   "secrets:\n  T:\n    env: HOME\n",
-		"Runtime":   "runtime: runsc\n",
-		"Engine":    "engine: podman\n",
 		"Routing":   "routing: [codex, claude]\n",
 		"Providers": "providers:\n  claude: evil.example.com\n",
 		// Direction-checked: the sample must *weaken* something already in force,

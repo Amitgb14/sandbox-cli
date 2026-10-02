@@ -1,13 +1,11 @@
-// Package config defines the sandbox configuration schema and its layered
+// Package policy defines the sandbox configuration schema and its layered
 // discovery/merge rules: built-in defaults < user config < project config < flags.
-package config
+package policy
 
 import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/Amitgb14/sandbox-cli/internal/image"
 )
 
 // Config is the merged sandbox configuration.
@@ -31,27 +29,14 @@ type Config struct {
 	Cache    CacheSpec             `yaml:"cache"`
 	Snapshot SnapshotSpec          `yaml:"snapshot"`
 	Secrets  map[string]SecretSpec `yaml:"secrets"`
-	// Runtime is the OCI runtime (docker --runtime); "" uses docker's default
-	// (runc). Set to a stronger-isolation runtime the host has registered, e.g.
-	// "kata-fc" (microVM) or "runsc" (gVisor). Any registered name is accepted;
-	// runtime.StrongerRuntime decides which are reported as a kernel of their own.
-	Runtime string `yaml:"runtime"`
-
-	// Engine is the container engine: "docker" (default) or "podman".
-	//
-	// User-config only, like `runtime`: it chooses which binary sandbox-cli
-	// executes, so a repository that could set it would choose what runs on your
-	// machine.
-	Engine string `yaml:"engine"`
-
 	// Routing is the ordered list of agents a run falls through when the one it
 	// asked for is unavailable — ["claude", "codex"] meaning "claude, and codex
 	// if the provider behind claude is not answering". Empty means no routing:
 	// the agent that was asked for is the agent that runs, and a provider outage
 	// is a failed run, which is what happened before this existed.
 	//
-	// User-config only, like `runtime` and `engine`, and for a sharper reason
-	// than either: choosing the agent chooses **which credentials are in reach**.
+	// User-config only, because choosing the agent chooses **which credentials
+	// are in reach**.
 	// Every adapter has its own persisted HOME and its own EnvAllow, so a
 	// repository that could rewrite this could aim a run at a different agent's
 	// login — a token the user never intended that repository to be near. See
@@ -482,6 +467,12 @@ func dedupePaths(in []string) []string {
 	return out
 }
 
+// DefaultImage is the base image a config names when nothing else does. The
+// image package owns the real reference (a hash of the embedded image
+// definition) and sets this at startup; it is a variable rather than an import
+// so policy depends on nothing below it.
+var DefaultImage = "sandbox-base"
+
 // Default returns the built-in base configuration.
 // PersistAuthEnabled reports the effective value: on unless explicitly off.
 func (c Config) PersistAuthEnabled() bool { return c.PersistAuth == nil || *c.PersistAuth }
@@ -491,7 +482,7 @@ func (c Config) SyncEnabled() bool { return c.Sync == nil || *c.Sync }
 
 func Default() Config {
 	return Config{
-		Image:   image.Ref(),
+		Image:   DefaultImage,
 		Workdir: "/workspace",
 		// Non-root by default: agents like Claude Code refuse
 		// --dangerously-skip-permissions when running as root. On macOS Docker
@@ -539,22 +530,9 @@ func boolPtr(b bool) *bool    { return &b }
 func int64Ptr(n int64) *int64 { return &n }
 
 // Validate checks that the merged config is internally consistent.
-// ValidEngine reports whether name is a container engine sandbox-cli speaks.
-//
-// Duplicated from runtime.KnownEngine only in the sense that config cannot
-// import runtime without a cycle; the two lists are asserted equal by test, so
-// adding an engine in one place and not the other fails rather than drifts.
-func ValidEngine(name string) bool { return name == "docker" || name == "podman" }
-
 func (c Config) Validate() error {
 	if c.Image == "" {
 		return fmt.Errorf("image must not be empty")
-	}
-	// A typo here would otherwise be executed: NewEngine treats an unknown name
-	// as the binary to run, so `engine: dokcer` becomes a confusing "executable
-	// file not found" from deep inside a run rather than a config error.
-	if c.Engine != "" && !ValidEngine(c.Engine) {
-		return fmt.Errorf("engine %q: want docker or podman", c.Engine)
 	}
 	// An image reference beginning with a dash is read by docker as another flag,
 	// not as the image: `image: "--privileged"` rendered a real --privileged into

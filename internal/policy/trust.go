@@ -1,4 +1,4 @@
-package config
+package policy
 
 import (
 	"fmt"
@@ -79,12 +79,6 @@ func restrictedProjectKeys(src, inherited Config) []string {
 	}
 	if src.Home != "" {
 		add("home") // relocates the container HOME, and with it the persisted-auth mount
-	}
-	if src.Engine != "" {
-		add("engine") // chooses which binary sandbox-cli executes on your machine
-	}
-	if src.Runtime != "" {
-		add("runtime") // selects the OCI runtime, i.e. the strength of the boundary
 	}
 	if src.Mounts != nil {
 		add("mounts") // the whole host filesystem is one line away

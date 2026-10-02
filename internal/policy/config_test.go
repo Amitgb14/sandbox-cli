@@ -1,4 +1,4 @@
-package config
+package policy
 
 import (
 	"errors"
@@ -303,23 +303,6 @@ func TestLoad_CacheOverride(t *testing.T) {
 	}
 	if !containsStr(cfg.Cache.CachePaths(), "/opt/extra-cache") {
 		t.Errorf("configured cache path missing: %v", cfg.Cache.CachePaths())
-	}
-}
-
-func TestLoad_RuntimeFromConfig(t *testing.T) {
-	// runtime selects the strength of the isolation boundary: user-level only.
-	withUserConfig(t, "runtime: kata-runtime\n")
-
-	cfg, err := Load(t.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Runtime != "kata-runtime" {
-		t.Errorf("Runtime = %q, want kata-runtime", cfg.Runtime)
-	}
-	// Unset stays empty (docker default).
-	if config2 := Default(); config2.Runtime != "" {
-		t.Errorf("default Runtime = %q, want empty", config2.Runtime)
 	}
 }
 

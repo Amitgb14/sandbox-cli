@@ -234,9 +234,18 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
 
 - **M0 — clear the tree.** *Done.* The old code is in `_old/`, and the binary
   builds.
-- **M1 — ported core green.** `policy`, `hostpath`, `githard`, `creds`, `agents`,
-  `egressproxy`, `audit`, `termsafe` and `timezone` are moved with `git mv`. Their
-  tests pass with only import changes.
+- **M1 — ported core green.** *Done.*
+  - `githard`, `creds`, `agents`, `egressproxy`, `audit` and `termsafe` moved
+    with `git mv`; their tests pass untouched.
+  - `config` became `policy`. The `engine` and `runtime` keys are gone with the
+    engines they chose, and so are their tests. The default image is a variable
+    the image package sets, so `policy` imports nothing below it.
+  - `hostpath` is the host half of the old `mounts.go`: the root, home and
+    ancestor refusals and `ResolveWorkspace`, with their tests.
+  - The guest half (`ValidateMountTarget`, the protected-target list) stays in
+    `_old/` for the macOS backend (M6), the only one with bind mounts.
+  - `timezone` moved into `spec` with its pure tests. The tests that go through
+    `BuildSpec` wait in `_old/` until `spec` builds requests again.
 - **M2 — the API, on paper and in Go.**
   - `docs/api/v1.md`; `internal/api` types and client.
   - `backend/fake` and a `sandboxd` serving it.

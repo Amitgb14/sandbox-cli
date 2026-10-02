@@ -1,4 +1,4 @@
-package config
+package policy
 
 import (
 	"fmt"
@@ -97,12 +97,9 @@ func profileBase(name string) Config {
 		// port is the one thing that opens the boundary the other way.
 		cfg.Ports = []string{}
 
-		// Runtime is deliberately left as the host default rather than set to
-		// runsc or kata here: prod may carry untrusted agents, for which a
-		// container namespace is not the boundary, but which stronger runtime is
-		// registered is a property of the machine. `doctor --profile prod` is
-		// where that gets checked, and until it exists this profile does not
-		// pretend to provide it.
+		// No runtime choice here any more: every sandbox is a microVM with a
+		// kernel of its own, so the boundary prod used to have to ask the host
+		// about is the only one there is.
 	case ProfileDev:
 		// Today's defaults. Dev's own hardening is expressed in Default() so that
 		// running without a profile and running `--profile dev` cannot drift

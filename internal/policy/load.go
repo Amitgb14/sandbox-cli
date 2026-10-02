@@ -1,4 +1,4 @@
-package config
+package policy
 
 import (
 	"encoding/json"
@@ -449,12 +449,6 @@ func mergeInto(dst *Config, src Config, baseDir string) {
 	}
 	if src.Hostname != "" {
 		dst.Hostname = src.Hostname
-	}
-	if src.Runtime != "" {
-		dst.Runtime = src.Runtime
-	}
-	if src.Engine != "" {
-		dst.Engine = src.Engine
 	}
 	// Replaced, never appended to. A chain is an ordered decision about which
 	// agent runs first and which is the safety net; merging two would produce an
