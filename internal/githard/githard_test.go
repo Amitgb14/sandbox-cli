@@ -101,15 +101,6 @@ func TestSnapshotConfigOnANonRepositoryIsQuiet(t *testing.T) {
 	}
 }
 
-// TestHooksMountIsReadOnlyInTheSpec is the prevention half, asserted where the
-// mount is decided. Belt to the live integration test's braces.
-func TestHooksDirIsDetected(t *testing.T) {
-	dir := initRepo(t)
-	if _, err := os.Stat(filepath.Join(dir, ".git", "hooks")); err != nil {
-		t.Skip("this git does not create .git/hooks")
-	}
-}
-
 // TestArgsNeutralisesWorktreeScopedDrivers pins the scope the enumeration used
 // to miss.
 //
@@ -303,5 +294,76 @@ func TestDiffConfigFlagsNewDrivers(t *testing.T) {
 	}
 	if got := DiffConfig(nil, map[string]string{"merge.ff": "only"}); got[0].Dangerous {
 		t.Error("merge.ff flagged as dangerous; it names no command")
+	}
+}
+
+// Each of these is a program the repository names and git runs on the host,
+// in a command sandbox-cli runs on the host: bring-back's fetch, land's commit
+// and merge, recover's diffs. Each test first proves the trap fires with plain
+// git — a test that passes because nothing would have run proves nothing —
+// and then that it does not fire through Args and Env.
+func TestHardenedGitRunsNoProgramTheRepositoryNames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		plant func(t *testing.T, repo, script string)
+		git   []string
+	}{
+		{"a pre-commit hook", func(t *testing.T, repo, script string) {
+			copyExec(t, script, filepath.Join(repo, ".git", "hooks", "pre-commit"))
+		}, []string{"commit", "-q", "--allow-empty", "-m", "x"}},
+		{"a reference-transaction hook, which every ref update runs", func(t *testing.T, repo, script string) {
+			copyExec(t, script, filepath.Join(repo, ".git", "hooks", "reference-transaction"))
+		}, []string{"update-ref", "refs/sandbox/x", "HEAD"}},
+		{"core.fsmonitor", func(t *testing.T, repo, script string) {
+			run(t, repo, "config", "core.fsmonitor", script)
+		}, []string{"status", "--porcelain"}},
+		{"a clean filter selected by .gitattributes", func(t *testing.T, repo, script string) {
+			os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("*.txt filter=evil\n"), 0o644)
+			run(t, repo, "add", ".gitattributes")
+			run(t, repo, "commit", "-qm", "attrs")
+			run(t, repo, "config", "filter.evil.clean", script)
+			os.WriteFile(filepath.Join(repo, "g.txt"), []byte("new\n"), 0o644)
+		}, []string{"add", "-A"}},
+		{"a diff textconv", func(t *testing.T, repo, script string) {
+			os.WriteFile(filepath.Join(repo, ".git", "info", "attributes"), []byte("*.txt diff=evil\n"), 0o644)
+			run(t, repo, "config", "diff.evil.textconv", script)
+			os.WriteFile(filepath.Join(repo, "f.txt"), []byte("changed\n"), 0o644)
+			run(t, repo, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "change")
+		}, []string{"log", "-p", "-1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initRepo(t)
+			writeAndCommit(t, repo)
+			script, marker := trap(t)
+			tc.plant(t, repo, script)
+
+			plain := exec.Command("git", tc.git...)
+			plain.Dir = repo
+			_ = plain.Run()
+			if !ran(marker) {
+				t.Fatalf("precondition failed: plain git %v did not run the planted program", tc.git)
+			}
+			if tc.git[0] == "add" {
+				run(t, repo, "reset", "-q") // so the hardened add has the file to add again
+			}
+			os.Remove(marker) // after the reset, which runs the filter too
+
+			_ = hardened(repo, tc.git...)
+			if ran(marker) {
+				t.Fatalf("hardened git %v ran a program the repository named", tc.git)
+			}
+		})
+	}
+}
+
+func copyExec(t *testing.T, src, dst string) {
+	t.Helper()
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Dir(dst), 0o755)
+	if err := os.WriteFile(dst, b, 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
