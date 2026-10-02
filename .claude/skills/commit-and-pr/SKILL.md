@@ -10,7 +10,7 @@ Commit only when asked. Branch first if on `main`.
 ## Before committing
 
 ```sh
-gofmt -l cmd internal          # must print nothing
+gofmt -l .                     # must print nothing; CI checks the whole tree, _old/ included
 go vet ./... && go test ./...
 ```
 

@@ -95,4 +95,3 @@ func isPathAncestor(ancestor, child string) bool {
 	}
 	return strings.HasPrefix(c, a+"/")
 }
-

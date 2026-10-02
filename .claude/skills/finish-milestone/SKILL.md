@@ -11,7 +11,7 @@ this adds what is specific to a milestone.
 
 1. **Green locally:**
    ```sh
-   gofmt -l cmd internal; go vet ./...; go test -race -count=1 ./...
+   gofmt -l .; go vet ./...; go test -race -count=1 ./...
    ```
    From M2 on, the conformance suite against the fake as well.
 2. **The plan says what happened**, not what was intended. In
