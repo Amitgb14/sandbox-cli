@@ -22,6 +22,14 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 
+# Another firewall on the host evaluates the same packets, and in nftables a
+# reject in any table wins over an accept in ours. Record which one is active so
+# a refused probe can be read for what it is.
+fw=none
+systemctl is-active --quiet firewalld 2>/dev/null && fw="firewalld (zone $(firewall-cmd --get-default-zone 2>/dev/null))"
+command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active" && fw="ufw"
+record "net: host firewall also active" "$fw"
+
 say "tap, nftables, proxy"
 ip tuntap add dev "$tap" mode tap
 ip addr add 172.16.0.1/30 dev "$tap"

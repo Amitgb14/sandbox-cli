@@ -281,41 +281,67 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
   - *macOS `container`:* boot time, read-only bind honoured, virtio-fs
     ownership, whether the guest can program iptables or egress must go over
     vsock, labels across restarts, and stdio over `exec -i`.
-  - *Status:* scripts written (`scripts/m3/`, with a README naming the exact
-    commands). The non-root Linux steps were run on a development machine on
-    2026-10-02. That machine was an x86_64 host, on xfs, with Firecracker 1.17.0
-    and guest kernel 6.1.155. These are **preliminary**: the real numbers come
-    from the maintainer's hosts.
+  - *Status: Linux done, macOS outstanding.* Scripts are in `scripts/m3/`. The
+    Linux results come from the maintainer's run on 2026-10-02: an x86_64 EL10
+    host (kernel 6.12) on xfs with firewalld active, Firecracker 1.17.0, guest
+    kernel 6.1.155, the full suite as root.
     - **Boot is dominated by the kernel command line, not by the VM.** From
-      starting the VMM to the guest's init being ready took 742 ms with default
-      arguments, 578 ms with `quiet`, and **53 ms** with `quiet` plus the
-      keyboard-controller probe disabled (`i8042.noaux i8042.nomux i8042.nopnp
-      i8042.dumbkbd`). The guest kernel's own boot fell from 620 ms to 20 ms.
-      `reboot=k` still ends the VM. The backend's kernel command line is a
-      measured decision, not a default.
-    - Memory: the VMM process holds 66 MB with an idle 512 MiB guest, and 95 MB
-      with 2 GiB configured. Guest memory is only resident once touched.
-    - vsock: a fresh connection round trip takes 105 µs. Throughput is 1.26 GB/s
-      host→guest and 1.65 GB/s guest→host, so bundles over vsock are not the
-      bottleneck.
-    - Snapshots, 1 GiB guest:
-      - pausing takes 5 ms and a full snapshot 230 ms;
-      - the memory file is the full 1 GiB on disk;
+      starting the VMM to the guest's init being ready, the median was 742 ms
+      with default arguments, 578 ms with `quiet`, and **53 ms** with `quiet`
+      plus the keyboard-controller probe disabled (`i8042.noaux i8042.nomux
+      i8042.nopnp i8042.dumbkbd`). The guest kernel's own boot fell from 620 ms
+      to 20 ms. `reboot=k` still ends the VM. The backend's kernel command line
+      is a measured decision, and these arguments are its starting point.
+    - **The jailer costs almost nothing.** The guest was ready 60 ms after
+      start. The VMM ran as uid 65534 in the chroot, and the only `/dev/kvm` it
+      had was the chroot's own `crw------- nobody nobody`. Linux sandboxd runs
+      as root to use it, as planned.
+    - **Memory:** the VMM process holds 68 MB with an idle 512 MiB guest, and
+      97 MB with 2 GiB configured. Guest memory is only resident once touched.
+    - **vsock:** a fresh connection round trip takes 115 µs. Throughput is
+      1.33 GB/s host→guest and 1.66 GB/s guest→host, so the guest agent and
+      bundles over vsock are not a bottleneck.
+    - **Snapshots, 1 GiB guest:**
+      - pausing takes 5 ms and a full snapshot 229 ms;
+      - the memory file is the full 1 GiB, on disk as well as apparent, even
+        for an idle guest;
       - restoring into a fresh VMM takes 6 ms, and the guest answers over vsock
         9 ms after the load starts.
 
       Suspend, resume and fork are cheap enough to be ordinary operations. The
-      cost to manage is the disk.
-    - Disk: a 1 GiB copy takes 277 ms, against 6 ms as a reflink on xfs. Where
-      the filesystem shares blocks, a per-sandbox root disk is close to free.
-    - Network, run in a user and network namespace, so without an uplink:
-      - every probe that should be blocked was blocked: a name not on the
-        allowlist, TLS with no SNI, other TCP ports, DNS over UDP, and the
-        host's own ports;
-      - the proxy allowed the right names, and then could not resolve them;
-      - the probes that should reach anything need a real host.
-    - Not yet run anywhere: the jailer (needs real root), and everything on
-      macOS.
+      cost to manage is disk: a dense memory file per snapshot. M8 should
+      measure diff snapshots, and punching holes in what an idle guest never
+      touched.
+    - **Disk:** a 1 GiB copy takes 271 ms, against 7 ms as a reflink on xfs.
+      Where the filesystem shares blocks, a per-sandbox root disk is close to
+      free; elsewhere it is a full copy, so M5 should prefer a read-only base
+      plus a per-sandbox overlay.
+    - **Egress enforced on the host works.** 10 of the 11 probes from inside the
+      guest behaved as designed:
+      - the allowed name went through by TLS SNI and by HTTP Host;
+      - a name not on the allowlist was refused, as were TLS with no SNI, other
+        TCP ports, DNS over UDP, and the host's own ports;
+      - nftables dropped 24 packets at input and 4 at forward;
+      - the proxy's decisions log shows exactly the expected allows and denials.
+    - **The one surprise, and two decisions it forces.** An explicit
+      `CONNECT` to the proxy port was refused ("no route to host"), even though
+      our own table accepts it. The reason is firewalld:
+      - it accepts any packet whose connection was DNAT'd, so the redirected
+        traffic passed;
+      - it rejects other unexpected inbound traffic with `admin-prohibited`;
+      - a reject in any nftables table wins over an accept in ours.
+
+      It failed closed, but it shows the design leaning on another firewall's
+      defaults. So:
+      1. **Redirect only.** The guest never addresses the proxy, so there is no
+         proxy port to open and no explicit-proxy mode to support. Every client
+         is caught by the redirect whether or not it honours `HTTPS_PROXY`.
+      2. **sandboxd must not assume it owns the host firewall.** At startup it
+         checks, from a probe VM, that an allowed name passes and a denied one
+         does not, and refuses to serve if either answer is wrong. It also
+         registers its tap devices with a running firewalld (or ufw) rather than
+         hoping that defaults line up. This belongs in `doctor` too.
+    - **Still to run:** macOS, the whole of `scripts/m3/macos/run-all.sh`.
 - **M4 — guestd and images.**
   - `sandbox-guestd` and `guestproto`, tested over a unix socket with no VM.
   - Image pipeline: OCI pull → ext4 rootfs (Linux) and OCI pull (macOS).
