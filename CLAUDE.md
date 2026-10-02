@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **On the `rewrite` branch** the tree is mid-rewrite (`docs/rewrite/PLAN.md`). The code this
+> file describes lives in `_old/` (ignored by the Go tool) and is ported into `internal/`
+> milestone by milestone. The rationale below still holds; the file paths are `_old/`-relative
+> until a package is ported. This file is rewritten for the new layout at M5.
+
 ## What this is
 
 `sandbox-cli` runs AI coding agents (Claude Code, Codex, Gemini, OpenCode, Cline, Goose, Crush, Aider,

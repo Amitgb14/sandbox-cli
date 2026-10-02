@@ -45,11 +45,11 @@ jobs:
       - name: test
         run: go test ./...
 
-      # The race detector, on the packages whose correctness depends on
-      # concurrency. Not the whole tree: -race is slow, and a package with no
-      # goroutines gains nothing from it.
+      # The race detector. The whole tree while the rewrite is small; narrow it
+      # back to the concurrent packages (spec, egressproxy, session, and later
+      # fleet and studioapi) once -race on everything gets slow.
       - name: test -race
-        run: go test -race ./internal/sandbox/ ./internal/egressproxy/ ./internal/studioapi/ ./internal/fleet/
+        run: go test -race ./...
 
   # Compile every target the release actually ships. Kept a separate job so its
   # verdict is legible on its own: "the release would not build" is a different

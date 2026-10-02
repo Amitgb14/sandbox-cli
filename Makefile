@@ -10,8 +10,9 @@ build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
 
 # The local HTTP control plane (internal/studioapi) — see docs/studio-api/.
+# Not ported yet on the rewrite branch (docs/rewrite/PLAN.md, M6).
 build-studio-api:
-	go build -ldflags "$(LDFLAGS)" -o bin/$(STUDIO_API_BINARY) ./cmd/sandbox-studio-api
+	@echo "sandbox-studio-api is not ported to the rewrite yet (M6); its source is in _old/" >&2; exit 1
 
 # --- release engineering (GoReleaser) ----------------------------------------
 # Install once: go install github.com/goreleaser/goreleaser/v2@latest
