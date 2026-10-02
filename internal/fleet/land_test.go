@@ -29,6 +29,11 @@ func landRepo(t *testing.T) *State {
 	}
 	repo := t.TempDir()
 	gitT(t, repo, "init", "-q", "-b", "main")
+	// land commits its merge as the user, from the user's own config. A test
+	// machine may have none — CI does not, and git refuses to guess there — so
+	// the repository carries one, as a user's machine would.
+	gitT(t, repo, "config", "user.name", "t")
+	gitT(t, repo, "config", "user.email", "t@x")
 	gitT(t, repo, "commit", "-q", "--allow-empty", "-m", "base")
 	base := gitT(t, repo, "rev-parse", "HEAD")
 	work := func(name string) string {
