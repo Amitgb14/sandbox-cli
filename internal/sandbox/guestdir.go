@@ -66,6 +66,22 @@ func EnsureGuestDir(root, rel string) {
 		if err := os.Mkdir(cur, 0o700); err != nil && !os.IsExist(err) {
 			return
 		}
+		// Mkdir reports EEXIST for a symlink too, and the walk used to carry on
+		// through it: the next level was created *inside the link's target* and
+		// ShareWithSandboxGroup opened the target's files to the group. The
+		// persisted HOME is agent-writable, so `~/.claude/projects -> ~/.ssh` set
+		// the user's private key to 0660 on the next run. Confirmed. Stop at the
+		// link and say so — this is best-effort, but not silently.
+		if fi, err := os.Lstat(cur); err != nil {
+			return
+		} else if fi.Mode()&os.ModeSymlink != 0 {
+			target, _ := os.Readlink(cur)
+			fmt.Fprintf(os.Stderr,
+				"sandbox-cli: %s is a symlink (to %q) inside a directory the agent can write; "+
+					"not following it. An earlier run may have planted it — inspect it, then remove it "+
+					"and this run will recreate the directory.\n", cur, target)
+			return
+		}
 		warnForeignOwner(cur)
 		// Each level, not just the last: the container has to *traverse* every
 		// component to reach the mount, so a middle directory left at 0700 with a

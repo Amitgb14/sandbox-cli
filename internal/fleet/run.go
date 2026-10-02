@@ -276,6 +276,10 @@ func (r *Runner) launchOne(ctx context.Context, spec Spec, lo LaunchOptions, tas
 // fleet only adds the branch, the labels and Detach.
 func (r *Runner) options(spec Spec, lo LaunchOptions, agent agents.Descriptor, task Task, worktreePath, base string) (sandbox.Options, error) {
 	lim := spec.LimitsFor(task)
+	wtMounts, err := sandbox.LinkedWorktreeMounts(worktreePath)
+	if err != nil {
+		return sandbox.Options{}, err
+	}
 	opts := sandbox.Options{
 		Project: worktreePath,
 		Detach:  true,
@@ -306,7 +310,7 @@ func (r *Runner) options(spec Spec, lo LaunchOptions, agent agents.Descriptor, t
 		// the caller added — today only `--share`'s handoff directory — goes on top,
 		// and every task gets it: a channel one agent can write and another cannot
 		// read is not a channel.
-		ExtraMounts: append(sandbox.LinkedWorktreeMounts(worktreePath), lo.ExtraMounts...),
+		ExtraMounts: append(wtMounts, lo.ExtraMounts...),
 	}
 
 	// Persist the agent's login, exactly as the interactive wrapper does — gate

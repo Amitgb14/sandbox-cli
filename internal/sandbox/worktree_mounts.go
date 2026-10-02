@@ -1,6 +1,9 @@
 package sandbox
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -47,26 +50,57 @@ import (
 // worktree.GitCommonDir already requires the target to look like a real git
 // directory; RefuseUnsafeHostPath is the second layer, and the one that would still
 // hold if that check were ever loosened.
-func LinkedWorktreeMounts(projectDir string) []string {
+func LinkedWorktreeMounts(projectDir string) ([]string, error) {
 	dir := config.ExpandTilde(projectDir)
 	gitDir, ok := worktree.GitCommonDir(dir)
 	if !ok || RefuseUnsafeHostPath(gitDir) != nil {
-		return nil
+		return nil, nil
 	}
 
 	mounts := []string{gitDir + ":" + gitDir + ":rw"}
 	if wt, err := filepath.Abs(dir); err == nil {
 		mounts = append(mounts, wt+":"+wt+":rw")
 	}
-	if h := filepath.Join(gitDir, "hooks"); isDirPath(h) {
+	h := filepath.Join(gitDir, "hooks")
+	mount, err := hooksDir(h)
+	if err != nil {
+		return nil, err
+	}
+	if mount {
 		mounts = append(mounts, h+":"+h+":ro")
 	}
-	return mounts
+	return mounts, nil
 }
 
-// isDirPath reports whether p exists and is a directory. A missing hooks
-// directory is ordinary — nothing to cover, nothing to mount.
-func isDirPath(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
+// hooksDir reports whether p is a real hooks directory to cover with a read-only
+// mount, and refuses when it is a symlink.
+//
+// A missing hooks directory is ordinary — nothing to cover, nothing to mount. A
+// symlink is not. The rw mount lets the agent replace `.git/hooks` with a link,
+// and docker follows a link in a bind source: `hooks -> /home/you/.ssh` was
+// mounted into the next run, and `hooks -> /` would have been, with
+// RefuseUnsafeHostPath never consulted because the string was never a path
+// anybody typed. Confirmed against the real engine. Skipping the mount instead
+// would not be safe either: the host's own git follows the link, so a link into
+// the workspace is a hooks directory the agent writes. Refusing — on every run,
+// in every profile — is the one answer that is safe, and it is said loudly
+// because the likeliest author is a previous run.
+//
+// Lstat leaves a window between this check and the engine resolving the mount,
+// which a *concurrent* run in the same repository could use. That is narrower
+// than what this closes, and closing it needs the engine to refuse links itself.
+func hooksDir(p string) (bool, error) {
+	fi, err := os.Lstat(p)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("checking %s: %w", p, err)
+	case fi.Mode()&fs.ModeSymlink != 0:
+		target, _ := os.Readlink(p)
+		return false, fmt.Errorf("refusing to start: %s is a symlink (to %q), and git runs what it finds there on the host. "+
+			"An earlier sandbox run may have planted it — inspect it, then replace it with a real directory "+
+			"(or set core.hooksPath in your own config)", p, target)
+	}
+	return fi.IsDir(), nil
 }

@@ -470,22 +470,74 @@ func GitCommonDir(dir string) (path string, ok bool) {
 		gitDir = filepath.Join(dir, gitDir)
 	}
 	// <main>/.git/worktrees/<name>/commondir points back at <main>/.git.
-	if b, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
-		common := strings.TrimSpace(string(b))
-		if common != "" {
-			if !filepath.IsAbs(common) {
-				common = filepath.Join(gitDir, common)
-			}
-			if isGitCommonDir(common) {
-				return filepath.Clean(common), true
-			}
-		}
+	b, err = os.ReadFile(filepath.Join(gitDir, "commondir"))
+	if err != nil {
+		return "", false
 	}
-	// Fall back to the conventional layout: .git/worktrees/<name> -> .git
-	if parent := filepath.Dir(filepath.Dir(gitDir)); isGitCommonDir(parent) {
-		return filepath.Clean(parent), true
+	common := strings.TrimSpace(string(b))
+	if common == "" {
+		return "", false
 	}
-	return "", false
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gitDir, common)
+	}
+	common = filepath.Clean(common)
+	if !isGitCommonDir(common) || !registeredWorktree(dir, gitDir, common) {
+		return "", false
+	}
+	return common, true
+}
+
+// registeredWorktree reports whether gitDir is common's own record of the
+// worktree at dir — the provenance check isGitCommonDir cannot make.
+//
+// Looking like a git directory proves nothing about *which* one: every
+// repository on the host has HEAD and objects/. The `.git` pointer is in the
+// workspace, so the agent can name `gitdir: /home/you/other/.git/worktrees/x` —
+// or, in --worktree mode, leave the pointer alone and rewrite the `commondir`
+// file inside the admin directory, which the rw mount of the parent .git also
+// reaches — and the next run mounted that other repository read-write.
+// Confirmed. Two facts the agent cannot forge together close it:
+//
+//   - the admin directory sits in common's own `worktrees/`, so a rewritten
+//     commondir naming another repository no longer contains it;
+//   - its `gitdir` file — written by `git worktree add`, inside a repository the
+//     agent was never given — points back at this workspace's `.git`.
+//
+// The conventional-layout fallback (two directories up from gitDir) is gone with
+// it: it accepted any git directory two levels above an agent-written string. A
+// moved worktree whose record is stale fails here too; `git worktree repair`
+// rewrites the record.
+func registeredWorktree(dir, gitDir, common string) bool {
+	adminDir, err := filepath.EvalSymlinks(gitDir)
+	if err != nil {
+		return false
+	}
+	if !sameDir(filepath.Dir(adminDir), filepath.Join(common, "worktrees")) {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(adminDir, "gitdir"))
+	if err != nil {
+		return false
+	}
+	back := strings.TrimSpace(string(b))
+	if back == "" {
+		return false
+	}
+	if !filepath.IsAbs(back) { // worktree.useRelativePaths
+		back = filepath.Join(adminDir, back)
+	}
+	a, errA := os.Stat(back)
+	w, errW := os.Stat(filepath.Join(dir, ".git"))
+	return errA == nil && errW == nil && os.SameFile(a, w)
+}
+
+// sameDir compares by identity, for the reason sandbox.samePath does: strings
+// disagree about case on APFS and about symlinks everywhere.
+func sameDir(a, b string) bool {
+	fa, errA := os.Stat(a)
+	fb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(fa, fb)
 }
 
 // isGitCommonDir reports whether path looks like a real git common directory,

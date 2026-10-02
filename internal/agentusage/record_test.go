@@ -70,6 +70,11 @@ func TestFindPrefersTheLiveRecording(t *testing.T) {
 	cache := filepath.Join(dir, ".claude.json")
 
 	os.WriteFile(rec, []byte(recordJSON), 0o600)
+	// A live recording's file time is the moment it was recorded. Left at "now",
+	// the fixture drifted further from its own recorded_at every day and the
+	// test began calling it abandoned three days after it was written.
+	recorded := time.Unix(1786742400, 0)
+	os.Chtimes(rec, recorded, recorded)
 	// A cache stamped three weeks before the recording — the real shape of this
 	// machine: written recently, reading long dead.
 	old := (time.Unix(1786742400, 0).Add(-21 * 24 * time.Hour).UnixMilli())

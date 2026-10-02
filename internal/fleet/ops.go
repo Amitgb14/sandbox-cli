@@ -99,6 +99,10 @@ func (r *Runner) Plan(ctx context.Context, spec Spec, opts LaunchOptions) ([]Pla
 			return nil, err
 		}
 		lim := spec.LimitsFor(t)
+		wtMounts, err := sandbox.LinkedWorktreeMounts(path)
+		if err != nil {
+			return nil, fmt.Errorf("branch %q: %w", t.Branch, err)
+		}
 		p := Planned{
 			Branch:         t.Branch,
 			Agent:          agent.Name,
@@ -109,7 +113,7 @@ func (r *Runner) Plan(ctx context.Context, spec Spec, opts LaunchOptions) ([]Pla
 			Memory:         lim.Memory,
 			CPUs:           lim.CPUs,
 			Allow:          lim.Allow,
-			Mounts:         append(sandbox.LinkedWorktreeMounts(path), opts.ExtraMounts...),
+			Mounts:         append(wtMounts, opts.ExtraMounts...),
 			Labels: map[string]string{
 				sandbox.LabelCLI:    "1",
 				sandbox.LabelFleet:  "1",

@@ -2,12 +2,14 @@ package sandbox
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/Amitgb14/sandbox-cli/internal/config"
 	"github.com/Amitgb14/sandbox-cli/internal/runtime"
+	"github.com/Amitgb14/sandbox-cli/internal/worktree"
 	"path/filepath"
 )
 
@@ -1504,5 +1506,68 @@ func TestPromptLabelIsTruncatedAndSaysSo(t *testing.T) {
 	multibyte := strings.Repeat("é", maxPromptLabel)
 	if !utf8.ValidString(truncatePrompt(multibyte)) {
 		t.Error("truncation cut a rune in half")
+	}
+}
+
+// The rw workspace mount lets the agent replace .git/hooks with a symlink, and
+// the engine follows a link in a bind source: `hooks -> ~/.ssh` was mounted into
+// the next run. Skipping the mount would leave the host's git following the
+// link, so the run refuses — and names the link, since a previous run is the
+// likeliest author.
+func TestBuildSpec_RefusesASymlinkedHooksDir(t *testing.T) {
+	dir := t.TempDir()
+	victim := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(dir, ".git", "hooks")); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := BuildSpec(baseCfg(), Options{Project: dir, Command: []string{"sh"}})
+	if err == nil {
+		t.Fatalf("a symlinked .git/hooks was accepted; mounts: %+v", spec.Mounts)
+	}
+	if !strings.Contains(err.Error(), victim) {
+		t.Errorf("the refusal does not name the link's target: %v", err)
+	}
+}
+
+// The parent repository's hooks, for a linked worktree, are the same hazard
+// reached through the other mount site.
+func TestLinkedWorktreeMounts_RefusesASymlinkedHooksDir(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
+		{"commit", "-qm", "init", "--allow-empty"},
+	} {
+		cmd := exec.Command(git, args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git %v: %s", args, out)
+		}
+	}
+	wt, err := worktree.Resolve(root, "feat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, err := LinkedWorktreeMounts(wt.Path); err != nil || len(m) == 0 {
+		t.Fatalf("precondition: an untouched worktree must mount (%v, %v)", m, err)
+	}
+
+	hooks := filepath.Join(root, ".git", "hooks")
+	if err := os.RemoveAll(hooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), hooks); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := LinkedWorktreeMounts(wt.Path); err == nil {
+		t.Fatalf("a symlinked parent hooks dir was accepted: %v", m)
 	}
 }

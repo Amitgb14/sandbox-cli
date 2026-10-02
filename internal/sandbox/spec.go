@@ -252,7 +252,12 @@ func BuildSpec(cfg config.Config, opts Options) (runtime.RunSpec, error) {
 	// `git config`, and git writes indexes, refs and logs constantly. Changes to
 	// .git/config are reported at exit instead — detected rather than prevented,
 	// because preventing them would break ordinary work for a smaller gain.
-	if hooks := filepath.Join(ws, ".git", "hooks"); isExistingDir(hooks) {
+	hooks := filepath.Join(ws, ".git", "hooks")
+	mountHooks, err := hooksDir(hooks)
+	if err != nil {
+		return runtime.RunSpec{}, err
+	}
+	if mountHooks {
 		mounts = append(mounts, runtime.Mount{
 			Source: hooks,
 			Target: path.Join(wsTarget, ".git", "hooks"),

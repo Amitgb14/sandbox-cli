@@ -13,6 +13,9 @@
 //	git update-ref     -> .git/hooks/reference-transaction
 //	git worktree add   -> filter.<x>.smudge, .git/hooks/post-checkout
 //	git show / diff    -> diff.<x>.textconv, diff.<x>.command
+//	git merge          -> merge.<x>.driver ($GIT_DIR/info/attributes selects it)
+//	git commit / merge -> gpg.program, gpg.<fmt>.program, when commit.gpgSign
+//	                      or merge.verifySignatures turns signing on
 //
 // GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM are not the answer: every setting above
 // can live in the repository's *local* config, which those do not cover and for
@@ -63,11 +66,23 @@ func Args(dir string) []string {
 		"-c", "core.pager=cat",
 		"-c", "core.editor=false",
 		"-c", "core.alternateRefsCommand=",
+		// Signing and verification run gpg.program (or gpg.ssh.program, or
+		// gpg.ssh.defaultKeyCommand) — all agent-writable. Turning off what
+		// invokes them is version-independent where blanking the program is not:
+		// an empty gpg.program makes git fall back to plain `gpg`, which is the
+		// user's binary but still git deciding to run something. Signing is never
+		// what a hardened call is for — a land merge or a rescue commit is
+		// sandbox-cli's own bookkeeping, not the user vouching for the content.
+		"-c", "commit.gpgSign=false",
+		"-c", "tag.gpgSign=false",
+		"-c", "tag.forceSignAnnotated=false",
+		"-c", "merge.verifySignatures=false",
+		"-c", "log.showSignature=false",
 	}
 	return append(a, neutralizedDrivers(dir)...)
 }
 
-// neutralizedDrivers overrides every filter and diff driver defined in the
+// neutralizedDrivers overrides every filter, diff and merge driver defined in the
 // repository's own config, so that even if an attribute selects one, there is
 // nothing to run.
 //
@@ -114,9 +129,12 @@ func neutralizedDrivers(dir string) []string {
 	seen := map[string]bool{}
 	for _, key := range strings.Split(string(out), "\n") {
 		key = strings.TrimSpace(key)
-		// filter.<name>.clean/smudge/process and diff.<name>.textconv/command are
-		// the keys whose values git executes.
-		if !strings.HasPrefix(key, "filter.") && !strings.HasPrefix(key, "diff.") {
+		// filter.<name>.clean/smudge/process, diff.<name>.textconv/command and
+		// merge.<name>.driver are the keys whose values git executes. A blanked
+		// merge driver fails the merge as a conflict rather than resolving it, so
+		// `land` stops with git's own message instead of merging wrongly.
+		if !strings.HasPrefix(key, "filter.") && !strings.HasPrefix(key, "diff.") &&
+			!strings.HasPrefix(key, "merge.") {
 			continue
 		}
 		if !runsACommand(key) || seen[key] {
@@ -145,7 +163,7 @@ func untrustedScopeEnv() []string {
 
 // runsACommand reports whether a config key's value is executed by git.
 func runsACommand(key string) bool {
-	for _, suffix := range []string{".clean", ".smudge", ".process", ".textconv", ".command"} {
+	for _, suffix := range []string{".clean", ".smudge", ".process", ".textconv", ".command", ".driver"} {
 		if strings.HasSuffix(key, suffix) {
 			return true
 		}
@@ -225,10 +243,27 @@ var dangerousConfigKeys = map[string]bool{
 	"credential.helper":         true,
 	"core.gitproxy":             true,
 	"core.attributesfile":       true,
+	"gpg.program":               true,
+	"gpg.openpgp.program":       true,
+	"gpg.ssh.program":           true,
+	"gpg.x509.program":          true,
+	"gpg.ssh.defaultkeycommand": true,
+	"commit.gpgsign":            true,
+	"merge.verifysignatures":    true,
 	// Not itself a command, but the switch that brings a whole second
 	// agent-writable config scope into play — turning it on is the enabling step
 	// for hiding a filter driver where `--local` cannot see it.
 	"extensions.worktreeconfig": true,
+}
+
+// isDangerousKey adds the per-driver keys, whose names are arbitrary, to the
+// fixed list: a new merge.<x>.driver is the same news as a new core.fsmonitor.
+func isDangerousKey(k string) bool {
+	if dangerousConfigKeys[k] {
+		return true
+	}
+	return (strings.HasPrefix(k, "filter.") || strings.HasPrefix(k, "diff.") ||
+		strings.HasPrefix(k, "merge.")) && runsACommand(k)
 }
 
 // ConfigChange is one key that differs between two snapshots.
@@ -286,12 +321,12 @@ func DiffConfig(before, after map[string]string) []ConfigChange {
 	for k, av := range after {
 		seen[k] = true
 		if bv, ok := before[k]; !ok || bv != av {
-			out = append(out, ConfigChange{Key: k, Before: before[k], After: av, Dangerous: dangerousConfigKeys[k]})
+			out = append(out, ConfigChange{Key: k, Before: before[k], After: av, Dangerous: isDangerousKey(k)})
 		}
 	}
 	for k, bv := range before {
 		if !seen[k] {
-			out = append(out, ConfigChange{Key: k, Before: bv, Dangerous: dangerousConfigKeys[k]})
+			out = append(out, ConfigChange{Key: k, Before: bv, Dangerous: isDangerousKey(k)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

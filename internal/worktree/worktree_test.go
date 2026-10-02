@@ -1051,3 +1051,71 @@ func TestARefusalCreatesNothing(t *testing.T) {
 		t.Errorf("a refused Resolve created %v", created)
 	}
 }
+
+// newRepoWithWorktree makes a repository with one linked worktree and returns
+// both paths.
+func newRepoWithWorktree(t *testing.T, branch string) (root, wt string) {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root = t.TempDir()
+	runOrSkip(t, git, root, "init", "-q")
+	runOrSkip(t, git, root, "config", "user.email", "t@example.com")
+	runOrSkip(t, git, root, "config", "user.name", "t")
+	runOrSkip(t, git, root, "commit", "-qm", "init", "--allow-empty")
+	info, err := Resolve(root, branch)
+	if err != nil {
+		t.Fatalf("creating worktree: %v", err)
+	}
+	return root, info.Path
+}
+
+// Looking like a git directory is not provenance: every repository on the host
+// has HEAD and objects/. Pointing the workspace's .git at *another* repository's
+// worktree record got that repository's .git mounted read-write on the next run.
+func TestGitCommonDir_RefusesAnotherRepositorysWorktree(t *testing.T) {
+	_, wt := newRepoWithWorktree(t, "feat")
+	other, otherWT := newRepoWithWorktree(t, "victim")
+
+	otherPointer, err := os.ReadFile(filepath.Join(otherWT, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, ".git"), otherPointer, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := GitCommonDir(wt); ok {
+		t.Fatalf("a pointer to %s's worktree record was accepted: would mount %q", other, got)
+	}
+	// And straight at the other repository's .git, which the removed two-up
+	// fallback accepted.
+	os.WriteFile(filepath.Join(wt, ".git"),
+		[]byte("gitdir: "+filepath.Join(other, ".git", "worktrees", "nonexistent")+"\n"), 0o644)
+	if got, ok := GitCommonDir(wt); ok {
+		t.Fatalf("a pointer two levels under another .git was accepted: would mount %q", got)
+	}
+}
+
+// The stealthier variant leaves the pointer alone and rewrites commondir inside
+// the admin directory — reachable because --worktree mounts the parent .git rw.
+func TestGitCommonDir_RefusesARewrittenCommondir(t *testing.T) {
+	root, wt := newRepoWithWorktree(t, "feat")
+	other, _ := newRepoWithWorktree(t, "victim")
+
+	if _, ok := GitCommonDir(wt); !ok {
+		t.Fatal("precondition: the untouched worktree must resolve")
+	}
+	admin := filepath.Join(root, ".git", "worktrees", filepath.Base(wt))
+	if _, err := os.Stat(filepath.Join(admin, "commondir")); err != nil {
+		t.Fatalf("precondition: admin dir not where expected: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(admin, "commondir"), []byte(filepath.Join(other, ".git")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := GitCommonDir(wt); ok {
+		t.Fatalf("a rewritten commondir was followed to %q", got)
+	}
+}

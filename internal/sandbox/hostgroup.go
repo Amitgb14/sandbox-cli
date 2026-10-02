@@ -255,6 +255,13 @@ func ShareWithSandboxGroup(dir string) {
 	if err != nil {
 		return
 	}
+	// The directory itself must not be a link either. share() skips one, but
+	// ReadDir follows it, and its children are not links — so a sandbox-owned
+	// directory the agent swapped for `-> ~/.ssh` had the private key opened to
+	// 0660 on the next launch. Confirmed.
+	if fi, err := os.Lstat(dir); err != nil || fi.Mode()&fs.ModeSymlink != 0 {
+		return
+	}
 	share(dir, g, true)
 
 	entries, err := os.ReadDir(dir)

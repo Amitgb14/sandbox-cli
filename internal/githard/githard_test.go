@@ -208,3 +208,100 @@ func output(t *testing.T, dir string, args ...string) string {
 	out, _ := cmd.Output()
 	return string(out)
 }
+
+// hardened runs git with Args and Env, the way every host-side caller does, and
+// returns whether it succeeded — a hardened call is allowed to fail, only not to
+// run anything.
+func hardened(dir string, args ...string) error {
+	cmd := exec.Command("git", append(Args(dir), args...)...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), Env(dir)...)
+	return cmd.Run()
+}
+
+// trap writes a script that leaves a marker when git runs it, and returns the
+// script and the marker.
+func trap(t *testing.T) (script, marker string) {
+	t.Helper()
+	d := t.TempDir()
+	marker = filepath.Join(d, "ran")
+	script = filepath.Join(d, "evil.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch "+marker+"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, marker
+}
+
+func ran(marker string) bool { _, err := os.Stat(marker); return err == nil }
+
+// A merge driver is selected by $GIT_DIR/info/attributes, which nothing can
+// override, and defined in .git/config, which a --worktree run mounts read-write.
+// `fleet land` merges on the host, so an undefined-by-us driver was a host
+// command. Reproduced before this was covered.
+func TestArgsNeutralisesMergeDrivers(t *testing.T) {
+	repo := initRepo(t)
+	writeAndCommit(t, repo)
+	script, marker := trap(t)
+	run(t, repo, "checkout", "-qb", "feat")
+	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("feat\n"), 0o644)
+	run(t, repo, "commit", "-qam", "feat")
+	run(t, repo, "checkout", "-q", "-")
+	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("base\n"), 0o644)
+	run(t, repo, "commit", "-qam", "base")
+	os.WriteFile(filepath.Join(repo, ".git", "info", "attributes"), []byte("* merge=evil\n"), 0o644)
+	run(t, repo, "config", "merge.evil.driver", script)
+
+	// Precondition: unhardened, the trap fires. Otherwise passing proves nothing.
+	cmd := exec.Command("git", "merge", "--no-ff", "-m", "m", "feat")
+	cmd.Dir = repo
+	_ = cmd.Run()
+	if !ran(marker) {
+		t.Fatal("precondition failed: plain git merge did not run the driver")
+	}
+	os.Remove(marker)
+	run(t, repo, "reset", "-q", "--hard", "HEAD~1")
+
+	_ = hardened(repo, "merge", "--no-ff", "-m", "m", "feat")
+	if ran(marker) {
+		t.Fatal("a hardened merge ran the repository's merge driver on the host")
+	}
+}
+
+// commit.gpgSign plus gpg.program in .git/config made every hardened commit —
+// land's and rescue's — run an agent-named program.
+func TestArgsDisablesSigningPrograms(t *testing.T) {
+	repo := initRepo(t)
+	writeAndCommit(t, repo)
+	script, marker := trap(t)
+	run(t, repo, "config", "commit.gpgSign", "true")
+	run(t, repo, "config", "gpg.program", script)
+
+	cmd := exec.Command("git", "commit", "--allow-empty", "-qm", "x")
+	cmd.Dir = repo
+	_ = cmd.Run()
+	if !ran(marker) {
+		t.Fatal("precondition failed: plain git commit did not run gpg.program")
+	}
+	os.Remove(marker)
+
+	if err := hardened(repo, "commit", "--allow-empty", "-qm", "y"); err != nil {
+		t.Fatalf("hardened commit failed: %v", err)
+	}
+	if ran(marker) {
+		t.Fatal("a hardened commit ran gpg.program on the host")
+	}
+}
+
+// The per-driver keys are arbitrary names, so the fixed list cannot carry them;
+// a new merge driver is reported as loudly as a new core.fsmonitor.
+func TestDiffConfigFlagsNewDrivers(t *testing.T) {
+	for _, k := range []string{"merge.evil.driver", "filter.x.clean", "diff.y.textconv", "gpg.program"} {
+		got := DiffConfig(map[string]string{}, map[string]string{k: "/x"})
+		if len(got) != 1 || !got[0].Dangerous {
+			t.Errorf("%s not flagged as dangerous: %+v", k, got)
+		}
+	}
+	if got := DiffConfig(nil, map[string]string{"merge.ff": "only"}); got[0].Dangerous {
+		t.Error("merge.ff flagged as dangerous; it names no command")
+	}
+}

@@ -249,7 +249,8 @@ func TestShareMountReachesEveryTask(t *testing.T) {
 	}
 	// And it must be *added* to the worktree's .git mount, not put in its place —
 	// without that one the agent can edit files it can never commit.
-	if want := len(sandbox.LinkedWorktreeMounts(wt)) + 1; len(opts.ExtraMounts) != want {
+	wtMounts, _ := sandbox.LinkedWorktreeMounts(wt)
+	if want := len(wtMounts) + 1; len(opts.ExtraMounts) != want {
 		t.Errorf("mounts = %v; the linked worktree mounts were displaced", opts.ExtraMounts)
 	}
 }

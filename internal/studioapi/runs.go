@@ -196,7 +196,9 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (san
 		if branch == "" {
 			branch = req.Worktree
 		}
-		extraMounts = sandbox.LinkedWorktreeMounts(info.Path)
+		if extraMounts, err = sandbox.LinkedWorktreeMounts(info.Path); err != nil {
+			return sandbox.Options{}, err
+		}
 		// repoID stays the scope's: a linked worktree belongs to the same
 		// repository, which is the whole point of addressing it by branch.
 	case req.Project != "":
