@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -280,7 +281,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	if sess != nil && rf.checkpoint > 0 {
 		stopCheckpoints = workspace.SessionCheckpoints(ctx, c, sess, rf.checkpoint)
 	}
-	code, err := attach(ctx, c, sb.ID, p.PID, tty)
+	code, err := attach(ctx, c, sb.ID, p.PID, tty, true)
 	// Reported only now: while attached, the agent owns the terminal, and a
 	// line printed over its UI is a line nobody can read.
 	if cerr := stopCheckpoints(); cerr != nil {
@@ -328,12 +329,23 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 }
 
 // attach connects the terminal (or stdin/stdout) to a process until it exits.
-func attach(ctx context.Context, c *api.Client, sandbox string, pid int, tty bool) (int, error) {
+//
+// Without a terminal, what an interrupt means depends on whose process it is.
+// A run you started in the foreground is yours to stop, so Ctrl-C is
+// forwarded to it (forward). Attaching to a run that was started detached is
+// watching it, and Ctrl-C there stops the watching: it detaches, and the run
+// carries on (errDetached). beta.15 kept the same split with docker's
+// --sig-proxy=false, because an unattended agent killed by a keystroke meant
+// for the viewer is the failure detaching exists to avoid. With a terminal,
+// Ctrl-C is a byte for the process's own terminal either way, as it is for
+// any interactive program.
+func attach(ctx context.Context, c *api.Client, sandbox string, pid int, tty, forward bool) (int, error) {
 	st, err := c.Attach(ctx, sandbox, pid)
 	if err != nil {
 		return 1, err
 	}
 	defer st.Close()
+	var detached atomic.Bool
 	if tty {
 		restore, err := makeRaw(os.Stdin)
 		if err == nil {
@@ -347,9 +359,14 @@ func attach(ctx context.Context, c *api.Client, sandbox string, pid int, tty boo
 		defer signal.Stop(sig)
 		go func() {
 			for s := range sig {
-				if s == os.Interrupt {
+				switch {
+				case !forward:
+					detached.Store(true)
+					_ = st.Close()
+					return
+				case s == os.Interrupt:
 					_ = st.Signal("INT")
-				} else {
+				default:
 					_ = st.Signal("TERM")
 				}
 			}
@@ -361,8 +378,15 @@ func attach(ctx context.Context, c *api.Client, sandbox string, pid int, tty boo
 			_ = st.CloseStdin()
 		}
 	}()
-	return st.Copy(os.Stdout, os.Stderr)
+	code, err := st.Copy(os.Stdout, os.Stderr)
+	if detached.Load() {
+		return 0, errDetached
+	}
+	return code, err
 }
+
+// errDetached is attach ending because the viewer left, not the process.
+var errDetached = errors.New("detached; the process is still running")
 
 // buildEnv is the agent's constant settings, the host values of its allowlist
 // that are set, and --env.

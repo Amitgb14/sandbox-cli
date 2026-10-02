@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -182,7 +183,7 @@ func newAttachCmd() *cobra.Command {
 	var every time.Duration
 	cmd := &cobra.Command{
 		Use:   "attach SANDBOX",
-		Short: "Attach your terminal to a sandbox's process; detaching (closing the terminal) leaves it running",
+		Short: "Attach your terminal to a sandbox's process; closing the terminal, or Ctrl-C without one, detaches and leaves it running",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ctxName, err := newClient(ctxFlag)
@@ -203,9 +204,14 @@ func newAttachCmd() *cobra.Command {
 			if sess, ok := attachedSession(cmd.Context(), c, ctxName, args[0]); ok && every > 0 {
 				stop = workspace.SessionCheckpoints(cmd.Context(), c, sess, every)
 			}
-			code, err := attach(cmd.Context(), c, args[0], p, info.Tty && isTerminal(os.Stdin))
+			code, err := attach(cmd.Context(), c, args[0], p, info.Tty && isTerminal(os.Stdin), false)
 			if cerr := stop(); cerr != nil {
 				fmt.Fprintf(os.Stderr, "sandbox-cli: checkpoints failed while attached: %v\n", cerr)
+			}
+			if errors.Is(err, errDetached) {
+				fmt.Fprintf(os.Stderr, "sandbox-cli: detached; %s keeps running (sandbox-cli attach %s · sandbox-cli kill %s)\n",
+					termsafe.Clean(args[0]), termsafe.Clean(args[0]), termsafe.Clean(args[0]))
+				return nil
 			}
 			if err != nil {
 				return err

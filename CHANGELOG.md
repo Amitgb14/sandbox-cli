@@ -196,6 +196,11 @@ In the rewrite:
   A fleet task now takes the user's config (image, env, secrets, network) and
   profile through the same code as `run`. Before, it built its own request and
   ignored both.
+- **Ctrl-C while watching a detached run detaches; it no longer stops the run.**
+  Without a terminal, `sandbox-cli attach` passed the interrupt on to the
+  process, so a keystroke meant for the viewer killed an unattended agent.
+  beta.15 prevented this with `--sig-proxy=false`. A run started in the
+  foreground still passes Ctrl-C on, since it is yours to stop.
 - **`sandboxd` refuses a TCP listener without a token, loopback included.** A
   loopback port is reachable by every user on the machine, and with no token
   any of them could create sandboxes, run commands and type into a running
