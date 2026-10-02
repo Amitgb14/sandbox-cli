@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -117,6 +118,14 @@ type Runner struct {
 	PersistLogins bool
 	// Keep leaves each task's sandbox running when it finishes.
 	Keep bool
+	// Prepare layers the user's configuration onto a task's request, exactly
+	// as a `run` layers it: image, environment, secrets and the network,
+	// with the task's allow as --allow would be, checked against the profile.
+	// Required. A fleet that built its own request ignored the config and the
+	// profile both, so a prod fleet ran on the server's default network; the
+	// rule a fleet keeps is the one every other run keeps, because it is the
+	// same code.
+	Prepare func(req *api.CreateSandboxRequest, allow []string) error
 	// CheckpointEvery fetches each task's working tree to
 	// refs/sandbox/checkpoints/<sandbox> this often while it runs; zero never.
 	// A fleet runs unattended for longer than anything else, and a VM lost an
@@ -166,6 +175,9 @@ func (r *Runner) tools(ctx context.Context, d agents.Descriptor, caps api.Capabi
 func (r *Runner) Run(ctx context.Context, spec Spec) (*State, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
+	}
+	if r.Prepare == nil {
+		return nil, errors.New("fleet: no Prepare, so no configuration or profile would apply to its tasks")
 	}
 	base, err := workspace.Git(r.Repo, "rev-parse", "HEAD")
 	if err != nil {
@@ -231,18 +243,19 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 		return
 	}
 	lim := spec.LimitsFor(t)
-	env := agentEnv(d)
-	for k, v := range workspace.Identity(r.Repo, spec.Defaults.Git) {
-		if _, set := env[k]; !set {
-			env[k] = v
-		}
-	}
-	req := api.CreateSandboxRequest{Name: sandboxName(t.Branch), Env: env,
+	req := api.CreateSandboxRequest{Name: sandboxName(t.Branch), Env: agentEnv(d),
 		Labels: map[string]string{"agent": d.Name, "fleet.branch": labelValue(t.Branch)}}
 	req.MemoryMB, req.CPUs = parseMemoryMiB(lim.Memory), parseCPUs(lim.CPUs)
-	if len(lim.Allow) > 0 {
-		req.Network = &api.NetworkPolicy{Mode: api.NetworkAllowlist,
-			Allow: append(append([]string{}, caps.Network.Default.Allow...), lim.Allow...)}
+	if err := r.Prepare(&req, lim.Allow); err != nil {
+		fail(TaskFailed, err)
+		return
+	}
+	// After the configuration, as in a run: an identity the user set in
+	// their env wins.
+	for k, v := range workspace.Identity(r.Repo, spec.Defaults.Git) {
+		if _, set := req.Env[k]; !set {
+			req.Env[k] = v
+		}
 	}
 	if m := r.tools(ctx, d, caps); m != nil {
 		req.Volumes = append(req.Volumes, *m)

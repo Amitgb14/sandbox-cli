@@ -33,19 +33,63 @@ func TestSplitWrapperArgs(t *testing.T) {
 	}
 }
 
-// --allow adds to the server's default allowlist: someone typing one more host
-// does not mean "and none of the others".
-func TestBuildNetworkAddsToTheDefault(t *testing.T) {
+// The network a run asks for is the config's and the flags' together, checked
+// against the profile as one, and never quietly the server's default instead:
+//   - --allow adds to the baseline, unless the config turned the baseline off;
+//   - an allowlist that resolves to nothing refuses the run (prod's shape when
+//     it names no hosts) rather than falling through to the server's default,
+//     which has github.com in it;
+//   - a --network flag cannot take a run out of what its profile requires.
+func TestNetworkFollowsTheConfigAndTheProfile(t *testing.T) {
 	caps := api.Capabilities{Network: api.NetworkCeiling{Default: api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com"}}}}
-	p := buildNetwork(&runFlags{allow: []string{"example.com"}}, caps)
-	if p == nil || p.Mode != api.NetworkAllowlist || !reflect.DeepEqual(p.Allow, []string{"github.com", "example.com"}) {
-		t.Fatalf("got %+v", p)
+	cases := []struct {
+		name, config string
+		rf           runFlags
+		want         *api.NetworkPolicy // nil: the server's default
+		refused      bool
+	}{
+		{name: "nothing set", want: nil},
+		{name: "--allow adds to the baseline", rf: runFlags{allow: []string{"example.com"}},
+			want: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com", "example.com"}}},
+		{name: "--network none", rf: runFlags{network: "none"}, want: &api.NetworkPolicy{Mode: api.NetworkNone}},
+		{name: "--network open under dev", rf: runFlags{network: "open"}, want: &api.NetworkPolicy{Mode: api.NetworkOpen}},
+		{name: "--deny alone keeps the baseline", rf: runFlags{deny: []string{"github.com"}},
+			want: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com"}, Deny: []string{"github.com"}}},
+		{name: "baseline off with --allow", config: "network:\n  baseline: false\n  allow: [a.example]\n", rf: runFlags{allow: []string{"b.example"}},
+			want: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"a.example", "b.example"}}},
+		{name: "baseline off and nothing named", config: "network:\n  mode: allowlist\n  baseline: false\n", refused: true},
+		{name: "prod naming no hosts", config: "profile: prod\n", refused: true},
+		{name: "prod with --allow", config: "profile: prod\n", rf: runFlags{allow: []string{"api.example"}},
+			want: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"api.example"}}},
+		{name: "prod with --network open", config: "profile: prod\nnetwork:\n  allow: [api.example]\n", rf: runFlags{network: "open"}, refused: true},
+		{name: "a mode nobody defines", rf: runFlags{network: "wide"}, refused: true},
 	}
-	if p := buildNetwork(&runFlags{}, caps); p != nil {
-		t.Fatalf("no flags should mean the server default, got %+v", p)
-	}
-	if p := buildNetwork(&runFlags{network: "none"}, caps); p.Mode != api.NetworkNone || p.Allow != nil {
-		t.Fatalf("none: %+v", p)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", home)
+			if tc.config != "" {
+				os.MkdirAll(filepath.Join(home, "sandbox"), 0o700)
+				if err := os.WriteFile(filepath.Join(home, "sandbox", "config.yaml"), []byte(tc.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rf := tc.rf
+			var req api.CreateSandboxRequest
+			err := applyConfig(&rf, t.TempDir(), &req, caps)
+			if tc.refused {
+				if err == nil {
+					t.Fatalf("not refused; network %+v", req.Network)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(req.Network, tc.want) {
+				t.Fatalf("network %+v, want %+v", req.Network, tc.want)
+			}
+		})
 	}
 }
 

@@ -183,6 +183,19 @@ In the rewrite:
   sign-in method) when saved and again when restored, so a file saved before
   this change is cleaned on its next use. An MCP server you configured in a
   sandbox no longer outlives it; put it in the repository's own config instead.
+- **The network a run asks for is the config's and the profile's, everywhere.**
+  Three ways around them are closed:
+  - An allowlist that resolves to nothing now refuses the run, as the prod
+    profile always said it would. Before, the client sent no network and the
+    server's default applied, `github.com` included.
+  - `--allow` no longer brings back a baseline the config turned off
+    (`baseline: false`).
+  - `--network` is checked against the profile, so `--network open` cannot take
+    a prod run out of prod.
+
+  A fleet task now takes the user's config (image, env, secrets, network) and
+  profile through the same code as `run`. Before, it built its own request and
+  ignored both.
 
 ### Changed
 

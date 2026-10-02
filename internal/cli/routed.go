@@ -57,7 +57,11 @@ func configuredRouting(rf *runFlags, primary string) (fallbacks []string, provid
 	if project == "" {
 		project, _ = os.Getwd()
 	}
-	cfg, err := loadConfig(project, rf.configPath, rf.profile)
+	ov, err := rf.overrides()
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg, err := loadConfig(project, rf.configPath, rf.profile, ov)
 	if err != nil {
 		return nil, nil, err
 	}

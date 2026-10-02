@@ -152,7 +152,11 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	}
 	// The configuration first: a mistake in your own files is yours to fix
 	// whether or not a sandboxd is answering, and should not wait behind one.
-	if _, err := loadConfig(project, rf.configPath, rf.profile); err != nil {
+	ov, err := rf.overrides()
+	if err != nil {
+		return 1, err
+	}
+	if _, err := loadConfig(project, rf.configPath, rf.profile, ov); err != nil {
 		return 1, err
 	}
 	c, ctxName, err := newClient(rf.context)
@@ -189,7 +193,6 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 			req.Volumes = append(req.Volumes, *m)
 		}
 	}
-	req.Network = buildNetwork(rf, caps)
 	if err := applyConfig(rf, project, &req, caps); err != nil {
 		return 1, err
 	}
@@ -433,27 +436,6 @@ func formatLabels(l map[string]string) string {
 		parts[i] = k + "=" + termsafe.Clean(l[k])
 	}
 	return strings.Join(parts, ",")
-}
-
-// buildNetwork turns the flags into a policy request, or nil for the server's
-// default. --allow adds to the server's default list rather than replacing it,
-// which is what someone typing one more host means.
-func buildNetwork(rf *runFlags, caps api.Capabilities) *api.NetworkPolicy {
-	if rf.network == "" && len(rf.allow) == 0 && len(rf.deny) == 0 {
-		return nil
-	}
-	mode := rf.network
-	if mode == "" {
-		mode = caps.Network.Default.Mode
-		if len(rf.allow) > 0 {
-			mode = api.NetworkAllowlist
-		}
-	}
-	p := &api.NetworkPolicy{Mode: mode, Deny: rf.deny}
-	if mode == api.NetworkAllowlist {
-		p.Allow = append(append([]string{}, caps.Network.Default.Allow...), rf.allow...)
-	}
-	return p
 }
 
 // mountsNear reports whether any mount is at path, inside it, or around it.

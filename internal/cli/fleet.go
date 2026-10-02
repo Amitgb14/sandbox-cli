@@ -10,7 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
+	"github.com/Amitgb14/sandbox-cli/internal/policy"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
@@ -54,12 +56,22 @@ func newFleetRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg, err := loadConfig(repo, "", profile)
+			caps, err := c.Capabilities(cmd.Context())
 			if err != nil {
 				return err
 			}
+			// One check of the configuration before any task is created, so
+			// a refusal is one error rather than one per task.
+			cfg, err := loadConfig(repo, "", profile, policy.Overrides{})
+			if err != nil {
+				return err
+			}
+			if err := fleetPrepare(repo, profile, caps)(&api.CreateSandboxRequest{}, nil); err != nil {
+				return err
+			}
 			r := &fleet.Runner{Client: c, Repo: repo, Keep: keep, Out: cmd.OutOrStdout(),
-				PersistLogins: cfg.PersistAuthEnabled(), CheckpointEvery: every}
+				PersistLogins: cfg.PersistAuthEnabled(), CheckpointEvery: every,
+				Prepare: fleetPrepare(repo, profile, caps)}
 			st, err := r.Run(cmd.Context(), spec)
 			if err != nil {
 				return err
@@ -162,4 +174,15 @@ func newFleetLandCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&unverified, "unverified", false, "land work that failed or whose verify rejected it")
 	cmd.Flags().StringVar(&onto, "onto", "", "land into this branch rather than the one the fleet started from")
 	return cmd
+}
+
+// fleetPrepare is how a fleet task's request takes the user's configuration:
+// through applyConfig, as `run` does, with the task's allow as --allow and the
+// fleet's profile as --profile. A fleet.yaml has CLI-flag trust, so its allow
+// is a flag's, and the profile still decides whether the result may run.
+func fleetPrepare(repo, profile string, caps api.Capabilities) func(*api.CreateSandboxRequest, []string) error {
+	return func(req *api.CreateSandboxRequest, allow []string) error {
+		rf := &runFlags{profile: profile, allow: allow}
+		return applyConfig(rf, repo, req, caps)
+	}
 }
