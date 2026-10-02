@@ -111,14 +111,19 @@ func (s *Server) putWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "storing the bundle in the sandbox failed: "+gitMessage(msg))
 		return
 	}
-	code, msg, err = s.execIn(ctx, id, []string{"git", "clone", "--quiet", "--no-hardlinks", "--branch", branch, bundleIn, "/workspace"}, nil, nil)
+	// The bundle carries HEAD — the client must not create a branch in its own
+	// repository just to send it — and the guest names it.
+	code, msg, err = s.execIn(ctx, id, []string{"git", "clone", "--quiet", "--no-hardlinks", bundleIn, "/workspace"}, nil, nil)
+	if err == nil && code == 0 {
+		code, msg, err = s.execIn(ctx, id, []string{"git", "-C", "/workspace", "checkout", "--quiet", "-B", branch}, nil, nil)
+	}
 	_, _, _ = s.execIn(ctx, id, []string{"rm", "-f", bundleIn}, nil, nil)
 	if err != nil {
 		writeBackendErr(w, err)
 		return
 	}
 	if code != 0 {
-		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "git clone in the sandbox failed: "+gitMessage(msg))
+		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "cloning the bundle in the sandbox failed (it must carry HEAD): "+gitMessage(msg))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

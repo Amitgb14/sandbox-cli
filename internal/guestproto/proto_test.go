@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -256,3 +257,50 @@ func TestClientBoundsWhatTheGuestSends(t *testing.T) {
 		t.Errorf("an oversized frame did not end the process view: exit %d", code)
 	}
 }
+
+// A tty exec gets a controlling terminal of the asked size, and a resize frame
+// changes it while the process runs.
+func TestTTYAndResize(t *testing.T) {
+	c, root := serve(t)
+	withCommands(t, root, "sh", "stty", "tty")
+	var out syncBuffer
+	p, err := c.ExecRequest(ctx(t), Request{Argv: []string{"sh"}, Env: map[string]string{"PATH": "/bin"}, Tty: true, Rows: 30, Cols: 100}, &out, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := p.Stdin()
+	waitFor := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !strings.Contains(out.String(), want) {
+			if time.Now().After(deadline) {
+				t.Fatalf("never saw %q in:\n%s", want, out.String())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	in.Write([]byte("stty size; tty\n"))
+	waitFor("30 100")
+	waitFor("/dev/pts/")
+	if err := p.Resize(40, 120); err != nil {
+		t.Fatal(err)
+	}
+	in.Write([]byte("stty size\n"))
+	waitFor("40 120")
+	in.Write([]byte("exit 7\n"))
+	if code := p.Wait(); code != 7 {
+		t.Fatalf("exit %d, want 7", code)
+	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }

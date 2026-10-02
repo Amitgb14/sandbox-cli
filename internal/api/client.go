@@ -251,7 +251,8 @@ func (c *Client) Signal(ctx context.Context, ref string, pid int, signal string)
 }
 
 // PutWorkspace clones a git bundle into the sandbox's empty /workspace and
-// checks out branch.
+// checks its HEAD out as branch. The bundle must carry HEAD (`git bundle create
+// f HEAD`), so the client never has to create a branch to send one.
 func (c *Client) PutWorkspace(ctx context.Context, ref, branch string, bundle io.Reader) error {
 	resp, err := c.do(ctx, http.MethodPost, sbx(ref)+"/workspace", url.Values{"branch": {branch}},
 		bundle, "application/octet-stream")
@@ -313,3 +314,5 @@ func (c *Client) ListDir(ctx context.Context, ref, path string) ([]DirEntry, err
 	var out DirList
 	return out.Entries, json.NewDecoder(resp.Body).Decode(&out)
 }
+
+func decodeErr(data []byte, eb *ErrorBody) error { return json.Unmarshal(data, eb) }

@@ -114,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	route("GET /v1/sandboxes/{ref}/processes/{pid}/output", false, s.followOutput)
 	route("POST /v1/sandboxes/{ref}/processes/{pid}/stdin", true, s.writeStdin)
 	route("POST /v1/sandboxes/{ref}/processes/{pid}/signal", false, s.signal)
+	route("GET /v1/sandboxes/{ref}/processes/{pid}/attach", false, s.attach)
 	route("GET /v1/sandboxes/{ref}/files", false, s.readFile)
 	route("PUT /v1/sandboxes/{ref}/files", true, s.writeFile)
 	route("DELETE /v1/sandboxes/{ref}/files", false, s.removeFile)
@@ -491,7 +492,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 	rec.mu.Unlock()
 
 	log := newOutputLog()
-	ps := backend.ProcSpec{Argv: append([]string(nil), req.Argv...), Env: env, Cwd: req.Cwd}
+	ps := backend.ProcSpec{Argv: append([]string(nil), req.Argv...), Env: env, Cwd: req.Cwd, Tty: req.Tty, Rows: req.Rows, Cols: req.Cols}
 	// The process outlives this request, so it gets a context of its own; it is
 	// ended by its own exit, a signal, or the sandbox being terminated.
 	proc, err := s.Backend.Start(context.WithoutCancel(r.Context()), id, ps, log.writer("stdout"), log.writer("stderr"))
@@ -503,7 +504,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 	rec.mu.Lock()
 	rec.nextPID++
 	pr := &procRecord{
-		info: api.Process{PID: rec.nextPID, Argv: ps.Argv, State: api.ProcessRunning, StartedAt: s.now().UTC()},
+		info: api.Process{PID: rec.nextPID, Tty: ps.Tty, Argv: ps.Argv, State: api.ProcessRunning, StartedAt: s.now().UTC()},
 		proc: proc,
 		log:  log,
 	}
@@ -532,6 +533,10 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TimeoutSecs < 0 {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "timeout_secs must not be negative")
+		return
+	}
+	if req.Tty {
+		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "a terminal is for a background process: start one and attach to it")
 		return
 	}
 	pr, ok := s.start(w, r, rec, req)

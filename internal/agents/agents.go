@@ -27,6 +27,13 @@ type Descriptor struct {
 	// subcommand cannot silently orphan an existing login.
 	PersistDir string
 
+	// AuthPaths are the files, relative to the agent's HOME, that hold its
+	// login. The CLI copies them out of the sandbox when a run ends and back in
+	// when the next one starts — the login outlives the sandbox without the host
+	// mounting anything into the guest. Empty for agents that authenticate only
+	// with API keys from the environment.
+	AuthPaths []string
+
 	// EnvAllow lists host environment variable names forwarded into the container
 	// *only if set on the host*. Suggested, opt-in, and deliberately narrow:
 	// nothing else about the host environment crosses the boundary.
@@ -234,6 +241,7 @@ var registry = map[string]Descriptor{
 		// Verified: the console feature was built and attached against this agent.
 		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
 		PersistDir:        "claude",
+		AuthPaths:         []string{".claude/.credentials.json", ".claude.json"},
 		ProviderHost:      "api.anthropic.com",
 		EnvAllow: []string{
 			"ANTHROPIC_API_KEY",
@@ -261,6 +269,7 @@ var registry = map[string]Descriptor{
 		// runs that may be working today.
 		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
 		PersistDir:        "codex",
+		AuthPaths:         []string{".codex/auth.json"},
 		ProviderHost:      "api.openai.com",
 		EnvAllow: []string{
 			"OPENAI_API_KEY",
@@ -281,6 +290,7 @@ var registry = map[string]Descriptor{
 		// Unverified, and kept as it was.
 		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
 		PersistDir:        "gemini",
+		AuthPaths:         []string{".gemini/oauth_creds.json", ".gemini/google_accounts.json", ".gemini/settings.json"},
 		ProviderHost:      "generativelanguage.googleapis.com",
 		// GOOGLE_APPLICATION_CREDENTIALS is deliberately absent: it names a host
 		// file path that is not mounted, so forwarding it would produce a confusing
@@ -304,6 +314,7 @@ var registry = map[string]Descriptor{
 	"opencode": {
 		Name:       "opencode",
 		PersistDir: "opencode",
+		AuthPaths:  []string{".local/share/opencode/auth.json"},
 		// Provider-agnostic, so the list spans the providers it can drive rather
 		// than naming a vendor; each is forwarded only if the host has it set.
 		EnvAllow: []string{

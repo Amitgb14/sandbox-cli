@@ -505,12 +505,51 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
     say why: no allowlist, and no git in alpine).
   - **Not verified:** the runtime itself. `scripts/m3/macos/run-all.sh`, then
     the conformance suite against `sandboxd --backend macos`, is the hand-over.
-- **M7 — the CLI as a client, and parity.**
-  - Contexts (`sandbox-cli context use local|<host>|cloud`).
-  - The fifteen agent wrappers, prod profile and persisted auth through the API.
-  - `--detach`, `list`, `logs`, `attach`, `kill`, `bring-back`.
-  - CLAUDE.md rewritten. `rewrite` replaces `main`; `_old/` is deleted. The
-    CHANGELOG names the dropped platforms.
+- **M7 — the CLI as a client, and parity.** *Done on the branch; merging to
+  `main` is the maintainer's call (it drops platforms beta.15 users are on).*
+  - **Terminals end to end.** The guest agent allocates a pty (`/dev/ptmx`,
+    controlling terminal, resize). `GET …/processes/{pid}/attach` upgrades the
+    HTTP connection (`Upgrade: sbx-stream/1`) to the guest protocol's frames,
+    over the unix socket and TLS alike:
+    - output is replayed from the start, so a late or second attach sees
+      everything;
+    - disconnecting detaches without stopping the process.
+
+    New conformance test; a `run` with a terminal is refused, so a terminal
+    session is always a background process.
+  - **The CLI is a client.**
+    - `context add/use/ls/rm`, with `local` built in.
+    - `run`.
+    - Fifteen agent wrappers from the descriptor table. The ten interactive-only
+      agents are ported verbatim from beta.15's per-agent files, comments
+      included. A wrapper consumes only leading sandbox flags.
+    - `list`, `logs`, `attach` (raw mode, SIGWINCH), `kill` (never infers its
+      target), `bring-back` and `doctor`.
+  - **The workspace round trip.** The repository's `HEAD` goes in as a bundle
+    (`HEAD`, so the CLI never creates a branch in your repository) and is
+    checked out as `sandbox`. At the end, uncommitted work is committed in the
+    guest, and `base..sandbox` comes back. The bundle is verified on the host
+    and must carry exactly one ref; it is fetched only into
+    `refs/sandbox/<name>`. Every host git call goes through `githard`.
+  - **Logins.** Each agent descriptor names its login files (`AuthPaths`). They
+    are copied in at start and out at the end, into an owner-only directory
+    that refuses symlinks; the prod profile turns this off. The user config and
+    `.sandbox.yaml` layer under the flags with the ported trust refusals, and
+    secrets are resolved by the credential broker on the host.
+  - **Verified on this machine** against `sandboxd` on Firecracker:
+    - `run` mirrored the exit code (3);
+    - the agent's commit and its uncommitted file came back to `refs/sandbox/…`
+      with your branches untouched, and the sandbox was terminated;
+    - a run under a real pty got the host terminal's size and `TERM`;
+    - `--detach`, `logs` and `kill` all worked;
+    - a user config's env and brokered secret reached the guest, and a
+      project `.sandbox.yaml` setting `env` was refused.
+  - **Docs.** A new README; the beta.15 user docs moved to `_old/docs/`; a
+    CHANGELOG entry that names what is removed.
+  - **Changed from the plan:** `_old/` stays until M10. Fleet, rescue,
+    routing and Studio are rebuilt from it, and deleting the reference before
+    the rebuild would mean rebuilding from memory, which `port-from-old`
+    exists to prevent.
 - **M8 — what makes sandboxes cheap to keep.** Suspend and resume, filesystem and
   memory snapshots, clone (Firecracker), tunnels, the Python and TypeScript SDKs.
 - **M9 — cloud.**

@@ -194,7 +194,13 @@ type Process struct {
 // whole process, not only the start: when it ends, the connection closes and the
 // guest kills the process.
 func (c *Client) Exec(ctx context.Context, argv []string, env map[string]string, cwd string, stdout, stderr io.Writer) (*Process, error) {
-	cn, done, err := c.open(ctx, Request{Op: OpExec, Argv: argv, Env: env, Cwd: cwd})
+	return c.ExecRequest(ctx, Request{Op: OpExec, Argv: argv, Env: env, Cwd: cwd}, stdout, stderr)
+}
+
+// ExecRequest is Exec with the whole request, for a tty.
+func (c *Client) ExecRequest(ctx context.Context, req Request, stdout, stderr io.Writer) (*Process, error) {
+	req.Op = OpExec
+	cn, done, err := c.open(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -240,6 +246,14 @@ func (p *Process) send(typ byte, payload []byte) error {
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
 	return WriteFrame(p.cn.rwc, typ, payload)
+}
+
+// Resize changes a tty process's terminal size.
+func (p *Process) Resize(rows, cols uint16) error {
+	var b [4]byte
+	binary.BigEndian.PutUint16(b[0:2], rows)
+	binary.BigEndian.PutUint16(b[2:4], cols)
+	return p.send(FrameResize, b[:])
 }
 
 // Stdin is the process's standard input.

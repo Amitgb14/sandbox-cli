@@ -316,7 +316,7 @@ func (b *Backend) Start(ctx context.Context, id string, p backend.ProcSpec, stdo
 	if err != nil {
 		return nil, err
 	}
-	proc, err := v.client.Exec(ctx, p.Argv, p.Env, p.Cwd, stdout, stderr)
+	proc, err := v.client.ExecRequest(ctx, guestproto.Request{Argv: p.Argv, Env: p.Env, Cwd: p.Cwd, Tty: p.Tty, Rows: p.Rows, Cols: p.Cols}, stdout, stderr)
 	if err != nil {
 		return nil, mapErr(err)
 	}

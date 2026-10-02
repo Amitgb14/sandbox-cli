@@ -11,6 +11,44 @@ version is tagged.
 
 ## Unreleased
 
+### The rewrite: microVM sandboxes behind one API
+
+sandbox-cli is rebuilt. Every sandbox is now a VM with its own kernel —
+Firecracker on Linux, the native `container` runtime on macOS — served by
+`sandboxd` behind one API, locally or on a machine you control.
+
+**Removed — read this first:**
+
+- **Docker and podman** are no longer used, in any role.
+- **Windows hosts** are no longer supported to run sandboxes. The CLI still
+  builds for Windows as a client of a remote `sandboxd`.
+- **Intel Macs and macOS 15 and earlier** cannot run local sandboxes (the
+  runtime needs macOS 26 on arm64). They can still use a remote `sandboxd`.
+- **Linux without KVM** cannot run `sandboxd`.
+- **The host repository is no longer bind-mounted** by default: it goes in as a
+  git bundle, and work comes back into `refs/sandbox/<name>` for you to merge.
+  On a local Mac, `--bind` mounts a directory instead.
+- **Not yet rebuilt:** `fleet`, `worktree`, `recover`, `usage`, `context list`
+  (agent conversations), routing and Studio. They return on the new API.
+
+**Changed:**
+
+- **`sandbox-cli context`** now chooses which `sandboxd` to talk to (`local`, a
+  self-hosted host, or the cloud). Listing agent conversations moves elsewhere
+  when it returns.
+- **`--allow` adds to the server's default allowlist,** and `--deny` wins over
+  it, wildcards included. DNS inside a sandbox answers only allowlisted names
+  and forwards nothing.
+- **Agent logins** are copied out of a sandbox when a run ends and back in when
+  the next starts. The prod profile still turns this off.
+
+**Added:**
+
+- `sandboxd`, its API (`docs/api/v1.md`), and a conformance suite that
+  defines it.
+- `bring-back`, `attach` with a real terminal, and `doctor` against any
+  endpoint.
+
 ### Security
 
 Four ways a run could reach the host, or a later run, through files it is allowed

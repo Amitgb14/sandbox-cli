@@ -226,3 +226,22 @@ func TestConsoleSeedsOnlyWhereTheDescriptorSaysHow(t *testing.T) {
 		t.Error("opencode is marked seedable; its bare positional is a project directory, so a prompt there becomes a path")
 	}
 }
+
+// Every interactive-only agent can be started and forwards something, and no
+// name is defined twice: a wrapper must resolve to exactly one descriptor.
+func TestInteractiveAgentsAreComplete(t *testing.T) {
+	for name, d := range interactive {
+		if _, dup := registry[name]; dup {
+			t.Errorf("%s is both headless and interactive-only", name)
+		}
+		if d.Name != name || len(d.Command) == 0 || len(d.EnvAllow) == 0 {
+			t.Errorf("%s: incomplete descriptor %+v", name, d)
+		}
+		if d.AutonomousArgs != nil {
+			t.Errorf("%s claims a headless mode from the interactive table", name)
+		}
+	}
+	if got := len(InteractiveNames()); got != 15 {
+		t.Errorf("%d agents have wrappers, want 15", got)
+	}
+}

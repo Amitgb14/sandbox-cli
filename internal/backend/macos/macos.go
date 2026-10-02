@@ -240,7 +240,7 @@ func (b *Backend) Start(ctx context.Context, id string, p backend.ProcSpec, stdo
 	if err := b.known(id); err != nil {
 		return nil, err
 	}
-	proc, err := b.client(id).Exec(ctx, p.Argv, p.Env, p.Cwd, stdout, stderr)
+	proc, err := b.client(id).ExecRequest(ctx, guestproto.Request{Argv: p.Argv, Env: p.Env, Cwd: p.Cwd, Tty: p.Tty, Rows: p.Rows, Cols: p.Cols}, stdout, stderr)
 	if err != nil {
 		return nil, mapErr(err)
 	}

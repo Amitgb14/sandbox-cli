@@ -75,6 +75,7 @@ func Run(t *testing.T, c *api.Client) {
 		{"IdleSandboxIsTerminated", testIdleTimeout},
 		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
 		{"WorkspaceRoundTripsAsABundle", testWorkspaceBundle},
+		{"AttachStreamsInputAndOutput", testAttach},
 	} {
 		t.Run(tc.name, func(t *testing.T) { tc.fn(t, e) })
 	}
@@ -640,7 +641,7 @@ func testWorkspaceBundle(t *testing.T, e *env) {
 	git("commit", "-q", "-m", "host commit")
 	base := git("rev-parse", "HEAD")
 	in := filepath.Join(t.TempDir(), "in.bundle")
-	git("bundle", "create", "-q", in, "feat")
+	git("bundle", "create", "-q", in, "HEAD")
 
 	sb := e.newSandbox(t, api.CreateSandboxRequest{})
 	if res, err := e.c.Run(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"git", "--version"}}); err != nil || res.ExitCode != 0 {
@@ -690,5 +691,56 @@ func testWorkspaceBundle(t *testing.T, e *env) {
 		if err := call(); !api.IsCode(err, api.CodeInvalidRequest) {
 			t.Errorf("%s: err = %v; want invalid_request", name, err)
 		}
+	}
+}
+
+// Attach holds a two-way stream on a running process: input reaches it, output
+// comes back, the exit code arrives last — and a second attach after it exited
+// still sees everything. Detaching does not stop a process.
+func testAttach(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	ctx := ctxT(t)
+	p, err := e.c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"cat"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Attach, write, and detach without ending input: the process keeps running.
+	st, err := e.c.Attach(ctx, sb.ID, p.PID)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	st.Write([]byte("first\n"))
+	st.Close()
+	time.Sleep(100 * time.Millisecond)
+	if got, _ := e.c.Process(ctx, sb.ID, p.PID); got.State != api.ProcessRunning {
+		t.Fatalf("detaching stopped the process: %+v", got)
+	}
+	// Attach again, finish the input, and read to the end.
+	st, err = e.c.Attach(ctx, sb.ID, p.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Write([]byte("second\n"))
+	st.CloseStdin()
+	var out bytes.Buffer
+	code, err := st.Copy(&out, &out)
+	st.Close()
+	if err != nil || code != 0 || out.String() != "first\nsecond\n" {
+		t.Fatalf("attach: output %q, exit %d, err %v", out.String(), code, err)
+	}
+	// After exit, an attach replays and ends with the code.
+	st, err = e.c.Attach(ctx, sb.ID, p.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	code, err = st.Copy(&out, &out)
+	st.Close()
+	if err != nil || code != 0 || out.String() != "first\nsecond\n" {
+		t.Fatalf("late attach: output %q, exit %d, err %v", out.String(), code, err)
+	}
+	// A plain request to the attach endpoint, without the upgrade, is refused.
+	if _, err := e.c.Run(ctx, sb.ID, api.RunRequest{Argv: []string{"true"}, Tty: true}); !api.IsCode(err, api.CodeInvalidRequest) {
+		t.Errorf("run with a terminal: %v; want invalid_request", err)
 	}
 }

@@ -307,9 +307,28 @@ func (s *Server) exec(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	cmd.SysProcAttr = s.procAttr()
-	stdin, _ := cmd.StdinPipe()
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	var stdin io.WriteCloser
+	var stdout, stderr io.Reader
+	var term *pty
+	if req.Tty {
+		t, err := openPTY(req.Rows, req.Cols)
+		if err != nil {
+			reply(c, fail(CodeInternal, "allocating a terminal: "+err.Error()))
+			return
+		}
+		term = t
+		defer term.close()
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = term.slave, term.slave, term.slave
+		ttyAttr(cmd.SysProcAttr)
+		stdin, stdout = term.master, term.master
+		if cmd.Env != nil && env["TERM"] == "" {
+			cmd.Env = append(cmd.Env, "TERM=xterm-256color")
+		}
+	} else {
+		stdin, _ = cmd.StdinPipe()
+		stdout, _ = cmd.StdoutPipe()
+		stderr, _ = cmd.StderrPipe()
+	}
 	if err := cmd.Start(); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			reply(c, fail(CodeNoSuchCommand, "no such command: "+req.Argv[0]))
@@ -342,9 +361,17 @@ func (s *Server) exec(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
 			}
 		}
 	}
-	outputs.Add(2)
-	go copyOut(FrameStdout, stdout)
-	go copyOut(FrameStderr, stderr)
+	if term != nil {
+		// The child holds its own copy of the slave; ours must go, or the master
+		// never sees EOF when the process exits.
+		term.slave.Close()
+		outputs.Add(1)
+		go copyOut(FrameStdout, stdout)
+	} else {
+		outputs.Add(2)
+		go copyOut(FrameStdout, stdout)
+		go copyOut(FrameStderr, stderr)
+	}
 
 	// Frames from the host. When the connection drops, the process is killed:
 	// nobody is left to read its output or to stop it.
@@ -359,11 +386,17 @@ func (s *Server) exec(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
 			case FrameStdin:
 				_, _ = stdin.Write(payload)
 			case FrameStdinEOF:
-				_ = stdin.Close()
+				if term == nil {
+					_ = stdin.Close()
+				} else {
+					_, _ = stdin.Write([]byte{4}) // ^D: a terminal has no EOF of its own
+				}
 			case FrameSignal:
 				killGroup(cmd, string(payload))
 			case FrameResize:
-				// No tty yet; resizing comes with PTY sessions.
+				if term != nil && len(payload) == 4 {
+					term.resize(binary.BigEndian.Uint16(payload[0:2]), binary.BigEndian.Uint16(payload[2:4]))
+				}
 			}
 		}
 	}()

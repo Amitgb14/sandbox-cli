@@ -49,6 +49,11 @@ type Request struct {
 	Cwd  string            `json:"cwd,omitempty"`
 	Path string            `json:"path,omitempty"`
 	Size int64             `json:"size,omitempty"`
+	// Tty runs an exec on a pseudo-terminal of Rows x Cols: stdout and stderr
+	// become one stream, and FrameResize changes the size.
+	Tty  bool   `json:"tty,omitempty"`
+	Rows uint16 `json:"rows,omitempty"`
+	Cols uint16 `json:"cols,omitempty"`
 }
 
 // Response is the guest's answer line.

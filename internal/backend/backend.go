@@ -52,6 +52,15 @@ type ProcSpec struct {
 	Argv []string
 	Env  map[string]string
 	Cwd  string
+	// Tty runs the process on a terminal of Rows x Cols; its stdout and stderr
+	// are then one stream, delivered on stdout.
+	Tty        bool
+	Rows, Cols uint16
+}
+
+// Resizer is a Proc on a terminal whose size can change.
+type Resizer interface {
+	Resize(rows, cols uint16) error
 }
 
 // Proc is a started process.

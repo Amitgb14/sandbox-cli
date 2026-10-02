@@ -156,6 +156,11 @@ type RunRequest struct {
 	Cwd         string            `json:"cwd,omitempty"`
 	Stdin       []byte            `json:"stdin,omitempty"`
 	TimeoutSecs int               `json:"timeout_secs,omitempty"`
+	// Tty runs the process on a terminal (background processes only): one
+	// output stream, and a size that attach can change.
+	Tty  bool   `json:"tty,omitempty"`
+	Rows uint16 `json:"rows,omitempty"`
+	Cols uint16 `json:"cols,omitempty"`
 }
 
 // RunResult is the outcome of a run.
@@ -177,6 +182,7 @@ const (
 // kernel's.
 type Process struct {
 	PID       int       `json:"pid"`
+	Tty       bool      `json:"tty,omitempty"`
 	Argv      []string  `json:"argv"`
 	State     string    `json:"state"`
 	ExitCode  *int      `json:"exit_code"`
