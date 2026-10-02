@@ -1,10 +1,10 @@
-import { ArrowRight, Package, Terminal } from "lucide-react";
+import { ArrowRight, Cpu, Terminal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { GithubMark } from "@/components/logo";
 import { buttonVariants } from "@/components/ui/button";
 import { InstallCard } from "@/components/install-card";
 import { ContainmentSimulator } from "@/components/containment-simulator";
-import { FIRST_RUN, HERO_STATS, REPO_URL, VERSION } from "@/lib/site";
+import { FIRST_RUN, HERO_STATS, REPO_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 export function Hero() {
@@ -38,26 +38,27 @@ export function Hero() {
                 />
                 <span className="relative inline-flex size-1.5 rounded-full bg-contained" />
               </span>
-              v{VERSION} · out now
+              every sandbox a VM with its own kernel
             </Badge>
 
             <h1 className="mt-5 text-[2.4rem] leading-[1.06] font-semibold tracking-[-0.032em] text-balance sm:text-[3rem] lg:text-[3.25rem]">
-              Give the agent full autonomy.
+              A whole machine for the agent.
               <br className="hidden sm:block" />{" "}
-              <span className="text-muted-foreground">Give it nothing else.</span>
+              <span className="text-muted-foreground">None of it is yours.</span>
             </h1>
 
             <p className="mt-5 max-w-xl text-[1.05rem] leading-relaxed text-muted-foreground">
-              <span className="font-mono text-[0.95em] text-foreground">sandbox-cli</span> runs
-              Claude Code, Codex, Gemini and twelve more coding agents inside a disposable Docker
-              container. Only the project you point it at is mounted;{" "}
-              <span className="text-foreground">HOME</span> is a fake ephemeral path and your SSH
-              keys, cloud credentials and browser cookies are not there to be read.
+              <span className="font-mono text-[0.95em] text-foreground">sandbox-cli</span> gives
+              any command — a test suite, a build, Claude Code or Codex at full autonomy — a
+              disposable microVM, on your Mac, a Linux machine you control, or the cloud, behind
+              one API. Your repository goes in as a git bundle and comes back as verified commits;
+              nothing on your machine is mounted, and egress is an allowlist of names enforced
+              outside the guest.
             </p>
 
             <div className="mt-7 flex flex-wrap items-center gap-2.5">
               <a href="#install" className={cn(buttonVariants({ size: "lg" }), "gap-1.5 px-4")}>
-                Install v{VERSION}
+                Install
                 <ArrowRight className="size-4" />
               </a>
               <a
@@ -73,10 +74,10 @@ export function Hero() {
 
             <p className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1.5">
-                <Package className="size-3.5" /> Needs Docker. Nothing else.
+                <Cpu className="size-3.5" /> Apple silicon (macOS 26) or Linux with KVM
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <Terminal className="size-3.5" /> macOS · Linux · Windows
+                <Terminal className="size-3.5" /> client on macOS · Linux · Windows
               </span>
               <span>MIT licensed · written in Go</span>
             </p>

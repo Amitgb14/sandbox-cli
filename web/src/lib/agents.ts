@@ -1,7 +1,9 @@
 /**
- * The fifteen agent wrappers, mirroring `agentCmds()` in internal/cli and the
- * per-agent sections of docs/AGENTS.md. Sizes are the on-disk installed sizes
- * measured for arm64 in July 2026 (see docs/AGENTS.md for the caveats).
+ * The fifteen agents under `sandbox-cli agent`, mirroring internal/agents.
+ * Sizes are the on-disk installed sizes measured for arm64 in July 2026.
+ *
+ * No vendor names: the page describes what each agent needs inside a sandbox,
+ * and a company name adds nothing to that.
  *
  * Deliberately absent: the *version* each first-run agent installs. Those are
  * pinned, and the pins live in exactly one place (internal/agents/pins.go) —
@@ -14,12 +16,11 @@ export type Agent = {
   /** The subcommand: `sandbox-cli <id>`. */
   id: string;
   name: string;
-  vendor: string;
-  /** Baked into the base image, or installed into the persisted home on first use. */
+  /** Baked into the base image, or installed into the sandbox at the start of each run. */
   delivery: "baked" | "first-run";
   /** Approximate installed size for first-run agents. */
   size?: string;
-  /** How you authenticate from a container with no browser. */
+  /** How you authenticate from a sandbox with no browser. */
   login: string;
   /** Host variables forwarded only if they are set. */
   env: string[];
@@ -29,12 +30,10 @@ export type Agent = {
    * A login method this sandbox cannot support, and the one to use instead.
    *
    * Only for flows that complete through a **loopback callback**: the agent
-   * starts a server on the container's own 127.0.0.1 and hands the provider that
+   * starts a server on the guest's own 127.0.0.1 and hands the provider that
    * address as the redirect URI, so your host browser follows the redirect to its
-   * *own* loopback and finds nothing. `--publish` does not rescue it — a
-   * published port forwards to the container's interface address, never to its
-   * loopback — which is why this is stated as unsupported rather than as a
-   * workaround. Every agent listed here offers a device-code or paste flow that
+   * *own* loopback and finds nothing. It is stated as unsupported rather than
+   * offered a workaround nobody has verified. Every agent listed here offers a device-code or paste flow that
    * needs no callback at all; that is the `instead`.
    */
   unsupportedLogin?: {
@@ -55,7 +54,6 @@ export const AGENTS: Agent[] = [
   {
     id: "claude",
     name: "Claude Code",
-    vendor: "Anthropic",
     delivery: "baked",
     login: "Run it and follow the prompt — a Claude account or ANTHROPIC_API_KEY.",
     env: [
@@ -66,27 +64,25 @@ export const AGENTS: Agent[] = [
       "CLAUDE_CODE_USE_VERTEX",
     ],
     gotcha:
-      "The only wrapper with a live memory/CPU status line in the agent's own UI, and the only one that shares your host conversation history for this project so --resume works on both sides.",
-    example: "sandbox-cli claude --dangerously-skip-permissions",
+      "Its login files (.claude/.credentials.json and .claude.json) are copied into each sandbox and back out when the run ends; your own ~/.claude is never read or written. --fallback codex hands a failed run to codex with a briefing of the conversation.",
+    example: "sandbox-cli agent claude --dangerously-skip-permissions",
   },
   {
     id: "codex",
     name: "Codex CLI",
-    vendor: "OpenAI",
     delivery: "baked",
     login: "A ChatGPT account, or export OPENAI_API_KEY on the host.",
     env: ["OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME"],
     unsupportedLogin: {
       method: "Sign in with ChatGPT",
       instead: "Sign in with Device Code",
-      why: "Codex starts a login server on the container's own loopback and gives OpenAI that address as the redirect, so your host browser lands on its own 127.0.0.1 and finds nothing. The port is picked at runtime, and --publish forwards to the container's interface rather than its loopback, so neither can be worked around.",
+      why: "Codex starts a login server on the guest's own loopback and gives the provider that address as the redirect, so your host browser lands on its own 127.0.0.1 and finds nothing. The port is picked at runtime, so nothing can be forwarded to it ahead of time.",
     },
-    example: "sandbox-cli codex exec 'run the tests'",
+    example: "sandbox-cli agent codex exec 'run the tests'",
   },
   {
     id: "gemini",
     name: "Gemini CLI",
-    vendor: "Google",
     delivery: "baked",
     login: "Prints a Google sign-in URL — open it on your host. GEMINI_API_KEY skips it.",
     env: [
@@ -98,13 +94,12 @@ export const AGENTS: Agent[] = [
     ],
     allow: ["generativelanguage.googleapis.com"],
     gotcha:
-      "GOOGLE_APPLICATION_CREDENTIALS is deliberately not forwarded — it names a host file that isn't mounted. Mount the file and repoint the variable.",
-    example: "sandbox-cli gemini --yolo",
+      "GOOGLE_APPLICATION_CREDENTIALS is deliberately not forwarded — it names a file on your machine, which the sandbox cannot see. Use an API key, or the sign-in URL.",
+    example: "sandbox-cli agent gemini --yolo",
   },
   {
     id: "opencode",
     name: "OpenCode",
-    vendor: "SST",
     delivery: "baked",
     login: "`opencode auth login` inside the sandbox, or forward a provider key.",
     env: [
@@ -120,14 +115,13 @@ export const AGENTS: Agent[] = [
     unsupportedLogin: {
       method: "xAI Grok OAuth (SuperGrok Subscription)",
       instead: "xAI Grok OAuth (Headless / Remote / VPS)",
-      why: "The subscription method redirects to a fixed http://127.0.0.1:56121/callback served inside the container — a URI registered with xAI, so it cannot be repointed — and your host browser follows it to its own loopback instead. --publish cannot expose it either, since a published port forwards to the container's interface rather than its loopback.",
+      why: "The subscription method redirects to a fixed http://127.0.0.1:56121/callback served inside the guest — a URI registered with the provider, so it cannot be repointed — and your host browser follows it to its own loopback instead.",
     },
-    example: "sandbox-cli opencode run 'run the tests'",
+    example: "sandbox-cli agent opencode run 'run the tests'",
   },
   {
     id: "copilot",
     name: "Copilot CLI",
-    vendor: "GitHub",
     delivery: "first-run",
     size: "350 MB",
     login: "`copilot login` prints a device code for github.com — enter it on your host.",
@@ -141,12 +135,11 @@ export const AGENTS: Agent[] = [
     ],
     gotcha:
       "Think before forwarding a GitHub PAT: it reaches every repository you can, far beyond the workspace. Leave it unset and use the device flow. Also the largest first-run download — it looks like a hang, it isn't.",
-    example: "sandbox-cli copilot -p 'run the tests'",
+    example: "sandbox-cli agent copilot -p 'run the tests'",
   },
   {
     id: "goose",
     name: "Goose",
-    vendor: "Block",
     delivery: "first-run",
     size: "273 MB",
     login: "`goose configure` — an interactive TUI, no browser involved.",
@@ -162,26 +155,24 @@ export const AGENTS: Agent[] = [
       "GOOSE_MODE",
     ],
     gotcha:
-      "The sandbox sets GOOSE_DISABLE_KEYRING=1 for you — a container has no OS keyring, so without it the login would not survive. Don't override it.",
-    example: "sandbox-cli goose run -t 'run the tests'",
+      "The sandbox sets GOOSE_DISABLE_KEYRING=1 for you — a sandbox has no OS keyring, so without it the login would not survive. Don't override it.",
+    example: "sandbox-cli agent goose run -t 'run the tests'",
   },
   {
     id: "cursor",
     name: "Cursor CLI",
-    vendor: "Anysphere",
     delivery: "first-run",
     size: "219 MB",
     login: "`cursor-agent login` prints a URL to open on your host; it polls for the result.",
     env: ["CURSOR_API_KEY", "CURSOR_API_ENDPOINT"],
     allow: ["cursor.com", "downloads.cursor.com"],
     gotcha:
-      "The sandbox sets NO_OPEN_BROWSER=1. If it complains about its own sandboxing, pass --sandbox disabled — this container already provides what that feature exists for.",
-    example: "sandbox-cli cursor -- --sandbox disabled",
+      "The sandbox sets NO_OPEN_BROWSER=1. If it complains about its own sandboxing, pass --sandbox disabled — this VM already provides what that feature exists for.",
+    example: "sandbox-cli agent cursor -- --sandbox disabled",
   },
   {
     id: "droid",
     name: "Droid",
-    vendor: "Factory",
     delivery: "first-run",
     size: "148 MB",
     login: "Device-code flow — code and URL printed, opened on your host.",
@@ -193,13 +184,12 @@ export const AGENTS: Agent[] = [
       "FACTORY_ENV",
     ],
     gotcha:
-      "The sandbox sets FACTORY_DISABLE_KEYRING=1 so credentials stay in a file in the persisted home even if the upstream default changes.",
-    example: "sandbox-cli droid exec 'run the tests'",
+      "The sandbox sets FACTORY_DISABLE_KEYRING=1 so credentials stay in a file the sandbox can copy back out, even if the upstream default changes.",
+    example: "sandbox-cli agent droid exec 'run the tests'",
   },
   {
     id: "cline",
     name: "Cline",
-    vendor: "Cline",
     delivery: "first-run",
     size: "130 MB",
     login: "`cline auth --provider anthropic --apikey sk-…`, or forward a key.",
@@ -213,24 +203,22 @@ export const AGENTS: Agent[] = [
     ],
     gotcha:
       "With an OAuth provider and no stored credentials it fails with an auth message rather than opening a browser. That's intended, not a crash.",
-    example: "sandbox-cli cline task 'run the tests'",
+    example: "sandbox-cli agent cline task 'run the tests'",
   },
   {
     id: "amp",
     name: "Amp",
-    vendor: "Sourcegraph",
     delivery: "first-run",
     size: "107 MB",
     login: "`amp login` prints a URL for your host and takes the code back in the terminal.",
     env: ["AMP_API_KEY", "AMP_URL", "AMP_LOG_LEVEL", "AMP_SKIP_UPDATE_CHECK"],
     gotcha:
-      "Leave the native-keyring setting off. Turning it on migrates the token into a keyring and deletes the file — in a container that trades a working login for none.",
-    example: "sandbox-cli amp -x 'run the tests'",
+      "Leave the native-keyring setting off. Turning it on migrates the token into a keyring and deletes the file — in a sandbox that trades a working login for none.",
+    example: "sandbox-cli agent amp -x 'run the tests'",
   },
   {
     id: "qwen",
     name: "Qwen Code",
-    vendor: "Alibaba",
     delivery: "first-run",
     size: "88 MB",
     login: "Forward a key, or enter one with /auth inside the agent. Plan on a key.",
@@ -248,13 +236,12 @@ export const AGENTS: Agent[] = [
     ],
     allow: ["dashscope-intl.aliyuncs.com"],
     gotcha:
-      "The sandbox sets SANDBOX=1 and NO_BROWSER=1. As a Gemini CLI fork it would otherwise try to re-run itself inside a container it starts via docker, and fail well after startup.",
-    example: "DASHSCOPE_API_KEY=… sandbox-cli qwen",
+      "The sandbox sets SANDBOX=1 and NO_BROWSER=1. As a Gemini CLI fork it would otherwise try to re-run itself inside a container it starts via docker, which a sandbox does not have, and fail well after startup.",
+    example: "DASHSCOPE_API_KEY=… sandbox-cli agent qwen",
   },
   {
     id: "openhands",
     name: "OpenHands CLI",
-    vendor: "All Hands AI",
     delivery: "first-run",
     size: "82 MB",
     login: "`openhands login` is a device-code flow — open the URL on your host.",
@@ -269,12 +256,11 @@ export const AGENTS: Agent[] = [
     allow: ["api.github.com"],
     gotcha:
       "LLM_* only take effect if you also pass --override-with-envs — that's OpenHands' rule, and it's why an exported key can look ignored.",
-    example: "sandbox-cli openhands -- --override-with-envs",
+    example: "sandbox-cli agent openhands -- --override-with-envs",
   },
   {
     id: "crush",
     name: "Crush",
-    vendor: "Charm",
     delivery: "first-run",
     size: "81 MB",
     login: "`crush login` shows a short code — open the page on your host and paste it.",
@@ -287,13 +273,12 @@ export const AGENTS: Agent[] = [
       "HYPER_API_KEY",
     ],
     gotcha:
-      "Crush speaks to roughly 25 providers; add any other key with --env-allow NAME rather than editing the wrapper.",
-    example: "sandbox-cli crush --env-allow CEREBRAS_API_KEY",
+      "Crush speaks to roughly 25 providers; forward any other key with -e NAME.",
+    example: "sandbox-cli agent crush -e CEREBRAS_API_KEY",
   },
   {
     id: "continue",
     name: "Continue CLI",
-    vendor: "Continue",
     delivery: "first-run",
     size: "65 MB",
     login: "None. Hub auth was removed upstream — the key is written into the agent home.",
@@ -301,12 +286,11 @@ export const AGENTS: Agent[] = [
     allow: ["api.continue.dev"],
     gotcha:
       "`cn login` and CONTINUE_API_KEY in the published docs are stale and do nothing. With --allow, permit api.continue.dev or it has no config to start from.",
-    example: "sandbox-cli continue --allow api.continue.dev",
+    example: "sandbox-cli agent continue --allow api.continue.dev",
   },
   {
     id: "aider",
     name: "Aider",
-    vendor: "Aider AI",
     delivery: "first-run",
     size: "~300 MB",
     login: "None at all — export a provider key on your host.",
@@ -322,7 +306,7 @@ export const AGENTS: Agent[] = [
     allow: ["astral.sh"],
     gotcha:
       "The workspace must be a git repo, and Aider writes into your project: a chat history file, a tags cache, and an appended `.aider*` line in .gitignore. Pass --no-gitignore to stop the last one.",
-    example: "OPENAI_API_KEY=… sandbox-cli aider",
+    example: "OPENAI_API_KEY=… sandbox-cli agent aider",
   },
 ];
 
@@ -333,14 +317,14 @@ export const BAKED_COUNT = AGENTS.filter((a) => a.delivery === "baked").length;
  * See the note on AGENTS above for why no version numbers appear here.
  */
 export const FIRST_RUN_NOTE = {
-  line: "sandbox-cli: installing qwen 0.21.3 into the sandbox agent home (first run only)...",
-  body: "An agent the base image does not carry is downloaded the first time you run it, into the sandbox-owned home that persists between runs — so it happens once, and it needs network at that moment. The version is pinned rather than resolved to whatever the vendor published that morning, and it is printed as it installs: a pin's cost is going stale, and staleness nobody can see is the kind that lasts. Two agents are deliberately unpinned, because one offers no version to ask for and the other replaces the first install itself.",
+  line: "sandbox-cli: installing qwen 0.21.3 into this sandbox (it is not in the image, so every run installs it)...",
+  body: "An agent the base image does not carry is installed at the start of every run: a sandbox's home is discarded with it, and only the agent's login files are carried between runs. So it costs the download each time, and it needs network to the package registry, which the default allowlist includes. The version is pinned rather than resolved to whatever was published that morning, and it is printed as it installs: a pin's cost is going stale, and staleness nobody can see is the kind that lasts.",
   buys: "A hijacked or typosquatted release does not reach a sandbox until the pin is bumped.",
   doesNotBuy:
     "A compromised registry can still serve different bytes for a version it already published — that needs integrity hashes a global install has no lockfile for.",
 };
 
-/** Always permitted when the egress allowlist is on (docs/AGENTS.md). */
+/** The default policy's baseline: permitted with no --allow (internal/policy). */
 export const BASELINE_DOMAINS = [
   "api.anthropic.com",
   "api.openai.com",

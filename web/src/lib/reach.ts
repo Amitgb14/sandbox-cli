@@ -1,7 +1,8 @@
 /**
  * What an agent can touch, with and without the sandbox. The point of the
  * blast-radius map: on a bare host every one of these is reachable, and inside
- * the sandbox all but one of them simply does not exist as a path.
+ * the sandbox — a VM with its own kernel and its own disk — all but one of them
+ * simply does not exist, and that one is a clone rather than your checkout.
  */
 
 export type HostPath = {
@@ -19,7 +20,7 @@ export const HOST_PATHS: HostPath[] = [
   {
     path: "~/projects/app",
     what: "the repo you asked it to work on",
-    stake: "The work itself. This is the blast radius you accepted when you started the agent.",
+    stake: "The work itself. Inside, it is a clone sent in as a git bundle; what comes back is commits you choose to merge, and your checkout is never written.",
     inside: "workspace",
     weight: 0,
   },
@@ -82,29 +83,29 @@ export const HOST_PATHS: HostPath[] = [
   {
     path: "$HOME",
     what: "the home directory itself",
-    stake: "rm -rf ~ is one hallucinated path away. Inside, HOME is a fake ephemeral directory.",
+    stake: "rm -rf ~ is one hallucinated path away. Inside, HOME is the guest's own, on a disk discarded with the VM.",
     inside: "ephemeral",
     weight: 10,
   },
   {
     path: "/etc, /usr, /",
     what: "the system",
-    stake: "Everything the user can write. Inside, these are the container's own, thrown away on exit.",
+    stake: "Everything the user can write. Inside, these are the guest's own, under a kernel that is not yours.",
     inside: "ephemeral",
     weight: 7,
   },
   {
-    path: "~/Desktop, ~/Downloads",
-    what: "pasted screenshots",
-    stake: "Reachable only if you pass --paste, and then read-only. Opt-in, because it widens what the agent sees.",
+    path: "~/data",
+    what: "a directory you choose to share",
+    stake: "Reachable only if you pass --bind on a local Mac, which can be read-only. Never your home or an ancestor of it, whatever you ask.",
     inside: "opt-in",
     weight: 3,
   },
 ];
 
 export const INSIDE_LABEL: Record<HostPath["inside"], string> = {
-  workspace: "mounted at /workspace",
-  absent: "not mounted — nothing to read",
-  ephemeral: "ephemeral, destroyed on exit",
-  "opt-in": "only with --paste, read-only",
+  workspace: "cloned into /workspace",
+  absent: "not there — nothing to read",
+  ephemeral: "the guest's own, discarded",
+  "opt-in": "only with --bind, on a local Mac",
 };

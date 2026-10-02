@@ -61,7 +61,7 @@ export function EgressVisualizer({ className }: { className?: string }) {
           ) : (
             <>
               <Globe className="size-3.5 text-exposed" />
-              <span>everything the container asks for, it gets</span>
+              <span>everything the guest asks for, it gets</span>
             </>
           )}
         </div>
@@ -137,17 +137,18 @@ export function EgressVisualizer({ className }: { className?: string }) {
       <div className="border-t bg-surface px-4 py-3.5 text-xs leading-relaxed text-muted-foreground sm:px-5">
         {enforcing ? (
           <>
-            Default-deny, programmed with <code className="font-mono">iptables</code> inside the
-            container at startup and then dropped back to the non-root user. It fails closed. Domains
-            resolve to IPs once at startup, so hosts behind rotating CDN addresses can still be
-            refused — add them explicitly.
+            Default-deny, enforced on the host, outside the guest: a firewall table per sandbox
+            sends web traffic through a proxy that decides on the <em>name</em> — TLS SNI or HTTP
+            Host — and resolves it fresh per connection, so a host sharing an allowed address does
+            not ride in on it. The guest&apos;s DNS answers only allowlisted names. It fails closed:
+            a server that cannot enforce it refuses the request.
           </>
         ) : (
           <>
-            Without <code className="font-mono">--allow</code> the container has ordinary outbound
-            networking, exactly like any other Docker container. That is the default because most
-            people want the agent to install things — the allowlist is there for when you do not
-            trust what it might read on the way.
+            Open egress is a mode the server&apos;s operator has to permit (its policy&apos;s
+            ceiling), and a request cannot raise it. A default sandboxd offers the allowlist and no
+            network at all, never open — the guest can still read your repository, and a
+            prompt-injected agent should not be able to post it anywhere it likes.
           </>
         )}
       </div>

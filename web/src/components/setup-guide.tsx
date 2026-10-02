@@ -10,11 +10,10 @@ import { cn } from "@/lib/utils";
 /**
  * Setup, per platform, ending in `sandbox-cli doctor` every time.
  *
- * The Podman path deliberately says it does not work rather than being left off
- * the page. People will reach for it — rootless Podman is a stronger default
- * than rootful Docker — and an absence reads as an oversight, while
- * instructions that fail read as a lie. Naming the three concrete blockers is
- * more useful than either.
+ * A path's caveat is shown before its steps: the macOS backend has not yet run
+ * on a real Mac, and an unprivileged Linux sandboxd has no network. Instructions
+ * that fail read as a lie; saying so first is more useful than either leaving
+ * the path off or hoping nobody notices.
  */
 export function SetupGuide() {
   const [active, setActive] = useState(SETUP_PATHS[0].id);
@@ -53,14 +52,11 @@ export function SetupGuide() {
         ))}
       </div>
 
-      {path.unsupported ? (
+      {path.caveat ? (
         <div className="flex items-start gap-3 rounded-xl border border-caution/40 bg-caution/5 px-4 py-3.5">
           <AlertTriangle className="mt-0.5 size-4 shrink-0 text-caution" />
           <p className="text-[0.82rem] leading-relaxed text-muted-foreground">
-            <span className="font-medium text-foreground">
-              Podman is not supported yet.
-            </span>{" "}
-            {path.unsupported}
+            <span className="font-medium text-foreground">Before you start:</span> {path.caveat}
           </p>
         </div>
       ) : null}

@@ -39,73 +39,61 @@ export type NavEntry =
   | { kind: "group"; label: string; items: NavLink[] };
 
 export const NAV: NavEntry[] = [
-  { kind: "link", href: "#threat", label: "Why" },
-  { kind: "link", href: STUDIO_PATH, label: "Studio" },
+  { kind: "link", href: "#why", label: "Why" },
   {
     kind: "group",
     label: "How it works",
     items: [
       {
+        href: "#modes",
+        label: "Three ways to run it",
+        hint: "your Mac, a Linux machine you control, or the cloud — one API",
+      },
+      {
+        href: "#api",
+        label: "The API",
+        hint: "the CLI, curl, Python and TypeScript, doing the same thing",
+      },
+      {
         href: "#features",
         label: "Features",
-        hint: "thirty-two capabilities, filtered by the question you came with",
-      },
-      {
-        href: "#command",
-        label: "The command",
-        hint: "build the flags, read the docker argv they produce",
-      },
-      {
-        href: "#config",
-        label: "Config file",
-        hint: "every flag as a .sandbox.yaml key, and which ones a project may not set",
+        hint: "every capability, filtered by the question you came with",
       },
       {
         href: "#network",
-        label: "Egress allowlist",
-        hint: "flip default-deny and watch which requests still leave",
+        label: "Egress by name",
+        hint: "an allowlist enforced outside the guest, where the agent cannot reach",
       },
       {
-        href: "#parallel",
-        label: "Parallel agents",
-        hint: "three branches, three containers, no collisions",
-      },
-      {
-        href: MULTI_AGENT_PATH,
-        label: "Running a fleet",
-        hint: "several agents from one file, mixed across tasks, with the work checked before it lands",
+        href: "#workspace",
+        label: "Your repository",
+        hint: "a git bundle in, verified commits out, checkpoints in between",
       },
       {
         href: "#sessions",
         label: "Sessions",
-        hint: "list, attach, follow and stop a run the terminal no longer holds",
+        hint: "list, follow, attach, stop — and what each one did",
       },
-      {
-        href: "#agents",
-        label: "Agents",
-        hint: "fifteen adapters, one prefix, your flags forwarded verbatim",
-      },
-
     ],
   },
   {
     kind: "group",
-    label: "Deploy",
+    label: "Agents",
     items: [
       {
-        href: "#deploy",
-        label: "Dev & prod",
-        hint: "both deployments, walked through step by step",
+        href: "#agents",
+        label: "Coding agents",
+        hint: "fifteen of them, under one prefix, logins kept between runs",
       },
       {
-        href: "#profiles",
-        label: "What actually differs",
-        hint: "the two profiles side by side, in one table",
+        href: MULTI_AGENT_PATH,
+        label: "Running a fleet",
+        hint: "one agent per branch, checked before it lands, with fallbacks",
       },
       {
-        href: "#compare",
-        label: "Compare",
-        hint: "prior art, including where this one loses",
+        href: STUDIO_PATH,
+        label: "Studio",
+        hint: "the browser view of the same sandboxes",
       },
     ],
   },
@@ -116,27 +104,17 @@ export const NAV: NavEntry[] = [
       {
         href: "#setup",
         label: "Setup",
-        hint: "from a cold machine to a verified sandbox, per platform",
+        hint: "a Mac, a Linux server, or a client pointed at either",
       },
       {
-        href: "#tutorial",
-        label: "Tutorial",
-        hint: "your first ten minutes, with what you should see at each step",
-      },
-      {
-        href: "#options",
-        label: "All options",
-        hint: "the whole flag surface, and what happens without each one",
-      },
-      {
-        href: "#troubleshooting",
-        label: "Troubleshooting",
-        hint: "what goes wrong, and why it is usually working",
+        href: "#compare",
+        label: "Compare",
+        hint: "where this sits among the alternatives, including where it loses",
       },
       {
         href: "#install",
         label: "Install",
-        hint: "one binary, five routes, no package manager",
+        hint: "one script; client, server and guest agent",
       },
     ],
   },

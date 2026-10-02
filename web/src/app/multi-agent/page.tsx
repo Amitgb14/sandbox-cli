@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowLeft, ArrowUpRight, Check, GitMerge, ShieldCheck, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, GitMerge, ShieldCheck, X } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
 import { type NavEntry } from "@/lib/nav";
 import { CodeBlock } from "@/components/code-block";
-import { ParallelAgents } from "@/components/parallel-agents";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -21,21 +20,20 @@ import {
   FLEET_AGENTS,
   FLEET_YAML,
   GUARDRAILS,
+  LAND_OUTPUT,
   LAND_REFUSALS,
   LOOP,
   MIXED_YAML,
-  RECOVERY,
+  RUN_OUTPUT,
   RUNGS,
-  SHARE_RULES,
-  SHARE_YAML,
   UNSUPPORTED_AGENT_COUNT,
 } from "@/lib/fleet";
-import { DOC_URL, REPO_URL } from "@/lib/site";
+import { DOC_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const TITLE = "Running agents in parallel — sandbox-cli";
 const DESCRIPTION =
-  "One agent per branch, each in its own git worktree and its own container. Mix Claude, Codex, Gemini, OpenCode and Droid across tasks in one fleet file, check the work with verify, and land what passed.";
+  "One agent per branch, each in a sandbox of its own on a clone of your repository. Mix agents across tasks in one fleet file, check the work with verify, land what passed — and fall through to another agent when a provider is down.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -67,6 +65,11 @@ const NAV: NavEntry[] = [
         hint: "claude on one branch, codex on another, and which five are eligible",
       },
       {
+        href: "#fallback",
+        label: "Fallbacks",
+        hint: "another agent when a provider is down, with a briefing rather than a resume",
+      },
+      {
         href: "#verify",
         label: "verify",
         hint: "the difference between an agent that stopped and work that is right",
@@ -81,11 +84,6 @@ const NAV: NavEntry[] = [
         href: "#land",
         label: "Landing",
         hint: "the only command that writes to your branch, and every refusal it makes",
-      },
-      {
-        href: "#share",
-        label: "Handing files over",
-        hint: "one directory two agents share — a convention, not a protocol",
       },
       {
         href: "#guardrails",
@@ -122,23 +120,25 @@ export default function MultiAgentPage() {
             </h1>
             <p className="text-[1.05rem] leading-relaxed text-pretty text-muted-foreground">
               The unit never changes: <strong className="font-medium text-foreground">one agent,
-              one branch, one worktree, one container</strong>. Everything on this page adds
-              something to that unit — a background container, a file describing several of them, a
-              check that decides whether the work is done. None of it changes the boundary, because
-              a fleet task becomes exactly the options a single <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">--worktree</code> run
-              produces.
+              one task, one sandbox</strong> — a VM of its own on a clone of your repository, whose
+              work comes back as commits to a ref. Everything on this page adds something to that
+              unit: a fallback when a provider is down, a file describing several of them, a check
+              that decides whether the work is done. None of it changes the boundary, because a
+              fleet task is exactly the request a single{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">sandbox-cli agent</code>{" "}
+              run makes.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2.5">
               <a href="#quickstart" className={cn(buttonVariants({ size: "sm" }))}>
                 Start here
               </a>
               <a
-                href={DOC_URL.guide}
+                href={DOC_URL.agents}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}
               >
-                Full guide
+                In the README
                 <ArrowUpRight className="size-3.5" />
               </a>
             </div>
@@ -174,10 +174,6 @@ export default function MultiAgentPage() {
               </li>
             ))}
           </ol>
-
-          <div className="mt-10">
-            <ParallelAgents />
-          </div>
         </Section>
 
         {/* ---------------------------------------------------------------- */}
@@ -188,8 +184,10 @@ export default function MultiAgentPage() {
             lead={
               <>
                 Write a <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">fleet.yaml</code>{" "}
-                next to your project. Every task gets its own branch, its own worktree and its own
-                detached container; your checkout is never touched and never changes branch.
+                next to your project. Every task gets a sandbox of its own on a clone of HEAD, and
+                its work comes back to{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">refs/sandbox/fleet/&lt;branch&gt;</code>;
+                your checkout is never touched and never changes branch.
               </>
             }
           />
@@ -198,7 +196,7 @@ export default function MultiAgentPage() {
 
           <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
             Then the whole cycle, all of it from your normal checkout.{" "}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">fleet run</code>{" "}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">agent fleet run</code>{" "}
             looks for <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">fleet.yaml</code>{" "}
             in the current directory; <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">-f path</code>{" "}
             names another.
@@ -221,21 +219,14 @@ export default function MultiAgentPage() {
             ))}
           </ol>
 
-          <div className="mt-10">
-            <h3 className="mb-3 text-[1.05rem] font-medium">When part of it goes wrong</h3>
-            <p className="mb-5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-              You do not re-run the file. Commenting the other tasks out is the thing people reach
-              for, and a fleet file with half its tasks commented out is one that will be run that
-              way again by mistake.
+          <div className="mt-10 flex flex-col gap-2">
+            <h3 className="text-[1.05rem] font-medium">What a run prints</h3>
+            <p className="mb-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              A line per task as it finishes, and a non-zero exit when any task did not verify — so a
+              script or a scheduler can tell. To retry one task, run a file with just that task: the
+              others&apos; work is already in their refs.
             </p>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              {RECOVERY.map((r) => (
-                <div key={r.cmd} className="flex flex-col gap-2.5 rounded-xl border bg-card p-5">
-                  <CodeBlock code={r.cmd} />
-                  <p className="text-sm leading-relaxed text-muted-foreground">{r.what}</p>
-                </div>
-              ))}
-            </div>
+            <CodeBlock code={RUN_OUTPUT} />
           </div>
         </Section>
 
@@ -260,15 +251,11 @@ export default function MultiAgentPage() {
             The fleet-wide{" "}
             <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">agent:</code>{" "}
             becomes optional once every task names one. Mixing costs nothing at the boundary — each
-            agent gets exactly the container it would get on its own. What it does cost is setup:{" "}
+            agent gets exactly the sandbox it would get on its own. What it does cost is setup:{" "}
             <strong className="font-medium text-foreground">
               every agent you name needs its own login before the run
             </strong>
-            , because none of them can answer a login prompt from a detached container.{" "}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-              sandbox-cli fleet run --dry-run
-            </code>{" "}
-            prints a reminder when it sees a mixed file.
+            , because none of them can answer a login prompt with nobody attached.
           </p>
 
           <h3 className="mt-10 mb-2 text-[1.05rem] font-medium">Which agents are eligible</h3>
@@ -304,7 +291,7 @@ export default function MultiAgentPage() {
                     </TableCell>
                     <TableCell className="align-top">
                       <Badge variant="outline" className="font-mono text-[0.65rem] whitespace-nowrap">
-                        {a.delivery === "baked" ? "in the image" : "on first use"}
+                        {a.delivery === "baked" ? "in the image" : "installed each run"}
                       </Badge>
                     </TableCell>
                   </TableRow>
@@ -314,7 +301,7 @@ export default function MultiAgentPage() {
           </div>
 
           <p className="mt-4 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            Anything else is rejected when the file is parsed, before a single container starts. The
+            Anything else is rejected when the file is parsed, before a single sandbox starts. The
             other {UNSUPPORTED_AGENT_COUNT} adapters are perfectly usable interactively — they are
             simply not ones we have confirmed will never stop and wait. Adding one to this list
             means running it and recording the argv, which a test pins, so it cannot grow by
@@ -353,8 +340,8 @@ export default function MultiAgentPage() {
             <div className="flex flex-col gap-3 rounded-xl border bg-card p-5">
               <h3 className="text-[0.98rem] font-medium">How it runs</h3>
               <p className="text-sm leading-relaxed text-muted-foreground">
-                The command runs <em>inside the container, after the agent</em>, and its exit code
-                becomes the container&apos;s. Inside because a check running on your host would be
+                The command runs <em>inside the sandbox, after the agent</em>, and its exit code
+                becomes the task&apos;s. Inside because a check running on your host would be
                 host code selected by a file the agent can write. After the agent, whatever the
                 agent&apos;s own exit code was — an agent that exits non-zero having left a tree
                 that builds and tests clean has done the job, and one that exits 0 having deleted
@@ -379,9 +366,9 @@ export default function MultiAgentPage() {
           <p className="mt-6 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             Exit <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">90</code>{" "}
             means the agent finished and its verify said no. A task with{" "}
-            <em>no</em> verify still runs — this is a fleet of agents, not a CI system — but it
-            lands reported as <strong className="font-medium text-foreground">unverified</strong>{" "}
-            rather than passed, because nothing checked it.
+            <em>no</em> verify still runs — this is a fleet of agents, not a CI system — and its
+            agent&apos;s own exit code decides: an agent that stopped is not the same as work that
+            is right, which is why the file should have one.
           </p>
         </Section>
 
@@ -389,15 +376,16 @@ export default function MultiAgentPage() {
         <Section id="land" tinted>
           <SectionHead
             eyebrow="landing the work"
-            title="The only command that writes to your base branch"
+            title="The only command that writes to one of your branches"
             lead={
               <>
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                  fleet land
+                  agent fleet land
                 </code>{" "}
-                commits whatever the agent left in its worktree, then merges the branch (
+                merges the ref a task&apos;s work came back to (
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">--no-ff</code>
-                ) into the one you have checked out. It refuses rather than guessing, and{" "}
+                , so each is one revertible unit) into the branch you have checked out — never a
+                sandbox an agent could still be writing. It refuses rather than guessing, and{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">--all</code>{" "}
                 sorts those refusals into two kinds.
               </>
@@ -446,6 +434,8 @@ export default function MultiAgentPage() {
             </Table>
           </div>
 
+          <CodeBlock code={LAND_OUTPUT} className="mt-6" />
+
           <div className="mt-6 flex max-w-3xl items-start gap-3 rounded-xl border bg-card p-5">
             <GitMerge className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <p className="text-sm leading-relaxed text-muted-foreground">
@@ -462,29 +452,52 @@ export default function MultiAgentPage() {
         </Section>
 
         {/* ---------------------------------------------------------------- */}
-        <Section id="share">
+        <Section id="fallback">
           <SectionHead
-            eyebrow="handing files between agents"
-            title="A convention, deliberately not a protocol"
-            lead="Two sandboxes are blind to each other by design. When one agent produces something another needs — an API contract, a schema, a generated client — --share gives them one directory in common. Files in a shared directory, or nothing: there is no messaging protocol here and none is planned."
+            eyebrow="when a provider is down"
+            title="Fall through to another agent, carrying a briefing"
+            lead={
+              <>
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  --fallback codex
+                </code>{" "}
+                on one agent run, or{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
+                  routing: [claude, codex]
+                </code>{" "}
+                in your own config, gives a run somewhere to go when the first choice cannot do it.
+                Two rules decide when, and they are deliberately cautious.
+              </>
+            }
           />
-
-          <CodeBlock code={SHARE_YAML} lang="yaml" />
-
-          <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
-            {SHARE_RULES.map((r) => (
-              <div key={r.title} className="flex flex-col gap-2 rounded-xl border bg-card p-5">
-                <div className="flex items-start gap-2">
-                  <Check className="mt-0.5 size-4 shrink-0 text-contained" />
-                  <h3 className="text-[0.95rem] font-medium">{r.title}</h3>
-                </div>
-                <p className="text-sm leading-relaxed text-muted-foreground">{r.body}</p>
-              </div>
-            ))}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            <div className="flex flex-col gap-3 rounded-xl border bg-card p-5">
+              <h3 className="text-[0.98rem] font-medium">Probe before starting</h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Each agent&apos;s provider is asked whether it is answering before a sandbox is made
+                for it. Down means skip it, before anything starts. Rate-limited is not down: a 429
+                means healthy and over-asked, and failing over would only route around your own
+                quota.
+              </p>
+            </div>
+            <div className="flex flex-col gap-3 rounded-xl border bg-card p-5">
+              <h3 className="text-[0.98rem] font-medium">Retry only what changed nothing</h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                A run that fails <em>having changed nothing</em> is retried with the next agent, in a
+                fresh sandbox. One that changed files is a failed attempt, not an outage, and is
+                never retried — and neither is one whose outcome cannot be told. A wrong retry puts a
+                second agent on top of the first one&apos;s edits; a missed one costs a re-run.
+              </p>
+            </div>
           </div>
-
           <p className="mt-6 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            Two agents that need to coordinate step by step are one task, not two.
+            The next agent gets a <strong className="font-medium text-foreground">briefing, not a
+            resume</strong>: the prompts and conclusions of the first conversation, written into its
+            sandbox at <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">/sandbox/context</code>.
+            A session id means nothing to another vendor&apos;s agent, and a translated transcript
+            would have it believe a history it never had. Both attempts carry one{" "}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">route.id</code>{" "}
+            label, so in the listing and the audit log they read as one episode.
           </p>
         </Section>
 
@@ -509,30 +522,21 @@ export default function MultiAgentPage() {
 
           <div className="mt-10 flex flex-wrap items-center gap-3">
             <a
-              href={DOC_URL.guide}
+              href={DOC_URL.agents}
               target="_blank"
               rel="noopener noreferrer"
               className={cn(buttonVariants({ size: "sm" }), "gap-1.5")}
             >
-              Read the full guide
+              Coding agents, in the README
               <ArrowUpRight className="size-3.5" />
             </a>
             <a
-              href={`${REPO_URL}/blob/main/docs/examples/fleet.yaml`}
+              href={DOC_URL.api}
               target="_blank"
               rel="noopener noreferrer"
               className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}
             >
-              Commented fleet.yaml
-              <ArrowUpRight className="size-3.5" />
-            </a>
-            <a
-              href={DOC_URL.agents}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}
-            >
-              Agent reference
+              The API underneath
               <ArrowUpRight className="size-3.5" />
             </a>
           </div>

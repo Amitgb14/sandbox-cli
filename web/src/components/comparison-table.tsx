@@ -100,22 +100,19 @@ export function ComparisonTable({ className }: { className?: string }) {
       </div>
 
       <p className="border-t bg-surface px-4 py-3 text-xs leading-relaxed text-muted-foreground sm:px-5">
-        This is the project&rsquo;s own read of the landscape, and the ratings for other tools are a
-        snapshot that will age — check their docs before choosing. sandbox-cli&rsquo;s edge is code
-        quality and a focused feature set, not a hard security boundary; for that, reach for microVM
-        tooling (or run sandbox-cli on top of one with{" "}
-        <code className="font-mono">--runtime</code>).
+        This is the project&rsquo;s own read of the landscape, by kind of tool rather than by
+        product, and a kind varies more than a table can show — check the tool you are weighing
+        before choosing. What sandbox-cli adds is a VM boundary that runs where your code already
+        is, with the same API on your laptop, your server and a cloud.
       </p>
 
       <p className="border-t bg-surface px-4 py-3 text-xs leading-relaxed text-muted-foreground sm:px-5">
-        <span className="font-medium text-foreground/80">Two rows here used to be kinder.</span>{" "}
-        <em>Credential broker</em> said &ldquo;Excellent&rdquo; while the value still reaches the
-        container&rsquo;s environment, where the agent can read it with{" "}
+        <span className="font-medium text-foreground/80">What this table does not claim.</span>{" "}
+        A secret handed to a sandbox reaches its environment, where the agent can read it with{" "}
         <code className="font-mono">printenv</code> — a broker that injects the credential so the
-        agent never holds it is not built. <em>Observability</em> said &ldquo;Excellent&rdquo; with
-        no per-command trace and no replay. Both were corrected against the code rather than left
-        standing, which is the rule this table is held to: a row that cannot be defended gets
-        changed here.
+        agent never holds it is not built, and the posture is to make a leaked one cheap instead:
+        short-lived values, an allowlist, prod&rsquo;s refusal to copy logins in. A row that cannot
+        be defended against the code gets changed here.
       </p>
     </div>
   );

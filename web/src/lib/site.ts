@@ -1,10 +1,17 @@
 /**
  * Facts about the project that appear in more than one place. Everything here
- * mirrors the repository — README.md, docs/AGENTS.md, docs/GUIDE.md — so the
- * page has exactly one place to update when the CLI changes.
+ * mirrors the repository — README.md, docs/api/v1.md, docs/local-macos.md,
+ * docs/self-hosting.md — so the page has exactly one place to update when the
+ * product changes.
+ *
+ * No version is pinned on the page. The microVM rewrite ships as a new release
+ * line, and a number written here before it is tagged would be a claim about a
+ * release that does not exist; the install routes take the latest instead, and
+ * the releases page is one link away.
  */
 
-export const VERSION = "0.0.1beta.15";
+/** What the header badge says: which product this page describes. */
+export const CHANNEL = "microVM";
 
 export const REPO_URL = "https://github.com/Amitgb14/sandbox-cli";
 export const RELEASES_URL = `${REPO_URL}/releases`;
@@ -20,20 +27,21 @@ export const RAW_INSTALL_URL =
 export const MULTI_AGENT_PATH = "/multi-agent/";
 export const STUDIO_PATH = "/studio/";
 
-export const DOC_URL = {
-  docs: `${REPO_URL}/blob/main/docs/README.md`,
-  guide: `${REPO_URL}/blob/main/docs/GUIDE.md`,
-  agents: `${REPO_URL}/blob/main/docs/AGENTS.md`,
-  development: `${REPO_URL}/blob/main/docs/DEVELOPMENT.md`,
-  changelog: `${REPO_URL}/blob/main/CHANGELOG.md`,
-  readme: `${REPO_URL}#readme`,
-  // A page of its own since the README was slimmed; it used to be a README anchor.
-  security: `${REPO_URL}/blob/main/docs/security/README.md`,
-  license: `${REPO_URL}/blob/main/LICENSE`,
-} as const;
+const BLOB = `${REPO_URL}/blob/main`;
 
-/** The one-liner the hero leads with — pinned to the current release. */
-export const INSTALL_ONELINER = `curl -fsSL ${RAW_INSTALL_URL} | sh -s -- --version ${VERSION}`;
+export const DOC_URL = {
+  readme: `${REPO_URL}#readme`,
+  api: `${BLOB}/docs/api/v1.md`,
+  localMac: `${BLOB}/docs/local-macos.md`,
+  selfHosting: `${BLOB}/docs/self-hosting.md`,
+  agents: `${REPO_URL}#coding-agents`,
+  security: `${BLOB}/docs/security/README.md`,
+  changelog: `${BLOB}/CHANGELOG.md`,
+  plan: `${BLOB}/docs/rewrite/PLAN.md`,
+  pythonSdk: `${REPO_URL}/tree/main/sdk/python`,
+  typescriptSdk: `${REPO_URL}/tree/main/sdk/typescript`,
+  license: `${BLOB}/LICENSE`,
+} as const;
 
 export type InstallRoute = {
   id: string;
@@ -49,64 +57,49 @@ export const INSTALL_ROUTES: InstallRoute[] = [
     id: "script",
     label: "Install script",
     hint: "macOS · Linux",
-    lines: [
-      `curl -fsSL ${RAW_INSTALL_URL} \\`,
-      `  | sh -s -- --version ${VERSION}`,
-    ],
-    note: "Detects your OS and CPU, verifies the archive against the release checksums.txt, and installs to ~/.local/bin/sandbox-cli. No root, no package manager.",
-  },
-  {
-    id: "latest",
-    label: "Latest release",
-    hint: "always current",
     lines: [`curl -fsSL ${RAW_INSTALL_URL} | sh`],
-    note: "Same installer with no --version pin: takes whatever the newest published release is.",
+    note: "On Linux and Apple-silicon Macs: sandbox-cli, sandboxd and the guest agent, each verified against the release checksums.txt, into ~/.local/bin. Elsewhere: the client only. No root, no package manager. It installs sandboxd; starting it is one step in the setup guide below.",
   },
   {
-    id: "go",
-    label: "Go",
-    hint: "Go 1.25+",
-    lines: ["go install github.com/Amitgb14/sandbox-cli/cmd/sandbox-cli@latest"],
-    // Deliberately @latest rather than @v<VERSION>: the release tags are not
-    // semver (0.0.1beta.8, no `v`, no `-` before the pre-release), so the module
-    // proxy cannot resolve one — `@v0.0.1beta.8` fails with "invalid version"
-    // and @latest lands on a pseudo-version of the default branch. Pinning a
-    // release is what the install script is for.
-    note: `Builds from source into $GOBIN, at whatever the default branch is. The release tags are not valid semver, so go install cannot pin one — use the install script with --version ${VERSION} when you need this exact release.`,
+    id: "client",
+    label: "Client only",
+    hint: "any machine",
+    lines: [`curl -fsSL ${RAW_INSTALL_URL} | sh -s -- --client-only`],
+    note: "Just sandbox-cli, for a machine that talks to a sandboxd somewhere else: sandbox-cli context add box https://box:7443 --token-file box.token --ca box-ca.pem",
   },
   {
     id: "source",
     label: "From source",
-    hint: "make",
+    hint: "Go 1.25+",
     lines: [
       "git clone https://github.com/Amitgb14/sandbox-cli",
-      "cd sandbox-cli && make install",
+      "cd sandbox-cli && make build",
     ],
-    note: "make build writes bin/sandbox-cli instead; make test runs the unit tests with no Docker required.",
+    note: "Writes bin/sandbox-cli, bin/sandboxd and bin/sandbox-guestd. make test runs the unit tests and the conformance suite against the in-memory backend; no VM required.",
   },
   {
     id: "windows",
     label: "Windows",
-    hint: "Docker Desktop / WSL2",
+    hint: "client only",
     lines: [
-      `# download sandbox-cli_${VERSION}_windows_amd64.zip`,
+      "# download sandbox-cli_<version>_windows_amd64.zip",
       `# from ${RELEASES_URL}`,
-      "# then put sandbox-cli.exe somewhere on your PATH",
+      "# then point it at a sandboxd: sandbox-cli context add …",
     ],
-    note: "The shell installer covers Linux and macOS only; Windows binaries ship as .zip on the releases page.",
+    note: "Windows does not run sandboxes. The client talks to a sandboxd on a Mac, a Linux machine or the cloud.",
   },
 ];
 
 /** First commands after install — the “now what” block in the hero. */
 export const FIRST_RUN = [
-  { cmd: "sandbox-cli claude", note: "Claude Code, contained" },
-  { cmd: "sandbox-cli run -- bash", note: "a shell in the sandbox" },
-  { cmd: "sandbox-cli run --dry-run -- npm test", note: "print the docker argv, run nothing" },
+  { cmd: "sandbox-cli run -- npm test", note: "a fresh VM on a clone of this repo" },
+  { cmd: "sandbox-cli agent claude", note: "a coding agent, its login kept" },
+  { cmd: "sandbox-cli list", note: "what is running, wherever it runs" },
 ];
 
 export const HERO_STATS = [
-  { value: "1", label: "host path mounted", sub: "your project, at /workspace" },
-  { value: "15", label: "agents wrapped", sub: "one prefix, flags forwarded verbatim" },
-  { value: "0", label: "host creds forwarded", sub: "default-deny env allowlist" },
-  { value: "--rm", label: "every container", sub: "nothing survives the run", mono: true },
+  { value: "~80 ms", label: "to a running VM", sub: "Firecracker, image cached", mono: true },
+  { value: "<1 ms", label: "from a pool", sub: "sandboxes booted ahead", mono: true },
+  { value: "0", label: "host paths mounted", sub: "your repo goes in as a git bundle" },
+  { value: "1", label: "API, three places", sub: "your Mac, your Linux box, the cloud" },
 ];

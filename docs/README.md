@@ -10,5 +10,7 @@
 | [Roadmap](roadmap/README.md) | Where earlier tasks went, and which earlier decisions were reversed |
 | [Security](security/) | The audit ledger and the open items |
 
-The beta.15 user documentation (docker-based) is in `_old/docs/` until the
-features it describes — fleets, worktrees, recovery, Studio — are rebuilt.
+The beta.15 user documentation (docker-based) is in `_old/docs/`. Fleets,
+fallbacks, recovery, the audit log, volumes and pools are rebuilt and described in
+the [README](../README.md) and the API doc; worktrees are replaced by sandboxes
+on clones of the repository; Studio is being rebuilt on the API.

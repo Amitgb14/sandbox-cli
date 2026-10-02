@@ -1,13 +1,11 @@
 /**
- * The four session commands, as the terminal actually prints them.
+ * The session commands, as the terminal actually prints them.
  *
- * A container outlives the process that started it — the daemon owns it, not the
- * `docker run` client — so this is the part of the CLI that answers "what is
- * running right now, and how do I get at it". The strings below are copied from
- * `internal/cli/session.go` rather than paraphrased: the empty-state line, the
- * two notes `attach` prints before handing over the terminal, and the refusal
- * `kill` gives for a container sandbox-cli did not start are each the point of
- * their own tab, and a plausible-looking rewrite would lose it.
+ * A sandbox outlives the process that started it — sandboxd owns it, not the
+ * client — so this is the part of the CLI that answers "what is running right
+ * now, and how do I get at it". The strings below were captured from the CLI
+ * against a sandboxd rather than paraphrased; the refusal `kill` gives for a
+ * name the server does not know is the point of its own tab.
  */
 
 export type SessionFrame = {
@@ -35,80 +33,63 @@ export const SESSION_COMMANDS: SessionCommand[] = [
   {
     id: "list",
     label: "list",
-    blurb: "What is running right now — and, with --all, what has finished.",
+    blurb: "What exists right now, on the sandboxd this context points at.",
     frames: [
       {
-        prompt: "sandbox-cli list --all",
+        prompt: "sandbox-cli list",
         header:
-          "ID            NAME                     KIND         AGENT   BRANCH     STATUS      ELAPSED",
+          "ID                    NAME   STATE    IMAGE         NETWORK    CREATED              LABELS",
         rows: [
-          "a1b2c3d4e5f6  sandbox-app-feature-a    fleet        claude  feature-a  running     12m04s",
-          "9f2la8hq4vzn  sandbox-app-feature-b    fleet        codex   feature-b  running     11m38s",
-          "m4x1pq7bd0cs  sandbox-app-docs         interactive  claude  docs       exited (0)  4m11s",
+          "sbx_6b6b467a88ae4dae  tests  running  sandbox-base  allowlist  2026-10-02 03:38:32  -",
+          "sbx_31c4aa440aa0b3ae  build  running  sandbox-base  allowlist  2026-10-02 03:38:32  team=infra",
         ],
-        trailing: [
-          "watch one with `sandbox-cli logs <id> --follow`, or `sandbox-cli attach <id>`",
-        ],
+        trailing: ["--label team=infra keeps only the sandboxes carrying that label"],
       },
     ],
-    note: "KIND is doing real work rather than decorating the row: fleet stop --all does not reach an interactive session, fleet clean does not reap one, and max_parallel does not count one — and the listing was the one place that distinction was invisible, which is exactly where somebody decides what to kill. The ID is the same one stats prints, so a row from either can be pasted into any of the other three.",
+    note: "The same listing whichever machine it is: your Mac, a Linux box, the cloud — sandbox-cli context use picks which. Labels are your own metadata; the agent layer adds its own (agent, route.id, fleet.branch), so a fleet's sandboxes and a failover's two attempts are findable by what they were for.",
   },
   {
     id: "logs",
     label: "logs",
-    blurb: "Read what a session has written — finished ones included.",
+    blurb: "A process's output from the start, followed until it exits.",
     frames: [
       {
-        prompt: "sandbox-cli logs feature-a --follow",
-        rows: [
-          "● Implementing the login form in src/auth/",
-          "  ⎿ Wrote src/auth/login.tsx (94 lines)",
-          "  ⎿ Wrote src/auth/login.test.tsx (61 lines)",
-          "● Running the tests",
-          "  ⎿ 128 passing",
-        ],
+        prompt: "sandbox-cli logs tests",
+        rows: ["ok"],
       },
     ],
-    note: "Detached and fleet containers are deliberately not removed when they exit — their exit code and their logs are the only record the run happened, so --rm would delete exactly what you came back for. sandbox-cli clean reaps them once you have read what you needed.",
+    note: "Output is kept by the server per process, from the first byte, so a client that connects late — or reconnects after a closed laptop — still reads it from the beginning. --pid picks a process when a sandbox runs several.",
   },
   {
     id: "attach",
     label: "attach",
-    blurb: "Put this terminal on a session that is already running.",
+    blurb: "Put this terminal on a process that is already running.",
     frames: [
       {
-        prompt: "sandbox-cli attach feature-a",
-        rows: [
-          "sandbox-cli: attached to sandbox-app-feature-a — Ctrl-C detaches, the agent keeps running",
-          "sandbox-cli: this session was started detached, so it has no keyboard: you will see its",
-          "             output but cannot type at it",
-        ],
+        prompt: "sandbox-cli attach build",
+        rows: ["(the process's terminal, at this window's size)"],
       },
     ],
-    note: "Ctrl-C detaches and never kills — the signal is not proxied into the container (--sig-proxy=false), because attaching is a way to look and looking must not be able to end someone's run. Both lines above exist so nobody learns them the expensive way: by typing into a container that is not listening, or by pressing Ctrl-C to stop watching and finding they stopped the work.",
+    note: "A process started with a terminal gets yours back, resized as you resize the window. Closing the terminal detaches and leaves the process running: attaching is a way to look, and looking must not be able to end someone's run.",
   },
   {
     id: "kill",
     label: "kill",
-    blurb: "Ask a session to stop — and refuse anything that is not ours.",
+    blurb: "Terminate a sandbox — and refuse anything that is not one of ours.",
     frames: [
       {
-        prompt: "sandbox-cli kill feature-b",
-        rows: ["stopped sandbox-app-feature-b"],
-        trailing: ["logs and exit codes are kept; `sandbox-cli clean` removes them"],
+        prompt: "sandbox-cli kill build",
+        rows: [],
       },
       {
         prompt: "sandbox-cli kill postgres",
-        rows: ['no sandbox session matches "postgres"'],
-        trailing: [
-          "`sandbox-cli list --all` shows every session, finished ones included",
-        ],
+        rows: ["sandbox-cli: postgres: not_found (404): no such sandbox"],
       },
     ],
-    note: "A reference is matched against a listing filtered by our own label and is never handed to the engine to resolve, so kill postgres finds nothing rather than your database. kill is also the one command that will not infer its target when a single sandbox is running: reading the wrong session costs a second, stopping the wrong agent costs its work. SIGTERM and docker's grace period by default; --force is SIGKILL and has to be asked for by name.",
+    note: "A reference is matched against the server's own sandboxes and is never handed to a backend to resolve, so kill postgres finds nothing rather than your database. Killing discards the VM and its disk; anything not brought back goes with it, which is what sandbox-cli recover is for if that was not the plan.",
   },
 ];
 
 /** Shown under the tabs — the reason this whole surface exists. */
 export const SESSION_NOTE =
-  "A kill -9 on sandbox-cli leaves the agent running and still writing to your project, because the daemon owns the container rather than the client that started it — and --detach means to. These four commands are how you get back to it.";
+  "A kill -9 on sandbox-cli leaves the sandbox running — sandboxd owns it, not the client that started it, and --detach means to. These four commands are how you get back to it; events shows what it did.";

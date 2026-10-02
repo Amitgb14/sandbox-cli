@@ -3,9 +3,9 @@ import { PLATFORMS } from "@/lib/comparison";
 import { cn } from "@/lib/utils";
 
 const OS = [
-  { key: "macos", label: "macOS", sub: "Docker Desktop" },
-  { key: "linux", label: "Linux", sub: "native Docker" },
-  { key: "windows", label: "Windows", sub: "Docker Desktop / WSL2" },
+  { key: "macos", label: "macOS", sub: "Apple silicon, macOS 26" },
+  { key: "linux", label: "Linux", sub: "with KVM" },
+  { key: "windows", label: "Elsewhere", sub: "Windows, Intel Macs" },
 ] as const;
 
 function Mark({ value }: { value: string }) {
@@ -30,10 +30,11 @@ function Mark({ value }: { value: string }) {
         <span className="text-[0.7rem]">partly verified</span>
       </span>
     );
+  // "—" means the row does not apply here: the dash alone says so.
   return (
     <span className="inline-flex items-center gap-1.5 text-muted-foreground">
       <Minus className="size-3.5" />
-      <span className="text-[0.7rem]">{value}</span>
+      {value === "—" ? <span className="sr-only">does not apply</span> : <span className="text-[0.7rem]">{value}</span>}
     </span>
   );
 }

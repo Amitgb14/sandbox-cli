@@ -122,7 +122,7 @@ export function BlastRadius({ className }: { className?: string }) {
         ) : (
           <p className="text-sm text-muted-foreground">
             {sandboxed
-              ? "Everything but the project is either not mounted or belongs to a container that is deleted on exit. Pick a path to read what was at stake."
+              ? "Nothing of yours is in the VM: the project is a clone, and everything else either is not there or is the guest's own, discarded with it. Pick a path to read what was at stake."
               : "This is the default when you run an agent with “Allow All” on your machine. Pick a path to read what is at stake."}
           </p>
         )}

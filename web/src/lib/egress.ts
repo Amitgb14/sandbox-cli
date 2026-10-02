@@ -1,9 +1,9 @@
 /**
- * Traffic the egress visualiser sends at the firewall. Verdicts follow the real
- * rule from README.md: egress is default-deny — the allowlist is now the
- * default posture, not an opt-in — permitting DNS, established flows, a
- * baseline of agent APIs and
- * package registries, and the domains you add.
+ * Traffic the egress visualiser sends at the allowlist. Verdicts follow the
+ * real rule in docs/api/v1.md and docs/self-hosting.md: a default sandboxd's
+ * policy is an allowlist — a baseline of agent APIs and package registries,
+ * plus the names a request adds and the server permits — checked by name on
+ * the host, outside the guest, with deny winning over allow.
  */
 
 export type Verdict = "baseline" | "allowed" | "blocked";
@@ -26,7 +26,7 @@ export const DESTINATIONS: Destination[] = [
   { host: "raw.githubusercontent.com", what: "install scripts", verdict: "baseline" },
   {
     host: "internal.registry.example.com",
-    what: "your private registry — added with --allow",
+    what: "your private registry — added with --allow, where the server's policy permits",
     verdict: "allowed",
     headline: true,
   },
@@ -49,10 +49,10 @@ export const VERDICT_COPY: Record<Verdict, { label: string; detail: string }> = 
   },
   allowed: {
     label: "--allow",
-    detail: "A domain you named on the command line or in .sandbox.yaml.",
+    detail: "A name you added with --allow or in your config, within what the server's policy lets a request add.",
   },
   blocked: {
     label: "Denied",
-    detail: "Default-deny. Nothing else leaves the container.",
+    detail: "Default-deny. The guest's DNS does not resolve it, and a connection to its address is refused on the host.",
   },
 };

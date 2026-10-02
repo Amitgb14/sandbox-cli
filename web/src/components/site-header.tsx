@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/navigation-menu";
 import { GithubMark, Wordmark } from "@/components/logo";
 import { NAV, type NavEntry } from "@/lib/nav";
-import { DOC_URL, REPO_URL, VERSION } from "@/lib/site";
+import { CHANNEL, DOC_URL, REPO_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 /**
@@ -119,7 +119,7 @@ export function SiteHeader({
           <Wordmark />
         </a>
         <span className="hidden rounded-full border px-2 py-0.5 font-mono text-[0.65rem] text-muted-foreground sm:inline">
-          v{VERSION}
+          {CHANNEL}
         </span>
 
         <NavigationMenu align="end" className="ml-auto hidden lg:flex">
@@ -170,7 +170,7 @@ export function SiteHeader({
             )}
             <NavigationMenuItem>
               <NavigationMenuLink
-                href={DOC_URL.guide}
+                href={DOC_URL.readme}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={cn(
@@ -241,7 +241,7 @@ export function SiteHeader({
                   ),
                 )}
                 <a
-                  href={DOC_URL.guide}
+                  href={DOC_URL.readme}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="rounded-md px-2 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -253,7 +253,7 @@ export function SiteHeader({
                   onClick={() => setOpen(false)}
                   className={cn(buttonVariants({ size: "sm" }))}
                 >
-                  Install v{VERSION}
+                  Install
                 </a>
               </nav>
             </SheetContent>

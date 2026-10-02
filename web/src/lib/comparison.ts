@@ -1,9 +1,11 @@
 /**
- * The landscape table from README.md ("Alternatives & prior art"), typed so the
- * page can render it and score it consistently.
+ * Where this sits among the alternatives — including where it loses.
  *
- * This is the project's own read of the landscape and the ratings for other
- * tools are a snapshot that will age — the page says so, and so does the README.
+ * The alternatives are described by kind, not by product: what a category of
+ * tool does is stable enough to compare honestly, and a row about one vendor's
+ * current feature list would be wrong by the time somebody read it. Each cell
+ * says what is true of the category as a rule; where a category varies, the
+ * cell says so rather than picking its best or worst member.
  */
 
 export type Tone = "strong" | "ok" | "weak" | "none" | "neutral";
@@ -20,10 +22,10 @@ export type Column = {
 
 export const COLUMNS: Column[] = [
   { id: "sandbox", name: "sandbox-cli", sub: "this project", highlight: true },
-  { id: "builtin", name: "Built-in agent sandboxes", sub: "Claude / Codex" },
-  { id: "sbx", name: "Docker Sandboxes", sub: "sbx" },
-  { id: "os", name: "Native OS tools", sub: "Seatbelt / Landlock" },
-  { id: "cloud", name: "Cloud microVMs", sub: "E2B, Daytona, …" },
+  { id: "builtin", name: "Agents' own sandboxes", sub: "policy inside the agent" },
+  { id: "container", name: "Container sandboxes", sub: "a container per agent" },
+  { id: "os", name: "OS sandboxing", sub: "Seatbelt / Landlock" },
+  { id: "hosted", name: "Hosted sandbox APIs", sub: "microVMs in a provider's cloud" },
 ];
 
 export type Row = {
@@ -41,271 +43,175 @@ const x = (text: string): Cell => ({ text, tone: "neutral" });
 
 export const ROWS: Row[] = [
   {
-    label: "Isolation strength",
+    label: "Isolation",
     note: "How hard the wall actually is",
     cells: {
-      sandbox: o("Good — Docker + hardening, optional gVisor/Kata"),
-      builtin: x("Medium — OS-level, shared kernel"),
-      sbx: s("Excellent — microVM / Firecracker"),
-      os: o("Good — kernel primitives"),
-      cloud: s("Excellent — microVMs"),
+      sandbox: s("A VM per sandbox: its own kernel, behind a hypervisor"),
+      builtin: w("Process rules the agent applies to itself"),
+      container: o("Namespaces on the host's shared kernel"),
+      os: o("Kernel-enforced per process, on your kernel"),
+      hosted: s("A VM per sandbox"),
     },
   },
   {
-    label: "Local, no cloud",
-    note: "Your code never leaves the machine",
+    label: "Your files",
+    note: "What is reachable by default",
     cells: {
-      sandbox: s("Yes"),
+      sandbox: s("Nothing mounted; the repo goes in as a git bundle"),
+      builtin: w("Your filesystem, minus what the rules forbid"),
+      container: o("The directories you mount, read-write"),
+      os: w("Your filesystem, minus what the rules forbid"),
+      hosted: s("Nothing; you upload what it needs"),
+    },
+  },
+  {
+    label: "Runs where your code is",
+    note: "Without sending it anywhere",
+    cells: {
+      sandbox: s("Your Mac, or a Linux machine you control"),
       builtin: s("Yes"),
-      sbx: s("Yes"),
+      container: s("Yes"),
       os: s("Yes"),
-      cloud: n("No"),
+      hosted: n("No — the provider's cloud"),
     },
   },
   {
-    label: "Persistent agent auth",
-    note: "Log in once, not every run",
+    label: "Self-hosted, nothing phoning home",
+    note: "For code that cannot leave the building",
     cells: {
-      sandbox: s("Excellent — dedicated persistent home"),
-      builtin: x("Varies"),
-      sbx: o("Good"),
-      os: x("Varies"),
-      cloud: x("Varies"),
+      sandbox: s("sandboxd on your machine; no external control plane"),
+      builtin: x("Not a server"),
+      container: o("Your machine, your daemon"),
+      os: x("Not a server"),
+      hosted: w("Varies; often their control plane in your cloud at best"),
     },
   },
   {
-    label: "Package cache persistence",
-    note: "No cold npm install every run",
+    label: "One API in every place",
+    note: "Laptop, own server, cloud",
     cells: {
-      sandbox: s("Yes — --cache volumes"),
-      builtin: w("Limited"),
-      sbx: o("Good"),
-      os: w("Manual"),
-      cloud: o("Often built-in"),
+      sandbox: s("The same API, checked by one conformance suite"),
+      builtin: n("No API"),
+      container: w("The engine's API, local only"),
+      os: n("No API"),
+      hosted: o("Theirs, in their cloud"),
     },
   },
   {
-    label: "Parallel agents (worktrees)",
-    note: "Several branches at once, no collisions",
-    cells: {
-      sandbox: s("Excellent — built-in --worktree"),
-      builtin: w("Poor"),
-      sbx: o("Good"),
-      os: w("Poor"),
-      cloud: x("Varies"),
-    },
-  },
-  {
-    label: "Credential broker",
-    note: "Secrets off the argv and out of history",
-    // This row used to read "Excellent — file / cmd / env sources", and that was
-    // an overclaim. internal/creds resolves secret *references* so values stay
-    // off the argv and out of config files — real, but the value still lands in
-    // the container's environment where the agent can read it with printenv. A
-    // broker that terminates TLS and injects the credential is open security
-    // item 2 and is not built. Prod's blunter answer is the honest one to sell.
-    cells: {
-      sandbox: w("Basic — references resolved; prod mounts no token at all"),
-      builtin: w("Basic"),
-      sbx: o("Good — proxy"),
-      os: x("Varies"),
-      cloud: o("Good"),
-    },
-  },
-  {
-    label: "Egress / network control",
+    label: "Egress control",
     note: "Stop exfiltration, keep installs working",
     cells: {
-      sandbox: s("Strong — allowlist with baselines"),
-      builtin: w("Basic"),
-      sbx: s("Strong"),
-      os: x("Varies"),
-      cloud: s("Strong"),
+      sandbox: s("Allowlist by name, enforced on the host, deny wins"),
+      builtin: o("Settings in the agent"),
+      container: w("Varies; often open by default"),
+      os: w("Coarse: on or off"),
+      hosted: o("Per-sandbox rules, where offered"),
     },
   },
   {
-    label: "Observability / metrics",
-    note: "What is this thing actually doing",
-    // Downgraded from "Excellent" for the same reason as the row above: a live
-    // gauge, stats and one line per run are real, but there is no per-command
-    // trace and no replay. That is roadmap task 4, not a shipped capability.
+    label: "Start time",
+    note: "From request to a running command",
     cells: {
-      sandbox: o("Good — live gauge, stats, per-run log; no per-command trace"),
-      builtin: w("Limited"),
-      sbx: o("Good"),
-      os: w("Poor"),
-      cloud: x("Varies"),
+      sandbox: s("~80 ms on Firecracker; under 1 ms from a pool"),
+      builtin: s("None — no VM"),
+      container: s("Sub-second"),
+      os: s("None"),
+      hosted: o("Fast, plus the network round-trip"),
     },
   },
   {
-    label: "Project config",
-    note: "Per-repo policy, checked in",
+    label: "Snapshots, fork, suspend",
+    note: "Keep a sandbox without paying for it",
     cells: {
-      sandbox: s("Excellent — .sandbox.yaml"),
-      builtin: w("Limited"),
-      sbx: o("Good"),
-      os: w("Poor"),
-      cloud: x("API / config"),
-    },
-  },
-  {
-    label: "Dry-run / preview",
-    note: "Read the boundary before trusting it",
-    cells: {
-      sandbox: s("Yes"),
+      sandbox: o("On Firecracker; not yet on a Mac"),
       builtin: n("No"),
-      sbx: x("Varies"),
+      container: w("Rare"),
       os: n("No"),
-      cloud: x("Varies"),
+      hosted: s("Usually"),
     },
   },
   {
-    label: "Ease of use",
+    label: "Coding agents",
+    note: "Logins, fleets, fallbacks",
     cells: {
-      sandbox: s("High — CLI-focused, thorough docs"),
-      builtin: s("High"),
-      sbx: s("High"),
-      os: x("Medium"),
-      cloud: x("Medium — setup"),
+      sandbox: s("Fifteen agents; logins kept; fleets and fallbacks"),
+      builtin: s("Built for one agent"),
+      container: o("Some, per tool"),
+      os: n("You wire it yourself"),
+      hosted: w("An SDK; you build the rest"),
     },
   },
   {
-    label: "Cross-platform",
+    label: "Audit log",
+    note: "What did it run, and how did it end",
     cells: {
-      sandbox: o("Good — macOS / Linux / Windows"),
-      builtin: o("Good"),
-      sbx: s("Excellent"),
-      os: w("Platform-specific"),
-      cloud: x("N/A"),
+      sandbox: s("Every action, on the server; env by name only"),
+      builtin: w("The agent's own transcript"),
+      container: w("The engine's events"),
+      os: n("No"),
+      hosted: o("Varies"),
     },
   },
   {
-    label: "Docker dependency",
+    label: "Where it loses",
     cells: {
-      sandbox: x("Yes"),
-      builtin: x("No"),
-      sbx: x("Yes"),
-      os: x("No"),
-      cloud: x("No"),
-    },
-  },
-  {
-    label: "Best for",
-    cells: {
-      sandbox: x("Local multi-agent workflows, ergonomics"),
-      builtin: x("Quick minimal protection"),
-      sbx: x("Strongest local isolation"),
-      os: x("Lightweight, zero deps"),
-      cloud: x("Scale & long-running tasks"),
+      sandbox: w("Needs KVM or macOS 26 on Apple silicon; the cloud mode is not open yet"),
+      builtin: w("The wall is the agent's own promise"),
+      container: w("One kernel bug from your machine"),
+      os: w("Different tools per OS, and your files stay in reach"),
+      hosted: w("Your code leaves the building; you pay per second"),
     },
   },
 ];
 
-/**
- * The same judgement as numbers. Axes are all "higher is better", scored 0–5
- * straight from the table above, so the chart and the table cannot disagree.
- */
-export const SCORE_AXES = [
-  "Isolation",
-  "Ergonomics",
-  "Parallelism",
-  "Credential hygiene",
-  "Observability",
-  "Stays local",
-] as const;
-
-export type ScoreSeries = {
-  id: string;
-  name: string;
-  values: Record<(typeof SCORE_AXES)[number], number>;
-};
-
-export const SCORES: ScoreSeries[] = [
-  {
-    id: "sandbox",
-    name: "sandbox-cli",
-    values: {
-      Isolation: 3.5,
-      Ergonomics: 5,
-      Parallelism: 5,
-      // Both of these came down with their rows above, because the chart is not
-      // allowed to say something the table does not. "Basic" scores 2 elsewhere
-      // in this chart; credential hygiene sits half a point above that only
-      // because prod does not mount the refresh token, which is a real
-      // mitigation rather than a broker.
-      "Credential hygiene": 2.5,
-      Observability: 3.5,
-      "Stays local": 5,
-    },
-  },
-  {
-    id: "builtin",
-    name: "Built-in agent sandboxes",
-    values: {
-      Isolation: 2.5,
-      Ergonomics: 5,
-      Parallelism: 1.5,
-      "Credential hygiene": 2,
-      Observability: 1.5,
-      "Stays local": 5,
-    },
-  },
-  {
-    id: "cloud",
-    name: "Cloud microVMs",
-    values: {
-      Isolation: 5,
-      Ergonomics: 3,
-      Parallelism: 4,
-      "Credential hygiene": 4,
-      Observability: 3,
-      "Stays local": 0,
-    },
-  },
-];
-
-/** README's platform matrix, trimmed to the rows that actually differ. */
+/** Where each part runs. The client runs anywhere; the server needs a VM. */
 export const PLATFORMS = [
   {
-    capability: "run, agent wrappers, mounts, env, hardening, metrics",
+    capability: "Run sandboxes on this machine",
+    macos: "yes",
+    linux: "yes",
+    windows: "no — client only",
+    footnote:
+      "macOS 26 on Apple silicon, with the native container runtime; Linux with /dev/kvm. Intel Macs and Windows run the client against a sandboxd elsewhere.",
+  },
+  {
+    capability: "Backend",
+    macos: "container runtime",
+    linux: "Firecracker",
+    windows: "—",
+  },
+  {
+    capability: "Egress allowlist by name",
+    macos: "not yet",
+    linux: "yes, as root",
+    windows: "—",
+    footnote:
+      "On Linux the firewall and proxy run on the host and need root. Without root, and on the macOS backend today, a sandbox gets no network or — where the operator permits — open egress; an allowlist request is refused there rather than served open.",
+  },
+  {
+    capability: "Suspend, snapshot, fork",
+    macos: "not yet",
+    linux: "yes",
+    windows: "—",
+  },
+  {
+    capability: "Volumes",
+    macos: "not yet",
+    linux: "yes",
+    windows: "—",
+  },
+  {
+    capability: "--bind a host directory",
+    macos: "yes",
+    linux: "no",
+    windows: "—",
+    footnote:
+      "A local Mac may mount one directory at /workspace when the operator allows it. Never your home or an ancestor of it.",
+  },
+  {
+    capability: "The client: run, agent, fleet, recover, events",
     macos: "yes",
     linux: "yes",
     windows: "yes",
-  },
-  {
-    capability: "--cache, --secret, --worktree, --git, --share",
-    macos: "yes",
-    linux: "yes",
-    windows: "yes",
-  },
-  {
-    capability: "Egress allowlist (--allow)",
-    macos: "partial",
-    linux: "yes",
-    windows: "partial",
-    footnote:
-      "The firewall runs iptables inside the Linux container, so it works wherever the container kernel is Linux. Verified in CI on native Linux; not yet independently verified on Docker Desktop.",
-  },
-  {
-    capability: "--host-gateway",
-    macos: "auto",
-    linux: "needed",
-    windows: "auto",
-    footnote: "host.docker.internal resolves automatically on Docker Desktop; native Linux needs the flag.",
-  },
-  {
-    capability: "/workspace file ownership",
-    macos: "virtualized to you",
-    linux: "container uid",
-    windows: "virtualized to you",
-    footnote: "On native Linux, use --user \"$(id -u):$(id -g)\" if ownership matters.",
-  },
-  {
-    capability: "--runtime kata-fc / runsc",
-    macos: "no",
-    linux: "yes",
-    windows: "no",
-    footnote:
-      "Docker Desktop runs containers in its own managed Linux VM and won't let you register custom OCI runtimes — you already get a VM boundary from Docker Desktop itself.",
   },
 ] as const;

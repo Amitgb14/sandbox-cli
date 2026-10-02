@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { GithubMark, Wordmark } from "@/components/logo";
-import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, VERSION } from "@/lib/site";
+import { DOC_URL, MULTI_AGENT_PATH, REPO_URL } from "@/lib/site";
 
 /**
  * Outbound links only. There is deliberately no "on this page" index here — the
@@ -12,10 +12,11 @@ const COLUMNS = [
   {
     title: "Docs",
     links: [
-      { label: "User guide", href: DOC_URL.guide },
+      { label: "README", href: DOC_URL.readme },
+      { label: "API v1", href: DOC_URL.api },
+      { label: "Local on a Mac", href: DOC_URL.localMac },
+      { label: "Self-hosting", href: DOC_URL.selfHosting },
       { label: "Running agents in parallel", href: MULTI_AGENT_PATH },
-      { label: "Agent reference", href: DOC_URL.agents },
-      { label: "Security model", href: DOC_URL.security },
       { label: "Changelog", href: DOC_URL.changelog },
     ],
   },
@@ -25,7 +26,9 @@ const COLUMNS = [
       { label: "Source", href: REPO_URL },
       { label: "Releases", href: `${REPO_URL}/releases` },
       { label: "Issues", href: `${REPO_URL}/issues` },
-      { label: "Development", href: DOC_URL.development },
+      { label: "Python SDK", href: DOC_URL.pythonSdk },
+      { label: "TypeScript SDK", href: DOC_URL.typescriptSdk },
+      { label: "Design and plan", href: DOC_URL.plan },
     ],
   },
 ];
@@ -37,8 +40,9 @@ export function SiteFooter() {
         <div className="flex flex-col gap-3">
           <Wordmark className="text-[1.05rem]" />
           <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
-            Run AI coding agents at full autonomy inside a disposable container, with the blast
-            radius limited to the project they were already meant to edit.
+            Isolated microVM sandboxes behind one API — on your Mac, a Linux machine you control,
+            or the cloud. For AI agents, and for anything else you would rather not run on the
+            host.
           </p>
           <a
             href={REPO_URL}
@@ -86,10 +90,9 @@ export function SiteFooter() {
       <div className="border-t">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-5 text-xs text-muted-foreground sm:px-6">
           <p>
-            MIT licensed · written in Go · v{VERSION}. Not affiliated with Anthropic, OpenAI, Google
-            or any other agent vendor.
+            MIT licensed · written in Go. Not affiliated with the vendor of any agent it runs.
           </p>
-          <p className="font-mono">isolation is a boundary, not a guarantee — read the model</p>
+          <p className="font-mono">a VM is a boundary, not a guarantee — read the model</p>
         </div>
       </div>
     </footer>
