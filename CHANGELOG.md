@@ -269,6 +269,15 @@ In the rewrite:
   `network: mode: default` in the daemon's *own* config, why a project
   `.sandbox.yaml` cannot do it, and what it costs.
 
+### Fixed
+
+- **On macOS, an image without `/workspace` failed every run with "no such
+  command".** Firecracker guests make `/workspace` and the sandbox user's home
+  at boot; the macOS backend's guest did not, so with an image like alpine and
+  no repository or `--bind`, the command could not start in `/workspace`. Those
+  directories are now made there too. A working directory that does not exist
+  is now reported as `cwd: no such directory` rather than blamed on the command.
+
 ## 0.0.1 — 2026-08-26
 
 **This leaves beta.** Twenty pre-releases and no more: the isolation boundary,

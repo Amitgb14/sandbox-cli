@@ -93,6 +93,7 @@ const (
 	CodeNotEmpty      = "not_empty"
 	CodeReadOnly      = "read_only"
 	CodeNoSuchCommand = "no_such_command"
+	CodeNoSuchCwd     = "no_such_cwd"
 	CodeBadRequest    = "bad_request"
 	CodeTooLarge      = "too_large"
 	CodeInternal      = "internal"

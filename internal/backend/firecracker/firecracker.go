@@ -510,6 +510,8 @@ func mapErr(err error) error {
 		return backend.ErrReadOnly
 	case guestproto.CodeNoSuchCommand:
 		return backend.ErrNoSuchCmd
+	case guestproto.CodeNoSuchCwd:
+		return backend.ErrNoSuchCwd
 	}
 	return err
 }
