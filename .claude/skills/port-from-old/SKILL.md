@@ -1,6 +1,6 @@
 ---
 name: port-from-old
-description: Move a package or file from _old/ (the beta.15 tree) into the new tree on the rewrite branch, keeping its history and its tests. Use whenever code is carried over rather than written fresh.
+description: Move a package or file from _old/ (the beta.15 tree) into the new tree, keeping its history and its tests. Use whenever code is carried over rather than written fresh.
 ---
 
 # Porting from `_old/`

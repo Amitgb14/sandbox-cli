@@ -28,14 +28,18 @@ milestone.
 
 ## State of the tree
 
-This branch (`rewrite`) is mid-rewrite. `main` still ships beta.15, a CLI that
-runs agents in docker/podman containers, and takes security fixes only until the
-rewrite replaces it.
+The rewrite merged into `main` on 2026-10-03 (#178). The last release of the
+container design is 0.0.1. The next release is the rewrite's: microVM sandboxes
+behind one API. M9 (cloud) is in a separate repository, and M10 (rebuilt on the
+API) is the work in progress.
 
 - `internal/`, `cmd/` — the new tree. `go test ./...` sees only this.
 - `_old/` — the beta.15 tree, ignored by the Go tool for its leading underscore.
   It does not compile in place; it is there to be ported from (skill:
-  `port-from-old`). It is deleted when the rewrite merges.
+  `port-from-old`). It holds `main`'s beta.15 work up to #175, including what
+  never shipped (the session server, S3 snapshot storage), for porting where
+  this design still wants it. It is deleted once the real-host checks in
+  `docs/rewrite/invariants.md` have passed; nothing else depends on it.
 - `_old/CLAUDE.md` — the design record of beta.15. Most of its docker mechanisms
   are obsolete; the *reasons* behind its rules are not. Read the relevant section
   before porting or replacing anything it describes.
