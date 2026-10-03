@@ -1066,6 +1066,34 @@ changelog entry saying so.
   rest of the tool keeps about absent readings: a missing measurement is not a
   good one, and `sandbox-cli list` is where a detached run's fate actually lives.
 
+### Security
+
+Four ways a run could reach the host, or a later run, through files it is allowed
+to write. All four were reproduced and are fixed; each has a test that fails on
+the previous release.
+
+- **`fleet land` no longer runs a merge driver or signing program the agent
+  named.** A `merge.<x>.driver`, or `commit.gpgSign` with `gpg.program`, in the
+  shared `.git/config` ran on the host during land's commit and merge. Both are
+  now neutralised for every git command sandbox-cli runs on its own behalf, and
+  a new one appearing in `.git/config` is reported as dangerous at the end of a
+  run. A repository that really uses a custom merge driver now gets a conflict
+  from `land` instead, to resolve by hand.
+- **A symlinked `.git/hooks` refuses the run.** The engine follows a link in a
+  mount source, so replacing `.git/hooks` with `-> ~/.ssh` mounted that directory
+  into the next run. sandbox-cli now refuses to start and names the link; if you
+  symlink your hooks directory on purpose, use `core.hooksPath` instead.
+- **A worktree's `.git` must lead back to that worktree.** Pointing it — or the
+  `commondir` file behind it — at another repository mounted that repository
+  read-write on the next run. The worktree record must now live in the named
+  repository and point back at this checkout. A worktree moved by hand needs
+  `git worktree repair`, and a submodule checkout no longer gets its
+  superproject's `.git` mounted.
+- **Symlinks in the persisted agent HOME are no longer followed** when sandbox-cli
+  prepares it. A link the agent planted there, such as `~/.claude/projects ->
+  ~/.ssh`, opened the target's files to your group on the next run. It is now
+  reported and left alone.
+
 ### Changed
 
 - **The site's Studio setup answers two questions it used to leave to a bad

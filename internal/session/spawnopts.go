@@ -176,7 +176,15 @@ func optionsFor(cfg config.Config, repoRoot, workDir, repoID string, p protocol.
 	// Read from the directory rather than from the request, because the repository is
 	// the authority on which branch is checked out there and a request asserting one
 	// would be asserting something it cannot know.
-	opts.ExtraMounts = append(opts.ExtraMounts, sandbox.LinkedWorktreeMounts(workDir)...)
+	//
+	// And refused when the worktree's record does not lead back to it: the pointer
+	// is agent-written, and following one that names another repository mounted
+	// that repository read-write (see sandbox.LinkedWorktreeMounts).
+	wtMounts, err := sandbox.LinkedWorktreeMounts(workDir)
+	if err != nil {
+		return sandbox.Options{}, err
+	}
+	opts.ExtraMounts = append(opts.ExtraMounts, wtMounts...)
 	opts.Branch = worktree.Branch(workDir)
 	opts.Base = p.Base
 	if opts.Base == "" {

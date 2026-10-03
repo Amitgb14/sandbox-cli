@@ -3,6 +3,7 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -146,5 +147,58 @@ func TestEnsureGuestDirRefusedRequestCreatesNothing(t *testing.T) {
 
 	if _, err := os.Stat(root); err == nil {
 		t.Error("created the root for a request that resolved to no path")
+	}
+}
+
+// The persisted HOME is agent-writable, so a level of the chain can be a link the
+// agent planted. Following it chmodded the target's files on the next run —
+// `~/.claude/projects -> ~/.ssh` left the private key at 0660 — and created the
+// next level inside it.
+func TestEnsureGuestDirStopsAtASymlink(t *testing.T) {
+	pinHostGID(t, strconv.Itoa(os.Getgid()))
+	root := t.TempDir()
+	victim := t.TempDir()
+	key := filepath.Join(victim, "id_ed25519")
+	if err := os.WriteFile(key, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(root, ".claude", "projects")); err != nil {
+		t.Fatal(err)
+	}
+
+	EnsureGuestDir(root, ".claude/projects/-workspace")
+
+	fi, err := os.Stat(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("the link's target was chmodded: key is now %v", fi.Mode().Perm())
+	}
+	if _, err := os.Stat(filepath.Join(victim, "-workspace")); err == nil {
+		t.Error("a directory was created inside the link's target")
+	}
+}
+
+// The same hazard reached directly: ShareWithSandboxGroup handed a link.
+func TestShareWithSandboxGroupDoesNotFollowALink(t *testing.T) {
+	pinHostGID(t, strconv.Itoa(os.Getgid()))
+	victim := t.TempDir()
+	key := filepath.Join(victim, "id_ed25519")
+	if err := os.WriteFile(key, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+
+	ShareWithSandboxGroup(link)
+
+	if fi, _ := os.Stat(key); fi.Mode().Perm() != 0o600 {
+		t.Errorf("followed the link: key is now %v", fi.Mode().Perm())
 	}
 }

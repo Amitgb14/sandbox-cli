@@ -211,7 +211,11 @@ func newSession(rf *runFlags) (*sandbox.Session, sandbox.Options, error) {
 	// safety check. The workspace's *own* .git/hooks is handled in BuildSpec,
 	// which knows where the workspace lands inside the container; this is the
 	// parent repository's, which a linked worktree also runs.
-	opts.ExtraMounts = append(opts.ExtraMounts, sandbox.LinkedWorktreeMounts(projectDir)...)
+	wtMounts, err := sandbox.LinkedWorktreeMounts(projectDir)
+	if err != nil {
+		return nil, sandbox.Options{}, err
+	}
+	opts.ExtraMounts = append(opts.ExtraMounts, wtMounts...)
 
 	// The branch drives the live gauge and the post-run summary, and — with
 	// --detach — the container's name and its sandbox.branch label. It matters

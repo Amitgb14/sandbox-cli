@@ -315,7 +315,11 @@ func (s *Server) buildRunOptions(ctx context.Context, req RunCreateRequest) (bui
 		// Appended, never assigned: a worktree run may also be sharing, and the
 		// assignment this used to be silently dropped the share mount for exactly
 		// the runs most likely to want one.
-		extraMounts = append(extraMounts, sandbox.LinkedWorktreeMounts(info.Path)...)
+		wtMounts, err := sandbox.LinkedWorktreeMounts(info.Path)
+		if err != nil {
+			return sandbox.Options{}, err
+		}
+		extraMounts = append(extraMounts, wtMounts...)
 		// repoID stays the scope's: a linked worktree belongs to the same
 		// repository, which is the whole point of addressing it by branch.
 	case req.Project != "":
