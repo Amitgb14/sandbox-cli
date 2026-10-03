@@ -69,6 +69,18 @@ var ErrNoHostname = errors.New("connection carries no hostname to check")
 type Matcher struct {
 	exact    map[string]bool
 	suffixes []string // ".example.com" for a "*.example.com" pattern
+	deny     *Matcher // names refused even when allowed: deny wins
+}
+
+// NewPolicyMatcher is NewMatcher with a deny list that wins over the allowlist,
+// including over a wildcard: allow *.github.com, deny gist.github.com refuses
+// gist.github.com. Deny patterns use the same syntax.
+func NewPolicyMatcher(allow, deny []string) *Matcher {
+	m := NewMatcher(allow)
+	if d := NewMatcher(deny); d.Len() > 0 {
+		m.deny = d
+	}
+	return m
 }
 
 // NewMatcher builds a Matcher from allowlist patterns. Empty and blank patterns
@@ -94,6 +106,9 @@ func NewMatcher(patterns []string) *Matcher {
 func (m *Matcher) Allows(host string) bool {
 	h := normalizeHost(host)
 	if h == "" {
+		return false
+	}
+	if m.deny != nil && m.deny.Allows(h) {
 		return false
 	}
 	if m.exact[h] {

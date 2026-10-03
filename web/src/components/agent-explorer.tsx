@@ -34,7 +34,7 @@ export function AgentExplorer({ className }: { className?: string }) {
                     a.id === id ? "text-primary-foreground/60" : "text-muted-foreground",
                   )}
                 >
-                  {a.name} · {a.vendor}
+                  {a.name}
                 </span>
               </span>
               <span
@@ -55,7 +55,7 @@ export function AgentExplorer({ className }: { className?: string }) {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="text-lg font-semibold tracking-tight">{agent.name}</h3>
-            <p className="text-sm text-muted-foreground">{agent.vendor}</p>
+            <p className="font-mono text-sm text-muted-foreground">sandbox-cli agent {agent.id}</p>
           </div>
           <Badge
             variant="outline"
@@ -72,7 +72,7 @@ export function AgentExplorer({ className }: { className?: string }) {
               </>
             ) : (
               <>
-                <Download className="size-2.5" /> installs on first use · {agent.size}
+                <Download className="size-2.5" /> installs each run · {agent.size}
               </>
             )}
           </Badge>
@@ -136,7 +136,7 @@ export function AgentExplorer({ className }: { className?: string }) {
         {agent.delivery === "first-run" ? (
           <div className="flex flex-col gap-1.5">
             <p className="eyebrow">
-              <Download className="size-3" /> first run
+              <Download className="size-3" /> not in the image
             </p>
             <code className="no-scrollbar overflow-x-auto rounded-lg border bg-surface px-3 py-2 font-mono text-[0.7rem] whitespace-nowrap text-muted-foreground">
               {FIRST_RUN_NOTE.line}

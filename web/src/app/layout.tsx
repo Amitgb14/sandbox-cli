@@ -21,9 +21,9 @@ const geistMono = Geist_Mono({
   display: "swap",
 });
 
-const TITLE = "sandbox-cli — run coding agents at full autonomy, contained";
+const TITLE = "sandbox-cli — isolated microVM sandboxes, on your Mac, your server or the cloud";
 const DESCRIPTION =
-  "Run Claude Code, Codex, Gemini and 9 more agents inside a disposable Docker container. Only your project is mounted, HOME is ephemeral, host credentials are unreachable.";
+  "A disposable microVM for any command — a test suite, or Claude Code and Codex at full autonomy — behind one API, on your Mac, a Linux machine you control, or the cloud. Your repository goes in as a git bundle; nothing of yours is mounted; egress is an allowlist enforced outside the guest.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://github.com/Amitgb14/sandbox-cli"),
@@ -34,7 +34,9 @@ export const metadata: Metadata = {
     "AI coding agent",
     "Claude Code",
     "Codex",
-    "Docker",
+    "microVM",
+    "Firecracker",
+    "sandbox API",
     "isolation",
     "secure development",
     "prompt injection",

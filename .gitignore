@@ -1,7 +1,9 @@
 /bin/
 /bin-docker/
 /dist/
-/.claude/
+# Per-machine Claude Code state, except the project skills, which are shared.
+/.claude/*
+!/.claude/skills/
 __pycache__/
 # Python build artifacts. `python -m build` writes here, and a published wheel
 # committed by accident is a file nobody looks at and everybody trusts.
@@ -33,6 +35,10 @@ docs/proposals/
 # be called dist or build.
 node_modules
 
+# Studio's built UI, embedded by `make studio` and a release build; only the
+# placeholder is tracked.
+internal/studio/ui/*
+!internal/studio/ui/.keep
 # The SDK's build outputs. `dist/` is what npm publishes and `dist-test/` is the
 # test build beside it; both are produced by tsc and neither is source.
 /sdk/typescript/dist/

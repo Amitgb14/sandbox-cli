@@ -25,6 +25,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Studio's UI is embedded in sandbox-cli (internal/studio/embed.go), so it
+      # is built before anything compiles: a release whose `studio` served only
+      # the "UI not built" page would be a broken release.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+
+      - name: Build Studio's UI
+        run: make studio
+
       - name: Test
         run: go test ./...
 

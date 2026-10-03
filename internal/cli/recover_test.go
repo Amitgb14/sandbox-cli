@@ -1,148 +1,146 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/Amitgb14/sandbox-cli/internal/config"
-	"github.com/Amitgb14/sandbox-cli/internal/rescue"
+	"github.com/spf13/cobra"
+
+	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
+	"github.com/Amitgb14/sandbox-cli/internal/server"
+	"github.com/Amitgb14/sandbox-cli/internal/spec"
+	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
-// --dry-run must stay a pure question: it prints the docker command it *would*
-// run and touches nothing. Snapshotting is the first thing on the run path that
-// writes outside the process, so it is the first thing that could break that.
-func TestDryRunTakesNoSnapshotAndRecordsNoSession(t *testing.T) {
-	cfgHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", cfgHome)
-	repo := initRepo(t)
-
-	out := renderDryRun(t, newClaudeCmd(), []string{"--project", repo})
-	if !strings.Contains(out, "docker") {
-		t.Fatalf("dry run printed no docker command:\n%s", out)
-	}
-	if entries, err := os.ReadDir(filepath.Join(cfgHome, "sandbox", "rescue")); err == nil && len(entries) > 0 {
-		t.Errorf("--dry-run recorded %d rescue session bucket(s)", len(entries))
-	}
-	if refs := gitOut(t, repo, "for-each-ref", "--format=%(refname)", "refs/sandbox"); refs != "" {
-		t.Errorf("--dry-run wrote snapshot refs:\n%s", refs)
-	}
-}
-
-// The safety net is on unless the user says otherwise: a default that has to be
-// switched on is not a safety net.
-func TestSnapshotsAreOnByDefault(t *testing.T) {
-	cfg := config.Default()
-	if !cfg.Snapshot.IsEnabled() {
-		t.Error("snapshots are off in the built-in defaults")
-	}
-	if got := cfg.Snapshot.EveryDuration(); got != config.DefaultSnapshotInterval {
-		t.Errorf("default interval is %s, want %s", got, config.DefaultSnapshotInterval)
-	}
-	if got := cfg.Snapshot.RetentionDuration(); got != config.DefaultSnapshotRetention {
-		t.Errorf("default retention is %s, want %s", got, config.DefaultSnapshotRetention)
-	}
-}
-
-// recover is a host-side utility like stats: it must not need Docker, a config
-// file, or a running sandbox to answer.
-func TestRecoverCommandTree(t *testing.T) {
-	cmd := newRecoverCmd()
-	want := map[string]bool{"list": false, "show": false, "restore": false, "fetch": false, "repair": false, "prune": false}
-	for _, sub := range cmd.Commands() {
-		name := strings.Fields(sub.Use)[0]
-		if _, ok := want[name]; !ok {
-			t.Errorf("unexpected recover subcommand %q", name)
-			continue
-		}
-		want[name] = true
-	}
-	for name, found := range want {
-		if !found {
-			t.Errorf("missing recover subcommand %q", name)
-		}
-	}
-	// Restoring must default to the mode that cannot destroy anything, so the
-	// destructive one has to be an explicit flag.
-	if cmd, _, err := cmd.Find([]string{"restore"}); err != nil {
-		t.Fatal(err)
-	} else if cmd.Flags().Lookup("into-worktree") == nil {
-		t.Error("restore has no --into-worktree flag, so its default may not be the safe one")
-	}
-}
-
-func gitOut(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git %v: %v", args, err)
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// A snapshot id is resolved against the bucket the same way a session reference
-// is resolved against a container listing: an unambiguous prefix is enough, and
-// ambiguity refuses and names the candidates. Guessing here restores the wrong
-// work, which is a cost nobody discovers until they look at the diff.
-func TestFetchResolvesAPrefixAndRefusesAnAmbiguousOne(t *testing.T) {
-	found := []rescue.Session{
-		{ID: "20260901-120000-aaaa"},
-		{ID: "20260901-120000-bbbb"},
-		{ID: "20260902-090000-cccc"},
-	}
-
-	got, err := pickRemote(found, "20260902")
-	if err != nil {
-		t.Fatalf("an unambiguous prefix was refused: %v", err)
-	}
-	if got.ID != "20260902-090000-cccc" {
-		t.Errorf("resolved to %q", got.ID)
-	}
-
-	// An exact id wins over being a prefix of nothing else, and never has to be
-	// disambiguated against itself.
-	if got, err := pickRemote(found, "20260901-120000-aaaa"); err != nil || got.ID != "20260901-120000-aaaa" {
-		t.Errorf("exact id resolved to %q (%v)", got.ID, err)
-	}
-
-	_, err = pickRemote(found, "20260901")
-	if err == nil {
-		t.Fatal("an ambiguous prefix resolved to one snapshot")
-	}
-	for _, want := range []string{"20260901-120000-aaaa", "20260901-120000-bbbb"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name candidate %s: %v", want, err)
-		}
-	}
-	if strings.Contains(err.Error(), "20260902-090000-cccc") {
-		t.Errorf("the refusal names a snapshot that does not match: %v", err)
-	}
-
-	if _, err := pickRemote(found, "20261231"); err == nil {
-		t.Error("a prefix matching nothing resolved")
-	}
-}
-
-// Mirroring is off until a bucket is configured, so the answer to "fetch"
-// without one is where to configure it — and it must come from the user's own
-// config, never a project .sandbox.yaml, which is refused snapshot.s3 precisely
-// because it names a network destination and the credential to reach it.
-func TestFetchWithNoBucketNamesWhereToConfigureOne(t *testing.T) {
+// recover says where each run's work still is: a live sandbox can be brought
+// back, a gone one has its checkpoint or is said to be lost, a record whose work
+// is home and whose sandbox is gone is pruned, and other repositories stay out
+// of it unless asked.
+func TestRecoverSaysWhereTheWorkIs(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	repo := initRepo(t)
+	t.Setenv("SANDBOX_CONTEXT", "")
+	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy()}).Handler())
+	defer srv.Close()
+	cf, _ := loadContexts()
+	cf.Contexts["t"] = endpointContext{Endpoint: srv.URL}
+	if err := cf.save(); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := api.NewClient(srv.URL, "")
+	live, err := c.CreateSandbox(context.Background(), api.CreateSandboxRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, s := range []workspace.Session{
+		{Sandbox: live.ID, Context: "t", Repo: "/r", Started: now.Add(-time.Hour)},
+		{Sandbox: "sbx_ckpt", Context: "t", Repo: "/r", Started: now.Add(-2 * time.Hour),
+			Checkpoint: workspace.CheckpointRefPrefix + "sbx_ckpt", CheckpointAt: now.Add(-10 * time.Minute)},
+		{Sandbox: "sbx_lost", Context: "t", Repo: "/r", Started: now.Add(-3 * time.Hour)},
+		{Sandbox: "sbx_home", Context: "t", Repo: "/r", Started: now, Done: true},
+		{Sandbox: "sbx_elsewhere", Context: "t", Repo: "/other", Started: now},
+		{Sandbox: "sbx_unreachable", Context: "nope", Repo: "/r", Started: now},
+	} {
+		if err := s.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	_, err := snapshotBucket(repo)
-	if err == nil {
-		t.Fatal("a repository with no bucket configured resolved one")
+	var out bytes.Buffer
+	if err := listRecoverable(context.Background(), &out, "/r", now); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "snapshot.s3.bucket") {
-		t.Errorf("the refusal does not name the setting: %v", err)
+	got := out.String()
+	for _, want := range []string{
+		"sandbox-cli bring-back " + live.ID,
+		"its last checkpoint is refs/sandbox/checkpoints/sbx_ckpt",
+		"10m ago",
+		"sbx_lost: the sandbox is gone and no checkpoint was taken",
+		"sbx_unreachable: its sandboxd (context nope) did not answer",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
 	}
-	if !strings.Contains(err.Error(), config.UserConfigPath()) {
-		t.Errorf("the refusal does not name the file to set it in: %v", err)
+	if strings.Contains(got, "sbx_home") || strings.Contains(got, "sbx_elsewhere") {
+		t.Errorf("listed a finished run or another repository:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(workspace.ConfigDir(), "sessions", "sbx_home.json")); err == nil {
+		t.Error("a finished run whose sandbox is gone was not pruned")
+	}
+	if _, err := os.Stat(filepath.Join(workspace.ConfigDir(), "sessions", "sbx_lost.json")); err != nil {
+		t.Error("an unrecovered run's record was removed; only forget may do that")
+	}
+}
+
+// Nothing checkpoints a detached run, so asking for checkpoints on one is
+// refused before anything starts; left at its default, the flag is not.
+func TestDetachRefusesCheckpointEvery(t *testing.T) {
+	run := func(args ...string) error {
+		rf := &runFlags{}
+		cmd := &cobra.Command{}
+		rf.register(cmd)
+		if err := cmd.ParseFlags(args); err != nil {
+			t.Fatal(err)
+		}
+		rf.context = "no-such-context" // anything past the refusal stops at the client
+		_, err := runSandbox(context.Background(), rf, runSpec{argv: []string{"true"}})
+		return err
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := run("--detach", "--checkpoint-every", "1m"); err == nil || !strings.Contains(err.Error(), "--checkpoint-every") {
+		t.Errorf("got %v", err)
+	}
+	if err := run("--detach"); err != nil && strings.Contains(err.Error(), "--checkpoint-every") {
+		t.Errorf("the default was refused: %v", err)
+	}
+	if err := run("--detach", "--checkpoint-every", "0"); err != nil && strings.Contains(err.Error(), "--checkpoint-every") {
+		t.Errorf("turning checkpoints off was refused: %v", err)
+	}
+}
+
+// attach checkpoints a run only when this host started it on a repository that
+// is still here, on the same sandboxd, and it has not finished; a name resolves
+// to the run started under it.
+func TestAttachedSession(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy()}).Handler())
+	defer srv.Close()
+	c, _ := api.NewClient(srv.URL, "")
+	ctx := context.Background()
+	repo := t.TempDir()
+	mk := func(name string, s workspace.Session) string {
+		sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Sandbox = sb.ID
+		if err := s.Save(); err != nil {
+			t.Fatal(err)
+		}
+		return sb.ID
+	}
+	mk("live", workspace.Session{Context: "t", Repo: repo})
+	mk("done", workspace.Session{Context: "t", Repo: repo, Done: true})
+	mk("moved", workspace.Session{Context: "t", Repo: filepath.Join(repo, "gone")})
+	mk("other", workspace.Session{Context: "elsewhere", Repo: repo})
+	if _, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{Name: "norecord"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if s, ok := attachedSession(ctx, c, "t", "live"); !ok || s.Repo != repo {
+		t.Errorf("live: %v %v", s, ok)
+	}
+	for _, ref := range []string{"done", "moved", "other", "norecord", "nonexistent"} {
+		if _, ok := attachedSession(ctx, c, "t", ref); ok {
+			t.Errorf("%s was checkpointed", ref)
+		}
 	}
 }

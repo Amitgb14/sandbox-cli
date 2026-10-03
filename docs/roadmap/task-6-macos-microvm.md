@@ -1,5 +1,9 @@
 # Task 6 — macOS microVM
 
+> **Superseded 2026-10-01.** macOS uses its native `container` runtime (macOS 26+, arm64),
+> not libkrun: the OS runs the VM, sandbox-cli ships the image and the guest agent. See
+> [`docs/rewrite/PLAN.md`](../rewrite/PLAN.md) (M3, M6). Kept as history.
+
 **Goal.** Make the stronger boundary reachable on the platform most users are actually on.
 Today `--runtime kata-runtime` and `--runtime runsc` cannot be selected on Docker Desktop
 at all, so every mac and Windows user is on a shared kernel with no way off it.
@@ -24,8 +28,8 @@ Desktop already runs everything in a VM, and the boundary you have is the contai
 Two things changed. The gap is now the largest single hole in what the tool claims — the
 README's own comparison table concedes isolation is the one row it does not win, and
 `doctor` cannot even *ask* the question on macOS. And the platform answer now exists:
-**libkrun** is a Red Hat-backed library that embeds a KVM (Linux) or Hypervisor.framework
-(macOS) microVM directly in a process, and **Microsandbox** ships it today with a dedicated
+**libkrun** is a library that embeds a KVM (Linux) or Hypervisor.framework
+(macOS) microVM directly in a process, and an open-source project ships it today with a dedicated
 kernel per sandbox and sub-200ms starts. This is no longer "Firecracker later"; it is a
 thing that runs on the platform the gap is on.
 

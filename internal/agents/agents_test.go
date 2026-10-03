@@ -155,44 +155,6 @@ func TestEveryAgentHasAVerifiedHeadlessArgv(t *testing.T) {
 	}
 }
 
-// Every line the claude bootstrap prints must go to stderr.
-//
-// stdout belongs to the agent: `claude -p` writes its answer there and a fleet's
-// verify reads it, so one chatty install line would corrupt the only thing that
-// run exists to produce. The bootstrap now says a lot more than it used to —
-// announcing the install, and explaining a failure — which is exactly why this
-// needs pinning rather than trusting.
-func TestClaudeBootstrapNeverWritesToStdout(t *testing.T) {
-	for i, line := range strings.Split(ClaudeBootstrap, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "echo ") {
-			continue
-		}
-		if !strings.HasSuffix(trimmed, ">&2") {
-			t.Errorf("line %d prints to stdout, which belongs to the agent: %q", i+1, trimmed)
-		}
-	}
-	// The installer's own output is redirected too — it is the noisiest part.
-	if !strings.Contains(ClaudeBootstrap, `bash "$installer" >&2`) {
-		t.Error("the installer's output is not redirected to stderr")
-	}
-}
-
-// The install must be bounded and must judge itself on the outcome. Both were
-// learned from a report where a silent, unbounded install read as a hung agent
-// for an evening.
-func TestClaudeBootstrapIsBoundedAndChecksTheOutcome(t *testing.T) {
-	for _, want := range []string{
-		"--connect-timeout",                           // an unreachable host fails in seconds
-		`command -v timeout`,                          // ...and the bound is not assumed to exist
-		`if [ ! -x "$HOME/.local/bin/claude" ]; then`, // judged on the binary, not on exit codes
-	} {
-		if !strings.Contains(ClaudeBootstrap, want) {
-			t.Errorf("claude bootstrap is missing %q", want)
-		}
-	}
-}
-
 // A console prompt is only ever appended where the descriptor says how.
 //
 // Written from a real failure: Console appended the prompt as a bare positional
@@ -228,5 +190,24 @@ func TestConsoleSeedsOnlyWhereTheDescriptorSaysHow(t *testing.T) {
 	// seedable has to come with evidence rather than a hunch.
 	if d, ok := Lookup("opencode"); ok && d.CanSeedConsole() {
 		t.Error("opencode is marked seedable; its bare positional is a project directory, so a prompt there becomes a path")
+	}
+}
+
+// Every interactive-only agent can be started and forwards something, and no
+// name is defined twice: a wrapper must resolve to exactly one descriptor.
+func TestInteractiveAgentsAreComplete(t *testing.T) {
+	for name, d := range interactive {
+		if _, dup := registry[name]; dup {
+			t.Errorf("%s is both headless and interactive-only", name)
+		}
+		if d.Name != name || len(d.Command) == 0 || len(d.EnvAllow) == 0 {
+			t.Errorf("%s: incomplete descriptor %+v", name, d)
+		}
+		if d.AutonomousArgs != nil {
+			t.Errorf("%s claims a headless mode from the interactive table", name)
+		}
+	}
+	if got := len(InteractiveNames()); got != 12 {
+		t.Errorf("%d agents have wrappers, want 12", got)
 	}
 }

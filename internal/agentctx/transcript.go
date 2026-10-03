@@ -1,9 +1,16 @@
+// Package agentctx reads agents' conversation transcripts.
+//
+// Only the claude-jsonl reader is here so far: it is the one format verified
+// against real transcripts, and handoff needs it. The session store — finding,
+// listing and resuming conversations — is beta.15's _old/internal/agentctx, and
+// comes back with `context list`.
 package agentctx
 
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -42,42 +49,21 @@ func Transcript(path string, n int) ([]Message, error) {
 		return nil, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, errNotRegular(path)
+		return nil, fmt.Errorf("not a regular file: %s", path)
 	}
-	// Which reader, decided by the file: this entry point is for callers holding
-	// only a path. One that knows the agent should call TranscriptOf, so the
-	// registry's recorded format decides rather than a guess at the first lines.
-	return TranscriptOf("", path, n)
-}
-
-// TranscriptOf is Transcript for a caller that already knows the format.
-//
-// Two ways of deciding which reader runs is one too many: `List` dispatches on
-// the registry's `Finding.Format` while `Transcript` sniffs the file, and a
-// rollout whose `session_meta` is not in the first few lines would list with a
-// correct title and turn count and then render as an empty conversation — and
-// brief the next agent with an empty transcript, since handoff.Write treats a
-// parse miss as normal. Where the agent is known, its recorded format decides;
-// the sniff stays for the callers that hold only a path.
-func TranscriptOf(format, path string, n int) ([]Message, error) {
-	if format == "" {
-		format = sniffFormat(path)
-	}
-	if format == FormatCodexRollout {
-		return codexTranscript(path, n)
-	}
-	return claudeMessages(path, n)
-}
-
-// claudeMessages reads a claude-jsonl transcript. Named for the format rather
-// than for the agent, because the pairing is the store descriptor's to make.
-func claudeMessages(path string, n int) ([]Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
+	return ParseTranscript(f, n)
+}
+
+// ParseTranscript is Transcript for a transcript already in hand — one read out
+// of a sandbox over the API, where there is no host path to Lstat, and the guest
+// answered with file contents rather than a link.
+func ParseTranscript(r io.Reader, n int) ([]Message, error) {
+	sc := bufio.NewScanner(r)
 	// Same limit List uses, and for the same reason: one tool result can be
 	// megabytes, and the default 64KB would stop the scan partway through.
 	sc.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
@@ -216,40 +202,62 @@ func FirstPrompt(path string) (string, bool) {
 	return "", false
 }
 
-// errNotRegular is the refusal shared by every reader here: these files live in
-// a directory the agent can write, so a symlink named like a transcript must be
-// refused rather than followed and rendered.
-func errNotRegular(path string) error {
-	return fmt.Errorf("not a regular file: %s", path)
+// claudeLine is the part of one transcript line this package reads. Everything
+// else in the line is ignored by encoding/json, which is what keeps the reader
+// from breaking every time Claude Code adds a field.
+//
+// Timestamp is a string rather than a time.Time on purpose: a single line with an
+// unparseable date would otherwise fail to decode entirely, losing the fields
+// next to it.
+type claudeLine struct {
+	Type        string `json:"type"`
+	SessionID   string `json:"sessionId"`
+	Cwd         string `json:"cwd"`
+	Timestamp   string `json:"timestamp"`
+	IsMeta      bool   `json:"isMeta"`
+	IsSidechain bool   `json:"isSidechain"`
+	AITitle     string `json:"aiTitle"`
+	LastPrompt  string `json:"lastPrompt"`
+	Message     *struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	} `json:"message"`
 }
 
-// sniffFormat reads far enough to tell a codex rollout from a claude transcript.
-//
-// Bounded to the first few lines: a rollout's session_meta is line one, and a
-// file that has not said what it is by then is read as claude's — the format
-// this package was written against, and the one whose reader treats an
-// unrecognised line as skippable rather than fatal.
-func sniffFormat(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return FormatClaudeJSONL
+// userPromptText reports whether a user message is a prompt someone typed, and
+// returns its text. Content is either a string (the plain case) or a block array;
+// an array holding a tool_result is the tool-call return path, while an array
+// with text blocks is a real prompt that carried an attachment.
+func userPromptText(content json.RawMessage) (string, bool) {
+	trimmed := strings.TrimSpace(string(content))
+	if trimmed == "" {
+		return "", false
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for i := 0; i < 4 && sc.Scan(); i++ {
-		var probe struct {
-			Type    string `json:"type"`
-			Payload *struct {
-				SessionID string `json:"session_id"`
-			} `json:"payload"`
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(content, &s); err != nil || strings.TrimSpace(s) == "" {
+			return "", false
 		}
-		if json.Unmarshal(sc.Bytes(), &probe) != nil {
-			continue
+		return s, true
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(content, &blocks); err != nil {
+		return "", false
+	}
+	var text string
+	for _, b := range blocks {
+		if b.Type == "tool_result" {
+			return "", false
 		}
-		if probe.Type == "session_meta" && probe.Payload != nil {
-			return FormatCodexRollout
+		if b.Type == "text" && text == "" {
+			text = b.Text
 		}
 	}
-	return FormatClaudeJSONL
+	if text == "" {
+		return "", false
+	}
+	return text, true
 }

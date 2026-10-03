@@ -23,7 +23,7 @@ max_parallel: 2
 defaults:
   memory: 8g
   allow: [example.com]
-  cache: true
+  git: true
 tasks:
   - branch: feature-a
     prompt: implement the login form
@@ -244,5 +244,16 @@ func TestConcurrency(t *testing.T) {
 		if got := (Spec{MaxParallel: c.max, Tasks: three}).Concurrency(); got != c.want {
 			t.Errorf("max_parallel %d: concurrency = %d, want %d", c.max, got, c.want)
 		}
+	}
+}
+
+// beta.15's cache volumes are gone. A file that still asks for them is refused
+// with what to do instead, rather than accepted and silently ignored — a fleet
+// that quietly re-downloads every dependency is not what the file's author
+// thought they had.
+func TestCacheIsRefusedNotIgnored(t *testing.T) {
+	p := writeSpec(t, "defaults: {cache: true}\ntasks:\n  - {branch: a, prompt: x}\n")
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "volume") {
+		t.Fatalf("err = %v, want a refusal pointing at volumes", err)
 	}
 }

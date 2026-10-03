@@ -30,9 +30,14 @@ jobs:
       # Cheapest first: a formatting or vet failure should not wait behind the
       # suite. `gofmt -l` prints offending files and exits 0, so the file list
       # is what has to fail the step.
+      #
+      # cmd and internal only: _old/ is the beta.15 tree kept to port from. The
+      # Go tool skips it (vet, test and build never see it), it is frozen, and
+      # it is deleted when the rewrite is done, so formatting it is not worth a
+      # red build.
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l .)"
+          unformatted="$(gofmt -l cmd internal)"
           if [ -n "$unformatted" ]; then
             echo "not gofmt'd:"; echo "$unformatted"; exit 1
           fi
@@ -45,84 +50,20 @@ jobs:
       - name: test
         run: go test ./...
 
-      # The race detector, on the packages whose correctness depends on
-      # concurrency. Not the whole tree: -race is slow, and a package with no
-      # goroutines gains nothing from it.
+      # The race detector. The whole tree while the rewrite is small; narrow it
+      # back to the concurrent packages (spec, egressproxy, session, and later
+      # fleet and studioapi) once -race on everything gets slow.
       - name: test -race
-        run: go test -race ./internal/sandbox/ ./internal/egressproxy/ ./internal/studioapi/ ./internal/fleet/
-
-  # The TypeScript SDK, which is a published package rather than a folder of
-  # examples: it compiles under the same strict settings a consumer would use,
-  # and its tests run a stub daemon over real HTTP so what is asserted is what
-  # crossed the wire.
-  #
-  # Separate from `check` because the verdicts are different sentences: "the Go
-  # tests failed" and "the client no longer matches the contract" send you to
-  # different files.
-  sdk-typescript:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      # The contract the package ships is generated from the Go types. Running
-      # the generator here and failing on a diff is what stops a published SDK
-      # from describing an API the daemon does not have — the same guard
-      # TestContractMirrorIsInSync gives the docs copy.
-      - name: contract is generated, not written
-        run: |
-          make contract
-          if ! git diff --quiet -- sdk/typescript/src/contract.ts docs/studio-api/types.ts; then
-            echo "the checked-in contract differs from what the generator produces:"
-            git --no-pager diff -- sdk/typescript/src/contract.ts docs/studio-api/types.ts
-            exit 1
-          fi
-
-      - name: build and test
-        working-directory: sdk/typescript
-        run: |
-          npm ci --no-audit --no-fund
-          npm run build
-          npm test
+        run: go test -race ./...
 
   # Compile every target the release actually ships. Kept a separate job so its
   # verdict is legible on its own: "the release would not build" is a different
   # sentence from "a test failed".
   #
-  # Mirrors .goreleaser.yaml's builds block — {linux,darwin,windows} ×
-  # {amd64,arm64}, CGO_ENABLED=0. If that list changes, change this one; a sweep
-  # that has drifted from what ships is worse than none, because it reassures.
-  sdk-python:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        # Both ends, because the floor is what breaks and the ceiling is what
-        # people run. 3.9 is what macOS still ships as /usr/bin/python3, which is
-        # the interpreter somebody's agent script finds without choosing it —
-        # `from __future__ import annotations` is what keeps the package working
-        # there, and a test only on a modern version would not notice it going.
-        python: ["3.9", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: test
-        working-directory: sdk/python
-        run: |
-          python -m pip install --quiet pytest
-          python -m pytest -q
-
+  # Covers .goreleaser.yaml's builds — sandbox-cli on {linux,darwin,windows} ×
+  # {amd64,arm64}, sandboxd and the guest agent on a subset of those — by
+  # building every package for every pair, CGO_ENABLED=0. If a target is added
+  # there, add it here; a sweep that has drifted from what ships reassures.
   build-matrix:
     runs-on: ubuntu-latest
     strategy:
@@ -149,3 +90,34 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
+
+  # Studio's UI: typecheck, lint, the static export sandbox-cli embeds, and the
+  # end-to-end suite against `sandbox-cli studio` in front of an in-memory
+  # sandboxd (studio/e2e). The site in web/ gets the first three.
+  frontends:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Studio — typecheck, lint, build
+        working-directory: studio
+        run: npm ci --no-audit --no-fund && npm run typecheck && npm run lint && npm run build
+
+      - name: Studio — end to end
+        run: |
+          go build -o bin/sandbox-cli ./cmd/sandbox-cli
+          go build -o bin/sandboxd ./cmd/sandboxd
+          cd studio && npx playwright install --with-deps chromium && npm run test:e2e
+
+      - name: Web — typecheck, lint, build
+        working-directory: web
+        run: npm ci --no-audit --no-fund && npx tsc --noEmit && npm run lint && npm run build

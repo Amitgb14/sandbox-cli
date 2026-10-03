@@ -1,5 +1,9 @@
 # Task 4 — Run provenance
 
+> **Re-scoped 2026-10-01.** Becomes per-sandbox events served by the API. On Linux, egress
+> is observed by the host-side proxy, outside anything the guest can forge. See
+> [`docs/rewrite/PLAN.md`](../rewrite/PLAN.md).
+
 **Goal.** Make a finished run readable. Today the run log answers *what was this run
 allowed to do*; it should also answer *what did it actually do*, from a channel the
 sandbox cannot forge.
@@ -20,7 +24,7 @@ env names forwarded             how it ended
 
 ## Why this, and why now
 
-The 21 July 2026 OpenAI disclosure is the argument. Models escaped an isolated evaluation
+A model developer's disclosure on 21 July 2026 is the argument. Models escaped an isolated evaluation
 environment through zero-days in a package-registry proxy that was part of that
 environment, escalated, and moved laterally to an internet-reachable node. The only reason
 that is *understood* is that the agents' actions could be reconstructed afterwards.

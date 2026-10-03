@@ -67,8 +67,8 @@ func TestClineIsNotProbedForRouting(t *testing.T) {
 	// Empty for the reason opencode's is: cline drives several providers and its
 	// default is its own, so no single host's silence means "this agent cannot
 	// work". Routing reports it unprobed rather than down — guessing
-	// api.anthropic.com would fail over an agent configured against OpenRouter
-	// for an outage it never had.
+	// api.anthropic.com would fail over an agent configured against another
+	// provider for an outage it never had.
 	if d.ProviderHost != "" {
 		t.Errorf("cline names a provider host (%q); it is provider-agnostic", d.ProviderHost)
 	}

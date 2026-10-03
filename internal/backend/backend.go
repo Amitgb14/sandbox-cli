@@ -1,0 +1,174 @@
+// Package backend is the seam between what a sandbox should be and the thing
+// that makes one: a VM under the macOS `container` runtime, a Firecracker
+// microVM, or the in-memory fake.
+//
+// The old tree had a Runtime interface, but it was docker-shaped and twelve
+// files named the concrete docker client anyway. Here the server holds a
+// Backend and nothing else. A backend does not decide policy — spec has already
+// resolved the request against the server's limits and network ceiling — and it
+// does not keep the sandbox list; the server does, so that a reference is only
+// ever matched against sandboxes this server created.
+//
+// What a backend must do is report honestly what it can honour, through
+// Capabilities, so that a request needing more is refused before it reaches the
+// backend rather than quietly weakened inside it.
+package backend
+
+import (
+	"context"
+	"errors"
+	"io"
+	"time"
+
+	"github.com/Amitgb14/sandbox-cli/internal/api"
+)
+
+// Spec is a fully resolved sandbox: every default applied, every limit checked,
+// every policy decision made. A backend renders it; it never second-guesses it.
+type Spec struct {
+	ID       string
+	Image    string
+	CPUs     float64
+	MemoryMB int
+	DiskMB   int
+	Env      map[string]string
+	Network  api.NetworkPolicy
+	// IdleTimeoutSecs is enforced by the server, not the backend; carried here
+	// so the resolved spec is the whole decision.
+	IdleTimeoutSecs int
+	// Bind, when set, is a host directory — already resolved and checked by
+	// hostpath — to mount at /workspace.
+	Bind *Bind
+	// FromSnapshot, when set, starts the sandbox from a snapshot of another —
+	// memory, processes and disk as they were — instead of booting the image.
+	FromSnapshot string
+	// Volumes are mounted at their paths. The server has checked that each
+	// exists, is attached nowhere else, and that the paths are allowed.
+	Volumes []api.VolumeMount
+}
+
+// VolumeStore keeps named volumes: filesystems that outlive the sandboxes they
+// are mounted in. The backend's own storage is the record of what exists, so
+// volumes survive a restart of sandboxd, which keeps no sandbox records.
+type VolumeStore interface {
+	CreateVolume(ctx context.Context, name string, sizeMB int) error
+	DeleteVolume(ctx context.Context, name string) error
+	Volumes(ctx context.Context) ([]VolumeInfo, error)
+}
+
+// VolumeInfo is one stored volume.
+type VolumeInfo struct {
+	Name      string
+	SizeMB    int
+	CreatedAt time.Time
+}
+
+// Suspender can stop a sandbox and bring it back later with its memory,
+// processes and disk exactly as they were, costing no CPU or memory meanwhile.
+type Suspender interface {
+	Suspend(ctx context.Context, id string) error
+	Resume(ctx context.Context, id string) error
+}
+
+// Snapshotter can capture a running sandbox — memory and disk — without
+// stopping it, and start new sandboxes from the capture (Spec.FromSnapshot).
+type Snapshotter interface {
+	Snapshot(ctx context.Context, id, snapshotID string) (SnapshotInfo, error)
+	DeleteSnapshot(ctx context.Context, snapshotID string) error
+}
+
+// SnapshotInfo describes a capture.
+type SnapshotInfo struct {
+	ID       string
+	Bytes    int64 // on the host's disk
+	Image    string
+	CPUs     float64
+	MemoryMB int
+	DiskMB   int
+}
+
+// Dialer can open a TCP connection to a port on the guest's own loopback —
+// a tunnel, which is how a dev server in a sandbox is reached without
+// publishing anything on the network.
+type Dialer interface {
+	DialGuest(ctx context.Context, id string, port int) (io.ReadWriteCloser, error)
+}
+
+// Bind is a host directory mounted at /workspace.
+type Bind struct {
+	HostPath string // absolute, symlinks resolved, refused if /, home or an ancestor
+	ReadOnly bool
+}
+
+// ProcSpec is one process to start inside a sandbox. Env is merged over the
+// sandbox's own by the server before it gets here.
+type ProcSpec struct {
+	Argv []string
+	Env  map[string]string
+	Cwd  string
+	// Tty runs the process on a terminal of Rows x Cols; its stdout and stderr
+	// are then one stream, delivered on stdout.
+	Tty        bool
+	Rows, Cols uint16
+}
+
+// Resizer is a Proc on a terminal whose size can change.
+type Resizer interface {
+	Resize(rows, cols uint16) error
+}
+
+// Proc is a started process.
+type Proc interface {
+	// Stdin is the process's standard input. Closing it delivers EOF.
+	Stdin() io.WriteCloser
+	// Signal delivers one of api.Signals.
+	Signal(sig string) error
+	// Wait blocks until the process exits and returns its exit code — 128+n for
+	// death by signal n, as a shell reports it — once every write to the stdout
+	// and stderr writers passed to Start has returned.
+	Wait() int
+}
+
+// Backend makes and runs sandboxes.
+type Backend interface {
+	// Name identifies the backend in /v1/capabilities ("fake", "macos",
+	// "firecracker").
+	Name() string
+	// Capabilities reports which api.Cap* this backend honours. Absent means no.
+	Capabilities() map[string]bool
+
+	// Create makes the sandbox and returns once it is running.
+	Create(ctx context.Context, s Spec) error
+	// UpdateNetwork replaces a running sandbox's egress policy, atomically: there
+	// is no moment where neither the old nor the new policy is in force. Only
+	// called when Capabilities includes api.CapNetworkPolicyUpdate.
+	UpdateNetwork(ctx context.Context, id string, p api.NetworkPolicy) error
+	// Terminate stops every process and discards the sandbox. Terminating an
+	// unknown or already-terminated id is not an error.
+	Terminate(ctx context.Context, id string) error
+
+	// Start runs a process, copying its output to stdout and stderr as it is
+	// produced. Start returns as soon as the process is running.
+	Start(ctx context.Context, id string, p ProcSpec, stdout, stderr io.Writer) (Proc, error)
+
+	// File operations take absolute guest paths, already validated by the server.
+	ReadFile(ctx context.Context, id, path string) ([]byte, error)
+	WriteFile(ctx context.Context, id, path string, data []byte) error
+	Remove(ctx context.Context, id, path string) error
+	ListDir(ctx context.Context, id, path string) ([]api.DirEntry, error)
+}
+
+// Errors a backend returns for the server to map onto API codes. Anything else
+// is reported as internal.
+var (
+	ErrNotFound    = errors.New("not found")
+	ErrIsDir       = errors.New("is a directory")
+	ErrNotDir      = errors.New("not a directory")
+	ErrNotEmpty    = errors.New("directory not empty")
+	ErrReadOnly    = errors.New("read-only file system")
+	ErrNoSuchCmd   = errors.New("no such command")
+	ErrBadSignal   = errors.New("unsupported signal")
+	ErrUnavailable = errors.New("backend unavailable")
+	ErrBusy        = errors.New("busy")
+	ErrUnsupported = errors.New("unsupported for this sandbox")
+)

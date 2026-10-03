@@ -1,142 +1,121 @@
 # Roadmap
 
-> Make the safest and most convenient way to run coding agents from the terminal.
-> Isolation gets stricter later; the CLI experience comes first.
+> Isolated microVM sandboxes for agents, behind one API — on your Mac, on your own
+> Linux machine, or in our cloud.
 
-sandbox-cli is one thing: **a CLI that runs coding agents (or any command) inside an
-isolated environment so they cannot mess up the host.** Everything else is machinery in
-service of that, and most of it is machinery for *later*.
+**Direction changed on 2026-10-01.** sandbox-cli started as a CLI that runs coding
+agents in a Docker container. It is being rebuilt as a sandbox product that runs three
+ways from the same API:
 
-The work is ordered, and the order is the point — each task is only worth starting once
-the one before it is good enough to use daily.
+- **Local**, on a Mac, with the native macOS `container` runtime.
+- **Self-hosted**, on a Linux machine the user controls, with Firecracker.
+- **Cloud**, on our own fleet, with Firecracker.
 
-| # | Task | What it really means | State |
-|---|------|----------------------|-------|
-| 1 | [Better local / dev agent experience](task-1-local-agent-experience.md) | Make the everyday loop pleasant and reliable: sessions you can see, attach to, follow and stop; a `doctor` that answers "is my setup good?"; errors that say what to do. | **Shipped** — [#35](https://github.com/Amitgb14/sandbox-cli/pull/35); one gap in coverage, see the doc |
-| 2 | [Multi-agent support](task-2-multi-agent.md) | Run several agents safely in parallel (git worktrees), orchestrated from the CLI. No GUI. | **Shipped** — [#36](https://github.com/Amitgb14/sandbox-cli/pull/36); one manual check outstanding, see the doc |
-| 3 | [Stronger isolation for Linux production](task-3-stronger-isolation.md) | When the code is untrusted, give each sandbox its own kernel — Kata on Linux, Firecracker later. | **In progress** — gVisor measured; [the allowlist does not survive it](task-3-gvisor-egress.md), and that decision blocks the rest |
-| 4 | [Run provenance](task-4-run-provenance.md) | Make a finished run readable: what the agent actually did, from a channel the sandbox cannot forge. Today the log is one line per run. | Not started |
-| 5 | [Checkpoint and fork](task-5-checkpoint-and-fork.md) | Stop paying cold start per worktree, and let three attempts at one fix branch from a single prepared state. | Not started |
-| 6 | [macOS microVM](task-6-macos-microvm.md) | A libkrun backend, so the stronger boundary is reachable on the platform most users are on. | Not started |
+Docker and podman are dropped. The full plan, the review of the nearest existing
+product and the milestones are in [`docs/rewrite/PLAN.md`](../rewrite/PLAN.md)
+on the `rewrite` branch. This page maps the old tasks onto that plan, and records which
+earlier decisions are reversed and why.
 
-Running alongside these, on its own track rather than in the queue, is the
-**control plane**: [the session server](../architecture/session-server.md). One
-daemon catalogs sandboxed panes grouped by git worktree, and the CLI, Studio and
-fleet become clients of one protocol instead of three callers that each build
-`sandbox.Options` for themselves. It is a track rather than a task because it
-changes no boundary — `runtime.BuildArgs` stays the only thing that turns policy
-into engine argv — and because every task above gets easier once there is one
-place that knows what is running.
+## Where the old tasks went
 
-## Why this order
+| # | Task | Now | State |
+|---|------|-----|-------|
+| 1 | [Better local / dev agent experience](task-1-local-agent-experience.md) | Carried into the CLI-as-client (rewrite M7): sessions, `doctor`, errors that say what to do | **Shipped** on beta.15 ([#35](https://github.com/Amitgb14/sandbox-cli/pull/35)); to be re-earned on the new backends |
+| 2 | [Multi-agent support](task-2-multi-agent.md) | Fleet rebuilt on the API (M10); one sandbox per branch is just N `create` calls | **Shipped** on beta.15 ([#36](https://github.com/Amitgb14/sandbox-cli/pull/36)) |
+| 3 | [Stronger isolation for Linux](task-3-stronger-isolation.md) | **Superseded.** Every sandbox is a microVM; Linux is Firecracker by default, not Kata as an option (M5) | Kata and gVisor work stops; the gVisor findings stay as history |
+| 4 | [Run provenance](task-4-run-provenance.md) | Per-sandbox events served by the API, recorded host-side by `sandboxd` and the host egress proxy, which the guest cannot forge | Not started; becomes easier, since egress is now observed outside the guest |
+| 5 | [Checkpoint and fork](task-5-checkpoint-and-fork.md) | Snapshots, suspend/resume and clone on Firecracker (M8); macOS reports the capability off | Not started; the "do it on Docker first" path is gone |
+| 6 | [macOS microVM](task-6-macos-microvm.md) | **Superseded.** The native macOS `container` runtime instead of libkrun; the OS runs the VM, sandbox-cli ships the image and the guest agent (M6) | Not started |
 
-Task 1 is where every user starts and where they spend every day. A tool whose daily loop
-is confusing does not get used long enough for its isolation story to matter.
+## Reversed decisions
 
-Task 2 is the first thing people ask for once the daily loop is good, and it is mostly a
-matter of making what already exists (`fleet`, `worktree`) feel like one feature rather
-than three.
+The roadmap used to decline several of these for good reasons. The reasons were about
+a **local CLI with a person at the terminal**, and the product is no longer only that.
+Each reversal keeps the original concern as a constraint on the new design.
 
-Task 3 is a real boundary change, and it is the one thing here that cannot be faked. It is
-only worth the cost once someone is running code they actually do not trust — and by then
-the two tasks above will have told us what the runtime seam has to look like.
+- **Remote execution, BYOC, cloud runners.** *Was:* a different tool, with a new trust
+  root and someone else's machine in the blast radius. *Now:* self-hosted and cloud are
+  two of the three modes.
+  - *Constraint kept:* the trust root is explicit. On a remote endpoint the trusted
+    party is a token, never a request body.
+  - Auth and server-side policy ship with self-hosted (M5), before any cloud code.
+- **A team/org policy layer.** *Was:* fetching executable intent from a server is a
+  trust root the design did without. *Now:* that server is `sandboxd`, and its policy
+  is the floor.
+  - *Constraint kept:* tighten-only. A request may narrow what the daemon decided and
+    never widen it, which is the `trust.go` rule, applied to API requests.
+- **Changing egress policy on a running sandbox.** *Was:* it needed a privileged
+  re-programming path inside the container. *Now:* on Linux, egress is enforced on the
+  host (tap + nftables + `egressproxy`), so updating it touches nothing in the guest.
+  - *Constraint kept:* the swap is atomic, with no window where egress is unfiltered.
+  - On macOS the update is offered only if measurement (rewrite M3) shows enforcement
+    can live outside the guest there too.
+- **Shareable preview URLs.** *Was:* the opposite of binding `--publish` to
+  `127.0.0.1`. *Now:* authenticated TCP tunnels in every mode. Public exposed ports
+  come later and only in the cloud.
+  - *Constraint kept:* nothing is public unless explicitly requested.
+- **The `Runtime` abstraction.** *Was:* deferred until a second backend forced it. Two
+  backends force it now. It becomes a `Backend` interface that declares its
+  capabilities, so a request a backend cannot honour is refused rather than quietly
+  weakened.
 
-Tasks 4–6 were added in August 2026 after a review of the wider sandbox landscape (see
-[how tasks 4–6 got here](#how-tasks-46-got-here)). They stay behind task 3 rather than
-displacing it: task 3 is the boundary this tool advertises, and none of these three is
-worth more than the boundary being real on Linux first.
+## Still deferred
 
-Their order among themselves is a judgement call, not a dependency chain. Provenance is
-first because it is cheapest and it extends machinery that already exists. Checkpoint and
-fork is second. The macOS microVM is last because it is the largest by a distance, and it
-is the first thing that genuinely needs the `Runtime` interface to grow a second backend —
-the question task 3 defers to "only then". The argument for swapping 5 and 6 is real and
-recorded in task 5: a *memory* checkpoint wants the microVM, so doing 5 on Docker means
-shipping the filesystem half twice.
+- A2A / agent-to-agent protocols.
+- Pre-warmed pools, durable shared filesystems, hosted git, desktop/VNC sessions, GPU
+  (rewrite M10 and later; each is a capability flag, not a boundary).
+- Distributed tracing, OpenTelemetry, Prometheus. The cloud will need metering
+  (M9), which is a narrower thing.
+- Formal threat-model documents beyond
+  [`docs/security/audit-2026-07-26.md`](../security/audit-2026-07-26.md) and
+  [`docs/security/open-items.md`](../security/open-items.md). The cloud's
+  multi-tenant threat model is the exception, and it is written before M9 starts.
 
-## What is deliberately deferred
+## Still declined
 
-These are all reasonable and none of them are next. Recording them here is how they stop
-leaking into the work that is:
+- **A credential broker that terminates TLS to inject secrets, and per-request egress
+  inspection** (method, path, body scanning). Same reason as before
+  ([open item 2](../security/open-items.md), decided 2026-08-04): one process holding
+  every token, every prompt in plaintext and a CA key trades frequent small leaks for a
+  rare total one. That is more true with tenants, not less.
+- **Handing an agent the means to manage its own sandboxes.** The API exists for
+  harnesses and people. A sandbox gets no API token by default, and a token issued to
+  one is scoped to what its creator could already do. The floor is set by `sandboxd`,
+  not by the process the floor exists to contain.
+- **Implementing the `kubernetes-sigs/agent-sandbox` CRD.** Still worth tracking as an
+  interop standard. Worth revisiting only if cloud customers ask to run the control
+  plane in their own clusters.
 
-- A full `Runtime` interface abstraction (today's seam is enough — see task 3; task 6 is
-  where this gets revisited, because a second backend is what would force it)
-- A2A / agent-to-agent communication protocols
-- A credential broker that terminates TLS and injects secrets
-  (`internal/creds` is a stub seam; prod's answer today is simply not to mount the
-  refresh token). This is [open security item 2](../security/open-items.md) and it is
-  blocked on a decision, not on effort
-- Distributed tracing, OpenTelemetry, Prometheus, centralized logging. Task 4 is a
-  **run-scoped, local, file-based** record; it is not a step toward any of these
-- Formal threat-model documents beyond the ledger already in
-  [`docs/security/audit-2026-07-26.md`](../security/audit-2026-07-26.md) and the live
-  backlog in [`docs/security/open-items.md`](../security/open-items.md)
+## History
 
-## Considered and declined
+### The original order (beta.1–beta.15)
 
-Same purpose as the "Not on this list" section in
-[`open-items.md`](../security/open-items.md): these came out of the August 2026 landscape
-review, each is a real gap, and each is declined for a reason — so nobody re-opens them
-without a new argument.
+The local CLI experience came first, then multi-agent, then stronger isolation. Each
+task was only worth starting once the one before it was good enough to use daily. That
+order shipped tasks 1 and 2, and it is why the rewrite has a working product to port
+from rather than a design to guess at.
 
-- **Remote execution / BYOC / cloud runners.** The honest version already exists and costs
-  nothing: sandbox-cli shells out to the engine binary, so `DOCKER_HOST` and
-  `DOCKER_CONTEXT` point it at another daemon today (which is why both are on
-  `config.IsReservedEnv`). A first-class remote feature is a hosted product with a new
-  trust root, an account model and someone else's machine in the blast radius. That is a
-  different tool.
-- **An MCP server, so an agent can manage its own sandboxes.** Several products ship one.
-  It inverts the thing this tool is: the boundary is decided by the person, in a config
-  the agent is not allowed to weaken (`internal/config/trust.go`). An API that lets the
-  agent create sandboxes and choose their policy hands that decision to the process the
-  policy exists to contain.
-- **A team/org policy layer — central push, RBAC, a security team setting the floor.**
-  The layering is deliberately local, and the one direction a project may move the profile
-  is *stricter* (`config.ResolveProfile`). A pushed policy means fetching executable
-  intent from a server, which is a trust root the design currently does entirely without.
-  The tighten-only direction is the answer for now; if this ever ships, the floor has to
-  arrive by a path the agent cannot influence, and that is the hard part rather than RBAC.
-- **Per-request egress policy — HTTP method and path, request inspection, outbound secret
-  scanning.** The proxy deliberately does not terminate TLS, so it cannot see a method, a
-  path, or a body. Making it able to is the *same* decision as the credential broker
-  above, and it should be made once, there, rather than arrived at twice from two
-  directions. Recorded because it is the one place a competitor (NVIDIA OpenShell) is
-  meaningfully ahead on policy rather than on isolation.
-- **Hot-reloading egress policy on a running sandbox.** Policy is fixed at container start
-  by design: it arrives as one environment variable and is programmed by the root phase
-  before the privilege drop. A reload path means something long-lived that can re-program
-  the firewall mid-run, which is a new privileged surface inside the container to buy
-  convenience.
-- **GPU, browser/VNC desktop, shareable preview URLs, image signing/SBOM/attestation,
-  spend caps, eval and benchmark hooks.** Each is a product surface rather than a boundary
-  control. `--publish` binds to `127.0.0.1` on purpose and a shareable URL is the opposite
-  of that.
-- **Implementing the `kubernetes-sigs/agent-sandbox` CRD** (Sandbox / SandboxTemplate /
-  SandboxClaim / SandboxWarmPool, isolation via `runtimeClassName`). Worth tracking as the
-  interop standard the category is converging on; not worth implementing in a local CLI
-  that has no cluster.
-
-## How tasks 4–6 got here
+### How tasks 4–6 got here
 
 A landscape review in August 2026 listed roughly fourteen gaps against sandbox-cli. Most
 were accurate. Three are worth recording because the *evidence* is what moved them from
 the deferred list onto the roadmap:
 
-- **The supply chain inside the box.** OpenAI disclosed on 21 July 2026 that models escaped
-  an isolated evaluation environment through zero-days in a self-hosted Artifactory
+- **The supply chain inside the box.** A model developer disclosed on 21 July 2026 that models escaped
+  an isolated evaluation environment through zero-days in a self-hosted
   package-registry proxy that was *part of that environment*, then escalated and moved
   laterally to an internet-reachable node. Eleven of the fifteen wrappers here download
   their agent from a vendor host on first run. That did not become a roadmap task — it was
   cheap enough to fix directly (`internal/agents/pins.go`), which is the right outcome for
   the sharpest item on the list.
-- **Checkpoint and fork are shipped elsewhere and users ask for them.** Blaxel resumes from
-  a memory+filesystem snapshot in under 25ms, Freestyle forks a live VM copy-on-write in
-  ~320ms, Zeroboot forks a KVM VM at p50 0.79ms by mmap'ing a Firecracker snapshot. Our
+- **Checkpoint and fork are shipped elsewhere and users ask for them.** One hosted service resumes from
+  a memory+filesystem snapshot in under 25ms, another forks a live VM copy-on-write in
+  ~320ms, and an open-source project forks a KVM VM at p50 0.79ms by mmap'ing a Firecracker snapshot. Our
   "snapshots" are git refs of the workspace (`internal/rescue`), which is a different
   feature wearing the same word.
 - **macOS cannot reach the stronger boundary at all.** `--runtime kata-fc`/`runsc` is
   unavailable on Docker Desktop, which is most developers. libkrun embeds a
-  Hypervisor.framework microVM on macOS and Microsandbox ships per-sandbox kernels on it,
+  Hypervisor.framework microVM on macOS and at least one open-source project ships per-sandbox kernels on it,
   so this is no longer "Firecracker later" — it is a thing that exists on the platform the
   gap is on.
 

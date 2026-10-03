@@ -1,25 +1,24 @@
 #!/bin/sh
-# Install sandbox-cli: pick the right release archive for this machine and put
-# the binary in the user's home. No root, no package manager.
+# Install sandbox-cli: pick the right release archives for this machine and put
+# the binaries in the user's home. No root, no package manager.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh
 #
-# Options (when run as a file, e.g. `sh install.sh --version 0.0.1beta.2`):
+# Where sandboxes can run — Linux, and Apple-silicon macOS — this installs the
+# client (sandbox-cli), the server (sandboxd) and the guest agent beside it
+# (sandbox-guestd). Elsewhere it installs the client, which talks to a sandboxd
+# on another machine (sandbox-cli context add).
+#
+# Options (when run as a file, e.g. `sh install.sh --version 0.1.0`):
 #   --version VER   install a specific release        (default: latest)
 #   --dest DIR      install directory                 (default: ~/.local/bin)
 #   --token TOK     GitHub token for a private repo   (or set GITHUB_TOKEN)
+#   --client-only   install sandbox-cli and nothing else
 #   --no-config     do not write ~/.config/sandbox/config.yaml
-#   --with-studio-api  also install sandbox-studio-api from the same archive
-#                   (Studio's control plane; studio.sh passes this)
-#   --uninstall     remove the binaries and stop Studio, then report what else
-#                   is left behind
+#   --uninstall     remove the binaries, then report what else is left behind
 #   --purge         with --uninstall: also delete ~/.config/sandbox (agent
-#                   logins!), the sandbox and Studio images, and cache volumes
-#
-# A first install also writes ~/.config/sandbox/config.yaml — the trusted user
-# layer — carrying the defaults with `profile: dev` and unrestricted egress, so
-# a fresh machine runs any agent without a domain list to maintain. An existing
-# file is never touched, so upgrading cannot reset your settings.
+#                   logins!) and sandboxd's state directory (images, volumes,
+#                   the audit log)
 #
 # POSIX sh; needs curl or wget, plus tar.
 
@@ -33,12 +32,9 @@ TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 UNINSTALL=0
 PURGE=0
 NO_CONFIG=0
-WITH_STUDIO_API=0
-
-# The second binary in the release archive. Not installed by default: it is
-# Studio's HTTP control plane, and somebody installing the CLI has not asked for
-# a server. studio.sh asks for it.
-STUDIO_API="sandbox-studio-api"
+CLIENT_ONLY=0
+SERVER="sandboxd"
+GUEST="sandbox-guestd"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
@@ -49,121 +45,58 @@ while [ $# -gt 0 ]; do
     --dest)      DEST="${2:-}"; shift 2 ;;
     --token)     TOKEN="${2:-}"; shift 2 ;;
     --no-config) NO_CONFIG=1; shift ;;
-    --with-studio-api) WITH_STUDIO_API=1; shift ;;
+    --client-only) CLIENT_ONLY=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge)     PURGE=1; shift ;;
-    -h|--help)   sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
 
 # ---- uninstall --------------------------------------------------------------
-# Deliberately conservative: the binary goes, everything else is only listed
-# unless --purge is given. ~/.config/sandbox holds your agent logins, so
-# deleting it silently would sign you out of Claude/Codex with no warning.
+# Deliberately conservative: the binaries go, everything else is only listed
+# unless --purge is given. ~/.config/sandbox holds your agent logins and
+# sandboxd's state directory holds your volumes, so deleting either silently
+# would lose things nobody asked to lose.
 if [ "$UNINSTALL" = 1 ]; then
   cfg="${XDG_CONFIG_HOME:-${HOME}/.config}/sandbox"
-
-  # Docker may be absent or not running; never let that fail the uninstall.
-  sandbox_images() {
-    command -v docker >/dev/null 2>&1 || return 0
-    docker images --filter reference='sandbox-base' -q 2>/dev/null | sort -u
-  }
-  sandbox_volumes() {
-    command -v docker >/dev/null 2>&1 || return 0
-    docker volume ls --filter name='sandbox-cache-' -q 2>/dev/null
-  }
-  studio_images() {
-    command -v docker >/dev/null 2>&1 || return 0
-    docker images --filter reference='ghcr.io/amitgb14/sandbox-studio-*' -q 2>/dev/null | sort -u
-  }
-
-  # Studio is stopped here, and stopping it is not optional the way deleting an
-  # image is.
-  #
-  # It leaves two things *running*: a UI container, and an API process on your
-  # host holding the docker socket and a port. Removing the binaries while those
-  # stay up is the worst of both — the tool is gone and the server it started is
-  # not — so this happens on a plain --uninstall, and only the artifacts on disk
-  # wait for --purge. It is also what makes `studio.sh uninstall` unnecessary for
-  # anyone who no longer has the script: this installer is the one they already
-  # used to get here.
-  stop_studio() {
-    studio_state="${cfg}/studio"
-    if command -v docker >/dev/null 2>&1; then
-      for c in sandbox-studio-ui sandbox-studio-api; do
-        if docker container inspect "$c" >/dev/null 2>&1; then
-          docker rm -f "$c" >/dev/null 2>&1 || true
-          info "stopped ${c}"
-        fi
-      done
-    fi
-    # The host API, by pid, checked against the process name for the same reason
-    # studio.sh checks it: pids are recycled and this file outlives a reboot.
-    if [ -r "${studio_state}/api.pid" ]; then
-      pid=$(cat "${studio_state}/api.pid" 2>/dev/null || true)
-      if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
-        case "$(ps -p "$pid" -o comm= 2>/dev/null)" in
-          *sandbox-studio-api*) kill "$pid" 2>/dev/null || true; info "stopped the Studio API (pid ${pid})" ;;
-        esac
-      fi
-    fi
-  }
-  stop_studio
+  state="${XDG_DATA_HOME:-${HOME}/.local/share}/sandboxd"
 
   removed=0
-  # Both binaries: an uninstall that left the server behind would leave the one
-  # thing here that listens on a port.
+  # sandbox-studio-api is beta.15's, removed if a machine still has it.
   for d in "$DEST" "${HOME}/.local/bin" /usr/local/bin; do
-    for b in "$BINARY" "$STUDIO_API"; do
+    for b in "$BINARY" "$SERVER" "$GUEST" sandbox-studio-api; do
       if [ -f "${d}/${b}" ]; then
-        rm -f "${d}/${b}"
-        info "removed ${d}/${b}"
-        removed=1
+        # One that is not ours to remove (root's, in /usr/local/bin) is
+        # reported and left: under set -e a failed rm would end the uninstall
+        # before --purge ran, and the user would not know how far it got.
+        if rm -f "${d}/${b}" 2>/dev/null; then
+          info "removed ${d}/${b}"
+          removed=1
+        else
+          info "! could not remove ${d}/${b} (permission); remove it yourself"
+        fi
       fi
     done
   done
   if [ "$removed" = 0 ]; then
-    info "no ${BINARY} binary found in ${DEST}, ~/.local/bin or /usr/local/bin"
+    info "no ${BINARY} binaries found in ${DEST}, ~/.local/bin or /usr/local/bin"
   fi
-
-  imgs=$(sandbox_images)
-  vols=$(sandbox_volumes)
-  simgs=$(studio_images)
+  info "a sandboxd still running keeps running until you stop it (launchctl or systemctl)"
 
   if [ "$PURGE" = 1 ]; then
-    if [ -d "$cfg" ]; then
-      rm -rf "$cfg"
-      info "removed ${cfg}  (config + agent logins)"
-    fi
-    if [ -n "$imgs" ]; then
-      # Unquoted on purpose: one id per line, split into separate arguments.
-      docker rmi -f $imgs >/dev/null 2>&1 || true
-      info "removed sandbox-base image(s)"
-    fi
-    if [ -n "$vols" ]; then
-      docker volume rm $vols >/dev/null 2>&1 || true
-      info "removed sandbox-cache-* volume(s)"
-    fi
-    if [ -n "$simgs" ]; then
-      docker rmi -f $simgs >/dev/null 2>&1 || true
-      info "removed sandbox-studio image(s)"
-    fi
+    for d in "$cfg" "$state"; do
+      if [ -d "$d" ]; then
+        rm -rf "$d"
+        info "removed ${d}"
+      fi
+    done
     info "purge complete"
-  else
-    # Only print the "left behind" report when something actually is.
-    if [ -d "$cfg" ] || [ -n "$imgs" ] || [ -n "$vols" ] || [ -n "$simgs" ]; then
-      info ""
-      info "Left in place — re-run with --uninstall --purge to delete these too:"
-      # `|| true` on each: a failed test is an AND-OR list with status 1, which
-      # `set -e` would otherwise treat as fatal and abort the report mid-way.
-      [ -d "$cfg" ] && info "  ${cfg}  (config + agent logins)" || true
-      [ -n "$imgs" ] && info "  sandbox-base image(s)      docker rmi \$(docker images -q sandbox-base)" || true
-      [ -n "$vols" ] && info "  sandbox-cache-* volume(s)  docker volume rm \$(docker volume ls -q -f name=sandbox-cache-)" || true
-      [ -n "$simgs" ] && info "  sandbox-studio image(s)    docker rmi \$(docker images -q 'ghcr.io/amitgb14/sandbox-studio-*')" || true
-    fi
+  elif [ -d "$cfg" ] || [ -d "$state" ]; then
     info ""
-    info "Your projects and their .sandbox.yaml files are never touched."
+    info "Left in place — re-run with --uninstall --purge to delete these too:"
+    [ -d "$cfg" ] && info "  ${cfg}  (config + agent logins)" || true
+    [ -d "$state" ] && info "  ${state}  (images, volumes, the audit log)" || true
   fi
   exit 0
 fi
@@ -216,6 +149,15 @@ case "$arch" in
   *) die "unsupported architecture: $arch" ;;
 esac
 
+# Where sandboxes can run: Linux (Firecracker, given KVM) and Apple-silicon
+# macOS (the native container runtime). An Intel Mac gets the client only.
+WITH_SERVER=0
+if [ "$CLIENT_ONLY" = 0 ]; then
+  case "${OS}/${ARCH}" in
+    linux/*|darwin/arm64) WITH_SERVER=1 ;;
+  esac
+fi
+
 # ---- resolve version --------------------------------------------------------
 TMP=$(mktemp -d)
 cleanup() { rm -rf "$TMP"; }
@@ -239,35 +181,40 @@ BASE="https://github.com/${REPO}/releases/download/${VERSION}"
 info "${BINARY} ${VERSION} -> ${DEST}/${BINARY}"
 info "  platform: ${OS}/${ARCH}"
 
-# ---- download ---------------------------------------------------------------
-info "  downloading ${ARCHIVE}"
-fetch "${BASE}/${ARCHIVE}" "$TMP/$ARCHIVE" || die "download failed: ${BASE}/${ARCHIVE}
-  If the repository is private, pass --token or set GITHUB_TOKEN."
-
-# ---- verify checksum --------------------------------------------------------
+# ---- download and verify ------------------------------------------------------
+CHECKSUMS=0
 if fetch "${BASE}/checksums.txt" "$TMP/checksums.txt" 2>/dev/null; then
-  expected=$(grep " ${ARCHIVE}\$" "$TMP/checksums.txt" | awk '{print $1}' | head -1)
-  if [ -n "$expected" ]; then
-    if command -v sha256sum >/dev/null 2>&1; then
-      actual=$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')
-    elif command -v shasum >/dev/null 2>&1; then
-      actual=$(shasum -a 256 "$TMP/$ARCHIVE" | awk '{print $1}')
-    else
-      actual=""
-      info "  ! no sha256 tool found; skipping verification"
-    fi
-    if [ -n "$actual" ]; then
-      [ "$actual" = "$expected" ] || die "checksum mismatch for ${ARCHIVE}
-  expected ${expected}
-  actual   ${actual}"
-      info "  checksum ok"
-    fi
-  else
-    info "  ! ${ARCHIVE} not listed in checksums.txt; skipping verification"
-  fi
+  CHECKSUMS=1
 else
   info "  ! checksums.txt not published for this release; skipping verification"
 fi
+
+verify() { # verify FILE — against the release's checksums.txt
+  [ "$CHECKSUMS" = 1 ] || return 0
+  name=$(basename "$1")
+  expected=$(grep " ${name}\$" "$TMP/checksums.txt" | awk '{print $1}' | head -1)
+  if [ -z "$expected" ]; then
+    info "  ! ${name} not listed in checksums.txt; skipping verification"
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$1" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$1" | awk '{print $1}')
+  else
+    info "  ! no sha256 tool found; skipping verification"
+    return 0
+  fi
+  [ "$actual" = "$expected" ] || die "checksum mismatch for ${name}
+  expected ${expected}
+  actual   ${actual}"
+  info "  checksum ok: ${name}"
+}
+
+info "  downloading ${ARCHIVE}"
+fetch "${BASE}/${ARCHIVE}" "$TMP/$ARCHIVE" || die "download failed: ${BASE}/${ARCHIVE}
+  If the repository is private, pass --token or set GITHUB_TOKEN."
+verify "$TMP/$ARCHIVE"
 
 # ---- install ----------------------------------------------------------------
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP" "$BINARY" 2>/dev/null \
@@ -283,23 +230,28 @@ mv "$DEST/.${BINARY}.new" "$DEST/$BINARY"
 
 info "installed ${DEST}/${BINARY}"
 
-# ---- the studio control plane, on request ------------------------------------
-# From the archive already downloaded and already checksummed, so the two halves
-# cannot end up at different versions and there is no second thing to verify.
-# Releases before this binary existed simply do not carry it, which is a plain
-# message rather than a failure: the CLI install above is complete either way.
-if [ "$WITH_STUDIO_API" = 1 ]; then
-  if [ ! -f "$TMP/$STUDIO_API" ]; then
-    tar -xzf "$TMP/$ARCHIVE" -C "$TMP" "$STUDIO_API" 2>/dev/null || true
-  fi
-  if [ -f "$TMP/$STUDIO_API" ]; then
-    chmod +x "$TMP/$STUDIO_API"
-    mv "$TMP/$STUDIO_API" "$DEST/.${STUDIO_API}.new"
-    mv "$DEST/.${STUDIO_API}.new" "$DEST/$STUDIO_API"
-    info "installed ${DEST}/${STUDIO_API}"
-  else
-    info "! ${VERSION} does not ship ${STUDIO_API}; install a newer release for Studio's API"
-  fi
+# ---- the server and the guest agent ---------------------------------------
+# sandboxd comes from the archive already verified; the guest agent from an
+# archive of its own (it is a Linux binary even on a Mac, where the VM is
+# linux/arm64), verified the same way, and installed beside sandboxd, which is
+# where sandboxd looks for it.
+install_bin() { # install_bin NAME — from $TMP to $DEST, atomically
+  chmod +x "$TMP/$1"
+  mv "$TMP/$1" "$DEST/.$1.new"
+  mv "$DEST/.$1.new" "$DEST/$1"
+  info "installed ${DEST}/$1"
+}
+
+if [ "$WITH_SERVER" = 1 ]; then
+  tar -xzf "$TMP/$ARCHIVE" -C "$TMP" "$SERVER" 2>/dev/null || true
+  [ -f "$TMP/$SERVER" ] || die "${SERVER} not found inside ${ARCHIVE}; pass --client-only to install the client alone"
+  GARCHIVE="${GUEST}_${VERSION}_linux_${ARCH}.tar.gz"
+  info "  downloading ${GARCHIVE}"
+  fetch "${BASE}/${GARCHIVE}" "$TMP/$GARCHIVE" || die "download failed: ${BASE}/${GARCHIVE}"
+  verify "$TMP/$GARCHIVE"
+  tar -xzf "$TMP/$GARCHIVE" -C "$TMP" "$GUEST" 2>/dev/null || die "${GUEST} not found inside ${GARCHIVE}"
+  install_bin "$SERVER"
+  install_bin "$GUEST"
 fi
 
 # ---- default user config ----------------------------------------------------
@@ -336,131 +288,46 @@ write_default_config() {
 #   profile base  ->  THIS FILE  ->  a project .sandbox.yaml  ->  flags
 #
 # A project's .sandbox.yaml travels with the repository, so it is untrusted: it
-# may tighten what is below and never loosen it, and the privilege-relevant keys
-# (image, user, mounts, secrets, env, security, ...) are refused from it outright.
+# may tighten what is below and never loosen it, and the keys that widen what a
+# sandbox is handed (image, env, env_allow, secrets, routing, providers) are
+# refused from it outright.
 #
-#   sandbox-cli config show    # the fully resolved configuration
-#   sandbox-cli config path    # which files were consulted
-#   sandbox-cli doctor         # whether this host can deliver it
+# What a sandbox can reach is decided by the sandboxd you talk to (its policy);
+# this file can only ask for less than that, or name what goes in.
 
 # Security profile. dev = a developer is watching, so a control that cannot be
-# satisfied warns; prod = unattended, so it refuses. A project may raise this to
-# prod, never lower it.
+# satisfied warns; prod = unattended, so it refuses — and prod does not copy
+# agent logins into sandboxes at all. A project may raise this, never lower it.
 profile: dev
 
-# ---------------------------------------------------------------------------
-# Egress
-# ---------------------------------------------------------------------------
-# mode: default  — the container gets an ordinary bridge network and reaches
-#                  anything, exactly like any other process on your machine.
-#                  This is what the installer writes: agents differ in which
-#                  hosts they need, and a list you have to maintain is a list
-#                  that eventually blocks the thing you are trying to do.
-#
-# What you give up by leaving it here: the container still cannot touch your
-# host, your other repositories or your keys — that boundary does not depend on
-# the network — but a prompt-injected agent inside it can post what it *can*
-# read (this project, and any credential you handed it) anywhere it likes.
-#
-# To bound that, change one word:
-#   mode: allowlist   # default-deny, with a baseline of the agent APIs and the
-#                     # package registries, plus anything under `allow:` below
-#   mode: none        # no network at all
-# Ad hoc, for a single run: --allow DOMAIN (implies allowlist), or --network none
-#
-# NOTE: --profile prod requires an allowlist, so it refuses to run while this
-# block says `default` — and a flag cannot lift it, because the profile is
-# checked as the configuration resolves. On a machine that runs unattended,
-# comment these two lines out (prod then supplies its own default-deny with the
-# baseline off) or set `mode: allowlist` here. The refusal is the point of prod:
-# nobody is watching, so it will not quietly run wider than it was asked to.
-network:
-  mode: default
-  # allow:                          # extra domains, allowlist mode only
-  #   - internal.registry.example.com
-  # baseline: false                 # drop the built-in domains so `allow` is
-  #                                 # the whole list — the only setting that
-  #                                 # also excludes github.com, a write endpoint
+# Egress. Without this block a sandbox gets the server's default policy
+# (an allowlist of agent APIs and package registries, on a default sandboxd).
+# network:
+#   mode: none                      # no network at all
+#   mode: allowlist                 # the server's list, plus:
+#   allow: [internal.registry.example.com]
+#   baseline: false                 # drop the built-in names, so `allow` is all
+# Per run: --network none, --allow NAME, --deny NAME.
 
-# ---------------------------------------------------------------------------
-# Everything below is a built-in default, written out so it can be changed.
-# Uncomment only what you want to differ.
-# ---------------------------------------------------------------------------
+# The image a sandbox boots. Unset means the server's default.
+# image: ghcr.io/you/sandbox-base:1
 
-# The container image. Unset means the built-in base image, whose tag is a hash
-# of its definition, so it rebuilds itself when that changes. Pinning here opts
-# out of that.
-# image: my-org/my-dev-image:latest
+# Environment for every sandbox: constant values, and host variables forwarded
+# by name when set. Values never appear in the audit log; names do.
+# env: {GOFLAGS: -mod=mod}
+# env_allow: [NPM_TOKEN]
 
-# workdir: /workspace       # where the project is mounted
-# user: sandbox             # sandbox (non-root default) | root — agents refuse
-#                           # --dangerously-skip-permissions as root
-# home: /sandbox/home       # the fake, ephemeral HOME
-# hostname: sandbox
-# engine: docker            # docker | podman
-# runtime: ""               # OCI runtime; "" = the daemon's default (runc).
-#                           # runsc (gVisor) or kata-runtime for a stronger
-#                           # boundary, if registered with the daemon.
-
-# persist_auth: true        # keep each agent's login in ~/.config/sandbox/agents/<agent>,
-#                           # mounted as that agent's whole HOME. --no-persist-auth
-#                           # opts out for one run; prod turns it off entirely.
-# sync: true                # claude only: mount this project's host history so
-#                           # sessions resolve on both sides. --no-sync opts out.
-
-# Container hardening. Pointer fields are tri-state: omit to keep the default.
-# security:
-#   no_new_privileges: true # block setuid privilege escalation
-#   cap_drop: [ALL]         # drop all Linux capabilities (cap_add: [] to add back)
-#   pids_limit: 1024        # fork-bomb guard; 0 disables
-#   memory: ""              # e.g. 2g — opt-in, empty = unlimited
-#   cpus: ""                # e.g. 1.5 — opt-in, empty = unlimited
-#   seccomp: ""             # "" = the daemon's default profile
-#                           # "required" = refuse to run unless one is applied
-#                           # /path/to/profile.json = use that profile
-
-# Crash safety net: the workspace is snapshotted into refs/sandbox while a run
-# is in flight, and `sandbox-cli recover` restores it. Your index, HEAD, branches
-# and working tree are never written.
-# snapshot:
-#   enabled: true
-#   interval: 2m
-#   retention: 336h         # 14 days
-
-# Package-manager caches in named volumes, so they survive the --rm container.
-# Opt-in; also available ad hoc via --cache.
-# cache:
-#   enabled: true
-#   paths:                  # added to the built-in npm/pip/cargo/go/yarn set
-#     - /sandbox/home/.cache/pnpm
-
-# Ports published to the host. A bare spec binds 127.0.0.1; write 0.0.0.0:3000:3000
-# to expose one deliberately.
-# ports:
-#   - 3000:3000
-
-# Extra mounts beyond the automatic /workspace bind. Host paths may use ~ and may
-# be relative to this file. mode defaults to ro. Never /, your home, or an
-# ancestor of it — those are refused.
-# mounts:
-#   - { host: ~/datasets, container: /workspace/data, mode: ro }
-
-# Values injected into every container.
-# env:
-#   NODE_ENV: development
-
-# Host variables forwarded ONLY if they are set (default-deny allowlist). The
-# agent wrappers already forward their own API key this way.
-# env_allow:
-#   - ANTHROPIC_API_KEY
-#   - OPENAI_API_KEY
-
-# Brokered credentials: resolved on the host at run time and passed to the
-# container by name, so the value never lands on the docker command line, in
-# --dry-run output, or in this file. One source each: file, command, or env.
+# Secrets resolved on this machine and handed to the sandbox as environment
+# variables: from a file, a command, or a host variable.
 # secrets:
-#   GITHUB_TOKEN:
-#     command: gh auth token
+#   GITHUB_TOKEN: {command: "gh auth token"}
+
+# Agent logins are copied into each sandbox and back out when the run ends.
+# persist_auth: false             # never copy them (prod's setting)
+
+# Fall through to another agent when a provider is down, or a run fails having
+# changed nothing (sandbox-cli agent claude --fallback codex, per run).
+# routing: [claude, codex]
 SANDBOX_CONFIG_EOF
 }
 
@@ -469,12 +336,26 @@ if [ "$NO_CONFIG" = 1 ]; then
 elif [ -f "$CONFIG_FILE" ]; then
   info "kept ${CONFIG_FILE}  (existing config, untouched)"
 elif write_default_config 2>/dev/null; then
-  info "wrote ${CONFIG_FILE}  (profile: dev, unrestricted egress — edit to tighten)"
+  info "wrote ${CONFIG_FILE}  (profile: dev; the server's network policy applies)"
 else
   # A config is a convenience, not a prerequisite: the built-in defaults are a
   # complete configuration on their own, so a read-only or unwritable home must
   # not fail an install that otherwise worked.
   info "! could not write ${CONFIG_FILE}; continuing with the built-in defaults"
+fi
+
+# ---- next steps -------------------------------------------------------------
+# sandboxd is installed, not started: how it runs is the machine's business
+# (a launch agent, a systemd unit) and each guide says how.
+if [ "$WITH_SERVER" = 1 ]; then
+  case "$OS" in
+    darwin) guide="docs/local-macos.md" ;;
+    *)      guide="docs/self-hosting.md  (also needs firecracker and a guest kernel)" ;;
+  esac
+  info "Start sandboxd: https://github.com/${REPO}/blob/main/${guide}"
+else
+  info "This machine runs the client only. Point it at a sandboxd:"
+  info "  ${BINARY} context add NAME https://HOST:PORT --token-file FILE --ca CA.pem"
 fi
 
 # ---- PATH hint --------------------------------------------------------------

@@ -1,11 +1,13 @@
 /**
- * Per-platform setup, from a cold machine to a verified sandbox.
+ * Setup, from a cold machine to a verified sandbox, for each place a sandbox can
+ * run — and for a machine that only talks to one.
  *
  * The last step of every path is `sandbox-cli doctor`, deliberately. Installing
- * the binary is the easy half; whether *this host* can actually deliver the
- * isolation — a daemon that applies a syscall filter, a container that can
- * program the egress firewall — is a property of the machine, and the point of
- * doctor is that you find out before an agent does.
+ * the binaries is the easy half; what *this* sandboxd can deliver — an egress
+ * allowlist, snapshots, volumes — is a property of the machine and how it was
+ * started, and the point of doctor is that you find out before an agent does.
+ *
+ * Mirrors docs/local-macos.md and docs/self-hosting.md.
  */
 
 export type SetupStep = {
@@ -18,71 +20,46 @@ export type SetupStep = {
 export type SetupPath = {
   id: string;
   label: string;
-  /** The container engine this path uses. */
+  /** What runs the sandboxes on this path. */
   engine: string;
   /**
-   * Set when a path does not work today; the UI leads with this. Nothing sets
-   * it now that Podman is supported — kept because the honest thing to do with
-   * an engine that does not work is say so on the page rather than omit it.
+   * Something a reader must know before following the path, shown first. The
+   * macOS path carries one because its backend has not yet run on a real Mac,
+   * and a setup guide is the wrong place to discover that.
    */
-  unsupported?: string;
+  caveat?: string;
   steps: SetupStep[];
 };
 
 /** The one-liner, kept here so the setup paths and the install card agree. */
 export const INSTALL_STEP: SetupStep = {
-  title: "Install sandbox-cli",
+  title: "Install",
   code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh",
-  body: "Drops a single static binary on your PATH, and — on a machine that has none yet — writes ~/.config/sandbox/config.yaml with every default spelled out. `go install github.com/Amitgb14/sandbox-cli/cmd/sandbox-cli@latest` works too if you would rather build it; it writes no config, and the built-in defaults are the stricter ones.",
+  body: "Installs sandbox-cli, sandboxd and the guest agent beside it into ~/.local/bin, each archive verified against the release checksums, and — on a machine that has none — writes ~/.config/sandbox/config.yaml with the client settings spelled out. It installs sandboxd; it does not start it.",
 };
 
-/**
- * The config the installer writes is its own step because of one line in it.
- * It sets `network.mode: default`, which relaxes sandbox-cli's built-in dev
- * default (`allowlist`) — a choice worth seeing on the way in rather than
- * discovering later from a denied connection.
- */
-const CONFIG_STEP: SetupStep = {
-  title: "Know what the default config chose for you",
-  code: "sandbox-cli config path      # which files were consulted\nsandbox-cli config show      # the resolved configuration\n\n# ~/.config/sandbox/config.yaml\n#   profile: dev\n#   network:\n#     mode: default            # <- change to allowlist, or none",
-  body: "The file is the trusted layer: everything in it is something you could have typed. It ships `network.mode: default`, so a fresh install reaches the whole internet and works with any agent, model provider or private registry without a domain list to maintain. The host boundary does not depend on that — your home, your keys and your other repositories are still unreachable — but an agent can post what it *can* read anywhere, so change the one word to `allowlist` when you want that bounded. An existing file is never overwritten by an upgrade, and `--no-config` skips writing one.",
-};
-
-const VERIFY_STEP: SetupStep = {
-  title: "Check the host can actually deliver it",
+const DOCTOR_STEP: SetupStep = {
+  title: "Ask what this sandboxd can deliver",
   code: "sandbox-cli doctor",
-  body: "Reports whether the daemon applies a syscall filter, whether a container here can program the egress firewall — tried, not queried — and which OCI runtimes are registered. Add --profile prod on a machine that will run unattended: it turns every warning into a refusal with a non-zero exit, so a scheduler finds out instead of you.",
+  body: "Prints the backend, the API version, the network policy's default and ceiling, the capabilities (egress allowlist, suspend, snapshots, volumes, audit) and the limits. A request for something missing from that list is refused, never served weaker.",
 };
 
 const FIRST_RUN_STEP: SetupStep = {
-  title: "Run an agent",
-  code: "cd ~/your-project\nsandbox-cli claude",
-  body: "The first run is slow twice over and mostly silent: it builds the base image (a few minutes), and the claude wrapper then downloads a self-updating copy of Claude Code into the persisted agent home — a large binary, with no progress shown. Interrupting either throws that work away and the next run starts from scratch, so let the first one finish; later runs start immediately. To watch it instead of guessing, run the install with its output visible: `sandbox-cli run -- sh -c 'curl -fsSL https://claude.ai/install.sh | bash'`. Only this directory is mounted; HOME inside the container is fake and dies with it. Egress follows the config from two steps ago — unrestricted as written, default-deny the moment you set `mode: allowlist` or pass --allow.",
+  title: "Run something",
+  code: "cd ~/your-project\nsandbox-cli run -- uname -a\nsandbox-cli agent claude",
+  body: "The first run builds the image's root disk, which takes a while; later ones start in about 80 ms on Firecracker. Your repository goes in as a git bundle and its commits come back into refs/sandbox/<id> when the run ends — `git log -p HEAD..refs/sandbox/<id>`, then merge if you want them.",
 };
 
-/**
- * Uninstall, which the page used to describe in a sentence and never show.
- *
- * It is on the page for the same reason the installer is cautious: the one
- * directory people do not expect to lose is ~/.config/sandbox, which holds
- * every agent login. Someone deciding between the two flags should be able to
- * read what each touches rather than find out.
- */
 export const UNINSTALL_STEPS: SetupStep[] = [
   {
-    title: "Remove the binary",
+    title: "Remove the binaries",
     code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --uninstall",
-    body: "Deletes sandbox-cli from ~/.local/bin (it checks /usr/local/bin too), then *reports* what else is on disk without touching it. Your projects and their .sandbox.yaml files are never touched by either flag, and containers are --rm, so nothing lingers between runs.",
+    body: "Deletes sandbox-cli, sandboxd and the guest agent from ~/.local/bin (it checks /usr/local/bin too, and reports a file it may not remove rather than stopping), then reports what else is on disk without touching it. A running sandboxd keeps running until you stop its launch agent or unit.",
   },
   {
-    title: "Then decide about your logins",
+    title: "Then decide about logins and volumes",
     code: "sh install.sh --uninstall --purge",
-    body: "--purge additionally deletes ~/.config/sandbox — your config.yaml and every agent login — plus the sandbox-base images and the sandbox-cache-* volumes. It is a separate flag because silently signing you out of Claude, Codex and the rest is not something an uninstaller should do on its own.",
-  },
-  {
-    title: "Or clean up by hand",
-    code: "rm -rf ~/.config/sandbox                                  # config + agent logins\ndocker rmi $(docker images -q sandbox-base)               # base image(s)\ndocker volume rm $(docker volume ls -q -f name=sandbox-cache-)   # package caches",
-    body: "The same three things --purge removes, in case you want one and not the others — reclaiming the image without losing the logins, say. The plain --uninstall prints these exact commands for whatever it found.",
+    body: "--purge also deletes ~/.config/sandbox — your config and every saved agent login — and sandboxd's state directory, which holds image disks, your volumes and the audit log. It is a separate flag because signing you out of every agent and deleting your volumes is not something an uninstaller should do on its own.",
   },
 ];
 
@@ -90,105 +67,87 @@ export const SETUP_PATHS: SetupPath[] = [
   {
     id: "macos",
     label: "macOS",
-    engine: "Docker Desktop",
+    engine: "the native container runtime",
+    caveat:
+      "The macOS backend is written and tested on Linux against a fake runtime that runs the real guest agent, but has not yet run on a real Mac. Expect rough edges; docs/local-macos.md lists the open points, and the Linux paths are the verified ones.",
     steps: [
       {
-        title: "Install Docker Desktop",
-        code: "brew install --cask docker",
-        body: "Then launch it once and let it finish starting — the daemon has to be running, not merely installed. Apple silicon and Intel are both fine.",
-      },
-      {
-        title: "Turn seccomp back on",
-        body: "Some Docker Desktop configurations leave the syscall filter off, so the container gets the whole syscall table. If Settings → Docker Engine sets \"seccomp-profile\": \"unconfined\", remove that line and apply. If it sets nothing — which happens — the containerd image store (Settings → General) has been reported to leave the filter off by itself; check `docker info` for \"Profile: unconfined\" either way. sandbox-cli warns when it finds this, and refuses under --profile prod.",
+        title: "Have the runtime",
+        code: "container system start",
+        body: "macOS 26 or later, on Apple silicon. Each sandbox is a VM of the runtime with a kernel of its own.",
       },
       INSTALL_STEP,
-      CONFIG_STEP,
-      VERIFY_STEP,
+      {
+        title: "Start sandboxd as a launch agent",
+        code: "cp packaging/launchd/dev.sandbox.sandboxd.plist ~/Library/LaunchAgents/\nlaunchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandbox.sandboxd.plist",
+        body: "It listens on a unix socket only you can open, which is the CLI's default context. Egress here is none, or open if your policy allows it: the macOS backend does not enforce an allowlist yet, so it does not claim one. With --allow-bind (the launch agent sets it), a run may mount a directory with --bind.",
+      },
+      DOCTOR_STEP,
       FIRST_RUN_STEP,
     ],
   },
   {
     id: "linux",
-    label: "Linux",
-    engine: "Docker Engine",
+    label: "Linux server",
+    engine: "Firecracker",
     steps: [
       {
-        title: "Install Docker Engine",
-        code: "curl -fsSL https://get.docker.com | sh",
-        body: "The convenience script covers Debian, Ubuntu, Fedora, CentOS and their relatives. Your distribution's own docker.io package works as well.",
+        title: "Have KVM, Firecracker and a guest kernel",
+        code: "ls -l /dev/kvm\n# firecracker and jailer: github.com/firecracker-microvm/firecracker/releases\n# a vmlinux with IP_PNP, VIRTIO_VSOCKETS and overlayfs",
+        body: "x86_64 or arm64, plus mkfs.ext4, ip and nft. The machine needs KVM: a cloud VM without nested virtualisation will not do.",
       },
       {
-        title: "Let your user talk to the daemon",
-        code: "sudo usermod -aG docker $USER\n\n# groups only apply to a NEW session. Either log out and back in, or:\nnewgrp docker\nid -nG | tr ' ' '\\n' | grep -qx docker && echo ok",
-        body: "Without this every command needs sudo. The trap is the second half: usermod changes the account, but your current shell keeps the old group set, so sandbox-cli goes on reporting `permission denied ... /var/run/docker.sock` however many times you restart the daemon — the missing piece is on the client side, not the daemon's. `newgrp docker` gives you a shell that has it now. And note that membership of the docker group is root-equivalent on the host: anyone in it can start a privileged container mounting /. That is Docker's model rather than sandbox-cli's, and rootless Docker avoids it.",
+        title: "Install, as root, where the unit expects it",
+        code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\\n  | sudo sh -s -- --dest /usr/local/bin --no-config",
+        body: "sandboxd and the guest agent land side by side in /usr/local/bin, where packaging/systemd/sandboxd.service runs them from. --no-config: the server reads its policy file, not a client config.",
       },
-      INSTALL_STEP,
-      CONFIG_STEP,
       {
-        title: "Know how ids land here — this is the platform where they are real",
-        code: "id -u; id -g                 # you, on the host\n# the container runs as uid 1001 with YOUR gid\nls -ld ~/.config/sandbox/agents/claude",
-        body: "Docker Desktop virtualizes bind-mount ownership; native Linux does not, so the numbers actually have to line up. Two consequences. Files the agent writes to /workspace come back owned by uid 1001 — pass --user \"$(id -u):$(id -g)\" for a run where that matters. And sandbox-cli's own state dirs, the persisted agent login above all, are yours at mode 0700 and would be unreadable to uid 1001 — so the container takes your primary group and those dirs are shared with it. That is automatic and needs no flag; before it existed, an agent login worked once and was gone by the next run.",
+        title: "Run it as a service",
+        code: "install -m 0600 token /etc/sandboxd/token\ninstall -m 0600 cert.pem key.pem /etc/sandboxd/tls/\ncp packaging/systemd/policy.example.yaml /etc/sandboxd/policy.yaml\ncp packaging/systemd/sandboxd.service /etc/systemd/system/\nsystemctl enable --now sandboxd",
+        body: "As root it enforces the egress allowlist on the host and runs every VM under the jailer with a uid of its own. It refuses to listen on a network address without a token and TLS. The policy file is where the ceiling, the image list, pools and limits are set; a request can only ask for less.",
       },
-      VERIFY_STEP,
+      {
+        title: "Point your client at it",
+        code: "sandbox-cli context add box https://box.example.internal:7443 \\\n  --token-file box.token --ca box-ca.pem\nsandbox-cli context use box",
+        body: "From your laptop, or on the server itself. The token never appears in an argv; it is read from the file you name.",
+      },
+      DOCTOR_STEP,
       FIRST_RUN_STEP,
     ],
   },
   {
-    id: "windows",
-    label: "Windows",
-    engine: "Docker Desktop + WSL2",
+    id: "linux-dev",
+    label: "Linux, quick try",
+    engine: "Firecracker, unprivileged",
+    caveat:
+      "No root means no host networking: sandboxes get no network at all, and a request for an allowlist is refused. Everything else — boot, run, files, bring-back, snapshots, volumes — works.",
     steps: [
-      {
-        title: "Install WSL2",
-        code: "wsl --install",
-        body: "In PowerShell as administrator, then reboot. sandbox-cli runs inside the Linux distribution, not on Windows directly.",
-      },
-      {
-        title: "Install Docker Desktop with the WSL2 backend",
-        body: "In Settings → Resources → WSL Integration, enable your distribution. Docker Desktop must be running for the CLI inside WSL to reach the daemon.",
-      },
-      {
-        title: "Keep your project inside the Linux filesystem",
-        code: "# good:  ~/projects/app\n# slow:  /mnt/c/Users/you/projects/app",
-        body: "A project under /mnt/c is reachable but crosses the Windows filesystem boundary on every read, which an agent doing thousands of small file operations will feel. Clone into the WSL home directory instead.",
-      },
       INSTALL_STEP,
-      CONFIG_STEP,
-      VERIFY_STEP,
+      {
+        title: "Start sandboxd in a terminal",
+        code: "sandboxd --backend firecracker \\\n  --kernel ~/vmlinux --firecracker ~/bin/firecracker",
+        body: "It listens on a unix socket under $XDG_RUNTIME_DIR, the CLI's default local context. Your user needs read-write access to /dev/kvm.",
+      },
+      DOCTOR_STEP,
       FIRST_RUN_STEP,
     ],
   },
   {
-    id: "podman",
-    label: "Podman",
-    engine: "rootless Podman",
+    id: "client",
+    label: "Client only",
+    engine: "a sandboxd elsewhere",
     steps: [
       {
-        title: "Install Podman and start its VM",
-        code: "brew install podman        # or your distribution's package\npodman machine init\npodman machine start",
-        body: "The machine step is macOS and Windows only; on Linux Podman talks to the host directly. Rootless is the default and is the interesting case — the container runs as your user, not root.",
-      },
-      INSTALL_STEP,
-      CONFIG_STEP,
-      {
-        title: "Tell sandbox-cli to use it",
-        code: "sandbox-cli run --engine podman -- true\n\n# or permanently, in ~/.config/sandbox/config.yaml:\n#   engine: podman",
-        body: "Docker stays the default. The engine is a user-config key rather than a project one: a repository that could choose which binary runs on your machine would be choosing what executes.",
+        title: "Install the client",
+        code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --client-only",
+        body: "For Windows (download the .zip from the releases page), an Intel Mac, or any machine that should not run VMs itself.",
       },
       {
-        title: "Expect the image to build again",
-        body: "Podman keeps its own image store, so the first run rebuilds the base image even if Docker already has it. That is one wait, not a recurring cost.",
+        title: "Add the endpoint",
+        code: "sandbox-cli context add box https://box.example.internal:7443 \\\n  --token-file box.token --ca box-ca.pem\nsandbox-cli context use box",
+        body: "Contexts are how one client talks to your Mac, your server and the cloud: the commands are the same, only the context differs.",
       },
-      {
-        title: "On native Linux, do not pass --user",
-        code: "sandbox-cli run --engine podman -- id      # uid 1001, mapped to you\n# NOT this:\n# sandbox-cli run --engine podman --user \"$(id -u):$(id -g)\" -- id",
-        body: "Rootless Podman maps your host user to container uid 0, so the usual Linux advice — passing --user \"$(id -u):$(id -g)\" — maps it into the subuid range instead and makes /workspace unreadable. sandbox-cli renders --userns=keep-id:uid=1001,gid=1001 and relabels bind mounts for SELinux, so files the agent writes come back owned by your own uid:gid. Pass nothing.",
-      },
-      {
-        title: "The Docker advice inverts here, including for logins",
-        body: "Under Docker on Linux the container joins your primary group so the persisted agent HOME is reachable from both sides. Podman needs none of that and gets none of it: keep-id already makes container uid 1001 you, so the login directory is simply yours. If you switch a machine between the two engines, expect the agent to log in once per engine — each writes as a different id, and that is the mapping working rather than failing.",
-      },
-      VERIFY_STEP,
+      DOCTOR_STEP,
       FIRST_RUN_STEP,
     ],
   },

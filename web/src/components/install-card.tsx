@@ -5,8 +5,7 @@ import { ArrowUpRight, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyButton } from "@/components/copy-button";
-import { WindowChrome } from "@/components/code-block";
-import { INSTALL_ROUTES, RELEASES_URL, VERSION } from "@/lib/site";
+import { CHANNEL, INSTALL_ROUTES, RELEASES_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 export function InstallCard({ className }: { className?: string }) {
@@ -23,9 +22,10 @@ export function InstallCard({ className }: { className?: string }) {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
         <div className="flex items-center gap-2.5">
           <Badge className="gap-1.5 font-mono text-[0.7rem]">
-            <Check className="size-3" />v{VERSION}
+            <Check className="size-3" />
+            {CHANNEL}
           </Badge>
-          <span className="text-xs text-muted-foreground">latest release</span>
+          <span className="text-xs text-muted-foreground">client · server · guest agent</span>
         </div>
         <a
           href={RELEASES_URL}
@@ -54,9 +54,6 @@ export function InstallCard({ className }: { className?: string }) {
 
         {INSTALL_ROUTES.map((r) => (
           <TabsContent key={r.id} value={r.id} className="p-0">
-            {/* The route's own name, because the tabs above choose between
-                machines and this says which one you are looking at. */}
-            <WindowChrome label={`Terminal — ${r.label}`} />
             <div className="group relative flex items-start gap-3 bg-[#0b0b0d] px-4 py-4">
               <pre className="no-scrollbar min-w-0 flex-1 overflow-x-auto font-mono text-[0.78rem] leading-relaxed text-[#e7e7ea]">
                 {r.lines.map((line, i) => (

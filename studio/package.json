@@ -2,16 +2,13 @@
   "name": "sandbox-studio",
   "version": "0.1.0",
   "private": true,
-  "description": "Sandbox Studio — a visual control plane for sandbox-cli",
+  "description": "Sandbox Studio \u2014 the browser view of sandbox-cli, served by `sandbox-cli studio`",
   "scripts": {
-    "dev": "next dev --port 3100",
     "build": "next build",
-    "start": "next start --port 3100",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "check": "npm run typecheck && npm run lint && npm run test:e2e"
+    "check": "npm run typecheck && npm run lint && npm run build && npm run test:e2e"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

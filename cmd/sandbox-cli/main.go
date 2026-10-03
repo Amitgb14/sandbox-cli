@@ -1,5 +1,5 @@
-// Command sandbox runs AI coding agents and arbitrary commands inside a
-// disposable, isolated Docker container.
+// Command sandbox-cli runs AI coding agents and arbitrary commands inside a
+// disposable, isolated sandbox.
 package main
 
 import (

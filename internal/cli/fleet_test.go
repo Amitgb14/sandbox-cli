@@ -2,78 +2,67 @@ package cli
 
 import (
 	"bytes"
-	"strings"
+	"context"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
 	"testing"
-	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
-	"github.com/Amitgb14/sandbox-cli/internal/runtime"
-	"github.com/Amitgb14/sandbox-cli/internal/sandbox"
+	"github.com/Amitgb14/sandbox-cli/internal/server"
+	"github.com/Amitgb14/sandbox-cli/internal/spec"
 )
 
-func fleetRow(branch, agent, id, state string) fleet.Status {
-	return fleet.Status{
-		Branch: branch,
-		Agent:  agent,
-		Container: &runtime.ContainerInfo{
-			ID:        id,
-			State:     state,
-			StartedAt: time.Now().Add(-time.Minute),
-			Labels:    map[string]string{sandbox.LabelAgent: agent},
-		},
-		Ahead: 2,
+// A fleet task's sandbox takes the user's configuration and profile as a run
+// does. It used to build its own request: under prod, with hosts named in the
+// config, a task ran on the server's default allowlist — github.com in it —
+// and a task's allow always added that baseline back.
+func TestFleetTasksTakeTheConfigAndProfile(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
 	}
-}
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+	os.MkdirAll(filepath.Join(home, "sandbox"), 0o700)
+	os.WriteFile(filepath.Join(home, "sandbox", "config.yaml"),
+		[]byte("profile: prod\nnetwork:\n  allow: [api.example]\nenv:\n  FROM_CONFIG: yes\n"), 0o600)
 
-// The branch table and the session table have to agree on how a container is
-// named, or "the id column matches list's" is a claim rather than a fact — and
-// the agent column is what makes a mixed fleet legible.
-func TestFleetStatusTableCarriesTheSessionIDAndTheAgent(t *testing.T) {
-	rows := []fleet.Status{
-		fleetRow("feature-a", "claude", "a1b2c3d4e5f6a7b8", "running"),
-		fleetRow("feature-b", "codex", "ffff0000ffff0000", "exited"),
-	}
-	var out bytes.Buffer
-	if err := renderFleetStatus(&out, rows); err != nil {
-		t.Fatalf("renderFleetStatus: %v", err)
-	}
-	got := out.String()
-	for _, want := range []string{"ID", "AGENT", "a1b2c3d4e5f6", "claude", "codex"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("status table is missing %q:\n%s", want, got)
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "base"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}
-	// The id is the 12-character form `list` prints and `kill` accepts, not the
-	// full one.
-	if strings.Contains(got, "a1b2c3d4e5f6a7b8") {
-		t.Errorf("the full container id leaked into the table:\n%s", got)
-	}
-}
 
-// Same rule as the session listing: a branch name is text from the repository
-// and a tab-separated table must not be forgeable by one.
-func TestFleetStatusCleansLabelText(t *testing.T) {
-	row := fleetRow("main\nsandbox-fake\tforged", "claude\x1b]0;pwned\x07", "aaaa1111bbbb", "running")
-	var out bytes.Buffer
-	if err := renderFleetStatus(&out, []fleet.Status{row}); err != nil {
+	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy()}).Handler())
+	defer srv.Close()
+	c, _ := api.NewClient(srv.URL, "")
+	ctx := context.Background()
+	caps, err := c.Capabilities(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.ContainsAny(out.String(), "\x1b\x07") {
-		t.Error("a label put an escape sequence on the user's terminal")
-	}
-	if lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n"); len(lines) != 2 {
-		t.Errorf("a branch name forged a row:\n%s", out.String())
-	}
-}
-
-// A branch whose container has been reaped still has a line — that is the state
-// you most need to see — but there is no session id left to print for it.
-func TestFleetStatusWithoutAContainer(t *testing.T) {
-	var out bytes.Buffer
-	if err := renderFleetStatus(&out, []fleet.Status{{Branch: "orphan"}}); err != nil {
+	r := &fleet.Runner{Client: c, Repo: repo, Keep: true, Out: &bytes.Buffer{}, Prepare: fleetPrepare(repo, "", caps)}
+	sp := fleet.Spec{Agent: "claude", Tasks: []fleet.Task{{Branch: "a", Prompt: "p", Allow: []string{"b.example"}}}}
+	if _, err := r.Run(ctx, sp); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "orphan") {
-		t.Errorf("a branch with no container should still be listed:\n%s", out.String())
+	sbs, err := c.Sandboxes(ctx)
+	if err != nil || len(sbs) != 1 {
+		t.Fatalf("sandboxes %v %v", sbs, err)
+	}
+	want := api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"api.example", "b.example"}}
+	if got := sbs[0].Network; got.Mode != want.Mode || !reflect.DeepEqual(got.Allow, want.Allow) {
+		t.Errorf("the task's network is %+v, want %+v", got, want)
+	}
+
+	if _, err := (&fleet.Runner{Client: c, Repo: repo, Out: &bytes.Buffer{}}).Run(ctx, sp); err == nil {
+		t.Error("a runner with nothing to apply the configuration ran")
 	}
 }

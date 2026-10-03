@@ -3,7 +3,7 @@
 import { Fragment } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Check, Laptop, Moon, PlugZap, Search, Server, Sun } from "lucide-react";
+import { Moon, PlugZap, Search, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -18,26 +18,9 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
-import { apiBase, defaultApiBase } from "@/lib/constants";
-import { cn } from "@/lib/utils";
 import { crumbsFor } from "@/lib/nav";
-import { useDaemon, useTransportMode } from "@/lib/api/queries";
+import { useInfo } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  useActiveConnection,
-  useConnectionHealth,
-  useConnections,
-  useSwitchConnection,
-  type ProbeState,
-} from "@/hooks/use-connection";
 
 export function AppHeader() {
   const pathname = usePathname();
@@ -92,8 +75,7 @@ export function AppHeader() {
             ⌘K
           </kbd>
         </Button>
-        <ConnectionSwitcher />
-        <TransportBadge />
+        <ConnectionBadge />
         <ThemeToggle />
       </div>
     </header>
@@ -101,183 +83,35 @@ export function AppHeader() {
 }
 
 /**
- * Which machine's daemon this is, and a one-click way to reach another.
- *
- * It lives in the header rather than in Settings because switching machines is
- * something you do *while working*, not while configuring: the whole point of a
- * saved connection is that the agents are on the Linux box and the browser is
- * here. Settings still owns adding and forgetting them — this only chooses.
- *
- * Rendered only when there is a choice to make. One daemon and no saved
- * connections is the ordinary case, and a picker with a single entry is chrome
- * that answers a question nobody asked.
+ * Which sandboxd Studio is talking to: the context's name and its backend.
+ * A permanent part of the chrome, because "whose sandboxes are these" is the
+ * first question on any screen, and a red badge when sandboxd is not
+ * answering says why every table is empty.
  */
-function ConnectionSwitcher() {
-  const saved = useConnections();
-  const { key, url, ready } = useActiveConnection();
-  const switchTo = useSwitchConnection();
-  // The *built-in* daemon's own URL, not the active one. apiBase() answers
-  // "where do requests go", which is the remote once you have switched — so a
-  // row labelled "This machine" would otherwise print the remote's host and the
-  // remote's health, and the local daemon would never be probed at all.
-  const builtIn = defaultApiBase();
-  // Both are probed: "this machine" is exactly as capable of being down as any
-  // other, and finding out by watching every panel fail is what this replaces.
-  const health = useConnectionHealth(ready ? [builtIn, url, ...saved.map((c) => c.url)] : []);
-
-  if (!ready || saved.length === 0) return null;
-
-  const active = saved.find((c) => c.url === key);
-  const label = active?.label ?? hostOf(url) ?? "this machine";
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-muted-foreground">
-          {active ? <Server className="size-3.5" /> : <Laptop className="size-3.5" />}
-          <span className="hidden max-w-[10rem] truncate sm:inline">{label}</span>
-          <HealthDot state={health[url]} />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-          Which machine runs the agents
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <ConnectionRow
-          icon={<Laptop className="size-3.5 shrink-0" />}
-          label="This machine"
-          detail={hostOf(builtIn)}
-          active={!key}
-          state={health[builtIn]}
-          onSelect={() => switchTo(null)}
-        />
-        {saved.map((c) => (
-          <ConnectionRow
-            key={c.url}
-            icon={<Server className="size-3.5 shrink-0" />}
-            label={c.label || hostOf(c.url)}
-            detail={c.url}
-            active={c.url === key}
-            state={health[c.url]}
-            onSelect={() => switchTo(c)}
-          />
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function ConnectionRow({
-  icon,
-  label,
-  detail,
-  active,
-  state,
-  onSelect,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  detail: string;
-  active: boolean;
-  state?: ProbeState;
-  onSelect: () => void;
-}) {
-  return (
-    <DropdownMenuItem onClick={onSelect} className="gap-2">
-      {icon}
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className={cn("truncate text-sm", active && "font-medium")}>{label}</span>
-        <span className="truncate font-mono text-[10px] text-muted-foreground">{detail}</span>
-      </span>
-      <HealthDot state={state} />
-      {active && <Check className="size-3.5 shrink-0" />}
-    </DropdownMenuItem>
-  );
-}
-
-/**
- * Three states, and the third is the one that matters: a daemon nobody has
- * heard back from yet is **unknown**, not down. Painting silence as an outage is
- * how a probe that has been running for 200ms reports every machine as
- * unreachable.
- */
-function HealthDot({ state }: { state?: ProbeState }) {
-  const title =
-    state === "up" ? "answering" : state === "down" ? "not answering" : "checking…";
-  return (
-    <span
-      title={title}
-      className={cn(
-        "size-1.5 shrink-0 rounded-full",
-        state === "up" && "bg-contained",
-        state === "down" && "bg-destructive",
-        (state === undefined || state === "checking") && "bg-muted-foreground/40",
-      )}
-    />
-  );
-}
-
-/** The host of a URL, for a label that has to fit in a button. */
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
-}
-
-/**
- * Whether what is on screen came from the daemon or from a fixture.
- *
- * A control plane that cannot say which it is showing is worse than one showing
- * nothing — so this is a permanent part of the chrome, not a dismissable banner.
- */
-function TransportBadge() {
-  const { mode, retry } = useTransportMode();
-  const { data: daemon } = useDaemon();
-
-  if (mode === "live") {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Badge
-            variant="outline"
-            className="h-8 gap-1.5 border-contained/40 bg-contained/10 px-2.5 text-contained"
-          >
-            <span className="size-1.5 rounded-full bg-contained" />
-            <span className="hidden font-mono text-[11px] md:inline">
-              {daemon?.engine ?? "daemon"} {daemon?.version ?? ""}
-            </span>
-          </Badge>
-        </TooltipTrigger>
-        <TooltipContent>
-          Connected to the sandbox daemon. Everything on screen is a live reading.
-        </TooltipContent>
-      </Tooltip>
-    );
-  }
-
+function ConnectionBadge() {
+  const { data, error } = useInfo();
+  const ok = data && !data.error;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
+        <Badge
           variant="outline"
-          size="sm"
-          onClick={retry}
-          className="h-8 gap-1.5 border-caution/40 bg-caution/10 px-2.5 text-caution hover:bg-caution/20 hover:text-caution"
+          className={
+            ok
+              ? "h-8 gap-1.5 border-contained/40 bg-contained/10 px-2.5 text-contained"
+              : "h-8 gap-1.5 border-exposed/40 bg-exposed/10 px-2.5 text-exposed"
+          }
         >
-          <PlugZap className="size-3.5" />
-          <span className="hidden text-[11px] md:inline">Fixture data</span>
-        </Button>
+          {ok ? <span className="size-1.5 rounded-full bg-contained" /> : <PlugZap className="size-3.5" />}
+          <span className="hidden font-mono text-[11px] md:inline">
+            {ok ? `${data.context} · ${data.capabilities?.backend ?? ""}` : "not connected"}
+          </span>
+        </Badge>
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
-        {/* The endpoint actually dialled, not a hardcoded one. This message is
-            read by somebody asking "why is this not my data", and naming a port
-            they never used sends them to look at the wrong process — the whole
-            job of this badge is to be right about where the data came from. */}
-        No daemon answered on {apiBase() || "this machine"}, so these are fixtures. Nothing here
-        reflects a real container. Click to retry.
+        {ok
+          ? `Context ${data.context}: sandboxd's ${data.capabilities?.backend} backend, API ${data.capabilities?.api_version}.`
+          : `sandboxd did not answer: ${data?.error ?? error?.message ?? "no response"}.`}
       </TooltipContent>
     </Tooltip>
   );

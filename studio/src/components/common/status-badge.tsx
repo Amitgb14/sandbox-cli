@@ -3,33 +3,38 @@ import {
   CircleDashed,
   CircleSlash,
   Loader2,
+  PauseCircle,
   ShieldAlert,
+  Unplug,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { RunOutcome } from "@/lib/types";
 
 /**
- * A run's outcome, as a word.
+ * A state, as a word.
  *
  * Status colour is never the only channel: every variant carries an icon and a
- * label, because four of these are red-ish or green-ish to somebody. That is the
- * same rule the CLI follows when it prints a reason next to a refusal rather
- * than relying on an exit code.
+ * label, because several of these are red-ish or green-ish to somebody. That is
+ * the same rule the CLI follows when it prints a reason next to a refusal
+ * rather than relying on an exit code.
+ *
+ * One map for the three kinds of state Studio shows — a sandbox's, a run's
+ * (a sandbox that is "gone"), and a fleet task's — since they share words.
  */
-const VARIANTS: Record<
-  RunOutcome,
-  { label: string; icon: LucideIcon; className: string; spin?: boolean }
-> = {
+const VARIANTS: Record<string, { label: string; icon: LucideIcon; className: string; spin?: boolean }> = {
   running: {
     label: "Running",
     icon: Loader2,
     className: "text-status-running border-status-running/30 bg-status-running/10",
     spin: true,
   },
-  passed: {
-    label: "Passed",
+  pending: { label: "Starting", icon: CircleDashed, className: "text-muted-foreground border-border bg-muted/40" },
+  suspended: { label: "Suspended", icon: PauseCircle, className: "text-caution border-caution/30 bg-caution/10" },
+  terminated: { label: "Terminated", icon: CircleSlash, className: "text-muted-foreground border-border bg-muted/40" },
+  gone: { label: "Gone", icon: CircleSlash, className: "text-muted-foreground border-border bg-muted/40" },
+  verified: {
+    label: "Verified",
     icon: CheckCircle2,
     className: "text-status-good border-status-good/30 bg-status-good/10",
   },
@@ -38,21 +43,13 @@ const VARIANTS: Record<
     icon: XCircle,
     className: "text-status-critical border-status-critical/30 bg-status-critical/10",
   },
-  "verify-failed": {
-    label: "Verify failed",
+  rejected: {
+    label: "Rejected",
     icon: ShieldAlert,
     className: "text-status-serious border-status-serious/30 bg-status-serious/10",
   },
-  stopped: {
-    label: "Stopped",
-    icon: CircleSlash,
-    className: "text-muted-foreground border-border bg-muted/40",
-  },
-  created: {
-    label: "Created",
-    icon: CircleDashed,
-    className: "text-muted-foreground border-border bg-muted/40",
-  },
+  lost: { label: "Lost", icon: Unplug, className: "text-status-critical border-status-critical/30 bg-status-critical/10" },
+  exited: { label: "Exited", icon: CheckCircle2, className: "text-muted-foreground border-border bg-muted/40" },
 };
 
 export function StatusBadge({
@@ -61,19 +58,19 @@ export function StatusBadge({
   className,
   size = "default",
 }: {
-  outcome: RunOutcome;
+  outcome: string;
   /** Shown for a non-zero exit: "Failed · 1" says more than "Failed". */
   exitCode?: number | null;
   className?: string;
   size?: "default" | "sm";
 }) {
-  const v = VARIANTS[outcome];
+  const v = VARIANTS[outcome] ?? { label: outcome, icon: CircleDashed, className: "text-muted-foreground border-border" };
   const Icon = v.icon;
   const showCode =
     exitCode !== null &&
     exitCode !== undefined &&
     exitCode !== 0 &&
-    (outcome === "failed" || outcome === "verify-failed" || outcome === "stopped");
+    (outcome === "failed" || outcome === "rejected" || outcome === "exited");
 
   return (
     <span

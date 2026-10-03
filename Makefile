@@ -1,17 +1,23 @@
 BINARY := sandbox-cli
-STUDIO_API_BINARY := sandbox-studio-api
 PKG := github.com/Amitgb14/sandbox-cli
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build build-studio-api install test test-integration lint fmt clean snapshot release docker-build image contract
+.PHONY: build studio install test test-sdk test-integration lint fmt clean snapshot release docker-build image
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
+	go build -ldflags "$(LDFLAGS)" -o bin/sandboxd ./cmd/sandboxd
+	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$(LDFLAGS)" -o bin/sandbox-guestd ./cmd/sandbox-guestd
 
-# The local HTTP control plane (internal/studioapi) — see docs/studio-api/.
-build-studio-api:
-	go build -ldflags "$(LDFLAGS)" -o bin/$(STUDIO_API_BINARY) ./cmd/sandbox-studio-api
+# Studio's UI, built as a static export and copied where sandbox-cli embeds it
+# (internal/studio/embed.go). Needs Node 20+. Run it before `make build` for a
+# sandbox-cli whose `studio` command serves the UI; without it, `studio` serves
+# its API and a page saying how to build the rest. A release build runs this.
+studio:
+	cd studio && npm ci --no-audit --no-fund && npm run build
+	find internal/studio/ui -mindepth 1 ! -name .keep -delete
+	cp -R studio/out/. internal/studio/ui/
 
 # --- release engineering (GoReleaser) ----------------------------------------
 # Install once: go install github.com/goreleaser/goreleaser/v2@latest
@@ -45,28 +51,16 @@ install:
 test:
 	go test ./...
 
+# The Python SDK against a real sandboxd (the in-memory backend).
+test-sdk: build
+	SANDBOXD=$(CURDIR)/bin/sandboxd python3 -m unittest discover -s sdk/python/tests
+
 # Requires a running Docker daemon; builds the base image on first run.
 test-integration:
 	go test -tags docker_integration -count=1 ./...
 
 fmt:
 	gofmt -w .
-
-# The TypeScript and Swift mirrors of the API's wire shapes, generated from the
-# Go types that define them. Checked in because a client author reads them; kept
-# honest by TestContractMirrorIsInSync and TestSwiftMirrorIsInSync, which fail
-# when they and types.go disagree.
-#
-# IOSAPP additionally writes the Swift mirror into a checkout of the iOS client,
-# which lives in its own repository:
-#
-#	make contract IOSAPP=../iosapp
-#
-# Exported rather than passed on the command line so the variable reaches the
-# generator's environment; a make-only variable would be silently ignored.
-export IOSAPP
-contract:
-	go run ./cmd/gen-contract .
 
 clean:
 	rm -rf bin dist bin-docker

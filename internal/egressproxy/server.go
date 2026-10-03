@@ -25,6 +25,11 @@ var errNoData = errors.New("connection sent no data")
 // Server enforces the allowlist for connections redirected to it.
 type Server struct {
 	Match *Matcher
+	// MatchFor, when set, picks the allowlist by the connecting address — one
+	// proxy on the host serving every sandbox, each with its own policy. A nil
+	// result denies: a connection from an address no sandbox holds is not one
+	// this proxy answers for.
+	MatchFor func(remote net.Addr) *Matcher
 	// Resolve looks up a hostname. Injected so tests do not need DNS.
 	Resolve func(host string) ([]net.IP, error)
 	// Dial opens the upstream connection. Injected for the same reason.
@@ -116,7 +121,11 @@ func (s *Server) handle(client net.Conn) {
 		return
 	}
 
-	if !s.Match.Allows(host) {
+	m := s.Match
+	if s.MatchFor != nil {
+		m = s.MatchFor(client.RemoteAddr())
+	}
+	if m == nil || !m.Allows(host) {
 		s.Log(Decision{Host: host, Port: port, Reason: "not on the egress allowlist"})
 		if explicit {
 			// An explicit proxy client understands a status line; a redirected one

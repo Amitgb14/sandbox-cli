@@ -1,11 +1,10 @@
-// Package fleet runs several agents at once: one detached container per git
-// branch, launched from a single task file, then supervised and landed by branch
-// name.
+// Package fleet runs several agents at once: one sandbox per git branch,
+// launched from a single task file, then landed by branch name.
 //
-// It owns no isolation policy of its own. Every task is turned into the same
-// sandbox.Options a `sandbox-cli claude --worktree BRANCH` run would produce,
-// with Detach set — so a fleet agent is confined exactly like an interactive one,
-// and any change to the sandbox boundary applies to both without fleet knowing.
+// It owns no isolation policy of its own. Every task is the same create request
+// a `sandbox-cli agent <name>` run makes, so a fleet agent is confined exactly
+// like an interactive one, and any change to the sandbox boundary applies to
+// both without fleet knowing.
 package fleet
 
 import (
@@ -48,13 +47,13 @@ type Defaults struct {
 	// built-in baseline.
 	Allow []string `yaml:"allow"`
 
-	// Cache persists package-manager caches in named volumes across runs, which
-	// matters more in a fleet: without it every agent re-downloads the same
-	// dependencies into its own throwaway container.
+	// Cache was beta.15's package-cache volumes. It is kept only so a file that
+	// sets it is refused with an explanation (Validate) rather than accepted and
+	// ignored.
 	Cache bool `yaml:"cache"`
 
-	// Git forwards the host git identity so the agent's commits are attributed to
-	// you rather than to nobody.
+	// Git makes the agents' commits with your own user.name and user.email
+	// rather than the neutral sandbox identity (workspace.Identity).
 	Git bool `yaml:"git"`
 }
 
@@ -200,6 +199,9 @@ func (s Spec) Validate() error {
 	}
 	if s.MaxParallel < 0 {
 		return fmt.Errorf("max_parallel must not be negative, got %d", s.MaxParallel)
+	}
+	if s.Defaults.Cache {
+		return fmt.Errorf("defaults.cache is gone with beta.15's cache volumes; keep a cache in a named volume instead (sandbox-cli volume), or remove the key")
 	}
 	seen := map[string]bool{}
 	for i, t := range s.Tasks {

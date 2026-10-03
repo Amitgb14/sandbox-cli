@@ -127,7 +127,7 @@ var installPins = map[string]InstallPin{
 	// which its own comment says the *versioned* setup scripts set
 	// (`cli/<version>/setup.sh`) and the top-level one leaves empty to get "the
 	// latest promoted version". So pinning means knowing a version and fetching a
-	// different URL, and Cognition publishes no index of them that this could
+	// different URL, and the vendor publishes no index of them that this could
 	// read. Recorded rather than guessed: naming a version from an example in a
 	// comment would pin every sandbox to whatever that example happened to be.
 	"devin": {Unpinned: "cli.devin.ai/install.sh installs the latest promoted version and offers " +

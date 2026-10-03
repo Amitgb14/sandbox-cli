@@ -1,77 +1,83 @@
 import Link from "next/link";
-import { ArrowRight, ArrowUpRight, Check, FileCode2, Lock, ShieldCheck, X } from "lucide-react";
+import { ArrowUpRight, Check, Cpu, Lock, ShieldCheck, X } from "lucide-react";
 import { GithubMark } from "@/components/logo";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Hero } from "@/components/hero";
 import { Section, SectionHead } from "@/components/section-head";
 import { BlastRadius } from "@/components/blast-radius";
+import { ModesTable } from "@/components/modes-table";
+import { ApiExamples } from "@/components/api-examples";
 import { FeaturesGrid } from "@/components/features-grid";
-import { DryRunBuilder } from "@/components/dry-run-builder";
-import { ConfigReference } from "@/components/config-reference";
 import { EgressVisualizer } from "@/components/egress-visualizer";
-import { ParallelAgents } from "@/components/parallel-agents";
 import { SessionCommands } from "@/components/session-commands";
-import { LiveGauge } from "@/components/live-gauge";
 import { AgentExplorer } from "@/components/agent-explorer";
 import { ComparisonTable } from "@/components/comparison-table";
-import { CapabilityChart } from "@/components/capability-chart";
 import { PlatformTable } from "@/components/platform-table";
 import { SetupGuide } from "@/components/setup-guide";
-import { DeployGuide } from "@/components/deploy-guide";
-import { StudioTutorial } from "@/components/studio-tutorial";
-import { TutorialSteps } from "@/components/tutorial-steps";
-import { OptionCatalog } from "@/components/option-catalog";
-import { ChallengeTable } from "@/components/challenge-table";
-import { ProfileDiff } from "@/components/profile-diff";
 import { InstallCard } from "@/components/install-card";
 import { UninstallSteps } from "@/components/uninstall-steps";
+import { CodeBlock } from "@/components/code-block";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import { AGENTS, BAKED_COUNT } from "@/lib/agents";
-import { HISTORY_NOTE } from "@/lib/features";
-import {
-  DOC_URL,
-  MULTI_AGENT_PATH,
-  PYTHON_SDK_PATH,
-  REPO_URL,
-  SDK_PATH,
-  STUDIO_PATH,
-  VERSION,
-} from "@/lib/site";
+import { AGENTS } from "@/lib/agents";
+import { DOC_URL, MULTI_AGENT_PATH, REPO_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const EXPOSED = [
   "Reads ~/.ssh, ~/.aws, cloud tokens, browser cookies",
   "One hallucinated path and the blast radius is your whole disk",
   "A poisoned README turns into local execution",
-  "The only thing enforcing trust is the prompt",
+  "A container shares your kernel: one bug from the host",
 ];
 
 const CONTAINED = [
-  "Those paths were never mounted — there is nothing to read",
-  "The blast radius is /workspace: the repo it was editing anyway",
-  "Injection lands in a container that dies on exit",
-  "The kernel enforces trust, not a paragraph of instructions",
+  "Nothing of yours is mounted — there is nothing to read",
+  "The repository is a clone; your checkout is never written",
+  "Injection lands in a VM that is discarded with the sandbox",
+  "Its own kernel, behind a hypervisor, not a namespace",
 ];
 
 const INVARIANTS = [
   {
-    icon: FileCode2,
-    title: "One function decides everything",
-    body: "runtime.BuildArgs is pure and deterministic: config in, docker argv out. It is the single choke point for what the container can reach, and it is exhaustively unit-tested against a golden output so the boundary cannot drift silently.",
-  },
-  {
     icon: Lock,
-    title: "Three refusals no flag can override",
-    body: "Never mount /, never mount your home directory, never mount an ancestor of it. ResolveWorkspace enforces those before anything else runs, and there is no configuration key that turns them off.",
+    title: "Tighten, never loosen",
+    body: "The server's policy is a ceiling every request is resolved against: a request may ask for less network, fewer resources, a narrower allowlist — never more. A repository's own .sandbox.yaml is untrusted and may only tighten your config.",
   },
   {
     icon: ShieldCheck,
-    title: "Nothing crosses that you did not name",
-    body: "Host environment variables are default-deny. Each agent wrapper ships a small suggested allowlist applied only if the value is set, and everything else needs an explicit --env or --mount.",
+    title: "The guest is hostile",
+    body: "The host talks to one agent in the VM over a bounded protocol and never acts on what the guest volunteers. A bundle coming back is verified against your repository and must carry exactly one ref; host-side git runs with every hook and filter neutralised.",
+  },
+  {
+    icon: Cpu,
+    title: "Fail closed",
+    body: "A control that was asked for and cannot be delivered refuses the run. A backend that cannot enforce an allowlist says so in its capabilities, and the request is refused — never served open, never quietly offline.",
   },
 ];
+
+const RECOVER = `sandbox-cli recover
+# SANDBOX               STARTED  SANDBOX STATE  CHECKPOINT  REPOSITORY
+# sbx_579194ea61058897  4m ago   gone           1m ago      /home/you/src/app
+#
+# sbx_579194ea61058897: the sandbox is gone; its last checkpoint is refs/sandbox/checkpoints/sbx_579194ea61058897
+#   review: git log -p HEAD..refs/sandbox/checkpoints/sbx_579194ea61058897 · merge: git merge …`;
+
+const BRING_BACK = `sandbox-cli run -- sh -c 'make fix && git commit -qam fix; echo note > TODO'
+# sandbox-cli: work brought back to refs/sandbox/sbx_cf20dd8c24c71989
+#   review: git log -p HEAD..refs/sandbox/sbx_cf20dd8c24c71989 · merge: git merge refs/sandbox/sbx_cf20dd8c24c71989`;
+
+const EVENTS = `sandbox-cli events sbx_cf20dd8c24c71989
+# 2026-10-02 03:17:02  sandbox.created     image sandbox-base · network none · env SECRET_TOKEN · labels team=infra
+# 2026-10-02 03:17:02  workspace.in        branch sandbox
+# 2026-10-02 03:17:02  process.started     pid 1 · sh -c echo hi > note.txt; exit 4
+# 2026-10-02 03:17:02  process.exited      pid 1 exit 4 after 0s
+# 2026-10-02 03:17:02  workspace.out       ab74a8aab9aed487e0714e71d9dd3f8fe306985e..sandbox
+# 2026-10-02 03:17:02  sandbox.terminated  request`;
+
+const FLEET = `sandbox-cli agent claude --fallback codex -p "fix the flaky test"
+sandbox-cli agent fleet run -f fleet.yaml   # one agent per branch, in parallel sandboxes
+sandbox-cli agent fleet land --all          # merge only what its verify accepted`;
 
 export default function Home() {
   return (
@@ -82,23 +88,23 @@ export default function Home() {
         <Hero />
 
         {/* ------------------------------------------------------------ why */}
-        <Section id="threat">
+        <Section id="why">
           <SectionHead
             center
             eyebrow="the trade nobody should have to make"
             title={
               <>
-                &ldquo;Allow All&rdquo; is the mode that makes agents useful.
-                <br className="hidden sm:block" /> It is also the one that scares you.
+                Autonomy is what makes agents useful.
+                <br className="hidden sm:block" /> Your machine is what it puts at risk.
               </>
             }
-            lead="Agents earn their keep the moment they stop asking permission for every edit. But the same flag that unblocks the work hands a non-deterministic process your entire home directory — and prompt injection turns text somebody else wrote into commands your shell runs."
+            lead="An agent earns its keep the moment it stops asking permission for every edit — and the same flag hands a non-deterministic process your home directory, while prompt injection turns text somebody else wrote into commands your shell runs. The answer is not a better prompt. It is a machine of its own."
           />
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="flex flex-col gap-4 rounded-2xl border border-exposed-line bg-exposed-soft/40 p-5">
               <Badge variant="outline" className="w-fit border-exposed/30 bg-card text-exposed">
-                Agent on the bare host
+                Agent on your machine
               </Badge>
               <ul className="flex flex-col gap-2.5 text-sm text-muted-foreground">
                 {EXPOSED.map((p) => (
@@ -112,7 +118,7 @@ export default function Home() {
 
             <div className="flex flex-col gap-4 rounded-2xl border border-contained-line bg-contained-soft/50 p-5">
               <Badge variant="outline" className="w-fit border-contained/30 bg-card text-contained">
-                Agent inside sandbox-cli
+                Agent in a sandbox
               </Badge>
               <ul className="flex flex-col gap-2.5 text-sm text-muted-foreground">
                 {CONTAINED.map((p) => (
@@ -140,391 +146,172 @@ export default function Home() {
           </div>
         </Section>
 
+        {/* ---------------------------------------------------------- modes */}
+        <Section id="modes" tinted>
+          <SectionHead
+            eyebrow="three ways to run it"
+            title="Your Mac, your own Linux box, or the cloud"
+            lead="sandboxd serves the API on each machine. The same request means the same thing on all three; what differs is what each machine can deliver, and the API says so rather than letting you find out."
+          />
+          <ModesTable />
+        </Section>
+
+        {/* ------------------------------------------------------------ api */}
+        <Section id="api">
+          <SectionHead
+            eyebrow="one API"
+            title="The CLI is one client. Your code can be another."
+            lead={
+              <>
+                Make a sandbox, run something, read what it printed, throw it away. The CLI, curl, and
+                the Python and TypeScript SDKs do it with the same calls — documented in{" "}
+                <a
+                  href={DOC_URL.api}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-4"
+                >
+                  docs/api/v1.md
+                </a>
+                , with files, background processes, a real terminal over attach, tunnels, snapshots,
+                volumes and an event log on top.
+              </>
+            }
+          />
+          <ApiExamples />
+        </Section>
+
         {/* ------------------------------------------------------- features */}
         <Section id="features" tinted>
           <SectionHead
             eyebrow="what you actually get"
-            title="Thirty-two capabilities, one prefix"
-            lead={
-              <>
-                Everything below ships today and is reachable from a flag or a{" "}
-                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                  .sandbox.yaml
-                </code>{" "}
-                key. Filter by the question you came with.
-              </>
-            }
+            title="Everything it does, by the question you came with"
+            lead="Each card names the flag or setting behind it and whether it is on by default. Nothing here is a plan: what is not built yet is said so in the modes and the comparison."
           />
           <FeaturesGrid />
         </Section>
 
-        {/* -------------------------------------------------- the command */}
-        <Section id="command">
-          <SectionHead
-            eyebrow="nothing up our sleeve"
-            title="Build the command. Read the argv. Then decide."
-            lead={
-              <>
-                Every flag resolves into a plain{" "}
-                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">docker</code>{" "}
-                invocation, and{" "}
-                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                  --dry-run
-                </code>{" "}
-                prints it before anything executes. Toggle real options and watch the boundary widen
-                or tighten — the arrow beside each flag tells you which way it moves.
-              </>
-            }
-          />
-          <DryRunBuilder />
-
-          <div id="config" className="mt-14 scroll-mt-20">
-            <SectionHead
-              eyebrow="the same boundary, as a file"
-              title={
-                <>
-                  Everything above has a{" "}
-                  <code className="font-mono text-[0.85em]">.sandbox.yaml</code> key
-                </>
-              }
-              lead={
-                <>
-                  Flags are for one run; a{" "}
-                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                    .sandbox.yaml
-                  </code>{" "}
-                  committed at the root of the repo is the boundary everyone on the project gets by
-                  default. Nothing here is required —{" "}
-                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                    sandbox-cli init
-                  </code>{" "}
-                  scaffolds the file, and every key falls back to a working default.
-                </>
-              }
-            />
-            <ConfigReference />
-          </div>
-        </Section>
-
-        {/* --------------------------------------------------------- egress */}
-        <Section id="network" tinted>
+        {/* -------------------------------------------------------- network */}
+        <Section id="network">
           <SectionHead
             eyebrow="the network half of the problem"
-            title="A firewall that stops exfiltration without stopping npm install"
-            lead="Filesystem isolation does nothing about an agent that has been talked into POSTing your .env somewhere. Flip the allowlist and watch which requests still leave."
+            title="An allowlist of names, enforced where the agent cannot reach"
+            lead="A sandbox can still read your repository, so the question is where that can go. The default policy permits the agent APIs and package registries and nothing else, checked by name on the host — so npm install works and a POST to somebody's webhook does not."
           />
           <EgressVisualizer />
         </Section>
 
-        {/* -------------------------------------------------------- workflow */}
-        <Section id="parallel">
+        {/* ------------------------------------------------------ workspace */}
+        <Section id="workspace" tinted>
           <SectionHead
-            eyebrow="what containment buys you"
-            title="Three agents, three branches, one repo, zero collisions"
-            lead={
-              <>
-                Isolation stops being a tax the moment it lets you do something you could not do
-                before.{" "}
-                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                  --worktree
-                </code>{" "}
-                runs each agent in a real git worktree for its own branch, in its own container, so
-                you can start three and go and do something else.
-              </>
-            }
+            eyebrow="your repository"
+            title="A git bundle in, verified commits out"
+            lead="The sandbox gets a clone, never your checkout. When the run ends, everything it left — committed or not — comes back into refs/sandbox/<id>, verified against your repository, and your branches do not move until you merge. While a run is attached, its working tree is checkpointed every five minutes, so a crash costs minutes rather than the run."
           />
-          <ParallelAgents />
-
-          <div className="mt-6 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
-            <span>
-              Several at once, from one file, with the work checked before it lands —
-            </span>
-            <Link
-              href={MULTI_AGENT_PATH}
-              className="inline-flex items-center gap-1 font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-foreground"
-            >
-              running agents in parallel
-              <ArrowUpRight className="size-3.5" />
-            </Link>
-          </div>
-
-          <div id="sessions" className="mt-14 scroll-mt-20">
-            <SectionHead
-              eyebrow="supervision"
-              title="A container outlives the terminal that started it"
-              lead={
-                <>
-                  The daemon owns the container, not the client — so a{" "}
-                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                    kill -9
-                  </code>{" "}
-                  on sandbox-cli leaves the agent working in your project, and{" "}
-                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                    --detach
-                  </code>{" "}
-                  does it on purpose. Four commands address one by id, name or branch.
-                </>
-              }
-            />
-            <SessionCommands />
-          </div>
-
-          <div className="mt-14">
-            <SectionHead
-              eyebrow="observability"
-              title="You can see what it is doing"
-              lead="A sandbox you cannot watch is a sandbox you will not trust. sandbox-cli measures — it never throttles — and reports in three places."
-            />
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
-              <div className="flex flex-col gap-3 rounded-2xl border bg-card p-5">
-                <h3 className="text-[0.95rem] font-semibold tracking-tight">
-                  Why only Claude gets a status line
-                </h3>
-                <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
-                  Claude Code has a{" "}
-                  <code className="font-mono text-[0.9em]">statusLine</code> hook, so the gauge lives
-                  in its own UI, injected through a managed-settings file that never touches your
-                  Claude settings. Neither Gemini CLI nor OpenCode has such a hook. Running them
-                  inside tmux to fake one was tried and reverted — it made their TUIs render badly,
-                  which is a bad trade for a gauge.
-                </p>
-                <p className="text-[0.85rem] leading-relaxed text-muted-foreground">
-                  For every other agent the answer is{" "}
-                  <code className="font-mono text-[0.9em]">sandbox-cli stats</code> in a second
-                  terminal, plus the peak-usage line every run prints when it exits.
-                </p>
-                <div className="mt-auto rounded-lg border bg-surface px-3 py-2.5">
-                  <p className="eyebrow mb-1.5">shared history</p>
-                  <code className="block text-[0.68rem] break-all text-muted-foreground">
-                    {HISTORY_NOTE.mount}
-                  </code>
-                  <p className="mt-2 text-[0.8rem] leading-relaxed text-muted-foreground">
-                    {HISTORY_NOTE.body}
-                  </p>
-                </div>
-              </div>
-              <LiveGauge />
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <p className="eyebrow">when the run ends</p>
+              <CodeBlock code={BRING_BACK} />
             </div>
+            <div className="flex flex-col gap-2">
+              <p className="eyebrow">when something ended it first</p>
+              <CodeBlock code={RECOVER} />
+            </div>
+          </div>
+        </Section>
+
+        {/* ------------------------------------------------------- sessions */}
+        <Section id="sessions">
+          <SectionHead
+            eyebrow="supervision"
+            title="A sandbox outlives the terminal that started it"
+            lead="sandboxd owns every sandbox, not the client that asked for it. Detach, close the laptop, come back from another machine: the same four commands find it, wherever it runs."
+          />
+          <SessionCommands />
+          <div className="mt-10 flex flex-col gap-2">
+            <SectionHead
+              className="mb-2"
+              eyebrow="observability"
+              title="And afterwards, what it did"
+              lead="The server records every sandbox's events — whichever client asked: its policy and environment variable names, every process with its argv and exit code, files read and written, network changes, and how it ended. Values are never written down."
+            />
+            <CodeBlock code={EVENTS} />
           </div>
         </Section>
 
         {/* --------------------------------------------------------- agents */}
         <Section id="agents" tinted>
           <SectionHead
-            eyebrow="adapters"
-            title={`${AGENTS.length} agents, one prefix, your flags forwarded verbatim`}
+            eyebrow="coding agents"
+            title={`${AGENTS.length} agents under one prefix, logins kept between runs`}
             lead={
               <>
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                  sandbox-cli claude --dangerously-skip-permissions
+                  sandbox-cli agent claude --dangerously-skip-permissions
                 </code>{" "}
-                just works: a leading run of sandbox flags is consumed by sandbox, and the first
-                token that is not one ends it — everything after goes to the agent untouched.{" "}
-                {BAKED_COUNT} agents are baked into the base image; the rest install themselves into
-                their own persisted home on first use, so you only download what you actually run.
+                is <code className="font-mono text-[0.85em]">run</code> with an agent&apos;s
+                conveniences on top: its login copied in and back out, its own environment
+                variables forwarded when set, and everything after the sandbox flags handed to the
+                agent untouched. None of it is required to use a sandbox.
               </>
             }
           />
           <AgentExplorer />
-        </Section>
-
-        {/* ------------------------------------------------------------ sdks */}
-        <Section id="sdks">
-          <SectionHead
-            eyebrow="from a program"
-            title="Two clients, one daemon"
-            lead={
-              <>
-                Everything the CLI does happens on the machine running the daemon, so driving it
-                from code is a client rather than a second implementation. Both speak the same
-                endpoints and keep the same rules; they differ in the language they are read in.
-              </>
-            }
-          />
-
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="flex flex-col rounded-2xl border bg-card p-6">
-              <Badge variant="outline" className="mb-3 w-fit border-border text-muted-foreground">
-                typescript
-              </Badge>
-              <h3 className="mb-2 text-[0.95rem] font-medium">@sandbox-cli/sdk</h3>
-              <p className="mb-4 flex-1 text-[0.85rem] leading-relaxed text-muted-foreground">
-                For an agent, a CI step, or a workflow that fans out across branches.{" "}
-                <code className="font-mono text-[0.85em]">npm install @sandbox-cli/sdk</code> —
-                typed against a contract generated from the daemon&apos;s own Go types, so a client
-                that describes an endpoint the daemon does not have fails a build.
-              </p>
+          <div className="mt-6 flex flex-col gap-3 rounded-2xl border bg-card p-5">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="text-[0.95rem] font-semibold tracking-tight">
+                Fallbacks when a provider is down, and fleets of agents
+              </h3>
               <Link
-                href={SDK_PATH}
-                className={cn(buttonVariants({ variant: "outline", size: "sm" }), "w-fit")}
+                href={MULTI_AGENT_PATH}
+                className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
               >
-                The TypeScript client
-                <ArrowRight className="size-3.5" />
+                running a fleet <ArrowUpRight className="size-3.5" />
               </Link>
             </div>
-
-            <div className="flex flex-col rounded-2xl border bg-card p-6">
-              <Badge variant="outline" className="mb-3 w-fit border-border text-muted-foreground">
-                python
-              </Badge>
-              <h3 className="mb-2 text-[0.95rem] font-medium">sandbox-cli-sdk</h3>
-              <p className="mb-4 flex-1 text-[0.85rem] leading-relaxed text-muted-foreground">
-                For a LangGraph node, a FastAPI handler, or untrusted code a model just wrote.{" "}
-                <code className="font-mono text-[0.85em]">pip install sandbox-cli-sdk</code>, then{" "}
-                <code className="font-mono text-[0.85em]">import sandbox_cli</code> — sync and async
-                from one implementation, and no dependencies, because it is imported into somebody
-                else&apos;s agent process.
-              </p>
-              <Link
-                href={PYTHON_SDK_PATH}
-                className={cn(buttonVariants({ variant: "outline", size: "sm" }), "w-fit")}
-              >
-                The Python client
-                <ArrowRight className="size-3.5" />
-              </Link>
-            </div>
+            <CodeBlock code={FLEET} />
           </div>
         </Section>
 
         {/* -------------------------------------------------------- compare */}
         <Section id="compare">
           <SectionHead
-            eyebrow="prior art, honestly"
+            eyebrow="the alternatives, honestly"
             title="Where this sits, including where it loses"
-            lead="Running an agent in a disposable container is a crowded space. sandbox-cli's edge is code quality, ergonomics and a focused feature set — not a hard security boundary. If you need one of those, the table says so."
+            lead="Running untrusted code somewhere safer is a crowded space. This compares kinds of tool rather than products, so it stays true; where a kind varies, the cell says so."
           />
-          <div className="flex flex-col gap-3">
-            <ComparisonTable />
-            <CapabilityChart />
-          </div>
+          <ComparisonTable />
 
           <div className="mt-14">
             <SectionHead
               eyebrow="platform support"
-              title="Everywhere Docker runs"
-              lead="Almost everything works identically across platforms; the differences are all about the boundary the host can provide."
+              title="The client runs anywhere. Sandboxes need a VM."
+              lead="Where a feature is missing on a platform, the server says so in its capabilities and refuses the request rather than running a weaker one."
             />
             <PlatformTable />
           </div>
         </Section>
 
-        {/* --------------------------------------------------------- deploy */}
-        <Section id="deploy" tinted>
-          <SectionHead
-            eyebrow="local development and production"
-            title="Two deployments. Neither of them is the lax one."
-            lead={
-              <>
-                The same tool runs on the machine where you work and on the machine nobody is
-                watching, and those pull in different directions — but not towards a weaker
-                boundary. Local development is where a prompt-injected agent has the most valuable
-                thing in reach, so{" "}
-                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-                  --profile
-                </code>{" "}
-                changes what each optimises within a secure baseline, plus one thing of kind: a
-                control this host cannot provide is a warning under dev and a refusal under prod.
-              </>
-            }
-          />
-          <DeployGuide />
-        </Section>
-
         {/* ---------------------------------------------------------- setup */}
-        <Section id="setup">
-          <div>
-            <SectionHead
-              className="mb-6"
-              eyebrow="setup"
-              title="From a cold machine to a verified sandbox"
-              lead="Pick your platform. Every path ends the same way — with doctor, because installing the binary is the easy half and whether this host can actually deliver the isolation is a property of the machine."
-            />
-            <SetupGuide />
-          </div>
-        </Section>
-
-        {/* ------------------------------------------------------- tutorial */}
-        <Section id="tutorial" tinted>
+        <Section id="setup" tinted>
           <SectionHead
-            eyebrow="getting started"
-            title="Your first ten minutes, end to end"
-            lead={
-              <>
-                Everything above explains one idea at a time and can be read in any order. This is
-                the part that is a <em>sequence</em>: install, check the host, read the argv, push on
-                the boundary, then run the agent. Each step says what you should see, so you can
-                tell whether to continue or stop.
-              </>
-            }
+            className="mb-6"
+            eyebrow="setup"
+            title="From a cold machine to a verified sandbox"
+            lead="Pick where sandboxes will run. Every path ends with doctor, because installing is the easy half and what this sandboxd can actually deliver is a property of the machine."
           />
-          <TutorialSteps />
-
-          <div id="options" className="mt-14 scroll-mt-20">
-            <SectionHead
-              eyebrow="the whole surface"
-              title="Every option, grouped by the question you came with"
-              lead={
-                <>
-                  The builder above is the interactive half — fifteen flags that move the boundary,
-                  so you can watch the argv change. This is the reference half: all of them,
-                  including the many that move nothing, with what happens when you leave each one
-                  out. Most of the time the answer is that you do not need it.
-                </>
-              }
-            />
-            <OptionCatalog />
-          </div>
-
-          <div id="profiles" className="mt-14 scroll-mt-20">
-            <SectionHead
-              eyebrow="dev vs prod"
-              title="What actually differs"
-              lead="Same tool, same host boundary, two dispositions. Nothing on this table is a security control being relaxed — the ones that would be are not on it, because no profile can move them."
-            />
-            <ProfileDiff />
-          </div>
-
-          <div id="troubleshooting" className="mt-14 scroll-mt-20">
-            <SectionHead
-              eyebrow="challenges and workarounds"
-              title="What goes wrong, and why it is usually working"
-              lead="Nearly everything below is a deliberate default doing its job in a way that reads like a failure the first time. Knowing which decision produced the symptom is what tells you whether to work around it or change it."
-            />
-            <ChallengeTable />
-          </div>
-
-          <div id="studio" className="mt-14 scroll-mt-20">
-            <SectionHead
-              eyebrow="sandbox studio"
-              title="The same boundary, driven from a browser"
-              lead={
-                <>
-                  Studio is a local control plane: every run, the boundary it ran inside, and what it
-                  changed. Setting it up is unlike everything above because it is{" "}
-                  <em>two processes that have to agree</em> — a daemon holding the docker socket and a
-                  Next app in your browser — so each step below says which side it belongs to.
-                  The <Link href={STUDIO_PATH} className="underline underline-offset-4">full
-                  walkthrough</Link> covers docker compose as well, and the three refusals that
-                  stand between a web page and your containers.
-                </>
-              }
-            />
-            <StudioTutorial />
-          </div>
+          <SetupGuide />
         </Section>
 
         {/* -------------------------------------------------------- install */}
-        {/* Untinted: the tutorial above took the tinted slot to keep the bands
-            alternating, and the footer is bg-surface, so a tinted section here
-            would run straight into it. */}
         <Section id="install">
           <div className="grid grid-cols-1 items-start gap-10 lg:grid-cols-[1fr_minmax(0,30rem)]">
             <div>
               <SectionHead
                 className="mb-6"
                 eyebrow="get started"
-                title="Install once. Prefix your agent. Done."
-                lead="Needs Docker — Docker Desktop on macOS and Windows. Go 1.25+ only if you build from source. The first run builds the base image; every run after that starts immediately."
+                title="One script: client, server, guest agent."
+                lead="On Linux and Apple-silicon Macs it installs all three; elsewhere, the client, which talks to a sandboxd somewhere else. Go 1.25+ only if you build from source."
               />
               <div className="flex flex-wrap items-center gap-2.5">
                 <a
@@ -537,7 +324,7 @@ export default function Home() {
                   Star on GitHub
                 </a>
                 <a
-                  href={DOC_URL.guide}
+                  href={DOC_URL.readme}
                   target="_blank"
                   rel="noopener noreferrer"
                   className={cn(
@@ -545,17 +332,16 @@ export default function Home() {
                     "gap-1.5 px-4",
                   )}
                 >
-                  Read the guide
+                  Read the README
                   <ArrowUpRight className="size-4" />
                 </a>
               </div>
               <p className="mt-6 max-w-xl text-sm leading-relaxed text-muted-foreground">
-                Uninstalling is symmetrical and cautious:{" "}
-                <code className="font-mono text-[0.9em]">--uninstall</code> removes the binary and
-                then <em>reports</em> what else is on disk without deleting it — because{" "}
+                Uninstalling is cautious: <code className="font-mono text-[0.9em]">--uninstall</code>{" "}
+                removes the binaries and <em>reports</em> what else is on disk —{" "}
                 <code className="font-mono text-[0.9em]">~/.config/sandbox</code> holds your agent
-                logins, and silently deleting it would sign you out of everything with no warning.
-                Add <code className="font-mono text-[0.9em]">--purge</code> when you mean it.
+                logins, and sandboxd&apos;s state directory your volumes. Add{" "}
+                <code className="font-mono text-[0.9em]">--purge</code> when you mean it.
               </p>
               <UninstallSteps className="mt-5 max-w-xl" />
             </div>
@@ -563,9 +349,9 @@ export default function Home() {
             <div className="flex flex-col gap-3">
               <InstallCard />
               <p className="text-xs text-muted-foreground">
-                v{VERSION} · verified against the release{" "}
-                <code className="font-mono">checksums.txt</code> · installs to{" "}
-                <code className="font-mono">~/.local/bin</code> · no root, no package manager.
+                verified against the release <code className="font-mono">checksums.txt</code> ·
+                installs to <code className="font-mono">~/.local/bin</code> · no root, no package
+                manager.
               </p>
             </div>
           </div>

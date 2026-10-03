@@ -133,7 +133,7 @@ func TestProbeClassifiesResponses(t *testing.T) {
 		{429, true, "rate limited means healthy and over-asked; failing over would route around your own quota rather than an outage"},
 		{500, false, ""},
 		{503, false, ""},
-		{529, false, "Anthropic's overloaded status is exactly the outage this exists for"},
+		{529, false, "a provider's overloaded status is exactly the outage this exists for"},
 	}
 	for _, tc := range cases {
 		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
@@ -248,3 +248,30 @@ func stubProbe(f roundTripFunc) func() {
 type net0 struct{}
 
 func (net0) Error() string { return "dial tcp: connection refused" }
+
+// The probe asks whether a provider answers, and nothing more: no credential,
+// even with the agent's key in the environment, because a probe is made from
+// the host before any sandbox exists and a key sent with it would be a key
+// sent somewhere the user did not run an agent.
+func TestProbeCarriesNoCredential(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-probe-test")
+	var got *http.Request
+	restore := stubProbe(func(r *http.Request) (*http.Response, error) {
+		got = r
+		return &http.Response{StatusCode: 401, Body: http.NoBody}, nil
+	})
+	defer restore()
+	Probe(context.Background(), "claude", nil)
+	if got == nil {
+		t.Fatal("no probe was made")
+	}
+	if got.Method != http.MethodHead || got.URL.Path != "/" || got.Body != nil && got.Body != http.NoBody {
+		t.Errorf("probe %s %s with a body", got.Method, got.URL)
+	}
+	for k, v := range got.Header {
+		if strings.Contains(strings.Join(v, " "), "sk-probe-test") || strings.EqualFold(k, "Authorization") ||
+			strings.EqualFold(k, "Cookie") || strings.Contains(strings.ToLower(k), "api-key") {
+			t.Errorf("the probe carried %s", k)
+		}
+	}
+}

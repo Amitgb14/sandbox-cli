@@ -1,15 +1,13 @@
 import {
-  Activity,
   Bot,
-  FileDiff,
-  FolderTree,
-  GitBranch,
+  Boxes,
+  GitMerge,
+  HardDrive,
   History,
   LayoutDashboard,
+  Network,
   Play,
   Settings,
-  ShieldCheck,
-  Shuffle,
   Terminal,
   type LucideIcon,
 } from "lucide-react";
@@ -20,6 +18,10 @@ import {
  * The sidebar, the command palette and the breadcrumbs all read this. Three
  * hand-maintained copies of a route list is how a nav item ends up reachable
  * from the palette and invisible in the sidebar.
+ *
+ * Routes are flat and detail screens take their subject as a query parameter
+ * (/sandbox?id=…): Studio is a static export embedded in sandbox-cli, and a
+ * static export has no server to answer a path it did not build.
  */
 
 export interface NavItem {
@@ -29,8 +31,8 @@ export interface NavItem {
   /** Shown in the palette, where there is room to say what a screen is for. */
   hint: string;
   shortcut?: string;
-  /** Match child routes too (`/runs/abc123` lights up `/runs`). */
-  prefix?: boolean;
+  /** Other paths that light this item up (a detail screen under a list). */
+  also?: string[];
 }
 
 export interface NavGroup {
@@ -46,16 +48,16 @@ export const NAV: NavGroup[] = [
         title: "Dashboard",
         href: "/",
         icon: LayoutDashboard,
-        hint: "Live runs, throughput, and what the host is carrying",
+        hint: "What is running, what came back, and what this sandboxd can do",
         shortcut: "D",
       },
       {
-        title: "Runs",
-        href: "/runs",
-        icon: Activity,
-        hint: "Every sandbox, running or finished",
-        shortcut: "R",
-        prefix: true,
+        title: "Sandboxes",
+        href: "/sandboxes",
+        icon: Boxes,
+        hint: "Every sandbox on this sandboxd: its terminal, output, files and events",
+        shortcut: "S",
+        also: ["/sandbox"],
       },
     ],
   },
@@ -66,36 +68,47 @@ export const NAV: NavGroup[] = [
         title: "Launch",
         href: "/launch",
         icon: Play,
-        hint: "Start a run, with the boundary spelled out before you do",
+        hint: "Start a command or an agent on a clone of a repository",
         shortcut: "N",
       },
       {
-        title: "Worktrees",
-        href: "/worktrees",
-        icon: GitBranch,
-        hint: "One branch per agent, and what is waiting to land",
-        shortcut: "W",
-      },
-      {
-        title: "Snapshots",
-        href: "/snapshots",
+        title: "Runs",
+        href: "/runs",
         icon: History,
-        hint: "Checkpoints of a working tree, and putting one back",
-        shortcut: "S",
+        hint: "Runs on your repositories: bring their work back, or find it after a crash",
+        shortcut: "R",
       },
       {
-        title: "Routing",
-        href: "/routing",
-        icon: Shuffle,
-        hint: "Which providers are answering, and which agent runs when one is not",
-        shortcut: "T",
+        title: "Review",
+        href: "/review",
+        icon: GitMerge,
+        hint: "Work that came back, under refs/sandbox/, and its diff against HEAD",
+        shortcut: "V",
       },
+      {
+        title: "Fleet",
+        href: "/fleet",
+        icon: Network,
+        hint: "A fleet run's tasks, and landing what verified",
+        shortcut: "F",
+      },
+    ],
+  },
+  {
+    label: "Resources",
+    items: [
       {
         title: "Agents",
         href: "/agents",
         icon: Bot,
-        hint: "Every adapter, its login and what crosses the boundary",
+        hint: "The twelve agents, which can run unattended, and whose login is saved",
         shortcut: "A",
+      },
+      {
+        title: "Volumes",
+        href: "/volumes",
+        icon: HardDrive,
+        hint: "Named filesystems that outlive the sandboxes they are mounted in",
       },
     ],
   },
@@ -103,72 +116,24 @@ export const NAV: NavGroup[] = [
     label: "System",
     items: [
       {
-        title: "Doctor",
-        href: "/settings/doctor",
-        icon: ShieldCheck,
-        hint: "Whether this host can deliver what the profile promises",
-      },
-      {
         title: "Settings",
         href: "/settings",
         icon: Settings,
-        hint: "Profile, egress, resources, appearance",
+        hint: "Repositories, the context, and what this sandboxd can deliver",
         shortcut: ",",
       },
     ],
   },
 ];
 
-/**
- * The Editor group, parked.
- *
- * Reading what the agents wrote rather than supervising the agents themselves:
- * Files browses a branch's working tree as it stands on disk, Changes shows what
- * a branch has beyond its base plus its uncommitted work. Both screens, their
- * routes and their endpoints all still work — this is not surfaced yet, on
- * purpose.
- *
- * Kept here rather than deleted because it is the only thing hiding it: put this
- * group back into NAV above and the sidebar, the command palette and the
- * keyboard shortcuts all come back with it, since all three read that one list.
- * The routes stay reachable by URL in the meantime (/files, /changes), which is
- * what makes it parked rather than removed.
- */
-export const EDITOR_NAV: NavGroup = {
-  label: "Editor",
-  items: [
-    {
-      title: "Files",
-      href: "/files",
-      icon: FolderTree,
-      hint: "Browse a branch's working tree as it stands on disk, uncommitted work included",
-      shortcut: "F",
-    },
-    {
-      title: "Changes",
-      href: "/changes",
-      icon: FileDiff,
-      hint: "What a branch has that its base does not, plus whatever is still uncommitted",
-      shortcut: "C",
-    },
-  ],
-};
-
 export const ALL_NAV_ITEMS = NAV.flatMap((g) => g.items);
 
-/** Human-readable segment labels for the breadcrumb trail. */
-const SEGMENT_LABELS: Record<string, string> = {
-  runs: "Runs",
-  launch: "Launch",
-  worktrees: "Worktrees",
-  snapshots: "Snapshots",
-  files: "Files",
-  changes: "Changes",
-  agents: "Agents",
-  routing: "Routing",
-  settings: "Settings",
-  doctor: "Doctor",
-};
+/** Whether a nav item is the screen at pathname. */
+export function isActive(item: NavItem, pathname: string): boolean {
+  const p = pathname.replace(/\/$/, "") || "/";
+  if (item.href === "/") return p === "/";
+  return p === item.href || (item.also ?? []).includes(p);
+}
 
 export interface Crumb {
   label: string;
@@ -177,24 +142,14 @@ export interface Crumb {
   current: boolean;
 }
 
-/**
- * Breadcrumbs from a pathname. A run id segment is passed through as-is and the
- * page overrides it with the run's name once loaded — a trail that guessed at a
- * title before the data arrived would flicker.
- */
+/** Breadcrumbs from a pathname: Studio, then the screen. */
 export function crumbsFor(pathname: string): Crumb[] {
-  const segments = pathname.split("/").filter(Boolean);
-  if (segments.length === 0) return [{ label: "Dashboard", href: "/", current: true }];
+  const p = pathname.replace(/\/$/, "") || "/";
+  if (p === "/") return [{ label: "Dashboard", href: "/", current: true }];
+  const item = ALL_NAV_ITEMS.find((i) => isActive(i, p));
   const crumbs: Crumb[] = [{ label: "Studio", href: "/", current: false }];
-  let href = "";
-  segments.forEach((seg, i) => {
-    href += `/${seg}`;
-    crumbs.push({
-      label: SEGMENT_LABELS[seg] ?? seg,
-      href,
-      current: i === segments.length - 1,
-    });
-  });
+  if (item && item.href !== p) crumbs.push({ label: item.title, href: item.href, current: false });
+  crumbs.push({ label: item && item.href === p ? item.title : p === "/sandbox" ? "Sandbox" : p.slice(1), href: p, current: true });
   return crumbs;
 }
 

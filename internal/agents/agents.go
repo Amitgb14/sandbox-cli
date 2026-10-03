@@ -2,7 +2,7 @@
 // as data rather than as code duplicated per subcommand.
 //
 // Each agent needs the same four things known in two different places: the
-// interactive `sandbox-cli claude` / `sandbox-cli codex` wrappers, and the
+// interactive `sandbox-cli agent claude` / `sandbox-cli agent codex` wrappers, and the
 // headless fleet runner that launches many agents at once. Keeping that
 // knowledge in one table is what stops the two paths from drifting — a fleet run
 // must forward the same environment and persist the same login as the wrapper,
@@ -27,6 +27,13 @@ type Descriptor struct {
 	// subcommand cannot silently orphan an existing login.
 	PersistDir string
 
+	// AuthPaths are the files, relative to the agent's HOME, that hold its
+	// login. The CLI copies them out of the sandbox when a run ends and back in
+	// when the next one starts — the login outlives the sandbox without the host
+	// mounting anything into the guest. Empty for agents that authenticate only
+	// with API keys from the environment.
+	AuthPaths []string
+
 	// EnvAllow lists host environment variable names forwarded into the container
 	// *only if set on the host*. Suggested, opt-in, and deliberately narrow:
 	// nothing else about the host environment crosses the boundary.
@@ -39,15 +46,13 @@ type Descriptor struct {
 	// are constants compiled in here, never anything read from the host.
 	//
 	// In the descriptor rather than in the wrapper because a fleet gets no
-	// wrapper: a setting left behind there — a keyring the container has no daemon
+	// wrapper: a setting left behind there — a keyring the sandbox has no daemon
 	// for is the standing example — is an agent that logs in every run and,
 	// unattended, cannot.
 	//
-	// No agent in the table sets it today; droid, which did, was removed. The
-	// field stays because the wiring behind it does: four call sites carry it to a
-	// container, and the goose, cursor and qwen wrappers do the same job in the
-	// place a fleet cannot reach, so the next agent needing it needs the mechanism
-	// and not a rediscovery of why it exists.
+	// No agent in this table sets it today; droid, which did, was removed. The
+	// field stays because the wiring behind it does: the next agent needing it
+	// needs the mechanism and not a rediscovery of why it exists.
 	Env []string
 
 	// Command is the container argv that starts the agent, to which caller
@@ -68,15 +73,12 @@ type Descriptor struct {
 
 	// ConsoleArgs are the arguments that make the agent start its interactive UI.
 	//
-	// Empty for almost every agent, because the bare binary *is* the UI — which is
-	// why Console used Command alone until cline arrived. Cline inverts it: a bare
-	// invocation is the headless mode and the TUI is opt-in behind `-i`, so
-	// without this a console run started an agent with no prompt and no UI, and
-	// the attached terminal got a container that printed usage and exited.
-	//
-	// A separate field rather than a second Command, because everything else about
-	// starting the agent — the bootstrap, the install, the PATH — is identical in
-	// both modes, and two argvs differing by one flag drift.
+	// Empty for almost every agent, because the bare binary *is* the UI. Cline
+	// inverts it: a bare invocation is the headless mode and the TUI is opt-in
+	// behind `-i`, so without this a console run started an agent with no prompt
+	// and no UI. A separate field rather than a second Command, because the
+	// bootstrap, the install and the PATH are identical in both modes, and two
+	// argvs differing by one flag drift.
 	ConsoleArgs []string
 
 	// SkipPermissionArgs turns off the agent's approval prompts.
@@ -186,69 +188,6 @@ func (d Descriptor) Invocation(prompt string, extra []string) []string {
 	return concat([]string{d.Name}, d.AutonomousArgs(prompt), extra)
 }
 
-// ClaudeBootstrap ensures a self-updating Claude install exists in the persisted
-// HOME (~/.local/bin, installed via the native installer on first run) and execs
-// it. The baked npm copy in /usr/local/bin is the offline fallback. Because the
-// persisted install is user-writable, Claude Code keeps itself up to date across
-// runs — the baked copy could not (root-owned).
-//
-// PATH is **appended** to, never prepended. That HOME is writable by the agent
-// and shared by every session using this adapter, so a prepend would let a
-// planted $HOME/.local/bin/git shadow the image's for every later run — the same
-// shape as the root-phase hazard in CLAUDE.md, one privilege drop later. The
-// wanted binary is reached by absolute path instead, which needs no PATH
-// precedence at all.
-//
-// **It says what it is doing, and it is bounded.** This used to run the installer
-// with both streams sent to /dev/null and no timeout, which made the first run of
-// the flagship agent a multi-minute silence — the download is a whole Claude Code
-// binary. Reported as a hang, and reasonably: it is indistinguishable from one.
-// Worse, interrupting it leaves nothing behind, so the next run started over and
-// the "first run only" cost became permanent.
-//
-// Three things follow, and the middle one is the reason the other bootstraps
-// (bootstrap.go) could stay quiet while this one cannot: they install in seconds
-// from a registry, this fetches a large release binary.
-//
-//   - It announces itself in the same words as every other agent's install.
-//   - The installer's own output is kept, on **stderr**. Never stdout: `claude -p`
-//     writes the answer there and a fleet's verify reads it, so a chatty install
-//     would corrupt the one thing the run exists to produce.
-//   - It is bounded, and the two bounds answer different questions. A host that
-//     does not answer at all is caught by `--connect-timeout` in seconds. A host
-//     that accepts and then stalls is caught by curl's `--max-time` (120s, for a
-//     small script) and by `timeout` (900s, for the install itself) — so that
-//     worst case is minutes, not seconds. Deliberately generous: a slow link is
-//     not an error, and killing a download that would have finished leaves the
-//     user worse off than waiting for it.
-//
-// Failure is still not fatal — `|| true` in spirit — because the baked copy works.
-// But it now says so, and says what to allow under an egress allowlist, since
-// `claude.ai` and `downloads.claude.ai` are not in the baseline and so this
-// install fails silently on every run for anyone using the built-in default.
-const ClaudeBootstrap = `export PATH="$PATH:$HOME/.local/bin"
-if [ ! -x "$HOME/.local/bin/claude" ] && command -v curl >/dev/null 2>&1; then
-  echo "sandbox-cli: installing the self-updating claude into the sandbox agent home (first run only; this downloads a release binary)..." >&2
-  bound=""
-  command -v timeout >/dev/null 2>&1 && bound="timeout 900"
-  installer="$(mktemp)"
-  if curl -fsSL --connect-timeout 15 --max-time 120 -o "$installer" https://claude.ai/install.sh; then
-    $bound bash "$installer" >&2 || true
-  fi
-  rm -f "$installer"
-  # Judged on the outcome, not on exit codes. A vendor script that returns 0
-  # without leaving a binary behind would otherwise pass silently — and "it said
-  # nothing and nothing happened" is the failure this whole block exists to end.
-  if [ ! -x "$HOME/.local/bin/claude" ]; then
-    echo "sandbox-cli: that install did not finish — continuing with the copy baked into the image, which cannot update itself." >&2
-    echo "sandbox-cli: re-run to retry; with an egress allowlist it needs --allow claude.ai --allow downloads.claude.ai." >&2
-  fi
-fi
-if [ -x "$HOME/.local/bin/claude" ]; then
-  exec "$HOME/.local/bin/claude" "$@"
-fi
-exec claude "$@"`
-
 // registry is the set of known agents, keyed by Name.
 var registry = map[string]Descriptor{
 	"claude": {
@@ -256,6 +195,7 @@ var registry = map[string]Descriptor{
 		// Verified: the console feature was built and attached against this agent.
 		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
 		PersistDir:        "claude",
+		AuthPaths:         []string{".claude/.credentials.json", ".claude.json"},
 		ProviderHost:      "api.anthropic.com",
 		EnvAllow: []string{
 			"ANTHROPIC_API_KEY",
@@ -264,9 +204,14 @@ var registry = map[string]Descriptor{
 			"CLAUDE_CODE_USE_BEDROCK",
 			"CLAUDE_CODE_USE_VERTEX",
 		},
-		// The trailing "claude" is $0 for the bootstrap shell, so the guest args
-		// land in "$@" and reach the real binary.
-		Command: []string{"sh", "-c", ClaudeBootstrap, "claude"},
+		// The image's own claude, run directly. beta.15 installed a
+		// self-updating copy into the agent's persisted HOME on first run; in
+		// the rewrite a sandbox's HOME is discarded with it (only the login
+		// files are carried), so that install ran at the start of every run —
+		// a large download where egress allowed it, a wasted attempt where it
+		// did not, and a "first run only" message that was never true. In a
+		// disposable VM the image is where an agent's version lives.
+		Command: []string{"claude"},
 		AutonomousArgs: func(prompt string) []string {
 			// -p is Claude Code's headless "print" mode: run the prompt and exit.
 			// The permission flag is SkipPermissionArgs below, appended by
@@ -283,6 +228,7 @@ var registry = map[string]Descriptor{
 		// runs that may be working today.
 		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
 		PersistDir:        "codex",
+		AuthPaths:         []string{".codex/auth.json"},
 		ProviderHost:      "api.openai.com",
 		EnvAllow: []string{
 			"OPENAI_API_KEY",
@@ -303,6 +249,7 @@ var registry = map[string]Descriptor{
 		// Unverified, and kept as it was.
 		ConsolePromptArgs: func(prompt string) []string { return []string{prompt} },
 		PersistDir:        "gemini",
+		AuthPaths:         []string{".gemini/oauth_creds.json", ".gemini/google_accounts.json", ".gemini/settings.json"},
 		ProviderHost:      "generativelanguage.googleapis.com",
 		// GOOGLE_APPLICATION_CREDENTIALS is deliberately absent: it names a host
 		// file path that is not mounted, so forwarding it would produce a confusing
@@ -326,6 +273,7 @@ var registry = map[string]Descriptor{
 	"opencode": {
 		Name:       "opencode",
 		PersistDir: "opencode",
+		AuthPaths:  []string{".local/share/opencode/auth.json"},
 		// Provider-agnostic, so the list spans the providers it can drive rather
 		// than naming a vendor; each is forwarded only if the host has it set.
 		EnvAllow: []string{
@@ -351,7 +299,7 @@ var registry = map[string]Descriptor{
 		// its default one is its own, so there is no single host whose silence
 		// means "this agent cannot work". Routing reports it unprobed rather than
 		// down, which is the honest answer — guessing api.anthropic.com would fail
-		// over an agent configured against OpenRouter for an outage it never had.
+		// over an agent configured against another provider for an outage it never had.
 		ProviderHost: "",
 		EnvAllow: []string{
 			"ANTHROPIC_API_KEY",

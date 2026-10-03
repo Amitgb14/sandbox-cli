@@ -1,0 +1,32 @@
+# /etc/sandboxd/policy.yaml — what requests may ask for. A request may tighten
+# any of this and never loosen it. Unknown keys are an error.
+default_image: ghcr.io/amitgb14/sandbox-base:edge
+# images: [ghcr.io/amitgb14/sandbox-base:edge]   # uncomment to allow only these
+
+defaults:
+  cpus: 2
+  memory_mb: 2048
+  disk_mb: 20480
+  idle_timeout_secs: 3600
+
+limits:
+  max_cpus: 8
+  max_memory_mb: 16384
+  max_disk_mb: 102400
+  max_idle_timeout_secs: 604800
+
+network:
+  default:
+    mode: allowlist
+    allow:
+      - api.anthropic.com
+      - api.openai.com
+      - registry.npmjs.org
+      - pypi.org
+      - files.pythonhosted.org
+      - github.com
+      - codeload.github.com
+      - objects.githubusercontent.com
+    deny: []
+  ceiling: allowlist      # requests may ask for allowlist or none, never open
+  may_allow: ["*"]        # names a request may add; [] allows only the default list

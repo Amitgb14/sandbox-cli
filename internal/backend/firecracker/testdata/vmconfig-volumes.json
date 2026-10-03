@@ -1,0 +1,40 @@
+{
+  "boot-source": {
+    "kernel_image_path": "/k/vmlinux",
+    "boot_args": "console=ttyS0 ro sbx.volumes=vdc:/sandbox/home/.cache:rw,vdd:/models:ro"
+  },
+  "drives": [
+    {
+      "drive_id": "rootfs",
+      "path_on_host": "/i/rootfs.ext4",
+      "is_root_device": true,
+      "is_read_only": true
+    },
+    {
+      "drive_id": "scratch",
+      "path_on_host": "scratch.ext4",
+      "is_root_device": false,
+      "is_read_only": false
+    },
+    {
+      "drive_id": "vol0",
+      "path_on_host": "/state/volumes/cache.ext4",
+      "is_root_device": false,
+      "is_read_only": false
+    },
+    {
+      "drive_id": "vol1",
+      "path_on_host": "/state/volumes/models.ext4",
+      "is_root_device": false,
+      "is_read_only": true
+    }
+  ],
+  "machine-config": {
+    "vcpu_count": 1,
+    "mem_size_mib": 1024
+  },
+  "vsock": {
+    "guest_cid": 3,
+    "uds_path": "v.sock"
+  }
+}

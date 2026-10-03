@@ -16,8 +16,14 @@ npm run build    # static export -> web/out
 
 | Route | What it is |
 |---|---|
-| `/` | The landing page — the argument, the interactive proofs, install. |
-| `/multi-agent` | **Running agents in parallel**: the fleet doc. One agent per branch, mixing agents across tasks, `verify`, landing, the share convention, the guardrails. Linked from the header nav, the footer, and the landing page's parallel-agents section. |
+| `/` | The landing page — the argument, the three ways to run it, the API, the interactive proofs, setup, install. |
+| `/multi-agent` | **Running agents in parallel**: fallbacks and the fleet. One agent per task in its own sandbox, mixing agents, `verify`, landing from refs, the guardrails. Linked from the header nav, the footer, and the landing page's agents section. |
+| `/studio` | Studio, the browser client of the same API. |
+
+Every terminal frame on these pages is output captured from the CLI, not
+paraphrased, and every claim about a platform says what is verified and what is
+not: the macOS backend has not yet run on a real Mac, and the page says so where
+it matters. No company names: alternatives are described by kind.
 
 The multi-agent story got its own route rather than another band on the landing
 page because it is the one feature people arrive already looking for, and it is

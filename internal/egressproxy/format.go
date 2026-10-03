@@ -11,12 +11,9 @@ package egressproxy
 // internal/agents/bootstrap.go was written about, in a place where the symptom is
 // an audit field that reads 0 instead of a crash.
 //
-// All three now derive from the constants here. This file is in embed.go's
-// `//go:embed` list because the proxy compiled into the image uses them too, and
-// TestEmbeddedSourcesAreComplete requires anything the proxy needs to ship.
-// That has a price worth knowing: internal/image hashes the embedded proxy
-// sources into the base-image tag, so touching this file changes the tag and
-// costs users one rebuild.
+// All three now derive from the constants here. (The proxy used to be compiled
+// into the container image from embedded sources; it runs on the host now, in
+// sandboxd, and the embedding is gone.)
 const (
 	// LogLinePrefix begins every decision line the proxy writes to stderr.
 	LogLinePrefix = "sandbox-cli: egress "
