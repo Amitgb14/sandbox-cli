@@ -85,6 +85,14 @@ export const FEATURES: Feature[] = [
     state: "default",
   },
   {
+    title: "Which agent is waiting for you",
+    group: "workflow",
+    flag: "agent state",
+    body: "Working, blocked, idle, done or failed, decided from the agent's process and its conversation: who spoke last, how long ago, and whether it has a terminal somebody can answer at. Never from the agent's wording, so a reworded prompt cannot make it lie. agent wait blocks until an agent is in a state you name; Studio's dashboard counts the ones waiting.",
+    code: "sandbox-cli agent wait fix-auth --state blocked --timeout 30m",
+    state: "default",
+  },
+  {
     title: "Pools: a create is a claim",
     group: "workflow",
     flag: "pools:",

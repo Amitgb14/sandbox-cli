@@ -61,7 +61,7 @@ by `e2e/global-setup.ts`.
 
 | Route | Screen |
 |---|---|
-| `/` | Dashboard: what is running, work not brought back, what this sandboxd can do |
+| `/` | Dashboard: agents waiting for you, what is running, work not brought back, what this sandboxd can do |
 | `/sandboxes`, `/sandbox?id=` | Every sandbox; one sandbox's terminal, output, files and events |
 | `/launch` | A command, an unattended agent, or an agent's console, on a clone of the repository |
 | `/runs` | Runs on the repository, and where each one's work is |

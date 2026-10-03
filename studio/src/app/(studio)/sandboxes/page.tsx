@@ -9,12 +9,14 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { Labels } from "@/components/sandbox/labels";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useSandboxes } from "@/lib/api/queries";
+import { useAgentStates, useSandboxes } from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
 
 /** Every sandbox on this sandboxd, terminated ones included until it forgets them. */
 export default function SandboxesPage() {
   const { data, isLoading, error } = useSandboxes();
+  const { data: agentStates } = useAgentStates();
+  const agentOf = new Map((agentStates ?? []).map((a) => [a.sandbox, a]));
   const [filter, setFilter] = useState("");
   const q = filter.trim().toLowerCase();
   const rows = (data ?? []).filter(
@@ -40,6 +42,7 @@ export default function SandboxesPage() {
             <TableRow>
               <TableHead>Sandbox</TableHead>
               <TableHead>State</TableHead>
+              <TableHead>Agent</TableHead>
               <TableHead>Image</TableHead>
               <TableHead>Network</TableHead>
               <TableHead>Labels</TableHead>
@@ -54,6 +57,9 @@ export default function SandboxesPage() {
                   {s.name ? <span className="ml-2 text-muted-foreground">{s.name}</span> : null}
                 </TableCell>
                 <TableCell><StatusBadge outcome={s.state} size="sm" /></TableCell>
+                <TableCell title={agentOf.get(s.id)?.why}>
+                  {agentOf.has(s.id) ? <StatusBadge outcome={agentOf.get(s.id)!.state} size="sm" /> : <span className="text-xs text-muted-foreground">—</span>}
+                </TableCell>
                 <TableCell className="max-w-48 truncate font-mono text-xs" title={s.image}>{s.image}</TableCell>
                 <TableCell className="font-mono text-xs">{s.network.mode}</TableCell>
                 <TableCell><Labels labels={s.labels} /></TableCell>
