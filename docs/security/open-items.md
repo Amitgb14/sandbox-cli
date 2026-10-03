@@ -17,6 +17,7 @@ comes back as a verified git bundle. Where each item stands there:
 | Item | In the rewrite |
 |---|---|
 | 1. Egress by IP | The allowlist is by name (`internal/egressproxy`), enforced on the host, under a root sandboxd (`--network`). Unprivileged, a sandbox has no network at all. |
+| DNS exfiltration ("Not on this list", and item 2) | **Closed under an allowlist.** The guest's resolver (`egressproxy.DNS`) never forwards a query. An allowed name gets an address on the host, which the proxy handles; any other name gets NXDOMAIN. So no query leaves the host on a guest's behalf, however a name is spelled (`TestDNSNeverForwards`). `--network open` is open by definition. |
 | 2. Raw credentials in the agent | **Unchanged.** A secret reaches the guest's environment by name and the agent can read its value. The mitigations listed there still apply. |
 | 3. `.git/config` and hooks | **Obsolete.** The host never mounts the workspace. A run's commits come back as a bundle that is verified and fetched through `githard` into `refs/sandbox/…`, so no hook or config the agent wrote runs on the host. |
 | 4. Sandboxes see each other | **Obsolete.** Each sandbox is its own VM with its own network device, or with none at all. |

@@ -10,18 +10,18 @@ Those are different promises, and only the first is one this tool can make.
 
 ---
 
-## The three ways a secret reaches a container
+## The three ways a secret reaches a sandbox
 
 | how | where the value comes from | reaches the agent as |
 |---|---|---|
-| `secrets:` in your own config | a host file, a host command, or a host env var, resolved per run | an environment variable |
-| `--env NAME` / a wrapper's `EnvAllow` | your shell's environment, forwarded only if set | an environment variable |
-| the agent's own login | the persisted HOME at `~/.config/sandbox/agents/<name>` | a file the agent reads |
+| `secrets:` in your own config | a host file, a host command, or a host env var, resolved per run on the machine running the CLI | an environment variable |
+| `--env NAME` / an agent's `EnvAllow` | your shell's environment, forwarded only if set | an environment variable |
+| the agent's own login | the files saved at `~/.config/sandbox/agents/<name>`, copied in when a run starts | a file the agent reads |
 
 The third is the one most people forget, and it is usually the most valuable: on
 the default auth path it is an **OAuth refresh token**, not an API key. It is
-scoped to your whole account, does not expire on its own, and the persisted HOME
-is the same directory in *every* project.
+scoped to your whole account, does not expire on its own, and the same saved
+login is restored into every run of that agent, in every project.
 
 ---
 
@@ -29,23 +29,31 @@ is the same directory in *every* project.
 
 These are properties of the code, not intentions.
 
-- **A secret value never appears on the docker command line.** `internal/creds`
-  resolves references on the host and the values reach the child process
-  directly; `runtime.BuildArgs` never renders them. They therefore do not appear
-  in `--dry-run` output, in `ps`, or in your shell history.
+- **A secret value never appears in an argv, a VM's config or its kernel
+  command line.** `internal/creds` resolves references on the host. The values
+  travel in the API request body to `sandboxd`, and from there to the guest's
+  environment over the agent channel. Neither the Firecracker config nor the
+  macOS runtime's argv carries them
+  (`TestBuildConfigCarriesNoEnvironmentValue`,
+  `TestBuildRunArgsCarryNoEnvironmentValue`), and the API never returns them
+  (`EnvironmentValuesAreNeverReturned`, conformance).
 - **A secret value is never written to a config file by us.** You give a
   *reference* — a path, a command, an env var name — and the resolution happens
   at run time.
-- **The audit log records environment variables by name only.**
-  `audit.SessionMeta` has nowhere to put a value, deliberately: the broker exists
-  to keep secrets out of files, and a log is a file.
+- **The audit log records environment variables by name only, and a process by
+  its program, argument count and a hash.** `api.Event` has nowhere to put a
+  value or an argument, deliberately: the broker exists to keep secrets out of
+  files, a log is a file, and a token pasted into a prompt is an argument.
 - **A project's own `.sandbox.yaml` cannot introduce secrets.** `secrets`, `env`
-  and `env_allow` are on the refused list in `config/trust.go` — a repository
+  and `env_allow` are on the refused list in `policy/trust.go` — a repository
   you cloned cannot make your machine resolve a credential. Naming a config with
   `--config <path>` is the deliberate act that overrides this.
-- **Under `--profile prod` the persisted HOME is not mounted at all**, and
+- **Under `--profile prod` no saved login is restored or saved**, and
   `ValidateProfile` refuses a prod config that turns it back on. The refresh
-  token is not in the container, so it cannot leak from one.
+  token never enters a sandbox, so it cannot leak from one.
+- **A saved login carries the login and nothing else.** Files that are also an
+  agent's settings keep only their login keys (`agents.FilterAuth`). An MCP
+  server, or another command an agent wrote into them, does not reach later runs.
 
 ## What is not guaranteed
 
@@ -58,9 +66,6 @@ will hand over the wrong credential.
   the proxy that hid every secret would also hold every secret, every prompt in
   plaintext and a CA private key. So this one is permanent, not pending: the
   answer is to make a leak cheap, which is what the next section is about.
-- **A leaked secret can leave over DNS.** The container uses a real resolver, and
-  data encoded into query names is not something a connection-level firewall
-  sees. Recorded at the bottom of `open-items.md` as knowingly open.
 - **A leaked secret can leave through a host you allowed.** If `github.com` is on
   the egress allowlist — as it is under the default baseline — a token can be
   pushed there in a commit message or a gist. The allowlist decides *where*, not
@@ -78,8 +83,7 @@ rather than prevent. What decides the damage is **scope, lifetime, breadth and
 recoverability** — not how well the value was hidden.
 
 **1. Run `--profile prod` when the credentials matter.** It removes the
-account-wide, never-expiring, cross-project credential from the container
-entirely, and empties the egress baseline so the permitted set is exactly what
+account-wide, never-expiring, cross-project credential from every sandbox, and empties the egress baseline so the permitted set is exactly what
 you named rather than one that already includes `github.com`.
 
 **2. Broker short-lived, narrowly-scoped secrets.** A `secrets:` entry runs a
@@ -145,9 +149,7 @@ one repository, leaked from one run* — which you rotate, or wait out.
 
 ## One deployment caveat
 
-A `secrets:` command runs wherever the **API process** runs. Under
-`docker compose --profile api` that is a container with neither your `gh` login
-nor the tooling the command expects, so brokered secrets fail there with
-`exit status 127`. Mounting your credentials into that container to fix it would
-hand them to a process already holding the docker socket. Brokered secrets belong
-to a host process — which is the deployment that compose file recommends anyway.
+A `secrets:` command runs where the **CLI** runs, not where `sandboxd` runs. A
+remote or self-hosted `sandboxd` therefore needs nothing of your tooling or
+login. The value is resolved on your machine and sent in the create request,
+which is one more reason a TCP `sandboxd` needs a token and, off loopback, TLS.
