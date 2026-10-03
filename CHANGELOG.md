@@ -83,6 +83,21 @@ in `_old/` as reference, to be ported where this design still wants it.
   settings the new client reads.
 - **`agent claude` runs the image's Claude Code.** It no longer downloads a
   self-updating copy at the start of each run.
+- **`sandbox-cli agent state` says which agent is waiting for you.** Each
+  agent sandbox is reported as working, blocked, idle, done or failed. Blocked
+  means the agent is quiet at a terminal, waiting for an answer. Idle means it
+  is quiet with no terminal. The state is decided from the agent's process and
+  conversation (who spoke last, how long ago, and whether anyone can type at
+  it), never from what the agent wrote. Where that evidence runs out, it says
+  `unknown`. `agent wait SANDBOX --state …` blocks until one of the named
+  states; a timeout exits 2 and names the state the agent was in. Studio's
+  Dashboard counts the agents waiting for you, and Sandboxes shows each one's
+  state. Ported from beta.15's line after 0.0.1.
+- **A routed run carries codex's conversation forward, as it did claude's.**
+  When codex fails having changed nothing and the run falls through, the next
+  agent's briefing quotes what was asked and answered in codex's session. It
+  leaves out codex's own instructions and the context it injects into every
+  session. Before, only claude's conversation crossed.
 - **Twelve agents, as on beta.15's `main`.** aider, amp, codebuff, continue,
   crush and droid are gone; Kilo Code and Devin CLI are console agents; cline
   has a verified headless mode (a bare prompt, with its UI behind `-i`), so a

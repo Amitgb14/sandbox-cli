@@ -121,3 +121,38 @@ jobs:
       - name: Web — typecheck, lint, build
         working-directory: web
         run: npm ci --no-audit --no-fund && npx tsc --noEmit && npm run lint && npm run build
+
+  # The SDKs. Python at both ends of what it supports: 3.9 is what macOS still
+  # ships as /usr/bin/python3, the interpreter somebody's agent script finds
+  # without choosing it, and a test only on a modern one would not notice the
+  # floor going. Its tests start a real sandboxd (in-memory backend) on a unix
+  # socket. TypeScript: the package compiles under its own strict settings.
+  sdks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Python SDK against sandboxd
+        run: make test-sdk
+
+      - uses: actions/setup-node@v4
+        if: matrix.python == '3.13'
+        with:
+          node-version: 22
+
+      - name: TypeScript SDK — typecheck
+        if: matrix.python == '3.13'
+        working-directory: sdk/typescript
+        run: npm install --no-audit --no-fund && npx tsc --noEmit

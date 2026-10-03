@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,10 +10,10 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
+	"github.com/Amitgb14/sandbox-cli/internal/agentstate"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/handoff"
 	"github.com/Amitgb14/sandbox-cli/internal/routing"
-	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // A routed run is a wrapper run with somewhere to fall through to:
@@ -33,20 +32,6 @@ import (
 //     cannot hand anything to the next agent: there is nothing of it left.
 //   - The briefing is read out of the failed sandbox before it is terminated,
 //     and written into the next one over the API (handoff.GuestDir).
-
-// transcriptDirs is where an agent keeps this run's conversation inside the
-// sandbox. Only claude's format is verified (agentctx), so only claude's
-// conversation crosses; any other agent's briefing is the file ledger alone,
-// which handoff treats as an ordinary case rather than a failure. The bucket
-// name is Claude Code's spelling of the working directory, /workspace.
-var transcriptDirs = map[string]string{
-	"claude": workspace.GuestHome + "/.claude/projects/-workspace",
-}
-
-// maxTranscripts bounds how many files are read looking for this run's
-// conversation. A fresh sandbox holds one; the directory is the agent's to
-// write, and a thousand planted files should not mean a thousand reads.
-const maxTranscripts = 8
 
 // configuredRouting is the chain's fallbacks and the probe overrides: flags
 // first, then the user's config. routing: and providers: are refused from a
@@ -157,7 +142,7 @@ func routedRun(ctx context.Context, rf *runFlags, primary agents.Descriptor, age
 		}
 		var collected []agentctx.Message
 		rs.after = func(ctx context.Context, c *api.Client, sandbox string) {
-			collected = readTranscript(ctx, c, sandbox, name)
+			collected = agentstate.ReadTranscript(ctx, c, sandbox, name)
 		}
 		code, err := execute(ctx, rf, rs)
 		if err != nil || code == 0 {
@@ -248,43 +233,4 @@ func writeBriefing(ex *handoff.Export) func(context.Context, *api.Client, string
 		}
 		fmt.Fprintf(os.Stderr, "sandbox-cli: carrying %s's briefing forward — %d prompt(s), at %s\n", ex.From, ex.Turns, handoff.GuestDir)
 	}
-}
-
-// readTranscript reads this run's conversation out of the sandbox. Best-effort
-// by construction: an agent that died before writing one is the commonest case
-// here. The contents come from the guest, so they are parsed as data (bounded
-// by the protocol's read limit) and only ever quoted into a briefing for the
-// next agent — never acted on by the host.
-func readTranscript(ctx context.Context, c *api.Client, sandbox, agent string) []agentctx.Message {
-	dir, ok := transcriptDirs[agent]
-	if !ok {
-		return nil
-	}
-	entries, err := c.ListDir(ctx, sandbox, dir)
-	if err != nil {
-		return nil
-	}
-	var best []agentctx.Message
-	read := 0
-	for _, e := range entries {
-		if e.Type != "file" || !strings.HasSuffix(e.Name, ".jsonl") || strings.Contains(e.Name, "/") {
-			continue
-		}
-		if read++; read > maxTranscripts {
-			break
-		}
-		data, err := c.ReadFile(ctx, sandbox, dir+"/"+e.Name)
-		if err != nil {
-			continue
-		}
-		msgs, err := agentctx.ParseTranscript(bytes.NewReader(data), 0)
-		if err != nil || len(msgs) == 0 {
-			continue
-		}
-		// The conversation that ended last is the one that failed.
-		if best == nil || msgs[len(msgs)-1].At.After(best[len(best)-1].At) {
-			best = msgs
-		}
-	}
-	return best
 }

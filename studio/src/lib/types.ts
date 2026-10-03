@@ -207,3 +207,18 @@ export interface LaunchResult {
 export type OutputEvent =
   | { stream: "stdout" | "stderr"; data: string }
   | { exit_code: number };
+
+/**
+ * What an agent is doing, decided host-side from evidence rather than from its
+ * wording (internal/agentstate): `blocked` is quiet with a terminal somebody can
+ * answer at, `idle` quiet with none, `unknown` where the evidence runs out.
+ */
+export type AgentStateName = "working" | "blocked" | "idle" | "done" | "failed" | "suspended" | "stopped" | "unknown";
+
+export interface AgentState {
+  sandbox: string;
+  name?: string;
+  agent: string;
+  state: AgentStateName;
+  why: string;
+}

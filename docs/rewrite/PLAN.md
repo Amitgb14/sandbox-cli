@@ -823,13 +823,15 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
   - **Merged with `main` (2026-10-02).** `main` released 0.0.1 and carried
     beta.15's line on after it. That later work is in `_old/` as reference.
     What it offers this design, to port when wanted:
-    - a codex transcript reader (`_old/internal/agentctx`), so a codex
-      conversation can brief the next agent;
-    - the session server's agent states (`working` / `blocked` / `idle`, from
-      the agent's own transcript) and `pane wait`;
+    - ~~a codex transcript reader~~ *ported*: a codex conversation briefs the
+      next agent (`agentctx.ParseCodexTranscript`);
+    - ~~agent states~~ *ported*: `agent state`, `agent wait`, and Studio's
+      "waiting for you" (`internal/agentstate`);
     - S3 mirroring of checkpoints, whose trust reasoning
       (`docs/security/open-items.md`) applies unchanged;
-    - testing the Python SDK on 3.9 and 3.13 in CI.
+    - ~~testing the Python SDK on 3.9 and 3.13 in CI~~ *done*: CI had not run
+      the SDKs at all; the `sdks` job runs the Python tests against sandboxd on
+      both, and typechecks the TypeScript SDK.
 
     The agent roster came across now, because it was a decision rather than a
     feature: twelve agents, with cline headless.
