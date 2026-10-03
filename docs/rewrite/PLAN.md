@@ -1,8 +1,8 @@
 # Rewrite plan: sandboxes as a product, three ways to run them
 
-**Status:** direction set 2026-10-01; M0 done. Branch `rewrite`; `main` stays
-the shipping line until the rewrite reaches parity, then is replaced. Nothing is
-deleted from history.
+**Status:** direction set 2026-10-01. Merged into `main` on 2026-10-03 (#178),
+replacing the container design whose last release is 0.0.1. Nothing is deleted
+from history. M10 continues on `main`.
 
 ## What we are building
 
