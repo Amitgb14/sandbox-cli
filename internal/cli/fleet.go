@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/fleet"
+	"github.com/Amitgb14/sandbox-cli/internal/mirror"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/workspace"
@@ -72,6 +74,10 @@ func newFleetRunCmd() *cobra.Command {
 			r := &fleet.Runner{Client: c, Repo: repo, Keep: keep, Out: cmd.OutOrStdout(),
 				PersistLogins: cfg.PersistAuthEnabled(), CheckpointEvery: every,
 				Prepare: fleetPrepare(repo, profile, caps)}
+			if cfg.Mirror != nil {
+				r.Mirror = fleetMirror(cfg.Mirror, repo)
+				r.MirrorCheckpoints = cfg.Mirror.UploadMode() == policy.MirrorAll
+			}
 			st, err := r.Run(cmd.Context(), spec)
 			if err != nil {
 				return err
@@ -184,5 +190,18 @@ func fleetPrepare(repo, profile string, caps api.Capabilities) func(*api.CreateS
 	return func(req *api.CreateSandboxRequest, allow []string) error {
 		rf := &runFlags{profile: profile, allow: allow}
 		return applyConfig(rf, repo, req, caps)
+	}
+}
+
+// fleetMirror is a fleet task's copy to the user's mirror: the same upload a
+// run makes, recorded in the fleet's state rather than a session record.
+func fleetMirror(spec *policy.MirrorSpec, repo string) func(ctx context.Context, sandbox, ref, kind string) (string, error) {
+	return func(ctx context.Context, sandbox, ref, kind string) (string, error) {
+		m, err := mirror.New(spec, repo)
+		if err != nil {
+			return "", err
+		}
+		e, err := m.Upload(ctx, ref, sandbox, kind, time.Now())
+		return e.Key, err
 	}
 }

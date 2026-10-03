@@ -64,6 +64,17 @@ type Config struct {
 	// not choose. See trust.go.
 	Providers map[string]string `yaml:"providers"`
 
+	// Mirror copies the work that comes back from a sandbox to object storage,
+	// so it outlives the machine that ran it. Nil is off, which is the default:
+	// it sends the repository off this machine and reads a credential, and
+	// neither is something to start doing because a tool was installed.
+	//
+	// User-config only (trust.go): it names a network destination and which of
+	// this machine's credentials is read, so a repository that could set it
+	// would be handed an exfiltration target, the means to authenticate to it,
+	// and the work bundled for the trip.
+	Mirror *MirrorSpec `yaml:"mirror"`
+
 	// Profile selects the security profile: "dev" (interactive, warns) or "prod"
 	// (unattended, refuses). See profile.go. A project config may raise this and
 	// never lower it, which is what stops a hostile repository dropping a run out
@@ -545,6 +556,9 @@ func (c Config) Validate() error {
 	if strings.ContainsAny(c.Image, " \t\n") {
 		return fmt.Errorf("image %q must not contain whitespace", c.Image)
 	}
+	if err := validateMirror(c.Mirror); err != nil {
+		return err
+	}
 	for k := range c.Env {
 		if IsReservedEnv(k) {
 			return fmt.Errorf("env %q: %s", k, reservedEnvReason)
@@ -615,4 +629,89 @@ func (c Config) NetworkArg() string {
 		return "none"
 	}
 	return ""
+}
+
+// Upload modes for MirrorSpec.
+//
+// MirrorBringBack is the default: the work a run brings home, once per run.
+// MirrorAll adds every new checkpoint, so a run whose machine dies mid-way is
+// recoverable from the bucket too; it is a bundle every few minutes per
+// running agent, and that is a thing to choose rather than to be given.
+const (
+	MirrorBringBack = "bring-back"
+	MirrorAll       = "all"
+)
+
+// DefaultMirrorMaxObjectMB bounds a bundle when none is configured: 2 GiB,
+// under the 5 GiB a single S3 PUT allows. The client does no multipart, and a
+// limit that refuses up front beats one discovered at the end of an hour.
+const DefaultMirrorMaxObjectMB = 2048
+
+// MirrorSpec is where work is mirrored and what is.
+type MirrorSpec struct {
+	S3          *S3Spec `yaml:"s3"`
+	Upload      string  `yaml:"upload"`        // MirrorBringBack (default) or MirrorAll
+	MaxObjectMB int     `yaml:"max_object_mb"` // 0: DefaultMirrorMaxObjectMB
+}
+
+// S3Spec is a bucket and how to reach it.
+//
+// **It holds no credential, and that is structural.** The three *_env fields
+// are the names of environment variables, as `secrets:` names a variable: a
+// config file is copied between machines and pasted into issues, and a secret
+// never in it cannot leak from it. There is nowhere in this struct for a value.
+type S3Spec struct {
+	Bucket    string `yaml:"bucket"`
+	Region    string `yaml:"region"`   // default us-east-1
+	Endpoint  string `yaml:"endpoint"` // an S3-compatible server; empty is the default S3 service
+	Prefix    string `yaml:"prefix"`
+	PathStyle bool   `yaml:"path_style"`
+
+	AccessKeyEnv    string `yaml:"access_key_env"`    // default AWS_ACCESS_KEY_ID
+	SecretKeyEnv    string `yaml:"secret_key_env"`    // default AWS_SECRET_ACCESS_KEY
+	SessionTokenEnv string `yaml:"session_token_env"` // default AWS_SESSION_TOKEN
+}
+
+// UploadMode is the resolved mode.
+func (m *MirrorSpec) UploadMode() string {
+	if m == nil || m.Upload == "" {
+		return MirrorBringBack
+	}
+	return m.Upload
+}
+
+// MaxObjectBytes is the resolved bundle ceiling.
+func (m *MirrorSpec) MaxObjectBytes() int64 {
+	if m == nil || m.MaxObjectMB <= 0 {
+		return int64(DefaultMirrorMaxObjectMB) << 20
+	}
+	return int64(m.MaxObjectMB) << 20
+}
+
+// validateMirror checks a mirror block as a whole.
+func validateMirror(m *MirrorSpec) error {
+	if m == nil {
+		return nil
+	}
+	switch m.Upload {
+	case "", MirrorBringBack, MirrorAll:
+	default:
+		return fmt.Errorf("mirror.upload must be %q or %q, got %q", MirrorBringBack, MirrorAll, m.Upload)
+	}
+	if m.MaxObjectMB < 0 {
+		return fmt.Errorf("mirror.max_object_mb must not be negative, got %d", m.MaxObjectMB)
+	}
+	// A destination is the one thing with no default: a mirror block with no
+	// bucket is one somebody believes is working.
+	if m.S3 == nil || m.S3.Bucket == "" {
+		return fmt.Errorf("mirror needs s3.bucket: the bucket to copy work into")
+	}
+	for field, name := range map[string]string{
+		"access_key_env": m.S3.AccessKeyEnv, "secret_key_env": m.S3.SecretKeyEnv, "session_token_env": m.S3.SessionTokenEnv,
+	} {
+		if name != "" && !ValidEnvName(name) {
+			return fmt.Errorf("mirror.s3.%s names %q, which is not an environment variable name (it names a variable, never holds a key)", field, name)
+		}
+	}
+	return nil
 }

@@ -96,6 +96,11 @@ resumed conversation. A run that changed files is never retried. Put
 `routing: [claude, codex]` in `~/.config/sandbox/config.yaml` to make a chain
 the default; a project's `.sandbox.yaml` cannot set it.
 
+To keep work that comes back beyond this machine, add a `mirror:` block to your
+own config. Every bring-back is then also copied to an S3-compatible bucket.
+`sandbox-cli mirror fetch` brings it back on any clone, checked before it lands.
+`sandbox-cli mirror --help` has the config.
+
 With several agents going, `sandbox-cli agent state` says which one needs
 you. It reports working, blocked (quiet at a terminal, so waiting for an
 answer), idle, done or failed. It decides from the agent's process and its

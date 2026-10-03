@@ -435,6 +435,17 @@ func readConfigFile(path string) (*Config, error) {
 // mergeInto overlays the non-zero fields of src onto dst. Mount host paths are
 // resolved relative to baseDir (the config file's directory).
 func mergeInto(dst *Config, src Config, baseDir string) {
+	if src.Mirror != nil {
+		// Replaced whole, never merged field by field: a nearer layer naming a
+		// new endpoint while an outer one supplies the bucket would send work
+		// to a destination neither file describes.
+		m := *src.Mirror
+		if src.Mirror.S3 != nil {
+			s3 := *src.Mirror.S3
+			m.S3 = &s3
+		}
+		dst.Mirror = &m
+	}
 	if src.Image != "" {
 		dst.Image = src.Image
 	}

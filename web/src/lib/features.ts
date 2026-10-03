@@ -85,6 +85,14 @@ export const FEATURES: Feature[] = [
     state: "default",
   },
   {
+    title: "Mirror work off the machine",
+    group: "workflow",
+    flag: "mirror:",
+    body: "Opt in, in your own config only, and what comes back is also copied to any S3-compatible bucket as a self-contained git bundle. The config names the variables holding the credential, never the credential. mirror fetch brings it into refs/sandbox/mirror/ on any clone, refused unless it is the commit its name says, from this repository's history, and on the uploading machine the commit recorded at upload.",
+    code: "sandbox-cli mirror fetch sbx_7f3a9c2e1b4d",
+    state: "default",
+  },
+  {
     title: "Which agent is waiting for you",
     group: "workflow",
     flag: "agent state",

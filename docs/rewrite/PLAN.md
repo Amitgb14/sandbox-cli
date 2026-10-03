@@ -827,8 +827,8 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
       next agent (`agentctx.ParseCodexTranscript`);
     - ~~agent states~~ *ported*: `agent state`, `agent wait`, and Studio's
       "waiting for you" (`internal/agentstate`);
-    - S3 mirroring of checkpoints, whose trust reasoning
-      (`docs/security/open-items.md`) applies unchanged;
+    - ~~S3 mirroring~~ *ported* as `mirror:`, with every rule from
+      `docs/security/open-items.md` kept (`internal/mirror`, `internal/s3`);
     - ~~testing the Python SDK on 3.9 and 3.13 in CI~~ *done*: CI had not run
       the SDKs at all; the `sdks` job runs the Python tests against sandboxd on
       both, and typechecks the TypeScript SDK.

@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// The published AWS worked example for "Transfer Payload in a Single Chunk",
-// signed here and compared to the signature AWS printed for it.
+// The published SigV4 worked example for "Transfer Payload in a Single Chunk",
+// signed here and compared to the signature the specification prints for it.
 //
 // A known-answer test rather than a round trip against our own code, and that is
 // the whole point of it: every internally consistent signer agrees with itself.

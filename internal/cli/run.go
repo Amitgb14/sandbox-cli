@@ -19,6 +19,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/mirror"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/workspace"
@@ -157,7 +158,8 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if _, err := loadConfig(project, rf.configPath, rf.profile, ov); err != nil {
+	cfg, err := loadConfig(project, rf.configPath, rf.profile, ov)
+	if err != nil {
 		return 1, err
 	}
 	c, ctxName, err := newClient(rf.context)
@@ -278,8 +280,11 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	}
 
 	stopCheckpoints := func() error { return nil }
+	reportMirror := func() {}
 	if sess != nil && rf.checkpoint > 0 {
-		stopCheckpoints = workspace.SessionCheckpoints(ctx, c, sess, rf.checkpoint)
+		var mirrorTaken func(string)
+		mirrorTaken, reportMirror = checkpointMirror(ctx, cfg.Mirror, sess)
+		stopCheckpoints = workspace.SessionCheckpoints(ctx, c, sess, rf.checkpoint, mirrorTaken)
 	}
 	code, err := attach(ctx, c, sb.ID, p.PID, tty, true)
 	// Reported only now: while attached, the agent owns the terminal, and a
@@ -287,6 +292,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	if cerr := stopCheckpoints(); cerr != nil {
 		fmt.Fprintf(os.Stderr, "sandbox-cli: checkpoints failed during the run: %v\n", cerr)
 	}
+	reportMirror()
 	if err != nil {
 		return 1, err
 	}
@@ -320,6 +326,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 				rs.result.changed = &changed
 			}
 			fmt.Fprintf(os.Stderr, "sandbox-cli: work brought back to %s\n  review: git log -p HEAD..%s · merge: git merge %s\n", ref, ref, ref)
+			sayMirror(mirrorWork(context.Background(), cfg.Mirror, sess, ref, mirror.KindBringBack))
 		}
 	}
 	if keep && !rf.detach {

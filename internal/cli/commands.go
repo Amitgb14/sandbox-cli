@@ -16,6 +16,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/mirror"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
@@ -200,14 +201,21 @@ func newAttachCmd() *cobra.Command {
 			}
 			// A run started with --detach has nothing checkpointing it; while
 			// someone is attached to it, this does.
-			stop := func() error { return nil }
+			stop, reportMirror := func() error { return nil }, func() {}
 			if sess, ok := attachedSession(cmd.Context(), c, ctxName, args[0]); ok && every > 0 {
-				stop = workspace.SessionCheckpoints(cmd.Context(), c, sess, every)
+				spec, err := mirrorSpecFor(sess.Repo)
+				if err != nil {
+					return err
+				}
+				var mirrorTaken func(string)
+				mirrorTaken, reportMirror = checkpointMirror(cmd.Context(), spec, sess)
+				stop = workspace.SessionCheckpoints(cmd.Context(), c, sess, every, mirrorTaken)
 			}
 			code, err := attach(cmd.Context(), c, args[0], p, info.Tty && isTerminal(os.Stdin), false)
 			if cerr := stop(); cerr != nil {
 				fmt.Fprintf(os.Stderr, "sandbox-cli: checkpoints failed while attached: %v\n", cerr)
 			}
+			reportMirror()
 			if errors.Is(err, errDetached) {
 				fmt.Fprintf(os.Stderr, "sandbox-cli: detached; %s keeps running (sandbox-cli attach %s · sandbox-cli kill %s)\n",
 					termsafe.Clean(args[0]), termsafe.Clean(args[0]), termsafe.Clean(args[0]))
@@ -332,6 +340,11 @@ func newBringBackCmd() *cobra.Command {
 				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ref)
+			spec, err := mirrorSpecFor(s.Repo)
+			if err != nil {
+				return err
+			}
+			sayMirror(mirrorWork(cmd.Context(), spec, &s, ref, mirror.KindBringBack))
 			return nil
 		},
 	}

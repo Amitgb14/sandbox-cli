@@ -53,8 +53,11 @@ type TaskState struct {
 	// Checkpoint is the latest checkpoint fetched while the task ran: where its
 	// work is if the sandbox died before bring-back.
 	Checkpoint string `json:"checkpoint,omitempty"`
-	Log        string `json:"log"`
-	Error      string `json:"error,omitempty"`
+	// Mirrored is the last object this task's work was copied to, when a
+	// mirror is configured.
+	Mirrored string `json:"mirrored,omitempty"`
+	Log      string `json:"log"`
+	Error    string `json:"error,omitempty"`
 }
 
 // State is a fleet run's record, kept outside the repository.
@@ -131,6 +134,15 @@ type Runner struct {
 	// A fleet runs unattended for longer than anything else, and a VM lost an
 	// hour in should not take the hour with it.
 	CheckpointEvery time.Duration
+
+	// Mirror copies a ref of this task's off the machine, when the user has a
+	// mirror configured: kind is "bring-back" or "checkpoint", and the answer
+	// is the object it went to. Nil is no mirror. A failure is reported on the
+	// task's line and fails nothing: the work is home in refs/sandbox/.
+	Mirror func(ctx context.Context, sandbox, ref, kind string) (key string, err error)
+	// MirrorCheckpoints is whether checkpoints are mirrored as well as what
+	// comes back (`mirror.upload: all`).
+	MirrorCheckpoints bool
 
 	toolsMu  sync.Mutex
 	toolsFor map[string]*api.VolumeMount
@@ -301,6 +313,14 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 				ts.Checkpoint = ref
 				mu.Unlock()
 				save()
+				if r.Mirror != nil && r.MirrorCheckpoints {
+					if key, err := r.Mirror(ctx, sb.ID, ref, "checkpoint"); err == nil {
+						mu.Lock()
+						ts.Mirrored = key
+						mu.Unlock()
+						save()
+					}
+				}
 			})
 	}
 	code := -1
@@ -327,8 +347,19 @@ func (r *Runner) runTask(ctx context.Context, spec Spec, t Task, caps api.Capabi
 	}
 
 	ref, err := workspace.BringBack(context.Background(), r.Client, sess, "fleet/"+t.Branch)
+	var mirrorErr error
+	if err == nil && ref != "" && r.Mirror != nil {
+		key, merr := r.Mirror(context.Background(), sb.ID, ref, "bring-back")
+		mu.Lock()
+		ts.Mirrored = key
+		mu.Unlock()
+		mirrorErr = merr
+	}
 	mu.Lock()
 	defer mu.Unlock()
+	if mirrorErr != nil {
+		ts.Error = "not mirrored: " + mirrorErr.Error()
+	}
 	ts.ExitCode, ts.Ref = code, ref
 	switch {
 	case err != nil:

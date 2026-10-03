@@ -137,7 +137,17 @@ func (s *Server) bringBack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	se.MarkBroughtBack(ref)
-	writeJSON(w, http.StatusOK, map[string]string{"ref": ref})
+	out := map[string]string{"ref": ref}
+	if ref != "" && s.Mirror != nil {
+		// As a CLI bring-back does: copied off the machine when the user has a
+		// mirror, and a failure said rather than failing what already worked.
+		if msg, err := s.Mirror(ctx, &se, ref); err != nil {
+			out["mirror_error"] = err.Error()
+		} else if msg != "" {
+			out["mirrored"] = msg
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) forgetRun(w http.ResponseWriter, r *http.Request) {

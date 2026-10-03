@@ -64,6 +64,11 @@ type Session struct {
 	// when the work is brought back from a detached run.
 	Agent string `json:"agent,omitempty"`
 
+	// Mirrored is what this machine copied to the configured mirror: the record
+	// a fetch here checks the bucket's copy against, so a bucket that was
+	// shared, mistaken or tampered with cannot hand back a different commit.
+	Mirrored []MirrorRecord `json:"mirrored,omitempty"`
+
 	// Checkpoint is the last checkpoint fetched, and when.
 	Checkpoint   string    `json:"checkpoint,omitempty"`
 	CheckpointAt time.Time `json:"checkpoint_at,omitempty"`
@@ -167,7 +172,7 @@ func CloneIn(ctx context.Context, c *api.Client, sandbox, repo string) (string, 
 func BringBack(ctx context.Context, c *api.Client, s Session, name string) (string, error) {
 	// Names that are namespaces of their own: refs/sandbox/fleet/<branch> and
 	// refs/sandbox/checkpoints/<id> cannot coexist with a ref of the same name.
-	if name == "fleet" || name == "checkpoints" {
+	if name == "fleet" || name == "checkpoints" || name == "mirror" {
 		return "", fmt.Errorf("refs/sandbox/%s is reserved; bring it back under another name (--name)", name)
 	}
 	commit := "cd /workspace && git add -A && " +
@@ -248,4 +253,12 @@ func Identity(repo string, own bool) map[string]string {
 		"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email,
 		"GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email,
 	}
+}
+
+// MirrorRecord is one object copied to the mirror (internal/mirror).
+type MirrorRecord struct {
+	Key  string    `json:"key"`
+	SHA  string    `json:"sha"`
+	Kind string    `json:"kind"`
+	At   time.Time `json:"at"`
 }

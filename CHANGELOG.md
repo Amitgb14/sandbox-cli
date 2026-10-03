@@ -83,6 +83,22 @@ in `_old/` as reference, to be ported where this design still wants it.
   settings the new client reads.
 - **`agent claude` runs the image's Claude Code.** It no longer downloads a
   self-updating copy at the start of each run.
+- **Work that comes back can be mirrored to S3, so it outlives the machine.**
+  Mirroring is off unless you add `mirror:` to `~/.config/sandbox/config.yaml`;
+  a project's `.sandbox.yaml` cannot set it. When it is on, every bring-back
+  (from `run`, `bring-back`, a fleet task or Studio) is copied to any
+  S3-compatible bucket as a self-contained git bundle. With `upload: all`, every
+  checkpoint is copied too.
+  - **Credentials:** the config holds only the names of the environment
+    variables that contain them.
+  - **`sandbox-cli mirror check | ls | push | fetch`:** `fetch` brings work back
+    into `refs/sandbox/mirror/<sandbox>` on any clone of the repository. Before
+    anything lands, the bundle must carry exactly the commit its name says and
+    descend from this repository's root. On the machine that uploaded it, it
+    must also be the commit recorded at upload.
+  - **Failures and limits:** a failed upload is reported and does not fail the
+    run. Nothing is ever deleted from the bucket, and a bundle over
+    `max_object_mb` (2 GiB by default) is refused before upload.
 - **`sandbox-cli agent state` says which agent is waiting for you.** Each
   agent sandbox is reported as working, blocked, idle, done or failed. Blocked
   means the agent is quiet at a terminal, waiting for an answer. Idle means it
