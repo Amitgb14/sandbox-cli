@@ -47,6 +47,7 @@ func newMirror(t *testing.T, repo string, spec *policy.MirrorSpec) (*Mirror, *mi
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
+	noBackgroundGit(t)
 	f, srv := mirrortest.NewServer(t)
 	t.Setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
@@ -156,4 +157,19 @@ func TestUploadRefusesABundleOverTheCeiling(t *testing.T) {
 	if len(f.Objects) != 0 {
 		t.Error("something was uploaded")
 	}
+}
+
+// noBackgroundGit stops a fetch from starting git's automatic gc or
+// maintenance in the background, which goes on writing into the repository
+// after the test has finished and races TempDir's cleanup ("directory not
+// empty"). Set for every git the test starts, sandbox-cli's own included.
+func noBackgroundGit(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_COUNT", "3")
+	t.Setenv("GIT_CONFIG_KEY_0", "gc.auto")
+	t.Setenv("GIT_CONFIG_VALUE_0", "0")
+	t.Setenv("GIT_CONFIG_KEY_1", "maintenance.auto")
+	t.Setenv("GIT_CONFIG_VALUE_1", "false")
+	t.Setenv("GIT_CONFIG_KEY_2", "gc.autoDetach")
+	t.Setenv("GIT_CONFIG_VALUE_2", "false")
 }

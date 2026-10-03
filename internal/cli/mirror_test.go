@@ -42,6 +42,7 @@ func TestMirrorPushLsFetch(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
+	noBackgroundGit(t)
 	_, srv := mirrortest.NewServer(t)
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", home)
@@ -106,4 +107,19 @@ func TestNoMirrorIsQuiet(t *testing.T) {
 	if spec, err := mirrorSpecFor(t.TempDir()); spec != nil || err != nil {
 		t.Errorf("%+v %v", spec, err)
 	}
+}
+
+// noBackgroundGit stops a fetch from starting git's automatic gc or
+// maintenance in the background, which goes on writing into the repository
+// after the test has finished and races TempDir's cleanup ("directory not
+// empty"). Set for every git the test starts, sandbox-cli's own included.
+func noBackgroundGit(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_COUNT", "3")
+	t.Setenv("GIT_CONFIG_KEY_0", "gc.auto")
+	t.Setenv("GIT_CONFIG_VALUE_0", "0")
+	t.Setenv("GIT_CONFIG_KEY_1", "maintenance.auto")
+	t.Setenv("GIT_CONFIG_VALUE_1", "false")
+	t.Setenv("GIT_CONFIG_KEY_2", "gc.autoDetach")
+	t.Setenv("GIT_CONFIG_VALUE_2", "false")
 }
