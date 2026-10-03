@@ -457,6 +457,12 @@ func (b *Backend) Start(_ context.Context, id string, ps backend.ProcSpec, stdou
 		s.mu.Unlock()
 		return nil, backend.ErrNotFound
 	}
+	if ps.Cwd != "" {
+		if n, ok := s.files[path.Clean(ps.Cwd)]; !ok || !n.dir {
+			s.mu.Unlock()
+			return nil, backend.ErrNoSuchCwd
+		}
+	}
 	s.procs = append(s.procs, p)
 	s.mu.Unlock()
 

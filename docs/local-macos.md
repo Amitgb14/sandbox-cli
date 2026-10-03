@@ -44,6 +44,11 @@ your home directory, or anything above it.
 
 ## Open points, decided by the M3 macOS run
 
+Seen on a Mac with macOS 26.1 (2026-10-03), `alpine:3.20`: a sandbox with
+`--network none` comes up in under a second, and a file the guest writes into a
+bind belongs to you on the Mac. Whether you can `git commit` such files
+afterwards is still to be checked, as is everything below.
+
 - Whether the runtime supports `--network none` as rendered. If it does not,
   creating a sandbox fails, rather than running one with a network.
 - Who owns files the guest writes into a bind, and whether you can still edit

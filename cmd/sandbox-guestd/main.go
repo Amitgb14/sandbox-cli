@@ -14,11 +14,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -43,7 +46,9 @@ func main() {
 	case "idle":
 		// The main process of a sandbox whose runtime starts its own init (the
 		// macOS backend): it only has to stay alive. Each request is a separate
-		// `serve --stdio` exec.
+		// `serve --stdio` exec. That init does not do what ours does at boot, so
+		// the directories every sandbox has are made here.
+		missingDirs("/")
 		for {
 			time.Sleep(time.Hour)
 		}
@@ -70,6 +75,26 @@ const (
 	defaultGID  = 1001
 	defaultHome = "/sandbox/home"
 )
+
+// missingDirs makes the workspace and the sandbox user's home exist under root,
+// as init's sandboxDirs does on Firecracker, for an image that lacks them
+// (alpine, say): without /workspace every request to run there fails. Unlike
+// sandboxDirs it gives away only what it made. A /workspace that already exists
+// may be a bind of a directory on the user's Mac, and its owner is not ours to
+// change.
+func missingDirs(root string) {
+	for _, d := range []string{"/workspace", defaultHome} {
+		p := filepath.Join(root, d)
+		if _, err := os.Lstat(p); err == nil || !errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-guestd: %s: %v\n", d, err)
+			continue
+		}
+		_ = os.Chown(p, defaultUID, defaultGID)
+	}
+}
 
 func baseEnv(home string) map[string]string {
 	return map[string]string{

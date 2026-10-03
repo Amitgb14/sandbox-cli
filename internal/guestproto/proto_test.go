@@ -118,6 +118,17 @@ func TestExecUnknownCommand(t *testing.T) {
 	}
 }
 
+// A missing working directory is named as such. Before, the process failed to
+// start with ENOENT and that was reported as the command not existing.
+func TestExecMissingCwd(t *testing.T) {
+	c, root := serve(t)
+	withCommands(t, root, "true")
+	_, err := c.Exec(ctx(t), []string{"true"}, map[string]string{"PATH": "/bin"}, "/no-such-dir", io.Discard, io.Discard)
+	if !IsCode(err, CodeNoSuchCwd) {
+		t.Fatalf("err = %v; want no_such_cwd", err)
+	}
+}
+
 func TestSignalReachesTheProcess(t *testing.T) {
 	c, root := serve(t)
 	withCommands(t, root, "sleep")

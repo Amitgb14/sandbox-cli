@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -366,6 +367,19 @@ func testRunCwd(t *testing.T, e *env) {
 	}
 	_, err := e.c.Run(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"pwd"}, Cwd: "tmp"})
 	wantCode(t, err, api.CodeInvalidRequest)
+	// A directory that does not exist is named as the problem. It used to come
+	// back as "no such command" — the same code, blaming a command that exists.
+	_, err = e.c.Run(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"pwd"}, Cwd: "/no-such-dir"})
+	wantCode(t, err, api.CodeInvalidRequest)
+	var ae *api.Error
+	if !errors.As(err, &ae) || !strings.Contains(ae.Message, "cwd") {
+		t.Errorf("a missing cwd was reported as %v; want it named as the cwd", err)
+	}
+	// The workspace exists in every sandbox, whatever the image.
+	res = e.run(t, sb.ID, api.RunRequest{Argv: []string{"pwd"}, Cwd: "/workspace"})
+	if strings.TrimSpace(string(res.Stdout)) != "/workspace" {
+		t.Errorf("pwd in /workspace printed %q", res.Stdout)
+	}
 }
 
 func testBackgroundProcess(t *testing.T, e *env) {

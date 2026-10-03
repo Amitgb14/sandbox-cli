@@ -290,6 +290,13 @@ func (s *Server) exec(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
 		reply(c, fail(CodeBadRequest, "cwd: "+err.Error()))
 		return
 	}
+	// Checked here, before the command is looked up: a process that cannot
+	// change into its directory fails to start with ENOENT, which is
+	// indistinguishable from a missing command and was reported as one.
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		reply(c, fail(CodeNoSuchCwd, "no such directory: "+cwd))
+		return
+	}
 
 	env := map[string]string{}
 	for k, v := range s.BaseEnv {

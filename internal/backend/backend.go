@@ -167,6 +167,7 @@ var (
 	ErrNotEmpty    = errors.New("directory not empty")
 	ErrReadOnly    = errors.New("read-only file system")
 	ErrNoSuchCmd   = errors.New("no such command")
+	ErrNoSuchCwd   = errors.New("no such working directory")
 	ErrBadSignal   = errors.New("unsupported signal")
 	ErrUnavailable = errors.New("backend unavailable")
 	ErrBusy        = errors.New("busy")

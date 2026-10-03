@@ -1024,6 +1024,8 @@ func writeBackendErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, api.CodeConflict, "read-only file system")
 	case errors.Is(err, backend.ErrNoSuchCmd):
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "no such command")
+	case errors.Is(err, backend.ErrNoSuchCwd):
+		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "cwd: no such directory")
 	case errors.Is(err, backend.ErrBadSignal):
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "unsupported signal")
 	case errors.Is(err, backend.ErrBusy):
