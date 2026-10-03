@@ -77,6 +77,14 @@ func restrictedProjectKeys(src, inherited Config) []string {
 		// same objection as `secrets` and `env`, arriving by a different door.
 		add("routing")
 	}
+	if src.Mirror != nil {
+		// A network destination and the name of a credential to read: a
+		// repository that set it could send the work it is about to receive
+		// to a bucket of its choosing, signed with the user's own key.
+		// Holding no secret value is no mitigation; naming somebody else's
+		// variable is the attack.
+		add("mirror")
+	}
 	if src.Home != "" {
 		add("home") // relocates the container HOME, and with it the persisted-auth mount
 	}

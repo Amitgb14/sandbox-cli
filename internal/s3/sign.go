@@ -3,15 +3,15 @@
 // prefix.
 //
 // Hand-rolled rather than imported, for the reason the module has no
-// dependencies but cobra and yaml.v3: the AWS SDK is ~15MB of transitive code
+// dependencies but cobra and yaml.v3: the vendor SDK is ~15MB of transitive code
 // and a release cadence to track, in exchange for five requests whose signing
 // algorithm is public, stable since 2012, and about a hundred lines. The cost is
 // real and worth naming — no IMDS, no SSO, no config-file profiles, no
 // multipart — and it is why credentials are resolved from named environment
 // variables and nothing else (see Config.Credentials).
 //
-// It talks to anything that speaks S3: AWS, MinIO, Cloudflare R2, Backblaze B2,
-// Ceph. Endpoint and path-style addressing are configuration rather than a
+// It talks to anything that speaks S3: the original service and the
+// S3-compatible servers, hosted or self-hosted. Endpoint and path-style addressing are configuration rather than a
 // vendor list, because a list of other people's products can be neither
 // completed nor kept current — the same reason internal/creds keeps its prefix
 // table short.
@@ -49,7 +49,7 @@ const (
 // comes back as 403 with no hint about which part was wrong:
 //
 //   - the canonical URI must be the *escaped* path with "/" left unescaped, and
-//     for S3 (unlike every other AWS service) it is not normalized a second
+//     for S3 (unlike the provider's other services) it is not normalized a second
 //     time, which is what lets a key contain "..";
 //   - every signed header must be lowercased, sorted, and its value trimmed;
 //   - Host must be in the signed set. It is not in req.Header — net/http keeps

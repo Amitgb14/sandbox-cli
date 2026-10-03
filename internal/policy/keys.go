@@ -18,7 +18,7 @@ import (
 // is refused with it rather than ignored.
 
 // liveKeys are the top-level keys the rewrite's client acts on.
-var liveKeys = map[string]bool{
+var liveKeys = map[string]bool{"mirror": true,
 	"image": true, "env": true, "env_allow": true, "network": true, "secrets": true,
 	"routing": true, "providers": true, "profile": true, "persist_auth": true,
 }

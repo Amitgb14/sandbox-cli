@@ -42,3 +42,26 @@ func TestCheckLiveKeys(t *testing.T) {
 		t.Error("an absent file is not an error")
 	}
 }
+
+// A mirror block is checked whole: a destination is required, a credential
+// is a variable's name and nothing else, and a mode nobody defines is refused.
+func TestMirrorIsValidated(t *testing.T) {
+	ok := Config{Image: "x", Workdir: "/w", Mirror: &MirrorSpec{S3: &S3Spec{Bucket: "b", AccessKeyEnv: "MY_KEY"}}}
+	if err := validateMirror(ok.Mirror); err != nil {
+		t.Errorf("a valid block: %v", err)
+	}
+	for name, m := range map[string]*MirrorSpec{
+		"no bucket":             {S3: &S3Spec{}},
+		"no s3 at all":          {Upload: MirrorAll},
+		"an unknown mode":       {S3: &S3Spec{Bucket: "b"}, Upload: "sometimes"},
+		"a negative ceiling":    {S3: &S3Spec{Bucket: "b"}, MaxObjectMB: -1},
+		"a key where a name is": {S3: &S3Spec{Bucket: "b", SecretKeyEnv: "wJalrXUtnFEMI/K7MDENG"}},
+	} {
+		if err := validateMirror(m); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if (&MirrorSpec{}).MaxObjectBytes() != DefaultMirrorMaxObjectMB<<20 || (*MirrorSpec)(nil).UploadMode() != MirrorBringBack {
+		t.Error("defaults")
+	}
+}

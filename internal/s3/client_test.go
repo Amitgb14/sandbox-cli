@@ -67,7 +67,7 @@ func TestHalfACredentialNamesTheMissingVariable(t *testing.T) {
 }
 
 // The two addressing styles produce different URLs, and getting it wrong is a
-// connection to a hostname that does not exist (vhost against MinIO) or a 404
+// connection to a hostname that does not exist (vhost against a self-hosted server) or a 404
 // with no explanation (path-style against a bucket that expects vhost).
 func TestAddressingStyle(t *testing.T) {
 	for _, tc := range []struct {
@@ -78,7 +78,7 @@ func TestAddressingStyle(t *testing.T) {
 		pathStyle bool
 	}{
 		{
-			name:     "aws virtual host",
+			name:     "default virtual host",
 			cfg:      Config{Bucket: "mybucket", Region: "eu-west-1"},
 			wantHost: "mybucket.s3.eu-west-1.amazonaws.com",
 			wantPath: "/snapshots/x.bundle",

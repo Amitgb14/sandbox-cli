@@ -19,7 +19,7 @@ import (
 
 // DefaultAccessKeyEnv and friends are the variable names used when the
 // configuration names none. They are the conventional ones, so a machine that
-// already has a working `aws` CLI needs no credential configuration here at all.
+// already has the provider's CLI working needs no credential configuration here at all.
 const (
 	DefaultAccessKeyEnv    = "AWS_ACCESS_KEY_ID"
 	DefaultSecretKeyEnv    = "AWS_SECRET_ACCESS_KEY"
@@ -54,7 +54,7 @@ type Config struct {
 	Bucket string
 	Region string
 
-	// Endpoint overrides the AWS host, for MinIO, R2, Ceph and the rest. Scheme
+	// Endpoint overrides the default S3 host, for any S3-compatible server. Scheme
 	// is optional and defaults to https.
 	Endpoint string
 
@@ -64,11 +64,11 @@ type Config struct {
 
 	// PathStyle addresses the bucket as <endpoint>/<bucket>/<key> rather than
 	// <bucket>.<endpoint>/<key>. Required by most self-hosted servers, and by
-	// AWS for a bucket whose name is not DNS-safe.
+	// the default service for a bucket whose name is not DNS-safe.
 	PathStyle bool
 
 	// The names of the variables holding the credential. Empty means the
-	// conventional AWS name.
+	// conventional name.
 	AccessKeyEnv    string
 	SecretKeyEnv    string
 	SessionTokenEnv string

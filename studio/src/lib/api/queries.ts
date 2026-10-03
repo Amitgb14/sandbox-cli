@@ -229,7 +229,9 @@ export function useSignal() {
 
 export function useBringBack() {
   return useInvalidating(
-    (sandbox: string) => apiFetch<{ ref: string }>(`/runs/${sandbox}/bring-back`, { method: "POST" }),
+    // mirrored / mirror_error: set when the user has a mirror configured.
+    (sandbox: string) =>
+      apiFetch<{ ref: string; mirrored?: string; mirror_error?: string }>(`/runs/${sandbox}/bring-back`, { method: "POST" }),
     () => [[...keys.runs], ["refs"]],
   );
 }

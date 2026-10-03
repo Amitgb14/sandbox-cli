@@ -152,12 +152,16 @@ func Checkpoints(ctx context.Context, every time.Duration, take func(context.Con
 }
 
 // SessionCheckpoints checkpoints a session's sandbox every interval, recording
-// each new checkpoint in the session record.
-func SessionCheckpoints(ctx context.Context, c *api.Client, sess *Session, every time.Duration) (stop func() error) {
+// each new checkpoint in the session record, then calling also (if not nil)
+// with its ref — which is how a mirror copies it off the machine.
+func SessionCheckpoints(ctx context.Context, c *api.Client, sess *Session, every time.Duration, also func(ref string)) (stop func() error) {
 	return Checkpoints(ctx, every,
 		func(ctx context.Context) (string, bool, error) { return Checkpoint(ctx, c, *sess) },
 		func(ref string) {
 			sess.Checkpoint, sess.CheckpointAt = ref, time.Now().UTC()
 			_ = sess.Save()
+			if also != nil {
+				also(ref)
+			}
 		})
 }

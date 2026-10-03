@@ -66,7 +66,12 @@ function RunsTable({ repo }: { repo: Repo }) {
               {r.state === "running" && (
                 <Button size="sm" variant="outline" disabled={bring.isPending}
                   onClick={() => bring.mutate(r.sandbox, {
-                    onSuccess: (res) => toast.success(res.ref ? `Brought back to ${res.ref}` : "No new commits"),
+                    onSuccess: (res) => {
+                      toast.success(res.ref ? `Brought back to ${res.ref}` : "No new commits");
+                      // The work is home either way; a mirror that failed is said, not hidden.
+                      if (res.mirrored) toast.success(res.mirrored);
+                      if (res.mirror_error) toast.error(`Not mirrored: ${res.mirror_error}`);
+                    },
                     onError: (e) => toast.error(e.message),
                   })}>
                   Bring back

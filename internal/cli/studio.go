@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
+	"github.com/Amitgb14/sandbox-cli/internal/mirror"
 	"github.com/Amitgb14/sandbox-cli/internal/studio"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
 	"github.com/Amitgb14/sandbox-cli/internal/workspace"
@@ -45,7 +46,14 @@ func newStudioCmd() *cobra.Command {
 			}
 			srv := &studio.Server{
 				Client: c, Context: ctxName, Token: hex.EncodeToString(tok), UI: studio.EmbeddedUI(),
-				Launch:    studioLauncher(ctxName),
+				Launch: studioLauncher(ctxName),
+				Mirror: func(ctx context.Context, se *workspace.Session, ref string) (string, error) {
+					spec, err := mirrorSpecFor(se.Repo)
+					if err != nil {
+						return "", err
+					}
+					return mirrorWork(ctx, spec, se, ref, mirror.KindBringBack)
+				},
 				ReposFile: filepath.Join(workspace.ConfigDir(), "studio", "repos.json"),
 				Version:   version.Version,
 				Logf: func(format string, a ...any) {

@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // LaunchRequest is a run started from Studio. It becomes the same request a
@@ -78,6 +79,9 @@ type Server struct {
 	ReposFile string
 	Version   string
 	Logf      func(format string, a ...any)
+	// Mirror copies brought-back work to the user's mirror, if one is
+	// configured; nil is none. Set by the CLI, which owns the config.
+	Mirror func(ctx context.Context, se *workspace.Session, ref string) (msg string, err error)
 }
 
 // Handler is everything Studio serves.
