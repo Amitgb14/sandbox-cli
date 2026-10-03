@@ -216,40 +216,46 @@ fetch "${BASE}/${ARCHIVE}" "$TMP/$ARCHIVE" || die "download failed: ${BASE}/${AR
   If the repository is private, pass --token or set GITHUB_TOKEN."
 verify "$TMP/$ARCHIVE"
 
-# ---- install ----------------------------------------------------------------
+# ---- check everything, then install ------------------------------------------
+# Every binary is extracted and verified before any is installed. Installing the
+# client and then finding the server missing left a half-install behind, and on
+# a release that predates the microVM rewrite that half was the old,
+# container-based client: a working command that did something else.
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP" "$BINARY" 2>/dev/null \
   || tar -xzf "$TMP/$ARCHIVE" -C "$TMP" \
   || die "could not extract ${ARCHIVE}"
 [ -f "$TMP/$BINARY" ] || die "${BINARY} not found inside ${ARCHIVE}"
 
-mkdir -p "$DEST"
-chmod +x "$TMP/$BINARY"
-# Stage then rename, so replacing a running binary is atomic.
-mv "$TMP/$BINARY" "$DEST/.${BINARY}.new"
-mv "$DEST/.${BINARY}.new" "$DEST/$BINARY"
-
-info "installed ${DEST}/${BINARY}"
-
-# ---- the server and the guest agent ---------------------------------------
 # sandboxd comes from the archive already verified; the guest agent from an
 # archive of its own (it is a Linux binary even on a Mac, where the VM is
 # linux/arm64), verified the same way, and installed beside sandboxd, which is
 # where sandboxd looks for it.
-install_bin() { # install_bin NAME — from $TMP to $DEST, atomically
+if [ "$WITH_SERVER" = 1 ]; then
+  tar -xzf "$TMP/$ARCHIVE" -C "$TMP" "$SERVER" 2>/dev/null || true
+  if [ ! -f "$TMP/$SERVER" ]; then
+    die "${ARCHIVE} has no ${SERVER}, so ${VERSION} predates the microVM rewrite: it is the
+  container-based release, and nothing was installed.
+  Install a release that has it (--version), or build the current one from source:
+    git clone https://github.com/${REPO} && cd sandbox-cli && make build
+  --client-only installs this release's client alone."
+  fi
+  GARCHIVE="${GUEST}_${VERSION}_linux_${ARCH}.tar.gz"
+  info "  downloading ${GARCHIVE}"
+  fetch "${BASE}/${GARCHIVE}" "$TMP/$GARCHIVE" || die "download failed: ${BASE}/${GARCHIVE}; nothing was installed"
+  verify "$TMP/$GARCHIVE"
+  tar -xzf "$TMP/$GARCHIVE" -C "$TMP" "$GUEST" 2>/dev/null || die "${GUEST} not found inside ${GARCHIVE}; nothing was installed"
+fi
+
+install_bin() { # install_bin NAME — from $TMP to $DEST; stage then rename, so replacing a running binary is atomic
   chmod +x "$TMP/$1"
   mv "$TMP/$1" "$DEST/.$1.new"
   mv "$DEST/.$1.new" "$DEST/$1"
   info "installed ${DEST}/$1"
 }
 
+mkdir -p "$DEST"
+install_bin "$BINARY"
 if [ "$WITH_SERVER" = 1 ]; then
-  tar -xzf "$TMP/$ARCHIVE" -C "$TMP" "$SERVER" 2>/dev/null || true
-  [ -f "$TMP/$SERVER" ] || die "${SERVER} not found inside ${ARCHIVE}; pass --client-only to install the client alone"
-  GARCHIVE="${GUEST}_${VERSION}_linux_${ARCH}.tar.gz"
-  info "  downloading ${GARCHIVE}"
-  fetch "${BASE}/${GARCHIVE}" "$TMP/$GARCHIVE" || die "download failed: ${BASE}/${GARCHIVE}"
-  verify "$TMP/$GARCHIVE"
-  tar -xzf "$TMP/$GARCHIVE" -C "$TMP" "$GUEST" 2>/dev/null || die "${GUEST} not found inside ${GARCHIVE}"
   install_bin "$SERVER"
   install_bin "$GUEST"
 fi

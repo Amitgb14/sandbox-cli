@@ -83,6 +83,12 @@ in `_old/` as reference, to be ported where this design still wants it.
   settings the new client reads.
 - **`agent claude` runs the image's Claude Code.** It no longer downloads a
   self-updating copy at the start of each run.
+- **The installer checks everything before installing anything.** It used to
+  install the client and then look for `sandboxd`. Run against a release from
+  before the rewrite (0.0.1, which ships only the container-based client), that
+  left the old client installed and then failed. Now every binary is extracted
+  and verified first, nothing is installed if one is missing, and the error says
+  the release predates the rewrite and how to build the current one.
 - **Work that comes back can be mirrored to S3, so it outlives the machine.**
   Mirroring is off unless you add `mirror:` to `~/.config/sandbox/config.yaml`;
   a project's `.sandbox.yaml` cannot set it. When it is on, every bring-back
