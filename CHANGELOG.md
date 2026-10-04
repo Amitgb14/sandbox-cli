@@ -303,6 +303,16 @@ that fails on the code before the fix:
   revoked`. Removing an SSH key closes the connections made with it. Both are
   rechecked every 30 seconds and at start, and recorded in the audit log
   (`ssh.revoked`, `job.revoked`).
+- **Revoking a key ends the API requests it has open.** A key was checked only
+  when a request arrived, so an attached terminal, a followed output stream
+  (`sandbox-cli logs`), a tunnel or a waiting `run` opened before the
+  revocation went on for as long as its client kept it. The gateway now holds
+  every open request on a sandbox to its key, on each revocation and every 30
+  seconds, and ends one whose key is revoked, gone, or no longer carries the
+  scope it needed: the request to the node is cancelled and an attach's or a
+  tunnel's connections are closed at both ends. A client sees its stream cut
+  off (`401` if the node had not answered yet); the audit log records each as
+  `api.revoked`. Requests made with the user's other keys stay open.
 
 ### Changed
 

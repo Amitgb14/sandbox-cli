@@ -70,7 +70,8 @@ type Config struct {
 	NotifyAllowPrivate bool
 	// AccessRecheckInterval is how often running jobs are held to their
 	// owner still holding an active API key (default 30s;
-	// revokeOrphanedJobs). A revocation through the admin API is acted on at
+	// revokeOrphanedJobs), and open forwarded requests to their key
+	// (recheckLive). A revocation through the admin API is acted on at
 	// once; this is the backstop for a store changed some other way.
 	AccessRecheckInterval time.Duration
 }
@@ -115,6 +116,7 @@ type Gateway struct {
 	jobs         *jobManager
 	notifyClient *http.Client
 	services     *serviceCtl
+	live         *liveRequests // open forwarded requests, held to their keys (live.go)
 
 	stop context.CancelFunc
 	wg   sync.WaitGroup
@@ -171,6 +173,7 @@ func New(cfg Config) (*Gateway, error) {
 		cfg: cfg, store: cfg.Store, logf: cfg.Logf, tombs: newTombstones(10000, time.Hour),
 		inflight: map[string]Usage{}, claimed: map[string]bool{},
 		metrics: newGatewayMetrics(), audit: cfg.Audit, services: newServiceCtl(cfg.Store),
+		live: newLiveRequests(),
 	}
 	g.nodes = newNodePool(poolConfig{interval: cfg.PollInterval, failAfter: cfg.FailAfter,
 		newClient: cfg.NewNodeClient, logf: cfg.Logf, changed: g.nodeChanged, polled: g.nodePolled})
@@ -221,6 +224,7 @@ func (g *Gateway) Start(ctx context.Context) {
 				return
 			case <-t.C:
 				g.revokeOrphanedJobs()
+				g.recheckLive()
 			}
 		}
 	}()
@@ -276,12 +280,14 @@ type accessRechecker interface{ RecheckAccess() int }
 
 // accessChanged is called once a key has been revoked or an SSH key
 // removed, before the request that did it is answered. Revocation takes
-// effect on what is already running, not only on what starts next: open SSH
+// effect on what is already running, not only on what starts next: open
+// API requests whose key no longer allows them are ended (live.go), open SSH
 // connections that no longer pass the login check are closed, and running
 // jobs whose owner holds no active key are cancelled. A service needs
 // nothing here: it is routed to and given replicas only while its owner is
 // active (pickReplica, ownerActive), which both check every time.
 func (g *Gateway) accessChanged() {
+	g.recheckLive()
 	g.revokeOrphanedJobs()
 	g.sshMu.RLock()
 	s := g.ssh

@@ -311,6 +311,15 @@ a file. `keys list` shows ids, never secrets; `keys revoke ID` ends a key.
 Revoking a key (`DELETE /v1/admin/keys/{id}`) acts on what is already running,
 not only on what starts next, before the call returns:
 
+- **Open API requests.** Every request on a sandbox that is still open — an
+  attached terminal (`sandbox-cli attach`, `shell` against the API), a followed
+  output stream (`sandbox-cli logs`), a tunnel, a `run` waiting on its command,
+  a file transfer — is held to its key again, and ended if the key is revoked,
+  gone from the state, or no longer holds the scope the request needed. The
+  request to the node is cancelled and, for an attach or a tunnel, both the
+  client's and the node's connections are closed. The client sees its stream
+  cut off; one ended before the node answered gets `401`. Another key of the
+  same user is not affected.
 - **SSH.** Every open SSH connection whose user no longer holds an active key
   with `sandbox:ssh` (or `admin`) in that tenant is closed, its sessions and
   forwards with it, and the processes they ran are hung up. A connection made
@@ -327,14 +336,17 @@ not only on what starts next, before the call returns:
   holds an active key, which is checked on every request and every step, so
   revoking the owner's last key stops a service's traffic at once. Its
   replicas stay until an admin deletes the service.
-- **The audit record** says what revocation ended: `ssh.revoked` (result
-  `closed`) per connection, with the credential's key id and fingerprint, and
-  `job.revoked` (result `cancelled`) per job, with its id. Never a secret.
+- **The audit record** says what revocation ended: `api.revoked` (result
+  `closed`) per open API request, with its key id, sandbox, node and route
+  (`target`, e.g. `GET /v1/sandboxes/{ref}/processes/{pid}/output`);
+  `ssh.revoked` (result `closed`) per connection, with the credential's key id
+  and fingerprint; and `job.revoked` (result `cancelled`) per job, with its id.
+  Never a secret.
 
 Every API request checks its key as it arrives, so a revoked key's next call
-is refused. The gateway also rechecks open SSH connections and running jobs
-every 30 seconds, and at start, for a state file changed while it was stopped
-(`keys revoke` with the gateway down).
+is refused. The gateway also rechecks open API requests, open SSH connections
+and running jobs every 30 seconds, and running jobs at start, for a state file
+changed while it was stopped (`keys revoke` with the gateway down).
 
 ## Users' side
 
@@ -445,8 +457,9 @@ in it.
   holds all of them.
 - **SSH is a scope of its own, and access ends with it.** An SSH key or token
   logs in only while its user holds an active key with `sandbox:ssh`, so a user
-  left with read-only keys cannot open a shell. Revoking ends open connections
-  and running jobs, not only the next login ([Revoking](#revoking)).
+  left with read-only keys cannot open a shell. Revoking ends open connections,
+  open API streams and running jobs, not only the next login
+  ([Revoking](#revoking)).
 - **Secrets travel by reference.** API keys and SSH tokens are random 256-bit
   strings stored only as their SHA-256; logs name a key by its id. The state
   file holds no secret, and is still 0600 and refused if others can read it,
@@ -662,10 +675,6 @@ atomically on every change).
   `sandbox:ssh` ([Revoking](#revoking)). An admin lists and removes any user's
   SSH keys with `GET /v1/admin/ssh-keys?user=U` and
   `DELETE /v1/admin/ssh-keys/{id}`.
-- **An open API stream outlives its key's revocation.** A request checks its
-  key when it arrives; an attached terminal or a followed output stream opened
-  before the revocation runs until it ends. SSH connections and jobs do not
-  (above).
 - **Quotas are per tenant and the same for every tenant**, set by flags.
 - **No usage metering** beyond the per-node audit logs; each node keeps its own.
 - **The gateway does not proxy `GET /v1/node`**; node status is

@@ -196,8 +196,10 @@ sandbox-cli studio --context ops   --port 7093
 
 ## 9. Revocation
 
-1. As alice, hold `sandbox-cli ssh demo` open in one terminal, and in another
-   start a long job: `command: [sleep, "600"]`.
+1. As alice, hold `sandbox-cli ssh demo` open in one terminal; in a second,
+   `sandbox-cli run -d --name follow -- sleep 600` and then
+   `sandbox-cli logs follow`, left open; and in another start a long job:
+   `command: [sleep, "600"]`.
 2. Revoke alice's key with the admin key. Her key id is in
    `sandbox-cli whoami`:
 
@@ -208,10 +210,10 @@ sandbox-cli studio --context ops   --port 7093
 
 **Pass:**
 
-- the SSH session ends at once;
+- the SSH session ends at once, and so does `sandbox-cli logs follow`;
 - the job's sandbox is gone from `SANDBOX_CONTEXT=ops sandbox-cli ls`, and
-  `SANDBOX_CONTEXT=ops sandbox-cli gateway audit` shows `ssh.revoked` and
-  `job.revoked`;
+  `SANDBOX_CONTEXT=ops sandbox-cli gateway audit` shows `api.revoked` (the
+  followed output), `ssh.revoked` and `job.revoked`;
 - `sandbox-cli ls` as alice is refused with 401;
 - a read-only key gets no SSH: `SANDBOX_CONTEXT=bob sandbox-cli ssh-key add`
   and `ssh-access` are refused for bob.

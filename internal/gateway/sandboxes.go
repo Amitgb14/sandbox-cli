@@ -423,6 +423,11 @@ func (g *Gateway) forward(scope string, after afterFunc) handlerFunc {
 		if after != nil {
 			modify = func(resp *http.Response) error { return after(resp, id, o) }
 		}
+		// Held to its key for as long as it is open, not only now: an
+		// attach, a followed output stream or a tunnel lasts as long as its
+		// client keeps it (live.go).
+		w, r, done := g.track(w, r, p, scope, id, o.Node)
+		defer done()
 		g.proxy(w, r, n, target, modify)
 	}
 }
@@ -449,6 +454,12 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, n *node, path st
 		FlushInterval:  -1,
 		ModifyResponse: modify,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(context.Cause(r.Context()), errAccessRevoked) {
+				// Ended before the node answered: say why, as a request
+				// made with the key now would be told.
+				writeErr(w, http.StatusUnauthorized, api.CodeUnauthorized, errAccessRevoked.Error())
+				return
+			}
 			if r.Context().Err() == nil {
 				g.logf("forwarding to %s: %v", n.cfg.Name, err)
 			}
