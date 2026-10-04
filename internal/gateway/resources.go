@@ -20,7 +20,7 @@ import (
 func (g *Gateway) capabilities(w http.ResponseWriter, r *http.Request, p Principal) {
 	caps, ok := g.combinedCapabilities()
 	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, api.CodeInternal, "no node is answering")
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
 		return
 	}
 	writeJSON(w, http.StatusOK, caps)
@@ -128,7 +128,7 @@ func (g *Gateway) createVolume(w http.ResponseWriter, r *http.Request, p Princip
 	}
 	caps, ok := g.combinedCapabilities()
 	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, api.CodeInternal, "no node is answering")
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
 		return
 	}
 	if !spec.ValidName(req.Name) {
@@ -147,13 +147,13 @@ func (g *Gateway) createVolume(w http.ResponseWriter, r *http.Request, p Princip
 	}
 	n := g.volumeNode(p, caps.Has(api.CapVolumes))
 	if n == nil {
-		writeErr(w, http.StatusServiceUnavailable, api.CodeInternal, "no node is taking new volumes")
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "no node is taking new volumes")
 		return
 	}
 	body, _ := json.Marshal(req)
 	resp, err := n.do(r.Context(), http.MethodPost, "/v1/volumes", nil, bytes.NewReader(body), "application/json")
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
+		writeUnreachable(w, n)
 		return
 	}
 	data, err := readBody(resp)
@@ -255,7 +255,7 @@ func (g *Gateway) deleteVolume(w http.ResponseWriter, r *http.Request, p Princip
 	}
 	resp, err := n.do(r.Context(), http.MethodDelete, "/v1/volumes/"+url.PathEscape(name), nil, nil, "")
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
+		writeUnreachable(w, n)
 		return
 	}
 	data, _ := readBody(resp)
@@ -325,7 +325,7 @@ func (g *Gateway) deleteSnapshot(w http.ResponseWriter, r *http.Request, p Princ
 	}
 	resp, err := n.do(r.Context(), http.MethodDelete, "/v1/snapshots/"+url.PathEscape(id), nil, nil, "")
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
+		writeUnreachable(w, n)
 		return
 	}
 	data, _ := readBody(resp)

@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +73,30 @@ func DefaultSFTPArgv() []string {
 	return []string{"/bin/sh", "-c", `exec "$(command -v sftp-server || echo /usr/lib/openssh/sftp-server)"`}
 }
 
+// publicHostRE is a host clients may be told to connect to. The CLI writes
+// it into known_hosts and ssh's argv, and refuses anything else (cli's
+// sshHostRE); a gateway that published one would serve SSH nobody can use.
+var publicHostRE = regexp.MustCompile(`^[A-Za-z0-9_.:][A-Za-z0-9_.:-]*$`)
+
+// checkPublicAddr refuses a Host and Port that GET /v1/ssh and ssh-access
+// could not usefully hand out: empty, a wildcard address, not a host name,
+// or no fixed port.
+func checkPublicAddr(host string, port int) error {
+	if host == "" {
+		return errors.New("ssh: no public host for clients to connect to")
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return fmt.Errorf("ssh: public host %s is a wildcard address clients cannot connect to", host)
+	}
+	if !publicHostRE.MatchString(host) {
+		return fmt.Errorf("ssh: public host %q is not a host name or address", host)
+	}
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("ssh: public port %d is not a port clients can connect to", port)
+	}
+	return nil
+}
+
 // sshScopes is what an SSH login may do: run things in the sandbox and read
 // it. The Router still checks that the user owns the sandbox.
 var sshScopes = []string{ScopeSSH, ScopeRead}
@@ -98,6 +124,9 @@ type SSHServer struct {
 func NewSSHServer(cfg SSHConfig) (*SSHServer, error) {
 	if cfg.Store == nil || cfg.Router == nil {
 		return nil, errors.New("ssh: a store and a router are required")
+	}
+	if err := checkPublicAddr(cfg.Host, cfg.Port); err != nil {
+		return nil, err
 	}
 	signer, err := loadHostKey(cfg.HostKeyFile)
 	if err != nil {

@@ -53,7 +53,7 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	}
 	caps, ok := g.combinedCapabilities()
 	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, api.CodeInternal, "no node is answering")
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
 		return
 	}
 
@@ -166,14 +166,22 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 			if want.Node != "" {
 				msg = "node " + want.Node + ", which holds what this sandbox needs, is not taking new sandboxes"
 			}
-			writeErr(w, http.StatusServiceUnavailable, api.CodeInternal, msg)
+			writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, msg)
 			return
 		}
 		resp, err := n.do(r.Context(), http.MethodPost, "/v1/sandboxes", nil, bytes.NewReader(body), "application/json")
 		if err != nil {
 			n.finishIf(pl, false)
 			g.logf("create on %s: %v", n.cfg.Name, err)
-			writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
+			// A node can stop answering between polls and still be marked
+			// healthy. When the connection was never made the node never
+			// saw the request, so the next node may run it; otherwise it
+			// may have, and a second sandbox is not ours to start.
+			if neverSent(err) && want.Node == "" {
+				tried = append(tried, n.cfg.Name)
+				continue
+			}
+			writeUnreachable(w, n)
 			return
 		}
 		data, err := readBody(resp)
@@ -300,6 +308,13 @@ func (g *Gateway) listSandboxes(ctx context.Context, p Principal, filters []stri
 	err := fanOut(ctx, g.nodes.healthy(), func(ctx context.Context, n *node) error {
 		var list api.SandboxList
 		if err := n.getJSON(ctx, "/v1/sandboxes", q, &list); err != nil {
+			// A node that cannot be connected to is left out, as it is
+			// once a poll marks it unhealthy: one node gone between polls
+			// does not take every user's listing down with it.
+			if neverSent(err) {
+				g.logf("listing on %s: %v", n.cfg.Name, err)
+				return nil
+			}
 			return err
 		}
 		mu.Lock()
@@ -387,7 +402,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, n *node, path st
 			if r.Context().Err() == nil {
 				g.logf("forwarding to %s: %v", n.cfg.Name, err)
 			}
-			writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
+			writeUnreachable(w, n)
 		},
 	}
 	rp.ServeHTTP(w, r)

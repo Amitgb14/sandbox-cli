@@ -313,7 +313,7 @@ func (g *Gateway) adminCordon(w http.ResponseWriter, r *http.Request, p Principa
 	body, _ := json.Marshal(req)
 	resp, err := n.do(r.Context(), http.MethodPost, "/v1/node/cordon", nil, bytes.NewReader(body), "application/json")
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
+		writeUnreachable(w, n)
 		return
 	}
 	if resp.StatusCode >= 300 {

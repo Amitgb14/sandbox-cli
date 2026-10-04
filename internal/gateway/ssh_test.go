@@ -752,6 +752,43 @@ func TestSSHHostKeyCreated0600AndReused(t *testing.T) {
 	}
 }
 
+// GET /v1/ssh and ssh-access hand out Host and Port; a server with none
+// clients could use is refused at start rather than published.
+func TestSSHServerRefusesUnusablePublicAddress(t *testing.T) {
+	for _, tc := range []struct {
+		host string
+		port int
+	}{
+		{"", 2222},
+		{"0.0.0.0", 2222},
+		{"::", 2222},
+		{"gw.example", 0},
+		{"gw.example", 70000},
+		{"gw.example:2222", -1},
+		{"-oProxyCommand=x", 2222},
+		{"gw example", 2222},
+		{"user@gw.example", 2222},
+	} {
+		cfg := SSHConfig{Store: &memStore{}, Router: &fakeRouter{},
+			HostKeyFile: filepath.Join(t.TempDir(), "k"), Host: tc.host, Port: tc.port}
+		if _, err := NewSSHServer(cfg); err == nil {
+			t.Errorf("host %q port %d was accepted", tc.host, tc.port)
+		}
+	}
+	for _, host := range []string{"gw.example", "127.0.0.1", "::1", "ssh-1.fleet.internal"} {
+		cfg := SSHConfig{Store: &memStore{}, Router: &fakeRouter{},
+			HostKeyFile: filepath.Join(t.TempDir(), "k"), Host: host, Port: 22}
+		s, err := NewSSHServer(cfg)
+		if err != nil {
+			t.Errorf("host %q: %v", host, err)
+			continue
+		}
+		if info := s.Info(); info.Host != host || info.Port != 22 {
+			t.Errorf("info %+v", info)
+		}
+	}
+}
+
 func TestSSHLogsCarryNoSecrets(t *testing.T) {
 	h := newHarness(t, nil)
 	k, priv := newKey(t)

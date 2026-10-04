@@ -158,7 +158,9 @@ in `_old/` as reference, to be ported where this design still wants it.
   told it does not exist. The gateway picks a node for each sandbox (a warm
   pool for the image first, then a built image, then the most free memory),
   sends a fork to its snapshot's node and a mount to its volume's, stops
-  placing on a node that stops answering or is cordoned, and holds each
+  placing on a node that stops answering or is cordoned (a call that needs
+  a node which is not answering is `503 unavailable`, and a create that
+  finds its node gone before a poll noticed goes to the next), and holds each
   tenant to a quota (`--quota-sandboxes`, `--quota-cpus`,
   `--quota-memory-mb`). State is one file, `--state`, holding only hashes
   of keys and tokens. `sandbox-gateway keys create` makes the first admin
