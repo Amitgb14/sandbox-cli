@@ -229,6 +229,16 @@ In the rewrite:
 
 ### Changed
 
+- **SSH into any sandbox through one port on the gateway.** `ssh SANDBOX@gateway`
+  opens a shell in the sandbox's home on a terminal sized to yours; `ssh … CMD`
+  runs one command and exits with its status; `sftp`, `scp` and `rsync` copy
+  files; `ssh -L` forwards to a port on the sandbox's own loopback. Log in with
+  a public key registered to your user (optionally limited to one sandbox), or
+  with a short-lived token as the username and nothing else. There is no sshd
+  in any guest: the gateway terminates SSH and runs each session as a process
+  in the sandbox. Remote forwarding, agent forwarding and X11 are refused, and
+  the base image gains `sftp-server` and `rsync` (not the SSH server).
+
 - **Studio is simpler.** It opens on the sandbox list instead of an overview of
   counts, in a near-monochrome theme with one quiet sidebar: Sandboxes,
   Snapshots and Volumes; Playground and Agents; Settings, with search, which
