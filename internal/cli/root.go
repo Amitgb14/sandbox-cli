@@ -26,7 +26,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(
-		newVersionCmd(), newContextCmd(), newRunCmd(), newListCmd(), newAttachCmd(),
+		newVersionCmd(), newContextCmd(), newRunCmd(), newListCmd(), newAttachCmd(), newShellCmd(), newExecCmd(),
 		newLogsCmd(), newKillCmd(), newEventsCmd(), newDoctorCmd(), newTunnelCmd(),
 	)
 	root.AddCommand(newSuspendCmds()...)

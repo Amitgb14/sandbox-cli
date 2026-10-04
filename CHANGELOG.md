@@ -229,6 +229,15 @@ In the rewrite:
 
 ### Changed
 
+- **Connect to a running sandbox: `sandbox-cli shell` and `exec`, and a
+  Terminal button in Studio.** `shell SANDBOX` opens bash (or sh) in a running
+  sandbox, in `/sandbox/home`, and exiting leaves the sandbox running; `exec
+  SANDBOX -- COMMAND` runs one command there and exits with its status. Both
+  work through any context, so a Mac connected to a Linux sandboxd opens a
+  shell in a sandbox there. In Studio, Terminal on a running sandbox opens the
+  same shell in the browser. A suspended sandbox is refused with how to resume
+  it, never started behind your back.
+
 - **Studio is simpler.** It opens on the sandbox list instead of an overview of
   counts, in a near-monochrome theme with one quiet sidebar: Sandboxes,
   Snapshots and Volumes; Playground and Agents; Settings, with search, which

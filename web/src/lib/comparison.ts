@@ -201,7 +201,7 @@ export const PLATFORMS = [
     windows: "—",
   },
   {
-    capability: "The client: run, agent, list, attach, events",
+    capability: "The client: run, agent, shell, exec, list, attach, events",
     macos: "yes",
     linux: "yes",
     windows: "yes",

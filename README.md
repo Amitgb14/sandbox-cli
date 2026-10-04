@@ -45,6 +45,9 @@ sandbox-cli run -- uname -a         # a fresh VM; its exit code is yours
 sandbox-cli run -- sh -c 'git clone https://github.com/you/app && cd app && npm test'   # needs a network that reaches github.com
 sandbox-cli run --network none -- make
 sandbox-cli run --keep --name dev -- bash
+sandbox-cli run --detach --name dev -- sleep infinity
+sandbox-cli shell dev               # a shell in a running sandbox; exit leaves it running
+sandbox-cli exec dev -- git clone https://github.com/you/app   # one command in it; its exit code is yours
 sandbox-cli list · logs ID · attach ID · kill ID
 sandbox-cli snapshot · suspend · resume · tunnel
 sandbox-cli events ID                # what the sandbox was asked to do, and how it ended
