@@ -36,7 +36,6 @@ export interface Sandbox {
   network: NetworkPolicy;
   created_at: string;
   idle_timeout_secs: number;
-  bind?: { host_path: string; read_only?: boolean };
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
 }
@@ -67,7 +66,6 @@ export interface AuditEvent {
   labels?: Record<string, string>;
   network?: NetworkPolicy;
   env_names?: string[];
-  bind?: string;
   snapshot?: string;
   volumes?: VolumeMount[];
   pid?: number;

@@ -80,7 +80,7 @@ export function AppSidebar() {
         <Button asChild className="w-full shadow-sm shadow-primary/20 group-data-[collapsible=icon]:hidden">
           <Link href="/launch">
             <Plus className="size-4" />
-            New run
+            New sandbox
           </Link>
         </Button>
       </SidebarFooter>

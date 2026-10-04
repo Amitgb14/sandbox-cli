@@ -10,12 +10,17 @@ import { SandboxTerminal } from "@/components/sandbox/terminal";
 import { ProcessOutput } from "@/components/sandbox/output";
 import { SandboxFiles } from "@/components/sandbox/files";
 import { SandboxEvents } from "@/components/sandbox/events";
+import { SandboxOverview } from "@/components/sandbox/overview";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useInfo, useKill, useProcesses, useSandbox, useSnapshot, useSuspend } from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
 
-/** One sandbox: its terminal, its output, its files and its events. */
+/**
+ * One sandbox: an overview of what it is and was given, then its terminal,
+ * its processes' logs, its files and its audit events — the tabs every hosted
+ * sandbox dashboard settles on, in that order.
+ */
 function SandboxDetail() {
   const id = useSearchParams().get("id") ?? "";
   const router = useRouter();
@@ -28,6 +33,7 @@ function SandboxDetail() {
   const suspend = useSuspend();
   const snapshot = useSnapshot();
   const [pid, setPid] = useState<number | null>(null);
+  const [tab, setTab] = useState<string | null>(null);
 
   if (!id) return <p className="text-sm text-muted-foreground">No sandbox named.</p>;
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
@@ -42,8 +48,14 @@ function SandboxDetail() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title={<span className="font-mono">{sb.name || sb.id}</span>}
-        description={`${sb.image} · ${sb.cpus} CPU · ${sb.memory_mb} MiB · created ${formatRelative(sb.created_at)}`}
+        title={sb.name || <span className="font-mono">{sb.id}</span>}
+        description={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {sb.name ? <span className="font-mono">{sb.id}</span> : null}
+            <span className="font-mono">{sb.image}</span>
+            <span>started {formatRelative(sb.created_at)}</span>
+          </span>
+        }
         actions={
           live ? (
             <div className="flex gap-2">
@@ -61,7 +73,7 @@ function SandboxDetail() {
               )}
               <Button variant="destructive" size="sm" disabled={kill.isPending}
                 onClick={() => {
-                  if (confirm("Terminate this sandbox? Anything not brought back goes with it.")) {
+                  if (confirm("Terminate this sandbox? Everything in it goes with it.")) {
                     act(kill.mutateAsync(id), "Terminated").then(() => router.push("/sandboxes"));
                   }
                 }}>
@@ -73,22 +85,28 @@ function SandboxDetail() {
       >
         <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
           <StatusBadge outcome={sb.state} />
-          <span className="font-mono text-xs">network {sb.network.mode}{sb.network.allow?.length ? ` · ${sb.network.allow.length} names` : ""}</span>
-          {sb.env_names?.length ? <span className="font-mono text-xs text-muted-foreground">env {sb.env_names.join(", ")}</span> : null}
-          {sb.volumes?.map((v) => (
-            <span key={v.name} className="font-mono text-xs text-muted-foreground">{v.name}:{v.path}{v.read_only ? ":ro" : ""}</span>
-          ))}
           <Labels labels={sb.labels} />
         </div>
       </PageHeader>
 
-      <Tabs defaultValue={tty ? "terminal" : "output"}>
+      <Tabs value={tab ?? (tty ? "terminal" : "overview")} onValueChange={setTab}>
         <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="terminal" disabled={!tty}>Terminal</TabsTrigger>
-          <TabsTrigger value="output" disabled={processes.length === 0}>Output</TabsTrigger>
+          <TabsTrigger value="output" disabled={processes.length === 0}>Logs</TabsTrigger>
           <TabsTrigger value="files" disabled={!live || sb.state !== "running"}>Files</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
         </TabsList>
+        <TabsContent value="overview" className="pt-3">
+          <SandboxOverview
+            sb={sb}
+            processes={processes}
+            onLogs={(p) => {
+              setPid(p);
+              setTab("output");
+            }}
+          />
+        </TabsContent>
         <TabsContent value="terminal" className="pt-3">
           {tty ? <SandboxTerminal sandbox={id} pid={tty.pid} /> : <p className="text-sm text-muted-foreground">No process here has a terminal.</p>}
         </TabsContent>
