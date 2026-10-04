@@ -246,6 +246,19 @@ In the rewrite:
 
 ### Changed
 
+- **A guide and packaging for running a gateway.** `docs/fleet.md` takes an
+  operator from one machine to many: which shape needs a gateway at all, the
+  certificates (`packaging/fleet/make-certs.sh` makes a private CA, the
+  gateway's client certificate and each node's server certificate with
+  openssl), the node and gateway flags, the first admin key, giving users keys
+  and scopes, the users' side with `sandbox-cli ssh`, the security model, and
+  what is not done yet. `packaging/systemd/sandbox-gateway.service` runs the
+  gateway as a user of its own with no capabilities and only its state
+  directory writable, since unlike `sandboxd` it needs no root;
+  `packaging/fleet/nodes.yaml` is an example node file. Releases carry
+  `sandbox-gateway` for Linux in an archive of its own, and
+  `install.sh --with-gateway` installs it. The API doc gains the gateway's
+  endpoints, scopes and errors, and the site's setup page a fleet path.
 - **`sandboxd` can be one node of many behind a gateway.** `--node-id` names
   the node in every sandbox id it makes, so a gateway routes each call by the
   id; `GET /v1/node` reports the node's capacity, what is free, its pools,

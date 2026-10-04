@@ -29,11 +29,12 @@ API always on it.
 | | Where | Isolation | Guide |
 |---|---|---|---|
 | **Local** | your Mac (macOS 26+, arm64) | a VM of the native `container` runtime | [docs/local-macos.md](docs/local-macos.md) |
-| **Self-hosted** | a Linux machine with KVM | Firecracker microVMs, egress enforced on the host | [docs/self-hosting.md](docs/self-hosting.md) |
+| **Self-hosted** | a Linux machine with KVM, or many behind one gateway | Firecracker microVMs, egress enforced on the host | [docs/self-hosting.md](docs/self-hosting.md), [docs/fleet.md](docs/fleet.md) |
 | **Cloud** | hosted | the same as self-hosted | (coming) |
 
 `sandboxd` serves the API on each machine. The CLI and the SDKs are clients; they cannot tell which of the three they are talking to,
-beyond what `sandbox-cli doctor` reports.
+beyond what `sandbox-cli doctor` reports. `sandbox-gateway` serves the same API in front of many machines, with a key per
+user, sandboxes only their owner can see, and SSH on one port ([docs/fleet.md](docs/fleet.md)).
 
 ## Use it
 
@@ -147,6 +148,7 @@ The microVM tests need `/dev/kvm`; see [AGENTS.md](AGENTS.md) and
 
 - [docs/api/v1.md](docs/api/v1.md): the API every mode serves.
 - [docs/self-hosting.md](docs/self-hosting.md), [docs/local-macos.md](docs/local-macos.md): running sandboxd.
+- [docs/fleet.md](docs/fleet.md): many sandboxd nodes behind one `sandbox-gateway`, for one machine or many.
 - [docs/rewrite/PLAN.md](docs/rewrite/PLAN.md): the plan, milestones and what was measured.
 - [docs/security/](docs/security/): the audit ledger and open items.
 - [AGENTS.md](AGENTS.md): for anyone, human or agent, changing this repository.
