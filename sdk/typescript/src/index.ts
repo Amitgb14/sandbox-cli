@@ -235,6 +235,9 @@ export interface JobOutput {
 /** A secret as listed: its name, never its value. */
 export interface SecretInfo {
   name: string;
+  updated_at: string;
+}
+
 /** What POST /v1/services and PUT /v1/services/{name} send (docs/fleet.md, "Services"). */
 export interface ServiceSpec {
   /** A DNS label with no "--"; unique within the tenant. */
@@ -624,6 +627,8 @@ export class Client {
 
   async deleteSecret(name: string): Promise<void> {
     await this.json("DELETE", "/v1/secrets/" + encodeURIComponent(name));
+  }
+
   // Services, on a gateway: a sandbox spec and a count it keeps true.
 
   private svc(name: string): string {
