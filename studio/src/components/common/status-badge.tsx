@@ -7,8 +7,6 @@ import {
   Loader2,
   Moon,
   PauseCircle,
-  ShieldAlert,
-  Unplug,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -22,8 +20,8 @@ import { cn } from "@/lib/utils";
  * the same rule the CLI follows when it prints a reason next to a refusal
  * rather than relying on an exit code.
  *
- * One map for the three kinds of state Studio shows — a sandbox's, a run's
- * (a sandbox that is "gone"), and a fleet task's — since they share words.
+ * One map for the kinds of state Studio shows — a sandbox's and an agent's —
+ * since they share words.
  */
 const VARIANTS: Record<string, { label: string; icon: LucideIcon; className: string; spin?: boolean }> = {
   running: {
@@ -35,23 +33,11 @@ const VARIANTS: Record<string, { label: string; icon: LucideIcon; className: str
   pending: { label: "Starting", icon: CircleDashed, className: "text-muted-foreground border-border bg-muted/40" },
   suspended: { label: "Suspended", icon: PauseCircle, className: "text-caution border-caution/30 bg-caution/10" },
   terminated: { label: "Terminated", icon: CircleSlash, className: "text-muted-foreground border-border bg-muted/40" },
-  gone: { label: "Gone", icon: CircleSlash, className: "text-muted-foreground border-border bg-muted/40" },
-  verified: {
-    label: "Verified",
-    icon: CheckCircle2,
-    className: "text-status-good border-status-good/30 bg-status-good/10",
-  },
   failed: {
     label: "Failed",
     icon: XCircle,
     className: "text-status-critical border-status-critical/30 bg-status-critical/10",
   },
-  rejected: {
-    label: "Rejected",
-    icon: ShieldAlert,
-    className: "text-status-serious border-status-serious/30 bg-status-serious/10",
-  },
-  lost: { label: "Lost", icon: Unplug, className: "text-status-critical border-status-critical/30 bg-status-critical/10" },
   exited: { label: "Exited", icon: CheckCircle2, className: "text-muted-foreground border-border bg-muted/40" },
   // An agent's state (internal/agentstate). `blocked` is the one that asks for
   // somebody, so it is the one that stands out.
@@ -86,7 +72,7 @@ export function StatusBadge({
     exitCode !== null &&
     exitCode !== undefined &&
     exitCode !== 0 &&
-    (outcome === "failed" || outcome === "rejected" || outcome === "exited");
+    (outcome === "failed" || outcome === "exited");
 
   return (
     <span

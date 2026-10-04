@@ -18,7 +18,7 @@ import (
 // is refused with it rather than ignored.
 
 // liveKeys are the top-level keys the rewrite's client acts on.
-var liveKeys = map[string]bool{"mirror": true,
+var liveKeys = map[string]bool{
 	"image": true, "env": true, "env_allow": true, "network": true, "secrets": true,
 	"routing": true, "providers": true, "profile": true, "persist_auth": true,
 }
@@ -26,17 +26,18 @@ var liveKeys = map[string]bool{"mirror": true,
 // replacedKeys say what became of beta.15's keys.
 var replacedKeys = map[string]string{
 	"user":     "a sandbox runs its commands as its own user; there is no host user to map",
-	"workdir":  "the workspace is always /workspace, a clone of your repository",
+	"workdir":  "every process starts in the sandbox user's home, /sandbox/home",
 	"home":     "a sandbox's HOME is the guest's own",
 	"hostname": "a sandbox's hostname is its id",
-	"mounts":   "nothing is mounted: use --bind on a local Mac, or a named volume (--volume)",
+	"mounts":   "nothing on the host is mounted into a sandbox: keep files in a named volume (--volume)",
 	"ports":    "reach a port inside with sandbox-cli tunnel",
 	"security": "the boundary is a VM now; sandboxd's policy file sets limits and egress",
 	"cache":    "keep a cache in a named volume (sandbox-cli volume, --volume)",
-	"snapshot": "checkpoints replace snapshots (--checkpoint-every)",
+	"snapshot": "snapshots are taken through the API, and a run starts from one with --from-snapshot",
 	"sync":     "an agent's conversation history stays in its sandbox",
 	"engine":   "there is no container engine: sandboxd runs VMs",
 	"runtime":  "there is no container engine: sandboxd runs VMs",
+	"mirror":   "a sandbox has no repository, so no work comes back to mirror",
 }
 
 // ErrDeadKeys is a config file setting keys that do nothing.

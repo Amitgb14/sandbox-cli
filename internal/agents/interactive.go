@@ -3,7 +3,7 @@ package agents
 import "sort"
 
 // The interactive-only agents: started in a terminal, with no verified headless
-// mode, so they are wrappers (`sandbox-cli agent goose`) and never fleet or routing
+// mode, so they are wrappers (`sandbox-cli agent goose`) and never routing or Studio
 // targets — an unattended agent that stops to ask does not fail, it hangs.
 //
 // Ported verbatim from beta.15's per-agent wrappers (_old/internal/cli/<agent>.go):

@@ -51,9 +51,8 @@ export function Hero() {
               <span className="font-mono text-[0.95em] text-foreground">sandbox-cli</span> gives
               any command — a test suite, a build, Claude Code or Codex at full autonomy — a
               disposable microVM, on your Mac, a Linux machine you control, or the cloud, behind
-              one API. Your repository goes in as a git bundle and comes back as verified commits;
-              nothing on your machine is mounted, and egress is an allowlist of names enforced
-              outside the guest.
+              one API. A sandbox starts in a home directory of its own and nothing on your machine
+              is mounted in; egress is an allowlist of names enforced outside the guest.
             </p>
 
             <div className="mt-7 flex flex-wrap items-center gap-2.5">

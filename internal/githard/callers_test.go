@@ -18,9 +18,7 @@ import (
 //
 // gitCallSites are the places allowed to start git, each with why.
 var gitCallSites = map[string]string{
-	"internal/workspace/bundle.go":      "workspace.Git: Args and Env, the one door every host caller uses",
-	"internal/githard/githard.go":       "githard itself: `git config --list` and `hash-object` read, and run nothing the config names",
-	"internal/api/conformance/suite.go": "the suite builds its own throwaway repository to clone in; nothing agent-written is in it",
+	"internal/githard/githard.go": "githard itself: `git config --list` and `hash-object` read, and run nothing the config names",
 }
 
 func TestEveryHostGitCallIsHardened(t *testing.T) {
@@ -62,7 +60,7 @@ func TestEveryHostGitCallIsHardened(t *testing.T) {
 				}
 				found[rel] = true
 				if _, ok := gitCallSites[rel]; !ok {
-					t.Errorf("%s: runs git directly; host-side git goes through workspace.Git (githard.Args and Env)", fset.Position(call.Pos()))
+					t.Errorf("%s: runs git directly; host-side git goes through githard.Args and Env", fset.Position(call.Pos()))
 				}
 				return true
 			})

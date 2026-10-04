@@ -57,8 +57,8 @@ const DOCTOR_STEP: SetupStep = {
 
 const FIRST_RUN_STEP: SetupStep = {
   title: "Run something",
-  code: "cd ~/your-project\nsandbox-cli run -- uname -a\nsandbox-cli agent claude",
-  body: "The first run builds the image's root disk, which takes a while; later ones start in about 80 ms on Firecracker. Your repository goes in as a git bundle and its commits come back into refs/sandbox/<id> when the run ends — `git log -p HEAD..refs/sandbox/<id>`, then merge if you want them.",
+  code: "sandbox-cli run -- uname -a\nsandbox-cli agent claude",
+  body: "The first run builds the image's root disk, which takes a while; later ones start in about 80 ms on Firecracker. A sandbox starts in /sandbox/home, its own home directory, with nothing of your machine mounted in: ask the agent to clone what it needs.",
 };
 
 export const UNINSTALL_STEPS: SetupStep[] = [
@@ -91,7 +91,7 @@ export const SETUP_PATHS: SetupPath[] = [
       {
         title: "Start sandboxd as a launch agent",
         code: LAUNCH_AGENT_CODE,
-        body: "The launch agent in the repository runs /usr/local/bin/sandboxd; the sed points it at the copy the script installed in ~/.local/bin, so nothing needs root. It listens on a unix socket only you can open, which is the CLI's default context. Egress here is none, or open if your policy allows it: the macOS backend does not enforce an allowlist yet, so it does not claim one. With --allow-bind (the launch agent sets it), a run may mount a directory with --bind.",
+        body: "The launch agent in the repository runs /usr/local/bin/sandboxd; the sed points it at the copy the script installed in ~/.local/bin, so nothing needs root. It listens on a unix socket only you can open, which is the CLI's default context. Egress here is none, or open if your policy allows it: the macOS backend does not enforce an allowlist yet, so it does not claim one.",
       },
       DOCTOR_STEP,
       FIRST_RUN_STEP,
@@ -131,7 +131,7 @@ export const SETUP_PATHS: SetupPath[] = [
     label: "Linux, quick try",
     engine: "Firecracker, unprivileged",
     caveat:
-      "No root means no host networking: sandboxes get no network at all, and a request for an allowlist is refused. Everything else — boot, run, files, bring-back, snapshots, volumes — works.",
+      "No root means no host networking: sandboxes get no network at all, and a request for an allowlist is refused. Everything else — boot, run, files, snapshots, volumes — works.",
     steps: [
       INSTALL_STEP,
       {

@@ -68,7 +68,6 @@ func run(args []string) error {
 	policyFile := fl.String("policy", "", "operator policy (YAML); default: the built-in policy")
 	backendName := fl.String("backend", "", "firecracker, macos or fake")
 	containerBin := fl.String("container", "container", "macos: the container CLI")
-	allowBind := fl.Bool("allow-bind", false, "let requests mount a host directory at /workspace (local endpoints)")
 	stateDir := fl.String("state-dir", defaultStateDir(), "images and per-sandbox state")
 	kernel := fl.String("kernel", "", "firecracker: guest kernel (vmlinux)")
 	firecracker := fl.String("firecracker", "firecracker", "firecracker: the VMM binary")
@@ -100,9 +99,6 @@ func run(args []string) error {
 	}
 	if *defaultImage != "" {
 		pol.DefaultImage = *defaultImage
-	}
-	if *allowBind {
-		pol.AllowBind = true
 	}
 
 	be, err := newBackend(*backendName, backendOptions{

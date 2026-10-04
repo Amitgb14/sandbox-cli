@@ -90,17 +90,14 @@ func (b *Backend) Name() string { return "macos" }
 
 func (b *Backend) Capabilities() map[string]bool {
 	return map[string]bool{
-		api.CapEgressOpen:      true,
-		api.CapBindWorkspace:   true,
-		api.CapWorkspaceBundle: true,
-		api.CapTunnel:          true,
+		api.CapEgressOpen: true,
+		api.CapTunnel:     true,
 	}
 }
 
 // BuildRunArgs is the `container run` argument list for a sandbox: a pure
 // function of the resolved spec and the host's agent directory. The agent is
-// mounted read-only; a bind, when asked for, is the only other host path, and
-// it has already passed hostpath's refusals.
+// mounted read-only, and it is the only host path a sandbox ever sees.
 func BuildRunArgs(s backend.Spec, agentDir string) ([]string, error) {
 	if s.Network.Mode == api.NetworkAllowlist {
 		return nil, errors.New("the macos backend cannot enforce an egress allowlist")
@@ -119,16 +116,6 @@ func BuildRunArgs(s backend.Spec, agentDir string) ([]string, error) {
 	}
 	if s.Network.Mode == api.NetworkNone {
 		args = append(args, "--network", "none")
-	}
-	if s.Bind != nil {
-		if strings.ContainsRune(s.Bind.HostPath, ',') {
-			return nil, fmt.Errorf("bind path %q contains a comma, which the mount syntax cannot express", s.Bind.HostPath)
-		}
-		m := "type=bind,source=" + s.Bind.HostPath + ",target=/workspace"
-		if s.Bind.ReadOnly {
-			m += ",readonly"
-		}
-		args = append(args, "--mount", m)
 	}
 	// "--" so an image reference can never be read as a flag.
 	return append(args, "--", s.Image, AgentDir+"/sandbox-guestd", "idle"), nil

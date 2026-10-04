@@ -5,29 +5,16 @@
 // and a run that would have worked does nothing. A chain — claude, then codex —
 // turns that from a failed afternoon into a slower one.
 //
-// Two mechanisms, and the split is the whole design:
+// It probes before launching: ask each agent's provider whether it is
+// answering, and skip one that is down before a sandbox is even created, so
+// nothing is half-done and there is no ambiguity about why the switch
+// happened. This is measurement, not inference.
 //
-//   - **Probe before launching.** Ask the primary's provider whether it is
-//     answering. Down means skip to the next agent before a container is even
-//     created, so nothing is half-done and there is no ambiguity about why the
-//     switch happened. This is measurement, not inference.
-//
-//   - **Retry after a run that did nothing.** A provider can die mid-run, which
-//     no preflight can catch. So a run that exits non-zero *and left the
-//     workspace unchanged* is retried with the next agent.
-//
-// That second rule gates on the **workspace**, not on the conversation, and the
-// distinction is load-bearing rather than a detail. Turns are cheap and safe to
-// redo; file changes are not — the hazard of retrying was always a second agent
-// inheriting the first one's half-finished edits. Gating on turns instead would
-// also make the handoff pointless: every case that failed over would be one with
-// no conversation to hand over, and the case worth carrying (an agent that
-// thought for twelve turns, wrote nothing, then hit an outage) would be excluded.
-//
-// What this package will not do is retry a run that *changed files*. That is a
-// failed attempt, not an outage, and the difference matters more than catching
-// every possible outage: a wrong retry destroys work, a missed one costs a
-// re-run somebody asks for by hand.
+// What it will not do is retry a run that started. A provider can die mid-run,
+// which no preflight catches, but retrying is safe only for a run that changed
+// nothing, and with no repository to compare there is no telling. A wrong
+// retry puts a second agent on top of the first one's work; a missed one costs
+// a re-run somebody asks for by hand. Those are not symmetric.
 package routing
 
 import (
@@ -215,38 +202,6 @@ func probeError(err error) string {
 		return "TLS certificate rejected"
 	}
 	return "unreachable"
-}
-
-// Outcome is what one attempt did, and it is the input to the failover rule.
-type Outcome struct {
-	Agent    string
-	ExitCode int
-
-	// WorkspaceChanged reports whether the run left anything behind. Nil means
-	// **it could not be determined**, which is a third answer and not a false:
-	// a workspace outside git, or a snapshot that failed, cannot be compared, and
-	// a caller that read "unknown" as "unchanged" would retry a run that may have
-	// done real work.
-	WorkspaceChanged *bool
-}
-
-// ShouldFailOver decides whether to try the next agent.
-//
-// It fails **closed**: everything unknown resolves to "do not retry". A retry
-// that should not have happened puts a second agent on top of the first one's
-// edits; a retry that did not happen costs a command somebody types again. Those
-// are not symmetric, so the rule does not pretend they are.
-func ShouldFailOver(o Outcome) (bool, string) {
-	if o.ExitCode == 0 {
-		return false, "the run succeeded"
-	}
-	if o.WorkspaceChanged == nil {
-		return false, "whether the workspace changed could not be determined, so this is treated as work done"
-	}
-	if *o.WorkspaceChanged {
-		return false, "the run changed files, so it is a failed attempt rather than an outage"
-	}
-	return true, fmt.Sprintf("exited %d having changed nothing", o.ExitCode)
 }
 
 // NewID mints an identifier for one routing episode.

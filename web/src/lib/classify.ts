@@ -1,7 +1,7 @@
 /**
  * The boundary classifier behind the simulator. Each rule states what the
  * sandbox actually does with a command and, crucially, *which* mechanism does
- * it — a guest with its own kernel, a repository that is a clone rather than a
+ * it — a guest with its own kernel, a home directory of its own rather than a
  * mount, an allowlist checked on the host, a VM that is discarded.
  *
  * These are the mechanisms README.md and docs/api/v1.md describe; the
@@ -63,11 +63,11 @@ const RULES: Rule[] = [
     },
   },
   {
-    test: /(cat|less|head|grep|cp|scp|rsync|tar)\s+.*(~|\$HOME|\/Users\/|\/home\/)(?!.*workspace)/i,
+    test: /(cat|less|head|grep|cp|scp|rsync|tar)\s+.*(~|\$HOME|\/Users\/|\/home\/)(?!.*sandbox\/home)/i,
     outcome: {
       verdict: "contained",
       by: "a separate machine",
-      detail: "Your home directory is not mounted. A host path reaches a sandbox only when you mount one on a local Mac, and never your home or an ancestor of it.",
+      detail: "Your home directory is not mounted. No backend mounts a host path into a sandbox, so there is nothing of yours there to read.",
     },
   },
   {
@@ -82,16 +82,16 @@ const RULES: Rule[] = [
     test: /^\s*(npm|pnpm|yarn|bun|go|cargo|pip|pytest|make|git|ls|cat|sed|node|python|tsc|eslint|vitest|jest)\b/i,
     outcome: {
       verdict: "passes",
-      by: "/workspace",
-      detail: "Ordinary work on the clone of your repository. This is exactly what the sandbox is for; its commits come back for you to merge.",
+      by: "/sandbox/home",
+      detail: "Ordinary work in the sandbox's own home, on whatever the agent cloned there. This is exactly what the sandbox is for; what should outlive it, the agent pushes.",
     },
   },
   {
-    test: /\/workspace|\.\/|src\/|package\.json|go\.mod/i,
+    test: /\/sandbox\/home|\.\/|src\/|package\.json|go\.mod/i,
     outcome: {
       verdict: "passes",
-      by: "/workspace",
-      detail: "Inside the clone. Read and write freely — your own checkout is untouched until you merge what comes back.",
+      by: "/sandbox/home",
+      detail: "Inside the sandbox's own home. Read and write freely — your own checkout is not in the VM to touch.",
     },
   },
 ];

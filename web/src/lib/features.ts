@@ -43,14 +43,14 @@ export const FEATURES: Feature[] = [
   {
     title: "Nothing of yours is mounted",
     group: "boundary",
-    body: "The repository goes in as a git bundle and is cloned inside. No host directory is shared by default; on a local Mac you may --bind one, and the server refuses your home directory, / and every ancestor of your home, compared by device and inode rather than by spelling.",
-    code: "sandbox-cli run --bind ~/data --bind-read-only -- ls /workspace",
+    body: "No host directory is shared, on any backend. Every process starts in /sandbox/home, the sandbox user's home; code gets in the way it gets onto any machine — the agent or the command runs git clone, or the files API writes it. Nothing comes back to your machine but the agent's saved login.",
+    code: "sandbox-cli agent claude -p \"clone github.com/you/app and fix its failing test\"",
     state: "default",
   },
   {
     title: "The guest is treated as hostile",
     group: "boundary",
-    body: "The host talks to one agent inside the VM over a bounded, framed protocol and never acts on what the guest volunteers. Bundles coming back are verified and must carry exactly one ref; files copied out are written without following links.",
+    body: "The host talks to one agent inside the VM over a bounded, framed protocol and never acts on what the guest volunteers. Files copied out — an agent's saved login — are written without following links.",
     state: "default",
   },
   {
@@ -69,29 +69,6 @@ export const FEATURES: Feature[] = [
   },
 
   // --- workflow ---------------------------------------------------------------
-  {
-    title: "Work comes back as commits you merge",
-    group: "workflow",
-    body: "When a run ends, everything the command left — committed or not — is fetched into refs/sandbox/<name>. Your branches are never moved; git merge is your decision.",
-    code: "git log -p HEAD..refs/sandbox/sbx_7f3a9c2e1b4d",
-    state: "default",
-  },
-  {
-    title: "Checkpoints, and recover",
-    group: "workflow",
-    flag: "--checkpoint-every",
-    body: "While a run is attached — or a fleet task is running — its working tree is fetched every five minutes through a private index; the agent's branches and staging are untouched. If the CLI, the machine or the VM dies, sandbox-cli recover says where each run's work still is.",
-    code: "sandbox-cli recover",
-    state: "default",
-  },
-  {
-    title: "Mirror work off the machine",
-    group: "workflow",
-    flag: "mirror:",
-    body: "Opt in, in your own config only, and what comes back is also copied to any S3-compatible bucket as a self-contained git bundle. The config names the variables holding the credential, never the credential. mirror fetch brings it into refs/sandbox/mirror/ on any clone, refused unless it is the commit its name says, from this repository's history, and on the uploading machine the commit recorded at upload.",
-    code: "sandbox-cli mirror fetch sbx_7f3a9c2e1b4d",
-    state: "default",
-  },
   {
     title: "Which agent is waiting for you",
     group: "workflow",
@@ -197,7 +174,7 @@ export const FEATURES: Feature[] = [
     title: "Labels",
     group: "observability",
     flag: "--label",
-    body: "Your own metadata on a sandbox: shown by list, filterable, recorded in its audit events. The agent layer labels its runs itself, so a failover's two sandboxes read as one episode.",
+    body: "Your own metadata on a sandbox: shown by list, filterable, recorded in its audit events. The agent layer labels its runs itself, so a run that fell back to another agent says which one it skipped and why.",
     code: "sandbox-cli list --label team=infra",
     state: "opt-in",
   },

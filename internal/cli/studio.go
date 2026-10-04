@@ -16,10 +16,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
-	"github.com/Amitgb14/sandbox-cli/internal/mirror"
 	"github.com/Amitgb14/sandbox-cli/internal/studio"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
-	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 func newStudioCmd() *cobra.Command {
@@ -27,13 +25,12 @@ func newStudioCmd() *cobra.Command {
 	var port int
 	cmd := &cobra.Command{
 		Use:   "studio",
-		Short: "Open Studio: the browser view of your sandboxes, runs and returned work",
+		Short: "Open Studio: the browser view of your sandboxes",
 		Long: "Serves Studio on a loopback port and prints the address to open, which carries a\n" +
 			"token made for this launch: anyone else on this machine can reach the port, and\n" +
 			"the token is what keeps them out. Studio talks to the sandboxd of the current\n" +
 			"context (or --context) and holds its token itself; the browser never sees it.\n\n" +
-			"Run from a git checkout, the repository is registered so runs can be launched\n" +
-			"on it. Ctrl-C stops Studio; sandboxes it started keep running.",
+			"Ctrl-C stops Studio; sandboxes it started keep running.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, ctxName, err := newClient(ctxFlag)
@@ -46,16 +43,8 @@ func newStudioCmd() *cobra.Command {
 			}
 			srv := &studio.Server{
 				Client: c, Context: ctxName, Token: hex.EncodeToString(tok), UI: studio.EmbeddedUI(),
-				Launch: studioLauncher(ctxName),
-				Mirror: func(ctx context.Context, se *workspace.Session, ref string) (string, error) {
-					spec, err := mirrorSpecFor(se.Repo)
-					if err != nil {
-						return "", err
-					}
-					return mirrorWork(ctx, spec, se, ref, mirror.KindBringBack)
-				},
-				ReposFile: filepath.Join(workspace.ConfigDir(), "studio", "repos.json"),
-				Version:   version.Version,
+				Launch:  studioLauncher(ctxName),
+				Version: version.Version,
 				Logf: func(format string, a ...any) {
 					fmt.Fprintf(os.Stderr, "studio: "+format+"\n", a...)
 				},
@@ -67,11 +56,6 @@ func newStudioCmd() *cobra.Command {
 					return fmt.Errorf("--ui-dir %s: no index.html (npm run build in studio/ writes studio/out)", uiDir)
 				}
 				srv.UI = os.DirFS(uiDir)
-			}
-			if wd, err := os.Getwd(); err == nil {
-				if rp, ok := srv.RegisterRepo(wd); ok {
-					fmt.Fprintf(cmd.ErrOrStderr(), "studio: repository %s\n", rp.Path)
-				}
 			}
 			// Loopback only, and no flag to change it: Studio holds a token
 			// that can start sandboxes, and the network is not where it goes.
@@ -103,26 +87,21 @@ func newStudioCmd() *cobra.Command {
 // studioLauncher turns a Studio launch into the run the CLI would make: a
 // detached `sandbox-cli run` or `sandbox-cli agent`, with every rule that
 // comes with it — the user's config and its trust layering, the profile, the
-// agent's environment and login, the git identity, checkpoints aside (a
-// detached run has nobody to drive them).
+// agent's environment and login.
 func studioLauncher(ctxName string) studio.Launcher {
-	return func(ctx context.Context, repoPath string, req studio.LaunchRequest) (studio.LaunchResult, error) {
-		rf := &runFlags{context: ctxName, project: repoPath, detach: true, name: req.Name,
-			network: req.Network, allow: req.Allow, git: req.Git, profile: req.Profile}
-		if repoPath == "" {
-			// No repository: an empty /workspace. The project directory is
-			// still where config is looked for, and left empty runSandbox
-			// would use the directory Studio was started in and pick up
-			// whatever .sandbox.yaml sits there. A fresh private directory
-			// outside any repository is its own search boundary, so no
-			// project config applies at all.
-			dir, err := os.MkdirTemp("", "sandbox-studio-")
-			if err != nil {
-				return studio.LaunchResult{}, err
-			}
-			defer os.RemoveAll(dir)
-			rf.project, rf.noWorkspace = dir, true
+	return func(ctx context.Context, req studio.LaunchRequest) (studio.LaunchResult, error) {
+		// The project directory is where .sandbox.yaml is looked for, and left
+		// empty runSandbox would use the directory Studio was started in and
+		// pick up whatever sits there: config nobody chose for this run. A
+		// fresh private directory outside any repository is its own search
+		// boundary, so no project config applies at all.
+		dir, err := os.MkdirTemp("", "sandbox-studio-")
+		if err != nil {
+			return studio.LaunchResult{}, err
 		}
+		defer os.RemoveAll(dir)
+		rf := &runFlags{context: ctxName, project: dir, detach: true, name: req.Name,
+			network: req.Network, allow: req.Allow, profile: req.Profile}
 		for k, v := range req.Labels {
 			rf.labels = append(rf.labels, k+"="+v)
 		}

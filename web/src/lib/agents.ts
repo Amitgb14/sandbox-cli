@@ -64,7 +64,7 @@ export const AGENTS: Agent[] = [
       "CLAUDE_CODE_USE_VERTEX",
     ],
     gotcha:
-      "Its login files (.claude/.credentials.json and .claude.json) are copied into each sandbox and back out when the run ends; your own ~/.claude is never read or written. --fallback codex hands a failed run to codex with a briefing of the conversation.",
+      "Its login files (.claude/.credentials.json and .claude.json) are copied into each sandbox and back out when the run ends; your own ~/.claude is never read or written. --fallback codex starts codex instead when the provider is not answering, probed before a sandbox is made; codex runs with its own login, not a resumed conversation.",
     example: "sandbox-cli agent claude --dangerously-skip-permissions",
   },
   {
@@ -78,7 +78,7 @@ export const AGENTS: Agent[] = [
       instead: "Sign in with Device Code",
       why: "Codex starts a login server on the guest's own loopback and gives the provider that address as the redirect, so your host browser lands on its own 127.0.0.1 and finds nothing. The port is picked at runtime, so nothing can be forwarded to it ahead of time.",
     },
-    example: "sandbox-cli agent codex exec 'run the tests'",
+    example: "sandbox-cli agent codex exec 'clone github.com/you/app and run its tests'",
   },
   {
     id: "gemini",
@@ -117,7 +117,7 @@ export const AGENTS: Agent[] = [
       instead: "xAI Grok OAuth (Headless / Remote / VPS)",
       why: "The subscription method redirects to a fixed http://127.0.0.1:56121/callback served inside the guest — a URI registered with the provider, so it cannot be repointed — and your host browser follows it to its own loopback instead.",
     },
-    example: "sandbox-cli agent opencode run 'run the tests'",
+    example: "sandbox-cli agent opencode run 'clone github.com/you/app and run its tests'",
   },
   {
     id: "kilocode",
@@ -127,8 +127,8 @@ export const AGENTS: Agent[] = [
     login: "`kilocode auth`, or forward a provider key.",
     env: ["KILOCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"],
     gotcha:
-      "Its CLI is an opencode fork — the same command surface, and the same provider keys. `kilocode run <message>` is its non-interactive mode, unverified here, so a fleet cannot name it yet.",
-    example: "sandbox-cli agent kilocode run 'explain this repository'",
+      "Its CLI is an opencode fork — the same command surface, and the same provider keys. `kilocode run <message>` is its non-interactive mode, unverified here, so Studio cannot launch it unattended and --fallback cannot route to it yet.",
+    example: "sandbox-cli agent kilocode run 'clone github.com/you/app and explain it'",
   },
   {
     id: "copilot",
@@ -145,8 +145,8 @@ export const AGENTS: Agent[] = [
       "COPILOT_API_URL",
     ],
     gotcha:
-      "Think before forwarding a GitHub PAT: it reaches every repository you can, far beyond the workspace. Leave it unset and use the device flow. Also the largest first-run download — it looks like a hang, it isn't.",
-    example: "sandbox-cli agent copilot -p 'run the tests'",
+      "Think before forwarding a GitHub PAT: it reaches every repository you can, far beyond what the sandbox needs. Leave it unset and use the device flow. Also the largest first-run download — it looks like a hang, it isn't.",
+    example: "sandbox-cli agent copilot -p 'clone github.com/you/app and run its tests'",
   },
   {
     id: "goose",
@@ -167,7 +167,7 @@ export const AGENTS: Agent[] = [
     ],
     gotcha:
       "The sandbox sets GOOSE_DISABLE_KEYRING=1 for you — a sandbox has no OS keyring, so without it the login would not survive. Don't override it.",
-    example: "sandbox-cli agent goose run -t 'run the tests'",
+    example: "sandbox-cli agent goose run -t 'clone github.com/you/app and run its tests'",
   },
   {
     id: "cursor",
@@ -190,8 +190,8 @@ export const AGENTS: Agent[] = [
     env: ["DEVIN_API_KEY", "DEVIN_API_BASE_URL"],
     allow: ["cli.devin.ai", "static.devin.ai"],
     gotcha:
-      "Its headless mode (devin -p PROMPT) and auto-approval (--permission-mode bypass) are documented but unverified here, so a fleet cannot name it yet — a descriptor is earned by running the agent, not by reading its docs.",
-    example: "sandbox-cli agent devin -p 'explain this repository'",
+      "Its headless mode (devin -p PROMPT) and auto-approval (--permission-mode bypass) are documented but unverified here, so Studio cannot launch it unattended and --fallback cannot route to it yet — a descriptor is earned by running the agent, not by reading its docs.",
+    example: "sandbox-cli agent devin -p 'clone github.com/you/app and explain it'",
   },
   {
     id: "cline",
@@ -209,7 +209,7 @@ export const AGENTS: Agent[] = [
     ],
     gotcha:
       "With an OAuth provider and no stored credentials it fails with an auth message rather than opening a browser. That's intended, not a crash.",
-    example: "sandbox-cli agent cline 'run the tests'",
+    example: "sandbox-cli agent cline 'clone github.com/you/app and run its tests'",
   },
   {
     id: "qwen",

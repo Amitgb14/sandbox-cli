@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
@@ -226,6 +227,11 @@ network:
 	if _, err := LoadPolicy(write("network: {celing: none}\n")); err == nil {
 		t.Error("an unknown key was accepted")
 	}
+	// allow_bind went with binds: a policy still turning it on is refused at
+	// startup rather than leaving its operator believing binds are served.
+	if _, err := LoadPolicy(write("allow_bind: true\n")); err == nil || !strings.Contains(err.Error(), "allow_bind") {
+		t.Errorf("a policy setting allow_bind: %v", err)
+	}
 	// A default above the ceiling is incoherent.
 	if _, err := LoadPolicy(write("network: {default: {mode: open}, ceiling: allowlist}\n")); err == nil {
 		t.Error("a default above the ceiling was accepted")
@@ -244,30 +250,5 @@ network:
 		if _, err := LoadPolicy(write(bad)); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
-	}
-}
-
-// A bind is the one request field naming a host path, so it gets the
-// non-overridable refusals, and only when the operator allowed binds at all.
-func TestBindIsRefusedUnlessAllowedAndSafe(t *testing.T) {
-	p := DefaultPolicy()
-	dir := t.TempDir()
-	if _, err := Resolve(api.CreateSandboxRequest{Bind: &api.Bind{HostPath: dir}}, p, "sbx_1"); !isRefused(err) {
-		t.Errorf("bind with allow_bind off: %v", err)
-	}
-	p.AllowBind = true
-	s, err := Resolve(api.CreateSandboxRequest{Bind: &api.Bind{HostPath: dir, ReadOnly: true}}, p, "sbx_1")
-	if err != nil || s.Bind == nil || !s.Bind.ReadOnly {
-		t.Fatalf("an ordinary directory: %+v, %v", s.Bind, err)
-	}
-	home, _ := os.UserHomeDir()
-	for name, path := range map[string]string{"root": "/", "home": home, "relative": "rel/dir"} {
-		if _, err := Resolve(api.CreateSandboxRequest{Bind: &api.Bind{HostPath: path}}, p, "sbx_1"); err == nil {
-			t.Errorf("bind of %s (%s) was accepted", name, path)
-		}
-	}
-	// FitTo turns it off where the backend cannot mount.
-	if fitted, _ := p.FitTo(map[string]bool{}); fitted.AllowBind {
-		t.Error("FitTo left bind on for a backend without bind_workspace")
 	}
 }

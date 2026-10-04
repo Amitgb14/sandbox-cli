@@ -57,12 +57,12 @@ const DOCTOR: Step = {
 
 const FIRST_RUN: Step = {
   title: "Run something",
-  code: "cd ~/your-project\nsandbox-cli run -- uname -a\nsandbox-cli agent claude",
+  code: "sandbox-cli run -- uname -a\nsandbox-cli agent claude",
   body: (
     <>
-      The first run builds the image&apos;s root disk, which takes a while; later ones start fast. Your repository
-      goes in as a git bundle, and its commits come back into <code>refs/sandbox/&lt;id&gt;</code> when the run
-      ends. Read them with <code>git log -p HEAD..refs/sandbox/&lt;id&gt;</code>, then merge if you want them.
+      The first run builds the image&apos;s root disk, which takes a while; later ones start fast. A sandbox
+      starts in <code>/sandbox/home</code>, its own home directory, and nothing on your machine is mounted in: ask
+      the agent to clone what it needs. The agent&apos;s login is saved when the run ends, so you log in once.
     </>
   ),
 };
@@ -93,8 +93,7 @@ const MAC_STEPS: Step[] = [
         The launch agent in the repository runs <code>/usr/local/bin/sandboxd</code>; the <code>sed</code> points
         it at the copy in <code>~/.local/bin</code>, so nothing needs root. It starts at login, restarts if it
         exits, logs to <code>/tmp/sandboxd.log</code>, and listens on a unix socket only you can open, which is the
-        CLI&apos;s default context. It passes <code>--allow-bind</code>, so a run may mount a directory with{" "}
-        <code>--bind</code>.
+        CLI&apos;s default context.
       </>
     ),
   },
@@ -105,7 +104,6 @@ const MAC_STEPS: Step[] = [
 const MAC_DIFFERENCES: [string, string, string][] = [
   ["Sandbox", "a VM of the container runtime", "a Firecracker microVM"],
   ["Egress", "none, or open if your policy allows it", "none or an allowlist, enforced on the host"],
-  ["Workspace", "a git bundle in and out, or a bind of a directory", "a git bundle in and out"],
   ["Network policy change on a running sandbox", "no", "yes"],
 ];
 
@@ -405,7 +403,6 @@ export default function SetupPage() {
             </div>
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
               To stop sandboxd: <code className="font-mono text-foreground">launchctl bootout gui/$(id -u)/dev.sandbox.sandboxd</code>.
-              A bind never mounts <code className="font-mono text-foreground">/</code>, your home directory, or anything above it.
             </p>
           </div>
         </Section>
@@ -418,7 +415,7 @@ export default function SetupPage() {
           />
           <Caveat>
             without root there are no tap devices, so sandboxes get <strong>no network at all</strong> and a request for
-            an allowlist is refused, never served open. Boot, run, files, bring-back, snapshots and volumes all work. For
+            an allowlist is refused, never served open. Boot, run, files, snapshots and volumes all work. For
             networking, use the Linux server path.
           </Caveat>
           <Steps steps={LINUX_STEPS} />

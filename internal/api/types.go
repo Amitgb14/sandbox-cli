@@ -68,14 +68,11 @@ const (
 	CapNetworkPolicyUpdate = "network_policy_update"
 	CapSuspend             = "suspend"
 	CapMemorySnapshot      = "memory_snapshot"
-	CapBindWorkspace       = "bind_workspace"
 	// CapEgressAllowlist: network mode allowlist is enforced. Without it, the
 	// endpoint offers only none — a sandbox there has no network at all.
 	CapEgressAllowlist = "egress_allowlist"
 	// CapEgressOpen: network mode open is available.
 	CapEgressOpen = "egress_open"
-	// CapWorkspaceBundle: a git bundle can be cloned in and brought back out.
-	CapWorkspaceBundle = "workspace_bundle"
 	// CapTunnel: a TCP port on the guest's loopback can be reached through the API.
 	CapTunnel = "tunnel"
 	// CapVolumes: named volumes persist across sandboxes and are mounted at a
@@ -119,16 +116,11 @@ type CreateSandboxRequest struct {
 	// memory_snapshot): memory, processes and disk as they were captured. Its
 	// image and resources are the snapshot's.
 	SnapshotID string `json:"snapshot_id,omitempty"`
-	// Bind mounts a host directory at /workspace instead of starting empty.
-	// Local endpoints only (capability bind_workspace, and the operator's
-	// allow_bind); the host path is refused if it is /, the home directory or
-	// an ancestor of it.
-	Bind *Bind `json:"bind,omitempty"`
 	// Labels are the client's own metadata: up to 32 keys of lowercase letters,
 	// digits and . _ / -, values up to 256 printable bytes. They decide nothing
 	// about the sandbox; they are returned with it, filter the listing
 	// (?label=k=v), and are recorded in its audit events, so a client can say
-	// why a sandbox exists — which agent, which fleet task, which retry.
+	// why a sandbox exists — which agent, which routing attempt, which job.
 	Labels map[string]string `json:"labels,omitempty"`
 	// Volumes mounts named volumes (capability volumes). A volume is attached
 	// to one live sandbox at a time.
@@ -162,12 +154,6 @@ type VolumeList struct {
 	Volumes []Volume `json:"volumes"`
 }
 
-// Bind is a host directory mounted at /workspace.
-type Bind struct {
-	HostPath string `json:"host_path"`
-	ReadOnly bool   `json:"read_only,omitempty"`
-}
-
 // UpdateSandboxRequest changes a running sandbox.
 type UpdateSandboxRequest struct {
 	Network *NetworkPolicy `json:"network,omitempty"`
@@ -189,7 +175,6 @@ type Sandbox struct {
 	CreatedAt time.Time     `json:"created_at"`
 	// IdleTimeoutSecs is in force for this sandbox; 0 means it never idles out.
 	IdleTimeoutSecs int               `json:"idle_timeout_secs"`
-	Bind            *Bind             `json:"bind,omitempty"`
 	Labels          map[string]string `json:"labels,omitempty"`
 	Volumes         []VolumeMount     `json:"volumes,omitempty"`
 }
@@ -207,8 +192,6 @@ const (
 	EventFileRead          = "file.read"
 	EventFileWritten       = "file.written"
 	EventFileRemoved       = "file.removed"
-	EventWorkspaceIn       = "workspace.in"  // a bundle cloned into /workspace
-	EventWorkspaceOut      = "workspace.out" // a bundle taken out of it
 	EventTunnelOpened      = "tunnel.opened"
 )
 
@@ -226,7 +209,6 @@ type Event struct {
 	// Network is the policy in force after the event (created, updated).
 	Network  *NetworkPolicy `json:"network,omitempty"`
 	EnvNames []string       `json:"env_names,omitempty"`
-	Bind     string         `json:"bind,omitempty"`
 	Snapshot string         `json:"snapshot,omitempty"`
 	Volumes  []VolumeMount  `json:"volumes,omitempty"`
 

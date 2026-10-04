@@ -7,19 +7,17 @@ import (
 	"strings"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
+	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
-	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
-// Reading an agent's conversation out of its sandbox, over the API. Shared by
-// the two things that need it: a routed run's handoff briefing, and the state
-// an agent is reported in.
+// Reading an agent's conversation out of its sandbox, over the API, for the
+// state an agent is reported in.
 
 // transcriptStore is where an agent keeps this run's conversation inside the
 // sandbox, and the reader for its format. Only agents whose format is verified
 // (agentctx) are here, so only their conversation crosses; any other agent's
-// briefing is the file ledger alone, which handoff treats as an ordinary case
-// rather than a failure.
+// state is decided without it.
 type transcriptStore struct {
 	dir    string
 	depth  int    // directories below dir that sessions are sharded into
@@ -28,11 +26,12 @@ type transcriptStore struct {
 }
 
 var transcriptStores = map[string]transcriptStore{
-	// The bucket name is Claude Code's spelling of the working directory.
-	"claude": {dir: workspace.GuestHome + "/.claude/projects/-workspace", parse: agentctx.ParseTranscript},
+	// The bucket name is Claude Code's spelling of the working directory, and
+	// every run starts in the sandbox user's home: /sandbox/home.
+	"claude": {dir: agenthome.GuestHome + "/.claude/projects/-sandbox-home", parse: agentctx.ParseTranscript},
 	// Sharded by date, YYYY/MM/DD, not by project; a fresh sandbox holds only
 	// this run's sessions, so the shard is not a question.
-	"codex": {dir: workspace.GuestHome + "/.codex/sessions", depth: 3, prefix: "rollout-", parse: agentctx.ParseCodexTranscript},
+	"codex": {dir: agenthome.GuestHome + "/.codex/sessions", depth: 3, prefix: "rollout-", parse: agentctx.ParseCodexTranscript},
 }
 
 // maxTranscripts and maxTranscriptDirs bound the search for this run's

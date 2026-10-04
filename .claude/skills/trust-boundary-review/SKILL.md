@@ -48,9 +48,9 @@ first. The ledger is `docs/security/audit-2026-07-26.md` and the open backlog is
   or a golden file? Names only.
 
 **Guest → host data**
-- Bundles: `git bundle verify`, base commit as the only prerequisite, one ref,
-  fetched into `refs/sandbox/…` through `githard`, never into `refs/heads`
-  directly.
+- Nothing a guest wrote is fetched into a host repository: there is no
+  bundle, bring-back or checkpoint any more. A change that brings guest
+  output into host git reintroduces that boundary and needs `githard`.
 - Synced files land only in sandboxd-owned directories, with no link-following.
 - `sandbox-guestd` gains no command that reads an arbitrary path back to the
   host on the guest's initiative.

@@ -20,24 +20,24 @@ var warnedSecret = func(format string, args ...any) {
 }
 
 // warnedNames records the secret names this process has already warned about, so
-// the line is said **once per secret name, per process**. A fleet resolves the
-// same `secrets:` block for every task it launches, so without this a twenty-task
-// fleet said the same sentence twenty times — which is how a warning stops being
-// read, the very failure the warning's own design argues against. One process is
-// the right scope because it is one command: `fleet run` says it once, an
-// interactive run says it once, and a later run in a new process says it again
-// rather than going quiet forever.
+// the line is said **once per secret name, per process**. A routed run resolves
+// the same `secrets:` block for every attempt it launches, and a process that
+// launched many runs used to say the same sentence for each — which is how a
+// warning stops being read, the very failure the warning's own design argues
+// against. One process is the right scope because it is one command: a routed
+// run says it once, an interactive run says it once, and a later run in a new
+// process says it again rather than going quiet forever.
 //
 // Only names that actually warned are recorded — the caller checks the lifetime
 // before reaching this map — so a name that resolves short-lived in one task and
 // long-lived in the next is still reported on the second.
 //
-// The lock is not for the fleet, whose launches are sequential. It is for
+// The lock is not for routing, whose launches are sequential. It is for
 // `studioapi`, which calls Session.Start from an HTTP handler, so two concurrent
 // POSTs to /runs share this map.
 //
 // **Per-process is right for a command and wrong for a daemon**, and the
-// distinction is invisible from here: a fleet and a Studio server are both one
+// distinction is invisible from here: a routed run and a Studio server are both one
 // Session calling Start N times, and only the caller knows whether that is one
 // command or N of them. a daemon outlives every run it starts, so
 // this silences the warning for every launch after the first. Harmless today only

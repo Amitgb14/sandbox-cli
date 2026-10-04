@@ -79,9 +79,6 @@ func eventDetail(ev api.Event) string {
 		if len(ev.EnvNames) > 0 {
 			add("env %s", termsafe.Clean(strings.Join(ev.EnvNames, ",")))
 		}
-		if ev.Bind != "" {
-			add("bind %s", termsafe.Clean(ev.Bind))
-		}
 		if ev.Snapshot != "" {
 			add("from %s", termsafe.Clean(ev.Snapshot))
 		}

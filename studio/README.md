@@ -1,10 +1,10 @@
 # studio/ — Sandbox Studio
 
-The browser view of `sandbox-cli`: launch a run on your repository, watch its
-output, type into its terminal, bring its work back and review the diff.
+The browser view of `sandbox-cli`: launch a command or an agent, watch its
+output, type into its terminal, read its files and audit events. A sandbox has
+no repository, so there is nothing to bring back or review on the host.
 
 ```sh
-cd ~/src/app
 sandbox-cli studio          # prints http://127.0.0.1:7080/#token=…
 ```
 
@@ -22,7 +22,8 @@ from the same origin:
 | `/` and every route | this app, as files (`out/`) |
 | `/api/v1/…` | sandboxd's API, proxied to the current context with that sandboxd's token; the browser never holds it |
 | `/api/ws/attach` | a WebSocket bridge to a process's terminal |
-| `/api/repos`, `/api/runs`, `/api/repos/{id}/refs`, `…/diff`, `…/fleet` | host-side work, through the same code the CLI uses |
+| `/api/info`, `/api/agents`, `/api/agents/state` | the context and version, the agents and their saved logins, and each agent's state |
+| `POST /api/runs` | launching a run, through the same code the CLI uses |
 
 Every `/api` request needs the token `sandbox-cli studio` prints in the URL's
 fragment; it is read once, kept in `sessionStorage` for the tab, and wiped from
@@ -61,10 +62,7 @@ by `e2e/global-setup.ts`.
 
 | Route | Screen |
 |---|---|
-| `/` | Dashboard: agents waiting for you, what is running, work not brought back, what this sandboxd can do |
+| `/` | Dashboard: agents waiting for you, what is running, what this sandboxd can do |
 | `/sandboxes`, `/sandbox?id=` | Every sandbox; one sandbox's terminal, output, files and events |
-| `/launch` | A command, an unattended agent, or an agent's console, on a clone of a repository or an empty `/workspace` |
-| `/runs` | Runs on the repository, and where each one's work is |
-| `/review` | `refs/sandbox/*` and their diff against HEAD |
-| `/fleet` | A fleet run's tasks; landing what verified |
-| `/agents`, `/volumes`, `/settings` | The agents Studio runs (those with a verified headless mode) and their logins; volumes; the context and repositories |
+| `/launch` | A command, an unattended agent, or an agent's console, starting in `/sandbox/home` |
+| `/agents`, `/volumes`, `/settings` | The agents Studio runs (those with a verified headless mode) and their logins; volumes; the context |

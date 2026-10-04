@@ -17,7 +17,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -26,7 +25,6 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/egressproxy"
-	"github.com/Amitgb14/sandbox-cli/internal/hostpath"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
 )
 
@@ -61,11 +59,6 @@ type Policy struct {
 	Limits          api.Limits
 
 	Network NetworkPolicy
-
-	// AllowBind lets a request mount a host directory at /workspace. Off by
-	// default, and only meaningful on a local endpoint, where whoever holds the
-	// socket is the person whose directories they are.
-	AllowBind bool
 
 	// Pools keep sandboxes booted ahead of the requests that will want them.
 	Pools []Pool
@@ -184,10 +177,6 @@ func (p Policy) FitTo(caps map[string]bool) (Policy, []string) {
 		}
 	}
 	p.Network = n
-	if p.AllowBind && !caps[api.CapBindWorkspace] {
-		notes = append(notes, "this backend cannot mount host directories: bind is off")
-		p.AllowBind = false
-	}
 	return p, notes
 }
 
@@ -235,10 +224,9 @@ const MaxVolumeMounts = 8
 var volumePathRE = regexp.MustCompile(`^(/[A-Za-z0-9._-]+)+$`)
 
 // reservedMountRoots are where a volume may not be mounted, nor anywhere
-// under: the system's own directories, and /workspace, which a clone needs
-// empty — a mount point inside it would make every clone fail.
+// under: the system's own directories.
 var reservedMountRoots = []string{"/proc", "/sys", "/dev", "/run", "/etc", "/usr", "/bin", "/sbin",
-	"/lib", "/lib32", "/lib64", "/libx32", "/boot", "/workspace", "/tmp"}
+	"/lib", "/lib32", "/lib64", "/libx32", "/boot", "/tmp"}
 
 // ValidateVolumeMounts checks the shape of a request's volume mounts: names,
 // paths that are absolute, plain and outside the reserved roots, and no two
@@ -374,22 +362,6 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 		return backend.Spec{}, err
 	}
 	s.Network = net
-
-	if req.Bind != nil {
-		if !pol.AllowBind {
-			return backend.Spec{}, refused("this server does not mount host directories")
-		}
-		if !filepath.IsAbs(req.Bind.HostPath) {
-			return backend.Spec{}, invalid("bind.host_path must be absolute")
-		}
-		// The non-overridable refusals: never /, never home, never an ancestor
-		// of it — compared by identity, after symlinks are resolved.
-		real, err := hostpath.ResolveWorkspace(req.Bind.HostPath)
-		if err != nil {
-			return backend.Spec{}, refused("bind: %v", err)
-		}
-		s.Bind = &backend.Bind{HostPath: real, ReadOnly: req.Bind.ReadOnly}
-	}
 	return s, nil
 }
 

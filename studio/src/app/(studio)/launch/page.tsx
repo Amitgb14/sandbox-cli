@@ -3,18 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Bot, Check, ChevronRight, FolderGit2, SquareTerminal, TerminalSquare, type LucideIcon } from "lucide-react";
+import { Bot, Check, ChevronRight, SquareTerminal, TerminalSquare, type LucideIcon } from "lucide-react";
 import { PageHeader } from "@/components/common/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useAgents, useInfo, useLaunch, useRepos } from "@/lib/api/queries";
-import { useUi } from "@/lib/store";
+import { useAgents, useInfo, useLaunch } from "@/lib/api/queries";
 import { cn } from "@/lib/utils";
 import type { LaunchRequest, NetworkMode } from "@/lib/types";
 
@@ -52,9 +50,6 @@ function pairs(s: string): Record<string, string> {
   return out;
 }
 
-/** The select's value for "no repository": Radix gives "" a meaning of its own. */
-const NO_REPO = "none";
-
 const KINDS: [Kind, string, string, LucideIcon][] = [
   ["headless", "Agent, unattended", "Runs the prompt to completion and exits", Bot],
   ["console", "Agent, interactive", "A terminal you attach to here", TerminalSquare],
@@ -79,11 +74,7 @@ function LaunchForm() {
   const router = useRouter();
   const { data: agents } = useAgents();
   const { data: info } = useInfo();
-  const { data: repos } = useRepos();
-  const sidebarRepo = useUi((s) => s.repo);
   const launch = useLaunch();
-  // The sidebar's repository is the default; null until the user picks here.
-  const [picked, setPicked] = useState<string | null>(null);
   const [kind, setKind] = useState<Kind>("headless");
   const [agent, setAgent] = useState("claude");
   const [prompt, setPrompt] = useState("");
@@ -93,17 +84,13 @@ function LaunchForm() {
   const [allow, setAllow] = useState("");
   const [labels, setLabels] = useState("");
   const [volumes, setVolumes] = useState("");
-  const [git, setGit] = useState(false);
 
-  const usable = (repos ?? []).filter((r) => !r.missing);
-  const repoId = picked ?? (usable.some((r) => r.id === sidebarRepo) ? sidebarRepo! : NO_REPO);
-  const repo = usable.find((r) => r.id === repoId);
   const ceiling = info?.capabilities?.network.ceiling;
   const chosen = agents?.find((a) => a.name === agent);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    const req: LaunchRequest = { repo: repo?.id, name: name || undefined, git: (repo && git) || undefined };
+    const req: LaunchRequest = { name: name || undefined };
     if (kind === "command") req.command = splitArgs(command);
     else {
       req.agent = agent;
@@ -140,33 +127,7 @@ function LaunchForm() {
   return (
     <form onSubmit={submit} className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
       <div className="flex min-w-0 flex-col gap-8">
-        <Section step={1} title="Workspace">
-          <Select value={repoId} onValueChange={setPicked}>
-            <SelectTrigger className="w-full sm:w-96" aria-label="Repository">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NO_REPO}>No repository · an empty /workspace</SelectItem>
-              {usable.map((r) => (
-                <SelectItem key={r.id} value={r.id}>
-                  {r.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">
-            {repo ? (
-              <>
-                A clone of <span className="font-mono text-foreground">{repo.path}</span> at its HEAD. When the run ends,
-                bring its work back from Runs; nothing on your machine is written until you merge it.
-              </>
-            ) : (
-              <>Nothing is cloned in and nothing comes back. Add a repository from the sidebar to work on one.</>
-            )}
-          </p>
-        </Section>
-
-        <Section step={2} title="What to run">
+        <Section step={1} title="What to run">
           <RadioGroup value={kind} onValueChange={(v) => setKind(v as Kind)} className="grid gap-2 sm:grid-cols-3">
             {KINDS.map(([v, title, hint, Icon]) => (
               <Label
@@ -186,11 +147,11 @@ function LaunchForm() {
         </Section>
 
         {kind === "command" ? (
-          <Section step={3} title="Command">
+          <Section step={2} title="Command">
             <Input id="command" aria-label="Command" className="font-mono" placeholder="npm test" value={command} onChange={(e) => setCommand(e.target.value)} required />
           </Section>
         ) : (
-          <Section step={3} title="Agent">
+          <Section step={2} title="Agent">
             <div role="radiogroup" aria-label="Agent" className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
               {(agents ?? []).map((a) => {
                 const on = a.name === agent;
@@ -268,14 +229,6 @@ function LaunchForm() {
               <Label htmlFor="volumes">Volumes</Label>
               <Input id="volumes" className="font-mono" placeholder="cache:/sandbox/home/.cache" value={volumes} onChange={(e) => setVolumes(e.target.value)} />
             </div>
-            {/* Identity is for the commits of a cloned repository; with none
-                there is nothing to commit to. */}
-            {repo && (
-              <Label className="flex items-center gap-2 self-end text-sm font-normal">
-                <Checkbox checked={git} onCheckedChange={(v) => setGit(v === true)} />
-                Commit with my git name and email
-              </Label>
-            )}
           </div>
         </details>
       </div>
@@ -284,11 +237,8 @@ function LaunchForm() {
         <CardContent className="flex flex-col gap-4 p-4">
           <h2 className="text-sm font-semibold">This run</h2>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Workspace</dt>
-            <dd className="flex min-w-0 items-center gap-1.5 truncate">
-              {repo ? <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden /> : null}
-              <span className="truncate">{repo ? repo.name : "empty"}</span>
-            </dd>
+            <dt className="text-muted-foreground">Starts in</dt>
+            <dd className="truncate font-mono text-[13px]">/sandbox/home</dd>
             <dt className="text-muted-foreground">Runs</dt>
             <dd className="truncate font-mono text-[13px]">
               {kind === "command" ? command || "—" : `${agent}${kind === "console" ? " (console)" : ""}`}
@@ -317,7 +267,7 @@ function LaunchForm() {
 export default function LaunchPage() {
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Launch" description="A fresh microVM sandbox for an agent or a command, on a clone of a repository or an empty workspace." />
+      <PageHeader title="Launch" description="A fresh microVM sandbox for an agent or a command. It starts in its own home directory and needs no repository: ask the agent, or the command, to clone what it needs." />
       <LaunchForm />
     </div>
   );

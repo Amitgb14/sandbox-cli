@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, Hand, History, PauseCircle, ShieldCheck } from "lucide-react";
+import { Boxes, Hand, PauseCircle, ShieldCheck } from "lucide-react";
 import { PageHeader, SectionHeader } from "@/components/common/page-header";
 import { MetricTile } from "@/components/common/metric-tile";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -9,14 +9,13 @@ import { Labels } from "@/components/sandbox/labels";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useAgentStates, useInfo, useRuns, useSandboxes } from "@/lib/api/queries";
+import { useAgentStates, useInfo, useSandboxes } from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
 
-/** What is running, what came back, and what this sandboxd can do. */
+/** What is running, which agents are waiting for you, and what this sandboxd can do. */
 export default function DashboardPage() {
   const { data: info } = useInfo();
   const { data: sandboxes, isLoading } = useSandboxes();
-  const { data: runs } = useRuns();
   const { data: agentStates } = useAgentStates();
   const agentOf = new Map((agentStates ?? []).map((a) => [a.sandbox, a]));
   const waiting = (agentStates ?? []).filter((a) => a.state === "blocked");
@@ -29,11 +28,10 @@ export default function DashboardPage() {
         title="Dashboard"
         description={info ? `Context ${info.context} · sandbox-cli ${info.version}` : "Connecting to sandboxd…"}
       />
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <MetricTile label="Waiting for you" icon={Hand} value={agentStates ? waiting.length : null} hint="agents quiet at a terminal" />
         <MetricTile label="Running" icon={Boxes} loading={isLoading} value={live.filter((s) => s.state === "running").length} hint="sandboxes on this sandboxd" />
         <MetricTile label="Suspended" icon={PauseCircle} loading={isLoading} value={live.filter((s) => s.state === "suspended").length} hint="memory kept, nothing running" />
-        <MetricTile label="Work not back" icon={History} value={runs?.filter((r) => !r.done).length ?? null} hint="runs whose commits have not been brought back" />
         <MetricTile label="Backend" icon={ShieldCheck} value={caps?.backend ?? null} hint={caps ? `API ${caps.api_version}` : undefined} />
       </div>
 

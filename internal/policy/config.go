@@ -64,8 +64,12 @@ type Config struct {
 	// not choose. See trust.go.
 	Providers map[string]string `yaml:"providers"`
 
-	// Mirror copies the work that comes back from a sandbox to object storage,
-	// so it outlives the machine that ran it. Nil is off, which is the default:
+	// Mirror is retired with the repository: there is no work coming back to
+	// copy, and CheckLiveKeys refuses a file that sets it. It still parses, as
+	// beta.15's keys do, so the trust rules keep refusing it from a project.
+	//
+	// It copied the work that came back from a sandbox to object storage,
+	// so it outlived the machine that ran it. Nil is off, which is the default:
 	// it sends the repository off this machine and reads a credential, and
 	// neither is something to start doing because a tool was installed.
 	//

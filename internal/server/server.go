@@ -137,8 +137,6 @@ func (s *Server) Handler() http.Handler {
 	route("PUT /v1/sandboxes/{ref}/files", true, s.writeFile)
 	route("DELETE /v1/sandboxes/{ref}/files", false, s.removeFile)
 	route("GET /v1/sandboxes/{ref}/dirs", false, s.listDir)
-	route("POST /v1/sandboxes/{ref}/workspace", true, s.putWorkspace)
-	route("GET /v1/sandboxes/{ref}/workspace/bundle", false, s.getWorkspaceBundle)
 	route("GET /v1/sandboxes/{ref}/events", false, s.events)
 	route("POST /v1/volumes", false, s.createVolume)
 	route("GET /v1/volumes", false, s.listVolumes)
@@ -188,7 +186,7 @@ func (s *Server) guard(raw bool, next http.HandlerFunc) http.Handler {
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	caps := map[string]bool{
 		api.CapNetworkPolicyUpdate: false, api.CapSuspend: false,
-		api.CapMemorySnapshot: false, api.CapBindWorkspace: false,
+		api.CapMemorySnapshot: false,
 	}
 	for k, v := range s.Backend.Capabilities() {
 		caps[k] = v
@@ -232,10 +230,6 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bs.FromSnapshot = req.SnapshotID
-	if bs.Bind != nil && !s.Backend.Capabilities()[api.CapBindWorkspace] {
-		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot mount host directories")
-		return
-	}
 	if len(bs.Volumes) > 0 {
 		if bs.FromSnapshot != "" {
 			writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "a sandbox started from a snapshot cannot mount volumes")
@@ -254,7 +248,6 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			CPUs: bs.CPUs, MemoryMB: bs.MemoryMB, DiskMB: bs.DiskMB,
 			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: s.now().UTC(),
 			IdleTimeoutSecs: bs.IdleTimeoutSecs,
-			Bind:            apiBind(bs.Bind),
 			Labels:          copyLabels(req.Labels),
 			Volumes:         bs.Volumes,
 		},
@@ -317,9 +310,6 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	ev := api.Event{Type: api.EventSandboxCreated, Sandbox: id, Name: out.Name, Image: out.Image,
 		Labels: out.Labels, Network: &out.Network, EnvNames: out.EnvNames, Snapshot: req.SnapshotID, Volumes: out.Volumes,
 		Reason: from}
-	if out.Bind != nil {
-		ev.Bind = out.Bind.HostPath
-	}
 	s.event(ev)
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -1037,13 +1027,6 @@ func writeBackendErr(w http.ResponseWriter, err error) {
 		// and engine detail that are the operator's to read, not the caller's.
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the backend failed")
 	}
-}
-
-func apiBind(b *backend.Bind) *api.Bind {
-	if b == nil {
-		return nil
-	}
-	return &api.Bind{HostPath: b.HostPath, ReadOnly: b.ReadOnly}
 }
 
 func sortedKeys(m map[string]string) []string {

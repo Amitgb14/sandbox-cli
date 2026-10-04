@@ -15,7 +15,7 @@
  * exactly one of them, including the ones that were never in the nav at all
  * (#network, #parallel, #install were reachable only by scrolling).
  *
- * One entry is a route rather than an anchor (the fleet doc). The type does not
+ * Some entries are routes rather than anchors (Studio, the setup guide). The type does not
  * distinguish them, because nothing about *navigation* differs — what differs is
  * how the header renders it, and that is a question about `basePath` and
  * client-side routing rather than about this list.
@@ -25,7 +25,7 @@
  * the menu tell you something you did not already know from the label.
  */
 
-import { MULTI_AGENT_PATH, SETUP_PATH, STUDIO_PATH } from "@/lib/site";
+import { SETUP_PATH, STUDIO_PATH } from "@/lib/site";
 
 export type NavLink = {
   href: string;
@@ -66,8 +66,8 @@ export const NAV: NavEntry[] = [
       },
       {
         href: "#workspace",
-        label: "Your repository",
-        hint: "a git bundle in, verified commits out, checkpoints in between",
+        label: "Where the work happens",
+        hint: "a home directory of its own; nothing of yours mounted in",
       },
       {
         href: "#sessions",
@@ -84,11 +84,6 @@ export const NAV: NavEntry[] = [
         href: "#agents",
         label: "Coding agents",
         hint: "twelve of them, under one prefix, logins kept between runs",
-      },
-      {
-        href: MULTI_AGENT_PATH,
-        label: "Running a fleet",
-        hint: "one agent per branch, checked before it lands, with fallbacks",
       },
       {
         href: STUDIO_PATH,

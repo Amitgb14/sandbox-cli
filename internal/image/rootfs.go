@@ -58,8 +58,8 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 	key := hex.EncodeToString(keySum[:16])
 	out := filepath.Join(dir, "rootfs", key, "rootfs.ext4")
 	res := &RootFS{Path: out, Key: key, Config: pulled.Config, OwnedByHost: os.Geteuid() != 0}
-	// Sandboxes created together ask for the same disk together — a fleet does
-	// it on every run. The second waits for the first build rather than racing
+	// Sandboxes created together ask for the same disk together — several
+	// agents started at once do it every time. The second waits for the first build rather than racing
 	// it; across processes, each build writes its own partial file and the
 	// renames are atomic.
 	unlock := lockKey(out)

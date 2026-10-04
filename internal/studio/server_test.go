@@ -7,9 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -36,7 +33,7 @@ func studioUnderTest(t *testing.T) (*Server, *httptest.Server, *api.Client) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Client: c, Context: "t", Token: testToken, ReposFile: filepath.Join(t.TempDir(), "repos.json")}
+	s := &Server{Client: c, Context: "t", Token: testToken}
 	st := httptest.NewServer(s.Handler())
 	t.Cleanup(st.Close)
 	return s, st, c
@@ -92,7 +89,7 @@ func TestGuard(t *testing.T) {
 		t.Errorf("foreign Host: %v %v", r.StatusCode, err)
 	}
 	// A body that is not JSON, the shape of a cross-origin simple request.
-	req, _ = http.NewRequest("POST", st.URL+"/api/repos", strings.NewReader("path=/"))
+	req, _ = http.NewRequest("POST", st.URL+"/api/runs", strings.NewReader("command=true"))
 	req.Header.Set("Content-Type", "text/plain")
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	if r, _ := http.DefaultClient.Do(req); r.StatusCode != http.StatusUnsupportedMediaType {
@@ -130,92 +127,43 @@ func TestProxyCarriesTheContextsToken(t *testing.T) {
 	}
 }
 
-func gitRepo(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	for _, a := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "base"}} {
-		cmd := exec.Command("git", a...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git: %v %s", err, out)
-		}
-	}
-	return dir
-}
-
-// A path is checked once, when added; everything else names an id.
-func TestReposAreAddedByPathAndUsedById(t *testing.T) {
-	_, st, _ := studioUnderTest(t)
-	if r, _ := call(t, st.URL, "POST", "/api/repos", testToken, "", map[string]string{"path": t.TempDir()}); r.StatusCode != http.StatusBadRequest {
-		t.Errorf("not a repository: %d", r.StatusCode)
-	}
-	if r, _ := call(t, st.URL, "POST", "/api/repos", testToken, "", map[string]string{"path": "relative/dir"}); r.StatusCode != http.StatusBadRequest {
-		t.Errorf("relative path: %d", r.StatusCode)
-	}
-	repo := gitRepo(t)
-	r, body := call(t, st.URL, "POST", "/api/repos", testToken, "", map[string]string{"path": filepath.Join(repo, ".")})
-	if r.StatusCode != http.StatusCreated {
-		t.Fatalf("add: %d %v", r.StatusCode, body)
-	}
-	id := body["id"].(string)
-	if r, _ := call(t, st.URL, "GET", "/api/repos/"+id+"/refs", testToken, "", nil); r.StatusCode != http.StatusOK {
-		t.Errorf("refs by id: %d", r.StatusCode)
-	}
-	if r, _ := call(t, st.URL, "GET", "/api/repos/000000000000/refs", testToken, "", nil); r.StatusCode != http.StatusNotFound {
-		t.Errorf("an unregistered id: %d", r.StatusCode)
-	}
-	for _, bad := range []string{"HEAD", "refs/heads/main", "refs/sandbox/../heads/main", "refs/sandbox/--output=/tmp/x", "refs/sandbox/a b"} {
-		if r, _ := call(t, st.URL, "GET", "/api/repos/"+id+"/diff?ref="+strings.ReplaceAll(bad, " ", "%20"), testToken, "", nil); r.StatusCode != http.StatusBadRequest {
-			t.Errorf("diff of %q: %d", bad, r.StatusCode)
-		}
-	}
-	os.RemoveAll(repo)
-	if r, _ := call(t, st.URL, "GET", "/api/repos/"+id+"/refs", testToken, "", nil); r.StatusCode != http.StatusGone {
-		t.Errorf("a repository gone from disk: %d", r.StatusCode)
-	}
-}
-
 func TestLaunchValidates(t *testing.T) {
 	s, st, _ := studioUnderTest(t)
-	repo := gitRepo(t)
-	rp, ok := s.RegisterRepo(repo)
-	if !ok {
-		t.Fatal("register")
-	}
 	launched := 0
-	s.Launch = func(context.Context, string, LaunchRequest) (LaunchResult, error) {
+	s.Launch = func(context.Context, LaunchRequest) (LaunchResult, error) {
 		launched++
 		return LaunchResult{Sandbox: "sbx_x"}, nil
 	}
 	for name, req := range map[string]LaunchRequest{
-		"neither":               {Repo: rp.ID},
-		"both":                  {Repo: rp.ID, Agent: "claude", Prompt: "x", Command: []string{"true"}},
-		"console without agent": {Repo: rp.ID, Console: true, Command: []string{"true"}},
-		"headless, no prompt":   {Repo: rp.ID, Agent: "claude"},
-		"unverified headless":   {Repo: rp.ID, Agent: "goose", Prompt: "x"},
-		"unverified console":    {Repo: rp.ID, Agent: "goose", Console: true},
-		"unknown agent":         {Repo: rp.ID, Agent: "nope", Prompt: "x"},
-		"unknown repo":          {Repo: "000000000000", Command: []string{"true"}},
+		"neither":               {},
+		"both":                  {Agent: "claude", Prompt: "x", Command: []string{"true"}},
+		"console without agent": {Console: true, Command: []string{"true"}},
+		"headless, no prompt":   {Agent: "claude"},
+		"unverified headless":   {Agent: "goose", Prompt: "x"},
+		"unverified console":    {Agent: "goose", Console: true},
+		"unknown agent":         {Agent: "nope", Prompt: "x"},
 	} {
 		if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", req); r.StatusCode < 400 {
 			t.Errorf("%s: %d %v", name, r.StatusCode, body)
 		}
 	}
+	// A launch that still names a repository, or asks for the commits to be
+	// made as the user, is refused rather than run without what it asked for.
+	for _, field := range []string{`"repo":"0123456789ab"`, `"git":true`} {
+		if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", json.RawMessage(`{"command":["true"],`+field+`}`)); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("a launch with %s: %d %v", field, r.StatusCode, body)
+		}
+	}
 	if launched != 0 {
 		t.Fatalf("an invalid request launched")
 	}
-	if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Repo: rp.ID, Agent: "claude", Console: true}); r.StatusCode != http.StatusCreated {
-		t.Errorf("a console run of a verified agent: %d %v", r.StatusCode, body)
-	}
-	// No repository: launched with no path, which the launcher turns into an
-	// empty /workspace.
-	var gotPath = "unset"
-	s.Launch = func(_ context.Context, path string, _ LaunchRequest) (LaunchResult, error) {
-		gotPath = path
-		return LaunchResult{Sandbox: "sbx_y"}, nil
-	}
-	if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Command: []string{"true"}}); r.StatusCode != http.StatusCreated || gotPath != "" {
-		t.Errorf("a run without a repository: %d %v, path %q", r.StatusCode, body, gotPath)
+	for name, req := range map[string]LaunchRequest{
+		"a command":                         {Command: []string{"true"}},
+		"a console run of a verified agent": {Agent: "claude", Console: true},
+	} {
+		if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", req); r.StatusCode != http.StatusCreated {
+			t.Errorf("%s: %d %v", name, r.StatusCode, body)
+		}
 	}
 }
 
@@ -308,33 +256,6 @@ func TestAttachBridge(t *testing.T) {
 		}
 	}
 	t.Fatal("no exit message")
-}
-
-// A repository Studio registers is checked at its root through hostpath: a
-// subdirectory of home is fine, a repository whose root is home is not —
-// Studio would hand every file in it to a launch.
-func TestRepoAtHomeIsRefused(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("no git")
-	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if out, err := exec.Command("git", "init", "-q", home).CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, out)
-	}
-	sub := filepath.Join(home, "src")
-	os.MkdirAll(sub, 0o755)
-	if _, err := validateRepoPath(sub); err == nil {
-		t.Error("a directory whose repository root is home was registered")
-	}
-	repo := filepath.Join(home, "proj")
-	os.MkdirAll(repo, 0o755)
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, out)
-	}
-	if root, err := validateRepoPath(repo); err != nil || root == "" {
-		t.Errorf("a repository under home: %q %v", root, err)
-	}
 }
 
 // The dashboard's "waiting for you": every live agent sandbox with what its

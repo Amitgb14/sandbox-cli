@@ -32,7 +32,7 @@ export default function VolumesPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Volumes"
-        description="Mount one at launch (Sandbox options → Volumes). A volume has one writer or any number of read-only readers, is never in /workspace, and the host never mounts it. agent-… volumes hold an agent the image lacks, installed once and mounted read-only by its runs."
+        description="Mount one at launch (Sandbox options → Volumes). A volume has one writer or any number of read-only readers, and the host never mounts it. agent-… volumes hold an agent the image lacks, installed once and mounted read-only by its runs."
       />
       {info && !supported ? (
         <EmptyState icon={HardDrive} title="This sandboxd has no volumes" description="Its backend does not offer them (capability volumes)." />

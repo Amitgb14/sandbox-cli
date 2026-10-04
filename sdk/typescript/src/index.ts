@@ -44,7 +44,6 @@ export interface CreateSandboxRequest {
   network?: NetworkPolicy;
   idle_timeout_secs?: number;
   snapshot_id?: string;
-  bind?: { host_path: string; read_only?: boolean };
   /** Your own metadata: returned with the sandbox, filters `sandboxes()`, recorded in its audit events. */
   labels?: Record<string, string>;
   /** Named volumes to mount (capability `volumes`); one live sandbox at a time. */
@@ -74,7 +73,6 @@ export interface AuditEvent {
   labels?: Record<string, string>;
   network?: NetworkPolicy;
   env_names?: string[];
-  bind?: string;
   snapshot?: string;
   pid?: number;
   /** process.started: the program, how many arguments, and SHA-256 over them (each followed by NUL). Never their text. */
@@ -376,16 +374,5 @@ export class Client {
   async listDir(ref: string, path: string): Promise<DirEntry[]> {
     const resp = await this.request("GET", this.sbx(ref) + "/dirs", { query: { path } });
     return ((await resp.json()) as { entries: DirEntry[] }).entries;
-  }
-
-  /** Clone a git bundle (which must carry HEAD) into /workspace as `branch`. */
-  async putWorkspace(ref: string, branch: string, bundle: Uint8Array): Promise<void> {
-    await this.request("POST", this.sbx(ref) + "/workspace", { query: { branch }, body: asBody(bundle), contentType: "application/octet-stream" });
-  }
-
-  /** base..branch as a git bundle. It comes from the guest: verify it before fetching from it. */
-  async getWorkspaceBundle(ref: string, base: string, branch: string): Promise<Uint8Array> {
-    const resp = await this.request("GET", this.sbx(ref) + "/workspace/bundle", { query: { base, branch } });
-    return new Uint8Array(await resp.arrayBuffer());
   }
 }

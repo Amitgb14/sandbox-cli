@@ -2,7 +2,8 @@
  * What an agent can touch, with and without the sandbox. The point of the
  * blast-radius map: on a bare host every one of these is reachable, and inside
  * the sandbox — a VM with its own kernel and its own disk — all but one of them
- * simply does not exist, and that one is a clone rather than your checkout.
+ * simply does not exist, and that one is a clone the agent makes rather than
+ * your checkout.
  */
 
 export type HostPath = {
@@ -11,7 +12,7 @@ export type HostPath = {
   /** Why it matters if an agent reads or writes it. */
   stake: string;
   /** Inside the sandbox: is it there at all? */
-  inside: "workspace" | "absent" | "ephemeral" | "opt-in";
+  inside: "workspace" | "absent" | "ephemeral";
   /** Ordering weight in the map — higher is scarier. */
   weight: number;
 };
@@ -20,7 +21,7 @@ export const HOST_PATHS: HostPath[] = [
   {
     path: "~/projects/app",
     what: "the repo you asked it to work on",
-    stake: "The work itself. Inside, it is a clone sent in as a git bundle; what comes back is commits you choose to merge, and your checkout is never written.",
+    stake: "The work itself. It is not mounted: the agent clones it from where you host it into /sandbox/home, pushes what it should keep, and your checkout is never written.",
     inside: "workspace",
     weight: 0,
   },
@@ -97,15 +98,14 @@ export const HOST_PATHS: HostPath[] = [
   {
     path: "~/data",
     what: "a directory you choose to share",
-    stake: "Reachable only if you pass --bind on a local Mac, which can be read-only. Never your home or an ancestor of it, whatever you ask.",
-    inside: "opt-in",
+    stake: "Not reachable: no backend mounts a host directory. What a sandbox needs goes in through the files API, or lives in a volume that is never mounted on the host.",
+    inside: "absent",
     weight: 3,
   },
 ];
 
 export const INSIDE_LABEL: Record<HostPath["inside"], string> = {
-  workspace: "cloned into /workspace",
+  workspace: "cloned into /sandbox/home, if the agent clones it",
   absent: "not there — nothing to read",
   ephemeral: "the guest's own, discarded",
-  "opt-in": "only with --bind, on a local Mac",
 };

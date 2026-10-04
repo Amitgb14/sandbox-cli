@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 
 const { token } = JSON.parse(readFileSync(join(__dirname, ".state.json"), "utf8")) as { token: string };
-const ROUTES = ["/", "/sandboxes/", "/launch/", "/runs/", "/review/", "/fleet/", "/agents/", "/volumes/", "/settings/"];
+const ROUTES = ["/", "/sandboxes/", "/launch/", "/agents/", "/volumes/", "/settings/"];
 
 test("every screen renders with no console errors", async ({ page }) => {
   const errors: string[] = [];
@@ -50,7 +50,7 @@ test("a sandbox started elsewhere is listed, labelled, and has events", async ({
   await expect(page).toHaveURL(/\/sandboxes\//);
 });
 
-test("Agents lists only the verified agents, and Launch runs with no repository", async ({ page }) => {
+test("Agents lists only the verified agents, and Launch starts a sandbox", async ({ page }) => {
   await page.goto(`/#token=${token}`);
   await expect(page.getByText("e2e · fake")).toBeVisible();
   await page.goto("/agents/");
@@ -61,9 +61,21 @@ test("Agents lists only the verified agents, and Launch runs with no repository"
   await expect(page.locator("main").getByText("goose", { exact: true })).toHaveCount(0);
 
   await page.goto("/launch/");
-  await expect(page.getByRole("combobox", { name: "Repository" })).toHaveText(/No repository/);
   await page.getByText("Command", { exact: true }).first().click();
   await page.getByRole("textbox", { name: "Command" }).fill("echo from-studio");
   await page.locator("form").getByRole("button", { name: "Launch" }).click();
   await expect(page).toHaveURL(/\/sandbox\/?\?id=sbx_/);
+});
+
+test("the repository screens are gone", async ({ page, request }) => {
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  const nav = page.locator("[data-sidebar=sidebar]");
+  for (const name of ["Runs", "Review", "Fleet"]) {
+    await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
+  }
+  for (const path of ["/api/repos", "/api/runs"]) {
+    const r = await request.fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+    expect(r.status(), path).toBeGreaterThanOrEqual(400);
+  }
 });

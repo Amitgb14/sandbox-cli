@@ -9,7 +9,7 @@ import { type NavEntry } from "@/lib/nav";
 
 const TITLE = "Sandbox Studio — sandbox-cli";
 const DESCRIPTION =
-  "The browser view of your sandboxes: launch a run on your repository, watch its output, type into its terminal, bring its work back and review the diff. One command, served from your machine.";
+  "The browser view of your sandboxes: launch a command or an agent, watch its output, type into its terminal, browse its files and read its events. One command, served from your machine.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -24,16 +24,14 @@ const NAV: NavEntry[] = [
   { kind: "link", href: "#guards", label: "Who may use it" },
 ];
 
-const OPEN = `cd ~/src/app            # the repository to work on
-sandbox-cli studio
+const OPEN = `sandbox-cli studio
 # Studio: http://127.0.0.1:7080/#token=cb0fbb4f…
-# studio: repository /home/you/src/app
 # studio: context local · Ctrl-C to stop`;
 
 const SCREENS = [
   {
     name: "Dashboard",
-    what: "What is running and suspended, runs whose work has not come back, and what this sandboxd can do — its backend, capabilities, network ceiling and limits.",
+    what: "What is running and suspended, and what this sandboxd can do — its backend, capabilities, network ceiling and limits.",
   },
   {
     name: "Sandboxes",
@@ -41,23 +39,11 @@ const SCREENS = [
   },
   {
     name: "Launch",
-    what: "A command, an agent run unattended, or an agent's interactive console, on a clone of your repository or an empty workspace — with the same config, profile, network policy, labels, volumes and git identity a sandbox-cli run would get.",
-  },
-  {
-    name: "Runs",
-    what: "Runs on your repository and where each one's work is: home, still in a live sandbox (bring it back), in a checkpoint after a crash, or lost.",
-  },
-  {
-    name: "Review",
-    what: "Every ref under refs/sandbox/ — bring-backs, checkpoints, fleet tasks — and its diff against what you have checked out. Merging stays a git command you run.",
-  },
-  {
-    name: "Fleet",
-    what: "A fleet run's tasks and their verdicts, and landing what verified, through the same refusals sandbox-cli agent fleet land makes.",
+    what: "A command, an agent run unattended, or an agent's interactive console, in a fresh sandbox that starts in its own home directory — with the same config, profile, network policy, labels, volumes and agent login a sandbox-cli run would get. It needs no repository: ask the agent, or the command, to clone what it needs.",
   },
   {
     name: "Agents, Volumes, Settings",
-    what: "The agents Studio runs, each with a verified headless mode, and whose login is saved; named volumes and where each is mounted; the context, its capabilities, and the repositories Studio may act on.",
+    what: "The agents Studio runs, each with a verified headless mode, and whose login is saved; named volumes and where each is mounted; the context and what its sandboxd can deliver.",
   },
 ];
 
@@ -92,7 +78,7 @@ export default function StudioPage() {
           <SectionHead
             eyebrow="sandbox studio"
             title="Your sandboxes, in a browser, from one command"
-            lead="Studio is a client of the same API as the CLI and the SDKs, served by sandbox-cli itself on a loopback port. It talks to whichever sandboxd your context points at — your Mac, your Linux box — and does the host-side work the CLI does: launching on your repository, bringing work back, recovering it, landing a fleet."
+            lead="Studio is a client of the same API as the CLI and the SDKs, served by sandbox-cli itself on a loopback port. It talks to whichever sandboxd your context points at — your Mac, your Linux box — and does the host-side work the CLI does, such as copying an agent's saved login in and back out."
           />
           <CodeBlock code={OPEN} />
           <p className="mt-4 max-w-3xl text-sm leading-relaxed text-muted-foreground">
@@ -105,7 +91,7 @@ export default function StudioPage() {
         <Section id="screens" tinted>
           <SectionHead
             eyebrow="screens"
-            title="Launch, watch, answer, bring back, review"
+            title="Launch, watch, answer, inspect"
             lead="Nothing here is a second implementation of the CLI: every screen is an API call or the same host-side code, so a rule the CLI keeps, Studio keeps."
           />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -122,7 +108,7 @@ export default function StudioPage() {
           <SectionHead
             eyebrow="who may use it"
             title="A local tool that can start sandboxes still needs a lock"
-            lead="Anything that can reach Studio's API can launch on your repository. These are the three reasons a web page you happen to have open cannot."
+            lead="Anything that can reach Studio's API can start sandboxes, and agents with your saved logins. These are the three reasons a web page you happen to have open cannot."
           />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             {GUARDS.map((g) => (

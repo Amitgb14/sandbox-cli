@@ -30,28 +30,20 @@ in `_old/` as reference, to be ported where this design still wants it.
 - **Intel Macs and macOS 15 and earlier** cannot run local sandboxes (the
   runtime needs macOS 26 on arm64). They can still use a remote `sandboxd`.
 - **Linux without KVM** cannot run `sandboxd`.
-- **The host repository is no longer bind-mounted** by default: it goes in as a
-  git bundle, and work comes back into `refs/sandbox/<name>` for you to merge.
-  On a local Mac, `--bind` mounts a directory instead.
+- **A sandbox has no repository.** The host repository is no longer mounted,
+  cloned or brought back: every process starts in `/sandbox/home`, and code
+  gets in by `git clone` inside the sandbox or through the files API. Nothing
+  comes back to the host except an agent's saved login. See the first entry
+  under Changed for what went with it.
+- **`fleet`, `recover` and `worktree` are removed.** Each existed to put a
+  repository's work into a sandbox or get it back out, and a sandbox no longer
+  has one.
 - **Agents move under `sandbox-cli agent`.** `sandbox-cli claude` is now
-  `sandbox-cli agent claude`, and likewise for every agent and for `fleet`.
+  `sandbox-cli agent claude`, and likewise for every agent.
   The old spellings are gone, with no aliases. The top level is the sandbox
   itself: every command there works for any command run in one.
 - **`usage` is removed.** It read one agent's private cache file and had
   nothing to do with sandboxes.
-- **`recover` is rebuilt for VMs.** The host repository is never written
-  by a guest now, so there is nothing to repair. `recover` lists runs whose
-  work never came back, and says whether it is in a sandbox that is still
-  alive, in a checkpoint, or lost. While a run is attached, its working tree is
-  checkpointed to `refs/sandbox/checkpoints/<id>` every five minutes
-  (`--checkpoint-every`, `0` to turn it off), without touching the sandbox's
-  index or branches. `attach` checkpoints a detached run while you are attached
-  to it, and `agent fleet run` checkpoints every task while it runs; a task the
-  fleet lost names its last checkpoint. `run --detach --checkpoint-every` is
-  refused, since nothing would take them. `recover forget` drops a record. `recover restore`,
-  `show` and `repair` are gone: a checkpoint is already a ref you can review
-  and merge. `bring-back --name fleet` and `--name checkpoints` are refused,
-  because both are namespaces of their own.
 - **The audit log moves to `sandboxd`.** The server records every
   sandbox's events: create with its policy and environment **names**, every
   process with its program, argument count and exit code, files, network changes, and how it
@@ -63,14 +55,14 @@ in `_old/` as reference, to be ported where this design still wants it.
   arguments are its prompt. The log keeps a SHA-256 of them instead, which a
   known command can be matched against (`docs/api/v1.md`).
 - **Labels.** `--label key=value` on `run` and every agent command, and
-  `list --label` to filter. Agent runs, routing attempts and fleet tasks are
-  labelled automatically (`agent`, `route.id`, `route.attempt`, `route.from`,
-  `route.reason`, `fleet.branch`), so a failover's two sandboxes read as one
-  episode in the listing and in the audit log.
+  `list --label` to filter. Agent runs and routing attempts are labelled
+  automatically (`agent`, `route.id`, `route.attempt`, `route.from`,
+  `route.reason`), so a run that skipped an agent reads as one episode in the
+  listing and in the audit log.
 - **Volumes.** `sandbox-cli volume create|ls|rm` and
   `--volume NAME:/path[:ro]`. A volume is a filesystem that outlives the
   sandbox it is mounted in, one live sandbox at a time, never in
-  `/workspace` or a system directory. Firecracker only for now; the macOS
+  `/tmp` or a system directory. Firecracker only for now; the macOS
   backend says it has no `volumes` capability until it is verified there.
 - **Pools.** `pools:` in the sandboxd policy keeps sandboxes booted ahead of
   requests, so a create of that shape takes under a millisecond.
@@ -95,22 +87,6 @@ in `_old/` as reference, to be ported where this design still wants it.
   left the old client installed and then failed. Now every binary is extracted
   and verified first, nothing is installed if one is missing, and the error says
   the release predates the rewrite and how to build the current one.
-- **Work that comes back can be mirrored to S3, so it outlives the machine.**
-  Mirroring is off unless you add `mirror:` to `~/.config/sandbox/config.yaml`;
-  a project's `.sandbox.yaml` cannot set it. When it is on, every bring-back
-  (from `run`, `bring-back`, a fleet task or Studio) is copied to any
-  S3-compatible bucket as a self-contained git bundle. With `upload: all`, every
-  checkpoint is copied too.
-  - **Credentials:** the config holds only the names of the environment
-    variables that contain them.
-  - **`sandbox-cli mirror check | ls | push | fetch`:** `fetch` brings work back
-    into `refs/sandbox/mirror/<sandbox>` on any clone of the repository. Before
-    anything lands, the bundle must carry exactly the commit its name says and
-    descend from this repository's root. On the machine that uploaded it, it
-    must also be the commit recorded at upload.
-  - **Failures and limits:** a failed upload is reported and does not fail the
-    run. Nothing is ever deleted from the bucket, and a bundle over
-    `max_object_mb` (2 GiB by default) is refused before upload.
 - **`sandbox-cli agent state` says which agent is waiting for you.** Each
   agent sandbox is reported as working, blocked, idle, done or failed. Blocked
   means the agent is quiet at a terminal, waiting for an answer. Idle means it
@@ -121,16 +97,10 @@ in `_old/` as reference, to be ported where this design still wants it.
   states; a timeout exits 2 and names the state the agent was in. Studio's
   Dashboard counts the agents waiting for you, and Sandboxes shows each one's
   state. Ported from beta.15's line after 0.0.1.
-- **A routed run carries codex's conversation forward, as it did claude's.**
-  When codex fails having changed nothing and the run falls through, the next
-  agent's briefing quotes what was asked and answered in codex's session. It
-  leaves out codex's own instructions and the context it injects into every
-  session. Before, only claude's conversation crossed.
 - **Twelve agents, as on beta.15's `main`.** aider, amp, codebuff, continue,
   crush and droid are gone; Kilo Code and Devin CLI are console agents; cline
   has a verified headless mode (a bare prompt, with its UI behind `-i`), so a
-  fleet or a routed run can name it. `agent: droid` in a fleet.yaml is now
-  refused when the file is parsed. A saved login under
+  routed run and Studio can name it. A saved login under
   `~/.config/sandbox/agents/<name>` is left alone.
 - **An agent not in the image installs once per endpoint, not every run.**
   The first run of such an agent (eight of twelve) installs its pinned
@@ -149,28 +119,24 @@ in `_old/` as reference, to be ported where this design still wants it.
   makes are then stamped with your offset, not `+0000`. A `TZ` you set with
   `--env` or in your config wins, and a zone that can't be read sends nothing.
 - **Commits inside a sandbox work.** The guest had no git identity, so an
-  agent's `git commit` failed with "Author identity unknown". A cloned
-  workspace now gets a neutral one (`sandbox <sandbox@localhost>`), and
-  `--git` (or `git: true` in a fleet) uses your own `user.name` and
-  `user.email` instead. A fleet file with `defaults.cache: true` is refused
-  with what to use instead, rather than accepted and ignored.
+  agent's `git commit` in a repository it cloned failed with "Author identity
+  unknown". Every run now gets a neutral one (`sandbox <sandbox@localhost>`).
+  Your own identity is not carried in.
 - **A long-lived secret is named again.** A `secrets:` value whose shape says it
   does not expire (a classic personal access token, say) gets a one-line
   warning, once per name, carrying no part of the value.
 - **Studio is `sandbox-cli studio`.** One command serves the browser UI on a
   loopback port, with a token made for that launch, and talks to the current
   context's sandboxd, holding its token itself. You can launch a command, an
-  unattended agent or an agent's console on your repository, use a real
-  terminal, watch output, files and events, bring work back, review the diff
-  of anything under `refs/sandbox/`, and land a fleet. `sandbox-studio-api`,
+  unattended agent or an agent's console, use a real terminal, and watch
+  output, files and events. `sandbox-studio-api`,
   `studio.sh`, the Studio docker images and the compose file are gone.
 - **A config key this version does not read is refused,** naming what
-  replaced it (`security:` → the VM boundary and sandboxd's policy, `mounts:` →
-  `--bind` or a volume, `cache:` → a volume, …), and so is a typo. A beta.15
+  replaced it (`security:` → the VM boundary and sandboxd's policy, `mounts:` and
+  `cache:` → a volume, …), and so is a typo. A beta.15
   config that sets only `profile` and `network.mode` still loads.
-- **Dropped:** `worktree` (every sandbox is already a clone; fleets are one
-  agent per branch) and `context list` (an agent's conversations stay in its
-  sandbox now; only its login is carried out).
+- **Dropped:** `context list` (an agent's conversations stay in its sandbox
+  now; only its login is carried out).
 
 **Changed:**
 
@@ -187,20 +153,14 @@ in `_old/` as reference, to be ported where this design still wants it.
 
 - `sandboxd`, its API (`docs/api/v1.md`), and a conformance suite that
   defines it.
-- `bring-back`, `attach` with a real terminal, and `doctor` against any
-  endpoint.
-- **`agent fleet` is back, on the API.** `fleet.yaml` is unchanged. Each task runs in
-  a sandbox of its own, and its work comes back into
-  `refs/sandbox/fleet/<branch>`. `agent fleet land` merges that ref; it no longer
-  merges a worktree. `agent fleet run` exits non-zero when any task did not verify.
-  `fleet stop` and `fleet clean` are gone: a task's sandbox is terminated when
-  the task ends, unless you pass `--keep`.
-- **Routing is back** (`--fallback`, `routing:` and `providers:` as before).
-  Each fallback runs in a fresh sandbox rather than in the same workspace, and
-  claude's briefing is written into that sandbox at `/sandbox/context`. A
-  `--detach` run with `--fallback` is now refused, because nothing watches a
-  detached run fail. Routed runs are not yet recorded in the audit log, which
-  the new CLI does not write yet.
+- `attach` with a real terminal, and `doctor` against any endpoint.
+- **Routing is back, before launch only** (`--fallback`, `routing:` and
+  `providers:` as before). Each agent's provider is probed before a sandbox is
+  made for it, and one that is down is skipped for the next. A run that started
+  is never retried with another agent and carries no briefing: telling whether
+  a failed run changed nothing took a repository to compare, and a run that may
+  have done work must not be done twice. A `--detach` run with `--fallback` is
+  refused, because nothing watches a detached run's exit.
 
 ### Security
 
@@ -251,9 +211,6 @@ In the rewrite:
   - `--network` is checked against the profile, so `--network open` cannot take
     a prod run out of prod.
 
-  A fleet task now takes the user's config (image, env, secrets, network) and
-  profile through the same code as `run`. Before, it built its own request and
-  ignored both.
 - **Your config is validated as a whole again.** beta.15 checked the merged
   config on every load, and the rewrite had dropped that check. Now a
   `network.mode` nobody defines, a secret with two sources, or a reserved name
@@ -272,6 +229,41 @@ In the rewrite:
 
 ### Changed
 
+- **A sandbox no longer has a repository.** Every process starts in the sandbox
+  user's home, `/sandbox/home`, and there is no `/workspace`. Code gets into a
+  sandbox the way it gets into any machine: the agent or the command runs
+  `git clone` inside it, or the files API writes it. A volume keeps what should
+  outlive one sandbox. Building a sandbox around the current repository meant
+  bundles in and out, a host-side fetch of whatever the guest sent back, and a
+  set of features to manage that work (checkpoints, recovery, mirroring,
+  fleets), each with its own trust boundary on the host. A sandbox needs none
+  of it, and hosted sandbox services put no repository on theirs. Commits made
+  inside still work: every run gets a neutral `sandbox` identity.
+  - **Removed commands and flags:** `bring-back`, `mirror check|ls|push|fetch`,
+    `recover` and `forget`, `agent fleet run|status|land`, `--checkpoint-every`
+    on `run` and `attach`, `--bind` and `--bind-read-only`, `--project`,
+    `--no-workspace`, `--no-bring-back` and `--git`. Nothing is written to
+    `refs/sandbox/` any more.
+  - **Removed from the API:** `POST /v1/sandboxes/{ref}/workspace` and
+    `GET /v1/sandboxes/{ref}/workspace/bundle`, the `bind` field on create and
+    on the sandbox and its events, the `bind_workspace` and `workspace_bundle`
+    capabilities, and the `workspace.in` and `workspace.out` events. A volume
+    may now be mounted anywhere outside the system directories. The SDKs lose
+    `put_workspace`/`get_workspace_bundle` (`putWorkspace`/`getWorkspaceBundle`)
+    and the `bind` parameter.
+  - **Routing** skips an agent whose provider is down, before launch. It no
+    longer retries after a failed run, and the briefing it carried is gone.
+  - **Studio** loses its repository picker, the Runs, Review and Fleet screens
+    and the repository list in Settings. `sandbox-cli studio` no longer
+    registers the directory it is started in.
+  - **Refused, not ignored:** a create request that still sends `bind`, a user
+    config that sets `mirror:` ("a sandbox has no repository, so no work comes
+    back to mirror"), and an operator policy with `allow_bind`. `sandboxd`
+    started with `--allow-bind` refuses to start, so copy the macOS launch
+    agent from `packaging/launchd` again if you installed an earlier one. Each
+    of these asked for something that no longer happens; carrying on without
+    it would hide that.
+
 - **The site has a setup guide for a Mac and for Linux** (`/setup`). It covers
   four paths, each from a cold machine to `sandbox-cli doctor` and a first run:
   a Mac, Linux without root, a Linux server under systemd with TLS and a token,
@@ -281,10 +273,7 @@ In the rewrite:
   runs `/usr/local/bin/sandboxd`: the launch agent is now pointed at the
   installed copy, and still needs no root.
 
-- **Studio can launch without a repository, and lists only the agents it can
-  run unattended.** Launch now asks which repository to clone, with "No
-  repository" starting the sandbox on an empty `/workspace` — nothing cloned in,
-  nothing to bring back. The Agents page and the launch form show only the
+- **Studio lists only the agents it can run unattended.** The Agents page and the launch form show only the
   agents with a verified headless mode (claude, codex, gemini, opencode, cline);
   Studio refuses to start the interactive-only ones, console runs included, and
   they stay available from the CLI with `sandbox-cli agent <name>`. Studio also
@@ -302,11 +291,10 @@ In the rewrite:
 
 ### Fixed
 
-- **On macOS, an image without `/workspace` failed every run with "no such
-  command".** Firecracker guests make `/workspace` and the sandbox user's home
-  at boot; the macOS backend's guest did not, so with an image like alpine and
-  no repository or `--bind`, the command could not start in `/workspace`. Those
-  directories are now made there too. A working directory that does not exist
+- **On macOS, an image without the sandbox user's home failed every run with
+  "no such command".** Firecracker guests make `/sandbox/home` at boot; the
+  macOS backend's guest did not, so with an image like alpine the command could
+  not start there. It is now made there too. A working directory that does not exist
   is now reported as `cwd: no such directory` rather than blamed on the command.
 
 ## 0.0.1 — 2026-08-26

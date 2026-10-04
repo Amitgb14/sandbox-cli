@@ -6,28 +6,30 @@ import (
 	"testing"
 )
 
-// idle on macOS must give an image without them a workspace and a home: the CLI
-// runs every command in /workspace.
-func TestMissingDirsMakesWorkspaceAndHome(t *testing.T) {
+// idle on macOS must give an image without one a home for the sandbox user:
+// every process starts there.
+func TestMissingDirsMakesHome(t *testing.T) {
 	root := t.TempDir()
 	missingDirs(root)
-	for _, d := range []string{"/workspace", defaultHome} {
-		if fi, err := os.Stat(filepath.Join(root, d)); err != nil || !fi.IsDir() {
-			t.Errorf("%s was not made: %v", d, err)
-		}
+	if fi, err := os.Stat(filepath.Join(root, defaultHome)); err != nil || !fi.IsDir() {
+		t.Errorf("%s was not made: %v", defaultHome, err)
+	}
+	// There is no workspace any more, and nothing makes one.
+	if _, err := os.Stat(filepath.Join(root, "workspace")); err == nil {
+		t.Error("a /workspace was made")
 	}
 }
 
-// An existing /workspace may be a bind of a host directory; it is left as it is.
-func TestMissingDirsLeavesAnExistingWorkspace(t *testing.T) {
+// An existing home is the image's; it is left as it is.
+func TestMissingDirsLeavesAnExistingHome(t *testing.T) {
 	root := t.TempDir()
-	ws := filepath.Join(root, "workspace")
-	if err := os.Mkdir(ws, 0o700); err != nil {
+	home := filepath.Join(root, defaultHome)
+	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	missingDirs(root)
-	fi, err := os.Stat(ws)
+	fi, err := os.Stat(home)
 	if err != nil || fi.Mode().Perm() != 0o700 {
-		t.Errorf("an existing /workspace was changed: %v %v", fi.Mode(), err)
+		t.Errorf("an existing home was changed: %v %v", fi.Mode(), err)
 	}
 }

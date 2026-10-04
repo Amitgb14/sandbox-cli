@@ -79,7 +79,7 @@ customers will compare us with. It is not named here; what matters is its shape.
    - fifteen agents, five with verified headless modes, and login persistence;
    - git-safe bring-back (general, not agent-specific): work returns as a verified bundle into
      `refs/sandbox/`, and nothing in the guest can plant hooks or config on the
-     host.
+     host. *(Removed 2026-10-04 with the repository model: see M10.)*
    - Prod profile: no refresh token in reach of the agent.
    - Credential broker and an audit log of every run.
 
@@ -835,6 +835,24 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
 
     The agent roster came across now, because it was a decision rather than a
     feature: twelve agents, with cline headless.
+
+  - **Removed: the repository model (decided 2026-10-04).** A sandbox no
+    longer gets a clone of the current repository. Every process starts in
+    `/sandbox/home`, and code gets in by `git clone` inside the sandbox or
+    through the files API, as on any machine. A sandbox needs no repository
+    to be useful, and hosted sandbox products put none on theirs. Building
+    one around the user's repository was what required bundles in and out,
+    bring-back's host-side fetch, checkpoints, `recover`, mirroring, fleets
+    and the macOS bind, and each of those was a trust boundary on the host to
+    keep safe. They went with it, as did routing's retry after a failed run
+    (telling "changed nothing" took bring-back) and its briefing; routing
+    keeps the probe before launch. `internal/workspace` became
+    `internal/agenthome`, which holds only agent logins and the tools
+    volume. `hostpath` and `githard` stay in the tree, unused for now. A
+    request, config or policy that asks for a removed control (`bind`,
+    `mirror:`, `allow_bind`, `--allow-bind`) is refused rather than ignored.
+    The entries above that describe those features are the record of what
+    was built, not of what ships.
 
 ## Risks
 

@@ -1,12 +1,43 @@
-# sandbox-cli — Test Plan
+# sandbox-cli — Testing
 
-This document lists every test case for sandbox-cli and how to run it. It has two
-parts:
+How the current tree is tested. Everything below the line further down is the
+test plan of the beta.15 container design, kept only because the security
+ledger (`docs/security/audit-2026-07-26.md`) cites its case numbers.
 
-- **Part 1 — Automated tests** (Go unit + Docker-gated integration). Run these first.
-- **Part 2 — Manual / E2E test cases** with step-by-step instructions and expected
-  results, for behavior that can't be asserted headlessly (interactive TUIs, login,
-  the Claude status line).
+## The current tree
+
+```sh
+make build                  # bin/sandbox-cli, bin/sandboxd, bin/sandbox-guestd
+go vet ./...
+gofmt -l cmd internal       # must print nothing
+go test -race -count=1 ./...   # unit tests and the conformance suite against the in-memory backend
+make test-sdk               # the Python SDK against a real sandboxd on the in-memory backend
+cd studio && npm run typecheck && npm run lint && npm run build && npm run test:e2e
+```
+
+- **The conformance suite** (`internal/api/conformance`) is what "the same in
+  three modes" means. It runs against the in-memory backend in `go test`, and
+  against any running `sandboxd` with `SANDBOX_CONFORMANCE_ENDPOINT` and
+  `SANDBOX_CONFORMANCE_TOKEN` set (`-run TestEndpoint`).
+- **A real microVM** needs `/dev/kvm`, a guest kernel and Firecracker:
+  `SANDBOX_TEST_KERNEL=… SANDBOX_TEST_FIRECRACKER=… go test -tags vm -v ./internal/backend/firecracker`.
+- **What fakes cannot prove** is listed, with the command that proves it on a
+  real host, in [docs/testing/end-to-end.md](docs/testing/end-to-end.md). The
+  maintainer runs those on a Mac with macOS 26 and on a KVM Linux machine.
+
+A sandbox has no repository. Every process starts in `/sandbox/home`, and
+nothing comes back to the host except an agent's saved login, so there is no
+bring-back, checkpoint, recovery or worktree to test.
+
+---
+
+# Appendix — the beta.15 test plan (historical)
+
+None of this applies to the current tree. It ran agents in docker containers on
+a mounted or cloned workspace; the commands, flags and packages it names
+(`--worktree`, `--git`, `--project`, `recover`, `internal/runtime`,
+`internal/rescue` and the rest) do not exist here. Its case numbers are cited by
+the security ledger, which is why it is kept unchanged.
 
 Legend: **[A]** = covered by an automated test · **[M]** = manual verification.
 

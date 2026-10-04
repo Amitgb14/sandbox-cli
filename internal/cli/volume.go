@@ -20,7 +20,7 @@ func newVolumeCmd() *cobra.Command {
 		Long: "A volume keeps what a sandbox wrote for the next one that mounts it: a package\n" +
 			"cache, a dataset, a model's weights. Mount one with\n" +
 			"`sandbox-cli run --volume NAME:/path[:ro]`. A volume is mounted in one live\n" +
-			"sandbox at a time, never in /workspace or a system directory.",
+			"sandbox at a time, never in a system directory.",
 	}
 	cmd.PersistentFlags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
 

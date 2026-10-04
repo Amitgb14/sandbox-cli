@@ -46,7 +46,7 @@ export const SESSION_COMMANDS: SessionCommand[] = [
         trailing: ["--label team=infra keeps only the sandboxes carrying that label"],
       },
     ],
-    note: "The same listing whichever machine it is: your Mac, a Linux box, the cloud — sandbox-cli context use picks which. Labels are your own metadata; the agent layer adds its own (agent, route.id, fleet.branch), so a fleet's sandboxes and a failover's two attempts are findable by what they were for.",
+    note: "The same listing whichever machine it is: your Mac, a Linux box, the cloud — sandbox-cli context use picks which. Labels are your own metadata; the agent layer adds its own (agent, route.id, route.from), so an agent's runs, and a run that fell back to another agent, are findable by what they were for.",
   },
   {
     id: "logs",
@@ -86,7 +86,7 @@ export const SESSION_COMMANDS: SessionCommand[] = [
         rows: ["sandbox-cli: postgres: not_found (404): no such sandbox"],
       },
     ],
-    note: "A reference is matched against the server's own sandboxes and is never handed to a backend to resolve, so kill postgres finds nothing rather than your database. Killing discards the VM and its disk; anything not brought back goes with it, which is what sandbox-cli recover is for if that was not the plan.",
+    note: "A reference is matched against the server's own sandboxes and is never handed to a backend to resolve, so kill postgres finds nothing rather than your database. Killing discards the VM and its disk and everything on it; what should outlive the sandbox belongs in a volume, or pushed from inside it before it ends.",
   },
 ];
 

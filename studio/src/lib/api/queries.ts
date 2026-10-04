@@ -12,18 +12,13 @@ import type {
   Agent,
   AgentState,
   AuditEvent,
-  Diff,
   DirEntry,
-  FleetState,
   Info,
   LaunchRequest,
   LaunchResult,
   NetworkPolicy,
   Process,
-  Repo,
-  Run,
   Sandbox,
-  SandboxRef,
   Snapshot,
   Volume,
 } from "@/lib/types";
@@ -39,11 +34,6 @@ export const keys = {
   dir: (id: string, path: string) => ["dir", id, path] as const,
   volumes: ["volumes"] as const,
   snapshots: ["snapshots"] as const,
-  repos: ["repos"] as const,
-  runs: ["runs"] as const,
-  refs: (repo: string) => ["refs", repo] as const,
-  diff: (repo: string, ref: string) => ["diff", repo, ref] as const,
-  fleet: (repo: string) => ["fleet", repo] as const,
   agents: ["agents"] as const,
   agentStates: ["agent-states"] as const,
 };
@@ -119,51 +109,12 @@ export function useSnapshots(enabled = true) {
   });
 }
 
-export function useRepos() {
-  return useQuery({ queryKey: keys.repos, queryFn: async () => (await apiFetch<{ repos: Repo[] }>("/repos")).repos });
-}
-
 /** Every live agent sandbox and what its agent is doing; reads conversations, so polled gently. */
 export function useAgentStates() {
   return useQuery({
     queryKey: keys.agentStates,
     queryFn: () => apiFetch<AgentState[]>("/agents/state"),
     refetchInterval: 5_000,
-  });
-}
-
-export function useRuns() {
-  return useQuery({
-    queryKey: keys.runs,
-    queryFn: async () => (await apiFetch<{ runs: Run[] }>("/runs")).runs,
-    refetchInterval: 5_000,
-  });
-}
-
-export function useRefs(repo: string) {
-  return useQuery({
-    queryKey: keys.refs(repo),
-    queryFn: async () => (await apiFetch<{ refs: SandboxRef[] }>(`/repos/${repo}/refs`)).refs,
-    enabled: !!repo,
-    refetchInterval: 15_000,
-  });
-}
-
-export function useDiff(repo: string, ref: string) {
-  return useQuery({
-    queryKey: keys.diff(repo, ref),
-    queryFn: () => apiFetch<Diff>(`/repos/${repo}/diff?ref=${encodeURIComponent(ref)}`),
-    enabled: !!repo && !!ref,
-  });
-}
-
-export function useFleet(repo: string) {
-  return useQuery({
-    queryKey: keys.fleet(repo),
-    queryFn: () => apiFetch<FleetState>(`/repos/${repo}/fleet`),
-    enabled: !!repo,
-    refetchInterval: 5_000,
-    retry: false,
   });
 }
 
@@ -186,14 +137,14 @@ function useInvalidating<V, R>(fn: (v: V) => Promise<R>, invalidate: (v: V) => r
 export function useLaunch() {
   return useInvalidating(
     (req: LaunchRequest) => apiFetch<LaunchResult>("/runs", { method: "POST", json: req }),
-    () => [[...keys.sandboxes], [...keys.runs]],
+    () => [[...keys.sandboxes]],
   );
 }
 
 export function useKill() {
   return useInvalidating(
     (id: string) => apiFetch<void>(sbx(id), { method: "DELETE" }),
-    (id) => [[...keys.sandboxes], [...keys.sandbox(id)], [...keys.runs], [...keys.volumes]],
+    (id) => [[...keys.sandboxes], [...keys.sandbox(id)], [...keys.volumes]],
   );
 }
 
@@ -227,36 +178,6 @@ export function useSignal() {
   });
 }
 
-export function useBringBack() {
-  return useInvalidating(
-    // mirrored / mirror_error: set when the user has a mirror configured.
-    (sandbox: string) =>
-      apiFetch<{ ref: string; mirrored?: string; mirror_error?: string }>(`/runs/${sandbox}/bring-back`, { method: "POST" }),
-    () => [[...keys.runs], ["refs"]],
-  );
-}
-
-export function useForgetRun() {
-  return useInvalidating(
-    (sandbox: string) => apiFetch<void>(`/runs/${sandbox}`, { method: "DELETE" }),
-    () => [[...keys.runs]],
-  );
-}
-
-export function useAddRepo() {
-  return useInvalidating(
-    (path: string) => apiFetch<Repo>("/repos", { method: "POST", json: { path } }),
-    () => [[...keys.repos]],
-  );
-}
-
-export function useRemoveRepo() {
-  return useInvalidating(
-    (id: string) => apiFetch<void>(`/repos/${id}`, { method: "DELETE" }),
-    () => [[...keys.repos]],
-  );
-}
-
 export function useCreateVolume() {
   return useInvalidating(
     ({ name, size_mb }: { name: string; size_mb?: number }) =>
@@ -272,13 +193,3 @@ export function useDeleteVolume() {
   );
 }
 
-export function useLand() {
-  return useInvalidating(
-    ({ repo, ...body }: { repo: string; branch?: string; all?: boolean; unverified?: boolean; onto?: string }) =>
-      apiFetch<{ landed?: string[]; skipped?: { Branch: string; Reason: string }[]; error?: string }>(
-        `/repos/${repo}/fleet/land`,
-        { method: "POST", json: body },
-      ),
-    ({ repo }) => [[...keys.fleet(repo)], [...keys.refs(repo)]],
-  );
-}

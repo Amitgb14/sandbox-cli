@@ -35,8 +35,8 @@ const MAX_SHOTS = 7;
 /**
  * The centrepiece. A particle system with one job: make the boundary something
  * you watch work rather than something you read about. Commands launch from the
- * host side; the ones that reach past the workspace shatter against the wall,
- * the ordinary ones pass through and settle into /workspace.
+ * host side; the ones that reach past the sandbox shatter against the wall,
+ * the ordinary ones pass through and settle into /sandbox/home.
  *
  * Everything is drawn from CSS custom properties, so the canvas and the rest of
  * the page cannot drift apart.
@@ -144,7 +144,7 @@ export const ContainmentCanvas = forwardRef<CanvasHandle, { className?: string }
         }
         ctx.globalAlpha = 1;
 
-        // --- workspace side: calm, tinted ---------------------------------
+        // --- sandbox side: calm, tinted -----------------------------------
         const tint = ctx.createLinearGradient(wallX, 0, w, 0);
         tint.addColorStop(0, withAlpha(contained, 0.1));
         tint.addColorStop(1, withAlpha(contained, 0.02));
@@ -172,7 +172,7 @@ export const ContainmentCanvas = forwardRef<CanvasHandle, { className?: string }
         ctx.stroke();
         ctx.globalAlpha = 1;
 
-        // the one opening: /workspace passes through here
+        // the one opening: work in /sandbox/home passes through here
         ctx.strokeStyle = css("--background", "#fff");
         ctx.lineWidth = 5;
         ctx.beginPath();
@@ -312,7 +312,7 @@ export const ContainmentCanvas = forwardRef<CanvasHandle, { className?: string }
       <canvas
         ref={canvasRef}
         role="img"
-        aria-label="Commands launched from the host side of a boundary: the ones reaching past the project shatter against it, ordinary project work passes through into /workspace."
+        aria-label="Commands launched from the host side of a boundary: the ones reaching past the sandbox shatter against it, ordinary work passes through into /sandbox/home."
         className={cn("h-full w-full", className)}
       />
     );
