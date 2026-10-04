@@ -92,7 +92,10 @@ test("a tenant submits a job and reads its output", async ({ page }) => {
   await page.getByRole("button", { name: "Submit", exact: true }).click();
   await expect(page).toHaveURL(/\/job\/?\?id=job_/);
   await expect(page.getByRole("heading", { name: "e2e-job" })).toBeVisible();
-  await expect(page.getByText("hello-from-a-job")).toBeVisible();
+  // Exact: the page also shows the command, "echo hello-from-a-job". A
+  // substring match found that alone before the output arrived, passing
+  // without it, and both after, failing strict mode.
+  await expect(page.getByText("hello-from-a-job", { exact: true })).toBeVisible();
   await expect(page.locator("main").getByText("Succeeded").first()).toBeVisible();
   await page.goto(`${base}/jobs/`);
   await expect(page.getByRole("link", { name: /e2e-job/ })).toBeVisible();
