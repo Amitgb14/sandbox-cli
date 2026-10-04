@@ -11,6 +11,9 @@ real guest. Each such claim gets a row here.
 The maintainer runs these on real machines. A row is not done until it has a
 dated result.
 
+For the gateway, [fleet-walkthrough.md](fleet-walkthrough.md) runs rows 37 and
+39 to 44 in one sitting on a KVM machine and a Mac.
+
 ## How to use this file
 
 - **Adding a feature whose truth depends on a real VM, kernel, network or OS?**

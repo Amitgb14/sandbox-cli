@@ -685,6 +685,10 @@ SANDBOX_CONFORMANCE_TOKEN=$(cat alice.key) \
   go test ./internal/api/conformance -run TestEndpoint -v
 ```
 
+[testing/fleet-walkthrough.md](testing/fleet-walkthrough.md) runs the whole
+gateway by hand on one KVM machine and a Mac: nodes, keys, SSH, isolation,
+secrets, jobs, services and the router, Studio, revocation and drain.
+
 `sandbox-cli ssh` against a real gateway and OpenSSH is row 37 of
 [testing/end-to-end.md](testing/end-to-end.md), and a node's mutual TLS and
 capacity are row 36.
