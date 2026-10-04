@@ -35,6 +35,7 @@ type Backend struct {
 	caps      map[string]bool
 	snapshots map[string]fakeSnapshot
 	volumes   map[string]*fakeVolume
+	images    map[string]bool // every image a sandbox was created from
 }
 
 // fakeVolume holds a volume's files by path relative to its mount point. A
@@ -67,7 +68,7 @@ type sandbox struct {
 // New returns an empty fake with the capabilities given (api.Cap* names).
 func New(caps ...string) *Backend {
 	b := &Backend{sandboxes: map[string]*sandbox{}, caps: map[string]bool{}, snapshots: map[string]fakeSnapshot{},
-		volumes: map[string]*fakeVolume{}}
+		volumes: map[string]*fakeVolume{}, images: map[string]bool{}}
 	for _, c := range caps {
 		b.caps[c] = true
 	}
@@ -151,6 +152,9 @@ func (b *Backend) Create(_ context.Context, spec backend.Spec) error {
 		}
 	}
 	b.sandboxes[spec.ID] = &sandbox{spec: spec, files: files}
+	if spec.FromSnapshot == "" {
+		b.images[spec.Image] = true
+	}
 	return nil
 }
 
@@ -163,6 +167,18 @@ func (s *sandbox) readOnly(p string) bool {
 		}
 	}
 	return false
+}
+
+// CachedImages is backend.ImageLister: the fake "builds" an image's disk the
+// first time a sandbox is created from it.
+func (b *Backend) CachedImages() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, 0, len(b.images))
+	for img := range b.images {
+		out = append(out, img)
+	}
+	return out
 }
 
 func (b *Backend) CreateVolume(_ context.Context, name string, sizeMB int) error {

@@ -348,6 +348,7 @@ const (
 	CodeNotFound        = "not_found"
 	CodeConflict        = "conflict"
 	CodeUnsupported     = "unsupported"
+	CodeUnavailable     = "unavailable"
 	CodeInternal        = "internal"
 )
 

@@ -88,6 +88,45 @@ pools:
 Every pooled sandbox holds its memory while it waits, so size pools to the
 traffic you have. A restart of sandboxd discards them with every other VM.
 
+## As one node behind a gateway
+
+Several machines can serve one API: a gateway in front, each `sandboxd` a node
+behind it. Users reach only the gateway. A node should listen **only on the
+private network** the gateway shares with it, never on an address users can
+reach, and accept only the gateway:
+
+```sh
+sandboxd --backend firecracker --listen 10.0.0.17:7443 \
+  --token-file /etc/sandboxd/token \
+  --tls-cert /etc/sandboxd/tls/cert.pem --tls-key /etc/sandboxd/tls/key.pem \
+  --client-ca /etc/sandboxd/tls/gateway-ca.pem \
+  --node-id n17 --node-label region=west --node-label disk=nvme \
+  --allowed-host 10.0.0.17
+```
+
+- **`--node-id`** names the node: every sandbox id it makes carries it
+  (`sbx_n17_0123456789abcdef`), so the gateway routes each later call by the
+  id alone. Lowercase letters, digits and `-`, at most 31. Without it the node
+  is a standalone `sandboxd` and its ids are as before.
+- **`--client-ca`** turns on mutual TLS: a connection must present a
+  certificate this CA signed, or the handshake fails before a request is read.
+  The token is still required on every request. It needs `--tls-cert` and
+  `--tls-key`; `sandboxd` refuses to start with it alone.
+- **`--node-label key=value`** (repeatable) describes the node to the gateway.
+- **`--capacity-cpus`, `--capacity-memory-mb`, `--capacity-disk-mb`** are what
+  the node offers sandboxes. The defaults are every CPU, all the memory
+  (`/proc/meminfo`) and the size of the state directory's filesystem; set them
+  lower to leave room for the host.
+
+`GET /v1/node` reports the node's capacity, what is free (capacity less what
+every sandbox not terminated, pooled ones included, has been given), how many
+run, the pools by image, the images whose disks are already built, the labels
+and whether it is cordoned. `POST /v1/node/cordon` with `{"cordoned": true}`
+stops new sandboxes landing on the node (`503 unavailable`) while those
+already there carry on. A cordon is held in memory, so a restart clears it;
+the gateway sees that on its next poll and cordons the node again if it still
+means to.
+
 ## Volumes
 
 Volumes are sparse ext4 files under `<state-dir>/volumes/`, attached to a VM as

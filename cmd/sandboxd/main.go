@@ -19,6 +19,10 @@
 //
 // TCP needs a token, and a network address TLS as well; only a unix socket
 // may go without a token.
+//
+// As one node behind a gateway (docs/self-hosting.md): --node-id names the
+// node in every sandbox id it makes, --node-label and --capacity-* describe it
+// at GET /v1/node, and --client-ca lets only the gateway's certificate connect.
 package main
 
 import (
@@ -79,6 +83,14 @@ func run(args []string) error {
 	fl.Var(&allowedHosts, "allowed-host", "a Host name to answer besides loopback (repeatable)")
 	fl.Var(&insecureRegistries, "insecure-registry", "a registry (host:port) to pull from over plain HTTP — a local one; repeatable")
 	auditLog := fl.String("audit-log", "", `every sandbox's events, as JSONL (default: <state-dir>/audit/events.jsonl; "none" keeps no log)`)
+	var node nodeOptions
+	var nodeLabels listFlag
+	fl.StringVar(&node.id, "node-id", "", "this sandboxd's name as one node behind a gateway; every sandbox id it makes names it")
+	fl.Var(&nodeLabels, "node-label", "key=value describing this node to a gateway (repeatable)")
+	fl.Float64Var(&node.cpus, "capacity-cpus", 0, "CPUs offered to sandboxes (default: every CPU)")
+	fl.IntVar(&node.memoryMB, "capacity-memory-mb", 0, "memory offered to sandboxes, MiB (default: all of it, on Linux)")
+	fl.IntVar(&node.diskMB, "capacity-disk-mb", 0, "disk offered to sandboxes, MiB (default: the size of the state directory's filesystem)")
+	fl.StringVar(&node.clientCA, "client-ca", "", "CA (PEM) whose certificates alone may connect; needs --tls-cert (mutual TLS, for a node behind a gateway)")
 	showVersion := fl.Bool("version", false, "print the version and exit")
 	if err := fl.Parse(args); err != nil {
 		return err
@@ -86,6 +98,11 @@ func run(args []string) error {
 	if *showVersion {
 		fmt.Println("sandboxd " + version.Version)
 		return nil
+	}
+	node.labels = nodeLabels
+	labels, err := checkNodeFlags(node, *tlsCert != "")
+	if err != nil {
+		return err
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "sandboxd: "+format+"\n", a...) }
 
@@ -126,11 +143,12 @@ func run(args []string) error {
 		return err
 	}
 	if *tlsCert != "" {
-		cert, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+		cfg, err := serverTLS(*tlsCert, *tlsKey, node.clientCA)
 		if err != nil {
-			return fmt.Errorf("tls: %w", err)
+			ln.Close()
+			return err
 		}
-		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+		ln = tls.NewListener(ln, cfg)
 		where = "https://" + strings.TrimPrefix(where, "tcp://")
 	}
 	// On by default: a run log is the record of what an agent did after its
@@ -142,9 +160,11 @@ func run(args []string) error {
 	case "none":
 		logPath = ""
 	}
+	nodeCap := capacity(node, *stateDir)
 	srv := &http.Server{
 		Handler: (&server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts,
-			Audit: audit.NewLog(logPath), Logf: logf}).Handler(),
+			Audit: audit.NewLog(logPath), Logf: logf,
+			NodeID: node.id, NodeLabels: labels, Capacity: nodeCap}).Handler(),
 		// Output streams are long-lived, so there is no WriteTimeout; a client that
 		// stops reading is noticed through its context.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -164,6 +184,10 @@ func run(args []string) error {
 	logf("%s serving API %s on %s; backend %s; token %s; network ceiling %s; default image %s; audit log %s",
 		version.Version, api.Version, where, be.Name(),
 		map[bool]string{true: "required", false: "not required"}[token != ""], pol.Network.Ceiling, pol.DefaultImage, auditNote)
+	if node.id != "" {
+		logf("node %s: capacity %g CPUs, %d MiB memory, %d MiB disk; client certificates %s",
+			node.id, nodeCap.CPUs, nodeCap.MemoryMB, nodeCap.DiskMB, map[bool]string{true: "required", false: "not required"}[node.clientCA != ""])
+	}
 	if be.Name() == "fake" {
 		logf("the fake backend runs no VMs and isolates nothing; it is for development and the conformance suite")
 	}
