@@ -62,8 +62,7 @@ by `e2e/global-setup.ts`.
 
 | Route | Screen |
 |---|---|
-| `/` | Overview: what is running, agents waiting for you, snapshots and volumes, what this sandboxd can do; a quick start when there is nothing yet |
-| `/sandboxes`, `/sandbox?id=` | Every sandbox, filtered by state, start time or a search, with what each was given; one sandbox's overview, terminal, logs, files and events |
+| `/` (also `/sandboxes`), `/sandbox?id=` | Home: every sandbox, searched and filtered by state, with what each was given and a menu to open, copy or terminate it; a first-run panel with code when there are none. One sandbox's overview, terminal, logs, files and events |
 | `/launch` | The Playground: a command, an unattended agent or an agent's console, starting in `/sandbox/home`, with the same command run written as CLI, curl, Python and TypeScript beside the form |
 | `/snapshots` | Sandboxes captured whole, to start new ones from; delete one |
 | `/agents`, `/volumes`, `/settings` | The agents Studio runs (those with a verified headless mode) and their logins; volumes; the context |

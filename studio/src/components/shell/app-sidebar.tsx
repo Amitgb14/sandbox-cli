@@ -2,89 +2,157 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Box, Plus } from "lucide-react";
+import { Moon, PlugZap, Search, Sun } from "lucide-react";
+import { useTheme } from "next-themes";
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarRail,
+  SidebarSeparator,
 } from "@/components/ui/sidebar";
-import { Button } from "@/components/ui/button";
 import { NAV, isActive } from "@/lib/nav";
-import { useSandboxes } from "@/lib/api/queries";
+import { useInfo, useSandboxes } from "@/lib/api/queries";
+import { useUi } from "@/lib/store";
+import { cn } from "@/lib/utils";
 
 /**
- * The sidebar. The one badge, on Sandboxes, is how many are running: a badge
- * that showed a total would be a number nobody acts on.
+ * The sidebar, and the only chrome: a wordmark, search, the screens, and at
+ * the foot which sandboxd this is, light or dark, and the version. Kept quiet
+ * on purpose — the table is what a person came to look at.
+ *
+ * The one badge, on Sandboxes, is how many are running: a badge that showed a
+ * total would be a number nobody acts on.
  */
 export function AppSidebar() {
   const pathname = usePathname();
   const { data: sandboxes } = useSandboxes();
+  const setPaletteOpen = useUi((s) => s.setPaletteOpen);
   const running = sandboxes?.filter((s) => s.state === "running").length ?? 0;
-  const badge = (href: string) => (href === "/sandboxes" ? running : 0) || null;
 
   return (
-    <Sidebar collapsible="icon" className="border-r">
-      <SidebarHeader className="pt-3">
-        <Link href="/" className="flex items-center gap-2.5 px-2 group-data-[collapsible=icon]:px-0">
-          <div className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-sm shadow-primary/30">
-            <Box className="size-4" />
-          </div>
-          <div className="grid leading-tight group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-semibold tracking-tight">Sandbox Studio</span>
-            <span className="text-[11px] text-muted-foreground">microVM sandboxes</span>
-          </div>
+    <Sidebar collapsible="offcanvas" className="border-r">
+      <SidebarHeader className="gap-3 px-3 pt-4">
+        <Link href="/" className="px-2 text-[1.05rem] font-semibold tracking-tight">
+          sandbox<span className="text-muted-foreground">·studio</span>
         </Link>
+        <button
+          type="button"
+          onClick={() => setPaletteOpen(true)}
+          className="flex h-8 items-center gap-2 rounded-md border bg-background px-2.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Search className="size-3.5" />
+          Search
+          <kbd className="ml-auto font-mono text-[10px]">⌘K</kbd>
+        </button>
       </SidebarHeader>
 
-      <SidebarContent>
-        {NAV.map((group) => (
-          <SidebarGroup key={group.label}>
-            <SidebarGroupLabel className="text-[11px] font-medium tracking-wide text-muted-foreground/70 uppercase">{group.label}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {group.items.map((item) => {
-                  const n = badge(item.href);
-                  return (
+      <SidebarContent className="px-1">
+        {NAV.map((group, i) => (
+          <div key={group.label}>
+            {i > 0 && <SidebarSeparator className="mx-3" />}
+            <SidebarGroup className="py-1.5">
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {group.items.map((item) => (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton
                         asChild
                         isActive={isActive(item, pathname)}
-                        tooltip={item.title}
-                        className="text-muted-foreground hover:text-foreground data-[active=true]:font-medium data-[active=true]:text-foreground data-[active=true]:[&>svg]:text-primary"
+                        className="h-8 text-muted-foreground hover:text-foreground data-[active=true]:font-medium data-[active=true]:text-foreground"
                       >
                         <Link href={item.href}>
                           <item.icon />
                           <span>{item.title}</span>
                         </Link>
                       </SidebarMenuButton>
-                      {n !== null && <SidebarMenuBadge className="tabular-nums">{n}</SidebarMenuBadge>}
+                      {item.href === "/" && running > 0 && (
+                        <SidebarMenuBadge className="tabular-nums">{running}</SidebarMenuBadge>
+                      )}
                     </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </div>
         ))}
       </SidebarContent>
 
-      <SidebarFooter>
-        <Button asChild className="w-full shadow-sm shadow-primary/20 group-data-[collapsible=icon]:hidden">
-          <Link href="/launch">
-            <Plus className="size-4" />
-            New sandbox
-          </Link>
-        </Button>
+      <SidebarFooter className="gap-3 px-3 pb-4">
+        <Connection />
+        <ThemeSwitch />
+        <Version />
       </SidebarFooter>
-      <SidebarRail />
     </Sidebar>
   );
+}
+
+/**
+ * Which sandboxd Studio is talking to: the context's name and its backend,
+ * and in red when it is not answering, which says why every table is empty.
+ */
+function Connection() {
+  const { data, error } = useInfo();
+  const ok = data && !data.error;
+  return (
+    <div
+      className="flex items-center gap-2 px-1 text-xs"
+      title={
+        ok
+          ? `Context ${data.context}: sandboxd's ${data.capabilities?.backend} backend, API ${data.capabilities?.api_version}.`
+          : `sandboxd did not answer: ${data?.error ?? error?.message ?? "no response"}.`
+      }
+    >
+      {ok ? (
+        <span className="size-1.5 rounded-full bg-contained" />
+      ) : (
+        <PlugZap className="size-3.5 text-exposed" />
+      )}
+      <span className={cn("truncate font-mono", ok ? "text-muted-foreground" : "text-exposed")}>
+        {ok ? `${data.context} · ${data.capabilities?.backend ?? ""}` : "not connected"}
+      </span>
+    </div>
+  );
+}
+
+function ThemeSwitch() {
+  const { resolvedTheme, theme, setTheme } = useTheme();
+  // Dark is the provider's default; until a choice is stored it may report
+  // neither, and the switch should still show which one is in force.
+  const current = resolvedTheme ?? theme ?? "dark";
+  const opts = [
+    { id: "light", label: "Light", icon: Sun },
+    { id: "dark", label: "Dark", icon: Moon },
+  ] as const;
+  return (
+    <div role="radiogroup" aria-label="Theme" className="grid grid-cols-2 rounded-md border bg-background p-0.5">
+      {opts.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={current === o.id}
+          onClick={() => setTheme(o.id)}
+          className={cn(
+            "flex items-center justify-center gap-1.5 rounded px-2 py-1 text-xs transition-colors",
+            current === o.id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <o.icon className="size-3.5" />
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Version() {
+  const { data } = useInfo();
+  return <p className="px-1 font-mono text-[11px] text-muted-foreground/70">{data ? `sandbox-cli ${data.version}` : " "}</p>;
 }

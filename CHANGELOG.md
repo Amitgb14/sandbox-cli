@@ -229,6 +229,14 @@ In the rewrite:
 
 ### Changed
 
+- **Studio is simpler.** It opens on the sandbox list instead of an overview of
+  counts, in a near-monochrome theme with one quiet sidebar: Sandboxes,
+  Snapshots and Volumes; Playground and Agents; Settings, with search, which
+  sandboxd this is, a Light/Dark switch and the version at its foot. The list
+  is a search, a state filter and a refresh over one table, each row with a menu
+  to open, copy or terminate the sandbox; with none, a first-run panel offers
+  the Playground and the same start in Python, TypeScript, curl or the CLI.
+
 - **Egress is open by default, and an agent under an allowlist can always
   reach its API.** A `sandboxd` with no policy file now gives a sandbox open
   egress unless the run asks for less. Where the backend can filter but not

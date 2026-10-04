@@ -73,7 +73,9 @@ test("the repository screens are gone", async ({ page, request }) => {
   await page.goto(`/#token=${token}`);
   await expect(page.getByText("e2e · fake")).toBeVisible();
   const nav = page.locator("[data-sidebar=sidebar]");
-  for (const name of ["Runs", "Review", "Fleet"]) {
+  // Home is the sandbox list, and the sidebar is the screens there are.
+  await expect(page.locator("main h1")).toHaveText("Sandboxes");
+  for (const name of ["Runs", "Review", "Fleet", "Overview", "Dashboard"]) {
     await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
   }
   for (const path of ["/api/repos", "/api/runs"]) {
@@ -103,7 +105,8 @@ test("the Playground writes the same sandbox as code, and the list filters by st
   await api(`/v1/sandboxes/${gone.id}`, "DELETE");
   await page.goto("/sandboxes/");
   await page.getByPlaceholder(/Search/).fill("filter-");
-  await page.getByRole("tab", { name: /Running/ }).click();
+  await page.getByRole("combobox", { name: "State" }).click();
+  await page.getByRole("option", { name: "Running" }).click();
   await expect(page.getByText("filter-keep")).toBeVisible();
   await expect(page.getByText("filter-gone")).toHaveCount(0);
   await api(`/v1/sandboxes/${keep.id}`, "DELETE");
