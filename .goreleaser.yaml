@@ -108,6 +108,10 @@ archives:
     ids:
       - sandbox-cli
       - sandboxd
+    # Windows and Intel Macs get the client alone, every other platform the
+    # client and sandboxd: two counts on purpose, which goreleaser v2 refuses
+    # unless told this is intended.
+    allow_different_binary_count: true
     formats: [tar.gz]
     format_overrides:
       - goos: windows
