@@ -3,7 +3,6 @@ import {
   Boxes,
   Camera,
   HardDrive,
-  LayoutDashboard,
   Play,
   Settings,
   Terminal,
@@ -43,32 +42,13 @@ export const NAV: NavGroup[] = [
     label: "Sandboxes",
     items: [
       {
-        title: "Overview",
-        href: "/",
-        icon: LayoutDashboard,
-        hint: "What is running, which agents are waiting for you, and what this sandboxd can do",
-        shortcut: "D",
-      },
-      {
         title: "Sandboxes",
-        href: "/sandboxes",
+        href: "/",
         icon: Boxes,
         hint: "Every sandbox on this sandboxd: its overview, terminal, logs, files and events",
         shortcut: "S",
-        also: ["/sandbox"],
+        also: ["/sandboxes", "/sandbox"],
       },
-      {
-        title: "Playground",
-        href: "/launch",
-        icon: Play,
-        hint: "Set up a sandbox, launch it, or copy the same setup as CLI, curl, Python or TypeScript",
-        shortcut: "N",
-      },
-    ],
-  },
-  {
-    label: "Resources",
-    items: [
       {
         title: "Snapshots",
         href: "/snapshots",
@@ -80,6 +60,18 @@ export const NAV: NavGroup[] = [
         href: "/volumes",
         icon: HardDrive,
         hint: "Named filesystems that outlive the sandboxes they are mounted in",
+      },
+    ],
+  },
+  {
+    label: "Build",
+    items: [
+      {
+        title: "Playground",
+        href: "/launch",
+        icon: Play,
+        hint: "Set up a sandbox, launch it, or copy the same setup as CLI, curl, Python or TypeScript",
+        shortcut: "N",
       },
       {
         title: "Agents",
@@ -123,7 +115,7 @@ export interface Crumb {
 /** Breadcrumbs from a pathname: Studio, then the screen. */
 export function crumbsFor(pathname: string): Crumb[] {
   const p = pathname.replace(/\/$/, "") || "/";
-  if (p === "/") return [{ label: "Overview", href: "/", current: true }];
+  if (p === "/") return [{ label: "Sandboxes", href: "/", current: true }];
   const item = ALL_NAV_ITEMS.find((i) => isActive(i, p));
   const crumbs: Crumb[] = [{ label: "Studio", href: "/", current: false }];
   if (item && item.href !== p) crumbs.push({ label: item.title, href: item.href, current: false });

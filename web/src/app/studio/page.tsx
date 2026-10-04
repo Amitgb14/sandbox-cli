@@ -30,12 +30,8 @@ const OPEN = `sandbox-cli studio
 
 const SCREENS = [
   {
-    name: "Overview",
-    what: "What is running, agents waiting for you, snapshots and volumes, and what this sandboxd can do — its capabilities, network ceiling and limits. With nothing running yet, a quick start in the client you use.",
-  },
-  {
     name: "Sandboxes",
-    what: "Every sandbox on the sandboxd, started from Studio, the CLI or an SDK, filtered by state, start time or a search, with what each was given. Each one has an overview, a real terminal, its processes' logs from the first byte, its files, and its audit events.",
+    what: "The home screen: every sandbox on the sandboxd, started from Studio, the CLI or an SDK, searched and filtered by state, with what each was given. With none yet, a first-run panel with the code to start one. Each sandbox has an overview, a real terminal, its processes' logs from the first byte, its files, and its audit events.",
   },
   {
     name: "Playground",

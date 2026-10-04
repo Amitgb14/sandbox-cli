@@ -26,36 +26,37 @@
 :root {
   --radius: 0.625rem;
 
-  /* UI chrome — light. Cool neutrals, one accent; the surfaces step by
-     elevation (background < card < popover) rather than by outline. */
-  --background: #f7f7f8;
-  --foreground: #0b0b0f;
+  /* UI chrome — light. Near-monochrome: one ink for type and primary
+     actions, hairline neutral rules, and colour only where it means something
+     (status, the boundary words below). */
+  --background: #ffffff;
+  --foreground: #0a0a0a;
   --card: #ffffff;
-  --card-foreground: #0b0b0f;
+  --card-foreground: #0a0a0a;
   --popover: #ffffff;
-  --popover-foreground: #0b0b0f;
-  --primary: #5b3df5;
+  --popover-foreground: #0a0a0a;
+  --primary: #0a0a0a;
   --primary-foreground: #ffffff;
-  --secondary: #f0f0f3;
-  --secondary-foreground: #18181f;
-  --muted: #f0f0f3;
-  --muted-foreground: #6b6b76;
-  --accent: #eeedf6;
-  --accent-foreground: #18181f;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #0a0a0a;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #0a0a0a;
   --destructive: #d03b3b;
   --destructive-foreground: #ffffff;
-  --border: #e5e5ea;
-  --input: #dcdce3;
-  --ring: #5b3df5;
+  --border: #e9e9ec;
+  --input: #e4e4e7;
+  --ring: #a1a1aa;
 
-  --sidebar: #fbfbfc;
-  --sidebar-foreground: #0b0b0f;
-  --sidebar-primary: #5b3df5;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #0a0a0a;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #eeedf6;
-  --sidebar-accent-foreground: #18181f;
-  --sidebar-border: #e5e5ea;
-  --sidebar-ring: #5b3df5;
+  --sidebar-accent: #efefef;
+  --sidebar-accent-foreground: #0a0a0a;
+  --sidebar-border: #ececec;
+  --sidebar-ring: #a1a1aa;
 
   /* Categorical slots — light steps, fixed order, never cycled */
   --chart-1: #2a78d6; /* blue */
@@ -90,34 +91,34 @@
 
 .dark {
   /* UI chrome — dark */
-  --background: #09090b;
-  --foreground: #f4f4f6;
-  --card: #121214;
-  --card-foreground: #f4f4f6;
-  --popover: #16161a;
-  --popover-foreground: #f4f4f6;
-  --primary: #8270ff;
-  --primary-foreground: #ffffff;
-  --secondary: #1a1a1f;
-  --secondary-foreground: #f4f4f6;
-  --muted: #17171b;
-  --muted-foreground: #8e8e99;
-  --accent: #1d1b2b;
-  --accent-foreground: #f4f4f6;
+  --background: #000000;
+  --foreground: #ededed;
+  --card: #0a0a0a;
+  --card-foreground: #ededed;
+  --popover: #111111;
+  --popover-foreground: #ededed;
+  --primary: #ededed;
+  --primary-foreground: #0a0a0a;
+  --secondary: #161616;
+  --secondary-foreground: #ededed;
+  --muted: #141414;
+  --muted-foreground: #8f8f8f;
+  --accent: #1a1a1a;
+  --accent-foreground: #ededed;
   --destructive: #e66767;
   --destructive-foreground: #ffffff;
-  --border: #222228;
-  --input: #2a2a31;
-  --ring: #8270ff;
+  --border: #1f1f1f;
+  --input: #262626;
+  --ring: #525252;
 
-  --sidebar: #0c0c0f;
-  --sidebar-foreground: #f4f4f6;
-  --sidebar-primary: #8270ff;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #1d1b2b;
-  --sidebar-accent-foreground: #f4f4f6;
-  --sidebar-border: #1c1c21;
-  --sidebar-ring: #8270ff;
+  --sidebar: #050505;
+  --sidebar-foreground: #ededed;
+  --sidebar-primary: #ededed;
+  --sidebar-primary-foreground: #0a0a0a;
+  --sidebar-accent: #161616;
+  --sidebar-accent-foreground: #ededed;
+  --sidebar-border: #1a1a1a;
+  --sidebar-ring: #525252;
 
   /* The same eight hues, stepped for the dark surface — not a second palette */
   --chart-1: #3987e5;
