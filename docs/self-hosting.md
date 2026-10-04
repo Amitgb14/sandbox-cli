@@ -91,7 +91,7 @@ traffic you have. A restart of sandboxd discards them with every other VM.
 ## As one node behind a gateway
 
 Several machines can serve one API: a gateway in front, each `sandboxd` a node
-behind it. Users reach only the gateway. A node should listen **only on the
+behind it ([fleet.md](fleet.md) sets up both). Users reach only the gateway. A node should listen **only on the
 private network** the gateway shares with it, never on an address users can
 reach, and accept only the gateway:
 

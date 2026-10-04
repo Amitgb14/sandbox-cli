@@ -75,6 +75,7 @@ question 2).
 cmd/sandbox-cli         client
 cmd/sandboxd            the API server
 cmd/sandbox-guestd      the guest agent: PID 1 of a Firecracker guest, and the only thing the host talks to
+cmd/sandbox-gateway     one API endpoint in front of many sandboxd nodes: users' keys, ownership, scheduling, SSH (docs/fleet.md)
 images/base/            the base image's Dockerfile (built in CI only)
 internal/
   api/          v1 wire types and client; api/conformance is the suite every endpoint must pass
@@ -92,7 +93,9 @@ internal/
   guestproto/   host <-> guest agent protocol; the host treats the guest as hostile
   vsock/        guest vsock listener, host dial through the VMM's bridge
   image/        OCI pull, safe unpack (paths resolved inside the root), ext4 root disks
-packaging/systemd/      sandboxd unit and an example operator policy (docs/self-hosting.md)
+  gateway/      sandbox-gateway: key store, ownership router, scheduler, node pool, SSH server; the only package that may use x/crypto/ssh
+packaging/systemd/      sandboxd and sandbox-gateway units, an example operator policy (docs/self-hosting.md)
+packaging/fleet/        certificates for a gateway and its nodes, an example node file (docs/fleet.md)
 packaging/launchd/      the macOS launch agent (docs/local-macos.md)
 sdk/                    Python (tested: make test-sdk) and TypeScript clients
   agenthome/  agent logins and the tools volume, copied in and out of the sandbox user's home

@@ -14,6 +14,8 @@
 #   --dest DIR      install directory                 (default: ~/.local/bin)
 #   --token TOK     GitHub token for a private repo   (or set GITHUB_TOKEN)
 #   --client-only   install sandbox-cli and nothing else
+#   --with-gateway  also install sandbox-gateway (Linux; docs/fleet.md); with
+#                   --client-only, the client and the gateway alone
 #   --no-config     do not write ~/.config/sandbox/config.yaml
 #   --uninstall     remove the binaries, then report what else is left behind
 #   --purge         with --uninstall: also delete ~/.config/sandbox (agent
@@ -33,8 +35,10 @@ UNINSTALL=0
 PURGE=0
 NO_CONFIG=0
 CLIENT_ONLY=0
+WITH_GATEWAY=0
 SERVER="sandboxd"
 GUEST="sandbox-guestd"
+GATEWAY="sandbox-gateway"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
@@ -46,9 +50,10 @@ while [ $# -gt 0 ]; do
     --token)     TOKEN="${2:-}"; shift 2 ;;
     --no-config) NO_CONFIG=1; shift ;;
     --client-only) CLIENT_ONLY=1; shift ;;
+    --with-gateway) WITH_GATEWAY=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge)     PURGE=1; shift ;;
-    -h|--help)   sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
@@ -65,7 +70,7 @@ if [ "$UNINSTALL" = 1 ]; then
   removed=0
   # sandbox-studio-api is beta.15's, removed if a machine still has it.
   for d in "$DEST" "${HOME}/.local/bin" /usr/local/bin; do
-    for b in "$BINARY" "$SERVER" "$GUEST" sandbox-studio-api; do
+    for b in "$BINARY" "$SERVER" "$GUEST" "$GATEWAY" sandbox-studio-api; do
       if [ -f "${d}/${b}" ]; then
         # One that is not ours to remove (root's, in /usr/local/bin) is
         # reported and left: under set -e a failed rm would end the uninstall
@@ -82,7 +87,7 @@ if [ "$UNINSTALL" = 1 ]; then
   if [ "$removed" = 0 ]; then
     info "no ${BINARY} binaries found in ${DEST}, ~/.local/bin or /usr/local/bin"
   fi
-  info "a sandboxd still running keeps running until you stop it (launchctl or systemctl)"
+  info "a sandboxd or sandbox-gateway still running keeps running until you stop it (launchctl or systemctl)"
 
   if [ "$PURGE" = 1 ]; then
     for d in "$cfg" "$state"; do
@@ -156,6 +161,13 @@ if [ "$CLIENT_ONLY" = 0 ]; then
   case "${OS}/${ARCH}" in
     linux/*|darwin/arm64) WITH_SERVER=1 ;;
   esac
+fi
+
+# The gateway is released for Linux only: it is a fleet's front door, run
+# beside Linux nodes. Asked for elsewhere, nothing is installed rather than
+# the rest without it.
+if [ "$WITH_GATEWAY" = 1 ] && [ "$OS" != linux ]; then
+  die "sandbox-gateway is released for Linux only; nothing was installed"
 fi
 
 # ---- resolve version --------------------------------------------------------
@@ -246,6 +258,16 @@ if [ "$WITH_SERVER" = 1 ]; then
   tar -xzf "$TMP/$GARCHIVE" -C "$TMP" "$GUEST" 2>/dev/null || die "${GUEST} not found inside ${GARCHIVE}; nothing was installed"
 fi
 
+# The gateway comes in an archive of its own, verified the same way.
+if [ "$WITH_GATEWAY" = 1 ]; then
+  GWARCHIVE="${GATEWAY}_${VERSION}_linux_${ARCH}.tar.gz"
+  info "  downloading ${GWARCHIVE}"
+  fetch "${BASE}/${GWARCHIVE}" "$TMP/$GWARCHIVE" || die "download failed: ${BASE}/${GWARCHIVE}
+  ${VERSION} may predate sandbox-gateway; nothing was installed"
+  verify "$TMP/$GWARCHIVE"
+  tar -xzf "$TMP/$GWARCHIVE" -C "$TMP" "$GATEWAY" 2>/dev/null || die "${GATEWAY} not found inside ${GWARCHIVE}; nothing was installed"
+fi
+
 install_bin() { # install_bin NAME — from $TMP to $DEST; stage then rename, so replacing a running binary is atomic
   chmod +x "$TMP/$1"
   mv "$TMP/$1" "$DEST/.$1.new"
@@ -258,6 +280,9 @@ install_bin "$BINARY"
 if [ "$WITH_SERVER" = 1 ]; then
   install_bin "$SERVER"
   install_bin "$GUEST"
+fi
+if [ "$WITH_GATEWAY" = 1 ]; then
+  install_bin "$GATEWAY"
 fi
 
 # ---- default user config ----------------------------------------------------
@@ -362,6 +387,10 @@ if [ "$WITH_SERVER" = 1 ]; then
 else
   info "This machine runs the client only. Point it at a sandboxd:"
   info "  ${BINARY} context add NAME https://HOST:PORT --token-file FILE --ca CA.pem"
+fi
+
+if [ "$WITH_GATEWAY" = 1 ]; then
+  info "Set up sandbox-gateway: https://github.com/${REPO}/blob/main/docs/fleet.md"
 fi
 
 # ---- PATH hint --------------------------------------------------------------
