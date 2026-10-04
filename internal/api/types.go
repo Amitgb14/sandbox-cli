@@ -5,7 +5,11 @@
 // two disagree, the document is fixed first and the types follow.
 package api
 
-import "time"
+import (
+	"regexp"
+	"strings"
+	"time"
+)
 
 // Version is the API version this package speaks.
 const Version = "v1"
@@ -356,4 +360,64 @@ type ErrorBody struct {
 type ErrorDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// NodeStatus is GET /v1/node: what a sandboxd reports about itself to a
+// gateway in front of many nodes (docs/roadmap/task-7-fleet-gateway.md). A
+// single sandboxd serves it too; it is how a gateway decides where a sandbox
+// goes and whether a node is healthy.
+type NodeStatus struct {
+	// Node is this sandboxd's name, set with --node-id; it is the <node> in
+	// the ids of the sandboxes it creates. Empty on a standalone sandboxd.
+	Node         string       `json:"node"`
+	Version      string       `json:"version"`
+	Capabilities Capabilities `json:"capabilities"`
+	// Capacity is what the machine has for sandboxes, and Free what is not
+	// yet given to running or suspended ones: allocations, not live usage.
+	Capacity NodeResources `json:"capacity"`
+	Free     NodeResources `json:"free"`
+	Running  int           `json:"running"`
+	// Pooled counts sandboxes booted ahead, by image.
+	Pooled map[string]int `json:"pooled,omitempty"`
+	// Images are those whose root disk is already built here, so a create
+	// for them skips the pull and the build.
+	Images []string          `json:"images,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
+	// Cordoned nodes take no new sandboxes; what runs there carries on.
+	Cordoned bool `json:"cordoned"`
+}
+
+// NodeResources is a quantity of the resources sandboxes are given.
+type NodeResources struct {
+	CPUs     float64 `json:"cpus"`
+	MemoryMB int     `json:"memory_mb"`
+	DiskMB   int     `json:"disk_mb"`
+}
+
+// CordonRequest is POST /v1/node/cordon.
+type CordonRequest struct {
+	Cordoned bool `json:"cordoned"`
+}
+
+// nodeIDRE is a node name as it appears in a sandbox id: short, lowercase,
+// no underscore, so the id splits unambiguously.
+var nodeIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}$`)
+
+// ValidNodeID reports whether s may name a node.
+func ValidNodeID(s string) bool { return nodeIDRE.MatchString(s) }
+
+// NodeOfID returns the node a sandbox id names — "n17" for
+// "sbx_n17_0123456789abcdef" — and false for an id that names none, which is
+// every id a standalone sandboxd makes. A gateway routes by it; the state
+// store, not the id, remains the authority on who owns the sandbox.
+func NodeOfID(id string) (string, bool) {
+	rest, ok := strings.CutPrefix(id, "sbx_")
+	if !ok {
+		return "", false
+	}
+	node, hex, ok := strings.Cut(rest, "_")
+	if !ok || !ValidNodeID(node) || len(hex) != 16 {
+		return "", false
+	}
+	return node, true
 }

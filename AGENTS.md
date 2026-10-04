@@ -65,7 +65,9 @@ gofmt -w cmd internal
 ```
 
 Go 1.25+. Dependencies are the standard library, `cobra` and `yaml.v3` — nothing
-else without a decision recorded in the plan.
+else without a decision recorded in the plan. The one recorded exception:
+`golang.org/x/crypto/ssh`, for `sandbox-gateway`'s SSH server only (plan, open
+question 2).
 
 ## Layout
 
