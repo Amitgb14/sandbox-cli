@@ -40,6 +40,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       procps \
       # Goose's installer extracts a .tar.bz2 and GNU tar shells out to bzip2.
       bzip2 \
+      # The gateway terminates SSH itself and runs these as ordinary processes
+      # for sftp, scp (which speaks sftp since OpenSSH 9.0) and rsync over
+      # ssh. Only the sftp-server binary: the sshd package is deliberately
+      # absent, since nothing in a guest listens for SSH.
+      openssh-sftp-server \
+      rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # The agents with a verified headless mode are baked in, so a sandbox can run
