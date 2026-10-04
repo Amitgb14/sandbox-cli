@@ -37,9 +37,9 @@ The guest agent is mounted read-only into every sandbox from beside
 
 **Egress.** The runtime's own network is open NAT. Until it is measured whether
 an allowlist can be enforced here, this backend does not claim one. A request
-for an allowlist is refused, never served open, and the default is `none`. To
-let sandboxes reach the network at all, set `ceiling: open` in a policy file you
-pass with `--policy`, knowing that is what it means.
+for an allowlist is refused, never served open. The default is open, as on
+Linux; ask for `--network none` for a sandbox with no network, or set the
+default to `none` in a policy file you pass with `--policy`.
 
 **No host directory.** A sandbox has no repository, and nothing of your Mac is
 mounted into it but the guest agent, read-only; every process starts in `/sandbox/home`. The bind mount this

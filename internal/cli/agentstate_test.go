@@ -21,7 +21,7 @@ import (
 // nothing wrong; and a sandbox that is gone ends the wait rather than letting
 // it run to its timeout.
 func TestAgentWait(t *testing.T) {
-	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy()}).Handler())
+	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicyFor(fake.New(api.CapEgressAllowlist).Capabilities())}).Handler())
 	defer srv.Close()
 	c, _ := api.NewClient(srv.URL, "")
 	ctx := context.Background()

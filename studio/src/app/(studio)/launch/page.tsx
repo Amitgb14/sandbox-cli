@@ -103,7 +103,10 @@ function LaunchForm() {
   const sandboxOpts = { name: name || undefined, network, allow: allowList, labels: labelMap, volumes: vols };
   const code =
     kind === "command"
-      ? snippets({ ...sandboxOpts, command: splitArgs(command), defaultAllow: info?.capabilities?.network.default.allow ?? undefined })
+      ? snippets({ ...sandboxOpts, command: splitArgs(command), defaultAllow:
+            info?.capabilities?.network.default.mode === "allowlist"
+              ? (info.capabilities.network.default.allow ?? undefined)
+              : info?.baseline_egress })
       : [{ id: "cli", label: "CLI", code: cliAgent(agent, sandboxOpts, kind === "console" ? prompt || undefined : undefined) }];
 
   function submit(e: React.FormEvent) {

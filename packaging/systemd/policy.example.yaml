@@ -15,6 +15,9 @@ limits:
   max_disk_mb: 102400
   max_idle_timeout_secs: 604800
 
+# With no policy file, sandboxd's default is open egress. A machine shared by
+# a team usually wants the allowlist as the default instead, which this does;
+# the ceiling below decides whether a run may still ask for open.
 network:
   default:
     mode: allowlist

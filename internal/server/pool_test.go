@@ -14,7 +14,7 @@ import (
 func poolServer(t *testing.T, size int) (*api.Client, *fake.Backend) {
 	t.Helper()
 	be := fake.New(api.CapEgressAllowlist, api.CapVolumes)
-	pol := spec.DefaultPolicy()
+	pol := spec.DefaultPolicyFor(be.Capabilities())
 	pol.Pools = []spec.Pool{{Size: size}}
 	ts := httptest.NewServer((&Server{Backend: be, Policy: pol}).Handler())
 	t.Cleanup(ts.Close)

@@ -188,7 +188,7 @@ export default function Home() {
           <SectionHead
             eyebrow="the network half of the problem"
             title="An allowlist of names, enforced where the agent cannot reach"
-            lead="A sandbox can still read whatever the agent cloned into it, so the question is where that can go. The default policy permits the agent APIs and package registries and nothing else, checked by name on the host — so npm install works and a POST to somebody's webhook does not."
+            lead="A sandbox can still read whatever the agent cloned into it, so the question is where that can go. Egress is open by default. Ask for an allowlist — or run the prod profile, which always does — and only the agent's API, package registries and the names you add get through, checked by name on the host: npm install works and a POST to somebody's webhook does not."
           />
           <EgressVisualizer />
         </Section>

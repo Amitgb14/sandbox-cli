@@ -27,7 +27,7 @@ const testToken = "studio-test-token"
 func studioUnderTest(t *testing.T) (*Server, *httptest.Server, *api.Client) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	sd := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy(), Token: "sandboxd-token"}).Handler())
+	sd := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicyFor(fake.New(api.CapEgressAllowlist).Capabilities()), Token: "sandboxd-token"}).Handler())
 	t.Cleanup(sd.Close)
 	c, err := api.NewClient(sd.URL, "sandboxd-token")
 	if err != nil {

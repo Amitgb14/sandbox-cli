@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -177,9 +178,16 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 			req.Volumes = append(req.Volumes, *m)
 		}
 	}
-	if err := applyConfig(rf, project, &req, caps); err != nil {
+	agentHost := ""
+	if rs.agent != nil {
+		agentHost = rs.agent.ProviderHost
+	}
+	if err := applyConfig(rf, project, &req, caps, agentHost); err != nil {
 		return 1, err
 	}
+	// With nothing asked for, the server's default applies; when that default
+	// is an allowlist without the agent's API, spell it out with it.
+	req.Network = withAgentAPI(req.Network, rs.agent, caps)
 	// git in the guest refuses every commit without an identity, and the image
 	// sets none; a neutral one, unless the user set their own (--env, or env:
 	// in their config). Theirs is never read from the host: whose name goes on
@@ -191,8 +199,17 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		}
 	}
 
+	done := progress("creating the sandbox", "the first use of an image pulls it and builds its disk, which can take minutes; interrupting stops that build")
 	sb, err := c.CreateSandbox(ctx, req)
+	done(err == nil)
 	if err != nil {
+		// A ceiling of none is almost always a sandboxd without root, which
+		// has no network devices to give. Say so: the refusal alone reads as
+		// a policy someone chose.
+		if strings.Contains(err.Error(), "ceiling (none)") {
+			return 1, fmt.Errorf("%w\n  this sandboxd offers no network at all, usually because it is not running as root; "+
+				"run it as root for open or allowlist egress, or ask for --network none (sandbox-cli doctor shows what it offers)", err)
+		}
 		return 1, err
 	}
 	if rs.result != nil {
@@ -305,6 +322,68 @@ func attach(ctx context.Context, c *api.Client, sandbox string, pid int, tty, fo
 		return 0, errDetached
 	}
 	return code, err
+}
+
+// progressDelay is how long a step runs before it is reported: a warm start
+// takes milliseconds, and a line for every one of those would be noise.
+var progressDelay = 1500 * time.Millisecond
+
+// progress reports a slow step on stderr: what is being waited for, how long
+// it has taken, and why it can take that long. The first run of an image
+// pulls gigabytes and builds a disk before anything prints, and a silent
+// minute reads as a hang — someone interrupted exactly that build. On a
+// terminal the line updates in place every second; otherwise one line is
+// printed once the step is slow, so a log is not filled with ticks. done
+// reports how it ended, and is safe to call when nothing was printed.
+func progress(what, why string) (done func(ok bool)) {
+	tty := isTerminal(os.Stderr)
+	start := time.Now()
+	stop := make(chan struct{})
+	finished := make(chan bool, 1)
+	go func() {
+		t := time.NewTimer(progressDelay)
+		defer t.Stop()
+		select {
+		case <-stop:
+			finished <- false
+			return
+		case <-t.C:
+		}
+		if !tty {
+			fmt.Fprintf(os.Stderr, "sandbox-cli: %s… (%s)\n", what, why)
+			<-stop
+			finished <- true
+			return
+		}
+		fmt.Fprintf(os.Stderr, "sandbox-cli: %s (%s)\n", what, why)
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			fmt.Fprintf(os.Stderr, "\rsandbox-cli: %s… %s ", what, time.Since(start).Round(time.Second))
+			select {
+			case <-stop:
+				finished <- true
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	return func(ok bool) {
+		close(stop)
+		if !<-finished {
+			return
+		}
+		el := time.Since(start).Round(100 * time.Millisecond)
+		clear := ""
+		if tty {
+			clear = "\r\033[K"
+		}
+		if ok {
+			fmt.Fprintf(os.Stderr, "%ssandbox-cli: %s took %s\n", clear, what, el)
+		} else {
+			fmt.Fprintf(os.Stderr, "%ssandbox-cli: %s failed after %s\n", clear, what, el)
+		}
+	}
 }
 
 // guestGitIdentity is the identity commits made in a sandbox carry by

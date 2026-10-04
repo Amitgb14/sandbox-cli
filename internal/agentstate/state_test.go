@@ -107,7 +107,7 @@ func TestEveryStateCanExplainItself(t *testing.T) {
 // is read from the guest, and a sandbox no agent run started is not read as
 // one.
 func TestLookReadsTheAgentFromTheSandbox(t *testing.T) {
-	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy()}).Handler())
+	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicyFor(fake.New(api.CapEgressAllowlist).Capabilities())}).Handler())
 	defer srv.Close()
 	c, _ := api.NewClient(srv.URL, "")
 	ctx := context.Background()

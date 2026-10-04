@@ -107,6 +107,8 @@ export interface Snapshot {
 export interface Info {
   context: string;
   version: string;
+  /** The client's built-in allowlist, which --allow adds to under a non-allowlist default. */
+  baseline_egress?: string[];
   capabilities?: Capabilities;
   error?: string;
 }

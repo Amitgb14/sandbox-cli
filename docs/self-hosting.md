@@ -42,6 +42,22 @@ journalctl -u sandboxd -f
 `sandbox-guestd` must sit beside `sandboxd` (or be named with `--agent`): it is
 put into every image's root disk, so the guest agent always matches the server.
 
+## The network default
+
+With no policy file, a sandbox gets **open** egress unless the run asks for
+less. That is the easy default for one person's machine. A run asks for an
+allowlist with `--network allowlist` (or `--allow host`), and the `prod`
+profile always uses one: then only the names on it get through, checked on
+the host by name. An agent run always has its own API on the list, because an
+agent that cannot reach its model cannot run at all, so claude reaches
+api.anthropic.com, codex api.openai.com, and so on. Every other name has to be
+asked for, and under `prod` the built-in list of registries is off too.
+
+A machine shared by a team usually wants the allowlist as the floor:
+`packaging/systemd/policy.example.yaml` sets it as the default with an
+`allowlist` ceiling, so no request can ask for open. Without root,
+`sandboxd` has no network devices at all, and every sandbox gets none.
+
 ## What sandboxd refuses
 
 - **A network address without a token, or without TLS.** A bearer token over

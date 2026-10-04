@@ -27,7 +27,7 @@ func TestInterruptDetachesAWatcherAndStopsAForegroundRun(t *testing.T) {
 	signal.Notify(guard, os.Interrupt)
 	defer signal.Stop(guard)
 
-	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy()}).Handler())
+	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicyFor(fake.New(api.CapEgressAllowlist).Capabilities())}).Handler())
 	defer srv.Close()
 	c, _ := api.NewClient(srv.URL, "")
 	ctx := context.Background()

@@ -8,13 +8,15 @@ Every sandbox is a VM with its own kernel. A sandbox is not built around your
 repository: every process starts in the sandbox user's home, `/sandbox/home`,
 and code gets in the way it gets into any machine, by `git clone` inside the
 sandbox or through the files API. None of your files are mounted into the
-guest, and nothing comes back to your machine except an agent's saved login. Egress is an
-allowlist of names, enforced outside the guest where the agent cannot reach it.
+guest, and nothing comes back to your machine except an agent's saved login. Egress is
+open by default; ask for an allowlist (`--network allowlist`, or the `prod` profile) and
+it is enforced outside the guest, where the agent cannot reach it, with the agent's own
+API always on it.
 
 ```
   sandbox VM  (its own kernel; processes start in /sandbox/home)
   code:     git clone inside the sandbox, or the files API; volumes keep data between runs
-  network:  only names on the allowlist; DNS answers nothing else
+  network:  open by default; or an allowlist of names, enforced on the host (prod: always)
   logins:   copied in and out per run, never a mounted host directory
 ```
 

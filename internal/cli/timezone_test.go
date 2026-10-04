@@ -60,7 +60,7 @@ func TestRunsCarryTheClientsZone(t *testing.T) {
 	defer func(f func() string) { hostTimezone = f }(hostTimezone)
 	apply := func(env map[string]string) map[string]string {
 		req := api.CreateSandboxRequest{Env: env}
-		if err := applyConfig(&runFlags{}, t.TempDir(), &req, api.Capabilities{}); err != nil {
+		if err := applyConfig(&runFlags{}, t.TempDir(), &req, api.Capabilities{}, ""); err != nil {
 			t.Fatal(err)
 		}
 		return req.Env

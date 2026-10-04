@@ -18,7 +18,7 @@ import (
 // volume behind to be skipped forever.
 func TestAgentTools(t *testing.T) {
 	ctx := context.Background()
-	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist, api.CapVolumes), Policy: spec.DefaultPolicy()}).Handler())
+	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist, api.CapVolumes), Policy: spec.DefaultPolicyFor(fake.New(api.CapEgressAllowlist, api.CapVolumes).Capabilities())}).Handler())
 	defer srv.Close()
 	c, _ := api.NewClient(srv.URL, "")
 	caps, err := c.Capabilities(ctx)
