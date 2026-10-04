@@ -474,6 +474,14 @@ that fails on the code before the fix:
 
 ### Fixed
 
+- **A gateway no longer refuses a burst of short-lived sandboxes on a node
+  with room.** A sandbox the gateway terminated kept counting against its node
+  until the node's next status, every 5 seconds by default, so create-use-
+  terminate in a loop — a test suite, a batch of agent runs — was refused "no
+  node has room for this sandbox" on an empty node: the conformance suite
+  through a gateway in front of a 16-CPU node failed from its 17th create. The
+  room comes back as soon as the node confirms the terminate.
+
 - **On macOS, an image without the sandbox user's home failed every run with
   "no such command".** Firecracker guests make `/sandbox/home` at boot; the
   macOS backend's guest did not, so with an image like alpine the command could

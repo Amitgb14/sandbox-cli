@@ -502,9 +502,9 @@ func (h *quotaHold) release() {
 // record makes the sandbox's owner record, and moves its share from in
 // flight to recorded in one step under the quota lock, so no check counts it
 // twice or not at all; the file is written after the lock is let go.
-func (h *quotaHold) record(id string, o Owner, cpus float64, memoryMB int) error {
+func (h *quotaHold) record(id string, o Owner, cpus float64, memoryMB, diskMB int) error {
 	h.g.quotaMu.Lock()
-	err := h.g.store.stageSandbox(id, o, cpus, memoryMB)
+	err := h.g.store.stageSandbox(id, o, cpus, memoryMB, diskMB)
 	if err == nil {
 		h.drop()
 	}

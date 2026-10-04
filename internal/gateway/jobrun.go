@@ -770,6 +770,9 @@ func (g *Gateway) terminateRunSandbox(id string) {
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
 		g.tombs.add(id, o)
+		if resp.StatusCode == http.StatusNoContent {
+			g.roomBack(o.Node, id)
+		}
 		if err := g.store.ForgetSandbox(id); err != nil {
 			g.logf("forgetting %s: %v", id, err)
 		}

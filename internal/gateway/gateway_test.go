@@ -735,3 +735,42 @@ func TestNodeGoneBetweenPolls(t *testing.T) {
 		t.Fatalf("listed %d sandboxes, want n1's (at least 6)", len(list))
 	}
 }
+
+// A sandbox the gateway terminated gives its room back at once. The node's
+// status shows the room free only at the next poll, and until then the
+// gateway counted the sandbox as still placed there: a burst of short-lived
+// sandboxes — create, use, terminate, the shape of a test suite or a batch of
+// agent runs — was refused "no node has room" on an empty node. Reproduced
+// on a real node with 16 CPUs, where the conformance suite's 17th create in
+// one poll interval was refused.
+func TestTerminatedSandboxesGiveTheirRoomBackBeforeThePoll(t *testing.T) {
+	n1 := startNode(t, "n1", allCaps...)
+	n1.capacity = api.NodeResources{CPUs: 4, MemoryMB: 64 << 10, DiskMB: 1 << 20}
+	// Polled only when the test says, so nothing frees the room but the fix.
+	tg := startGateway(t, func(c *Config) { c.PollInterval = time.Hour }, n1)
+	tg.g.PollNow(ctxT(t))
+	alice := tg.user("alice")
+	ctx := ctxT(t)
+	// Ten one-CPU sandboxes, at most one alive at a time, with no poll in
+	// between: room for four is enough.
+	for i := range 10 {
+		sb, err := alice.CreateSandbox(ctx, api.CreateSandboxRequest{CPUs: 1})
+		if err != nil {
+			t.Fatalf("create %d of 10, each terminated before the next, on a node with room for 4: %v", i+1, err)
+		}
+		if err := alice.TerminateSandbox(ctx, sb.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A status asked after the terminates shows the room free itself, and
+	// the credits go: they must not count twice. Four alive fill the node.
+	tg.g.PollNow(ctx)
+	for i := range 4 {
+		if _, err := alice.CreateSandbox(ctx, api.CreateSandboxRequest{CPUs: 1}); err != nil {
+			t.Fatalf("live sandbox %d of 4: %v", i+1, err)
+		}
+	}
+	if _, err := alice.CreateSandbox(ctx, api.CreateSandboxRequest{CPUs: 1}); err == nil {
+		t.Fatal("a fifth live sandbox was placed on a node with room for four")
+	}
+}

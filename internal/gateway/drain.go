@@ -162,6 +162,9 @@ func (g *Gateway) terminateOn(ctx context.Context, n *node, id string) error {
 	if o, ok := g.store.OwnerOf(id); ok {
 		g.tombs.add(id, o)
 	}
+	if resp.StatusCode == http.StatusNoContent {
+		g.roomBack(n.cfg.Name, id)
+	}
 	if err := g.store.ForgetSandbox(id); err != nil {
 		g.logf("drain: forgetting %s: %v", id, err)
 	}
