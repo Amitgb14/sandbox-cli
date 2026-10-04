@@ -229,6 +229,18 @@ In the rewrite:
 
 ### Changed
 
+- **Studio is reorganised around sandboxes, the way hosted sandbox dashboards
+  are.** The Overview shows what is running, agents waiting for you, snapshots
+  and volumes, and a quick start in the CLI, curl, Python or TypeScript when
+  there is nothing yet. Sandboxes filters by state, start time and a search,
+  and shows what each sandbox was given (vCPU, memory, disk: allocations, since
+  sandboxd reports no live usage). A sandbox opens on an Overview tab —
+  resources, network, lifecycle, volumes, environment names and its processes —
+  beside Terminal, Logs (formerly Output), Files and Events. Launch is now the
+  Playground: the form, with the same command run written as CLI, curl, Python
+  and TypeScript beside it, so a run set up by hand can be repeated from a
+  script. And a new Snapshots screen lists snapshots and deletes them.
+
 - **A sandbox no longer has a repository.** Every process starts in the sandbox
   user's home, `/sandbox/home`, and there is no `/workspace`. Code gets into a
   sandbox the way it gets into any machine: the agent or the command runs

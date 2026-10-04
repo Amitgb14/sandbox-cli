@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 
 const { token } = JSON.parse(readFileSync(join(__dirname, ".state.json"), "utf8")) as { token: string };
-const ROUTES = ["/", "/sandboxes/", "/launch/", "/agents/", "/volumes/", "/settings/"];
+const ROUTES = ["/", "/sandboxes/", "/launch/", "/snapshots/", "/agents/", "/volumes/", "/settings/"];
 
 test("every screen renders with no console errors", async ({ page }) => {
   const errors: string[] = [];
@@ -41,7 +41,9 @@ test("a sandbox started elsewhere is listed, labelled, and has events", async ({
   await expect(page.getByText("suite=studio-e2e")).toBeVisible();
   await page.getByRole("link", { name: created.id }).click();
   await expect(page.getByRole("heading", { name: created.id })).toBeVisible();
-  await page.getByRole("tab", { name: "Output" }).click();
+  await page.getByRole("tab", { name: "Overview" }).click();
+  await expect(page.getByText("echo hi")).toBeVisible();
+  await page.getByRole("tab", { name: "Logs" }).click();
   await expect(page.getByText("hi", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Events" }).click();
   await expect(page.getByText("process.exited")).toBeVisible();
@@ -78,4 +80,31 @@ test("the repository screens are gone", async ({ page, request }) => {
     const r = await request.fetch(path, { headers: { Authorization: `Bearer ${token}` } });
     expect(r.status(), path).toBeGreaterThanOrEqual(400);
   }
+});
+
+test("the Playground writes the same sandbox as code, and the list filters by state", async ({ page, request }) => {
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/launch/");
+  await page.getByText("Command", { exact: true }).first().click();
+  await page.getByRole("textbox", { name: "Command" }).fill("make test");
+  const code = page.locator("pre").last();
+  await expect(code).toContainText("sandbox-cli run -- make test");
+  await page.getByRole("tab", { name: "Python" }).click();
+  await expect(code).toContainText('c.run(sb["id"], ["make", "test"])');
+  await page.getByRole("tab", { name: "TypeScript" }).click();
+  await expect(code).toContainText('await c.run(sb.id, ["make","test"])');
+
+  // One running and one terminated sandbox; the state filter tells them apart.
+  const api = (path: string, method = "GET", data?: unknown) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
+  const keep = await (await api("/v1/sandboxes", "POST", { name: "filter-keep" })).json();
+  const gone = await (await api("/v1/sandboxes", "POST", { name: "filter-gone" })).json();
+  await api(`/v1/sandboxes/${gone.id}`, "DELETE");
+  await page.goto("/sandboxes/");
+  await page.getByPlaceholder(/Search/).fill("filter-");
+  await page.getByRole("tab", { name: /Running/ }).click();
+  await expect(page.getByText("filter-keep")).toBeVisible();
+  await expect(page.getByText("filter-gone")).toHaveCount(0);
+  await api(`/v1/sandboxes/${keep.id}`, "DELETE");
 });

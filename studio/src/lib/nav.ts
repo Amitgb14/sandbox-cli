@@ -1,6 +1,7 @@
 import {
   Bot,
   Boxes,
+  Camera,
   HardDrive,
   LayoutDashboard,
   Play,
@@ -39,10 +40,10 @@ export interface NavGroup {
 
 export const NAV: NavGroup[] = [
   {
-    label: "Overview",
+    label: "Sandboxes",
     items: [
       {
-        title: "Dashboard",
+        title: "Overview",
         href: "/",
         icon: LayoutDashboard,
         hint: "What is running, which agents are waiting for you, and what this sandboxd can do",
@@ -52,20 +53,15 @@ export const NAV: NavGroup[] = [
         title: "Sandboxes",
         href: "/sandboxes",
         icon: Boxes,
-        hint: "Every sandbox on this sandboxd: its terminal, output, files and events",
+        hint: "Every sandbox on this sandboxd: its overview, terminal, logs, files and events",
         shortcut: "S",
         also: ["/sandbox"],
       },
-    ],
-  },
-  {
-    label: "Work",
-    items: [
       {
-        title: "Launch",
+        title: "Playground",
         href: "/launch",
         icon: Play,
-        hint: "Start a command or an agent in a fresh sandbox",
+        hint: "Set up a sandbox, launch it, or copy the same setup as CLI, curl, Python or TypeScript",
         shortcut: "N",
       },
     ],
@@ -74,17 +70,23 @@ export const NAV: NavGroup[] = [
     label: "Resources",
     items: [
       {
-        title: "Agents",
-        href: "/agents",
-        icon: Bot,
-        hint: "The agents Studio runs, all with a verified headless mode, and whose login is saved",
-        shortcut: "A",
+        title: "Snapshots",
+        href: "/snapshots",
+        icon: Camera,
+        hint: "Sandboxes captured whole, to start new ones from",
       },
       {
         title: "Volumes",
         href: "/volumes",
         icon: HardDrive,
         hint: "Named filesystems that outlive the sandboxes they are mounted in",
+      },
+      {
+        title: "Agents",
+        href: "/agents",
+        icon: Bot,
+        hint: "The agents Studio runs, all with a verified headless mode, and whose login is saved",
+        shortcut: "A",
       },
     ],
   },
@@ -121,7 +123,7 @@ export interface Crumb {
 /** Breadcrumbs from a pathname: Studio, then the screen. */
 export function crumbsFor(pathname: string): Crumb[] {
   const p = pathname.replace(/\/$/, "") || "/";
-  if (p === "/") return [{ label: "Dashboard", href: "/", current: true }];
+  if (p === "/") return [{ label: "Overview", href: "/", current: true }];
   const item = ALL_NAV_ITEMS.find((i) => isActive(i, p));
   const crumbs: Crumb[] = [{ label: "Studio", href: "/", current: false }];
   if (item && item.href !== p) crumbs.push({ label: item.title, href: item.href, current: false });

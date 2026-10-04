@@ -163,6 +163,13 @@ export function useSnapshot() {
   );
 }
 
+export function useDeleteSnapshot() {
+  return useInvalidating(
+    (id: string) => apiFetch<void>(`/v1/snapshots/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    () => [[...keys.snapshots]],
+  );
+}
+
 export function useUpdateNetwork() {
   return useInvalidating(
     ({ id, network }: { id: string; network: NetworkPolicy }) =>

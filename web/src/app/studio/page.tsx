@@ -30,16 +30,20 @@ const OPEN = `sandbox-cli studio
 
 const SCREENS = [
   {
-    name: "Dashboard",
-    what: "What is running and suspended, and what this sandboxd can do — its backend, capabilities, network ceiling and limits.",
+    name: "Overview",
+    what: "What is running, agents waiting for you, snapshots and volumes, and what this sandboxd can do — its capabilities, network ceiling and limits. With nothing running yet, a quick start in the client you use.",
   },
   {
     name: "Sandboxes",
-    what: "Every sandbox on the sandboxd, started from Studio, the CLI or an SDK, with its labels. Each one has a real terminal, its processes' output from the first byte, its files, and its audit events.",
+    what: "Every sandbox on the sandboxd, started from Studio, the CLI or an SDK, filtered by state, start time or a search, with what each was given. Each one has an overview, a real terminal, its processes' logs from the first byte, its files, and its audit events.",
   },
   {
-    name: "Launch",
-    what: "A command, an agent run unattended, or an agent's interactive console, in a fresh sandbox that starts in its own home directory — with the same config, profile, network policy, labels, volumes and agent login a sandbox-cli run would get. It needs no repository: ask the agent, or the command, to clone what it needs.",
+    name: "Playground",
+    what: "A command, an agent run unattended, or an agent's interactive console, in a fresh sandbox that starts in its own home directory — with the same config, profile, network policy, labels, volumes and agent login a sandbox-cli run would get. Beside the form, the same command run as CLI, curl, Python and TypeScript, to repeat it from a script.",
+  },
+  {
+    name: "Snapshots",
+    what: "Sandboxes captured whole — memory, processes and disk — to start new ones from, where the backend offers them.",
   },
   {
     name: "Agents, Volumes, Settings",
