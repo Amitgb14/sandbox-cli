@@ -534,6 +534,13 @@ that fails on the code before the fix:
   through a gateway in front of a 16-CPU node failed from its 17th create. The
   room comes back as soon as the node confirms the terminate.
 
+- **A Mac behind a gateway now gets sandboxes and jobs.** sandboxd read the
+  machine's memory from `/proc/meminfo`, which macOS does not have, so a Mac
+  node reported 0 MiB and the gateway queued everything for it, a job
+  forever. It now reads `hw.memsize`. Disk was 0 on any first start, measured
+  before the state directory existed; it is now the filesystem that directory
+  will be made on. `--capacity-memory-mb` and `--capacity-disk-mb` still win.
+
 - **On macOS, an image without the sandbox user's home failed every run with
   "no such command".** Firecracker guests make `/sandbox/home` at boot; the
   macOS backend's guest did not, so with an image like alpine the command could

@@ -89,7 +89,7 @@ func run(args []string) error {
 	fl.StringVar(&node.id, "node-id", "", "this sandboxd's name as one node behind a gateway; every sandbox id it makes names it")
 	fl.Var(&nodeLabels, "node-label", "key=value describing this node to a gateway (repeatable)")
 	fl.Float64Var(&node.cpus, "capacity-cpus", 0, "CPUs offered to sandboxes (default: every CPU)")
-	fl.IntVar(&node.memoryMB, "capacity-memory-mb", 0, "memory offered to sandboxes, MiB (default: all of it, on Linux)")
+	fl.IntVar(&node.memoryMB, "capacity-memory-mb", 0, "memory offered to sandboxes, MiB (default: all of it, on Linux and macOS)")
 	fl.IntVar(&node.diskMB, "capacity-disk-mb", 0, "disk offered to sandboxes, MiB (default: the size of the state directory's filesystem)")
 	fl.StringVar(&node.clientCA, "client-ca", "", "CA (PEM) whose certificates alone may connect; needs --tls-cert (mutual TLS, for a node behind a gateway)")
 	metricsListen := fl.String("metrics-listen", "", "loopback host:port to serve Prometheus metrics on, without a credential; off when empty")

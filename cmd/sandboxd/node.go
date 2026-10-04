@@ -82,7 +82,7 @@ func capacity(o nodeOptions, stateDir string) api.NodeResources {
 		c.CPUs = float64(runtime.NumCPU())
 	}
 	if c.MemoryMB == 0 {
-		c.MemoryMB = memTotalMB("/proc/meminfo")
+		c.MemoryMB = hostMemMB()
 	}
 	if c.DiskMB == 0 {
 		c.DiskMB = diskTotalMB(stateDir)

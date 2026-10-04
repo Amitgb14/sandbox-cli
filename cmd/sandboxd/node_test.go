@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -98,6 +99,20 @@ func TestCapacityFlagsWinOverDetection(t *testing.T) {
 	}
 	if c := capacity(nodeOptions{}, t.TempDir()); c.CPUs < 1 {
 		t.Fatalf("detected %+v", c)
+	}
+}
+
+// Memory and disk are detected on Linux and macOS, and for a state directory
+// that does not exist yet, as on a first start. Either at 0 makes a gateway
+// take the node for one with no room: on a Mac, memory read from
+// /proc/meminfo was always 0, and every job sent there stayed queued.
+func TestCapacityDetectsMemoryAndDiskBeforeTheStateDirExists(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("memory and disk are detected on Linux and macOS only")
+	}
+	c := capacity(nodeOptions{}, filepath.Join(t.TempDir(), "not", "yet"))
+	if c.MemoryMB <= 0 || c.DiskMB <= 0 {
+		t.Fatalf("detected %+v; want memory and disk", c)
 	}
 }
 
