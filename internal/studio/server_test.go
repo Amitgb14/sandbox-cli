@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/server"
@@ -191,6 +193,7 @@ func TestLaunchValidates(t *testing.T) {
 		"console without agent": {Repo: rp.ID, Console: true, Command: []string{"true"}},
 		"headless, no prompt":   {Repo: rp.ID, Agent: "claude"},
 		"unverified headless":   {Repo: rp.ID, Agent: "goose", Prompt: "x"},
+		"unverified console":    {Repo: rp.ID, Agent: "goose", Console: true},
 		"unknown agent":         {Repo: rp.ID, Agent: "nope", Prompt: "x"},
 		"unknown repo":          {Repo: "000000000000", Command: []string{"true"}},
 	} {
@@ -201,8 +204,49 @@ func TestLaunchValidates(t *testing.T) {
 	if launched != 0 {
 		t.Fatalf("an invalid request launched")
 	}
-	if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Repo: rp.ID, Agent: "goose", Console: true}); r.StatusCode != http.StatusCreated {
-		t.Errorf("a console run of an interactive-only agent: %d %v", r.StatusCode, body)
+	if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Repo: rp.ID, Agent: "claude", Console: true}); r.StatusCode != http.StatusCreated {
+		t.Errorf("a console run of a verified agent: %d %v", r.StatusCode, body)
+	}
+	// No repository: launched with no path, which the launcher turns into an
+	// empty /workspace.
+	var gotPath = "unset"
+	s.Launch = func(_ context.Context, path string, _ LaunchRequest) (LaunchResult, error) {
+		gotPath = path
+		return LaunchResult{Sandbox: "sbx_y"}, nil
+	}
+	if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Command: []string{"true"}}); r.StatusCode != http.StatusCreated || gotPath != "" {
+		t.Errorf("a run without a repository: %d %v, path %q", r.StatusCode, body, gotPath)
+	}
+}
+
+// Studio lists exactly the agents with a verified headless mode; the
+// interactive-only wrappers stay in the CLI.
+func TestAgentsListsOnlyVerified(t *testing.T) {
+	_, st, _ := studioUnderTest(t)
+	r, _ := call(t, st.URL, "GET", "/api/agents", testToken, "", nil)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", r.StatusCode)
+	}
+	req, _ := http.NewRequest("GET", st.URL+"/api/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got struct{ Agents []Agent }
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, a := range got.Agents {
+		names = append(names, a.Name)
+	}
+	if want := agents.Names(); !slices.Equal(names, want) {
+		t.Errorf("listed %v, want %v", names, want)
+	}
+	if len(agents.InteractiveNames()) <= len(names) {
+		t.Fatalf("no interactive-only agent to leave out; the test proves nothing")
 	}
 }
 

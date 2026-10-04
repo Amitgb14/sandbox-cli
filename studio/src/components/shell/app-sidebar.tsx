@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Box, ChevronsUpDown, FolderPlus, Plus } from "lucide-react";
+import { Box, ChevronsUpDown, FolderGit2, FolderPlus, Plus } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -38,9 +38,9 @@ import { cn } from "@/lib/utils";
  * running, Runs how many still hold work that has not come back. A badge that
  * showed a total would be a number nobody acts on.
  *
- * The repository picker scopes the work screens (Launch, Runs, Review, Fleet);
- * Sandboxes is the whole sandboxd's, since a sandbox need not have a
- * repository at all.
+ * The repository picker scopes Runs, Review and Fleet, and is what Launch
+ * starts on unless told otherwise. Sandboxes is the whole sandboxd's, and
+ * Launch can start one with no repository at all.
  */
 export function AppSidebar() {
   const pathname = usePathname();
@@ -68,27 +68,29 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon" className="border-r">
-      <SidebarHeader>
-        <SidebarMenu>
+      <SidebarHeader className="gap-3 pt-3">
+        <Link href="/" className="flex items-center gap-2.5 px-2 group-data-[collapsible=icon]:px-0">
+          <div className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-sm shadow-primary/30">
+            <Box className="size-4" />
+          </div>
+          <div className="grid leading-tight group-data-[collapsible=icon]:hidden">
+            <span className="text-sm font-semibold tracking-tight">Sandbox Studio</span>
+            <span className="text-[11px] text-muted-foreground">microVM sandboxes</span>
+          </div>
+        </Link>
+        <SidebarMenu className="group-data-[collapsible=icon]:hidden">
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent" tooltip="Repository">
-                  <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                    <Box className="size-4" />
-                  </div>
-                  <div className="grid flex-1 text-left leading-tight">
-                    <span className="truncate text-sm font-semibold">Sandbox Studio</span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      {active?.name ?? "No repository"}
-                    </span>
-                  </div>
-                  <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
+                <SidebarMenuButton className="h-9 border bg-background/60 data-[state=open]:bg-sidebar-accent" tooltip="Repository">
+                  <FolderGit2 className="text-muted-foreground" />
+                  <span className={cn("truncate", !active && "text-muted-foreground")}>{active?.name ?? "No repository"}</span>
+                  <ChevronsUpDown className="ml-auto size-3.5 text-muted-foreground" />
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-72">
                 <DropdownMenuLabel className="text-xs text-muted-foreground">
-                  The repository Launch, Runs, Review and Fleet are about
+                  The repository Runs, Review and Fleet are about, and Launch starts on
                 </DropdownMenuLabel>
                 {(repos ?? []).map((r) => (
                   <DropdownMenuItem key={r.id} disabled={r.missing} onClick={() => !r.missing && setRepo(r.id)}>
@@ -122,14 +124,19 @@ export function AppSidebar() {
       <SidebarContent>
         {NAV.map((group) => (
           <SidebarGroup key={group.label}>
-            <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+            <SidebarGroupLabel className="text-[11px] font-medium tracking-wide text-muted-foreground/70 uppercase">{group.label}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.items.map((item) => {
                   const n = badge(item.href);
                   return (
                     <SidebarMenuItem key={item.href}>
-                      <SidebarMenuButton asChild isActive={isActive(item, pathname)} tooltip={item.title}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={isActive(item, pathname)}
+                        tooltip={item.title}
+                        className="text-muted-foreground hover:text-foreground data-[active=true]:font-medium data-[active=true]:text-foreground data-[active=true]:[&>svg]:text-primary"
+                      >
                         <Link href={item.href}>
                           <item.icon />
                           <span>{item.title}</span>
@@ -146,7 +153,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter>
-        <Button asChild className="w-full group-data-[collapsible=icon]:hidden">
+        <Button asChild className="w-full shadow-sm shadow-primary/20 group-data-[collapsible=icon]:hidden">
           <Link href="/launch">
             <Plus className="size-4" />
             New run

@@ -70,6 +70,8 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// No repository is a sandbox with an empty /workspace: nothing is cloned
+	// in, and nothing comes back to bring home.
 	var path string
 	for _, rp := range repos {
 		if rp.ID == req.Repo && !rp.Missing {
@@ -77,7 +79,7 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch {
-	case path == "":
+	case req.Repo != "" && path == "":
 		writeErr(w, http.StatusNotFound, "no repository with that id; add it first")
 		return
 	case (req.Agent == "") == (len(req.Command) == 0):
@@ -90,19 +92,20 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "a headless agent run needs a prompt")
 		return
 	}
+	// Studio offers only the agents with a verified headless mode, console
+	// runs included. Headless needs it outright: nobody will answer a
+	// question, and an agent that stops to ask does not fail, it hangs. A
+	// console run does not, but the interactive-only wrappers are unverified
+	// beyond starting, and they stay a CLI choice (sandbox-cli agent <name>)
+	// rather than something Studio puts on a menu.
 	if req.Agent != "" {
-		if _, ok := agents.LookupInteractive(req.Agent); !ok {
-			writeErr(w, http.StatusBadRequest, "unknown agent "+req.Agent)
-			return
-		}
-		// Headless means nobody will answer a question, so only an agent with
-		// a verified headless mode may run that way: one that stops to ask
-		// does not fail, it hangs.
-		if !req.Console {
-			if _, ok := agents.Lookup(req.Agent); !ok {
-				writeErr(w, http.StatusBadRequest, req.Agent+" has no verified headless mode; run it as a console")
-				return
+		if _, ok := agents.Lookup(req.Agent); !ok {
+			msg := "unknown agent " + req.Agent
+			if _, ok := agents.LookupInteractive(req.Agent); ok {
+				msg = req.Agent + " has no verified headless mode, so Studio does not run it; use sandbox-cli agent " + req.Agent
 			}
+			writeErr(w, http.StatusBadRequest, msg)
+			return
 		}
 	}
 	if s.Launch == nil {
@@ -162,18 +165,17 @@ func (s *Server) forgetRun(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Agent is one agent, as `sandbox-cli agent ls` shows it.
+// Agent is one agent Studio can run. Only agents with a verified headless
+// mode are listed (see launch); `sandbox-cli agent ls` shows the rest.
 type Agent struct {
-	Name       string `json:"name"`
-	Unattended bool   `json:"unattended"` // a verified headless mode
-	Login      string `json:"login"`      // "saved", "-", or "not kept"
+	Name  string `json:"name"`
+	Login string `json:"login"` // "saved", "-", or "not kept"
 }
 
 func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 	out := []Agent{}
-	for _, name := range agents.InteractiveNames() {
-		d, _ := agents.LookupInteractive(name)
-		_, unattended := agents.Lookup(name)
+	for _, name := range agents.Names() {
+		d, _ := agents.Lookup(name)
 		login := "-"
 		if len(d.AuthPaths) == 0 {
 			login = "not kept"
@@ -184,7 +186,7 @@ func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 				}
 			}
 		}
-		out = append(out, Agent{Name: name, Unattended: unattended, Login: login})
+		out = append(out, Agent{Name: name, Login: login})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": out})
 }

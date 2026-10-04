@@ -18,7 +18,7 @@ export function TokenGate() {
   const [value, setValue] = useState("");
   if (!(error instanceof ApiError) || error.status !== 401) return null;
   return (
-    <div className="mx-4 mt-4 flex flex-col gap-3 rounded-lg border border-caution/40 bg-caution/10 p-4 md:mx-6">
+    <div className="mx-4 mt-4 flex flex-col gap-3 rounded-lg border border-caution/40 bg-caution/10 p-4 md:mx-8">
       <div className="flex items-center gap-2 text-sm font-medium">
         <KeyRound className="size-4" /> Studio needs its token
       </div>

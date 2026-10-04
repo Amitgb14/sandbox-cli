@@ -266,6 +266,16 @@ In the rewrite:
 
 ### Changed
 
+- **Studio can launch without a repository, and lists only the agents it can
+  run unattended.** Launch now asks which repository to clone, with "No
+  repository" starting the sandbox on an empty `/workspace` — nothing cloned in,
+  nothing to bring back. The Agents page and the launch form show only the
+  agents with a verified headless mode (claude, codex, gemini, opencode, cline);
+  Studio refuses to start the interactive-only ones, console runs included, and
+  they stay available from the CLI with `sandbox-cli agent <name>`. Studio also
+  has a refreshed look: a readable page width, tables as cards, a step-by-step
+  launch form with a summary of the run, and an agent card per agent.
+
 - **The site's Studio setup answers two questions it used to leave to a bad
   afternoon.** The remote track now starts with installing the two binaries on
   the Linux machine — they are two, not one with a subcommand, and `make build`

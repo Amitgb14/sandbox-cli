@@ -109,6 +109,20 @@ func studioLauncher(ctxName string) studio.Launcher {
 	return func(ctx context.Context, repoPath string, req studio.LaunchRequest) (studio.LaunchResult, error) {
 		rf := &runFlags{context: ctxName, project: repoPath, detach: true, name: req.Name,
 			network: req.Network, allow: req.Allow, git: req.Git, profile: req.Profile}
+		if repoPath == "" {
+			// No repository: an empty /workspace. The project directory is
+			// still where config is looked for, and left empty runSandbox
+			// would use the directory Studio was started in and pick up
+			// whatever .sandbox.yaml sits there. A fresh private directory
+			// outside any repository is its own search boundary, so no
+			// project config applies at all.
+			dir, err := os.MkdirTemp("", "sandbox-studio-")
+			if err != nil {
+				return studio.LaunchResult{}, err
+			}
+			defer os.RemoveAll(dir)
+			rf.project, rf.noWorkspace = dir, true
+		}
 		for k, v := range req.Labels {
 			rf.labels = append(rf.labels, k+"="+v)
 		}

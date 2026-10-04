@@ -38,7 +38,9 @@ import (
 // LaunchRequest is a run started from Studio. It becomes the same request a
 // detached `sandbox-cli run` or `sandbox-cli agent` makes.
 type LaunchRequest struct {
-	Repo string `json:"repo"` // a registered repository's id
+	// Repo is a registered repository's id, cloned into /workspace. Empty
+	// starts the sandbox with an empty /workspace instead.
+	Repo string `json:"repo,omitempty"`
 	// Agent, when set, runs that agent: headless with Prompt, or — Console —
 	// interactive on a terminal the browser attaches to. Otherwise Command.
 	Agent   string   `json:"agent,omitempty"`
@@ -65,7 +67,8 @@ type LaunchResult struct {
 	PID     int    `json:"pid"`
 }
 
-// Launcher starts a run on a repository at path; the CLI supplies it.
+// Launcher starts a run on a repository at repoPath, or with an empty
+// /workspace when repoPath is empty; the CLI supplies it.
 type Launcher func(ctx context.Context, repoPath string, req LaunchRequest) (LaunchResult, error)
 
 // Server is one Studio.

@@ -63,8 +63,8 @@ by `e2e/global-setup.ts`.
 |---|---|
 | `/` | Dashboard: agents waiting for you, what is running, work not brought back, what this sandboxd can do |
 | `/sandboxes`, `/sandbox?id=` | Every sandbox; one sandbox's terminal, output, files and events |
-| `/launch` | A command, an unattended agent, or an agent's console, on a clone of the repository |
+| `/launch` | A command, an unattended agent, or an agent's console, on a clone of a repository or an empty `/workspace` |
 | `/runs` | Runs on the repository, and where each one's work is |
 | `/review` | `refs/sandbox/*` and their diff against HEAD |
 | `/fleet` | A fleet run's tasks; landing what verified |
-| `/agents`, `/volumes`, `/settings` | Agents and logins; volumes; the context and repositories |
+| `/agents`, `/volumes`, `/settings` | The agents Studio runs (those with a verified headless mode) and their logins; volumes; the context and repositories |

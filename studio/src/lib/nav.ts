@@ -68,7 +68,7 @@ export const NAV: NavGroup[] = [
         title: "Launch",
         href: "/launch",
         icon: Play,
-        hint: "Start a command or an agent on a clone of a repository",
+        hint: "Start a command or an agent, on a clone of a repository or an empty workspace",
         shortcut: "N",
       },
       {
@@ -101,7 +101,7 @@ export const NAV: NavGroup[] = [
         title: "Agents",
         href: "/agents",
         icon: Bot,
-        hint: "The twelve agents, which can run unattended, and whose login is saved",
+        hint: "The agents Studio runs, all with a verified headless mode, and whose login is saved",
         shortcut: "A",
       },
       {
