@@ -272,6 +272,15 @@ In the rewrite:
 
 ### Changed
 
+- **The site has a setup guide for a Mac and for Linux** (`/setup`). It covers
+  four paths, each from a cold machine to `sandbox-cli doctor` and a first run:
+  a Mac, Linux without root, a Linux server under systemd with TLS and a token,
+  and a client pointed at a server. A troubleshooting section is keyed by the
+  error you saw. It also fixes the macOS steps on the landing page, which
+  installed `sandboxd` into `~/.local/bin` and then started a launch agent that
+  runs `/usr/local/bin/sandboxd`: the launch agent is now pointed at the
+  installed copy, and still needs no root.
+
 - **Studio can launch without a repository, and lists only the agents it can
   run unattended.** Launch now asks which repository to clone, with "No
   repository" starting the sandbox on an empty `/workspace` — nothing cloned in,

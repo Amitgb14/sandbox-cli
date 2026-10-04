@@ -25,7 +25,7 @@
  * the menu tell you something you did not already know from the label.
  */
 
-import { MULTI_AGENT_PATH, STUDIO_PATH } from "@/lib/site";
+import { MULTI_AGENT_PATH, SETUP_PATH, STUDIO_PATH } from "@/lib/site";
 
 export type NavLink = {
   href: string;
@@ -102,9 +102,9 @@ export const NAV: NavEntry[] = [
     label: "Get started",
     items: [
       {
-        href: "#setup",
-        label: "Setup",
-        hint: "a Mac, a Linux server, or a client pointed at either",
+        href: SETUP_PATH,
+        label: "Setup guide",
+        hint: "a Mac, Linux with or without root, or a client; step by step, with fixes",
       },
       {
         href: "#compare",
