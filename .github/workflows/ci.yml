@@ -11,13 +11,64 @@ name: ci
 #
 # The lesson is not "add Windows"; it is that a release builds six targets and a
 # PR built none of them. This runs the same six.
+#
+# Each job runs only for the parts of the tree it checks, decided by the
+# `changes` job below, so a pull request that only touches Studio's screens
+# does not wait for the Go matrix and one that only touches Go skips the web
+# site. Jobs are skipped rather than the workflow filtered by `paths:`: a
+# skipped job counts as passed for a required check, while a workflow that
+# never started leaves one waiting forever.
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
+  # Which parts of the tree a change touches. The rules lean towards running:
+  #
+  #   go      anything but studio/, web/, docs/, sdk/ and Markdown — a file
+  #           nobody thought to list is checked, not skipped;
+  #   studio  studio/ (but not its Markdown), and anything Go under cmd/ or
+  #           internal/ or the module files, because Studio's e2e suite runs
+  #           the real sandbox-cli, sandboxd and sandbox-gateway;
+  #   web     web/;
+  #   sdks    sdk/, and the same Go, since the Python tests start a sandboxd.
+  #
+  # A push to main, a manual run, and a change to this file run everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.f.outputs.go }}
+      studio: ${{ steps.f.outputs.studio }}
+      web: ${{ steps.f.outputs.web }}
+      sdks: ${{ steps.f.outputs.sdks }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: f
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          all() { for k in go studio web sdks; do echo "$k=true" >> "$GITHUB_OUTPUT"; done; }
+          if [ "$EVENT" != pull_request ]; then all; exit 0; fi
+          files="$(git diff --name-only "$BASE" HEAD)"
+          echo "changed:"; echo "$files"
+          if echo "$files" | grep -qx '.github/workflows/ci.yml'; then all; exit 0; fi
+          has() { echo "$files" | grep -Eq "$1" && echo true || echo false; }
+          gocode='^(cmd/|internal/|go\.mod$|go\.sum$|Makefile$)'
+          {
+            echo "go=$(echo "$files" | grep -Ev '^(studio/|web/|docs/|sdk/)|\.md$' | grep -q . && echo true || echo false)"
+            echo "studio=$(echo "$files" | grep -E "^studio/|$gocode" | grep -Ev '\.md$' | grep -q . && echo true || echo false)"
+            echo "web=$(has '^web/')"
+            echo "sdks=$(has "^sdk/|$gocode")"
+          } | tee -a "$GITHUB_OUTPUT"
+
   check:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,6 +116,8 @@ jobs:
   # building every package for every pair, CGO_ENABLED=0. If a target is added
   # there, add it here; a sweep that has drifted from what ships reassures.
   build-matrix:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     strategy:
       # Report every broken target in one run, rather than stopping at the first
@@ -91,10 +144,14 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
 
-  # Studio's UI: typecheck, lint, the static export sandbox-cli embeds, and the
-  # end-to-end suite against `sandbox-cli studio` in front of an in-memory
-  # sandboxd (studio/e2e). The site in web/ gets the first three.
-  frontends:
+  # Studio's UI: typecheck, lint, the static export sandbox-cli embeds, the
+  # check that a NEXT_PUBLIC_STUDIO_ADMIN=off build carries no admin screen,
+  # and the end-to-end suite against `sandbox-cli studio` in front of an
+  # in-memory sandboxd and a sandbox-gateway (studio/e2e). The suite runs the
+  # binaries from bin/, so all three are built first.
+  studio:
+    needs: changes
+    if: needs.changes.outputs.studio == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -108,15 +165,28 @@ jobs:
         with:
           node-version: 22
 
-      - name: Studio — typecheck, lint, build
+      - name: Studio — typecheck, lint, build, admin-off build
         working-directory: studio
-        run: npm ci --no-audit --no-fund && npm run typecheck && npm run lint && npm run build
+        run: npm ci --no-audit --no-fund && npm run typecheck && npm run lint && npm run build && npm run check:admin-off
 
       - name: Studio — end to end
         run: |
           go build -o bin/sandbox-cli ./cmd/sandbox-cli
           go build -o bin/sandboxd ./cmd/sandboxd
+          go build -o bin/sandbox-gateway ./cmd/sandbox-gateway
           cd studio && npx playwright install --with-deps chromium && npm run test:e2e
+
+  # The site in web/: typecheck, lint, build.
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Web — typecheck, lint, build
         working-directory: web
@@ -128,6 +198,8 @@ jobs:
   # floor going. Its tests start a real sandboxd (in-memory backend) on a unix
   # socket. TypeScript: the package compiles under its own strict settings.
   sdks:
+    needs: changes
+    if: needs.changes.outputs.sdks == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
