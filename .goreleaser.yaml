@@ -35,7 +35,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version={{ .Version }}
+      - -s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version={{ .Version }} -X github.com/Amitgb14/sandbox-cli/internal/policy.DefaultImage=ghcr.io/amitgb14/sandbox-base:{{ .Tag }}
     goos:
       - linux
       - darwin
@@ -55,7 +55,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version={{ .Version }}
+      - -s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version={{ .Version }} -X github.com/Amitgb14/sandbox-cli/internal/policy.DefaultImage=ghcr.io/amitgb14/sandbox-base:{{ .Tag }}
     goos:
       - linux
       - darwin
@@ -77,7 +77,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version={{ .Version }}
+      - -s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version={{ .Version }} -X github.com/Amitgb14/sandbox-cli/internal/policy.DefaultImage=ghcr.io/amitgb14/sandbox-base:{{ .Tag }}
     goos:
       - linux
     goarch:

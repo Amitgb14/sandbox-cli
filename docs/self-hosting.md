@@ -86,10 +86,12 @@ each volume is hard-linked in.
 
 Every sandbox's events are appended to `<state-dir>/audit/events.jsonl` (mode
 0600): each create with its policy, labels and environment variable **names**,
-every process with its argv and exit code, files read and written, network
-changes, and how the sandbox ended. Clients read a sandbox's events with
-`GET /v1/sandboxes/{ref}/events`, or `sandbox-cli events <id>`. Values are never
-written. An argv is written as given, so treat the file as sensitive.
+every process with its program, argument count, a SHA-256 of its arguments
+and its exit code, files read and written, network changes, and how the
+sandbox ended. Clients read a sandbox's events with
+`GET /v1/sandboxes/{ref}/events`, or `sandbox-cli events <id>`. Environment
+values and a process's arguments are never written: an agent's arguments are
+its prompt. The hash still matches a known command (`docs/api/v1.md`).
 
 - `--audit-log /var/log/sandboxd/events.jsonl` puts it elsewhere;
   `--audit-log none` keeps no log, and capabilities then say `audit: false`.
