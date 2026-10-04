@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
-import { GeistSans } from "geist/font/sans";
+// Inter for text, bundled with the UI rather than fetched from a font service:
+// Studio is served by sandbox-cli on the user's own machine, often offline.
+import "@fontsource-variable/inter";
 import { GeistMono } from "geist/font/mono";
 import { Providers } from "@/components/providers";
 import "./globals.css";
@@ -26,7 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     // from there. suppressHydrationWarning is required: the theme script rewrites
     // this attribute before React hydrates, on purpose.
     <html lang="en" className="dark" suppressHydrationWarning>
-      <body className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased`}>
+      <body className={`${GeistMono.variable} font-sans antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>
