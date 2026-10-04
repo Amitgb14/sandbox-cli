@@ -62,6 +62,12 @@ by `e2e/global-setup.ts`. `npm run check` also runs `check:admin-off`, which
 builds with `NEXT_PUBLIC_STUDIO_ADMIN=off` and fails if anything of the admin
 screens is in that build.
 
+A pull request that touches only `studio/` runs only Studio's CI job, not the
+Go matrix; one that changes Go under `cmd/` or `internal/` runs it too, since
+the suite runs those binaries. Note what changed on the screens in
+[CHANGELOG.md](CHANGELOG.md) here; a change that also touches the CLI or the
+API goes in the main one.
+
 ## Screens
 
 | Route | Screen |

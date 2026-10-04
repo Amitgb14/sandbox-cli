@@ -21,7 +21,8 @@ vendor by its role instead:
 git diff --cached | grep -iE '<names that came up in this session>'
 ```
 
-User-facing change? Add an entry under `Unreleased` in `CHANGELOG.md`.
+User-facing change? Add an entry under `Unreleased` in `CHANGELOG.md` — or in
+`studio/CHANGELOG.md` when only Studio's screens changed.
 
 ## Message
 

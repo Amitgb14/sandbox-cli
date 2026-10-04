@@ -160,7 +160,12 @@ Each of these was paid for with a reproduced escape. The ledger is
 - **Commits:** a plain-sentence title saying what changed, then prose explaining
   why. No `Co-Authored-By` trailer. Skill: `commit-and-pr`.
 - **CHANGELOG.md:** user-facing changes go under `Unreleased`; a release moves
-  them under a dated version heading.
+  them under a dated version heading. A change to Studio's screens alone goes
+  in `studio/CHANGELOG.md` instead; one that also changes the CLI, the API or
+  a command Studio runs goes in `CHANGELOG.md`.
+- **CI runs by path** (`.github/workflows/ci.yml`, the `changes` job): a pull
+  request runs only the jobs for what it touches. A new top-level directory
+  is checked by the Go jobs unless the `changes` job says otherwise.
 - **Verification on real hosts** (a Mac with macOS 26, a KVM Linux machine) is
   run by the maintainer. Hand over the exact commands and what a pass proves; do
   not build CI to run them. After a push, report and stop — do not poll CI.

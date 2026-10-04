@@ -306,6 +306,9 @@ that fails on the code before the fix:
 
 ### Changed
 
+- **Studio's screens have their own changelog,** [studio/CHANGELOG.md](studio/CHANGELOG.md).
+  This file keeps what changes the CLI, the API or a command Studio runs.
+
 - **Connect to a running sandbox: `sandbox-cli shell` and `exec`, and a
   Terminal button in Studio.** `shell SANDBOX` opens bash (or sh) in a running
   sandbox, in `/sandbox/home`, and exiting leaves the sandbox running; `exec
@@ -397,28 +400,6 @@ that fails on the code before the fix:
   lost` and stops counting against its tenant's quota, and it is reconciled
   from the node's own listing as soon as the node answers again.
 
-- **Studio is simpler.** It opens on the sandbox list instead of an overview of
-  counts, in a near-monochrome theme with one quiet sidebar: Sandboxes,
-  Snapshots and Volumes; Playground and Agents; Settings, with search, which
-  sandboxd this is, a Light/Dark switch and the version at its foot. The list
-  is a search, a state filter and a refresh over one table, each row with a menu
-  to open, copy or terminate the sandbox; with none, a first-run panel offers
-  the Playground and the same start in Python, TypeScript, curl or the CLI.
-
-- **Studio has screens for a gateway.** On a gateway context Studio asks who
-  the API key is (`GET /v1/whoami`) and adds Jobs (submit, cancel, each run's
-  kept output and files), Services (deploy from a JSON spec, replicas and
-  health, scale, remove), Secrets (names only; set and remove with
-  `secrets:write`), SSH (how to connect, your SSH keys, a short-lived access
-  token shown once) and Account. An admin key also gets Nodes (capacity,
-  cordon, drain, add, remove — never a node's endpoint), Lost sandboxes, Users
-  & keys (a new key's secret shown once) and Audit. Actions the key's scopes do
-  not allow are not offered, and a screen it may not have is *Not available*
-  by URL too, without a request; the gateway's 403 stays the control. A plain
-  `sandboxd` shows the same screens as before. `NEXT_PUBLIC_STUDIO_ADMIN=off`
-  at build time leaves the admin screens out of the bundle, for a dashboard
-  hosted for many tenants ([fleet.md](docs/fleet.md#studio)).
-
 - **Egress is open by default, and an agent under an allowlist can always
   reach its API.** A `sandboxd` with no policy file now gives a sandbox open
   egress unless the run asks for less. Where the backend can filter but not
@@ -437,18 +418,6 @@ that fails on the code before the fix:
   and builds its disk before anything runs, which can take minutes and used to
   look like a hang. `run` now says what it is waiting for, how long it has
   taken, and that interrupting stops the build.
-
-- **Studio is reorganised around sandboxes, the way hosted sandbox dashboards
-  are.** The Overview shows what is running, agents waiting for you, snapshots
-  and volumes, and a quick start in the CLI, curl, Python or TypeScript when
-  there is nothing yet. Sandboxes filters by state, start time and a search,
-  and shows what each sandbox was given (vCPU, memory, disk: allocations, since
-  sandboxd reports no live usage). A sandbox opens on an Overview tab —
-  resources, network, lifecycle, volumes, environment names and its processes —
-  beside Terminal, Logs (formerly Output), Files and Events. Launch is now the
-  Playground: the form, with the same command run written as CLI, curl, Python
-  and TypeScript beside it, so a run set up by hand can be repeated from a
-  script. And a new Snapshots screen lists snapshots and deletes them.
 
 - **A sandbox no longer has a repository.** Every process starts in the sandbox
   user's home, `/sandbox/home`, and there is no `/workspace`. Code gets into a
@@ -493,13 +462,6 @@ that fails on the code before the fix:
   installed `sandboxd` into `~/.local/bin` and then started a launch agent that
   runs `/usr/local/bin/sandboxd`: the launch agent is now pointed at the
   installed copy, and still needs no root.
-
-- **Studio lists only the agents it can run unattended.** The Agents page and the launch form show only the
-  agents with a verified headless mode (claude, codex, gemini, opencode, cline);
-  Studio refuses to start the interactive-only ones, console runs included, and
-  they stay available from the CLI with `sandbox-cli agent <name>`. Studio also
-  has a refreshed look: a readable page width, tables as cards, a step-by-step
-  launch form with a summary of the run, and an agent card per agent.
 
 - **The site's Studio setup answers two questions it used to leave to a bad
   afternoon.** The remote track now starts with installing the two binaries on
