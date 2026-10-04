@@ -21,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAgentStates, useKill, useSandboxes } from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
+import { useCan } from "@/lib/caller";
 import { cn } from "@/lib/utils";
 import type { Sandbox, SandboxState } from "@/lib/types";
 
@@ -48,6 +49,7 @@ export default function SandboxesPage() {
   const { data, isLoading, isFetching, error, refetch } = useSandboxes();
   const { data: agentStates } = useAgentStates();
   const kill = useKill();
+  const can = useCan();
   const agentOf = new Map((agentStates ?? []).map((a) => [a.sandbox, a]));
   const [query, setQuery] = useState("");
   const [state, setState] = useState<"all" | SandboxState>("all");
@@ -76,7 +78,7 @@ export default function SandboxesPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-[1.75rem] leading-tight font-semibold tracking-tight">Sandboxes</h1>
-        <div className="flex items-center gap-2">
+        {can("sandbox:create") && <div className="flex items-center gap-2">
           <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
             <Link href="/launch">Playground</Link>
           </Button>
@@ -86,7 +88,7 @@ export default function SandboxesPage() {
               Create sandbox
             </Link>
           </Button>
-        </div>
+        </div>}
       </div>
       {error ? <p className="text-sm text-destructive">{error.message}</p> : null}
 
@@ -191,7 +193,7 @@ export default function SandboxesPage() {
                           >
                             Copy id
                           </DropdownMenuItem>
-                          {s.state !== "terminated" && (
+                          {s.state !== "terminated" && can("sandbox:delete") && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem variant="destructive" onClick={() => terminate(s)}>

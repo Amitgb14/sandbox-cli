@@ -17,14 +17,16 @@ import {
   SidebarMenuItem,
   SidebarSeparator,
 } from "@/components/ui/sidebar";
-import { NAV, isActive } from "@/lib/nav";
+import { isActive, useNav } from "@/lib/nav";
+import { useCaller } from "@/lib/caller";
 import { useInfo, useSandboxes } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 /**
- * The sidebar, and the only chrome: a wordmark, search, the screens, and at
- * the foot which sandboxd this is, light or dark, and the version. Kept quiet
+ * The sidebar, and the only chrome: a wordmark, search, the screens the
+ * caller has (lib/nav.ts), and at the foot which sandboxd or gateway this is,
+ * light or dark, and the version. Kept quiet
  * on purpose — the table is what a person came to look at.
  *
  * The one badge, on Sandboxes, is how many are running: a badge that showed a
@@ -35,6 +37,7 @@ export function AppSidebar() {
   const { data: sandboxes } = useSandboxes();
   const setPaletteOpen = useUi((s) => s.setPaletteOpen);
   const running = sandboxes?.filter((s) => s.state === "running").length ?? 0;
+  const nav = useNav();
 
   return (
     <Sidebar collapsible="offcanvas" className="border-r">
@@ -54,7 +57,7 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent className="px-1">
-        {NAV.map((group, i) => (
+        {nav.map((group, i) => (
           <div key={group.label}>
             {i > 0 && <SidebarSeparator className="mx-3" />}
             <SidebarGroup className="py-1.5">
@@ -99,7 +102,13 @@ export function AppSidebar() {
  */
 function Connection() {
   const { data, error } = useInfo();
+  const caller = useCaller();
   const ok = data && !data.error;
+  // Through a gateway the backend is the nodes'; who the key is matters more.
+  const label =
+    caller.kind === "gateway"
+      ? `${data?.context} · ${caller.who.user}${caller.who.tenant ? `@${caller.who.tenant}` : ""}`
+      : `${data?.context} · ${data?.capabilities?.backend ?? ""}`;
   return (
     <div
       className="flex items-center gap-2 px-1 text-xs"
@@ -115,7 +124,7 @@ function Connection() {
         <PlugZap className="size-3.5 text-exposed" />
       )}
       <span className={cn("truncate font-mono", ok ? "text-muted-foreground" : "text-exposed")}>
-        {ok ? `${data.context} · ${data.capabilities?.backend ?? ""}` : "not connected"}
+        {ok ? label : "not connected"}
       </span>
     </div>
   );

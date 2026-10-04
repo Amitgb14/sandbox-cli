@@ -89,6 +89,7 @@ func (g *Gateway) removeSSHKey(w http.ResponseWriter, r *http.Request, p Princip
 				writeErr(w, http.StatusInternalServerError, api.CodeInternal, "removing the key failed")
 				return
 			}
+			g.accessChanged()
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -185,6 +186,7 @@ func (g *Gateway) adminRevokeKey(w http.ResponseWriter, r *http.Request, p Princ
 		return
 	}
 	g.logf("key %s revoked by %s", id, p.KeyID)
+	g.accessChanged()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -221,6 +223,7 @@ func (g *Gateway) adminRemoveSSHKey(w http.ResponseWriter, r *http.Request, p Pr
 		return
 	}
 	g.logf("ssh key %s removed by %s", id, p.KeyID)
+	g.accessChanged()
 	w.WriteHeader(http.StatusNoContent)
 }
 

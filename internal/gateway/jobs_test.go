@@ -793,6 +793,11 @@ func TestUnsealedEnvIsLostOnRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	// ana still holds a key: a job whose owner holds none is cancelled at
+	// Start instead (TestRevokingAKeyCancelsItsOwnersJobs).
+	if _, _, err := st.CreateKey("ana", "", []string{ScopeCreate}); err != nil {
+		t.Fatal(err)
+	}
 	rec := &jobRecord{ID: newID("job_"), User: "ana", Spec: api.JobSpec{Command: []string{"true"}, Completions: 1,
 		Parallelism: 1, TimeoutSecs: 10}, EnvNames: []string{"X"}, State: api.JobRunning, Created: time.Now(),
 		Runs: []api.JobRun{{N: 0, State: api.RunQueued}}}

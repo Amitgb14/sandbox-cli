@@ -52,6 +52,30 @@ const VARIANTS: Record<string, { label: string; icon: LucideIcon; className: str
   done: { label: "Done", icon: CheckCircle2, className: "text-status-good border-status-good/30 bg-status-good/10" },
   stopped: { label: "Stopped", icon: CircleSlash, className: "text-muted-foreground border-border bg-muted/40" },
   unknown: { label: "Unknown", icon: CircleHelp, className: "text-muted-foreground border-border" },
+  // A gateway's jobs and runs (internal/api/jobs_types.go) and service
+  // replicas (services_types.go).
+  queued: { label: "Queued", icon: CircleDashed, className: "text-muted-foreground border-border bg-muted/40" },
+  succeeded: { label: "Succeeded", icon: CheckCircle2, className: "text-status-good border-status-good/30 bg-status-good/10" },
+  cancelled: { label: "Cancelled", icon: CircleSlash, className: "text-muted-foreground border-border bg-muted/40" },
+  timed_out: {
+    label: "Timed out",
+    icon: XCircle,
+    className: "text-status-critical border-status-critical/30 bg-status-critical/10",
+  },
+  starting: { label: "Starting", icon: CircleDashed, className: "text-muted-foreground border-border bg-muted/40" },
+  healthy: { label: "Healthy", icon: CheckCircle2, className: "text-status-good border-status-good/30 bg-status-good/10" },
+  unhealthy: {
+    label: "Unhealthy",
+    icon: XCircle,
+    className: "text-status-critical border-status-critical/30 bg-status-critical/10",
+  },
+  lost: { label: "Lost", icon: CircleHelp, className: "text-caution border-caution/30 bg-caution/10" },
+  cordoned: { label: "Cordoned", icon: PauseCircle, className: "text-caution border-caution/30 bg-caution/10" },
+  down: {
+    label: "Not answering",
+    icon: XCircle,
+    className: "text-status-critical border-status-critical/30 bg-status-critical/10",
+  },
 };
 
 export function StatusBadge({

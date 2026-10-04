@@ -8,7 +8,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
-    "check": "npm run typecheck && npm run lint && npm run build && npm run test:e2e"
+    "check:admin-off": "node scripts/check-admin-off.mjs",
+    "check": "npm run typecheck && npm run lint && npm run build && npm run check:admin-off && npm run test:e2e"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Bot, Check, ChevronRight, SquareTerminal, TerminalSquare, type LucideIcon } from "lucide-react";
 import { CodeTabs } from "@/components/common/code-tabs";
 import { PageHeader } from "@/components/common/page-header";
+import { Gate } from "@/components/shell/gate";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,33 +16,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useAgents, useInfo, useLaunch } from "@/lib/api/queries";
 import { cliAgent, snippets } from "@/lib/codegen";
+import { splitArgs } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { LaunchRequest, NetworkMode } from "@/lib/types";
 
 type Kind = "headless" | "console" | "command";
-
-/** Splits a command line the way a shell would for plain words and quotes. */
-function splitArgs(s: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let quote: string | null = null;
-  let any = false;
-  for (const ch of s) {
-    if (quote) {
-      if (ch === quote) quote = null;
-      else cur += ch;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-      any = true;
-    } else if (/\s/.test(ch)) {
-      if (cur || any) out.push(cur);
-      cur = "";
-      any = false;
-    } else cur += ch;
-  }
-  if (cur || any) out.push(cur);
-  return out;
-}
 
 function pairs(s: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -291,7 +270,9 @@ function LaunchForm() {
 }
 
 export default function LaunchPage() {
+  // Through a gateway, a key without sandbox:create is refused every launch.
   return (
+    <Gate scope="sandbox:create">
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Playground"
@@ -299,5 +280,6 @@ export default function LaunchPage() {
       />
       <LaunchForm />
     </div>
+    </Gate>
   );
 }

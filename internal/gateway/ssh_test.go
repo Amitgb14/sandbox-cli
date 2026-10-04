@@ -36,12 +36,14 @@ type memStore struct {
 	mu      sync.Mutex
 	keys    []SSHKey
 	tokens  map[string]SSHToken
-	revoked map[string]bool // users whose API keys are all revoked
-	extra   []Key           // further API keys, as given
+	revoked map[string]bool     // users whose API keys are all revoked
+	scopes  map[string][]string // a user's key's scopes; default ssh and read
+	extra   []Key               // further API keys, as given
 }
 
 // Keys reports one API key per user the store knows, revoked for the users in
-// revoked: what SSH login checks to see that a user is still active.
+// revoked: what SSH login checks to see that a user is still active and may
+// use SSH.
 func (m *memStore) Keys() []Key {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -50,7 +52,11 @@ func (m *memStore) Keys() []Key {
 	add := func(u string) {
 		if u != "" && !seen[u] {
 			seen[u] = true
-			out = append(out, Key{ID: "k-" + u, User: u, Revoked: m.revoked[u]})
+			sc, ok := m.scopes[u]
+			if !ok {
+				sc = []string{ScopeSSH, ScopeRead}
+			}
+			out = append(out, Key{ID: "k-" + u, User: u, Scopes: sc, Revoked: m.revoked[u]})
 		}
 	}
 	for _, k := range m.keys {
@@ -72,6 +78,36 @@ func (m *memStore) SSHKeysByFingerprint(fp string) []SSHKey {
 		}
 	}
 	return out
+}
+
+func (m *memStore) SSHKeysFor(user string) []SSHKey {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []SSHKey
+	for _, k := range m.keys {
+		if k.User == user {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func (m *memStore) removeKey(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, k := range m.keys {
+		if k.ID == id {
+			m.keys = append(m.keys[:i], m.keys[i+1:]...)
+			return
+		}
+	}
+}
+
+// set changes the store under its lock, as a revocation would.
+func (m *memStore) set(f func(m *memStore)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f(m)
 }
 
 func (m *memStore) RedeemSSHToken(tok string) (SSHToken, bool) {

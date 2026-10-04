@@ -45,6 +45,10 @@ const SCREENS = [
     name: "Agents, Volumes, Settings",
     what: "The agents Studio runs, each with a verified headless mode, and whose login is saved; named volumes and where each is mounted; the context and what its sandboxd can deliver.",
   },
+  {
+    name: "Through a gateway",
+    what: "When the context is a sandbox-gateway, Studio asks who the API key is and adds what that key may use: Jobs, Services, Secrets (names only), SSH and Account — and for an admin key, Nodes, Lost sandboxes, Users & keys and Audit. Actions the key's scopes do not allow are not offered. A plain sandboxd shows exactly the screens above.",
+  },
 ];
 
 const GUARDS = [

@@ -48,6 +48,7 @@ type env struct {
 	nodeCmds map[string]*exec.Cmd
 	cliEnv   []string
 	userKeys map[string]string // user -> key file
+	keyIDs   map[string]string // user -> key id
 }
 
 func TestGatewayEndToEnd(t *testing.T) {
@@ -266,6 +267,56 @@ func (e *env) sshLogins(sshBin, keyFile, a1, bobID, token string) {
 	if out, code := ssh(append(noKey, "--", "sgt_"+strings.Repeat("a", 52)+"@127.0.0.1", "true")...); code != 255 || !strings.Contains(out, "Permission denied") {
 		t.Fatalf("a made-up token: exit %d:\n%s", code, out)
 	}
+
+	// Revoking a key ends an open session, not only the next login: carol
+	// holds a connection open (-N: no command, which the fake node would
+	// refuse) and an admin revokes her key.
+	e.cliOK("carol", "run", "--keep", "--name", "c1", "--", "echo", "hi")
+	m := regexp.MustCompile(`(?m)^ssh -p \d+ (sgt_[a-z0-9]+)@`).FindStringSubmatch(e.cli("carol", "ssh-access", "c1"))
+	if m == nil {
+		t.Fatal("carol's ssh-access printed no token")
+	}
+	held := exec.Command(sshBin, append(append(append([]string{}, base...), noKey...), "-N", "--", m[1]+"@127.0.0.1")...)
+	var heldOut syncBuffer
+	held.Stdout, held.Stderr = &heldOut, &heldOut
+	if err := held.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan struct{})
+	go func() { _ = held.Wait(); close(ended) }()
+	t.Cleanup(func() { _ = held.Process.Kill() })
+	e.waitLog(`user "carol" via a token logged in`)
+	select {
+	case <-ended:
+		t.Fatalf("carol's ssh -N ended before the revocation:\n%s", heldOut.String())
+	default:
+	}
+	e.adminDo(http.MethodDelete, "/v1/admin/keys/"+e.keyIDs["carol"], http.StatusNoContent)
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("carol's SSH session stayed open after her key was revoked")
+	}
+	e.waitLog(`user "carol" via a token: closed: the user holds no active API key with sandbox:ssh`)
+}
+
+// adminDo sends one admin API request with the admin key and checks its status.
+func (e *env) adminDo(method, path string, want int) {
+	key, err := os.ReadFile(e.userKeys["admin"])
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	req, _ := http.NewRequest(method, e.apiURL+path, nil)
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(key)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != want {
+		body, _ := io.ReadAll(resp.Body)
+		e.t.Fatalf("%s %s: %s %s", method, path, resp.Status, body)
+	}
 }
 
 // --- the fleet ------------------------------------------------------------------
@@ -279,7 +330,8 @@ func start(t *testing.T) *env {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	e := &env{t: t, bin: filepath.Join(dir, "bin"), dir: dir, state: filepath.Join(dir, "gw", "state.json"),
-		gwLog: &syncBuffer{}, nodes: map[string]chan struct{}{}, nodeCmds: map[string]*exec.Cmd{}, userKeys: map[string]string{}}
+		gwLog: &syncBuffer{}, nodes: map[string]chan struct{}{}, nodeCmds: map[string]*exec.Cmd{}, userKeys: map[string]string{},
+		keyIDs: map[string]string{}}
 	e.build()
 
 	for _, n := range []string{"n1", "n2"} {
@@ -290,7 +342,8 @@ func start(t *testing.T) *env {
 		e.gateway("nodes", "add", n, "unix://"+sock)
 	}
 	user := []string{"--scope", "sandbox:read", "--scope", "sandbox:create", "--scope", "sandbox:delete", "--scope", "sandbox:ssh"}
-	for _, u := range []string{"alice", "bob"} {
+	// carol is revoked mid-test, so nobody else's steps depend on her.
+	for _, u := range []string{"alice", "bob", "carol"} {
 		e.newKey(u, append([]string{"--user", u}, user...)...)
 	}
 	e.newKey("admin", "--user", "root", "--scope", "admin")
@@ -311,7 +364,7 @@ func start(t *testing.T) *env {
 		"XDG_CONFIG_HOME="+filepath.Join(dir, "cfg"),
 		"SSH_AUTH_SOCK=", // only the key we generate
 	)
-	for _, u := range []string{"alice", "bob", "admin"} {
+	for _, u := range []string{"alice", "bob", "carol", "admin"} {
 		e.cliOK("", "context", "add", u, e.apiURL, "--token-file", e.userKeys[u])
 	}
 	return e
@@ -388,6 +441,9 @@ func (e *env) newKey(who string, args ...string) {
 		e.t.Fatal(err)
 	}
 	e.userKeys[who] = path
+	if m := regexp.MustCompile(`(?m)^id: +(\S+)$`).FindStringSubmatch(out); m != nil {
+		e.keyIDs[who] = m[1]
+	}
 }
 
 // run runs sandbox-cli as user (its context), returning stdout and stderr.

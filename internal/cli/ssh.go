@@ -379,6 +379,8 @@ func newSSHCmd() *cobra.Command {
 			"The key is --identity (a .pub file, or a private key with its .pub beside\n" +
 			"it), else the first of ~/.ssh/id_ed25519.pub, id_ecdsa.pub, id_rsa.pub.\n" +
 			"Only the public half is read; ssh does the authentication.\n\n" +
+			"A gateway lets you in only while you hold an active API key with the\n" +
+			"sandbox:ssh scope, and closes an open session once you no longer do.\n\n" +
 			"A plain sandboxd has no SSH server: there this opens a shell (or runs\n" +
 			"COMMAND) in the sandbox through the API instead, and says so.",
 		Example: "  sandbox-cli ssh demo\n" +
@@ -481,6 +483,8 @@ func newSSHKeyCmd() *cobra.Command {
 		Short: "Manage the public keys a gateway accepts for SSH logins",
 		Long: "A gateway's SSH server logs you in with a public key you registered:\n" +
 			"`ssh SANDBOX@gateway -p PORT`. These commands add, list and remove yours.\n" +
+			"A login needs an active API key with the sandbox:ssh scope, and removing\n" +
+			"a key closes the connections made with it.\n" +
 			"A plain sandboxd has no SSH server and refuses them.",
 	}
 	var ctxFlag, sandbox string

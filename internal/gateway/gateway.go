@@ -68,6 +68,11 @@ type Config struct {
 	// link-local addresses; without it the gateway posts to public ones only
 	// (jobrun.go, newNotifyClient).
 	NotifyAllowPrivate bool
+	// AccessRecheckInterval is how often running jobs are held to their
+	// owner still holding an active API key (default 30s;
+	// revokeOrphanedJobs). A revocation through the admin API is acted on at
+	// once; this is the backstop for a store changed some other way.
+	AccessRecheckInterval time.Duration
 }
 
 // Quota bounds what one tenant may hold at once. Zero is unlimited.
@@ -152,6 +157,9 @@ func New(cfg Config) (*Gateway, error) {
 	if cfg.JobRetention <= 0 {
 		cfg.JobRetention = 24 * time.Hour
 	}
+	if cfg.AccessRecheckInterval <= 0 {
+		cfg.AccessRecheckInterval = 30 * time.Second
+	}
 	var seal *sealer
 	if cfg.SecretsKey != nil {
 		var err error
@@ -196,10 +204,26 @@ func (g *Gateway) Start(ctx context.Context) {
 	g.ctx = ctx
 	g.ctxMu.Unlock()
 	g.nodes.pollAll(ctx)
-	g.wg.Add(3)
+	g.wg.Add(4)
 	go func() { defer g.wg.Done(); g.nodes.run(ctx) }()
 	g.startJobs(ctx)
+	// A key revoked while the gateway was down (the CLI's keys revoke) is
+	// acted on now, before a resumed job makes another sandbox.
+	g.revokeOrphanedJobs()
 	go func() { defer g.wg.Done(); g.runServices(ctx) }()
+	go func() {
+		defer g.wg.Done()
+		t := time.NewTicker(g.cfg.AccessRecheckInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				g.revokeOrphanedJobs()
+			}
+		}
+	}()
 	go func() {
 		defer g.wg.Done()
 		t := time.NewTicker(g.cfg.ReconcileInterval)
@@ -245,6 +269,26 @@ func (g *Gateway) SetSSH(s SSHInfoer) {
 	g.sshMu.Lock()
 	g.ssh = s
 	g.sshMu.Unlock()
+}
+
+// accessRechecker is the SSH server's RecheckAccess.
+type accessRechecker interface{ RecheckAccess() int }
+
+// accessChanged is called once a key has been revoked or an SSH key
+// removed, before the request that did it is answered. Revocation takes
+// effect on what is already running, not only on what starts next: open SSH
+// connections that no longer pass the login check are closed, and running
+// jobs whose owner holds no active key are cancelled. A service needs
+// nothing here: it is routed to and given replicas only while its owner is
+// active (pickReplica, ownerActive), which both check every time.
+func (g *Gateway) accessChanged() {
+	g.revokeOrphanedJobs()
+	g.sshMu.RLock()
+	s := g.ssh
+	g.sshMu.RUnlock()
+	if r, ok := s.(accessRechecker); ok {
+		r.RecheckAccess()
+	}
 }
 
 func (g *Gateway) sshInfo() (api.SSHInfo, bool) {

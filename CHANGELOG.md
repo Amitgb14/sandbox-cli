@@ -287,6 +287,22 @@ that fails on the code before the fix:
   active API key matched the name alone, so revoking `ci` in one tenant left
   its SSH keys, tokens and routed services working while another tenant had a
   `ci`.
+- **SSH needs a key with `sandbox:ssh`; a read-only key loses SSH.** A
+  registered SSH key or an `ssh-access` token logged in while its user held
+  any active API key, so a user left with only `sandbox:read` keys kept a shell
+  in every sandbox they own. A login now needs an active key carrying
+  `sandbox:ssh` (or `admin`) in the user's tenant. Give such users a key with
+  the scope if they should keep SSH.
+- **Revoking a key ends open SSH sessions and running jobs, not only the next
+  login.** An open SSH connection stayed open after its user's keys were
+  revoked, and a job went on running, and making sandboxes for its queued
+  runs, in its owner's name. Now revoking a key closes, before the call
+  returns, every SSH connection whose user may no longer use SSH, and cancels
+  every running job and agent run whose owner holds no active key, as
+  `DELETE /v1/jobs/{id}` does, saying `cancelled: the owner's access was
+  revoked`. Removing an SSH key closes the connections made with it. Both are
+  rechecked every 30 seconds and at start, and recorded in the audit log
+  (`ssh.revoked`, `job.revoked`).
 
 ### Changed
 
@@ -388,6 +404,20 @@ that fails on the code before the fix:
   is a search, a state filter and a refresh over one table, each row with a menu
   to open, copy or terminate the sandbox; with none, a first-run panel offers
   the Playground and the same start in Python, TypeScript, curl or the CLI.
+
+- **Studio has screens for a gateway.** On a gateway context Studio asks who
+  the API key is (`GET /v1/whoami`) and adds Jobs (submit, cancel, each run's
+  kept output and files), Services (deploy from a JSON spec, replicas and
+  health, scale, remove), Secrets (names only; set and remove with
+  `secrets:write`), SSH (how to connect, your SSH keys, a short-lived access
+  token shown once) and Account. An admin key also gets Nodes (capacity,
+  cordon, drain, add, remove — never a node's endpoint), Lost sandboxes, Users
+  & keys (a new key's secret shown once) and Audit. Actions the key's scopes do
+  not allow are not offered, and a screen it may not have is *Not available*
+  by URL too, without a request; the gateway's 403 stays the control. A plain
+  `sandboxd` shows the same screens as before. `NEXT_PUBLIC_STUDIO_ADMIN=off`
+  at build time leaves the admin screens out of the bundle, for a dashboard
+  hosted for many tenants ([fleet.md](docs/fleet.md#studio)).
 
 - **Egress is open by default, and an agent under an allowlist can always
   reach its API.** A `sandboxd` with no policy file now gives a sandbox open

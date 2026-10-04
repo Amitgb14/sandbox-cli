@@ -53,6 +53,10 @@ type sshLogin struct {
 	fingerprint string
 	refused     string
 	remote      string // the client's address, set once logged in
+	// sshKeyID is the registered SSH key the login used, empty for a
+	// token: an open connection lasts only as long as the key stays
+	// registered (RecheckAccess).
+	sshKeyID string
 }
 
 func (l *sshLogin) describe() string {
@@ -112,9 +116,10 @@ func usernameForLog(u string) string {
 }
 
 // userActive reports whether user, in tenant, still holds an API key that is
-// not revoked. An SSH key or token is a credential the user made with an API
-// key; revoking a user's keys must end their SSH access too, or a revoked user
-// keeps every sandbox they own for as long as their SSH keys are registered.
+// not revoked, whatever its scopes. It is what work done in the user's name
+// without a request of theirs is held to: a service's routing and replicas
+// (pickReplica, ownerActive) and a job's runs (revokeOrphanedJobs). Revoking
+// a user's last key stops all of it. SSH is held to more (userMaySSH).
 //
 // The tenant is part of who the user is, as it is for ownership (mayAct):
 // matched on the name alone, a revoked "ci" in one tenant kept logging in
@@ -122,6 +127,26 @@ func usernameForLog(u string) string {
 func userActive(st Store, user, tenant string) bool {
 	for _, k := range st.Keys() {
 		if k.User == user && k.Tenant == tenant && !k.Revoked {
+			return true
+		}
+	}
+	return false
+}
+
+// userMaySSH reports whether user, in tenant, still holds an API key that is
+// not revoked and carries sandbox:ssh (admin carries every scope). It is the
+// check every SSH login makes, and the one an open connection is held to for
+// as long as it lasts (RecheckAccess).
+//
+// userActive is not enough here. An SSH key or token is a credential the user
+// made with an ssh-capable API key, but holding one outlived the key: a user
+// left with only a read-only key — the ssh one revoked, or never issued —
+// kept a shell in every sandbox they own for as long as an SSH key stayed
+// registered. SSH is a capability of its own, and it lasts as long as a key
+// granting it does.
+func userMaySSH(st Store, user, tenant string) bool {
+	for _, k := range st.Keys() {
+		if k.User == user && k.Tenant == tenant && !k.Revoked && (Principal{Scopes: k.Scopes}).Can(ScopeSSH) {
 			return true
 		}
 	}
@@ -144,8 +169,9 @@ func (s *SSHServer) authToken(cm ssh.ConnMetadata, login *sshLogin) error {
 		login.refused = "token"
 		return errors.New("token refused")
 	}
-	if !userActive(s.cfg.Store, tok.User, tok.Tenant) {
-		s.cfg.Logf("ssh: %s: a token for user %q was refused: the user holds no active API key", cm.RemoteAddr(), termsafe.Clean(tok.User))
+	if !userMaySSH(s.cfg.Store, tok.User, tok.Tenant) {
+		s.cfg.Logf("ssh: %s: a token for user %q was refused: the user holds no active API key with %s", cm.RemoteAddr(), termsafe.Clean(tok.User), ScopeSSH)
+		login.refused = "token"
 		return refusal(ErrNotFound)
 	}
 	p := Principal{User: tok.User, Tenant: tok.Tenant, KeyID: "ssh-token", Scopes: sshScopes, Sandbox: tok.Sandbox}
@@ -200,8 +226,8 @@ func (s *SSHServer) authKey(cm ssh.ConnMetadata, key ssh.PublicKey, login *sshLo
 	var found *sshLogin
 	var lastErr error = ErrNotFound
 	for _, k := range s.keyCandidates(ref, key) {
-		if !userActive(s.cfg.Store, k.User, k.Tenant) {
-			s.cfg.Logf("ssh: %s: key %s (%s) refused: user %q holds no active API key", cm.RemoteAddr(), k.ID, fp, termsafe.Clean(k.User))
+		if !userMaySSH(s.cfg.Store, k.User, k.Tenant) {
+			s.cfg.Logf("ssh: %s: key %s (%s) refused: user %q holds no active API key with %s", cm.RemoteAddr(), k.ID, fp, termsafe.Clean(k.User), ScopeSSH)
 			continue
 		}
 		p := Principal{User: k.User, Tenant: k.Tenant, KeyID: k.ID, Scopes: sshScopes, Sandbox: k.Sandbox}
@@ -224,7 +250,7 @@ func (s *SSHServer) authKey(cm ssh.ConnMetadata, key ssh.PublicKey, login *sshLo
 			return &ssh.BannerError{Err: errors.New("ambiguous"), Message: msgAmbiguous}
 		}
 		if found == nil {
-			found = &sshLogin{principal: p, id: id, client: c, how: fmt.Sprintf("key %s (%s)", k.ID, fp), fingerprint: fp}
+			found = &sshLogin{principal: p, id: id, client: c, how: fmt.Sprintf("key %s (%s)", k.ID, fp), fingerprint: fp, sshKeyID: k.ID}
 		}
 	}
 	if found == nil {

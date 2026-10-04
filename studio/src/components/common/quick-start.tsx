@@ -1,17 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Boxes, Plus } from "lucide-react";
 import { CodeTabs } from "@/components/common/code-tabs";
+import { EmptyState } from "@/components/common/empty-state";
 import { Button } from "@/components/ui/button";
+import { can, useCaller } from "@/lib/caller";
 import { snippets } from "@/lib/codegen";
 
 /**
  * The empty state for "no sandboxes": not a dead end but the first one, from
  * the Playground or from whichever client the reader uses. The snippet is the
- * codegen's, so it is the same code the Playground would show.
+ * codegen's, so it is the same code the Playground would show. A gateway key
+ * that cannot create sandboxes is told so instead of offered a way to.
  */
 export function QuickStart() {
+  const caller = useCaller();
+  if (caller.kind === "loading") return null;
+  if (!can(caller, "sandbox:create")) {
+    return <EmptyState icon={Boxes} title="No sandboxes" description="This API key can see sandboxes but not create them (scope sandbox:create)." />;
+  }
   const tabs = snippets({ command: ["uname", "-a"] });
   // Code first in the order people reach for it; the CLI last.
   const ordered = ["python", "typescript", "curl", "cli"].map((id) => tabs.find((t) => t.id === id)!).filter(Boolean);

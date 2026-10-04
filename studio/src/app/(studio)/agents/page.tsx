@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAgents } from "@/lib/api/queries";
 import { cn } from "@/lib/utils";
+import { useCan } from "@/lib/caller";
 import type { Agent } from "@/lib/types";
 
 /**
@@ -47,6 +48,7 @@ export default function AgentsPage() {
 
 function AgentCard({ agent: a }: { agent: Agent }) {
   const saved = a.login === "saved";
+  const can = useCan();
   return (
     <Card className="surface-sheen gap-0 py-0 transition-colors hover:border-foreground/20">
       <CardContent className="flex flex-col gap-4 p-4">
@@ -64,9 +66,11 @@ function AgentCard({ agent: a }: { agent: Agent }) {
             <KeyRound className="size-3.5" aria-hidden />
             {saved ? "login saved" : a.login === "not kept" ? "not kept between runs" : "not logged in yet"}
           </span>
-          <Link href="/launch" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-            Launch <ArrowRight className="size-3.5" aria-hidden />
-          </Link>
+          {can("sandbox:create") && (
+            <Link href="/launch" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+              Launch <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          )}
         </div>
       </CardContent>
     </Card>

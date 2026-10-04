@@ -59,12 +59,12 @@ type LostList struct {
 }
 
 // AuditEntry is one line of the gateway's audit record: an authenticated API
-// request, or an SSH login or session. It names a credential by its id and
-// an SSH key by its fingerprint; never a secret.
+// request, an SSH login or session, or what revoking access ended. It names
+// a credential by its id and an SSH key by its fingerprint; never a secret.
 type AuditEntry struct {
 	Time   time.Time `json:"time"`
-	Kind   string    `json:"kind"`   // "api" or "ssh"
-	Action string    `json:"action"` // "POST /v1/sandboxes", "ssh.login", "ssh.session"
+	Kind   string    `json:"kind"`   // "api", "ssh" or "job"
+	Action string    `json:"action"` // "POST /v1/sandboxes", "ssh.login", "ssh.session", "ssh.revoked", "job.revoked"
 	KeyID  string    `json:"key_id,omitempty"`
 	User   string    `json:"user,omitempty"`
 	Tenant string    `json:"tenant,omitempty"`
@@ -73,10 +73,10 @@ type AuditEntry struct {
 	Sandbox string `json:"sandbox,omitempty"`
 	Node    string `json:"node,omitempty"`
 	// Target is what an endpoint not about a sandbox acted on: a key id, a
-	// node or volume name, a snapshot id.
+	// node or volume name, a snapshot id, a job id.
 	Target string `json:"target,omitempty"`
 	Status int    `json:"status,omitempty"` // the HTTP status (api)
-	Result string `json:"result,omitempty"` // "ok" or "refused" (ssh)
+	Result string `json:"result,omitempty"` // "ok" or "refused" (ssh); "closed" (ssh.revoked), "cancelled" (job.revoked)
 	// Fingerprint is the SSH key's (SHA256:…), or "token" for a login with a
 	// short-lived token.
 	Fingerprint string `json:"fingerprint,omitempty"`
