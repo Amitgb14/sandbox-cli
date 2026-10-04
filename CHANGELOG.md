@@ -246,6 +246,20 @@ In the rewrite:
   in any guest: the gateway terminates SSH and runs each session as a process
   in the sandbox. Remote forwarding, agent forwarding and X11 are refused, and
   the base image gains `sftp-server` and `rsync` (not the SSH server).
+- **The CLI and the SDKs speak to a gateway: SSH, keys and who you are.** A
+  context can now point at a gateway in front of many sandboxd nodes, with a
+  gateway API key as its token file. `sandbox-cli ssh SANDBOX` registers your
+  public key there if it is not already, pins the gateway's SSH host key in
+  the CLI's own `known_hosts`, and hands the terminal to your `ssh`; after
+  that, plain `ssh SANDBOX@gateway -p PORT` works too. Against a plain
+  sandboxd, which has no SSH server, it says so and opens the same session
+  through the API instead. `ssh-key add | list | rm` manages your keys,
+  `ssh-access SANDBOX` prints a short-lived ssh command that needs no
+  registered key, and `whoami` shows the user, tenant, scopes and key behind
+  the credential. The CLI reads only the public half of a key; ssh does the
+  authentication. The Python and TypeScript SDKs gain `whoami`, `ssh_info`,
+  `add_ssh_key`, `ssh_keys`, `remove_ssh_key` and `ssh_access` (camelCase in
+  TypeScript), and the Go client gains these and the gateway's admin calls.
 
 - **Studio is simpler.** It opens on the sandbox list instead of an overview of
   counts, in a near-monochrome theme with one quiet sidebar: Sandboxes,

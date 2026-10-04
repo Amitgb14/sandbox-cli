@@ -130,6 +130,43 @@ export interface Snapshot {
   created_at: string;
 }
 
+/** GET /v1/whoami on a gateway: who the API key belongs to. */
+export interface Whoami {
+  user: string;
+  tenant: string;
+  key_id: string;
+  scopes: string[];
+}
+
+/** GET /v1/ssh on a gateway. */
+export interface SSHInfo {
+  host: string;
+  port: number;
+  /** Public host keys as known_hosts lines without the host ("ssh-ed25519 AAAA…"). */
+  host_keys: string[];
+  /** SHA256:… of the first host key. */
+  fingerprint: string;
+}
+
+/** A registered SSH public key. */
+export interface SSHKeyInfo {
+  id: string;
+  fingerprint: string;
+  key: string;
+  /** Set when the key is limited to one sandbox. */
+  sandbox?: string;
+  created: string;
+}
+
+/** A short-lived SSH login: `user` is the token, and the whole credential until it expires. */
+export interface SSHAccess {
+  user: string;
+  host: string;
+  port: number;
+  expires_at: string;
+  command: string;
+}
+
 /** A non-2xx response; `code` is the API's error code (refused, unsupported, not_found, ...). */
 export class ApiError extends Error {
   constructor(
@@ -374,5 +411,43 @@ export class Client {
   async listDir(ref: string, path: string): Promise<DirEntry[]> {
     const resp = await this.request("GET", this.sbx(ref) + "/dirs", { query: { path } });
     return ((await resp.json()) as { entries: DirEntry[] }).entries;
+  }
+
+  // Gateway only. A gateway in front of many sandboxd nodes adds these; a
+  // plain sandboxd answers each with ApiError code "not_found".
+
+  /** The caller as the gateway sees its API key. */
+  whoami(): Promise<Whoami> {
+    return this.json("GET", "/v1/whoami");
+  }
+
+  /** Where the gateway's SSH server listens, and the host keys to pin. */
+  sshInfo(): Promise<SSHInfo> {
+    return this.json("GET", "/v1/ssh");
+  }
+
+  /**
+   * Register a public key (one authorized_keys line, no options) for SSH
+   * logins: `ssh SANDBOX@host -p port`. `sandbox` limits it to one sandbox.
+   */
+  addSSHKey(key: string, sandbox?: string): Promise<SSHKeyInfo> {
+    return this.json("POST", "/v1/ssh-keys", sandbox ? { key, sandbox } : { key });
+  }
+
+  async sshKeys(): Promise<SSHKeyInfo[]> {
+    return (await this.json<{ keys: SSHKeyInfo[] }>("GET", "/v1/ssh-keys")).keys;
+  }
+
+  async removeSSHKey(id: string): Promise<void> {
+    await this.json("DELETE", "/v1/ssh-keys/" + encodeURIComponent(id));
+  }
+
+  /**
+   * A short-lived SSH login to one sandbox. `user` is the token and the whole
+   * credential until `expires_at`. `ttlSecs` 0 or absent takes the gateway's
+   * default.
+   */
+  sshAccess(ref: string, ttlSecs?: number): Promise<SSHAccess> {
+    return this.json("POST", this.sbx(ref) + "/ssh-access", ttlSecs ? { ttl_secs: ttlSecs } : {});
   }
 }
