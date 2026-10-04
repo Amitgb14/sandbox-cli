@@ -8,6 +8,7 @@ LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
 	go build -ldflags "$(LDFLAGS)" -o bin/sandboxd ./cmd/sandboxd
+	go build -ldflags "$(LDFLAGS)" -o bin/sandbox-gateway ./cmd/sandbox-gateway
 	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$(LDFLAGS)" -o bin/sandbox-guestd ./cmd/sandbox-guestd
 
 # Studio's UI, built as a static export and copied where sandbox-cli embeds it
