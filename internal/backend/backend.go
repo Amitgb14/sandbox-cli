@@ -84,6 +84,15 @@ type SnapshotInfo struct {
 	DiskMB   int
 }
 
+// ImageLister can say which images it already has a root disk for, so a
+// create naming one skips the pull and the build. A gateway in front of many
+// nodes prefers such a node (GET /v1/node). It is a placement hint, not a
+// promise: an image reported here may be evicted, or rebuilt for a new guest
+// agent, before the create arrives.
+type ImageLister interface {
+	CachedImages() []string
+}
+
 // Dialer can open a TCP connection to a port on the guest's own loopback —
 // a tunnel, which is how a dev server in a sandbox is reached without
 // publishing anything on the network.

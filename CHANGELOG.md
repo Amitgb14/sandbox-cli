@@ -229,6 +229,15 @@ In the rewrite:
 
 ### Changed
 
+- **`sandboxd` can be one node of many behind a gateway.** `--node-id` names
+  the node in every sandbox id it makes, so a gateway routes each call by the
+  id; `GET /v1/node` reports the node's capacity, what is free, its pools,
+  built images and labels (`--capacity-*`, `--node-label`); and `POST
+  /v1/node/cordon` stops new sandboxes landing on it with `503 unavailable`
+  while the running ones carry on. `--client-ca` requires a client certificate
+  from that CA on top of the token, so a node on a private network answers
+  only its gateway. Without these flags `sandboxd` behaves exactly as before.
+
 - **Studio is simpler.** It opens on the sandbox list instead of an overview of
   counts, in a near-monochrome theme with one quiet sidebar: Sandboxes,
   Snapshots and Volumes; Playground and Agents; Settings, with search, which
