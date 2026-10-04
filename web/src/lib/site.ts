@@ -27,7 +27,21 @@ export const RAW_INSTALL_URL =
 export const STUDIO_PATH = "/studio/";
 export const SETUP_PATH = "/setup/";
 
-const BLOB = `${REPO_URL}/blob/main`;
+/**
+ * The documentation, rendered from the repository's docs/ at build time
+ * (src/lib/docs.ts). `docPath` is the one way to name a page of it, so a page
+ * that moves is renamed in the manifest and nowhere else.
+ */
+export const DOCS_PATH = "/docs/";
+export function docPath(slug: string, anchor?: string) {
+  const base = slug ? `${DOCS_PATH}${slug}/` : DOCS_PATH;
+  return anchor ? `${base}#${anchor}` : base;
+}
+
+/** A file in the repository on GitHub, and a directory. */
+export const BLOB = `${REPO_URL}/blob/main`;
+export const TREE = `${REPO_URL}/tree/main`;
+export const EDIT = `${REPO_URL}/edit/main`;
 
 export const DOC_URL = {
   readme: `${REPO_URL}#readme`,

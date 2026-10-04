@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { GithubMark, Wordmark } from "@/components/logo";
-import { DOC_URL, REPO_URL, SETUP_PATH } from "@/lib/site";
+import { DOC_URL, REPO_URL, SETUP_PATH, docPath } from "@/lib/site";
 
 /**
  * Outbound links only. There is deliberately no "on this page" index here — the
@@ -12,11 +12,11 @@ const COLUMNS = [
   {
     title: "Docs",
     links: [
-      { label: "README", href: DOC_URL.readme },
+      { label: "Documentation", href: docPath("") },
       { label: "Setup guide", href: SETUP_PATH },
-      { label: "API v1", href: DOC_URL.api },
-      { label: "Local on a Mac", href: DOC_URL.localMac },
-      { label: "Self-hosting", href: DOC_URL.selfHosting },
+      { label: "CLI reference", href: docPath("cli") },
+      { label: "API v1", href: docPath("api") },
+      { label: "A fleet", href: docPath("fleet") },
       { label: "Changelog", href: DOC_URL.changelog },
     ],
   },
@@ -26,8 +26,7 @@ const COLUMNS = [
       { label: "Source", href: REPO_URL },
       { label: "Releases", href: `${REPO_URL}/releases` },
       { label: "Issues", href: `${REPO_URL}/issues` },
-      { label: "Python SDK", href: DOC_URL.pythonSdk },
-      { label: "TypeScript SDK", href: DOC_URL.typescriptSdk },
+      { label: "SDKs", href: docPath("sdk") },
       { label: "Design and plan", href: DOC_URL.plan },
     ],
   },
@@ -62,8 +61,8 @@ export function SiteFooter() {
               {c.links.map((l) => (
                 <li key={l.label}>
                   {l.href.startsWith("/") ? (
-                    // The one internal route in here: next/link, so basePath is
-                    // applied and it is not opened in a new tab like the rest.
+                    // An internal route (the setup guide, the docs): next/link, so
+                    // basePath is applied and it is not opened in a new tab like the rest.
                     <Link
                       href={l.href}
                       className="text-sm text-muted-foreground transition-colors hover:text-foreground"

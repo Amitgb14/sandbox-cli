@@ -231,3 +231,176 @@
     opacity: 0;
   }
 }
+
+/*
+ * The docs' reading column (/docs): the repository's Markdown, rendered at
+ * build time (src/lib/markdown.ts). Written here rather than with a prose
+ * plugin so it uses the page's own tokens — the same ink, rules and mono — and
+ * one more dependency is not needed for a few dozen rules.
+ *
+ * Two of them keep a phone free of sideways scrolling: a wide table or a long
+ * code line scrolls inside its own box, and a long unbroken token in running
+ * text (an id, a URL, a flag) may break anywhere.
+ */
+.doc-prose {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+.doc-prose > :first-child {
+  margin-top: 0;
+}
+.doc-prose h1,
+.doc-prose h2,
+.doc-prose h3,
+.doc-prose h4 {
+  position: relative;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+.doc-prose h1 {
+  font-size: 2rem;
+  margin: 0 0 1.25rem;
+  letter-spacing: -0.028em;
+}
+.doc-prose h2 {
+  font-size: 1.4rem;
+  margin: 2.75rem 0 0.9rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+.doc-prose h3 {
+  font-size: 1.1rem;
+  margin: 2rem 0 0.6rem;
+}
+.doc-prose h4 {
+  font-size: 1rem;
+  margin: 1.5rem 0 0.5rem;
+}
+.doc-prose .doc-anchor {
+  position: absolute;
+  left: -1.1rem;
+  padding-right: 0.3rem;
+  color: var(--muted-foreground);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.doc-prose h2 .doc-anchor {
+  top: 1.25rem;
+}
+.doc-prose h1:hover .doc-anchor,
+.doc-prose h2:hover .doc-anchor,
+.doc-prose h3:hover .doc-anchor,
+.doc-prose h4:hover .doc-anchor,
+.doc-prose .doc-anchor:focus-visible {
+  opacity: 1;
+}
+.doc-prose p,
+.doc-prose ul,
+.doc-prose ol,
+.doc-prose blockquote,
+.doc-prose pre,
+.doc-prose .doc-table {
+  margin: 0 0 1rem;
+}
+.doc-prose ul,
+.doc-prose ol {
+  padding-left: 1.4rem;
+}
+.doc-prose ul {
+  list-style: disc;
+}
+.doc-prose ol {
+  list-style: decimal;
+}
+.doc-prose li {
+  margin: 0.3rem 0;
+}
+.doc-prose li > p {
+  margin: 0.3rem 0;
+}
+.doc-prose a:not(.doc-anchor) {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  text-underline-offset: 2px;
+  transition: text-decoration-color 0.15s;
+}
+.doc-prose a:not(.doc-anchor):hover {
+  text-decoration-color: var(--foreground);
+}
+.doc-prose strong {
+  font-weight: 600;
+}
+.doc-prose hr {
+  margin: 2rem 0;
+  border-color: var(--border);
+}
+.doc-prose blockquote {
+  border-left: 2px solid var(--caution);
+  background: var(--caution-soft);
+  padding: 0.6rem 1rem;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.doc-prose blockquote > :last-child {
+  margin-bottom: 0;
+}
+.doc-prose :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.3rem;
+}
+/* The site's terminal block (components/code-block.tsx), without colour. */
+.doc-prose pre {
+  background: #0b0b0d;
+  color: #e7e7ea;
+  border-radius: var(--radius-xl);
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.65;
+  overflow-wrap: normal;
+}
+.doc-prose pre code {
+  white-space: pre;
+}
+.doc-prose .doc-table {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.doc-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  overflow-wrap: normal;
+}
+.doc-prose th,
+.doc-prose td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  min-width: 8rem;
+}
+.doc-prose th {
+  background: var(--surface);
+  font-weight: 600;
+}
+.doc-prose tr:last-child td {
+  border-bottom: 0;
+}
+/* A table's first column is usually the thing named — a flag, a scope, a
+   route — and reads wrong broken in two; the table scrolls instead. */
+.doc-prose td:first-child code {
+  white-space: nowrap;
+}

@@ -32,7 +32,9 @@ jobs:
   #   studio  studio/ (but not its Markdown), and anything Go under cmd/ or
   #           internal/ or the module files, because Studio's e2e suite runs
   #           the real sandbox-cli, sandboxd and sandbox-gateway;
-  #   web     web/;
+  #   web     web/, and the Markdown the site renders at /docs: docs/,
+  #           sdk/**/*.md and studio/README.md (web/src/lib/docs.ts), so a
+  #           doc whose link or anchor breaks fails the site's link check;
   #   sdks    sdk/, and the same Go, since the Python tests start a sandboxd.
   #
   # A push to main, a manual run, and a change to this file run everything.
@@ -62,7 +64,7 @@ jobs:
           {
             echo "go=$(echo "$files" | grep -Ev '^(studio/|web/|docs/|sdk/)|\.md$' | grep -q . && echo true || echo false)"
             echo "studio=$(echo "$files" | grep -E "^studio/|$gocode" | grep -Ev '\.md$' | grep -q . && echo true || echo false)"
-            echo "web=$(has '^web/')"
+            echo "web=$(has '^web/|^docs/|^sdk/.*\.md$|^studio/README\.md$')"
             echo "sdks=$(has "^sdk/|$gocode")"
           } | tee -a "$GITHUB_OUTPUT"
 
@@ -176,7 +178,9 @@ jobs:
           go build -o bin/sandbox-gateway ./cmd/sandbox-gateway
           cd studio && npx playwright install --with-deps chromium && npm run test:e2e
 
-  # The site in web/: typecheck, lint, build.
+  # The site in web/: typecheck, lint, build. The build renders docs/ into
+  # /docs and then checks every internal link and anchor of the export
+  # (npm run check:docs, run by npm run build).
   web:
     needs: changes
     if: needs.changes.outputs.web == 'true'

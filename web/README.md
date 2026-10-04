@@ -9,7 +9,8 @@ cd web
 npm install
 npm run dev      # http://localhost:3000
 npm run lint
-npm run build    # static export -> web/out
+npm run build    # static export -> web/out, then check:docs
+npm run check:docs   # every internal link and anchor in web/out resolves
 ```
 
 ## Routes
@@ -18,6 +19,7 @@ npm run build    # static export -> web/out
 |---|---|
 | `/` | The landing page — the argument, the three ways to run it, the API, the interactive proofs, setup, install. |
 | `/studio` | Studio, the browser client of the same API. |
+| `/docs`, `/docs/<page>` | **The documentation**, rendered at build time from the repository's `docs/` (and `sdk/README.md`): one page per component, a sidebar of segments, "On this page", previous and next. `src/lib/docs.ts` is the manifest of which file is which page; `src/lib/markdown.ts` renders them with `marked`, GitHub-style heading ids, links between docs rewritten to `/docs` and every other relative link to GitHub. Nothing of the text is copied here. |
 | `/setup` | **The setup guide**: a Mac, Linux without root, a Linux server under systemd, and a client, each from install to `sandbox-cli doctor` and a first run, then troubleshooting by the error you saw. The landing page's setup band is the short version and links here. |
 
 Every terminal frame on these pages is output captured from the CLI, not

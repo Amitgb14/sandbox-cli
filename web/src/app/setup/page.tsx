@@ -18,7 +18,7 @@ import {
   LAUNCH_AGENT_CODE,
   UNINSTALL_STEPS,
 } from "@/lib/setup";
-import { DOC_URL, STUDIO_PATH } from "@/lib/site";
+import { DOC_URL, STUDIO_PATH, docPath } from "@/lib/site";
 
 /**
  * The setup guide: a Mac, a Linux machine for a quick try, a Linux server, and
@@ -432,7 +432,7 @@ const PATHS = [
 export default function SetupPage() {
   return (
     <div id="top">
-      <SiteHeader nav={NAV} />
+      <SiteHeader nav={NAV} installHref="/#install" />
       <main className="flex-1">
         <Section id="start">
           <Link
@@ -474,7 +474,7 @@ export default function SetupPage() {
           <Caveat>
             the macOS backend was written and tested on Linux, against a fake runtime that runs the real guest agent.
             Its first runs on a real Mac (macOS 26.1) boot a sandbox in under a second, but the full check has not run
-            yet. Expect rough edges; <a className="underline" href={DOC_URL.localMac}>docs/local-macos.md</a> lists the
+            yet. Expect rough edges; <Link className="underline" href={docPath("local-macos")}>Local on a Mac</Link> lists the
             open points.
           </Caveat>
           <Steps steps={MAC_STEPS} />
@@ -529,7 +529,7 @@ export default function SetupPage() {
           <Steps steps={SERVER_STEPS} />
           <p className="mt-8 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             Pools, volumes, the audit log, how the allowlist is enforced and living with a host firewall are in{" "}
-            <a className="underline" href={DOC_URL.selfHosting}>docs/self-hosting.md</a>. To check the whole API
+            <Link className="underline" href={docPath("self-hosting")}>Self-hosting on Linux</Link>. To check the whole API
             against your server, run the conformance suite from a checkout:
           </p>
           <div className="mt-3 max-w-3xl">
@@ -560,7 +560,12 @@ export default function SetupPage() {
           <p className="mt-8 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             On one machine the gateway can sit beside sandboxd, reaching it on a loopback port with its token. Node
             and gateway flags, the admin API, scopes, quotas, the security model and what is not done yet are in{" "}
-            <a className="underline" href={DOC_URL.fleet}>docs/fleet.md</a>. To check a fleet end to end — one KVM
+            <Link className="underline" href={docPath("fleet")}>the gateway docs</Link>, with{" "}
+            <Link className="underline" href={docPath("ssh")}>SSH</Link>,{" "}
+            <Link className="underline" href={docPath("organizations")}>organizations</Link>,{" "}
+            <Link className="underline" href={docPath("jobs")}>jobs and secrets</Link>,{" "}
+            <Link className="underline" href={docPath("services")}>services</Link> and{" "}
+            <Link className="underline" href={docPath("operations")}>operations</Link> on pages of their own. To check a fleet end to end — one KVM
             machine and a laptop, every step with what a pass looks like — follow{" "}
             <a className="underline" href={DOC_URL.fleetWalkthrough}>the fleet walkthrough</a>.
           </p>
