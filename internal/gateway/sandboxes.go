@@ -51,13 +51,89 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 			return
 		}
 	}
-	caps, ok := g.combinedCapabilities()
-	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
+	c, cerr := g.create(r.Context(), p, req, createOpts{})
+	if cerr != nil {
+		cerr.write(w)
 		return
 	}
+	w.Header().Set("Content-Type", c.contentType)
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write(c.body)
+}
 
-	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB}
+// createOpts is what the gateway itself adds to a create: a service's
+// replica carries the gateway's own labels, which a request may not set, and
+// may be spread across nodes.
+type createOpts struct {
+	labels map[string]string
+	spread map[string]int
+}
+
+// created is a sandbox a node made and the store recorded, with the node's
+// answer as it came.
+type created struct {
+	sb          api.Sandbox
+	node        string
+	body        []byte
+	contentType string
+}
+
+// createError is why a create did not happen, as the HTTP front answers it:
+// the gateway's own error, a node's refusal relayed as it came, or a routing
+// error.
+type createError struct {
+	status      int
+	code, msg   string
+	raw         []byte
+	contentType string
+	route       error
+}
+
+func (e *createError) Error() string {
+	switch {
+	case e.route != nil:
+		return e.route.Error()
+	case e.raw != nil:
+		var eb api.ErrorBody
+		if json.Unmarshal(e.raw, &eb) == nil && eb.Error.Message != "" {
+			return eb.Error.Code + ": " + eb.Error.Message
+		}
+		return http.StatusText(e.status)
+	}
+	return e.code + ": " + e.msg
+}
+
+func (e *createError) write(w http.ResponseWriter) {
+	switch {
+	case e.route != nil:
+		writeRouteErr(w, e.route, "")
+	case e.raw != nil:
+		if e.contentType != "" {
+			w.Header().Set("Content-Type", e.contentType)
+		}
+		w.WriteHeader(e.status)
+		_, _ = w.Write(e.raw)
+	default:
+		writeErr(w, e.status, e.code, e.msg)
+	}
+}
+
+func newCreateError(status int, code, msg string) *createError {
+	return &createError{status: status, code: code, msg: msg}
+}
+
+// create is the one way a sandbox is made through the gateway: placed,
+// counted against its tenant's quota, stamped with its owner, and recorded
+// before anyone hears of it. A user's POST /v1/sandboxes and a service's
+// replica both come here, so a replica is made exactly as a user's sandbox
+// is. req has been validated; its labels are the caller's own.
+func (g *Gateway) create(ctx context.Context, p Principal, req api.CreateSandboxRequest, opts createOpts) (*created, *createError) {
+	caps, ok := g.combinedCapabilities()
+	if !ok {
+		return nil, newCreateError(http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
+	}
+
+	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, Spread: opts.spread}
 	if want.CPUs == 0 {
 		want.CPUs = g.cfg.Defaults.CPUs
 	}
@@ -83,8 +159,7 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	case req.SnapshotID != "" && caps.Has(api.CapMemorySnapshot):
 		o, ok := g.store.SnapshotOwner(req.SnapshotID)
 		if !ok || !mayAct(p, o) {
-			writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such snapshot")
-			return
+			return nil, newCreateError(http.StatusNotFound, api.CodeNotFound, "no such snapshot")
 		}
 		want.Node = o.Node
 		want.Caps = append(want.Caps, api.CapMemorySnapshot)
@@ -92,12 +167,10 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 		for _, m := range req.Volumes {
 			o, ok := g.store.VolumeOwner(m.Name)
 			if !ok || !mayAct(p, o) {
-				writeErr(w, http.StatusNotFound, api.CodeNotFound, "no volume named "+m.Name)
-				return
+				return nil, newCreateError(http.StatusNotFound, api.CodeNotFound, "no volume named "+m.Name)
 			}
 			if want.Node != "" && o.Node != want.Node {
-				writeErr(w, http.StatusConflict, api.CodeConflict, "the volumes named are on different nodes; one sandbox mounts volumes of one node")
-				return
+				return nil, newCreateError(http.StatusConflict, api.CodeConflict, "the volumes named are on different nodes; one sandbox mounts volumes of one node")
 			}
 			want.Node = o.Node
 		}
@@ -107,19 +180,16 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	if req.Name != "" {
 		key := "sbx\x00" + p.User + "\x00" + p.Tenant + "\x00" + req.Name
 		if !g.claim(key) {
-			writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+req.Name+" already exists")
-			return
+			return nil, newCreateError(http.StatusConflict, api.CodeConflict, "a sandbox named "+req.Name+" already exists")
 		}
 		defer g.unclaim(key)
-		list, err := g.listSandboxes(r.Context(), p, nil, false)
+		list, err := g.listSandboxes(ctx, p, nil, false)
 		if err != nil {
-			writeRouteErr(w, err, "")
-			return
+			return nil, &createError{route: err}
 		}
 		for _, sb := range list {
 			if sb.Name == req.Name && sb.State != api.StateTerminated {
-				writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+req.Name+" already exists")
-				return
+				return nil, newCreateError(http.StatusConflict, api.CodeConflict, "a sandbox named "+req.Name+" already exists")
 			}
 		}
 	}
@@ -127,13 +197,15 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	res := api.NodeResources{CPUs: want.CPUs, MemoryMB: want.MemoryMB, DiskMB: want.DiskMB}
 	hold, err := g.reserveQuota(p.Tenant, res)
 	if err != nil {
-		writeErr(w, http.StatusForbidden, api.CodeRefused, err.Error())
-		return
+		return nil, newCreateError(http.StatusForbidden, api.CodeRefused, err.Error())
 	}
 	defer hold.release()
 
-	labels := make(map[string]string, len(req.Labels)+2)
+	labels := make(map[string]string, len(req.Labels)+len(opts.labels)+2)
 	for k, v := range req.Labels {
+		labels[k] = v
+	}
+	for k, v := range opts.labels {
 		labels[k] = v
 	}
 	labels[LabelOwner] = p.User
@@ -143,8 +215,7 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	req.Labels = labels
 	body, err := json.Marshal(req)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "encoding the request failed")
-		return
+		return nil, newCreateError(http.StatusInternalServerError, api.CodeInternal, "encoding the request failed")
 	}
 
 	// A node refusing the name (409, someone else's sandbox there has it)
@@ -156,20 +227,16 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	for {
 		n, pl, err := g.place(want, tried, res)
 		if err != nil && conflict != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write(conflict)
-			return
+			return nil, &createError{status: http.StatusConflict, raw: conflict, contentType: "application/json"}
 		}
 		if err != nil {
 			msg := err.Error()
 			if want.Node != "" {
 				msg = "node " + want.Node + ", which holds what this sandbox needs, is not taking new sandboxes"
 			}
-			writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, msg)
-			return
+			return nil, newCreateError(http.StatusServiceUnavailable, api.CodeUnavailable, msg)
 		}
-		resp, err := n.do(r.Context(), http.MethodPost, "/v1/sandboxes", nil, bytes.NewReader(body), "application/json")
+		resp, err := n.do(ctx, http.MethodPost, "/v1/sandboxes", nil, bytes.NewReader(body), "application/json")
 		if err != nil {
 			n.finishIf(pl, false)
 			g.logf("create on %s: %v", n.cfg.Name, err)
@@ -181,14 +248,12 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 				tried = append(tried, n.cfg.Name)
 				continue
 			}
-			writeUnreachable(w, n)
-			return
+			return nil, newCreateError(http.StatusServiceUnavailable, api.CodeUnavailable, "node "+n.cfg.Name+" did not answer")
 		}
 		data, err := readBody(resp)
 		if err != nil {
 			n.finishIf(pl, false)
-			writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
-			return
+			return nil, newCreateError(http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
 		}
 		if resp.StatusCode == http.StatusConflict && req.Name != "" && want.Node == "" {
 			n.finishIf(pl, false)
@@ -198,14 +263,12 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 		}
 		if resp.StatusCode != http.StatusCreated {
 			n.finishIf(pl, false)
-			relay(w, resp, data)
-			return
+			return nil, &createError{status: resp.StatusCode, raw: data, contentType: resp.Header.Get("Content-Type")}
 		}
 		var sb api.Sandbox
 		if err := json.Unmarshal(data, &sb); err != nil || !spec.ValidID(sb.ID) {
 			n.finishIf(pl, false)
-			writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" answered with no sandbox")
-			return
+			return nil, newCreateError(http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" answered with no sandbox")
 		}
 		// Recorded before the caller hears of it: a sandbox the store does
 		// not hold is one nobody can reach, so if the record fails the
@@ -220,15 +283,17 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 		if err != nil {
 			n.finishIf(pl, false)
 			g.logf("create on %s: %v; terminating %s", n.cfg.Name, err, sb.ID)
-			if resp, derr := n.do(context.WithoutCancel(r.Context()), http.MethodDelete, "/v1/sandboxes/"+url.PathEscape(sb.ID), nil, nil, ""); derr == nil {
+			if resp, derr := n.do(context.WithoutCancel(ctx), http.MethodDelete, "/v1/sandboxes/"+url.PathEscape(sb.ID), nil, nil, ""); derr == nil {
 				resp.Body.Close()
 			}
-			writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the sandbox's owner could not be recorded; it was terminated")
-			return
+			return nil, newCreateError(http.StatusInternalServerError, api.CodeInternal, "the sandbox's owner could not be recorded; it was terminated")
 		}
 		n.finishIf(pl, true)
-		relay(w, resp, data)
-		return
+		ct := resp.Header.Get("Content-Type")
+		if ct == "" {
+			ct = "application/json"
+		}
+		return &created{sb: sb, node: n.cfg.Name, body: data, contentType: ct}, nil
 	}
 }
 
