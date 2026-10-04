@@ -52,6 +52,12 @@ type SSHConfig struct {
 	// Now is the clock tokens are checked against; nil is time.Now.
 	Now func() time.Time
 
+	// RecheckInterval is how often every open connection is held to the
+	// login check again (default 30s; RecheckAccess). The gateway asks for
+	// a recheck itself whenever it revokes a key or removes an SSH key; this
+	// is the backstop for a store changed some other way.
+	RecheckInterval time.Duration
+
 	// Audit records every login and session (Gateway.AuditLog); Metrics
 	// counts them (Gateway.SSHMetrics). Either may be nil.
 	Audit   *AuditLog
@@ -112,13 +118,17 @@ var sshScopes = []string{ScopeSSH, ScopeRead}
 // client uses. A login names its sandbox in the SSH username, so one port and
 // one host key serve the whole fleet.
 type SSHServer struct {
-	cfg     SSHConfig
-	signer  ssh.Signer
-	slots   chan struct{}
-	mu      sync.Mutex
-	closed  bool
-	lns     map[net.Listener]bool
-	conns   map[net.Conn]bool
+	cfg    SSHConfig
+	signer ssh.Signer
+	slots  chan struct{}
+	mu     sync.Mutex
+	closed bool
+	lns    map[net.Listener]bool
+	conns  map[net.Conn]bool
+	// live is every connection that has logged in, with what it logged in
+	// as, for RecheckAccess. Under mu.
+	live    map[*ssh.ServerConn]*sshLogin
+	recheck sync.Once
 	wg      sync.WaitGroup
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -164,10 +174,13 @@ func NewSSHServer(cfg SSHConfig) (*SSHServer, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.RecheckInterval <= 0 {
+		cfg.RecheckInterval = 30 * time.Second
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SSHServer{
 		cfg: cfg, signer: signer, slots: make(chan struct{}, cfg.MaxConns),
-		lns: map[net.Listener]bool{}, conns: map[net.Conn]bool{},
+		lns: map[net.Listener]bool{}, conns: map[net.Conn]bool{}, live: map[*ssh.ServerConn]*sshLogin{},
 		baseCtx: ctx, cancel: cancel,
 	}, nil
 }
@@ -181,6 +194,12 @@ func (s *SSHServer) Serve(ln net.Listener) error {
 		return net.ErrClosed
 	}
 	s.lns[ln] = true
+	// The backstop starts with the first Serve, under mu and before Close
+	// can have begun waiting, so Close always waits for it.
+	s.recheck.Do(func() {
+		s.wg.Add(1)
+		go func() { defer s.wg.Done(); s.recheckLoop() }()
+	})
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -302,6 +321,25 @@ func (s *SSHServer) handleConn(nc net.Conn) {
 	defer sconn.Close()
 	login.remote = remoteIP(nc.RemoteAddr().String())
 	s.audit(login, "ssh.login", "")
+	// Tracked from here, and checked once more at once: a revocation that
+	// landed between the login check and this line found no connection to
+	// close, and must not be missed until the next backstop.
+	s.mu.Lock()
+	s.live[sconn] = login
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.live, sconn)
+		s.mu.Unlock()
+	}()
+	if why := s.lostAccess(login, nil); why != "" {
+		s.endLogin(sconn, login, why)
+		go ssh.DiscardRequests(reqs)
+		for nch := range chans {
+			_ = nch.Reject(ssh.Prohibited, "access revoked")
+		}
+		return
+	}
 
 	ctx, cancel := context.WithCancel(s.baseCtx)
 	defer cancel()
@@ -349,4 +387,108 @@ func (s *SSHServer) handleConn(nc net.Conn) {
 	}
 	cancel()
 	wg.Wait()
+}
+
+// RecheckAccess holds every open connection to the check its login passed,
+// and closes those that no longer pass it, returning how many. Closing a
+// connection ends its channels, and each session hangs up the process it
+// started (session.hangup), so a revoked user is out at once, not at their
+// next login.
+//
+// A connection fails the check when its user holds no active API key with
+// sandbox:ssh in its tenant any more (userMaySSH) — the key revoked, or the
+// last ssh-capable one — or when it logged in with a registered SSH key that
+// has since been removed. A token login stays as long as its user passes:
+// the token was spent on the login, and what it granted is the user's.
+//
+// The gateway calls this whenever it revokes a key or removes an SSH key;
+// recheckLoop calls it every RecheckInterval as well, for a store changed
+// any other way. It costs one read of the store's keys per user and tenant
+// with a connection open, and nothing for a server with none.
+func (s *SSHServer) RecheckAccess() int {
+	s.mu.Lock()
+	live := make(map[*ssh.ServerConn]*sshLogin, len(s.live))
+	for c, l := range s.live {
+		live[c] = l
+	}
+	s.mu.Unlock()
+	if len(live) == 0 {
+		return 0
+	}
+	cache := map[[2]string]bool{}
+	n := 0
+	for c, l := range live {
+		if why := s.lostAccess(l, cache); why != "" {
+			s.endLogin(c, l, why)
+			n++
+		}
+	}
+	return n
+}
+
+// lostAccess says why login may no longer stay connected, or "". cache, when
+// not nil, keeps userMaySSH's answer per user and tenant for one recheck.
+func (s *SSHServer) lostAccess(login *sshLogin, cache map[[2]string]bool) string {
+	p := login.principal
+	who := [2]string{p.User, p.Tenant}
+	ok, seen := cache[who]
+	if !seen {
+		ok = userMaySSH(s.cfg.Store, p.User, p.Tenant)
+		if cache != nil {
+			cache[who] = ok
+		}
+	}
+	if !ok {
+		return "the user holds no active API key with " + ScopeSSH
+	}
+	if login.sshKeyID != "" {
+		for _, k := range s.cfg.Store.SSHKeysFor(p.User) {
+			if k.ID == login.sshKeyID && k.Tenant == p.Tenant {
+				return ""
+			}
+		}
+		return "the SSH key it logged in with was removed"
+	}
+	return ""
+}
+
+// endLogin closes a connection that lost its access, and says so in the log
+// and the audit record, by the credential's id and fingerprint only.
+func (s *SSHServer) endLogin(c *ssh.ServerConn, login *sshLogin, why string) {
+	// Once: a revocation's recheck and the backstop's may find the same
+	// connection at the same time.
+	s.mu.Lock()
+	_, open := s.live[c]
+	delete(s.live, c)
+	s.mu.Unlock()
+	if !open {
+		return
+	}
+	s.cfg.Logf("ssh: %s: closed: %s", login.describe(), why)
+	if s.cfg.Audit != nil {
+		node := ""
+		if o, ok := s.cfg.Store.OwnerOf(login.id); ok {
+			node = o.Node
+		}
+		p := login.principal
+		s.cfg.Audit.write(api.AuditEntry{
+			Kind: "ssh", Action: "ssh.revoked", KeyID: p.KeyID, User: p.User, Tenant: p.Tenant, Remote: login.remote,
+			Sandbox: login.id, Node: node, Result: "closed", Fingerprint: login.fingerprint,
+		})
+	}
+	_ = c.Close()
+}
+
+// recheckLoop runs RecheckAccess every RecheckInterval until Close.
+func (s *SSHServer) recheckLoop() {
+	t := time.NewTicker(s.cfg.RecheckInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.baseCtx.Done():
+			return
+		case <-t.C:
+			s.RecheckAccess()
+		}
+	}
 }

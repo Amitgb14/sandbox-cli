@@ -82,7 +82,9 @@ sandbox-cli ssh-access demo --ttl 15m   # a short-lived `ssh TOKEN@gateway …` 
 ```
 
 The token in an `ssh-access` line is the whole credential until it expires;
-hand it only to whoever should have that access. Against a plain sandboxd,
+hand it only to whoever should have that access. Every SSH login needs an
+active API key with the `sandbox:ssh` scope, and revoking it closes open
+sessions too ([docs/fleet.md](docs/fleet.md#revoking)). Against a plain sandboxd,
 `sandbox-cli ssh` opens the session through the API instead, since a sandboxd
 has no SSH server.
 

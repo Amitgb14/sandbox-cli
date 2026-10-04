@@ -175,6 +175,20 @@ func (s *FileStore) AllJobs() []*jobRecord {
 	return out
 }
 
+// runningJobs is the id and owner of every job still running and not yet
+// cancelled: what revokeOrphanedJobs looks at, without copying runs.
+func (s *FileStore) runningJobs() map[string]Owner {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]Owner{}
+	for id, r := range s.st.Jobs {
+		if r.State == api.JobRunning && !r.Cancelled {
+			out[id] = r.owner()
+		}
+	}
+	return out
+}
+
 // UpdateJob changes a job in place and writes it.
 func (s *FileStore) UpdateJob(id string, fn func(*jobRecord)) error {
 	return s.change(func() error {

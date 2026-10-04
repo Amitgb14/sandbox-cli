@@ -314,6 +314,9 @@ func TestSSHEndpoints(t *testing.T) {
 	}
 
 	// SSH keys.
+	if code := tg.do(noSSH, http.MethodPost, "/v1/ssh-keys", api.SSHKeyRequest{Key: ed25519Line(t, "")}, &eb); code != http.StatusForbidden {
+		t.Fatalf("registering a key without the ssh scope: %d", code)
+	}
 	if code := tg.do(aliceKey, http.MethodPost, "/v1/ssh-keys", api.SSHKeyRequest{Key: `command="sh" ` + ed25519Line(t, "")}, &eb); code != http.StatusBadRequest {
 		t.Fatalf("a key with options: %d", code)
 	}

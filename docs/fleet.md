@@ -297,7 +297,7 @@ sudo -u sandbox-gateway sandbox-gateway --state … keys create --user alice --t
 | `sandbox:read` | get, list, process output, files read, directory listings, events, volumes and snapshots listed |
 | `sandbox:create` | create sandboxes and volumes, and act on its user's: run, start processes, stdin, signals, attach, tunnels, file writes, suspend, resume, snapshots, network policy |
 | `sandbox:delete` | terminate sandboxes, delete volumes and snapshots |
-| `sandbox:ssh` | register SSH keys, issue SSH access tokens, log in over SSH — which runs commands in the sandbox |
+| `sandbox:ssh` | register SSH keys, issue SSH access tokens, log in over SSH — which runs commands in the sandbox. A login, by SSH key or token, needs its user to hold an active key with this scope at the time, and an open connection ends when they no longer do |
 | `secrets:write` | set and remove the tenant's secrets. Any key of the tenant may name them in a job or a service, and so read them from inside its sandboxes: a tenant is the unit that shares secrets, and users with no tenant all share the default one |
 | `admin` | every scope, on every user's sandboxes, plus keys, nodes and cordon |
 
@@ -305,6 +305,36 @@ A user is letters, digits and `. _ @ + -`, at most 64; so is a tenant, which
 is optional and is what quotas count. A key acts as its user: two keys for one
 user see the same sandboxes. Hand the secret over as you would a password, in
 a file. `keys list` shows ids, never secrets; `keys revoke ID` ends a key.
+
+### Revoking
+
+Revoking a key (`DELETE /v1/admin/keys/{id}`) acts on what is already running,
+not only on what starts next, before the call returns:
+
+- **SSH.** Every open SSH connection whose user no longer holds an active key
+  with `sandbox:ssh` (or `admin`) in that tenant is closed, its sessions and
+  forwards with it, and the processes they ran are hung up. A connection made
+  with an `ssh-access` token is held to the same check: it stays while its
+  user still may use SSH. Removing an SSH key (`sandbox-cli ssh-key remove`, or
+  `DELETE /v1/admin/ssh-keys/{id}`) closes the connections that logged in with
+  it.
+- **Jobs and agent runs.** A running job whose owner holds no active key at all
+  in that tenant is cancelled as `DELETE /v1/jobs/{id}` would: its running
+  sandboxes are terminated, its queued runs never start, and the job and each
+  run say `cancelled: the owner's access was revoked`. Every run also checks its
+  owner before it makes a sandbox.
+- **Services** are routed to and given new replicas only while their owner
+  holds an active key, which is checked on every request and every step, so
+  revoking the owner's last key stops a service's traffic at once. Its
+  replicas stay until an admin deletes the service.
+- **The audit record** says what revocation ended: `ssh.revoked` (result
+  `closed`) per connection, with the credential's key id and fingerprint, and
+  `job.revoked` (result `cancelled`) per job, with its id. Never a secret.
+
+Every API request checks its key as it arrives, so a revoked key's next call
+is refused. The gateway also rechecks open SSH connections and running jobs
+every 30 seconds, and at start, for a state file changed while it was stopped
+(`keys revoke` with the gateway down).
 
 ## Users' side
 
@@ -367,6 +397,10 @@ token, and have the same SSH calls ([sdk/README.md](../sdk/README.md)).
   anything is looked up.
 - **Scopes are fixed at issue.** A key holds the scopes it was given; `admin`
   holds all of them.
+- **SSH is a scope of its own, and access ends with it.** An SSH key or token
+  logs in only while its user holds an active key with `sandbox:ssh`, so a user
+  left with read-only keys cannot open a shell. Revoking ends open connections
+  and running jobs, not only the next login ([Revoking](#revoking)).
 - **Secrets travel by reference.** API keys and SSH tokens are random 256-bit
   strings stored only as their SHA-256; logs name a key by its id. The state
   file holds no secret, and is still 0600 and refused if others can read it,
@@ -577,11 +611,15 @@ atomically on every change).
 - **No admin commands in `sandbox-cli`.** Use `sandbox-gateway keys|nodes` with
   the gateway stopped, or the admin API with `curl` (above); the Go client
   (`internal/api`) has the admin calls.
-- **SSH access follows a user's API keys.** An SSH key or token logs in only
-  while its user still holds an active API key, so revoking a user's keys ends
-  their SSH access at once, tokens included. An admin lists and removes any
-  user's SSH keys with `GET /v1/admin/ssh-keys?user=U` and
+- **SSH access follows a user's API keys.** An SSH key or token logs in, and
+  stays connected, only while its user holds an active API key with
+  `sandbox:ssh` ([Revoking](#revoking)). An admin lists and removes any user's
+  SSH keys with `GET /v1/admin/ssh-keys?user=U` and
   `DELETE /v1/admin/ssh-keys/{id}`.
+- **An open API stream outlives its key's revocation.** A request checks its
+  key when it arrives; an attached terminal or a followed output stream opened
+  before the revocation runs until it ends. SSH connections and jobs do not
+  (above).
 - **Quotas are per tenant and the same for every tenant**, set by flags.
 - **No usage metering** beyond the per-node audit logs; each node keeps its own.
 - **The gateway does not proxy `GET /v1/node`**; node status is

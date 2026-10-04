@@ -287,6 +287,22 @@ that fails on the code before the fix:
   active API key matched the name alone, so revoking `ci` in one tenant left
   its SSH keys, tokens and routed services working while another tenant had a
   `ci`.
+- **SSH needs a key with `sandbox:ssh`; a read-only key loses SSH.** A
+  registered SSH key or an `ssh-access` token logged in while its user held
+  any active API key, so a user left with only `sandbox:read` keys kept a shell
+  in every sandbox they own. A login now needs an active key carrying
+  `sandbox:ssh` (or `admin`) in the user's tenant. Give such users a key with
+  the scope if they should keep SSH.
+- **Revoking a key ends open SSH sessions and running jobs, not only the next
+  login.** An open SSH connection stayed open after its user's keys were
+  revoked, and a job went on running, and making sandboxes for its queued
+  runs, in its owner's name. Now revoking a key closes, before the call
+  returns, every SSH connection whose user may no longer use SSH, and cancels
+  every running job and agent run whose owner holds no active key, as
+  `DELETE /v1/jobs/{id}` does, saying `cancelled: the owner's access was
+  revoked`. Removing an SSH key closes the connections made with it. Both are
+  rechecked every 30 seconds and at start, and recorded in the audit log
+  (`ssh.revoked`, `job.revoked`).
 
 ### Changed
 

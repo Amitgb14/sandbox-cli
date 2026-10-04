@@ -34,6 +34,13 @@ import (
 // resumed, not finished.
 var errJobCancelled = errors.New("the job was cancelled")
 
+// reasonOwnerRevoked is what a job, and each run it stopped, says when it
+// was cancelled because its owner holds no active API key any more;
+// errOwnerRevoked is the cause its context ends with.
+const reasonOwnerRevoked = "cancelled: the owner's access was revoked"
+
+var errOwnerRevoked = fmt.Errorf("%w: %s", errJobCancelled, reasonOwnerRevoked)
+
 // jobManager holds what runs jobs: their contexts, and environments that
 // are not sealed (a gateway without a secrets key).
 type jobManager struct {
@@ -101,6 +108,17 @@ func (jm *jobManager) cancel(ctx context.Context, id string, wait time.Duration)
 	case <-ctl.done:
 	case <-t.C:
 	case <-ctx.Done():
+	}
+}
+
+// cancelNow cancels a running job with cause and does not wait: it is
+// called from a run's own goroutine as well, which waiting would deadlock.
+func (jm *jobManager) cancelNow(id string, cause error) {
+	jm.mu.Lock()
+	ctl := jm.ctls[id]
+	jm.mu.Unlock()
+	if ctl != nil {
+		ctl.cancel(cause)
 	}
 }
 
@@ -173,7 +191,11 @@ func (g *Gateway) startJob(id string) {
 	jm.ctls[id] = ctl
 	if rec, ok := g.store.Job(id); ok && rec.Cancelled {
 		// Asked before a restart: the cancel is finished now.
-		cancel(errJobCancelled)
+		cause := errJobCancelled
+		if rec.Error == reasonOwnerRevoked {
+			cause = errOwnerRevoked
+		}
+		cancel(cause)
 	}
 	jm.wg.Add(1)
 	go func() {
@@ -187,6 +209,66 @@ func (g *Gateway) startJob(id string) {
 		}()
 		g.runJob(ctx, id)
 	}()
+}
+
+// revokeOrphanedJobs cancels every running job whose owner holds no active
+// API key in its tenant any more (userActive). A job runs in its owner's
+// name long after the request that made it, and before this a job outlived
+// the revocation of its owner's keys: its running sandboxes kept running
+// and its queued runs went on making new ones, for up to a week each.
+//
+// The cancel is the one DELETE /v1/jobs/{id} makes: recorded first, so a
+// restarted gateway finishes it, and then each running run's sandbox
+// terminated and the queued runs never started. Called on every
+// revocation (accessChanged), at Start, and every AccessRecheckInterval.
+func (g *Gateway) revokeOrphanedJobs() {
+	active := map[Owner]bool{}
+	for id, o := range g.store.runningJobs() {
+		ok, seen := active[o]
+		if !seen {
+			ok = userActive(g.store, o.User, o.Tenant)
+			active[o] = ok
+		}
+		if !ok {
+			g.revokeJob(id, o)
+		}
+	}
+}
+
+// revokeJob cancels job id because its owner o lost their access.
+func (g *Gateway) revokeJob(id string, o Owner) {
+	first := false
+	if err := g.store.UpdateJob(id, func(j *jobRecord) {
+		if j.State != api.JobRunning || j.Cancelled {
+			return
+		}
+		first = true
+		j.Cancelled = true
+		if j.Error == "" {
+			j.Error = reasonOwnerRevoked
+		}
+	}); err != nil {
+		g.logf("job %s: recording its cancel: %v", id, err)
+		// Cancelled all the same: the access is gone whether or not the
+		// record says so, and a restarted gateway rechecks at Start.
+	}
+	g.jobs.cancelNow(id, errOwnerRevoked)
+	if !first {
+		return
+	}
+	g.logf("job %s: cancelled: user %q of tenant %q holds no active API key", id, o.User, o.Tenant)
+	g.audit.write(api.AuditEntry{Kind: "job", Action: "job.revoked", User: o.User, Tenant: o.Tenant,
+		Target: id, Result: "cancelled"})
+}
+
+// cancelledOutcome is a run stopped by its job's cancel, saying why when the
+// cause was the owner's revocation.
+func cancelledOutcome(ctx context.Context) outcome {
+	o := outcome{state: api.RunCancelled}
+	if errors.Is(context.Cause(ctx), errOwnerRevoked) {
+		o.err = reasonOwnerRevoked
+	}
+	return o
 }
 
 // stopping reports how a run's context ended: cancelled (the job was), or
@@ -284,6 +366,9 @@ func (g *Gateway) finishJob(id string) {
 				r.State = api.RunCancelled
 				if r.Finished == nil {
 					r.Finished = &now
+				}
+				if r.Error == "" && j.Error == reasonOwnerRevoked {
+					r.Error = j.Error
 				}
 			}
 			if r.State != api.RunSucceeded {
@@ -397,9 +482,16 @@ func (g *Gateway) attempt(ctx context.Context, rec *jobRecord, env map[string]st
 		return g.watch(ctx, rec, n, nd, run.Sandbox, run.PID, *run.Started)
 	}
 	if c, i := stopping(ctx); c {
-		return outcome{state: api.RunCancelled}
+		return cancelledOutcome(ctx)
 	} else if i {
 		return outcome{interrupted: true}
+	}
+	// Every new sandbox is made in the owner's name, so the owner is checked
+	// before each, not only when a revocation is noticed: a run that reaches
+	// this between the revocation and the recheck makes nothing.
+	if !userActive(g.store, rec.User, rec.Tenant) {
+		g.revokeJob(rec.ID, rec.owner())
+		return outcome{state: api.RunCancelled, err: reasonOwnerRevoked}
 	}
 	if envErr != nil {
 		return outcome{state: api.RunFailed, err: envErr.Error(), final: true, counted: true}
@@ -424,7 +516,7 @@ func (g *Gateway) attempt(ctx context.Context, rec *jobRecord, env map[string]st
 			break
 		}
 		if c, i := stopping(ctx); c {
-			return outcome{state: api.RunCancelled}
+			return cancelledOutcome(ctx)
 		} else if i {
 			return outcome{interrupted: true}
 		}
@@ -459,7 +551,7 @@ func (g *Gateway) attempt(ctx context.Context, rec *jobRecord, env map[string]st
 			return outcome{interrupted: true}
 		} else if c {
 			g.terminateRunSandbox(sb.ID)
-			return outcome{state: api.RunCancelled}
+			return cancelledOutcome(ctx)
 		}
 		g.terminateRunSandbox(sb.ID)
 		return failed("starting the command: " + err.Error())
@@ -570,7 +662,7 @@ func (g *Gateway) watch(ctx context.Context, rec *jobRecord, n int, nd *node, sa
 			return outcome{interrupted: true}
 		} else if c {
 			g.terminateRunSandbox(sandbox)
-			return outcome{state: api.RunCancelled}
+			return cancelledOutcome(ctx)
 		}
 		if fctx.Err() != nil {
 			// The deadline: the process is killed, and what it wrote kept.
