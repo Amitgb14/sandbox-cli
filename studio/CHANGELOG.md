@@ -10,6 +10,10 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Studio's text is set in Inter,** bundled with the UI so it needs no font
+  service and works offline. Column headings are small monospace capitals,
+  page titles a medium weight; code, ids and the terminal stay in Geist Mono.
+
 - **Studio is simpler.** It opens on the sandbox list instead of an overview of
   counts, in a near-monochrome theme with one quiet sidebar: Sandboxes,
   Snapshots and Volumes; Playground and Agents; Settings, with search, which
