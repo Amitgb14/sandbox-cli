@@ -19,6 +19,7 @@ npm run build    # static export -> web/out
 | `/` | The landing page — the argument, the three ways to run it, the API, the interactive proofs, setup, install. |
 | `/multi-agent` | **Running agents in parallel**: fallbacks and the fleet. One agent per task in its own sandbox, mixing agents, `verify`, landing from refs, the guardrails. Linked from the header nav, the footer, and the landing page's agents section. |
 | `/studio` | Studio, the browser client of the same API. |
+| `/setup` | **The setup guide**: a Mac, Linux without root, a Linux server under systemd, and a client, each from install to `sandbox-cli doctor` and a first run, then troubleshooting by the error you saw. The landing page's setup band is the short version and links here. |
 
 Every terminal frame on these pages is output captured from the CLI, not
 paraphrased, and every claim about a platform says what is verified and what is

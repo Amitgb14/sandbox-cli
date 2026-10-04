@@ -26,6 +26,7 @@ export const RAW_INSTALL_URL =
  */
 export const MULTI_AGENT_PATH = "/multi-agent/";
 export const STUDIO_PATH = "/studio/";
+export const SETUP_PATH = "/setup/";
 
 const BLOB = `${REPO_URL}/blob/main`;
 

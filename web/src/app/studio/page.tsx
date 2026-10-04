@@ -41,7 +41,7 @@ const SCREENS = [
   },
   {
     name: "Launch",
-    what: "A command, an agent run unattended, or an agent's interactive console, on a clone of your repository — with the same config, profile, network policy, labels, volumes and git identity a sandbox-cli run would get.",
+    what: "A command, an agent run unattended, or an agent's interactive console, on a clone of your repository or an empty workspace — with the same config, profile, network policy, labels, volumes and git identity a sandbox-cli run would get.",
   },
   {
     name: "Runs",
@@ -57,7 +57,7 @@ const SCREENS = [
   },
   {
     name: "Agents, Volumes, Settings",
-    what: "Which agents can run unattended and whose login is saved; named volumes and where each is mounted; the context, its capabilities, and the repositories Studio may act on.",
+    what: "The agents Studio runs, each with a verified headless mode, and whose login is saved; named volumes and where each is mounted; the context, its capabilities, and the repositories Studio may act on.",
   },
 ];
 

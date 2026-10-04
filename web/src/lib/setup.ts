@@ -38,6 +38,17 @@ export const INSTALL_STEP: SetupStep = {
   body: "Installs sandbox-cli, sandboxd and the guest agent beside it into ~/.local/bin, each archive verified against the release checksums, and — on a machine that has none — writes ~/.config/sandbox/config.yaml with the client settings spelled out. It installs sandboxd; it does not start it.",
 };
 
+/**
+ * The launch agent, fetched and pointed at the installed sandboxd. The plist in
+ * packaging/launchd runs /usr/local/bin/sandboxd, but the install script puts
+ * it in ~/.local/bin; copying the plist as-is left a launch agent with nothing
+ * to run.
+ */
+export const LAUNCH_AGENT_CODE = `curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/launchd/dev.sandbox.sandboxd.plist \\
+  | sed "s#/usr/local/bin/sandboxd#$HOME/.local/bin/sandboxd#" \\
+  > ~/Library/LaunchAgents/dev.sandbox.sandboxd.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandbox.sandboxd.plist`;
+
 const DOCTOR_STEP: SetupStep = {
   title: "Ask what this sandboxd can deliver",
   code: "sandbox-cli doctor",
@@ -69,7 +80,7 @@ export const SETUP_PATHS: SetupPath[] = [
     label: "macOS",
     engine: "the native container runtime",
     caveat:
-      "The macOS backend is written and tested on Linux against a fake runtime that runs the real guest agent, but has not yet run on a real Mac. Expect rough edges; docs/local-macos.md lists the open points, and the Linux paths are the verified ones.",
+      "The macOS backend was written and tested on Linux against a fake runtime that runs the real guest agent. Its first runs on a real Mac (macOS 26.1) boot a sandbox in under a second, but the full check has not run yet. Expect rough edges; docs/local-macos.md lists the open points, and the Linux paths are the verified ones.",
     steps: [
       {
         title: "Have the runtime",
@@ -79,8 +90,8 @@ export const SETUP_PATHS: SetupPath[] = [
       INSTALL_STEP,
       {
         title: "Start sandboxd as a launch agent",
-        code: "cp packaging/launchd/dev.sandbox.sandboxd.plist ~/Library/LaunchAgents/\nlaunchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandbox.sandboxd.plist",
-        body: "It listens on a unix socket only you can open, which is the CLI's default context. Egress here is none, or open if your policy allows it: the macOS backend does not enforce an allowlist yet, so it does not claim one. With --allow-bind (the launch agent sets it), a run may mount a directory with --bind.",
+        code: LAUNCH_AGENT_CODE,
+        body: "The launch agent in the repository runs /usr/local/bin/sandboxd; the sed points it at the copy the script installed in ~/.local/bin, so nothing needs root. It listens on a unix socket only you can open, which is the CLI's default context. Egress here is none, or open if your policy allows it: the macOS backend does not enforce an allowlist yet, so it does not claim one. With --allow-bind (the launch agent sets it), a run may mount a directory with --bind.",
       },
       DOCTOR_STEP,
       FIRST_RUN_STEP,

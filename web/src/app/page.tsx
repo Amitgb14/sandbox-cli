@@ -21,7 +21,7 @@ import { CodeBlock } from "@/components/code-block";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { AGENTS } from "@/lib/agents";
-import { DOC_URL, MULTI_AGENT_PATH, REPO_URL } from "@/lib/site";
+import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, SETUP_PATH } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const EXPOSED = [
@@ -301,6 +301,12 @@ export default function Home() {
             lead="Pick where sandboxes will run. Every path ends with doctor, because installing is the easy half and what this sandboxd can actually deliver is a property of the machine."
           />
           <SetupGuide />
+          <Link
+            href={SETUP_PATH}
+            className="mt-6 inline-flex items-center gap-1.5 text-sm font-medium underline-offset-4 hover:underline"
+          >
+            The full setup guide, with troubleshooting →
+          </Link>
         </Section>
 
         {/* -------------------------------------------------------- install */}
