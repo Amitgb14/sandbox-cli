@@ -78,6 +78,8 @@ type serveOptions struct {
 	quota                                             gateway.Quota
 	pollInterval                                      time.Duration
 	corsOrigins                                       []string
+	secretsKeyFile, jobsDir                           string
+	jobRetention                                      time.Duration
 }
 
 func newServe(state *string) *cobra.Command {
@@ -109,6 +111,9 @@ func newServe(state *string) *cobra.Command {
 	f.IntVar(&o.quota.MemoryMB, "quota-memory-mb", 0, "most memory (MB) one tenant's sandboxes may hold; 0 is unlimited")
 	f.DurationVar(&o.pollInterval, "poll-interval", 5*time.Second, "how often each node is asked for its status")
 	f.StringArrayVar(&o.corsOrigins, "cors-origin", nil, "a browser origin allowed to call the API (repeatable)")
+	f.StringVar(&o.secretsKeyFile, "secrets-key-file", "", "32 random bytes (mode 0600) sealing secrets and jobs' environments; without it there are no secrets")
+	f.StringVar(&o.jobsDir, "jobs-dir", "", "where jobs' runs keep output and files (default: jobs/ beside the state file)")
+	f.DurationVar(&o.jobRetention, "job-retention", 24*time.Hour, "how long a finished job, and what it kept, is kept")
 	return cmd
 }
 
@@ -136,9 +141,16 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 	if err := os.MkdirAll(o.nodeFilesDir, 0o700); err != nil {
 		return err
 	}
+	var secretsKey []byte
+	if o.secretsKeyFile != "" {
+		if secretsKey, err = gateway.LoadSecretsKey(o.secretsKeyFile); err != nil {
+			return err
+		}
+	}
 	g, err := gateway.New(gateway.Config{
 		Store: st, StaticNodes: static, PollInterval: o.pollInterval, Quota: o.quota,
 		NodeFilesDir: o.nodeFilesDir, CORSOrigins: o.corsOrigins, Logf: logf,
+		SecretsKey: secretsKey, JobsDir: o.jobsDir, JobRetention: o.jobRetention,
 	})
 	if err != nil {
 		return err

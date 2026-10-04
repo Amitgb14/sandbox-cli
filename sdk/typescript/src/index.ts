@@ -167,6 +167,77 @@ export interface SSHAccess {
   command: string;
 }
 
+/** A job: one sandbox per run, made, watched and taken down by a gateway. */
+export interface JobSpec {
+  name?: string;
+  image?: string;
+  /** The argv each run starts; or `agent` and `prompt` (or `prompts`, one run each). */
+  command?: string[];
+  agent?: string;
+  prompt?: string;
+  prompts?: string[];
+  parallelism?: number;
+  completions?: number;
+  retries?: number;
+  timeout_secs?: number;
+  env?: Record<string, string>;
+  /** Names of the tenant's secrets, each set in the run's environment under its name. */
+  secrets?: string[];
+  network?: NetworkPolicy;
+  resources?: { cpus?: number; memory_mb?: number; disk_mb?: number };
+  from_snapshot?: string;
+  keep?: { output?: boolean; files?: string[] };
+  /** POSTed the run's and the job's state when each ends: https, or http to loopback. */
+  notify?: string;
+}
+
+/** POST /v1/agent-runs: a job of one agent run. */
+export type AgentRunOptions = Omit<JobSpec, "agent" | "prompt" | "command" | "prompts" | "parallelism" | "completions">;
+
+export interface JobRun {
+  n: number;
+  state: "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
+  sandbox?: string;
+  pid?: number;
+  attempts: number;
+  exit_code?: number;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+  output_truncated?: boolean;
+  files?: { path: string; size: number; truncated?: boolean; error?: string }[];
+}
+
+export interface Job {
+  id: string;
+  name?: string;
+  state: "running" | "succeeded" | "failed" | "cancelled";
+  spec: JobSpec;
+  env_names?: string[];
+  created_at: string;
+  finished_at?: string;
+  expires_at?: string;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  /** Absent in a listing. */
+  runs?: JobRun[];
+  error?: string;
+}
+
+export interface JobOutput {
+  stdout: Uint8Array;
+  stderr: Uint8Array;
+  truncated: boolean;
+}
+
+/** A secret as listed: its name, never its value. */
+export interface SecretInfo {
+  name: string;
+  updated_at: string;
+}
+
 /** A non-2xx response; `code` is the API's error code (refused, unsupported, not_found, ...). */
 export class ApiError extends Error {
   constructor(
@@ -449,5 +520,59 @@ export class Client {
    */
   sshAccess(ref: string, ttlSecs?: number): Promise<SSHAccess> {
     return this.json("POST", this.sbx(ref) + "/ssh-access", ttlSecs ? { ttl_secs: ttlSecs } : {});
+  }
+
+  // Jobs, agent runs and secrets (gateway only): work the gateway runs after
+  // the request that started it has gone.
+
+  private job_(id: string): string {
+    return "/v1/jobs/" + encodeURIComponent(id);
+  }
+
+  createJob(spec: JobSpec): Promise<Job> {
+    return this.json("POST", "/v1/jobs", spec);
+  }
+
+  /** A one-run job of `agent` on `prompt`. */
+  agentRun(agent: string, prompt: string, opts: AgentRunOptions = {}): Promise<Job> {
+    return this.json("POST", "/v1/agent-runs", { ...opts, agent, prompt });
+  }
+
+  /** The caller's jobs, newest first, without their runs. */
+  async jobs(): Promise<Job[]> {
+    return (await this.json<{ jobs: Job[] }>("GET", "/v1/jobs")).jobs;
+  }
+
+  job(id: string): Promise<Job> {
+    return this.json("GET", this.job_(id));
+  }
+
+  /** Runs not started never are; running ones' sandboxes are terminated. */
+  cancelJob(id: string): Promise<Job> {
+    return this.json("DELETE", this.job_(id));
+  }
+
+  async jobOutput(id: string, run: number): Promise<JobOutput> {
+    const o = await this.json<{ stdout?: string; stderr?: string; truncated: boolean }>(
+      "GET", `${this.job_(id)}/runs/${run}/output`);
+    return { stdout: fromB64(o.stdout), stderr: fromB64(o.stderr), truncated: o.truncated };
+  }
+
+  async jobFile(id: string, run: number, path: string): Promise<Uint8Array> {
+    const resp = await this.request("GET", `${this.job_(id)}/runs/${run}/files`, { query: { path } });
+    return new Uint8Array(await resp.arrayBuffer());
+  }
+
+  /** Set one of the tenant's secrets. The value is never returned. */
+  async setSecret(name: string, value: string): Promise<void> {
+    await this.json("PUT", "/v1/secrets/" + encodeURIComponent(name), { value });
+  }
+
+  async secrets(): Promise<SecretInfo[]> {
+    return (await this.json<{ secrets: SecretInfo[] }>("GET", "/v1/secrets")).secrets;
+  }
+
+  async deleteSecret(name: string): Promise<void> {
+    await this.json("DELETE", "/v1/secrets/" + encodeURIComponent(name));
   }
 }

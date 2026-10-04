@@ -42,10 +42,13 @@ const (
 	ScopeDelete = "sandbox:delete" // terminate
 	ScopeSSH    = "sandbox:ssh"    // SSH sessions, and SSH keys and tokens for them
 	ScopeAdmin  = "admin"          // users, keys, nodes, cordon; every sandbox
+	// ScopeSecretsWrite sets and removes the tenant's secrets (secrets.go).
+	// Listing their names needs only ScopeRead; a value is never returned.
+	ScopeSecretsWrite = "secrets:write"
 )
 
 // AllScopes lists the scopes, for help text and validation.
-var AllScopes = []string{ScopeRead, ScopeCreate, ScopeDelete, ScopeSSH, ScopeAdmin}
+var AllScopes = []string{ScopeRead, ScopeCreate, ScopeDelete, ScopeSSH, ScopeAdmin, ScopeSecretsWrite}
 
 // Labels the gateway stamps on every sandbox it creates. A request that sets
 // either is refused: they decide who may act on the sandbox.

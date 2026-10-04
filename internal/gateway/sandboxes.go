@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -37,24 +38,67 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 			return
 		}
 	}
-	if req.Name != "" && !spec.ValidName(req.Name) {
-		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "name "+req.Name+": lowercase letters, digits and dashes, starting with a letter or digit, at most 63")
-		return
+	_, f := g.create(r.Context(), p, req, nil)
+	f.write(w)
+}
+
+// createFail is the answer to a create, as a node or the gateway put it: on
+// success the node's 201 and its body, otherwise the refusal.
+type createFail struct {
+	status int
+	body   []byte
+	// transient marks a refusal that waiting may cure — the tenant's quota
+	// full, no node with room, a node not answering — which a job's run
+	// waits out rather than counting as a failed attempt.
+	transient bool
+}
+
+func (f *createFail) write(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(f.status)
+	_, _ = w.Write(f.body)
+}
+
+// err is the refusal as a client would have read it.
+func (f *createFail) err() error {
+	var eb api.ErrorBody
+	if json.Unmarshal(f.body, &eb) != nil || eb.Error.Code == "" {
+		eb.Error = api.ErrorDetail{Code: api.CodeInternal, Message: strings.TrimSpace(string(f.body))}
 	}
-	if len(req.Labels) > spec.MaxLabels-2 {
-		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "labels: at most 30 through a gateway, which adds its own two")
-		return
+	return &api.Error{Status: f.status, Code: eb.Error.Code, Message: eb.Error.Message}
+}
+
+func failWith(status int, code, msg string) *createFail {
+	body, _ := json.Marshal(api.ErrorBody{Error: api.ErrorDetail{Code: code, Message: msg}})
+	return &createFail{status: status, body: body}
+}
+
+func transientFail(status int, code, msg string) *createFail {
+	f := failWith(status, code, msg)
+	f.transient = true
+	return f
+}
+
+// create is the one create path: POST /v1/sandboxes, and every run of a job
+// (jobs.go). It validates, places, holds the quota, stamps the owner labels
+// and extra — gateway.* labels only the gateway sets — and records the owner
+// before the sandbox is handed back. It returns the sandbox and the response
+// to send: the node's 201, or the refusal.
+func (g *Gateway) create(ctx context.Context, p Principal, req api.CreateSandboxRequest, extra map[string]string) (api.Sandbox, *createFail) {
+	if req.Name != "" && !spec.ValidName(req.Name) {
+		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, "name "+req.Name+": lowercase letters, digits and dashes, starting with a letter or digit, at most 63")
+	}
+	if max := spec.MaxLabels - 2 - len(extra); len(req.Labels) > max {
+		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, fmt.Sprintf("labels: at most %d through a gateway, which adds its own", max))
 	}
 	for _, err := range []error{spec.ValidateLabels(req.Labels), spec.ValidateVolumeMounts(req.Volumes)} {
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
-			return
+			return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 		}
 	}
 	caps, ok := g.combinedCapabilities()
 	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, api.CodeInternal, "no node is answering")
-		return
+		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeInternal, "no node is answering")
 	}
 
 	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB}
@@ -83,8 +127,7 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	case req.SnapshotID != "" && caps.Has(api.CapMemorySnapshot):
 		o, ok := g.store.SnapshotOwner(req.SnapshotID)
 		if !ok || !mayAct(p, o) {
-			writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such snapshot")
-			return
+			return api.Sandbox{}, failWith(http.StatusNotFound, api.CodeNotFound, "no such snapshot")
 		}
 		want.Node = o.Node
 		want.Caps = append(want.Caps, api.CapMemorySnapshot)
@@ -92,12 +135,10 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 		for _, m := range req.Volumes {
 			o, ok := g.store.VolumeOwner(m.Name)
 			if !ok || !mayAct(p, o) {
-				writeErr(w, http.StatusNotFound, api.CodeNotFound, "no volume named "+m.Name)
-				return
+				return api.Sandbox{}, failWith(http.StatusNotFound, api.CodeNotFound, "no volume named "+m.Name)
 			}
 			if want.Node != "" && o.Node != want.Node {
-				writeErr(w, http.StatusConflict, api.CodeConflict, "the volumes named are on different nodes; one sandbox mounts volumes of one node")
-				return
+				return api.Sandbox{}, failWith(http.StatusConflict, api.CodeConflict, "the volumes named are on different nodes; one sandbox mounts volumes of one node")
 			}
 			want.Node = o.Node
 		}
@@ -107,19 +148,20 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	if req.Name != "" {
 		key := "sbx\x00" + p.User + "\x00" + p.Tenant + "\x00" + req.Name
 		if !g.claim(key) {
-			writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+req.Name+" already exists")
-			return
+			return api.Sandbox{}, failWith(http.StatusConflict, api.CodeConflict, "a sandbox named "+req.Name+" already exists")
 		}
 		defer g.unclaim(key)
-		list, err := g.listSandboxes(r.Context(), p, nil, false)
+		list, err := g.listSandboxes(ctx, p, nil, false)
 		if err != nil {
-			writeRouteErr(w, err, "")
-			return
+			var ae *api.Error
+			if errors.As(err, &ae) {
+				return api.Sandbox{}, failWith(ae.Status, ae.Code, ae.Message)
+			}
+			return api.Sandbox{}, transientFail(http.StatusBadGateway, api.CodeInternal, "a node did not answer")
 		}
 		for _, sb := range list {
 			if sb.Name == req.Name && sb.State != api.StateTerminated {
-				writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+req.Name+" already exists")
-				return
+				return api.Sandbox{}, failWith(http.StatusConflict, api.CodeConflict, "a sandbox named "+req.Name+" already exists")
 			}
 		}
 	}
@@ -127,13 +169,15 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	res := api.NodeResources{CPUs: want.CPUs, MemoryMB: want.MemoryMB, DiskMB: want.DiskMB}
 	hold, err := g.reserveQuota(p.Tenant, res)
 	if err != nil {
-		writeErr(w, http.StatusForbidden, api.CodeRefused, err.Error())
-		return
+		return api.Sandbox{}, transientFail(http.StatusForbidden, api.CodeRefused, err.Error())
 	}
 	defer hold.release()
 
-	labels := make(map[string]string, len(req.Labels)+2)
+	labels := make(map[string]string, len(req.Labels)+len(extra)+2)
 	for k, v := range req.Labels {
+		labels[k] = v
+	}
+	for k, v := range extra {
 		labels[k] = v
 	}
 	labels[LabelOwner] = p.User
@@ -143,8 +187,7 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	req.Labels = labels
 	body, err := json.Marshal(req)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "encoding the request failed")
-		return
+		return api.Sandbox{}, failWith(http.StatusInternalServerError, api.CodeInternal, "encoding the request failed")
 	}
 
 	// A node refusing the name (409, someone else's sandbox there has it)
@@ -156,31 +199,25 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	for {
 		n, pl, err := g.place(want, tried, res)
 		if err != nil && conflict != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write(conflict)
-			return
+			return api.Sandbox{}, &createFail{status: http.StatusConflict, body: conflict}
 		}
 		if err != nil {
 			msg := err.Error()
 			if want.Node != "" {
 				msg = "node " + want.Node + ", which holds what this sandbox needs, is not taking new sandboxes"
 			}
-			writeErr(w, http.StatusServiceUnavailable, api.CodeInternal, msg)
-			return
+			return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeInternal, msg)
 		}
-		resp, err := n.do(r.Context(), http.MethodPost, "/v1/sandboxes", nil, bytes.NewReader(body), "application/json")
+		resp, err := n.do(ctx, http.MethodPost, "/v1/sandboxes", nil, bytes.NewReader(body), "application/json")
 		if err != nil {
 			n.finishIf(pl, false)
 			g.logf("create on %s: %v", n.cfg.Name, err)
-			writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
-			return
+			return api.Sandbox{}, transientFail(http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
 		}
 		data, err := readBody(resp)
 		if err != nil {
 			n.finishIf(pl, false)
-			writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
-			return
+			return api.Sandbox{}, transientFail(http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
 		}
 		if resp.StatusCode == http.StatusConflict && req.Name != "" && want.Node == "" {
 			n.finishIf(pl, false)
@@ -190,14 +227,12 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 		}
 		if resp.StatusCode != http.StatusCreated {
 			n.finishIf(pl, false)
-			relay(w, resp, data)
-			return
+			return api.Sandbox{}, &createFail{status: resp.StatusCode, body: data}
 		}
 		var sb api.Sandbox
 		if err := json.Unmarshal(data, &sb); err != nil || !spec.ValidID(sb.ID) {
 			n.finishIf(pl, false)
-			writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" answered with no sandbox")
-			return
+			return api.Sandbox{}, failWith(http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" answered with no sandbox")
 		}
 		// Recorded before the caller hears of it: a sandbox the store does
 		// not hold is one nobody can reach, so if the record fails the
@@ -212,15 +247,13 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 		if err != nil {
 			n.finishIf(pl, false)
 			g.logf("create on %s: %v; terminating %s", n.cfg.Name, err, sb.ID)
-			if resp, derr := n.do(context.WithoutCancel(r.Context()), http.MethodDelete, "/v1/sandboxes/"+url.PathEscape(sb.ID), nil, nil, ""); derr == nil {
+			if resp, derr := n.do(context.WithoutCancel(ctx), http.MethodDelete, "/v1/sandboxes/"+url.PathEscape(sb.ID), nil, nil, ""); derr == nil {
 				resp.Body.Close()
 			}
-			writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the sandbox's owner could not be recorded; it was terminated")
-			return
+			return api.Sandbox{}, failWith(http.StatusInternalServerError, api.CodeInternal, "the sandbox's owner could not be recorded; it was terminated")
 		}
 		n.finishIf(pl, true)
-		relay(w, resp, data)
-		return
+		return sb, &createFail{status: http.StatusCreated, body: data}
 	}
 }
 

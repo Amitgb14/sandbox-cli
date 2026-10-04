@@ -93,6 +93,8 @@ func (g *Gateway) Handler() http.Handler {
 	route("GET /v1/ssh-keys", false, g.listSSHKeys)
 	route("DELETE /v1/ssh-keys/{id}", false, g.removeSSHKey)
 
+	g.jobRoutes(route) // jobs, agent runs, secrets (jobs.go)
+
 	route("POST /v1/admin/keys", false, g.adminCreateKey)
 	route("GET /v1/admin/keys", false, g.adminListKeys)
 	route("DELETE /v1/admin/keys/{id}", false, g.adminRevokeKey)

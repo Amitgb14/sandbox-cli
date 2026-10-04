@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -45,6 +46,13 @@ type Config struct {
 	Logf        func(format string, args ...any)
 	// NewNodeClient builds a node's client; default NewNodeClient.
 	NewNodeClient func(NodeConfig) (*api.Client, error)
+	// SecretsKey seals secrets and jobs' environments (LoadSecretsKey).
+	// Without one the secret endpoints answer unsupported.
+	SecretsKey []byte
+	// JobsDir holds what jobs' runs kept (default: jobs/ beside the state
+	// file), and JobRetention is how long a finished job is kept (24h).
+	JobsDir      string
+	JobRetention time.Duration
 }
 
 // Quota bounds what one tenant may hold at once. Zero is unlimited.
@@ -76,6 +84,9 @@ type Gateway struct {
 
 	claimMu sync.Mutex
 	claimed map[string]bool // sandbox and volume names being created
+
+	sealer *sealer // nil without a secrets key
+	jobs   *jobManager
 
 	stop context.CancelFunc
 	wg   sync.WaitGroup
@@ -109,7 +120,20 @@ func New(cfg Config) (*Gateway, error) {
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}
 	}
-	g := &Gateway{
+	if cfg.JobsDir == "" {
+		cfg.JobsDir = filepath.Join(filepath.Dir(cfg.Store.path), "jobs")
+	}
+	if cfg.JobRetention <= 0 {
+		cfg.JobRetention = 24 * time.Hour
+	}
+	var seal *sealer
+	if cfg.SecretsKey != nil {
+		var err error
+		if seal, err = newSealer(cfg.SecretsKey); err != nil {
+			return nil, err
+		}
+	}
+	g := &Gateway{sealer: seal, jobs: newJobManager(),
 		cfg: cfg, store: cfg.Store, logf: cfg.Logf, tombs: newTombstones(10000, time.Hour),
 		inflight: map[string]Usage{}, claimed: map[string]bool{},
 		nodes: newNodePool(poolConfig{interval: cfg.PollInterval, failAfter: cfg.FailAfter,
@@ -144,6 +168,7 @@ func (g *Gateway) Start(ctx context.Context) {
 	g.nodes.pollAll(ctx)
 	g.wg.Add(2)
 	go func() { defer g.wg.Done(); g.nodes.run(ctx) }()
+	g.startJobs(ctx)
 	go func() {
 		defer g.wg.Done()
 		t := time.NewTicker(g.cfg.ReconcileInterval)
@@ -164,6 +189,7 @@ func (g *Gateway) Close() {
 	if g.stop != nil {
 		g.stop()
 	}
+	g.jobs.close()
 	g.wg.Wait()
 }
 
