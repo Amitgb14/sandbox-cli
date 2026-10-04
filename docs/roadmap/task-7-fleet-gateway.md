@@ -52,6 +52,45 @@ What does not exist anywhere:
 | node health, drain, losing a node | hundreds of machines means some are always broken |
 | services: replicas, restarts, health checks, HTTP ingress | requirement 5 |
 
+## Deployment shapes
+
+The gateway is a layer on top, never a requirement. Every shape speaks the same
+Sandbox API v1, so a client moving between them changes its address and its
+credential and nothing else.
+
+| Shape | What runs | How clients connect | Gateway |
+|---|---|---|---|
+| **Local, a Mac** | `sandboxd` (macOS backend) under launchd | `sandbox-cli`, Studio and the SDKs over a unix socket only its owner can open; `shell` and `exec` to get inside a sandbox | **No.** One user, and the socket's permission is the login |
+| **One remote Linux machine** | `sandboxd` (Firecracker) under systemd, TLS and a token | a context (`sandbox-cli context add box https://box:7443 --token-file …`), the SDKs; `shell`, `exec` and `tunnel` over the API | **Optional**, on the same machine |
+| **Many Linux machines** | `sandboxd` on every node, gateway replicas in front | everything through the gateway | **Yes** |
+
+**Local** is unchanged by this plan. SSH adds nothing on a machine you are
+already at; `sandbox-cli shell` is the way into a sandbox.
+
+**One remote machine** works today without a gateway: one token, one trusted
+party, and `shell`, `exec` and `tunnel` over the API. A gateway is worth adding
+there when any of these is wanted:
+
+- more than one person: their own API keys, ownership of sandboxes, quotas;
+- plain `ssh <sandbox>@box`, so stock `ssh`, `scp` and `rsync` work, and tools
+  that connect to sandboxes over SSH need nothing special;
+- room to grow: a second machine joins as another node, and clients do not
+  change, because they already talk to the gateway.
+
+On one machine the gateway is one more process, and `sandboxd` stops listening
+on the network at all:
+
+```sh
+sandboxd --listen unix:///run/sandboxd.sock …           # the node, not on the network
+sandbox-gateway --node unix:///run/sandboxd.sock \
+  --listen :443 --ssh-listen :22 …                      # users reach only this
+```
+
+**Why the gateway is its own binary,** rather than a mode of `sandboxd`:
+`sandboxd` and the guest agent keep the stdlib-only rule, and only the gateway
+takes the SSH dependency (decision 2). And one machine is simply a gateway with
+one node, so there is no single-node mode to keep in step with the fleet.
+
 ## Architecture
 
 ```
@@ -358,8 +397,10 @@ through their allowlist. That is a deliberate boundary, not a gap to close.
   forwarded;
 - scheduler with capacity, image and pool awareness; ids that name their node;
 - `sandbox-cli context add fleet https://gateway… --token-file key`.
-- *Done when* the conformance suite passes against the gateway in front of
-  three nodes, and 1,000 creates across them succeed with no errors.
+- *Done when* the conformance suite passes against the gateway in front of one
+  node on the same machine and in front of three nodes, and 1,000 creates
+  across three nodes succeed with no errors. Local and single-machine use
+  without a gateway keep passing as they do today.
 
 **Phase 2 — SSH.**
 - the gateway's SSH server on one port: shell, command, scp, sftp, rsync, port
