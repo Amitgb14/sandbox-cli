@@ -148,6 +148,23 @@ in `_old/` as reference, to be ported where this design still wants it.
   and forwards nothing.
 - **Agent logins** are copied out of a sandbox when a run ends and back in when
   the next starts. The prod profile still turns this off.
+- **`sandbox-gateway` puts one address in front of many `sandboxd` nodes.**
+  It speaks the same API, so the CLI, the SDKs and Studio work against it
+  with only the address and the credential changed, and the conformance
+  suite passes through it. Users hold gateway-issued API keys with scopes
+  (`sandbox:read`, `sandbox:create`, `sandbox:delete`, `sandbox:ssh`,
+  `admin`); a node's token never leaves the gateway. Every sandbox belongs to
+  the user who made it: another user asking for it, by id or by name, is
+  told it does not exist. The gateway picks a node for each sandbox (a warm
+  pool for the image first, then a built image, then the most free memory),
+  sends a fork to its snapshot's node and a mount to its volume's, stops
+  placing on a node that stops answering or is cordoned, and holds each
+  tenant to a quota (`--quota-sandboxes`, `--quota-cpus`,
+  `--quota-memory-mb`). State is one file, `--state`, holding only hashes
+  of keys and tokens. `sandbox-gateway keys create` makes the first admin
+  key before it serves; after that, keys and nodes are managed through
+  `/v1/admin/…`. A non-loopback `--listen` needs TLS. The SSH endpoints are
+  in place; the SSH server itself lands separately.
 
 **Added:**
 
