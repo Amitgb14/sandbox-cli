@@ -123,7 +123,7 @@ func TestVMGuestAgent(t *testing.T) {
 	run := func(argv ...string) (string, int) {
 		t.Helper()
 		var out, errb bytes.Buffer
-		p, err := c.Exec(ctx, argv, nil, "/workspace", &out, &errb)
+		p, err := c.Exec(ctx, argv, nil, "/sandbox/home", &out, &errb)
 		if err != nil {
 			t.Fatalf("exec %v: %v", argv, err)
 		}
@@ -149,9 +149,10 @@ func TestVMGuestAgent(t *testing.T) {
 	if out, _ := run("hostname"); out != "sbx-test" {
 		t.Errorf("hostname %q", out)
 	}
-	// The workspace is the sandbox user's, on the writable layer.
-	if out, code := run("sh", "-c", "echo made-in-guest > /workspace/f && cat /workspace/f"); code != 0 || out != "made-in-guest" {
-		t.Errorf("workspace write: %q exit %d", out, code)
+	// The sandbox user's home is theirs, on the writable layer: there is no
+	// /workspace since a sandbox stopped having a repository.
+	if out, code := run("sh", "-c", "echo made-in-guest > /sandbox/home/f && cat /sandbox/home/f"); code != 0 || out != "made-in-guest" {
+		t.Errorf("home write: %q exit %d", out, code)
 	}
 	// Root is an overlay: writable for the agent, while the image disk is opened
 	// read-only by the VMM and never changes.
@@ -177,10 +178,10 @@ func TestVMGuestAgent(t *testing.T) {
 	// A large file round-trips over vsock.
 	big := bytes.Repeat([]byte("0123456789abcdef"), 1<<20) // 16 MiB
 	t0 = time.Now()
-	if err := c.WriteFile(ctx, "/workspace/big", big); err != nil {
+	if err := c.WriteFile(ctx, "/sandbox/home/big", big); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.ReadFile(ctx, "/workspace/big")
+	got, err := c.ReadFile(ctx, "/sandbox/home/big")
 	if err != nil || !bytes.Equal(got, big) {
 		t.Fatalf("16 MiB round trip: %v", err)
 	}
