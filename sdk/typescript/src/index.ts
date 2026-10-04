@@ -167,6 +167,59 @@ export interface SSHAccess {
   command: string;
 }
 
+/** What POST /v1/services and PUT /v1/services/{name} send (docs/fleet.md, "Services"). */
+export interface ServiceSpec {
+  /** A DNS label with no "--"; unique within the tenant. */
+  name: string;
+  image?: string;
+  /** Started in each replica as a detached process; a replica whose command exits is replaced. */
+  command?: string[];
+  replicas: number;
+  resources?: { cpus?: number; memory_mb?: number; disk_mb?: number };
+  /** The port on each replica's loopback: where an HTTP health check and the router go. */
+  port?: number;
+  /** Exactly one of `http` (a path; 2xx or 3xx is healthy) or `command` (exit 0 is healthy). */
+  health?: { http?: string; command?: string[]; every_secs?: number; timeout_secs?: number; failures?: number };
+  env?: Record<string, string>;
+  network?: NetworkPolicy;
+  placement?: { spread?: "node" };
+  /** Routed through the gateway's HTTP router. */
+  public?: boolean;
+  /** Refused (501) until the gateway has a secret store. */
+  secrets?: string[];
+}
+
+export interface ServiceReplica {
+  sandbox: string;
+  node: string;
+  revision: number;
+  state: "starting" | "healthy" | "unhealthy" | "lost";
+  healthy: boolean;
+  last_check?: string;
+  last_error?: string;
+  restarts: number;
+  created_at: string;
+}
+
+export interface Service {
+  /** The spec, without env values: their names are in env_names. */
+  spec: ServiceSpec;
+  env_names?: string[];
+  owner: string;
+  tenant?: string;
+  revision: number;
+  serving: number;
+  desired: number;
+  ready: number;
+  restarts: number;
+  rollout?: { state: "in_progress" | "done" | "failed"; from: number; to: number; reason?: string };
+  error?: string;
+  url?: string;
+  replicas: ServiceReplica[];
+  created_at: string;
+  updated_at: string;
+}
+
 /** A non-2xx response; `code` is the API's error code (refused, unsupported, not_found, ...). */
 export class ApiError extends Error {
   constructor(
@@ -449,5 +502,38 @@ export class Client {
    */
   sshAccess(ref: string, ttlSecs?: number): Promise<SSHAccess> {
     return this.json("POST", this.sbx(ref) + "/ssh-access", ttlSecs ? { ttl_secs: ttlSecs } : {});
+  }
+
+  // Services, on a gateway: a sandbox spec and a count it keeps true.
+
+  private svc(name: string): string {
+    return "/v1/services/" + encodeURIComponent(name);
+  }
+
+  /** Create a service. ApiError "conflict" if the tenant has one by that name: use updateService. */
+  deployService(spec: ServiceSpec): Promise<Service> {
+    return this.json("POST", "/v1/services", spec);
+  }
+
+  /** Replace a service's spec; a change to what a replica is rolls out one replica at a time. */
+  updateService(spec: ServiceSpec): Promise<Service> {
+    return this.json("PUT", this.svc(spec.name), spec);
+  }
+
+  async services(): Promise<Service[]> {
+    return (await this.json<{ services: Service[] }>("GET", "/v1/services")).services;
+  }
+
+  service(name: string): Promise<Service> {
+    return this.json("GET", this.svc(name));
+  }
+
+  scaleService(name: string, replicas: number): Promise<Service> {
+    return this.json("POST", this.svc(name) + "/scale", { replicas });
+  }
+
+  /** Delete a service and terminate its replicas. */
+  async deleteService(name: string): Promise<void> {
+    await this.json("DELETE", this.svc(name));
   }
 }

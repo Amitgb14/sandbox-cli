@@ -306,3 +306,39 @@ class Client:
         if ttl_secs:
             req["ttl_secs"] = ttl_secs
         return self._json("POST", self._sbx(ref) + "/ssh-access", req)
+
+    # --- services (gateway) ------------------------------------------------------
+    # A sandbox spec and a count a gateway keeps true (docs/fleet.md,
+    # "Services"). A plain sandboxd answers each with ApiError ``not_found``.
+
+    @staticmethod
+    def _svc(name: str) -> str:
+        return "/v1/services/" + urllib.parse.quote(name, safe="")
+
+    def deploy_service(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a service from ``spec`` (``name``, ``image``, ``command``,
+        ``replicas``, ``resources``, ``port``, ``health``, ``env``, ``network``,
+        ``placement``, ``public``). ApiError ``conflict`` if the tenant already
+        has one by that name; change it with ``update_service``."""
+        return self._json("POST", "/v1/services", spec)
+
+    def update_service(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace a service's spec. A change to what a replica is rolls out
+        one replica at a time; ``rollout`` in the result follows it."""
+        return self._json("PUT", self._svc(spec["name"]), spec)
+
+    def services(self) -> List[Dict[str, Any]]:
+        return self._json("GET", "/v1/services")["services"]
+
+    def service(self, name: str) -> Dict[str, Any]:
+        """One service: its spec (env as ``env_names``), ``desired`` and
+        ``ready`` counts, ``rollout``, and each replica's sandbox, node, state,
+        health, last check and restarts."""
+        return self._json("GET", self._svc(name))
+
+    def scale_service(self, name: str, replicas: int) -> Dict[str, Any]:
+        return self._json("POST", self._svc(name) + "/scale", {"replicas": replicas})
+
+    def delete_service(self, name: str) -> None:
+        """Delete a service and terminate its replicas."""
+        self._json("DELETE", self._svc(name))

@@ -26,8 +26,9 @@ import (
 // The file holds no secret. An API key and an SSH token are kept as the hex
 // SHA-256 of the secret, which is a 256-bit random string: a hash of that
 // needs no salt or stretching, because there is no dictionary to try. Reading
-// the file tells an attacker who owns what, so it is still written 0600 and a
-// file others can read is refused at load.
+// the file tells an attacker who owns what — and a service's spec, env values
+// included, since every replica is created from it — so it is still written
+// 0600 and a file others can read is refused at load.
 //
 // Every change is written before the call returns, atomically (a temporary
 // file, fsync, rename), so a crash leaves the old state or the new one. Writes
@@ -60,6 +61,7 @@ type fileState struct {
 	Volumes   map[string]Owner         `json:"volumes"`
 	Snapshots map[string]Owner         `json:"snapshots"`
 	Nodes     []NodeConfig             `json:"nodes"`
+	Services  *serviceState            `json:"services,omitempty"` // services_store.go
 }
 
 type tokenRecord struct {

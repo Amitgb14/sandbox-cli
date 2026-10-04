@@ -248,6 +248,21 @@ In the rewrite:
 
 ### Changed
 
+- **Services on the gateway.** `sandbox-gateway` keeps a sandbox spec and a
+  count running: `POST /v1/services` (and `sandbox-cli service deploy -f
+  service.yaml`, `ls`, `get`, `scale`, `rm`; `deploy_service` and friends in
+  the Python and TypeScript SDKs). Each replica is a sandbox made by the
+  gateway's own create path, owned and counted against quota like the user's
+  others. Replicas are health-checked through the guest agent (an HTTP probe
+  over the node's tunnel, or a command), replaced when they fail, spread
+  across nodes with `placement: { spread: node }`, and replaced elsewhere
+  when their node is lost. A changed spec rolls out one replica at a time and
+  stops, keeping the old replicas serving, if the new revision fails. State
+  is in the gateway's state file, so a restarted gateway resumes each
+  service. `serve --router-listen --router-domain` adds an HTTP router for
+  services marked `public`, at `<service>.DOMAIN` or
+  `<service>--<tenant>.DOMAIN` under one wildcard name. Not yet: internal
+  service names, autoscaling, secrets. See docs/fleet.md, "Services".
 - **A guide and packaging for running a gateway.** `docs/fleet.md` takes an
   operator from one machine to many: which shape needs a gateway at all, the
   certificates (`packaging/fleet/make-certs.sh` makes a private CA, the

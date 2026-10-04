@@ -42,7 +42,11 @@ type Config struct {
 	// CORSOrigins are browser origins allowed to call the gateway. A request
 	// with any other Origin is refused, as by sandboxd.
 	CORSOrigins []string
-	Logf        func(format string, args ...any)
+	// ServiceInterval is how often the service controller looks at every
+	// service (default 1s); Router is where the HTTP router serves them.
+	ServiceInterval time.Duration
+	Router          RouterConfig
+	Logf            func(format string, args ...any)
 	// NewNodeClient builds a node's client; default NewNodeClient.
 	NewNodeClient func(NodeConfig) (*api.Client, error)
 }
@@ -76,6 +80,8 @@ type Gateway struct {
 
 	claimMu sync.Mutex
 	claimed map[string]bool // sandbox and volume names being created
+
+	services *serviceCtl
 
 	stop context.CancelFunc
 	wg   sync.WaitGroup
@@ -111,7 +117,7 @@ func New(cfg Config) (*Gateway, error) {
 	}
 	g := &Gateway{
 		cfg: cfg, store: cfg.Store, logf: cfg.Logf, tombs: newTombstones(10000, time.Hour),
-		inflight: map[string]Usage{}, claimed: map[string]bool{},
+		inflight: map[string]Usage{}, claimed: map[string]bool{}, services: newServiceCtl(cfg.Store),
 		nodes: newNodePool(poolConfig{interval: cfg.PollInterval, failAfter: cfg.FailAfter,
 			newClient: cfg.NewNodeClient, logf: cfg.Logf}),
 	}
@@ -142,8 +148,9 @@ func New(cfg Config) (*Gateway, error) {
 func (g *Gateway) Start(ctx context.Context) {
 	ctx, g.stop = context.WithCancel(ctx)
 	g.nodes.pollAll(ctx)
-	g.wg.Add(2)
+	g.wg.Add(3)
 	go func() { defer g.wg.Done(); g.nodes.run(ctx) }()
+	go func() { defer g.wg.Done(); g.runServices(ctx) }()
 	go func() {
 		defer g.wg.Done()
 		t := time.NewTicker(g.cfg.ReconcileInterval)
