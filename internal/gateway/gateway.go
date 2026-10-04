@@ -49,7 +49,11 @@ type Config struct {
 	NodeLostAfter time.Duration
 	// Audit records every authenticated request (audit.go); nil keeps none.
 	Audit *AuditLog
-	Logf  func(format string, args ...any)
+	// ServiceInterval is how often the service controller looks at every
+	// service (default 1s); Router is where the HTTP router serves them.
+	ServiceInterval time.Duration
+	Router          RouterConfig
+	Logf            func(format string, args ...any)
 	// NewNodeClient builds a node's client; default NewNodeClient.
 	NewNodeClient func(NodeConfig) (*api.Client, error)
 	// SecretsKey seals secrets and jobs' environments (LoadSecretsKey).
@@ -97,8 +101,9 @@ type Gateway struct {
 	claimMu sync.Mutex
 	claimed map[string]bool // sandbox and volume names being created
 
-	sealer *sealer // nil without a secrets key
-	jobs   *jobManager
+	sealer   *sealer // nil without a secrets key
+	jobs     *jobManager
+	services *serviceCtl
 
 	stop context.CancelFunc
 	wg   sync.WaitGroup
@@ -151,7 +156,7 @@ func New(cfg Config) (*Gateway, error) {
 	g := &Gateway{sealer: seal, jobs: newJobManager(),
 		cfg: cfg, store: cfg.Store, logf: cfg.Logf, tombs: newTombstones(10000, time.Hour),
 		inflight: map[string]Usage{}, claimed: map[string]bool{},
-		metrics: newGatewayMetrics(), audit: cfg.Audit,
+		metrics: newGatewayMetrics(), audit: cfg.Audit, services: newServiceCtl(cfg.Store),
 	}
 	g.nodes = newNodePool(poolConfig{interval: cfg.PollInterval, failAfter: cfg.FailAfter,
 		newClient: cfg.NewNodeClient, logf: cfg.Logf, changed: g.nodeChanged, polled: g.nodePolled})
@@ -185,9 +190,10 @@ func (g *Gateway) Start(ctx context.Context) {
 	g.ctx = ctx
 	g.ctxMu.Unlock()
 	g.nodes.pollAll(ctx)
-	g.wg.Add(2)
+	g.wg.Add(3)
 	go func() { defer g.wg.Done(); g.nodes.run(ctx) }()
 	g.startJobs(ctx)
+	go func() { defer g.wg.Done(); g.runServices(ctx) }()
 	go func() {
 		defer g.wg.Done()
 		t := time.NewTicker(g.cfg.ReconcileInterval)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/gateway"
 )
 
 func run(t *testing.T, args ...string) (string, error) {
@@ -227,5 +228,51 @@ func TestServe(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The router carries whatever a public service's users send, cookies and
+// credentials among it: off loopback it is served only over TLS, as the API
+// is, and a gateway asked to route and unable to does not start.
+func TestRouterFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		o       serveOptions
+		refused string
+		want    gateway.RouterConfig
+	}{
+		{name: "off", o: serveOptions{}},
+		{name: "domain without listen", o: serveOptions{routerDomain: "apps.example.com"}, refused: "--router-listen"},
+		{name: "no domain", o: serveOptions{routerListen: "127.0.0.1:0"}, refused: "--router-domain"},
+		{name: "wildcard domain", o: serveOptions{routerListen: "127.0.0.1:0", routerDomain: "*.apps.example.com"}, refused: "--router-domain"},
+		{name: "cert without key", o: serveOptions{routerListen: "127.0.0.1:0", routerDomain: "apps.example.com", routerCert: "c"}, refused: "go together"},
+		{name: "loopback", o: serveOptions{routerListen: "127.0.0.1:8080", routerDomain: "Apps.Example.COM."}, want: gateway.RouterConfig{Domain: "apps.example.com", Scheme: "http", Port: 8080}},
+		{name: "behind a proxy", o: serveOptions{routerListen: "127.0.0.1:8080", routerDomain: "apps.example.com", routerScheme: "https", routerPort: 443}, want: gateway.RouterConfig{Domain: "apps.example.com", Scheme: "https", Port: 443}},
+		{name: "bad scheme", o: serveOptions{routerListen: "127.0.0.1:8080", routerDomain: "apps.example.com", routerScheme: "ftp"}, refused: "http or https"},
+	} {
+		rc, err := routerConfig(tc.o)
+		switch {
+		case tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)):
+			t.Errorf("%s: %v; want a refusal naming %q", tc.name, err, tc.refused)
+		case tc.refused == "" && err != nil:
+			t.Errorf("%s: %v", tc.name, err)
+		case tc.want != (gateway.RouterConfig{}) && rc != tc.want:
+			t.Errorf("%s: %+v; want %+v", tc.name, rc, tc.want)
+		}
+	}
+
+	_, err := listenTLS("0.0.0.0:0", "", "", "router-")
+	if err == nil || !strings.Contains(err.Error(), "--router-listen") || !strings.Contains(err.Error(), "--router-tls-cert") {
+		t.Errorf("plain http off loopback: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := false
+	err = serve(ctx, filepath.Join(t.TempDir(), "state.json"), serveOptions{
+		listen: "127.0.0.1:0", routerListen: "0.0.0.0:0", routerDomain: "apps.example.com",
+	}, t.Logf, func(string) { served = true; cancel() })
+	if served || err == nil || !strings.Contains(err.Error(), "router") {
+		t.Fatalf("served %v, err %v; the gateway must not start without the router it was asked for", served, err)
 	}
 }

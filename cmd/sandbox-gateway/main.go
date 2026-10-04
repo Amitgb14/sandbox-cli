@@ -4,6 +4,7 @@
 // the sandbox with that node's own token.
 //
 //	sandbox-gateway serve --listen ADDR --state FILE [--tls-cert C --tls-key K] [--node-config nodes.yaml] …
+//	                      [--router-listen ADDR --router-domain apps.example.com [--router-tls-cert C --router-tls-key K]]
 //	sandbox-gateway keys create --user U [--tenant T] --scope S…   prints the secret once
 //	sandbox-gateway keys list | keys revoke ID
 //	sandbox-gateway nodes add NAME ENDPOINT [--token-file …] | nodes list | nodes remove NAME
@@ -76,6 +77,9 @@ type serveOptions struct {
 	listen, tlsCert, tlsKey, nodeConfig, nodeFilesDir string
 	sshListen, sshHostKey, sshPublicHost              string
 	sshPublicPort                                     int
+	routerListen, routerDomain, routerCert, routerKey string
+	routerScheme                                      string
+	routerPort                                        int
 	quota                                             gateway.Quota
 	pollInterval                                      time.Duration
 	corsOrigins                                       []string
@@ -111,6 +115,12 @@ func newServe(state *string) *cobra.Command {
 	f.StringVar(&o.sshHostKey, "ssh-host-key", "", "the SSH host key, created when missing (default: ssh_host_ed25519_key beside the state file)")
 	f.StringVar(&o.sshPublicHost, "ssh-public-host", "", "the host clients are told to connect to for SSH (default: the --ssh-listen host)")
 	f.IntVar(&o.sshPublicPort, "ssh-public-port", 0, "the port clients are told to connect to for SSH (default: the --ssh-listen port)")
+	f.StringVar(&o.routerListen, "router-listen", "", "host:port for the HTTP router that serves public services; off when empty. A non-loopback address needs --router-tls-cert and --router-tls-key")
+	f.StringVar(&o.routerDomain, "router-domain", "", "the domain the router serves services under: <service>.DOMAIN, <service>--<tenant>.DOMAIN (one wildcard name)")
+	f.StringVar(&o.routerCert, "router-tls-cert", "", "the router's TLS certificate (PEM), for *.DOMAIN")
+	f.StringVar(&o.routerKey, "router-tls-key", "", "the router's TLS private key (PEM)")
+	f.StringVar(&o.routerScheme, "router-public-scheme", "", "the scheme clients reach the router by, for services' URLs (default: https with --router-tls-cert, else http)")
+	f.IntVar(&o.routerPort, "router-public-port", 0, "the port clients reach the router on, for services' URLs (default: the --router-listen port)")
 	f.IntVar(&o.quota.Sandboxes, "quota-sandboxes", 0, "most sandboxes one tenant may hold at once; 0 is unlimited")
 	f.Float64Var(&o.quota.CPUs, "quota-cpus", 0, "most CPUs one tenant's sandboxes may hold; 0 is unlimited")
 	f.IntVar(&o.quota.MemoryMB, "quota-memory-mb", 0, "most memory (MB) one tenant's sandboxes may hold; 0 is unlimited")
@@ -165,11 +175,16 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 			return err
 		}
 	}
+	rcfg, err := routerConfig(o)
+	if err != nil {
+		return err
+	}
 	g, err := gateway.New(gateway.Config{
 		Store: st, StaticNodes: static, PollInterval: o.pollInterval, Quota: o.quota,
 		NodeFilesDir: o.nodeFilesDir, CORSOrigins: o.corsOrigins, Logf: logf,
 		NodeLostAfter: o.nodeLostAfter, Audit: auditLog,
 		SecretsKey: secretsKey, JobsDir: o.jobsDir, JobRetention: o.jobRetention,
+		Router: rcfg,
 	})
 	if err != nil {
 		return err
@@ -180,6 +195,17 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 			return err
 		}
 		defer metricsLn.Close()
+	}
+
+	// The router, like SSH, listens before the API does, so a gateway asked
+	// to route and unable to does not start at all. It is held to the API's
+	// rule: off loopback, only with TLS.
+	var routerLn net.Listener
+	if o.routerListen != "" {
+		if routerLn, err = listenTLS(o.routerListen, o.routerCert, o.routerKey, "router-"); err != nil {
+			return fmt.Errorf("router: %w", err)
+		}
+		defer routerLn.Close()
 	}
 
 	// The SSH server is built before the API listens, so a gateway asked to
@@ -230,8 +256,14 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 		// Output streams and attached terminals are long-lived; no write timeout.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	errc := make(chan error, 3)
+	errc := make(chan error, 4)
 	go func() { errc <- srv.Serve(ln) }()
+	var routerSrv *http.Server
+	if routerLn != nil {
+		routerSrv = &http.Server{Handler: g.RouterHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() { errc <- fmt.Errorf("router: %w", routerSrv.Serve(routerLn)) }()
+		logf("routing *.%s on %s", rcfg.Domain, routerLn.Addr())
+	}
 	if sshSrv != nil {
 		go func() { errc <- fmt.Errorf("ssh: %w", sshSrv.Serve(sshLn)) }()
 		logf("serving SSH on %s", sshLn.Addr())
@@ -273,10 +305,66 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 	if msrv != nil {
 		msrv.Close()
 	}
+	if routerSrv != nil {
+		_ = routerSrv.Shutdown(shutdown)
+	}
 	if sshSrv != nil {
 		sshSrv.Close()
 	}
 	return err
+}
+
+// routerConfig checks the router's flags and says where it serves.
+func routerConfig(o serveOptions) (gateway.RouterConfig, error) {
+	if o.routerListen == "" {
+		if o.routerDomain != "" || o.routerCert != "" || o.routerKey != "" {
+			return gateway.RouterConfig{}, errors.New("--router-domain and --router-tls-* need --router-listen")
+		}
+		return gateway.RouterConfig{}, nil
+	}
+	d := strings.ToLower(strings.TrimSuffix(o.routerDomain, "."))
+	if d == "" || strings.HasPrefix(d, "*") || strings.ContainsAny(d, "/: ") || !strings.Contains(d, ".") {
+		return gateway.RouterConfig{}, fmt.Errorf("--router-domain %q: a domain such as apps.example.com, which *.DOMAIN points at", o.routerDomain)
+	}
+	if (o.routerCert == "") != (o.routerKey == "") {
+		return gateway.RouterConfig{}, errors.New("--router-tls-cert and --router-tls-key go together")
+	}
+	rc := gateway.RouterConfig{Domain: d, Scheme: o.routerScheme, Port: o.routerPort}
+	if rc.Scheme == "" {
+		rc.Scheme = "http"
+		if o.routerCert != "" {
+			rc.Scheme = "https"
+		}
+	}
+	if rc.Scheme != "http" && rc.Scheme != "https" {
+		return gateway.RouterConfig{}, fmt.Errorf("--router-public-scheme %q: http or https", rc.Scheme)
+	}
+	if rc.Port == 0 {
+		_, port, err := net.SplitHostPort(o.routerListen)
+		if err != nil {
+			return gateway.RouterConfig{}, fmt.Errorf("--router-listen %q: %w", o.routerListen, err)
+		}
+		rc.Port, _ = strconv.Atoi(port)
+	}
+	return rc, nil
+}
+
+// listenTLS opens a listener under openListener's rule, in TLS when a
+// certificate is given; its errors name the flags with prefix.
+func listenTLS(addr, cert, key, prefix string) (net.Listener, error) {
+	ln, _, err := openListener(addr, cert != "")
+	if err != nil {
+		return nil, errors.New(strings.NewReplacer("--listen", "--"+prefix+"listen", "--tls-", "--"+prefix+"tls-").Replace(err.Error()))
+	}
+	if cert == "" {
+		return ln, nil
+	}
+	kp, err := tls.LoadX509KeyPair(cert, key)
+	if err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("tls: %w", err)
+	}
+	return tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{kp}, MinVersion: tls.VersionTLS12}), nil
 }
 
 func sshConfig(statePath string, o serveOptions) (gateway.SSHConfig, error) {

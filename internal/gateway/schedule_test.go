@@ -68,6 +68,10 @@ func TestSchedule(t *testing.T) {
 		{"pinned to the holding node", []Candidate{cand("a", 60000), cand("b", 2000)}, want(func(w *Want) { w.Node = "b" }), "b", nil},
 		{"pinned node not up", []Candidate{cand("a", 60000)}, want(func(w *Want) { w.Node = "b" }), "", errNoCandidate},
 		{"excluded after a refusal", []Candidate{cand("a", 60000), cand("b", 2000)}, want(func(w *Want) { w.Exclude = []string{"a"} }), "b", nil},
+		{"spread avoids a node holding a replica", []Candidate{cand("a", 60000), cand("b", 2000)}, want(func(w *Want) { w.Spread = map[string]int{"a": 1} }), "b", nil},
+		{"spread picks the fewest", []Candidate{cand("a", 60000), cand("b", 50000), cand("c", 2000)}, want(func(w *Want) { w.Spread = map[string]int{"a": 2, "b": 1, "c": 1} }), "b", nil},
+		{"spread doubles up when it must", []Candidate{cand("a", 60000), cand("b", 2000)}, want(func(w *Want) { w.Spread = map[string]int{"a": 1, "b": 1} }), "a", nil},
+		{"spread does not override room", []Candidate{cand("a", 60000), cand("b", 512)}, want(func(w *Want) { w.Spread = map[string]int{"a": 1} }), "a", nil},
 		{"a node reporting no disk is not refused for disk", []Candidate{cand("a", 60000, noDiskReport)}, small, "a", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {

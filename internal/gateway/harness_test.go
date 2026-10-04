@@ -15,6 +15,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/audit"
+	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/server"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
@@ -51,13 +52,24 @@ type testNode struct {
 
 func startNode(t *testing.T, name string, caps ...string) *testNode {
 	t.Helper()
+	return startNodeWith(t, name, nil, caps...)
+}
+
+// startNodeWith is startNode with the fake backend wrapped — in a backend
+// that can dial a guest port, for a tunnel followed end to end.
+func startNodeWith(t *testing.T, name string, wrap func(*fake.Backend) backend.Backend, caps ...string) *testNode {
+	t.Helper()
 	tn := &testNode{t: t, name: name, token: "node-token-" + name + "-0123456789",
 		capacity: api.NodeResources{CPUs: 64, MemoryMB: 64 << 10, DiskMB: 1 << 20}}
 	empty := ""
 	tn.reportAs.Store(&empty)
 	tn.be = fake.New(caps...)
 	pol := spec.DefaultPolicyFor(capSet(caps...))
-	s := &server.Server{Backend: tn.be, Policy: pol, Token: tn.token,
+	var be backend.Backend = tn.be
+	if wrap != nil {
+		be = wrap(tn.be)
+	}
+	s := &server.Server{Backend: be, Policy: pol, Token: tn.token,
 		Audit: audit.NewLog(filepath.Join(t.TempDir(), "events.jsonl"))}
 	tn.h = s.Handler()
 	mux := http.NewServeMux()

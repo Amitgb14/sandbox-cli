@@ -38,6 +38,12 @@ type Want struct {
 	Node string
 	// Exclude are nodes already tried for this request.
 	Exclude []string
+	// Spread, when set, counts what each node already holds of the
+	// sandboxes this one is kept apart from (a service's replicas). Among the
+	// nodes that fit, only those holding the fewest are chosen from: a node
+	// that already holds one is avoided while another has room, so losing a
+	// machine costs as few of them as it can.
+	Spread map[string]int
 }
 
 // Errors from Schedule.
@@ -55,7 +61,8 @@ var (
 
 // Schedule picks a node for w among cands, which the caller has already
 // narrowed to healthy, uncordoned nodes. Among those that can run it and
-// have room it prefers, in order: one with a booted pool for the image, one
+// have room — and, with Spread, hold the fewest of its kind — it prefers, in
+// order: one with a booted pool for the image, one
 // with the image already built, the most free memory; ties go to the name
 // that sorts first.
 func Schedule(cands []Candidate, w Want) (string, error) {
@@ -89,6 +96,13 @@ func Schedule(cands []Candidate, w Want) (string, error) {
 	}
 	if len(fits) == 0 {
 		return "", errNoRoom
+	}
+	if w.Spread != nil {
+		least := w.Spread[fits[0].Name]
+		for _, c := range fits {
+			least = min(least, w.Spread[c.Name])
+		}
+		fits = slices.DeleteFunc(fits, func(c Candidate) bool { return w.Spread[c.Name] > least })
 	}
 	sort.SliceStable(fits, func(i, j int) bool { return better(fits[i], fits[j], w) })
 	return fits[0].Name, nil

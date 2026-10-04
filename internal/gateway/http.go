@@ -89,6 +89,13 @@ func (g *Gateway) Handler() http.Handler {
 	route("GET /v1/volumes", false, g.listVolumes)
 	route("DELETE /v1/volumes/{name}", false, g.deleteVolume)
 
+	route("POST /v1/services", false, g.createService)
+	route("GET /v1/services", false, g.listServices)
+	route("GET /v1/services/{name}", false, g.getService)
+	route("PUT /v1/services/{name}", false, g.updateService)
+	route("POST /v1/services/{name}/scale", false, g.scaleService)
+	route("DELETE /v1/services/{name}", false, g.deleteService)
+
 	route("GET /v1/ssh", false, g.sshEndpoint)
 	route("POST /v1/ssh-keys", false, g.addSSHKey)
 	route("GET /v1/ssh-keys", false, g.listSSHKeys)

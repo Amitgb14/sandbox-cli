@@ -85,6 +85,13 @@ func transientFail(status int, code, msg string) *createFail {
 // before the sandbox is handed back. It returns the sandbox and the response
 // to send: the node's 201, or the refusal.
 func (g *Gateway) create(ctx context.Context, p Principal, req api.CreateSandboxRequest, extra map[string]string) (api.Sandbox, *createFail) {
+	return g.createSpread(ctx, p, req, extra, nil)
+}
+
+// createSpread is create, placing the sandbox away from the nodes in spread
+// (a node name and how many of the caller's replicas it already holds), as a
+// service's replicas are.
+func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateSandboxRequest, extra map[string]string, spread map[string]int) (api.Sandbox, *createFail) {
 	if req.Name != "" && !spec.ValidName(req.Name) {
 		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, "name "+req.Name+": lowercase letters, digits and dashes, starting with a letter or digit, at most 63")
 	}
@@ -101,7 +108,7 @@ func (g *Gateway) create(ctx context.Context, p Principal, req api.CreateSandbox
 		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
 	}
 
-	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB}
+	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, Spread: spread}
 	if want.CPUs == 0 {
 		want.CPUs = g.cfg.Defaults.CPUs
 	}
@@ -483,4 +490,42 @@ func (g *Gateway) afterSnapshot(resp *http.Response, id string, o Owner) error {
 	resp.Body = io.NopCloser(bytes.NewReader(data))
 	resp.ContentLength = int64(len(data))
 	return nil
+}
+
+// createOpts is what the gateway itself adds to a create of its own: a
+// service's replica carries the gateway's labels, which a request may not
+// set, and is spread across nodes.
+type createOpts struct {
+	labels map[string]string
+	spread map[string]int
+}
+
+// created is a sandbox the gateway made for itself, and the node it is on.
+type created struct {
+	sb   api.Sandbox
+	node string
+}
+
+// createError is a create the gateway made for itself that did not happen.
+type createError struct{ fail *createFail }
+
+func (e *createError) Error() string { return e.fail.err().Error() }
+
+// refused reports whether the request itself was refused, so trying again
+// will not help: a client error that is not a name clash, and not one waiting
+// cures (a full quota, no node with room).
+func (e *createError) refused() bool {
+	st := e.fail.status
+	return !e.fail.transient && st >= 400 && st < 500 && st != http.StatusConflict
+}
+
+// createFor is the create path for the gateway's own sandboxes (a service's
+// replicas): create, with the node the sandbox landed on.
+func (g *Gateway) createFor(ctx context.Context, p Principal, req api.CreateSandboxRequest, opts createOpts) (*created, *createError) {
+	sb, f := g.createSpread(ctx, p, req, opts.labels, opts.spread)
+	if f.status != http.StatusCreated {
+		return nil, &createError{fail: f}
+	}
+	o, _ := g.store.OwnerOf(sb.ID)
+	return &created{sb: sb, node: o.Node}, nil
 }
