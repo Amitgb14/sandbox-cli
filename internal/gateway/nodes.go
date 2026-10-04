@@ -55,6 +55,7 @@ type placement struct {
 	res  api.NodeResources
 	sent time.Time
 	done time.Time // zero while the create is in flight
+	id   string    // the sandbox, once created
 }
 
 func newNode(cfg NodeConfig, static bool, c *api.Client) *node {
@@ -168,6 +169,46 @@ func (n *node) finish(p *placement, created bool) {
 		return
 	}
 	p.done = time.Now()
+}
+
+// created ends a placement whose create succeeded, naming the sandbox, so
+// that terminating it before the next status can give its room back.
+func (n *node) created(p *placement, id string) {
+	if p == nil {
+		return
+	}
+	n.mu.Lock()
+	p.id = id
+	n.mu.Unlock()
+	n.finish(p, true)
+}
+
+// released gives back the room of a sandbox the gateway terminated, until a
+// status asked for after it shows the room free itself. Without it, a
+// sandbox counted as used until the next poll, and a burst of short-lived
+// ones (create, use, terminate: a test suite, a batch of agent runs) was
+// refused "no node has room" on an empty node.
+//
+// If the sandbox's own placement is still held, the status never counted it,
+// and dropping the placement is the whole of it. Otherwise the status counts
+// it as used, and a credit — a placement of negative size, already done —
+// stands in for its room until a poll asked after the terminate takes it
+// away. A terminate that lands while a poll is in flight may be counted in
+// that status and the credit both, for one interval; the node refuses a
+// sandbox it has no room for, so that errs toward a refusal there rather
+// than a sandbox placed where it cannot run.
+func (n *node) released(id string, res api.NodeResources) {
+	now := time.Now()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for p := range n.placed {
+		if p.id == id {
+			delete(n.placed, p)
+			return
+		}
+	}
+	credit := api.NodeResources{CPUs: -res.CPUs, MemoryMB: -res.MemoryMB, DiskMB: -res.DiskMB}
+	n.placed[&placement{res: credit, sent: now, done: now, id: id}] = struct{}{}
 }
 
 // poolConfig is how the pool polls.

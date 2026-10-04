@@ -83,6 +83,7 @@ type sandboxRecord struct {
 	Owner
 	CPUs     float64   `json:"cpus,omitempty"`
 	MemoryMB int       `json:"memory_mb,omitempty"`
+	DiskMB   int       `json:"disk_mb,omitempty"` // for the room a terminate gives back (nodes.go)
 	Recorded time.Time `json:"recorded"`
 }
 
@@ -523,19 +524,19 @@ func (s *FileStore) SetOwner(sandbox string, o Owner) error {
 // RecordSandbox is SetOwner with the resources the sandbox was given, which
 // count against its tenant's quota until it is forgotten.
 func (s *FileStore) RecordSandbox(sandbox string, o Owner, cpus float64, memoryMB int) error {
-	if err := s.stageSandbox(sandbox, o, cpus, memoryMB); err != nil {
+	if err := s.stageSandbox(sandbox, o, cpus, memoryMB, 0); err != nil {
 		return err
 	}
 	return s.persist()
 }
 
 // stageSandbox is RecordSandbox without the write (see stage).
-func (s *FileStore) stageSandbox(sandbox string, o Owner, cpus float64, memoryMB int) error {
+func (s *FileStore) stageSandbox(sandbox string, o Owner, cpus float64, memoryMB, diskMB int) error {
 	if sandbox == "" || o.User == "" || o.Node == "" {
 		return errors.New("an owner needs a sandbox, a user and a node")
 	}
 	return s.stage(func() error {
-		s.st.Sandboxes[sandbox] = sandboxRecord{Owner: o, CPUs: cpus, MemoryMB: memoryMB, Recorded: s.now().UTC()}
+		s.st.Sandboxes[sandbox] = sandboxRecord{Owner: o, CPUs: cpus, MemoryMB: memoryMB, DiskMB: diskMB, Recorded: s.now().UTC()}
 		return nil
 	})
 }
@@ -546,6 +547,14 @@ func (s *FileStore) OwnerOf(sandbox string) (Owner, bool) {
 	defer s.mu.RUnlock()
 	r, ok := s.st.Sandboxes[sandbox]
 	return r.Owner, ok
+}
+
+// SizeOf returns what a recorded sandbox was given.
+func (s *FileStore) SizeOf(sandbox string) (api.NodeResources, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.st.Sandboxes[sandbox]
+	return api.NodeResources{CPUs: r.CPUs, MemoryMB: r.MemoryMB, DiskMB: r.DiskMB}, ok
 }
 
 // ForgetSandbox drops a sandbox's record. Forgetting one not held is not an error.

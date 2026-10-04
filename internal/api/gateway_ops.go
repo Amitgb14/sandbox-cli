@@ -64,7 +64,7 @@ type LostList struct {
 type AuditEntry struct {
 	Time   time.Time `json:"time"`
 	Kind   string    `json:"kind"`   // "api", "ssh" or "job"
-	Action string    `json:"action"` // "POST /v1/sandboxes", "ssh.login", "ssh.session", "ssh.revoked", "job.revoked"
+	Action string    `json:"action"` // "POST /v1/sandboxes", "api.revoked", "ssh.login", "ssh.session", "ssh.revoked", "job.revoked"
 	KeyID  string    `json:"key_id,omitempty"`
 	User   string    `json:"user,omitempty"`
 	Tenant string    `json:"tenant,omitempty"`
@@ -73,10 +73,11 @@ type AuditEntry struct {
 	Sandbox string `json:"sandbox,omitempty"`
 	Node    string `json:"node,omitempty"`
 	// Target is what an endpoint not about a sandbox acted on: a key id, a
-	// node or volume name, a snapshot id, a job id.
+	// node or volume name, a snapshot id, a job id; for api.revoked, the route
+	// pattern of the request it ended.
 	Target string `json:"target,omitempty"`
 	Status int    `json:"status,omitempty"` // the HTTP status (api)
-	Result string `json:"result,omitempty"` // "ok" or "refused" (ssh); "closed" (ssh.revoked), "cancelled" (job.revoked)
+	Result string `json:"result,omitempty"` // "ok" or "refused" (ssh); "closed" (api.revoked, ssh.revoked), "cancelled" (job.revoked)
 	// Fingerprint is the SSH key's (SHA256:…), or "token" for a login with a
 	// short-lived token.
 	Fingerprint string `json:"fingerprint,omitempty"`

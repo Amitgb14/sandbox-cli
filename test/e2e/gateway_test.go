@@ -270,8 +270,20 @@ func (e *env) sshLogins(sshBin, keyFile, a1, bobID, token string) {
 
 	// Revoking a key ends an open session, not only the next login: carol
 	// holds a connection open (-N: no command, which the fake node would
-	// refuse) and an admin revokes her key.
+	// refuse), follows a process's output (logs, which follows until the
+	// process exits), and an admin revokes her key.
 	e.cliOK("carol", "run", "--keep", "--name", "c1", "--", "echo", "hi")
+	e.cliOK("carol", "run", "-d", "--name", "c2", "--", "sleep", "600")
+	logs := exec.Command(filepath.Join(e.bin, "sandbox-cli"), withContext([]string{"logs", "c2"}, "carol")...)
+	logs.Env = e.cliEnv
+	var logsOut syncBuffer
+	logs.Stdout, logs.Stderr = &logsOut, &logsOut
+	if err := logs.Start(); err != nil {
+		t.Fatal(err)
+	}
+	logsEnded := make(chan struct{})
+	go func() { _ = logs.Wait(); close(logsEnded) }()
+	t.Cleanup(func() { _ = logs.Process.Kill() })
 	m := regexp.MustCompile(`(?m)^ssh -p \d+ (sgt_[a-z0-9]+)@`).FindStringSubmatch(e.cli("carol", "ssh-access", "c1"))
 	if m == nil {
 		t.Fatal("carol's ssh-access printed no token")
@@ -289,6 +301,8 @@ func (e *env) sshLogins(sshBin, keyFile, a1, bobID, token string) {
 	select {
 	case <-ended:
 		t.Fatalf("carol's ssh -N ended before the revocation:\n%s", heldOut.String())
+	case <-logsEnded:
+		t.Fatalf("carol's logs ended before the revocation:\n%s", logsOut.String())
 	default:
 	}
 	e.adminDo(http.MethodDelete, "/v1/admin/keys/"+e.keyIDs["carol"], http.StatusNoContent)
@@ -298,6 +312,15 @@ func (e *env) sshLogins(sshBin, keyFile, a1, bobID, token string) {
 		t.Fatal("carol's SSH session stayed open after her key was revoked")
 	}
 	e.waitLog(`user "carol" via a token: closed: the user holds no active API key with sandbox:ssh`)
+	select {
+	case <-logsEnded:
+	case <-time.After(10 * time.Second):
+		t.Fatal("carol's logs stayed open after her key was revoked")
+	}
+	// Ended by the revocation while it was open, not refused at its start:
+	// the gateway logs the followed request it ended.
+	e.waitLog(`GET /v1/sandboxes/{ref}/processes/{pid}/output`)
+	e.waitLog(`by key ` + e.keyIDs["carol"] + `: ended: its API key was revoked`)
 }
 
 // adminDo sends one admin API request with the admin key and checks its status.

@@ -265,7 +265,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 		if names && named != n.cfg.Name {
 			err = errors.New("the node made an id naming node " + named)
 		} else {
-			err = hold.record(sb.ID, o, sb.CPUs, sb.MemoryMB)
+			err = hold.record(sb.ID, o, sb.CPUs, sb.MemoryMB, sb.DiskMB)
 		}
 		if err != nil {
 			n.finishIf(pl, false)
@@ -275,7 +275,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 			}
 			return api.Sandbox{}, failWith(http.StatusInternalServerError, api.CodeInternal, "the sandbox's owner could not be recorded; it was terminated")
 		}
-		n.finishIf(pl, true)
+		n.created(pl, sb.ID)
 		noteSandbox(ctx, sb.ID, n.cfg.Name)
 		return sb, &createFail{status: http.StatusCreated, body: data}
 	}
@@ -423,6 +423,11 @@ func (g *Gateway) forward(scope string, after afterFunc) handlerFunc {
 		if after != nil {
 			modify = func(resp *http.Response) error { return after(resp, id, o) }
 		}
+		// Held to its key for as long as it is open, not only now: an
+		// attach, a followed output stream or a tunnel lasts as long as its
+		// client keeps it (live.go).
+		w, r, done := g.track(w, r, p, scope, id, o.Node)
+		defer done()
 		g.proxy(w, r, n, target, modify)
 	}
 }
@@ -449,6 +454,12 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, n *node, path st
 		FlushInterval:  -1,
 		ModifyResponse: modify,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(context.Cause(r.Context()), errAccessRevoked) {
+				// Ended before the node answered: say why, as a request
+				// made with the key now would be told.
+				writeErr(w, http.StatusUnauthorized, api.CodeUnauthorized, errAccessRevoked.Error())
+				return
+			}
 			if r.Context().Err() == nil {
 				g.logf("forwarding to %s: %v", n.cfg.Name, err)
 			}
@@ -469,6 +480,7 @@ func (g *Gateway) afterDelete(resp *http.Response, id string, o Owner) error {
 	if _, held := g.store.OwnerOf(id); held {
 		g.metrics.terminated.Inc("delete")
 	}
+	g.roomBack(o.Node, id)
 	if err := g.store.ForgetSandbox(id); err != nil {
 		g.logf("forgetting %s: %v", id, err)
 	}
@@ -534,4 +546,18 @@ func (g *Gateway) createFor(ctx context.Context, p Principal, req api.CreateSand
 	}
 	o, _ := g.store.OwnerOf(sb.ID)
 	return &created{sb: sb, node: o.Node}, nil
+}
+
+// roomBack tells the scheduler that a sandbox the gateway terminated on
+// node has given back its room (node.released). Called after the node
+// answered the delete with 204, and before the store forgets the sandbox's
+// size; a 404 means it ended earlier, and the node's status already says so.
+func (g *Gateway) roomBack(node, id string) {
+	n := g.nodes.get(node)
+	if n == nil {
+		return
+	}
+	if res, ok := g.store.SizeOf(id); ok {
+		n.released(id, res)
+	}
 }
