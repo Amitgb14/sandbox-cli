@@ -319,6 +319,27 @@ that fails on the code before the fix:
 - **Studio's screens have their own changelog,** [studio/CHANGELOG.md](studio/CHANGELOG.md).
   This file keeps what changes the CLI, the API or a command Studio runs.
 
+- **Organisations on the gateway.** A user with the new `org:create` scope
+  creates an organisation (`sandbox-cli org create acme`, `POST /v1/orgs`),
+  becomes its owner and adds members (`org members add bob [--role owner]
+  [--tenant T]`, `org members rm`). An organisation is a tenant of its own:
+  its sandboxes, volumes, secrets, jobs and services are visible only in it,
+  it has its own quota, and its services are routed as `<service>--<org>`.
+  Any request may select one with the `X-Sandbox-Org` header; the gateway
+  allows it only for a member and answers `404` otherwise. The CLI sends it
+  from the new global `--org`, `SANDBOX_ORG`, or the context's (`org use`,
+  `context add --org`); `whoami` shows the current one and `org ls` lists
+  yours. The Python and TypeScript SDKs take `org`. Removing a member ends
+  their open streams, SSH sessions and running jobs in that organisation at
+  once. `sandbox-gateway serve --max-orgs-per-user N` (default 10) bounds how
+  many one user may make or own. Without the header and with no
+  memberships, every existing key behaves exactly as before. `sandbox-cli ssh
+  --org acme NAME` logs in to a sandbox of the organisation by its id; a
+  plain `ssh NAME@gateway` still looks names up in the key's own tenant.
+  The gateway's state file gains an `orgs` field: an older gateway refuses a
+  file a newer one has written organisations to, while this one loads every
+  older file.
+
 - **Connect to a running sandbox: `sandbox-cli shell` and `exec`, and a
   Terminal button in Studio.** `shell SANDBOX` opens bash (or sh) in a running
   sandbox, in `/sandbox/home`, and exiting leaves the sandbox running; `exec

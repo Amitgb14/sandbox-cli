@@ -59,7 +59,7 @@ $GW nodes add local http://127.0.0.1:7443 --token-file ~/gw/node.token
 $GW keys create --user ops --scope admin                                   # ops.key
 $GW keys create --user alice --tenant team-a --scope sandbox:read \
   --scope sandbox:create --scope sandbox:delete --scope sandbox:ssh \
-  --scope secrets:write                                                    # alice.key
+  --scope secrets:write --scope org:create                                 # alice.key
 $GW keys create --user bob --tenant team-b --scope sandbox:read            # bob.key, read-only
 
 $GW serve --listen 0.0.0.0:8443 \
@@ -86,7 +86,7 @@ sandbox-cli context use alice
 sandbox-cli whoami
 ```
 
-**Pass:** `whoami` prints alice, team-a, her key id and her five scopes.
+**Pass:** `whoami` prints alice, team-a, her key id and her six scopes.
 `SANDBOX_CONTEXT=bob sandbox-cli …` runs any command below as another user.
 
 ## 4. Sandboxes and SSH (alice)
@@ -244,6 +244,35 @@ Copy it to the Mac and run `./sandbox-cli-hosted studio --context ops --port 709
 
 **Pass:** even with an admin key, Studio has no admin screens: the build does
 not contain them.
+
+## 12. Organisations (alice and bob)
+
+```sh
+sandbox-cli org create acme                       # alice owns it
+sandbox-cli --org acme run --keep --name inacme -- sleep 600
+sandbox-cli ls                                    # team-a: no inacme
+sandbox-cli --org acme ls                         # inacme
+SANDBOX_CONTEXT=bob sandbox-cli --org acme ls     # refused: no such organization
+sandbox-cli org members add bob --tenant team-b
+SANDBOX_CONTEXT=bob sandbox-cli org ls            # team-b and acme
+sandbox-cli ssh --org acme inacme -- sleep 600    # leave it open
+sandbox-cli logs --org acme inacme                # likewise, in a second terminal (if it printed a process)
+sandbox-cli studio --context alice --port 7095    # the switcher: acme shows inacme, team-a does not
+sandbox-cli org members rm bob
+```
+
+For the removal to end something of bob's, have bob hold the open session:
+give his key `sandbox:create` and `sandbox:ssh` for this step, run
+`SANDBOX_CONTEXT=bob sandbox-cli --org acme run -d --name bobs -- sleep 600`,
+then `SANDBOX_CONTEXT=bob sandbox-cli ssh --org acme bobs` and leave it open
+before alice removes him.
+
+**Pass:** `inacme` is listed only in acme; bob is refused acme until he is
+added; in Studio the switcher lists team-a and acme, switching shows only
+that organisation's sandboxes, and Members lists alice and bob; removing bob
+closes his open SSH session in acme within a second
+(`SANDBOX_CONTEXT=ops sandbox-cli gateway audit` shows `org.member_removed`
+and `ssh.revoked`), and his next `--org acme` command is refused.
 
 ## Cleaning up
 

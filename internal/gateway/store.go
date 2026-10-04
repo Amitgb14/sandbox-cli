@@ -67,6 +67,9 @@ type fileState struct {
 	Secrets  []secretRecord        `json:"secrets,omitempty"`
 	Jobs     map[string]*jobRecord `json:"jobs,omitempty"`
 	Services *serviceState         `json:"services,omitempty"` // services_store.go
+	// Orgs are the organisations users made and who belongs to each
+	// (orgs.go). A state file from before them has none, and loads.
+	Orgs []orgRecord `json:"orgs,omitempty"`
 }
 
 type tokenRecord struct {
@@ -315,6 +318,9 @@ func (s *FileStore) CreateKey(user, tenant string, scopes []string) (string, Key
 	k := Key{ID: newID("key_"), User: user, Tenant: tenant, Scopes: slices.Clone(scopes),
 		Hash: hashSecret(secret), Created: s.now().UTC()}
 	err := s.change(func() error {
+		if err := s.nameTakenInOrg(tenant, user, tenant); err != nil {
+			return err
+		}
 		s.st.Keys = append(s.st.Keys, k)
 		return nil
 	})

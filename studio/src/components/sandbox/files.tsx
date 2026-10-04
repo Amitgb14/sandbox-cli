@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ChevronRight, File, Folder } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getToken } from "@/lib/api/client";
+import { authHeaders } from "@/lib/api/client";
 import { useDir } from "@/lib/api/queries";
 import { formatBytes } from "@/lib/format";
 
@@ -27,7 +27,7 @@ export function SandboxFiles({ sandbox }: { sandbox: string }) {
       return;
     }
     const resp = await fetch(`/api/v1/sandboxes/${encodeURIComponent(sandbox)}/files?path=${encodeURIComponent(file)}`, {
-      headers: { Authorization: `Bearer ${getToken()}` },
+      headers: authHeaders(),
     });
     const buf = new Uint8Array(await resp.arrayBuffer());
     const binary = buf.subarray(0, 8000).includes(0);

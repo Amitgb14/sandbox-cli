@@ -12,6 +12,10 @@
  */
 
 import type { OutputEvent } from "@/lib/types";
+import { currentOrg } from "@/lib/org";
+
+/** The header that selects an organisation on a gateway (lib/org.ts). */
+export const ORG_HEADER = "X-Sandbox-Org";
 
 const TOKEN_KEY = "sandbox-studio-token";
 
@@ -62,10 +66,24 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
-  const headers = new Headers(init.headers);
+/**
+ * Studio's token, and the selected organisation unless noOrg: the headers
+ * every request to Studio's server carries. The token is Studio's own, never
+ * the endpoint's, which sandbox-cli puts on as it proxies.
+ */
+export function authHeaders(noOrg = false): Record<string, string> {
+  const h: Record<string, string> = {};
   const t = getToken();
-  if (t) headers.set("Authorization", `Bearer ${t}`);
+  if (t) h.Authorization = `Bearer ${t}`;
+  const org = noOrg ? null : currentOrg();
+  if (org) h[ORG_HEADER] = org;
+  return h;
+}
+
+export async function apiFetch<T>(path: string, opts: RequestInit & { json?: unknown; noOrg?: boolean } = {}): Promise<T> {
+  const { noOrg, ...init } = opts;
+  const headers = new Headers(init.headers);
+  for (const [k, v] of Object.entries(authHeaders(noOrg))) headers.set(k, v);
   let body = init.body;
   if (init.json !== undefined) {
     headers.set("Content-Type", "application/json");
@@ -111,7 +129,7 @@ export async function followOutput(
 ): Promise<void> {
   const resp = await fetch(
     `/api/v1/sandboxes/${encodeURIComponent(sandbox)}/processes/${pid}/output`,
-    { headers: { Authorization: `Bearer ${getToken()}` }, signal },
+    { headers: authHeaders(), signal },
   );
   if (!resp.ok || !resp.body) throw new ApiError(resp.status, resp.statusText);
   const reader = resp.body.getReader();
@@ -137,5 +155,9 @@ export function attachURL(sandbox: string, pid?: number): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const q = new URLSearchParams({ sandbox, token: getToken() });
   if (pid) q.set("pid", String(pid));
+  // A browser cannot give a WebSocket headers, so the organisation rides in
+  // the query, as the token does; Studio's server passes it on as a header.
+  const org = currentOrg();
+  if (org) q.set("org", org);
   return `${proto}//${window.location.host}/api/ws/attach?${q.toString()}`;
 }

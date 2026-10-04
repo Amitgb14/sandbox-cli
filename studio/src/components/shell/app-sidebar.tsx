@@ -22,6 +22,7 @@ import { useCaller } from "@/lib/caller";
 import { useInfo, useSandboxes } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { OrgSwitcher } from "@/components/shell/org-switcher";
 
 /**
  * The sidebar, and the only chrome: a wordmark, search, the screens the
@@ -45,6 +46,7 @@ export function AppSidebar() {
         <Link href="/" className="px-2 text-[1.05rem] font-semibold tracking-tight">
           sandbox<span className="text-muted-foreground">·studio</span>
         </Link>
+        <OrgSwitcher />
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}

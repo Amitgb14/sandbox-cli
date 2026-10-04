@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const dist = join(root, ".next-admin-off");
 // Strings only the admin screens carry.
-const PROBES = ["/v1/admin/", "page.admin", "Users & keys", "Lost sandboxes", "Drain and terminate"];
+const PROBES = ["/v1/admin/", "/v1/admin/orgs", "/admin/orgs", "page.admin", "Users & keys", "Lost sandboxes", "Drain and terminate", "All organizations"];
 
 function* files(dir) {
   for (const name of readdirSync(dir)) {

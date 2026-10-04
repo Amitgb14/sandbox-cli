@@ -16,7 +16,9 @@ import (
 // sandboxd), and an error for anything else — a refused credential or an
 // endpoint that cannot be reached says nothing about which one it is.
 func (c *Client) IsGateway(ctx context.Context) (bool, error) {
-	_, err := c.Whoami(ctx)
+	// Asked without an organisation: a 404 for one the key may not select
+	// ("no such organization") would otherwise read as a plain sandboxd.
+	_, err := c.WithOrg("").Whoami(ctx)
 	if err == nil {
 		return true, nil
 	}

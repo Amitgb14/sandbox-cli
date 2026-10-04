@@ -74,6 +74,10 @@ type Config struct {
 	// (recheckLive). A revocation through the admin API is acted on at
 	// once; this is the backstop for a store changed some other way.
 	AccessRecheckInterval time.Duration
+	// MaxOrgsPerUser is how many organisations one user may make or own
+	// (orgs.go). Each is a tenant with a quota of its own, so this bounds
+	// how far one user can multiply theirs. Zero is unlimited.
+	MaxOrgsPerUser int
 }
 
 // Quota bounds what one tenant may hold at once. Zero is unlimited.

@@ -16,7 +16,7 @@ import (
 // keys and nodes.
 
 func (g *Gateway) whoami(w http.ResponseWriter, r *http.Request, p Principal) {
-	writeJSON(w, http.StatusOK, api.Whoami{User: p.User, Tenant: p.Tenant, KeyID: p.KeyID, Scopes: p.Scopes})
+	writeJSON(w, http.StatusOK, api.Whoami{User: p.User, Tenant: p.KeyTenant, KeyID: p.KeyID, Scopes: p.Scopes, Org: wireOrg(p.Tenant)})
 }
 
 // --- SSH ----------------------------------------------------------------------
@@ -53,7 +53,10 @@ func (g *Gateway) addSSHKey(w http.ResponseWriter, r *http.Request, p Principal)
 		}
 		sandbox = id
 	}
-	k, err := g.store.AddSSHKey(p.User, p.Tenant, sandbox, req.Key)
+	// An SSH key is its user's, not an organisation's: it is kept under the
+	// key's own tenant, whatever the request selected, and logs in to the
+	// user's sandboxes in their organisations by id (ssh_auth.go).
+	k, err := g.store.AddSSHKey(p.User, p.KeyTenant, sandbox, req.Key)
 	switch {
 	case errors.Is(err, ErrKeyTaken), errors.Is(err, ErrKeyRegistered):
 		writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
@@ -71,7 +74,7 @@ func (g *Gateway) listSSHKeys(w http.ResponseWriter, r *http.Request, p Principa
 	}
 	out := api.SSHKeyList{Keys: []api.SSHKeyInfo{}}
 	for _, k := range g.store.SSHKeysFor(p.User) {
-		if k.Tenant == p.Tenant {
+		if k.Tenant == p.KeyTenant {
 			out.Keys = append(out.Keys, sshKeyInfo(k))
 		}
 	}
@@ -84,7 +87,7 @@ func (g *Gateway) removeSSHKey(w http.ResponseWriter, r *http.Request, p Princip
 	}
 	id := r.PathValue("id")
 	for _, k := range g.store.SSHKeysFor(p.User) {
-		if k.ID == id && k.Tenant == p.Tenant {
+		if k.ID == id && k.Tenant == p.KeyTenant {
 			if err := g.store.RemoveSSHKey(id); err != nil && !errors.Is(err, ErrNoSuchKey) {
 				writeErr(w, http.StatusInternalServerError, api.CodeInternal, "removing the key failed")
 				return

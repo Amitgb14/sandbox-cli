@@ -41,6 +41,12 @@ type memStore struct {
 	extra   []Key               // further API keys, as given
 }
 
+// MemberRole: the SSH fakes hold no organisations.
+func (m *memStore) MemberRole(string, string, string) (string, bool) { return "", false }
+
+// OwnerOf: the fake router, not the store, knows the sandboxes.
+func (m *memStore) OwnerOf(string) (Owner, bool) { return Owner{}, false }
+
 // Keys reports one API key per user the store knows, revoked for the users in
 // revoked: what SSH login checks to see that a user is still active and may
 // use SSH.

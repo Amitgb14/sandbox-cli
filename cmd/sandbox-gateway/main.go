@@ -90,6 +90,7 @@ type serveOptions struct {
 	secretsKeyFile, jobsDir string
 	jobRetention            time.Duration
 	notifyAllowPrivate      bool
+	maxOrgsPerUser          int
 }
 
 func newServe(state *string) *cobra.Command {
@@ -125,6 +126,7 @@ func newServe(state *string) *cobra.Command {
 	f.IntVar(&o.quota.Sandboxes, "quota-sandboxes", 0, "most sandboxes one tenant may hold at once; 0 is unlimited")
 	f.Float64Var(&o.quota.CPUs, "quota-cpus", 0, "most CPUs one tenant's sandboxes may hold; 0 is unlimited")
 	f.IntVar(&o.quota.MemoryMB, "quota-memory-mb", 0, "most memory (MB) one tenant's sandboxes may hold; 0 is unlimited")
+	f.IntVar(&o.maxOrgsPerUser, "max-orgs-per-user", 10, "most organizations one user may create or own (each is a tenant with its own quota); 0 is unlimited")
 	f.DurationVar(&o.pollInterval, "poll-interval", 5*time.Second, "how often each node is asked for its status")
 	f.StringArrayVar(&o.corsOrigins, "cors-origin", nil, "a browser origin allowed to call the API (repeatable)")
 	f.StringVar(&o.metricsListen, "metrics-listen", "", "loopback host:port to serve Prometheus metrics on, without a credential; off when empty")
@@ -142,6 +144,9 @@ func newServe(state *string) *cobra.Command {
 func serve(ctx context.Context, statePath string, o serveOptions, logf func(string, ...any), ready func(string)) error {
 	if o.quota.Sandboxes < 0 || o.quota.CPUs < 0 || o.quota.MemoryMB < 0 {
 		return errors.New("a quota cannot be negative")
+	}
+	if o.maxOrgsPerUser < 0 {
+		return errors.New("--max-orgs-per-user cannot be negative")
 	}
 	if (o.tlsCert == "") != (o.tlsKey == "") {
 		return errors.New("--tls-cert and --tls-key go together")
@@ -187,6 +192,7 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 		NodeLostAfter: o.nodeLostAfter, Audit: auditLog,
 		SecretsKey: secretsKey, JobsDir: o.jobsDir, JobRetention: o.jobRetention,
 		NotifyAllowPrivate: o.notifyAllowPrivate,
+		MaxOrgsPerUser:     o.maxOrgsPerUser,
 		Router:             rcfg,
 	})
 	if err != nil {

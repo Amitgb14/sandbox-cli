@@ -427,6 +427,19 @@ func sshThroughGateway(ctx context.Context, c *api.Client, ref, identityFlag str
 	if !validSSHUser(ref) {
 		return fmt.Errorf("%q is not a sandbox id or name", termsafe.Clean(ref))
 	}
+	if c.Org() != "" && !spec.ValidID(ref) {
+		// The SSH server looks a name up in the key's own tenant only. In
+		// an organisation the name is resolved here, through the API with
+		// the organisation selected, and the login is by id, which the
+		// server allows for a member's sandboxes. (An ssh-access token would
+		// do as well, but it would sit in ssh's argv, where every process on
+		// this machine can read it.)
+		sb, err := c.Sandbox(ctx, ref)
+		if err != nil {
+			return orgErr(c, err)
+		}
+		ref = sb.ID
+	}
 	sshPath, err := exec.LookPath("ssh")
 	if err != nil {
 		return errors.New("no ssh client on PATH: install OpenSSH's client, or use `sandbox-cli attach`")
@@ -617,18 +630,27 @@ func newWhoamiCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			w, err := c.Whoami(cmd.Context())
-			if api.IsCode(err, api.CodeNotFound) {
+			gw, err := c.IsGateway(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if !gw {
 				fmt.Fprintf(cmd.OutOrStdout(), "context %s is a single-tenant sandboxd: it has no users, and its token is its operator's\n",
 					termsafe.Clean(name))
 				return nil
 			}
+			// With the organisation selected, so a name the key may not
+			// select says so here.
+			w, err := c.Whoami(cmd.Context())
 			if err != nil {
-				return err
+				return orgErr(c, err)
 			}
 			t := newTable(cmd.OutOrStdout())
 			fmt.Fprintf(t, "user\t%s\n", termsafe.Clean(w.User))
 			fmt.Fprintf(t, "tenant\t%s\n", termsafe.Clean(w.Tenant))
+			if w.Org != "" {
+				fmt.Fprintf(t, "org\t%s\n", termsafe.Clean(w.Org))
+			}
 			fmt.Fprintf(t, "key\t%s\n", termsafe.Clean(w.KeyID))
 			fmt.Fprintf(t, "scopes\t%s\n", termsafe.Clean(strings.Join(w.Scopes, ", ")))
 			return t.Flush()

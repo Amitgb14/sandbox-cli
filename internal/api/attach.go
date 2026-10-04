@@ -49,9 +49,7 @@ func (c *Client) upgrade(ctx context.Context, path, protocol string) (io.ReadWri
 	}
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", protocol)
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
+	c.setAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err

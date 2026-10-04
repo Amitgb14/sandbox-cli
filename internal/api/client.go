@@ -40,6 +40,31 @@ type Client struct {
 	base  string // "http://host:port" (or "http://sandboxd" over a unix socket)
 	token string
 	http  *http.Client
+	// org, when set, is sent as OrgHeader on every request, streams and
+	// upgrades included: a gateway acts in that organisation.
+	org string
+}
+
+// WithOrg returns a copy of c that acts in organisation org on a gateway
+// (OrgHeader on every request); "" acts in the key's own tenant. The copy
+// shares c's connections.
+func (c *Client) WithOrg(org string) *Client {
+	cp := *c
+	cp.org = org
+	return &cp
+}
+
+// Org is the organisation c selects, "" for none.
+func (c *Client) Org() string { return c.org }
+
+// setAuth puts the credential and the organisation on a request.
+func (c *Client) setAuth(req *http.Request) {
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if c.org != "" {
+		req.Header.Set(OrgHeader, c.org)
+	}
 }
 
 // NewClient returns a client for endpoint, which is either a URL
@@ -102,9 +127,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
+	c.setAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err

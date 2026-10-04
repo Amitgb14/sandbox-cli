@@ -16,6 +16,7 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	req.Org = orgOf(r)
 	switch {
 	case (req.Agent == "") == (len(req.Command) == 0):
 		writeErr(w, http.StatusBadRequest, "name an agent or a command, not both")

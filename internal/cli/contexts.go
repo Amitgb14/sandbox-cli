@@ -23,6 +23,9 @@ type endpointContext struct {
 	Endpoint  string `json:"endpoint"`
 	TokenFile string `json:"token_file,omitempty"`
 	CAFile    string `json:"ca_file,omitempty"`
+	// Org is the organisation a gateway context acts in (sandbox-cli org
+	// use); empty is the key's own tenant.
+	Org string `json:"org,omitempty"`
 }
 
 type contextFile struct {
@@ -86,8 +89,24 @@ func (cf contextFile) resolve(name string) (endpointContext, error) {
 	return endpointContext{}, fmt.Errorf("no context named %q (sandbox-cli context ls)", name)
 }
 
+// orgFlag is the global --org: the organisation to act in on a gateway, over
+// SANDBOX_ORG and the context's own.
+var orgFlag string
+
+// selectedOrg is the organisation a command acts in: --org, then SANDBOX_ORG,
+// then the context's.
+func selectedOrg(c endpointContext) string {
+	if orgFlag != "" {
+		return orgFlag
+	}
+	if v := os.Getenv("SANDBOX_ORG"); v != "" {
+		return v
+	}
+	return c.Org
+}
+
 // newClient connects to the selected context: --context, then SANDBOX_CONTEXT,
-// then the current one.
+// then the current one. On a gateway it acts in the selected organisation.
 func newClient(flagContext string) (*api.Client, string, error) {
 	cf, err := loadContexts()
 	if err != nil {
@@ -118,10 +137,16 @@ func newClient(flagContext string) (*api.Client, string, error) {
 			return nil, "", fmt.Errorf("context %s: CA: %w", name, err)
 		}
 		cl, err := api.NewClientWithCA(c.Endpoint, token, pem)
-		return cl, name, err
+		if err != nil {
+			return nil, name, err
+		}
+		return cl.WithOrg(selectedOrg(c)), name, nil
 	}
 	cl, err := api.NewClient(c.Endpoint, token)
-	return cl, name, err
+	if err != nil {
+		return nil, name, err
+	}
+	return cl.WithOrg(selectedOrg(c)), name, nil
 }
 
 func newContextCmd() *cobra.Command {
@@ -151,12 +176,16 @@ func newContextCmd() *cobra.Command {
 				if n == cf.Current {
 					mark = "*"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s %-12s %s\n", mark, termsafe.Clean(n), termsafe.Clean(c.Endpoint))
+				line := fmt.Sprintf("%s %-12s %s", mark, termsafe.Clean(n), termsafe.Clean(c.Endpoint))
+				if c.Org != "" {
+					line += "  (org " + termsafe.Clean(c.Org) + ")"
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), line)
 			}
 			return nil
 		},
 	})
-	var tokenFile, caFile string
+	var tokenFile, caFile, org string
 	add := &cobra.Command{
 		Use:   "add NAME ENDPOINT",
 		Short: "Add a context: https://host:port with --token-file, or unix:///path",
@@ -186,12 +215,16 @@ func newContextCmd() *cobra.Command {
 				a, _ := filepath.Abs(p)
 				return a
 			}
-			cf.Contexts[args[0]] = endpointContext{Endpoint: args[1], TokenFile: abs(tokenFile), CAFile: abs(caFile)}
+			if org != "" && !validOrgArg(org) {
+				return fmt.Errorf("--org %q is not an organization name", termsafe.Clean(org))
+			}
+			cf.Contexts[args[0]] = endpointContext{Endpoint: args[1], TokenFile: abs(tokenFile), CAFile: abs(caFile), Org: org}
 			return cf.save()
 		},
 	}
 	add.Flags().StringVar(&tokenFile, "token-file", "", "file holding the endpoint's bearer token")
 	add.Flags().StringVar(&caFile, "ca", "", "CA certificate for a self-hosted endpoint's TLS")
+	add.Flags().StringVar(&org, "org", "", "on a gateway, the organization to act in (default: the key's own tenant)")
 	cmd.AddCommand(add)
 	cmd.AddCommand(&cobra.Command{
 		Use:   "use NAME",

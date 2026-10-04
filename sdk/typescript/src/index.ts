@@ -133,9 +133,39 @@ export interface Snapshot {
 /** GET /v1/whoami on a gateway: who the API key belongs to. */
 export interface Whoami {
   user: string;
+  /** The key's own tenant; "" is the default one. */
   tenant: string;
   key_id: string;
   scopes: string[];
+  /** The organization this request acted in ("default" for the default tenant). */
+  org?: string;
+}
+
+/** One organization the caller may act in (GET /v1/orgs). */
+export interface Org {
+  name: string;
+  role: "owner" | "member";
+  created?: string;
+  current: boolean;
+}
+
+/** A member of an organization: a user, named with the tenant of their own keys. */
+export interface OrgMember {
+  user: string;
+  /** Absent for the default tenant. */
+  tenant?: string;
+  role: "owner" | "member";
+  added?: string;
+}
+
+/** An organization as an admin lists it (GET /v1/admin/orgs). */
+export interface AdminOrg {
+  name: string;
+  created: string;
+  created_by: string;
+  created_by_tenant?: string;
+  members: number;
+  owners: number;
 }
 
 /** GET /v1/ssh on a gateway. */
@@ -330,6 +360,12 @@ function asBody(b: Uint8Array): BodyInit {
 
 export interface ClientOptions {
   token?: string;
+  /**
+   * On a gateway, the organization every request acts in (the X-Sandbox-Org
+   * header); absent is the key's own tenant. One the key's user is not a
+   * member of is refused with ApiError code "not_found".
+   */
+  org?: string;
   /** A fetch implementation; default globalThis.fetch. */
   fetch?: typeof fetch;
 }
@@ -337,6 +373,7 @@ export interface ClientOptions {
 export class Client {
   private readonly base: string;
   private readonly token: string;
+  private readonly org: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(endpoint: string, opts: ClientOptions = {}) {
@@ -346,7 +383,13 @@ export class Client {
     }
     this.base = endpoint.replace(/\/+$/, "");
     this.token = opts.token ?? "";
+    this.org = opts.org ?? "";
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  /** A client like this one acting in organization `org` ("" for the key's own tenant). */
+  withOrg(org: string): Client {
+    return new Client(this.base, { token: this.token, org, fetch: this.fetchImpl });
   }
 
   private async request(
@@ -359,6 +402,7 @@ export class Client {
     const headers: Record<string, string> = {};
     if (init.contentType) headers["Content-Type"] = init.contentType;
     if (this.token) headers["Authorization"] = "Bearer " + this.token;
+    if (this.org) headers["X-Sandbox-Org"] = this.org;
     const resp = await this.fetchImpl(url, { method, headers, body: init.body });
     if (!resp.ok) {
       const text = await resp.text();
@@ -543,6 +587,38 @@ export class Client {
   /** The caller as the gateway sees its API key. */
   whoami(): Promise<Whoami> {
     return this.json("GET", "/v1/whoami");
+  }
+
+  /** The organizations the key may act in: its own tenant first, then each it is a member of. */
+  async orgs(): Promise<Org[]> {
+    return (await this.json<{ orgs: Org[] }>("GET", "/v1/orgs")).orgs;
+  }
+
+  /** Create an organization with the caller as its owner (scope org:create). */
+  createOrg(name: string): Promise<Org> {
+    return this.json("POST", "/v1/orgs", { name });
+  }
+
+  async orgMembers(org: string): Promise<OrgMember[]> {
+    return (await this.json<{ members: OrgMember[] }>("GET", "/v1/orgs/" + encodeURIComponent(org) + "/members")).members;
+  }
+
+  /** Add a member or change one's role; an owner may. `tenant` defaults to the caller's. */
+  setOrgMember(org: string, user: string, opts: { role?: "owner" | "member"; tenant?: string } = {}): Promise<OrgMember> {
+    return this.json("POST", "/v1/orgs/" + encodeURIComponent(org) + "/members", { user, ...opts });
+  }
+
+  async removeOrgMember(org: string, user: string, tenant?: string): Promise<void> {
+    const resp = await this.request(
+      "DELETE",
+      "/v1/orgs/" + encodeURIComponent(org) + "/members/" + encodeURIComponent(user),
+      tenant ? { query: { tenant } } : {},
+    );
+    await resp.arrayBuffer();
+  }
+
+  async adminOrgs(): Promise<AdminOrg[]> {
+    return (await this.json<{ orgs: AdminOrg[] }>("GET", "/v1/admin/orgs")).orgs;
   }
 
   /** Where the gateway's SSH server listens, and the host keys to pin. */

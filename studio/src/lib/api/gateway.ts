@@ -8,7 +8,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, apiFetch, getToken } from "@/lib/api/client";
+import { ApiError, apiFetch, authHeaders } from "@/lib/api/client";
 import type { Job, JobOutput, JobSpec, SecretInfo, Service, ServiceSpec, SSHAccess, SSHInfo, SSHKey } from "@/lib/types";
 
 const enc = encodeURIComponent;
@@ -84,7 +84,7 @@ export function useCancelJob() {
  */
 export async function downloadJobFile(id: string, n: number, path: string): Promise<void> {
   const resp = await fetch(`/api/v1/jobs/${enc(id)}/runs/${n}/files?path=${enc(path)}`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: authHeaders(),
   });
   if (!resp.ok) throw new ApiError(resp.status, resp.statusText);
   const url = URL.createObjectURL(await resp.blob());

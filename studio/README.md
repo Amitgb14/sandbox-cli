@@ -55,9 +55,10 @@ npm run test:e2e              # needs bin/ (make build) and out/ (npm run build)
 ```
 
 The end-to-end suite (`e2e/`) runs against the real thing: `sandbox-cli studio`
-serving `out/`, in front of a `sandboxd` on its in-memory backend, and three more
+serving `out/`, in front of a `sandboxd` on its in-memory backend, and four more
 in front of a real `sandbox-gateway` (one node, on the same backend), one per
-API key — admin, a tenant's, and a read-only one (`e2e/state.ts`) — all started
+API key — admin, a tenant's that may create organizations, a read-only one, and
+one that may not create them (`e2e/state.ts`) — all started
 by `e2e/global-setup.ts`. `npm run check` also runs `check:admin-off`, which
 builds with `NEXT_PUBLIC_STUDIO_ADMIN=off` and fails if anything of the admin
 screens is in that build.
@@ -89,8 +90,21 @@ the key's scopes, which decide the rest ([docs/fleet.md](../docs/fleet.md#studio
 | `/services`, `/service?name=` | Services: deploy from a JSON spec, replicas and health, scale, remove | any key |
 | `/secrets` | The tenant's secrets by name; set and remove with `secrets:write` | any key |
 | `/ssh` | Where to connect; your SSH keys and a short-lived access token with `sandbox:ssh` | any key |
-| `/account` | User, tenant, key id and scopes | any key |
-| `/admin/nodes`, `/admin/lost`, `/admin/keys`, `/admin/audit` | Nodes (cordon, drain, add, remove), lost sandboxes, API keys and any user's SSH keys, the audit record | `admin` |
+| `/members` | The current organization's members; owners (and admin) add, remove and change roles, members read | any key |
+| `/account` | User, tenant, the current organization, key id and scopes | any key |
+| `/admin/nodes`, `/admin/lost`, `/admin/keys`, `/admin/audit`, `/admin/orgs` | Nodes (cordon, drain, add, remove), lost sandboxes, API keys and any user's SSH keys, the audit record, every organization | `admin` |
+
+On a gateway the top of the sidebar is the organization switcher
+(`src/components/shell/org-switcher.tsx`, `src/lib/org.ts`): the key's own
+tenant and every organization its user belongs to, *Create organization* with
+`org:create`, and *Members*. The choice is kept per browser in localStorage and
+sent as `X-Sandbox-Org` on every call (`?org=` on the attach WebSocket, which
+cannot carry headers); the gateway checks it. Switching clears the query cache
+and remounts the screens, so nothing of the previous organization is shown. The
+detection call, whoami, is made without it, so a refused selection never reads
+as a plain sandboxd; a refused one falls back to the key's own tenant, with a
+notice. With nothing chosen in this browser, Studio starts in the context's
+organization (`sandbox-cli org use`).
 
 Actions a key's scopes do not allow are hidden, everywhere (`useCan`); a screen
 the caller may not have renders *Not available* inside `<Gate>`, which mounts

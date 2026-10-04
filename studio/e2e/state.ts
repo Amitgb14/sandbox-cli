@@ -13,9 +13,11 @@ export const GATEWAY_STUDIOS = [
     port: 7183,
     user: "alice",
     tenant: "team-a",
-    scopes: ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh", "secrets:write"],
+    scopes: ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh", "secrets:write", "org:create"],
   },
   { name: "gw-readonly", port: 7184, user: "bob", tenant: "team-a", scopes: ["sandbox:read"] },
+  // A user who may not create organizations, for being added to alice's.
+  { name: "gw-member", port: 7185, user: "dana", tenant: "team-a", scopes: ["sandbox:read", "sandbox:create"] },
 ] as const;
 
 export type GatewayStudio = (typeof GATEWAY_STUDIOS)[number]["name"];

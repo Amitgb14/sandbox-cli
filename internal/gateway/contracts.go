@@ -45,10 +45,13 @@ const (
 	// ScopeSecretsWrite sets and removes the tenant's secrets (secrets.go).
 	// Listing their names needs only ScopeRead; a value is never returned.
 	ScopeSecretsWrite = "secrets:write"
+	// ScopeOrgCreate creates organisations (orgs.go), each a tenant of its
+	// own with its own quota; how many one user may make is capped.
+	ScopeOrgCreate = "org:create"
 )
 
 // AllScopes lists the scopes, for help text and validation.
-var AllScopes = []string{ScopeRead, ScopeCreate, ScopeDelete, ScopeSSH, ScopeAdmin, ScopeSecretsWrite}
+var AllScopes = []string{ScopeRead, ScopeCreate, ScopeDelete, ScopeSSH, ScopeAdmin, ScopeSecretsWrite, ScopeOrgCreate}
 
 // Labels the gateway stamps on every sandbox it creates. A request that sets
 // either is refused: they decide who may act on the sandbox.
@@ -59,8 +62,16 @@ const (
 
 // Principal is who a credential says the caller is, once checked.
 type Principal struct {
-	User   string
+	User string
+	// Tenant is the tenant the request acts in: the key's own, or the
+	// organisation X-Sandbox-Org selected, checked against the user's
+	// memberships once, as the request is authenticated (orgs.go). Every
+	// handler keys isolation on it.
 	Tenant string
+	// KeyTenant is the tenant of the credential itself, whatever was
+	// selected: who the user is, since a user name is unique only within a
+	// tenant. Empty for a principal not made from a key.
+	KeyTenant string
 	// KeyID names the credential in logs and the audit record; never the
 	// secret itself.
 	KeyID  string
@@ -160,6 +171,10 @@ type Store interface {
 	PutNode(n NodeConfig) error
 	RemoveNode(name string) error
 	Nodes() []NodeConfig
+
+	// MemberRole returns the role user — named with the tenant of their own
+	// keys — holds in organisation org, and false when not a member.
+	MemberRole(org, user, userTenant string) (string, bool)
 }
 
 // Router turns a principal, a sandbox reference and a scope into a client for

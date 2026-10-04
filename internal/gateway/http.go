@@ -45,6 +45,11 @@ func (g *Gateway) Handler() http.Handler {
 	})
 	route("GET /v1/capabilities", false, g.capabilities)
 	route("GET /v1/whoami", false, g.whoami)
+	route("GET /v1/orgs", false, g.listOrgs)
+	route("POST /v1/orgs", false, g.createOrg)
+	route("GET /v1/orgs/{name}/members", false, g.listOrgMembers)
+	route("POST /v1/orgs/{name}/members", false, g.setOrgMember)
+	route("DELETE /v1/orgs/{name}/members/{user}", false, g.removeOrgMember)
 
 	route("POST /v1/sandboxes", false, g.createSandbox)
 	route("GET /v1/sandboxes", false, g.listHandler)
@@ -115,6 +120,7 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/admin/nodes/{name}/drain", false, g.adminDrain)
 	route("GET /v1/admin/lost", false, g.adminLost)
 	route("GET /v1/admin/audit", false, g.adminAudit)
+	route("GET /v1/admin/orgs", false, g.adminListOrgs)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")
@@ -122,9 +128,10 @@ func (g *Gateway) Handler() http.Handler {
 	return mux
 }
 
-// guard applies the origin check, the credential, the content type and the
-// body cap, in that order: a request refused for its origin learns nothing
-// about its credential.
+// guard applies the origin check, the credential, the organisation the
+// request selects, the content type and the body cap, in that order: a
+// request refused for its origin learns nothing about its credential, and
+// one refused its organisation reaches no handler.
 func (g *Gateway) guard(raw bool, next handlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !g.originAllowed(r) {
@@ -135,6 +142,12 @@ func (g *Gateway) guard(raw bool, next handlerFunc) http.Handler {
 		if !ok {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeErr(w, http.StatusUnauthorized, api.CodeUnauthorized, "missing or unknown API key")
+			return
+		}
+		notePrincipal(r.Context(), p)
+		// Once, here, so every handler, the router and the audit record
+		// see the one tenant the request acts in (orgs.go).
+		if p, ok = g.selectOrg(w, r, p); !ok {
 			return
 		}
 		notePrincipal(r.Context(), p)
@@ -174,7 +187,7 @@ func (g *Gateway) authenticate(r *http.Request) (Principal, bool) {
 	if !ok {
 		return Principal{}, false
 	}
-	return Principal{User: k.User, Tenant: k.Tenant, KeyID: k.ID, Scopes: k.Scopes}, true
+	return Principal{User: k.User, Tenant: k.Tenant, KeyTenant: k.Tenant, KeyID: k.ID, Scopes: k.Scopes}, true
 }
 
 func checkContentType(r *http.Request, raw bool) error {

@@ -3,6 +3,7 @@ JSON wire format carries them base64-encoded, and this module does the
 conversion so callers never see it."""
 
 import base64
+import copy
 import http.client
 import json
 import socket
@@ -47,12 +48,17 @@ class Client:
 
     ``endpoint`` is ``unix:///path/to/sandboxd.sock``, ``http://127.0.0.1:7070``
     or ``https://host:port``. ``ca_file`` trusts a private CA (the usual
-    self-hosted case) instead of the system's.
+    self-hosted case) instead of the system's. ``org``, on a gateway, is the
+    organization every request acts in (the ``X-Sandbox-Org`` header); empty
+    is the key's own tenant. The gateway refuses one the key's user is not a
+    member of with ``not_found``.
     """
 
-    def __init__(self, endpoint: str, token: str = "", ca_file: Optional[str] = None, timeout: float = 300.0):
+    def __init__(self, endpoint: str, token: str = "", ca_file: Optional[str] = None, timeout: float = 300.0,
+                 org: str = ""):
         self._token = token
         self._timeout = timeout
+        self._org = org
         if endpoint.startswith("unix://"):
             self._unix = endpoint[len("unix://"):]
             if not self._unix:
@@ -88,6 +94,8 @@ class Client:
             headers["Content-Type"] = content_type
         if self._token:
             headers["Authorization"] = "Bearer " + self._token
+        if self._org:
+            headers["X-Sandbox-Org"] = self._org
         conn = self._conn()
         conn.request(method, path, body=body, headers=headers)
         resp = conn.getresponse()
@@ -276,8 +284,48 @@ class Client:
 
     def whoami(self) -> Dict[str, Any]:
         """The caller as the gateway sees its API key: ``user``, ``tenant``,
-        ``key_id`` and ``scopes``."""
+        ``key_id``, ``scopes``, and ``org``, the organization this client
+        acts in."""
         return self._json("GET", "/v1/whoami")
+
+    def with_org(self, org: str) -> "Client":
+        """A copy of this client acting in organization ``org`` ("" for the
+        key's own tenant)."""
+        c = copy.copy(self)
+        c._org = org
+        return c
+
+    def orgs(self) -> List[Dict[str, Any]]:
+        """The organizations the key may act in: its own tenant first (named
+        ``default`` when it has none), then each it is a member of, with
+        ``name``, ``role`` and ``current``."""
+        return self._json("GET", "/v1/orgs")["orgs"]
+
+    def create_org(self, name: str) -> Dict[str, Any]:
+        """Create an organization with the caller as its owner (scope
+        ``org:create``)."""
+        return self._json("POST", "/v1/orgs", {"name": name})
+
+    def org_members(self, org: str) -> List[Dict[str, Any]]:
+        return self._json("GET", "/v1/orgs/" + urllib.parse.quote(org, safe="") + "/members")["members"]
+
+    def set_org_member(self, org: str, user: str, role: str = "", tenant: str = "") -> Dict[str, Any]:
+        """Add a member, or change one's role (``owner`` or ``member``); an
+        owner may. ``tenant`` is the tenant of the user's own keys, default
+        the caller's."""
+        req: Dict[str, Any] = {"user": user}
+        if role:
+            req["role"] = role
+        if tenant:
+            req["tenant"] = tenant
+        return self._json("POST", "/v1/orgs/" + urllib.parse.quote(org, safe="") + "/members", req)
+
+    def remove_org_member(self, org: str, user: str, tenant: str = "") -> None:
+        path = "/v1/orgs/" + urllib.parse.quote(org, safe="") + "/members/" + urllib.parse.quote(user, safe="")
+        self._read(self._request("DELETE", path, {"tenant": tenant} if tenant else None))
+
+    def admin_orgs(self) -> List[Dict[str, Any]]:
+        return self._json("GET", "/v1/admin/orgs")["orgs"]
 
     def ssh_info(self) -> Dict[str, Any]:
         """Where the gateway's SSH server listens (``host``, ``port``) and the

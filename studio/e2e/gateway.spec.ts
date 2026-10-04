@@ -12,8 +12,8 @@ import { e2eState, gatewayStudio, type GatewayStudio } from "./state";
  */
 
 const TENANT = ["Jobs", "Services", "Secrets", "SSH", "Account"];
-const ADMIN = ["Nodes", "Lost sandboxes", "Users & keys", "Audit"];
-const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/audit/"];
+const ADMIN = ["Nodes", "Lost sandboxes", "Users & keys", "Audit", "All organizations"];
+const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/audit/", "/admin/orgs/"];
 
 /** Opens a gateway Studio with its token, once whoami has answered. */
 async function open(page: Page, name: GatewayStudio, user: string) {
@@ -50,17 +50,19 @@ test("a plain sandboxd shows no gateway screens and asks for none", async ({ pag
   const seen = record(page);
   await page.goto(`/#token=${token}`);
   await expect(page.getByText("e2e · fake")).toBeVisible();
-  for (const name of [...TENANT, ...ADMIN]) {
+  for (const name of [...TENANT, ...ADMIN, "Members"]) {
     await expect(nav(page).getByRole("link", { name, exact: true })).toHaveCount(0);
   }
+  // No organisations on a plain sandboxd: no switcher, and nothing asked.
+  await expect(page.getByTestId("org-switcher")).toHaveCount(0);
   // The sandboxd's own screens are all there, with their actions.
   await expect(page.getByRole("link", { name: "Create sandbox" }).first()).toBeVisible();
-  for (const path of ["/jobs/", "/secrets/", ...ADMIN_ROUTES]) {
+  for (const path of ["/jobs/", "/secrets/", "/members/", ...ADMIN_ROUTES]) {
     await page.goto(path);
     await expect(page.getByRole("heading", { name: "Not available" })).toBeVisible();
   }
   // whoami, which answered 404, is the only gateway endpoint it asked for.
-  expect(seen.filter((p) => /^\/api\/v1\/(jobs|services|secrets|ssh|admin)/.test(p))).toEqual([]);
+  expect(seen.filter((p) => /^\/api\/v1\/(jobs|services|secrets|ssh|admin|orgs)/.test(p))).toEqual([]);
 });
 
 test("a tenant key sees the tenant screens and not the admin ones, by sidebar or by URL", async ({ page }) => {
@@ -76,7 +78,9 @@ test("a tenant key sees the tenant screens and not the admin ones, by sidebar or
 
   await page.goto(`${base}/account/`);
   await expect(page.locator("main").getByText("alice", { exact: true })).toBeVisible();
-  await expect(page.locator("main").getByText("team-a", { exact: true })).toBeVisible();
+  await expect(page.locator("main").getByText("team-a", { exact: true }).first()).toBeVisible();
+  // With nothing selected, the organization is the key's own tenant.
+  await expect(page.getByTestId("account-org")).toHaveText("team-a");
 });
 
 test("a tenant submits a job and reads its output", async ({ page }) => {

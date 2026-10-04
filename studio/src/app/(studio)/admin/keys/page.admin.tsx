@@ -16,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useCreateKey, useKeys, useRemoveUserSSHKey, useRevokeKey, useUserSSHKeys, type CreatedKey } from "@/lib/admin/api";
 import { formatRelative } from "@/lib/format";
 
-const SCOPES = ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh", "secrets:write", "admin"];
+const SCOPES = ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh", "secrets:write", "org:create", "admin"];
 const USER_SCOPES = ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh"];
 
 /**

@@ -234,6 +234,14 @@ func (g *gatewayStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			HostKeys: []string{"ssh-ed25519 " + strings.Fields(vecKey)[1]}, Fingerprint: vecFP})
 	case "GET /v1/ssh-keys":
 		_ = json.NewEncoder(w).Encode(api.SSHKeyList{Keys: g.keys})
+	case "GET /v1/sandboxes/demo":
+		// Only in organisation acme: what ssh --org looks the name up in.
+		if r.Header.Get(api.OrgHeader) != "acme" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"no such sandbox"}}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.Sandbox{ID: "sbx_n1_00000000000000d0", Name: "demo"})
 	case "POST /v1/ssh-keys":
 		var req api.SSHKeyRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -444,6 +452,16 @@ func TestSSHCommandRunsTheSystemSSH(t *testing.T) {
 		filepath.Join(home, ".ssh", "id_ed25519.pub"), []string{"uname", "-a"}), "\n") + "\n"
 	if string(got) != want {
 		t.Errorf("ssh ran with\n%s\nwant\n%s", got, want)
+	}
+
+	// In an organisation, the name is resolved with it selected and the
+	// login is by id: the SSH server looks names up in the key's own tenant.
+	if _, err := runCLI(t, "--org", "acme", "ssh", "demo", "true"); !errors.As(err, &ee) {
+		t.Fatalf("ssh --org: %v", err)
+	}
+	got, _ = os.ReadFile(argsFile)
+	if !strings.Contains(string(got), "sbx_n1_00000000000000d0@gw.example\n") {
+		t.Errorf("ssh --org ran with\n%s", got)
 	}
 
 	// No ssh on PATH: a clear error, not an exec failure.

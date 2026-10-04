@@ -1,6 +1,7 @@
 import {
   Bot,
   Boxes,
+  Building2,
   Camera,
   CircleUser,
   HardDrive,
@@ -12,6 +13,7 @@ import {
   Settings,
   Terminal,
   Unplug,
+  UserRoundCog,
   Users,
   Workflow,
   type LucideIcon,
@@ -67,6 +69,7 @@ const ADMIN_GROUP: NavGroup[] = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off"
           { title: "Lost sandboxes", href: "/admin/lost", icon: Unplug, need: "admin", hint: "Sandboxes on nodes that stopped answering" },
           { title: "Users & keys", href: "/admin/keys", icon: Users, need: "admin", hint: "Issue and revoke API keys; any user's SSH keys" },
           { title: "Audit", href: "/admin/audit", icon: ScrollText, need: "admin", hint: "Every authenticated request and SSH login the gateway recorded" },
+          { title: "All organizations", href: "/admin/orgs", icon: Building2, need: "admin", hint: "Every organization on the gateway, who made it and how many members it has" },
         ],
       },
     ]
@@ -131,7 +134,8 @@ export const NAV: NavGroup[] = [
   {
     label: "System",
     items: [
-      { title: "Account", href: "/account", icon: CircleUser, need: "gateway", hint: "Who this API key is: user, tenant and scopes" },
+      { title: "Members", href: "/members", icon: UserRoundCog, need: "gateway", hint: "Who belongs to the current organization; owners add and remove members" },
+      { title: "Account", href: "/account", icon: CircleUser, need: "gateway", hint: "Who this API key is: user, tenant, organization and scopes" },
       {
         title: "Settings",
         href: "/settings",
