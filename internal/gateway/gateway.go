@@ -42,7 +42,13 @@ type Config struct {
 	// CORSOrigins are browser origins allowed to call the gateway. A request
 	// with any other Origin is refused, as by sandboxd.
 	CORSOrigins []string
-	Logf        func(format string, args ...any)
+	// NodeLostAfter is how long a node may not answer before its sandboxes
+	// are reported lost and stop counting against quotas (lost.go; default
+	// 5m).
+	NodeLostAfter time.Duration
+	// Audit records every authenticated request (audit.go); nil keeps none.
+	Audit *AuditLog
+	Logf  func(format string, args ...any)
 	// NewNodeClient builds a node's client; default NewNodeClient.
 	NewNodeClient func(NodeConfig) (*api.Client, error)
 }
@@ -65,6 +71,12 @@ type Gateway struct {
 	nodes *nodePool
 	tombs *tombstones
 	logf  func(string, ...any)
+
+	metrics *gatewayMetrics // metrics.go
+	audit   *AuditLog       // audit.go
+	ctxMu   sync.Mutex
+	ctx     context.Context // Start's, for work begun outside a request
+	closing bool
 
 	sshMu sync.RWMutex
 	ssh   SSHInfoer
@@ -109,12 +121,16 @@ func New(cfg Config) (*Gateway, error) {
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}
 	}
+	if cfg.NodeLostAfter <= 0 {
+		cfg.NodeLostAfter = 5 * time.Minute
+	}
 	g := &Gateway{
 		cfg: cfg, store: cfg.Store, logf: cfg.Logf, tombs: newTombstones(10000, time.Hour),
 		inflight: map[string]Usage{}, claimed: map[string]bool{},
-		nodes: newNodePool(poolConfig{interval: cfg.PollInterval, failAfter: cfg.FailAfter,
-			newClient: cfg.NewNodeClient, logf: cfg.Logf}),
+		metrics: newGatewayMetrics(), audit: cfg.Audit,
 	}
+	g.nodes = newNodePool(poolConfig{interval: cfg.PollInterval, failAfter: cfg.FailAfter,
+		newClient: cfg.NewNodeClient, logf: cfg.Logf, changed: g.nodeChanged, polled: g.nodePolled})
 	seen := map[string]bool{}
 	for _, n := range cfg.StaticNodes {
 		if seen[n.Name] {
@@ -141,6 +157,9 @@ func New(cfg Config) (*Gateway, error) {
 // reconciling until Close.
 func (g *Gateway) Start(ctx context.Context) {
 	ctx, g.stop = context.WithCancel(ctx)
+	g.ctxMu.Lock()
+	g.ctx = ctx
+	g.ctxMu.Unlock()
 	g.nodes.pollAll(ctx)
 	g.wg.Add(2)
 	go func() { defer g.wg.Done(); g.nodes.run(ctx) }()
@@ -161,6 +180,9 @@ func (g *Gateway) Start(ctx context.Context) {
 
 // Close stops polling. It does not close the store.
 func (g *Gateway) Close() {
+	g.ctxMu.Lock()
+	g.closing = true
+	g.ctxMu.Unlock()
 	if g.stop != nil {
 		g.stop()
 	}
@@ -270,6 +292,7 @@ func (g *Gateway) resolve(ctx context.Context, p Principal, ref, scope string) (
 		g.logf("sandbox %s names node %s but is recorded on %s; refusing to route it", id, named, o.Node)
 		return "", Owner{}, nil, ErrNotFound
 	}
+	noteSandbox(ctx, id, o.Node)
 	n := g.nodes.get(o.Node)
 	if n == nil || !n.isHealthy() {
 		return "", Owner{}, nil, ErrNodeDown
@@ -349,7 +372,7 @@ func (g *Gateway) reserveQuota(tenant string, r api.NodeResources) (*quotaHold, 
 	defer g.quotaMu.Unlock()
 	in := g.inflight[tenant]
 	if q.Sandboxes > 0 || q.CPUs > 0 || q.MemoryMB > 0 {
-		u := g.store.UsageOf(tenant)
+		u := g.usageOf(tenant) // less what is on lost nodes
 		who := "tenant " + tenant
 		if tenant == "" {
 			who = "the default tenant"
@@ -465,33 +488,71 @@ func (t *tombstones) get(id string) (Owner, bool) {
 // tenant's quota.
 func (g *Gateway) reconcile(ctx context.Context) {
 	for _, n := range g.nodes.healthy() {
-		recorded := g.store.SandboxesOn(n.cfg.Name)
-		if len(recorded) == 0 {
-			continue
-		}
-		asked := time.Now()
-		var list api.SandboxList
-		if err := n.getJSON(ctx, "/v1/sandboxes", nil, &list); err != nil {
-			continue
-		}
-		state := map[string]string{}
-		for _, sb := range list.Sandboxes {
-			state[sb.ID] = sb.State
-		}
-		var forget []string
-		for id, at := range recorded {
-			st, listed := state[id]
-			if listed && st == api.StateTerminated {
-				if o, ok := g.store.OwnerOf(id); ok {
-					g.tombs.add(id, o)
-				}
-				forget = append(forget, id)
-			} else if !listed && at.Before(asked) {
-				forget = append(forget, id)
+		g.reconcileNode(ctx, n)
+	}
+}
+
+// reconcileNode is reconcile for one node: also run when a node answers
+// again after not answering (lost.go).
+func (g *Gateway) reconcileNode(ctx context.Context, n *node) {
+	recorded := g.store.SandboxesOn(n.cfg.Name)
+	if len(recorded) == 0 {
+		return
+	}
+	asked := time.Now()
+	var list api.SandboxList
+	if err := n.getJSON(ctx, "/v1/sandboxes", nil, &list); err != nil {
+		return
+	}
+	state := map[string]string{}
+	for _, sb := range list.Sandboxes {
+		state[sb.ID] = sb.State
+	}
+	var forget []string
+	for id, at := range recorded {
+		st, listed := state[id]
+		if listed && st == api.StateTerminated {
+			if o, ok := g.store.OwnerOf(id); ok {
+				g.tombs.add(id, o)
 			}
-		}
-		if err := g.store.ForgetSandboxes(forget); err != nil {
-			g.logf("reconcile %s: %v", n.cfg.Name, err)
+			forget = append(forget, id)
+		} else if !listed && at.Before(asked) {
+			forget = append(forget, id)
 		}
 	}
+	if err := g.store.ForgetSandboxes(forget); err != nil {
+		g.logf("reconcile %s: %v", n.cfg.Name, err)
+		return
+	}
+	g.metrics.terminated.Add(float64(len(forget)), "ended")
+}
+
+// baseCtx is Start's context, ended by Close.
+func (g *Gateway) baseCtx() context.Context {
+	g.ctxMu.Lock()
+	defer g.ctxMu.Unlock()
+	if g.ctx == nil {
+		return context.Background()
+	}
+	return g.ctx
+}
+
+// goBackground runs fn on a goroutine Close waits for, unless Close has
+// begun. Add and Wait are ordered by ctxMu, as a WaitGroup requires.
+func (g *Gateway) goBackground(fn func(ctx context.Context)) {
+	g.ctxMu.Lock()
+	if g.closing {
+		g.ctxMu.Unlock()
+		return
+	}
+	g.wg.Add(1)
+	ctx := g.ctx
+	g.ctxMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go func() {
+		defer g.wg.Done()
+		fn(ctx)
+	}()
 }

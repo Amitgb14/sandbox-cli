@@ -261,6 +261,7 @@ func (ss *session) start(kind string, argv []string, tty bool) bool {
 	// The command line is not logged: it is the user's, and may carry a
 	// secret typed on it.
 	ss.s.cfg.Logf("ssh: %s started in %s, process %d, for %s", kind, id, p.PID, ss.login.describe())
+	ss.s.audit(ss.login, "ssh.session", kind)
 
 	go func() {
 		_, _ = io.Copy(st, ss.ch)
@@ -364,6 +365,7 @@ func (s *SSHServer) directTCPIP(ctx context.Context, login *sshLogin, nch ssh.Ne
 		return
 	}
 	s.cfg.Logf("ssh: tunnel to %s port %d for %s", login.id, m.Port, login.describe())
+	s.audit(login, "ssh.session", "direct-tcpip")
 	go func() {
 		// No requests are defined on a forward; this ends when the channel
 		// does, which must end the tunnel too.

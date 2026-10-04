@@ -47,6 +47,12 @@ type sshLogin struct {
 	// how names the credential for logs: a key's id and fingerprint, or
 	// "a token"; never the secret.
 	how string
+	// fingerprint names the credential in the audit record: the key's
+	// SHA256 fingerprint, or "token". refused is the same for a credential
+	// that was refused, for a connection that ends without logging in.
+	fingerprint string
+	refused     string
+	remote      string // the client's address, set once logged in
 }
 
 func (l *sshLogin) describe() string {
@@ -76,6 +82,9 @@ func (s *SSHServer) serverConfig(login *sshLogin) *ssh.ServerConfig {
 		// which sandboxes that person has.
 		PublicKeyCallback: func(cm ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if len(s.keyCandidates(cm.User(), key)) == 0 {
+				if login.refused == "" {
+					login.refused = ssh.FingerprintSHA256(key)
+				}
 				return nil, errors.New("unknown key")
 			}
 			return &ssh.Permissions{}, nil
@@ -128,6 +137,7 @@ func (s *SSHServer) authToken(cm ssh.ConnMetadata, login *sshLogin) error {
 	// again rather than trust that, and a token with no expiry is refused.
 	if !ok || tok.Sandbox == "" || tok.User == "" || tok.Expires.IsZero() || !s.cfg.Now().Before(tok.Expires) {
 		s.cfg.Logf("ssh: %s: a token was refused (unknown or expired)", cm.RemoteAddr())
+		login.refused = "token"
 		return errors.New("token refused")
 	}
 	if !userActive(s.cfg.Store, tok.User) {
@@ -141,9 +151,10 @@ func (s *SSHServer) authToken(cm ssh.ConnMetadata, login *sshLogin) error {
 	}
 	if err != nil {
 		s.cfg.Logf("ssh: %s: user %q with a token for %s refused: %v", cm.RemoteAddr(), termsafe.Clean(tok.User), tok.Sandbox, err)
+		login.refused = "token"
 		return refusal(err)
 	}
-	*login = sshLogin{principal: p, id: id, client: c, how: "a token"}
+	*login = sshLogin{principal: p, id: id, client: c, how: "a token", fingerprint: "token"}
 	return nil
 }
 
@@ -205,14 +216,16 @@ func (s *SSHServer) authKey(cm ssh.ConnMetadata, key ssh.PublicKey, login *sshLo
 		}
 		if found != nil && found.id != id {
 			s.cfg.Logf("ssh: %s: key %s (%s) for %s refused: matches more than one sandbox", cm.RemoteAddr(), k.ID, fp, usernameForLog(ref))
+			login.refused = fp
 			return &ssh.BannerError{Err: errors.New("ambiguous"), Message: msgAmbiguous}
 		}
 		if found == nil {
-			found = &sshLogin{principal: p, id: id, client: c, how: fmt.Sprintf("key %s (%s)", k.ID, fp)}
+			found = &sshLogin{principal: p, id: id, client: c, how: fmt.Sprintf("key %s (%s)", k.ID, fp), fingerprint: fp}
 		}
 	}
 	if found == nil {
 		s.cfg.Logf("ssh: %s: key %s for %s refused: %v", cm.RemoteAddr(), fp, usernameForLog(ref), lastErr)
+		login.refused = fp
 		return refusal(lastErr)
 	}
 	*login = *found

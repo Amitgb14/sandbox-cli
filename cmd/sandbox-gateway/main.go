@@ -38,6 +38,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/gateway"
+	"github.com/Amitgb14/sandbox-cli/internal/metrics"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
 )
 
@@ -78,6 +79,10 @@ type serveOptions struct {
 	quota                                             gateway.Quota
 	pollInterval                                      time.Duration
 	corsOrigins                                       []string
+	metricsListen, auditLog                           string
+	nodeLostAfter                                     time.Duration
+	// metricsReady, when set, is told the metrics address (tests).
+	metricsReady func(string)
 }
 
 func newServe(state *string) *cobra.Command {
@@ -109,6 +114,9 @@ func newServe(state *string) *cobra.Command {
 	f.IntVar(&o.quota.MemoryMB, "quota-memory-mb", 0, "most memory (MB) one tenant's sandboxes may hold; 0 is unlimited")
 	f.DurationVar(&o.pollInterval, "poll-interval", 5*time.Second, "how often each node is asked for its status")
 	f.StringArrayVar(&o.corsOrigins, "cors-origin", nil, "a browser origin allowed to call the API (repeatable)")
+	f.StringVar(&o.metricsListen, "metrics-listen", "", "loopback host:port to serve Prometheus metrics on, without a credential; off when empty")
+	f.StringVar(&o.auditLog, "audit-log", "", `who did what, as JSONL (default: audit/gateway.jsonl beside the state file; "none" keeps no log)`)
+	f.DurationVar(&o.nodeLostAfter, "node-lost-after", 5*time.Minute, "how long a node may not answer before its sandboxes are reported lost and stop counting against quotas")
 	return cmd
 }
 
@@ -136,12 +144,30 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 	if err := os.MkdirAll(o.nodeFilesDir, 0o700); err != nil {
 		return err
 	}
+	// On by default, as sandboxd's: a record of who did what cannot be
+	// turned on after the fact.
+	auditPath := o.auditLog
+	switch auditPath {
+	case "":
+		auditPath = filepath.Join(filepath.Dir(statePath), "audit", "gateway.jsonl")
+	case "none":
+		auditPath = ""
+	}
+	auditLog := gateway.NewAuditLog(auditPath)
 	g, err := gateway.New(gateway.Config{
 		Store: st, StaticNodes: static, PollInterval: o.pollInterval, Quota: o.quota,
 		NodeFilesDir: o.nodeFilesDir, CORSOrigins: o.corsOrigins, Logf: logf,
+		NodeLostAfter: o.nodeLostAfter, Audit: auditLog,
 	})
 	if err != nil {
 		return err
+	}
+	var metricsLn net.Listener
+	if o.metricsListen != "" {
+		if metricsLn, err = metrics.Listen(o.metricsListen); err != nil {
+			return err
+		}
+		defer metricsLn.Close()
 	}
 
 	// The SSH server is built before the API listens, so a gateway asked to
@@ -154,6 +180,7 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 			return err
 		}
 		cfg.Store, cfg.Router, cfg.Logf = st, g, logf
+		cfg.Audit, cfg.Metrics = auditLog, g.SSHMetrics()
 		if sshSrv, err = gateway.NewSSHServer(cfg); err != nil {
 			return fmt.Errorf("ssh: %w", err)
 		}
@@ -191,11 +218,25 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 		// Output streams and attached terminals are long-lived; no write timeout.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	errc := make(chan error, 2)
+	errc := make(chan error, 3)
 	go func() { errc <- srv.Serve(ln) }()
 	if sshSrv != nil {
 		go func() { errc <- fmt.Errorf("ssh: %w", sshSrv.Serve(sshLn)) }()
 		logf("serving SSH on %s", sshLn.Addr())
+	}
+	var msrv *http.Server
+	if metricsLn != nil {
+		msrv = &http.Server{Handler: g.MetricsHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() { errc <- fmt.Errorf("metrics: %w", msrv.Serve(metricsLn)) }()
+		logf("serving metrics on http://%s/metrics", metricsLn.Addr())
+		if o.metricsReady != nil {
+			o.metricsReady(metricsLn.Addr().String())
+		}
+	}
+	if auditPath != "" {
+		logf("audit log %s", auditPath)
+	} else {
+		logf("audit log off")
 	}
 	healthy := 0
 	for _, n := range g.Nodes() {
@@ -216,6 +257,9 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 	defer cancel()
 	if serr := srv.Shutdown(shutdown); err == nil {
 		err = serr
+	}
+	if msrv != nil {
+		msrv.Close()
 	}
 	if sshSrv != nil {
 		sshSrv.Close()
