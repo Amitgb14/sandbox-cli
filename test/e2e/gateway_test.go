@@ -119,6 +119,9 @@ func TestGatewayEndToEnd(t *testing.T) {
 		}
 	}
 
+	// --- organisations: chosen per request, invisible to non-members --------
+	e.orgs(idRE)
+
 	// --- SSH: keys, the published address, access tokens --------------------
 	info := e.sshInfo("alice")
 	if info.Host != "127.0.0.1" || info.Port != e.sshPort || len(info.HostKeys) != 1 {
@@ -210,6 +213,57 @@ func TestGatewayEndToEnd(t *testing.T) {
 	e.cliOK("alice", append([]string{"kill"}, onN1...)...)
 	if out := e.cli("alice", "list"); strings.Contains(out, a1) && !strings.Contains(out, "terminated") {
 		t.Fatalf("after kill:\n%s", out)
+	}
+}
+
+// orgs is dave's organisation: what is made in it is seen only in it, and
+// only by its members, and a member removed is out at once.
+func (e *env) orgs(idRE *regexp.Regexp) {
+	t := e.t
+	if out, err := e.run("alice", "org", "create", "nope"); err == nil || !strings.Contains(out, "org:create") {
+		t.Fatalf("alice, without org:create, made an organization: %v\n%s", err, out)
+	}
+	e.cliOK("dave", "org", "create", "e2e-org")
+	e.cliOK("dave", "org", "use", "e2e-org")
+	if out := e.cli("dave", "whoami"); !strings.Contains(out, "e2e-org") {
+		t.Fatalf("whoami after org use:\n%s", out)
+	}
+	out := e.cli("dave", "run", "--detach", "--", "sleep", "600")
+	inOrg := idRE.FindString(out)
+	if inOrg == "" {
+		t.Fatalf("a run in the organization printed no id:\n%s", out)
+	}
+	if out := e.cli("dave", "list"); !strings.Contains(out, inOrg) {
+		t.Fatalf("dave's list in e2e-org lacks %s:\n%s", inOrg, out)
+	}
+	if out := e.cli("dave", "list", "--org", "default"); strings.Contains(out, inOrg) {
+		t.Fatalf("dave's own tenant lists the organization's sandbox:\n%s", out)
+	}
+	if out, err := e.run("bob", "list", "--org", "e2e-org"); err == nil || !strings.Contains(out, "no such organization") {
+		t.Fatalf("bob, not a member, listed e2e-org: %v\n%s", err, out)
+	}
+	e.cliOK("dave", "org", "members", "add", "bob")
+	if out := e.cli("bob", "org", "ls"); !strings.Contains(out, "e2e-org") {
+		t.Fatalf("bob's org ls lacks e2e-org:\n%s", out)
+	}
+	bobsInOrg := idRE.FindString(e.cli("bob", "run", "--detach", "--org", "e2e-org", "--", "sleep", "600"))
+	if bobsInOrg == "" {
+		t.Fatal("bob's run in e2e-org printed no id")
+	}
+	e.cliOK("dave", "org", "members", "rm", "bob")
+	if out, err := e.run("bob", "kill", bobsInOrg, "--org", "e2e-org"); err == nil || !strings.Contains(out, "no such organization") {
+		t.Fatalf("bob acted in e2e-org after he was removed: %v\n%s", err, out)
+	}
+	// Sandboxes are still their user's within an organisation: bob's is an
+	// admin's to end now, not dave's.
+	if out, err := e.run("dave", "kill", bobsInOrg); err == nil || !strings.Contains(out, "not_found (404)") {
+		t.Fatalf("dave ended bob's sandbox: %v\n%s", err, out)
+	}
+	e.cliOK("dave", "kill", inOrg)
+	e.cliOK("admin", "kill", bobsInOrg)
+	e.cliOK("dave", "org", "use", "default")
+	if out := e.cli("dave", "whoami"); !strings.Contains(out, "org     default") {
+		t.Fatalf("whoami after org use default:\n%s", out)
 	}
 }
 
@@ -369,6 +423,8 @@ func start(t *testing.T) *env {
 	for _, u := range []string{"alice", "bob", "carol"} {
 		e.newKey(u, append([]string{"--user", u}, user...)...)
 	}
+	// dave may create organisations.
+	e.newKey("dave", append([]string{"--user", "dave", "--scope", "org:create"}, user...)...)
 	e.newKey("admin", "--user", "root", "--scope", "admin")
 
 	apiPort, sshPort := freePort(t), freePort(t)
@@ -387,7 +443,7 @@ func start(t *testing.T) *env {
 		"XDG_CONFIG_HOME="+filepath.Join(dir, "cfg"),
 		"SSH_AUTH_SOCK=", // only the key we generate
 	)
-	for _, u := range []string{"alice", "bob", "carol", "admin"} {
+	for _, u := range []string{"alice", "bob", "carol", "dave", "admin"} {
 		e.cliOK("", "context", "add", u, e.apiURL, "--token-file", e.userKeys[u])
 	}
 	return e
@@ -492,7 +548,7 @@ func (e *env) run(user string, args ...string) (string, error) {
 func withContext(args []string, name string) []string {
 	words := 1
 	switch args[0] {
-	case "ssh-key", "context", "volume":
+	case "ssh-key", "context", "volume", "org":
 		words = 2
 	}
 	if words > len(args) {
