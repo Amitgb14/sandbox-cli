@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/spec"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
@@ -124,13 +125,28 @@ func usernameForLog(u string) string {
 // The tenant is part of who the user is, as it is for ownership (mayAct):
 // matched on the name alone, a revoked "ci" in one tenant kept logging in
 // for as long as some other tenant had an active "ci".
+//
+// In an organisation (orgs.go) the user's keys are in their own tenant, and
+// what counts is a key there while the user is still a member: removing a
+// member stops their work in the organisation as revoking their keys would.
 func userActive(st Store, user, tenant string) bool {
 	for _, k := range st.Keys() {
-		if k.User == user && k.Tenant == tenant && !k.Revoked {
+		if k.User == user && !k.Revoked && keyActsIn(st, k, tenant) {
 			return true
 		}
 	}
 	return false
+}
+
+// keyActsIn reports whether k's user may act in tenant: k's own, or an
+// organisation they are a member of through k's tenant. Scopes are the
+// caller's to check.
+func keyActsIn(st Store, k Key, tenant string) bool {
+	if k.Tenant == tenant {
+		return true
+	}
+	_, ok := st.MemberRole(tenant, k.User, k.Tenant)
+	return ok
 }
 
 // userMaySSH reports whether user, in tenant, still holds an API key that is
@@ -146,7 +162,7 @@ func userActive(st Store, user, tenant string) bool {
 // granting it does.
 func userMaySSH(st Store, user, tenant string) bool {
 	for _, k := range st.Keys() {
-		if k.User == user && k.Tenant == tenant && !k.Revoked && (Principal{Scopes: k.Scopes}).Can(ScopeSSH) {
+		if k.User == user && !k.Revoked && (Principal{Scopes: k.Scopes}).Can(ScopeSSH) && keyActsIn(st, k, tenant) {
 			return true
 		}
 	}
@@ -230,8 +246,14 @@ func (s *SSHServer) authKey(cm ssh.ConnMetadata, key ssh.PublicKey, login *sshLo
 			s.cfg.Logf("ssh: %s: key %s (%s) refused: user %q holds no active API key with %s", cm.RemoteAddr(), k.ID, fp, termsafe.Clean(k.User), ScopeSSH)
 			continue
 		}
-		p := Principal{User: k.User, Tenant: k.Tenant, KeyID: k.ID, Scopes: sshScopes, Sandbox: k.Sandbox}
+		p := Principal{User: k.User, Tenant: k.Tenant, KeyTenant: k.Tenant, KeyID: k.ID, Scopes: sshScopes, Sandbox: k.Sandbox}
 		id, c, err := s.resolve(p, ref)
+		if errors.Is(err, ErrNotFound) {
+			if op, ok := s.orgPrincipal(p, ref); ok {
+				p = op
+				id, c, err = s.resolve(p, ref)
+			}
+		}
 		// A key limited to one sandbox reaches only that one. The principal
 		// carries the limit for the router to enforce; this checks the
 		// answer as well, so the limit holds whatever the router does.
@@ -260,6 +282,30 @@ func (s *SSHServer) authKey(cm ssh.ConnMetadata, key ssh.PublicKey, login *sshLo
 	}
 	*login = *found
 	return nil
+}
+
+// orgPrincipal is p acting in the organisation that holds sandbox ref, when
+// ref is the id of a sandbox of p's user in an organisation they are still a
+// member of and may use SSH in. A name is never looked up this way: names
+// are per tenant, and a name matching in two organisations would be a guess
+// (sandbox-cli ssh --org issues a token for the right one instead). The
+// router still decides; this only chooses the tenant it is asked about.
+func (s *SSHServer) orgPrincipal(p Principal, ref string) (Principal, bool) {
+	if !spec.ValidID(ref) {
+		return Principal{}, false
+	}
+	o, ok := s.cfg.Store.OwnerOf(ref)
+	if !ok || o.User != p.User || o.Tenant == p.KeyTenant {
+		return Principal{}, false
+	}
+	if _, member := s.cfg.Store.MemberRole(o.Tenant, p.User, p.KeyTenant); !member {
+		return Principal{}, false
+	}
+	if !userMaySSH(s.cfg.Store, p.User, o.Tenant) {
+		return Principal{}, false
+	}
+	p.Tenant = o.Tenant
+	return p, true
 }
 
 func (s *SSHServer) resolve(p Principal, ref string) (string, *api.Client, error) {

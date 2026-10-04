@@ -443,7 +443,7 @@ func (s *SSHServer) lostAccess(login *sshLogin, cache map[[2]string]bool) string
 	}
 	if login.sshKeyID != "" {
 		for _, k := range s.cfg.Store.SSHKeysFor(p.User) {
-			if k.ID == login.sshKeyID && k.Tenant == p.Tenant {
+			if k.ID == login.sshKeyID && k.Tenant == p.KeyTenant {
 				return ""
 			}
 		}

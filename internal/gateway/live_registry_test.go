@@ -81,7 +81,7 @@ func TestLiveRegistryEmptiesAfterNormalRequests(t *testing.T) {
 // What a key may lose: being revoked, leaving the store, or the scope the
 // request was resolved with.
 func TestLiveLostAccess(t *testing.T) {
-	p := Principal{User: "alice", Tenant: "t", KeyID: "k1", Scopes: []string{ScopeRead, ScopeCreate}}
+	p := Principal{User: "alice", Tenant: "t", KeyTenant: "t", KeyID: "k1", Scopes: []string{ScopeRead, ScopeCreate}}
 	key := Key{ID: "k1", User: "alice", Tenant: "t", Scopes: []string{ScopeRead, ScopeCreate}}
 	for _, c := range []struct {
 		name  string
@@ -103,7 +103,7 @@ func TestLiveLostAccess(t *testing.T) {
 		if c.mod != nil {
 			c.mod(&k)
 		}
-		why := liveLostAccess(&liveReq{p: p, scope: c.scope}, map[string]Key{k.ID: k})
+		why := liveLostAccess(&memStore{}, &liveReq{p: p, scope: c.scope}, map[string]Key{k.ID: k})
 		if (why != "") != c.lost {
 			t.Errorf("%s: lost access = %q; want lost %v", c.name, why, c.lost)
 		}

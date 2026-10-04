@@ -442,13 +442,106 @@ func NodeOfID(id string) (string, bool) {
 //	POST   /v1/admin/nodes       NodeSpec      -> NodeInfo           (admin)
 //	DELETE /v1/admin/nodes/{name}                                    (admin)
 //	POST   /v1/admin/nodes/{name}/cordon  CordonRequest -> NodeInfo  (admin)
+//	GET    /v1/orgs                            -> OrgList
+//	POST   /v1/orgs              CreateOrgRequest -> Org             (org:create)
+//	GET    /v1/orgs/{name}/members             -> OrgMemberList      (a member)
+//	POST   /v1/orgs/{name}/members  OrgMemberRequest -> OrgMember    (an owner)
+//	DELETE /v1/orgs/{name}/members/{user}[?tenant=T]                 (an owner)
+//	GET    /v1/admin/orgs                      -> AdminOrgList       (admin)
+//
+// Any request to a gateway may carry OrgHeader to act in one of the
+// caller's organisations instead of its key's own tenant.
 
 // Whoami is the caller as the gateway sees its credential.
 type Whoami struct {
-	User   string   `json:"user"`
+	User string `json:"user"`
+	// Tenant is the key's own tenant, whatever organisation the request
+	// selected; "" is the default tenant.
 	Tenant string   `json:"tenant"`
 	KeyID  string   `json:"key_id"`
 	Scopes []string `json:"scopes"`
+	// Org is the organisation this request acts in, after OrgHeader: the
+	// key's own tenant when the header is absent, and DefaultOrg for the
+	// default tenant.
+	Org string `json:"org,omitempty"`
+}
+
+// OrgHeader selects the organisation a gateway request acts in. Absent, a
+// request acts in its key's own tenant. Present, the gateway allows it only
+// when the key's user is a member of that organisation (or the key is an
+// admin's), and answers 404 otherwise, as for an organisation that does not
+// exist. A plain sandboxd ignores it.
+const OrgHeader = "X-Sandbox-Org"
+
+// DefaultOrg is the default tenant's name on the wire: the tenant of keys
+// issued with none. No organisation may be created with it.
+const DefaultOrg = "default"
+
+// Org is one organisation the caller may act in.
+type Org struct {
+	Name string `json:"name"`
+	// Role is the caller's: "owner" or "member".
+	Role    string    `json:"role"`
+	Created time.Time `json:"created,omitzero"`
+	// Current marks the organisation this request acted in.
+	Current bool `json:"current"`
+}
+
+// OrgList is GET /v1/orgs: the key's own tenant first, then every
+// organisation its user is a member of.
+type OrgList struct {
+	Orgs []Org `json:"orgs"`
+}
+
+// CreateOrgRequest is POST /v1/orgs. A name is a DNS label of 1 to 30
+// lowercase letters, digits and dashes, starting with a letter, with no
+// "--", and not "default" or "admin".
+type CreateOrgRequest struct {
+	Name string `json:"name"`
+}
+
+// Organisation roles.
+const (
+	RoleOwner  = "owner"
+	RoleMember = "member"
+)
+
+// OrgMember is one member of an organisation. A user is named with the
+// tenant of their own keys, because a user name is unique only within a
+// tenant; "" is the default tenant.
+type OrgMember struct {
+	User   string    `json:"user"`
+	Tenant string    `json:"tenant,omitempty"`
+	Role   string    `json:"role"`
+	Added  time.Time `json:"added,omitzero"`
+}
+
+// OrgMemberList is GET /v1/orgs/{name}/members.
+type OrgMemberList struct {
+	Members []OrgMember `json:"members"`
+}
+
+// OrgMemberRequest adds a member or changes one's role. Tenant is the
+// member's own tenant; omitted, it is the caller's. Role defaults to member.
+type OrgMemberRequest struct {
+	User   string `json:"user"`
+	Tenant string `json:"tenant,omitempty"`
+	Role   string `json:"role,omitempty"`
+}
+
+// AdminOrg is one organisation as an admin lists it.
+type AdminOrg struct {
+	Name            string    `json:"name"`
+	Created         time.Time `json:"created"`
+	CreatedBy       string    `json:"created_by"`
+	CreatedByTenant string    `json:"created_by_tenant,omitempty"`
+	Members         int       `json:"members"`
+	Owners          int       `json:"owners"`
+}
+
+// AdminOrgList is GET /v1/admin/orgs.
+type AdminOrgList struct {
+	Orgs []AdminOrg `json:"orgs"`
 }
 
 // SSHInfo is where the gateway's SSH server listens and the host key to pin.

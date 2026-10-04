@@ -133,7 +133,7 @@ func (g *Gateway) recheckLive() int {
 	}
 	n := 0
 	for _, lr := range open {
-		if why := liveLostAccess(lr, keys); why != "" {
+		if why := liveLostAccess(g.store, lr, keys); why != "" {
 			if g.endLive(lr, why) {
 				n++
 			}
@@ -143,17 +143,21 @@ func (g *Gateway) recheckLive() int {
 }
 
 // liveLostAccess says why lr may no longer stay open, or "".
-func liveLostAccess(lr *liveReq, keys map[string]Key) string {
+func liveLostAccess(st Store, lr *liveReq, keys map[string]Key) string {
 	k, ok := keys[lr.p.KeyID]
 	switch {
 	case !ok:
 		return "its API key is no longer in the store"
 	case k.Revoked:
 		return "its API key was revoked"
-	case k.User != lr.p.User || k.Tenant != lr.p.Tenant:
+	case k.User != lr.p.User || k.Tenant != lr.p.KeyTenant:
 		return "its API key no longer names the same user"
 	case lr.scope != "" && !(Principal{Scopes: k.Scopes}).Can(lr.scope):
 		return "its API key no longer holds " + lr.scope
+	case !stillInTenant(st, lr.p, k):
+		// Made in an organisation (X-Sandbox-Org) its user has since
+		// been removed from.
+		return "its user is no longer a member of organization " + wireOrg(lr.p.Tenant)
 	}
 	return ""
 }
