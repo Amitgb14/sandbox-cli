@@ -256,7 +256,7 @@ export interface ServiceSpec {
   placement?: { spread?: "node" };
   /** Routed through the gateway's HTTP router. */
   public?: boolean;
-  /** Refused (501) until the gateway has a secret store. */
+  /** Names of the tenant's secrets, each set in every replica's environment. */
   secrets?: string[];
 }
 

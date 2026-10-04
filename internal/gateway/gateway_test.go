@@ -545,6 +545,77 @@ func TestVolumesAndSnapshotsAreOwned(t *testing.T) {
 	}
 }
 
+// In a fleet where only some nodes have volumes and snapshots, the fleet's
+// combined capabilities have neither, and the create path once skipped the
+// ownership check on that account: alice, naming bob's volume or snapshot,
+// was placed on the node holding it and got it mounted or restored.
+func TestMixedFleetVolumesAndSnapshotsStayOwned(t *testing.T) {
+	full := startNode(t, "n1", allCaps...)
+	bare := startNode(t, "n2", api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend)
+	tg := startGateway(t, nil, full, bare)
+	alice, bob := tg.user("alice"), tg.user("bob")
+	ctx := ctxT(t)
+	if caps, err := alice.Capabilities(ctx); err != nil || caps.Has(api.CapVolumes) || caps.Has(api.CapMemorySnapshot) {
+		t.Fatalf("precondition: the fleet's combined capabilities have volumes or snapshots (%v)", err)
+	}
+	if _, err := bob.CreateVolume(ctx, api.CreateVolumeRequest{Name: "data", SizeMB: 64}); err != nil {
+		t.Fatal(err)
+	}
+	// The bare node cordoned, so a create that is not pinned still lands
+	// where bob's things are: the trap is armed whatever the scheduler picks.
+	bare.cordoned.Store(true)
+	tg.g.PollNow(ctx)
+	src, err := bob.CreateSandbox(ctx, api.CreateSandboxRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodeOf(tg, src.ID) != "n1" {
+		t.Fatal("precondition: bob's sandbox is not on n1")
+	}
+	snap, err := bob.CreateSnapshot(ctx, src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = alice.CreateSandbox(ctx, api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: "data", Path: "/data"}}})
+	wantCode(t, err, api.CodeNotFound)
+	_, err = alice.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID})
+	wantCode(t, err, api.CodeNotFound)
+
+	// Bob's own still work, and go to the node that holds them even with
+	// the other one taking sandboxes again. Volumes are made, and listed,
+	// where some node has them.
+	bare.cordoned.Store(false)
+	tg.g.PollNow(ctx)
+	for _, name := range []string{"v1", "v2", "v3"} {
+		if _, err := bob.CreateVolume(ctx, api.CreateVolumeRequest{Name: name, SizeMB: 8}); err != nil {
+			t.Fatalf("volume %s in a mixed fleet: %v", name, err)
+		}
+		if o, _ := tg.store.VolumeOwner(name); o.Node != "n1" {
+			t.Fatalf("volume %s went to %s, which has no volumes", name, o.Node)
+		}
+	}
+	if vols, err := bob.Volumes(ctx); err != nil || len(vols) != 4 {
+		t.Fatalf("bob's volumes in a mixed fleet: %v %v", vols, err)
+	}
+	for i := 0; i < 4; i++ {
+		sb, err := bob.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nodeOf(tg, sb.ID) != "n1" {
+			t.Fatalf("a fork of bob's snapshot went to %s", nodeOf(tg, sb.ID))
+		}
+		sb, err = bob.CreateSandbox(ctx, api.CreateSandboxRequest{Volumes: []api.VolumeMount{{Name: "data", Path: "/data", ReadOnly: true}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nodeOf(tg, sb.ID) != "n1" {
+			t.Fatalf("a mount of bob's volume went to %s", nodeOf(tg, sb.ID))
+		}
+	}
+}
+
 func TestNoNodeAnswering(t *testing.T) {
 	n1 := startNode(t, "n1", allCaps...)
 	n1.down.Store(true)

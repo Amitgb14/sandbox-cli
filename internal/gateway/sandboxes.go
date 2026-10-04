@@ -103,8 +103,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 			return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 		}
 	}
-	caps, ok := g.combinedCapabilities()
-	if !ok {
+	if _, ok := g.combinedCapabilities(); !ok {
 		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
 	}
 
@@ -130,15 +129,22 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	// A snapshot and a volume live on one node, so the sandbox goes there.
 	// Where no node has the capability at all, nothing is pinned: the
 	// request goes to a node, which refuses it in its own words.
+	//
+	// "Some node has it", not the fleet's combined capabilities, which say a
+	// capability only when every node has it: in a mixed fleet that skipped
+	// the ownership check, and a create naming another user's volume or
+	// snapshot was placed on whichever node, where the one holding it
+	// mounted or restored it for them (reproduced in
+	// TestMixedFleetVolumesAndSnapshotsStayOwned).
 	switch {
-	case req.SnapshotID != "" && caps.Has(api.CapMemorySnapshot):
+	case req.SnapshotID != "" && g.anyNodeHas(api.CapMemorySnapshot):
 		o, ok := g.store.SnapshotOwner(req.SnapshotID)
 		if !ok || !mayAct(p, o) {
 			return api.Sandbox{}, failWith(http.StatusNotFound, api.CodeNotFound, "no such snapshot")
 		}
 		want.Node = o.Node
 		want.Caps = append(want.Caps, api.CapMemorySnapshot)
-	case len(req.Volumes) > 0 && caps.Has(api.CapVolumes):
+	case len(req.Volumes) > 0 && g.anyNodeHas(api.CapVolumes):
 		for _, m := range req.Volumes {
 			o, ok := g.store.VolumeOwner(m.Name)
 			if !ok || !mayAct(p, o) {

@@ -165,8 +165,7 @@ in `_old/` as reference, to be ported where this design still wants it.
   `--quota-memory-mb`). State is one file, `--state`, holding only hashes
   of keys and tokens. `sandbox-gateway keys create` makes the first admin
   key before it serves; after that, keys and nodes are managed through
-  `/v1/admin/…`. A non-loopback `--listen` needs TLS. The SSH endpoints are
-  in place; the SSH server itself lands separately.
+  `/v1/admin/…`. A non-loopback `--listen` needs TLS.
 - **A gateway runs jobs and agent runs after you have gone.** `POST /v1/jobs`
   (`sandbox-cli job run -f job.yaml`) runs a command, or an agent on a prompt
   or on a batch of prompts, in a fresh sandbox per run made through the same
@@ -175,7 +174,7 @@ in `_old/` as reference, to be ported where this design still wants it.
   timeout, keeps its output (1 MiB per stream) and the files the job names
   (8 MiB each), terminates the sandbox, retries a failed run up to
   `retries`, keeps `parallelism` runs going at most, and can POST each run's
-  state to a `notify` URL (https, or http to loopback; never output). `job
+  state to a `notify` URL (https to a public address; never output). `job
   ls`, `get`, `output` and `cancel` follow it; a finished job is kept for
   `--job-retention` (a day). `sandbox-cli agent-run claude "…" --secret
   ANTHROPIC_API_KEY --wait` is the one-run case. An agent's saved login does
@@ -265,6 +264,30 @@ In the rewrite:
   agent's terminal. Serve locally on the default unix socket, which only its
   owner can open, or pass `--token-file`.
 
+On the gateway, found in review before its first release; each has a test
+that fails on the code before the fix:
+
+- **Another user's volume or snapshot is not found in a mixed fleet either.**
+  Where only some nodes had volumes or memory snapshots, the fleet's combined
+  capabilities had neither, and a create naming a volume or snapshot skipped
+  the ownership check: placed on the node holding it, the sandbox mounted
+  another user's volume or started from their snapshot. The check now runs
+  whenever any node offers the capability, and such a create goes to the node
+  that holds what it names.
+- **A job's `notify` URL reaches public addresses only.** It was any https
+  host, so any user could make the gateway connect to its own loopback, the
+  nodes' network or a cloud metadata address. A loopback, private, link-local
+  or shared address is now refused when the job is submitted and again when
+  the gateway connects, after resolving the name. `serve
+  --notify-allow-private` allows them, and with it http to loopback, for hook
+  receivers on a private network. A notification that fails is logged
+  without its URL, which often carries the hook's credential.
+- **A revoked user's SSH access and public services end even when another
+  tenant has a user of the same name.** The check that a user still holds an
+  active API key matched the name alone, so revoking `ci` in one tenant left
+  its SSH keys, tokens and routed services working while another tenant had a
+  `ci`.
+
 ### Changed
 
 - **Services on the gateway.** `sandbox-gateway` keeps a sandbox spec and a
@@ -280,8 +303,10 @@ In the rewrite:
   is in the gateway's state file, so a restarted gateway resumes each
   service. `serve --router-listen --router-domain` adds an HTTP router for
   services marked `public`, at `<service>.DOMAIN` or
-  `<service>--<tenant>.DOMAIN` under one wildcard name. Not yet: internal
-  service names, autoscaling, secrets. See docs/fleet.md, "Services".
+  `<service>--<tenant>.DOMAIN` under one wildcard name. `secrets: [NAME]`
+  sets the tenant's secrets in every replica's environment, opened from the
+  secret store as each replica is made, as for a job. Not yet: internal
+  service names, autoscaling. See docs/fleet.md, "Services".
 - **A guide and packaging for running a gateway.** `docs/fleet.md` takes an
   operator from one machine to many: which shape needs a gateway at all, the
   certificates (`packaging/fleet/make-certs.sh` makes a private CA, the

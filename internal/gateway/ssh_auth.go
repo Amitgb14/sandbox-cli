@@ -111,13 +111,17 @@ func usernameForLog(u string) string {
 	return fmt.Sprintf("%q", termsafe.Clean(u))
 }
 
-// userActive reports whether user still holds an API key that is not
-// revoked. An SSH key or token is a credential the user made with an API key;
-// revoking a user's keys must end their SSH access too, or a revoked user
+// userActive reports whether user, in tenant, still holds an API key that is
+// not revoked. An SSH key or token is a credential the user made with an API
+// key; revoking a user's keys must end their SSH access too, or a revoked user
 // keeps every sandbox they own for as long as their SSH keys are registered.
-func userActive(st Store, user string) bool {
+//
+// The tenant is part of who the user is, as it is for ownership (mayAct):
+// matched on the name alone, a revoked "ci" in one tenant kept logging in
+// for as long as some other tenant had an active "ci".
+func userActive(st Store, user, tenant string) bool {
 	for _, k := range st.Keys() {
-		if k.User == user && !k.Revoked {
+		if k.User == user && k.Tenant == tenant && !k.Revoked {
 			return true
 		}
 	}
@@ -140,7 +144,7 @@ func (s *SSHServer) authToken(cm ssh.ConnMetadata, login *sshLogin) error {
 		login.refused = "token"
 		return errors.New("token refused")
 	}
-	if !userActive(s.cfg.Store, tok.User) {
+	if !userActive(s.cfg.Store, tok.User, tok.Tenant) {
 		s.cfg.Logf("ssh: %s: a token for user %q was refused: the user holds no active API key", cm.RemoteAddr(), termsafe.Clean(tok.User))
 		return refusal(ErrNotFound)
 	}
@@ -196,7 +200,7 @@ func (s *SSHServer) authKey(cm ssh.ConnMetadata, key ssh.PublicKey, login *sshLo
 	var found *sshLogin
 	var lastErr error = ErrNotFound
 	for _, k := range s.keyCandidates(ref, key) {
-		if !userActive(s.cfg.Store, k.User) {
+		if !userActive(s.cfg.Store, k.User, k.Tenant) {
 			s.cfg.Logf("ssh: %s: key %s (%s) refused: user %q holds no active API key", cm.RemoteAddr(), k.ID, fp, termsafe.Clean(k.User))
 			continue
 		}

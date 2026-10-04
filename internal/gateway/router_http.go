@@ -151,8 +151,10 @@ func (g *Gateway) routeHost(host, domain string) (*service, bool) {
 	if !ok || domain == "" || label == "" || strings.Contains(label, ".") {
 		return nil, false
 	}
-	name, tenant, _ := strings.Cut(label, "--")
-	if !validServiceName(name) {
+	// "web--" is not a second name for the default tenant's "web": one
+	// service, one origin.
+	name, tenant, named := strings.Cut(label, "--")
+	if !validServiceName(name) || (named && tenant == "") {
 		return nil, false
 	}
 	s := g.services.get(tenant, name)
@@ -172,7 +174,7 @@ func (g *Gateway) routeHost(host, domain string) (*service, bool) {
 func (g *Gateway) pickReplica(s *service) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !userActive(g.store, s.rec.User) {
+	if !userActive(g.store, s.rec.User, s.rec.Tenant) {
 		return "", false
 	}
 	var up []replicaRecord

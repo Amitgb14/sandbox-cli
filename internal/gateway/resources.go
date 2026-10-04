@@ -126,8 +126,7 @@ func (g *Gateway) createVolume(w http.ResponseWriter, r *http.Request, p Princip
 	if !decode(w, r, &req) {
 		return
 	}
-	caps, ok := g.combinedCapabilities()
-	if !ok {
+	if _, ok := g.combinedCapabilities(); !ok {
 		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
 		return
 	}
@@ -145,7 +144,7 @@ func (g *Gateway) createVolume(w http.ResponseWriter, r *http.Request, p Princip
 		writeErr(w, http.StatusConflict, api.CodeConflict, "a volume named "+req.Name+" already exists")
 		return
 	}
-	n := g.volumeNode(p, caps.Has(api.CapVolumes))
+	n := g.volumeNode(p, g.anyNodeHas(api.CapVolumes)) // any node: in a mixed fleet the combined capabilities say none
 	if n == nil {
 		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "no node is taking new volumes")
 		return
@@ -207,7 +206,7 @@ func (g *Gateway) listVolumes(w http.ResponseWriter, r *http.Request, p Principa
 	if !need(w, p, ScopeRead) {
 		return
 	}
-	if caps, ok := g.combinedCapabilities(); ok && !caps.Has(api.CapVolumes) {
+	if _, ok := g.combinedCapabilities(); ok && !g.anyNodeHas(api.CapVolumes) {
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint has no volumes")
 		return
 	}
@@ -266,6 +265,18 @@ func (g *Gateway) deleteVolume(w http.ResponseWriter, r *http.Request, p Princip
 		}
 	}
 	relay(w, resp, data)
+}
+
+// anyNodeHas reports whether some answering node, cordoned or not, offers
+// capability c: whether a request naming something only such a node holds
+// can be acted on anywhere.
+func (g *Gateway) anyNodeHas(c string) bool {
+	for _, cand := range g.nodes.candidates() {
+		if cand.Status.Capabilities.Has(c) {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *node) hasCap(c string) bool {

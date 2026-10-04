@@ -7,13 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
@@ -698,12 +701,49 @@ func (c *capped) Write(p []byte) {
 
 // --- notifications ----------------------------------------------------------------
 
-// notifyClient posts notifications: bounded in time, and never following a
-// redirect, which would let the receiver point the gateway somewhere the
-// job's owner never named.
-var notifyClient = &http.Client{
-	Timeout:       10 * time.Second,
-	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+// newNotifyClient is what posts notifications: bounded in time, and never
+// following a redirect, which would let the receiver point the gateway
+// somewhere the job's owner never named.
+//
+// Unless allowPrivate, it connects to public addresses only. A notify URL
+// is the job owner's text and the gateway sits on the operator's network,
+// so without this any user could make it open connections to the gateway's
+// own loopback, the nodes' network or a cloud metadata address — a port
+// scan by timing at the least. The address is checked as it is dialled,
+// after the name is resolved, so a name that resolves to a private address
+// (or is made to, between the check at submit time and the post) is refused
+// too. No proxy is used: one would be dialled instead, and the check would
+// be of the proxy.
+func newNotifyClient(allowPrivate bool) *http.Client {
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	if !allowPrivate {
+		d.Control = func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			if ip, err := netip.ParseAddr(host); err != nil || !publicAddr(ip) {
+				return fmt.Errorf("notify: %s is not a public address (sandbox-gateway serve --notify-allow-private allows it)", host)
+			}
+			return nil
+		}
+	}
+	return &http.Client{
+		Timeout:       10 * time.Second,
+		Transport:     &http.Transport{DialContext: d.DialContext, TLSHandshakeTimeout: 10 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// cgnat is the shared address space (RFC 6598), private in all but name.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// publicAddr reports whether ip is an address on the public internet: not
+// loopback, private, link-local (169.254.169.254 among them), shared,
+// unspecified or multicast.
+func publicAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !cgnat.Contains(ip)
 }
 
 // notify posts n to the job's notify URL: three tries at most, a failure
@@ -737,7 +777,7 @@ func (g *Gateway) notify(j *jobRecord, n api.JobNotification) {
 			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("User-Agent", "sandbox-gateway")
-			resp, err := notifyClient.Do(req)
+			resp, err := g.notifyClient.Do(req)
 			if err == nil {
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 				resp.Body.Close()
@@ -745,6 +785,13 @@ func (g *Gateway) notify(j *jobRecord, n api.JobNotification) {
 					return
 				}
 				err = fmt.Errorf("answered %d", resp.StatusCode)
+			}
+			// Without the URL, which a client error quotes whole: a hook's
+			// URL commonly carries its credential in the path or the query,
+			// and it is the job owner's, not the operator's log's.
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				err = ue.Err
 			}
 			g.logf("job %s: notify (%s): %v", j.ID, n.Event, err)
 		}

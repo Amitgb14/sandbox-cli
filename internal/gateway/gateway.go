@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"time"
@@ -63,6 +64,10 @@ type Config struct {
 	// file), and JobRetention is how long a finished job is kept (24h).
 	JobsDir      string
 	JobRetention time.Duration
+	// NotifyAllowPrivate lets a job's notify URL reach loopback, private and
+	// link-local addresses; without it the gateway posts to public ones only
+	// (jobrun.go, newNotifyClient).
+	NotifyAllowPrivate bool
 }
 
 // Quota bounds what one tenant may hold at once. Zero is unlimited.
@@ -101,9 +106,10 @@ type Gateway struct {
 	claimMu sync.Mutex
 	claimed map[string]bool // sandbox and volume names being created
 
-	sealer   *sealer // nil without a secrets key
-	jobs     *jobManager
-	services *serviceCtl
+	sealer       *sealer // nil without a secrets key
+	jobs         *jobManager
+	notifyClient *http.Client
+	services     *serviceCtl
 
 	stop context.CancelFunc
 	wg   sync.WaitGroup
@@ -153,7 +159,7 @@ func New(cfg Config) (*Gateway, error) {
 			return nil, err
 		}
 	}
-	g := &Gateway{sealer: seal, jobs: newJobManager(),
+	g := &Gateway{sealer: seal, jobs: newJobManager(), notifyClient: newNotifyClient(cfg.NotifyAllowPrivate),
 		cfg: cfg, store: cfg.Store, logf: cfg.Logf, tombs: newTombstones(10000, time.Hour),
 		inflight: map[string]Usage{}, claimed: map[string]bool{},
 		metrics: newGatewayMetrics(), audit: cfg.Audit, services: newServiceCtl(cfg.Store),

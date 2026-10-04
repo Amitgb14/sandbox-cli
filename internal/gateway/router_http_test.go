@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
 
 // No two (service, tenant) pairs share a router name, and each name reads
@@ -64,5 +66,27 @@ func TestRouterMakesCookiesHostOnly(t *testing.T) {
 	}
 	if !strings.Contains(got[0], "HttpOnly") || !strings.Contains(got[0], "Secure") || !strings.Contains(got[1], "Path=/x") {
 		t.Errorf("attributes lost: %q", got)
+	}
+}
+
+// A host names one service by one name. "web--" once read as the default
+// tenant's "web" — the same service at a second origin, whose cookies and
+// storage the first does not share.
+func TestRouterHostNamesOneServiceOnce(t *testing.T) {
+	pub := func(name, tenant string) *service {
+		return &service{rec: serviceRecord{Name: name, Tenant: tenant, Spec: api.ServiceSpec{Name: name, Public: true}}}
+	}
+	g := &Gateway{services: &serviceCtl{svcs: map[string]*service{
+		svcKey("", "web"):     pub("web", ""),
+		svcKey("acme", "web"): pub("web", "acme"),
+	}}}
+	for host, want := range map[string]bool{
+		"web.apps.test": true, "WEB.apps.test.": true, "web.apps.test:8080": true, "web--acme.apps.test": true,
+		"web--.apps.test": false, "web--acme--.apps.test": false, "x.web.apps.test": false, "apps.test": false,
+		"web.other.test": false,
+	} {
+		if _, ok := g.routeHost(host, "apps.test"); ok != want {
+			t.Errorf("%s routes: %v, want %v", host, ok, want)
+		}
 	}
 }

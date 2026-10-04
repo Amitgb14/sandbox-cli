@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -51,11 +52,13 @@ import (
 // restarted gateway needs them; the node's audit record still keeps neither.
 //
 // A notify URL is the job owner's to name, and the gateway POSTs to it from
-// wherever it runs: https to any host, so an owner can make the gateway send
-// a small fixed-shape JSON to a host on the gateway's own network. The body
-// is never theirs to choose and no redirect is followed, but an operator who
-// must keep the gateway from reaching internal https services should block
-// that at the network.
+// wherever it runs. So it goes only to a public address, checked as it is
+// dialled (newNotifyClient): a job cannot make the gateway connect to its own
+// loopback, the nodes' network or a metadata address. An operator whose hook
+// receivers are on a private network allows that with
+// Config.NotifyAllowPrivate (serve --notify-allow-private), and then http to
+// loopback as well. The body is never the owner's to choose and no redirect
+// is followed.
 
 // Bounds on a job.
 const (
@@ -336,17 +339,19 @@ func (g *Gateway) checkJobSpec(p Principal, s *api.JobSpec) error {
 		}
 	}
 	if s.Notify != "" {
-		if err := checkNotifyURL(s.Notify); err != nil {
+		if err := checkNotifyURL(s.Notify, g.cfg.NotifyAllowPrivate); err != nil {
 			return badSpec("notify: %v", err)
 		}
 	}
 	return nil
 }
 
-// checkNotifyURL allows https anywhere, and http only to this machine: a
+// checkNotifyURL allows https, and http only to this machine: a
 // notification in the clear across a network says which jobs a user runs to
-// anyone on the path.
-func checkNotifyURL(s string) error {
+// anyone on the path. Unless allowPrivate, a host given as an address must
+// be a public one, and so http, which is loopback only, is refused; a name
+// is checked when it is dialled (newNotifyClient), this only says so early.
+func checkNotifyURL(s string, allowPrivate bool) error {
 	if len(s) > maxNotifyURL {
 		return fmt.Errorf("at most %d bytes", maxNotifyURL)
 	}
@@ -354,17 +359,23 @@ func checkNotifyURL(s string) error {
 	if err != nil || u.Host == "" {
 		return errors.New("not an absolute URL")
 	}
+	h := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	switch u.Scheme {
 	case "https":
-		return nil
 	case "http":
-		h := u.Hostname()
-		if ip := net.ParseIP(h); h == "localhost" || (ip != nil && ip.IsLoopback()) {
-			return nil
+		if ip := net.ParseIP(h); h != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return errors.New("http is allowed only to a loopback address; use https")
 		}
-		return errors.New("http is allowed only to a loopback address; use https")
+	default:
+		return errors.New("want an https URL")
 	}
-	return errors.New("want an https URL")
+	if allowPrivate {
+		return nil
+	}
+	if ip, err := netip.ParseAddr(h); h == "localhost" || strings.HasSuffix(h, ".localhost") || (err == nil && !publicAddr(ip)) {
+		return errors.New(h + " is a loopback, private or link-local address, which this gateway does not post to (an operator allows it with sandbox-gateway serve --notify-allow-private)")
+	}
+	return nil
 }
 
 // keepOutput reports whether a job keeps its runs' output (the default).

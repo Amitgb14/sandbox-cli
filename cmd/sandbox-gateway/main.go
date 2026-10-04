@@ -89,6 +89,7 @@ type serveOptions struct {
 	metricsReady            func(string)
 	secretsKeyFile, jobsDir string
 	jobRetention            time.Duration
+	notifyAllowPrivate      bool
 }
 
 func newServe(state *string) *cobra.Command {
@@ -132,6 +133,7 @@ func newServe(state *string) *cobra.Command {
 	f.StringVar(&o.secretsKeyFile, "secrets-key-file", "", "32 random bytes (mode 0600) sealing secrets and jobs' environments; without it there are no secrets")
 	f.StringVar(&o.jobsDir, "jobs-dir", "", "where jobs' runs keep output and files (default: jobs/ beside the state file)")
 	f.DurationVar(&o.jobRetention, "job-retention", 24*time.Hour, "how long a finished job, and what it kept, is kept")
+	f.BoolVar(&o.notifyAllowPrivate, "notify-allow-private", false, "let a job's notify URL reach loopback, private and link-local addresses (default: public addresses only)")
 	return cmd
 }
 
@@ -184,7 +186,8 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 		NodeFilesDir: o.nodeFilesDir, CORSOrigins: o.corsOrigins, Logf: logf,
 		NodeLostAfter: o.nodeLostAfter, Audit: auditLog,
 		SecretsKey: secretsKey, JobsDir: o.jobsDir, JobRetention: o.jobRetention,
-		Router: rcfg,
+		NotifyAllowPrivate: o.notifyAllowPrivate,
+		Router:             rcfg,
 	})
 	if err != nil {
 		return err

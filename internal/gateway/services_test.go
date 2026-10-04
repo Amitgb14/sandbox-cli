@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -136,13 +137,19 @@ func startAppNode(t *testing.T, name string, app *fakeApp) *testNode {
 // nodes named by names, each with the fake app behind its tunnels.
 func startServices(t *testing.T, names ...string) *svcEnv {
 	t.Helper()
+	return startServicesWith(t, nil, names...)
+}
+
+// startServicesWith is startServices with the gateway's config changed by mod.
+func startServicesWith(t *testing.T, mod func(*Config), names ...string) *svcEnv {
+	t.Helper()
 	app := newFakeApp(t)
 	var nodes []*testNode
 	for _, n := range names {
 		nodes = append(nodes, startAppNode(t, n, app))
 	}
 	path := filepath.Join(t.TempDir(), "state.json")
-	tg := startGatewayAt(t, path, nodes...)
+	tg := startGatewayAtWith(t, path, mod, nodes...)
 	return &svcEnv{testGateway: tg, app: app, router: startRouter(t, tg), path: path}
 }
 
@@ -155,6 +162,11 @@ func svcConfig(cfg *Config) {
 // a gateway and start another on what it left.
 func startGatewayAt(t *testing.T, path string, nodes ...*testNode) *testGateway {
 	t.Helper()
+	return startGatewayAtWith(t, path, nil, nodes...)
+}
+
+func startGatewayAtWith(t *testing.T, path string, mod func(*Config), nodes ...*testNode) *testGateway {
+	t.Helper()
 	st, err := OpenFileStore(path)
 	if err != nil {
 		t.Fatal(err)
@@ -163,6 +175,9 @@ func startGatewayAt(t *testing.T, path string, nodes ...*testNode) *testGateway 
 	svcConfig(&cfg)
 	for _, n := range nodes {
 		cfg.StaticNodes = append(cfg.StaticNodes, n.config())
+	}
+	if mod != nil {
+		mod(&cfg)
 	}
 	g, err := New(cfg)
 	if err != nil {
@@ -890,4 +905,71 @@ func TestServiceRestartResumesARollout(t *testing.T) {
 		}
 		return true
 	})
+}
+
+// A service's secrets are opened from the secret store for each replica it
+// makes, as a job's are for each run: in the replica's environment, and in
+// no record, response or state file. A spec naming one the tenant does not
+// have is refused, and a secret removed later stops new replicas rather than
+// starting one without it.
+func TestServiceSecretsReachReplicasOnly(t *testing.T) {
+	e := startServicesWith(t, withKey, "n1")
+	ctx := ctxT(t)
+	alice := e.client("alice", "", ScopeRead, ScopeCreate, ScopeDelete, ScopeSecretsWrite)
+	const secret, plain = "svc-secret-81c4e", "svc-plain-3a9d0"
+
+	sp := webSpec(2)
+	sp.Env = map[string]string{"PLAIN": plain}
+	sp.Secrets = []string{"API_TOKEN"}
+	_, err := alice.DeployService(ctx, sp)
+	wantCode(t, err, api.CodeInvalidRequest) // no such secret yet
+	if err := alice.SetSecret(ctx, "API_TOKEN", secret); err != nil {
+		t.Fatal(err)
+	}
+	both := sp
+	both.Env = map[string]string{"API_TOKEN": "x"}
+	_, err = alice.DeployService(ctx, both)
+	wantCode(t, err, api.CodeInvalidRequest)
+	twice := sp
+	twice.Secrets = []string{"API_TOKEN", "API_TOKEN"}
+	_, err = alice.DeployService(ctx, twice)
+	wantCode(t, err, api.CodeInvalidRequest)
+	reserved := sp
+	reserved.Secrets = []string{"LD_PRELOAD"}
+	_, err = alice.DeployService(ctx, reserved)
+	wantCode(t, err, api.CodeInvalidRequest)
+
+	created, err := alice.DeployService(ctx, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := waitService(t, alice, "web", "ready", ready(2))
+	e.app.mu.Lock()
+	for _, r := range s.Replicas {
+		env := e.app.env[r.Sandbox]
+		if env["API_TOKEN"] != secret || env["PLAIN"] != plain {
+			t.Errorf("replica %s's environment lacks the secret or the env: %v", r.Sandbox, env)
+		}
+	}
+	e.app.mu.Unlock()
+	for what, v := range map[string]any{"the create's answer": created, "GET": s} {
+		if raw, _ := json.Marshal(v); strings.Contains(string(raw), secret) || strings.Contains(string(raw), plain) {
+			t.Errorf("%s holds a value: %s", what, raw)
+		}
+	}
+	if state, _ := os.ReadFile(e.path); strings.Contains(string(state), secret) {
+		t.Error("the state file holds the secret's value")
+	}
+
+	// Removed, it stops the next replica, and the service says why.
+	if err := alice.DeleteSecret(ctx, "API_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.ScaleService(ctx, "web", 3); err != nil {
+		t.Fatal(err)
+	}
+	s = waitService(t, alice, "web", "refusing a replica", func(s api.Service) bool { return strings.Contains(s.Error, "API_TOKEN") })
+	if len(s.Replicas) != 2 {
+		t.Fatalf("%d replicas with the secret gone", len(s.Replicas))
+	}
 }

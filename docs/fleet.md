@@ -252,6 +252,8 @@ system and only its state directory writable.
 | `--quota-sandboxes`, `--quota-cpus`, `--quota-memory-mb` | 0 (unlimited) | most one tenant may hold at once. |
 | `--poll-interval` | `5s` | how often each node is asked for its status. |
 | `--cors-origin ORIGIN` | | a browser origin allowed to call the API (repeatable). Others are refused. |
+| `--secrets-key-file FILE` | | 32 random bytes, mode 0600, sealing the tenants' secrets and jobs' environments. Without it there are no secrets. |
+| `--notify-allow-private` | off | lets a job's `notify` URL reach loopback, private and link-local addresses (and http to loopback). Off, the gateway posts only to public addresses, checked as it connects. |
 
 To serve SSH on port 22 or the API on 443, give the unit
 `AmbientCapabilities=CAP_NET_BIND_SERVICE` (it is in the unit, commented out),
@@ -296,6 +298,7 @@ sudo -u sandbox-gateway sandbox-gateway --state … keys create --user alice --t
 | `sandbox:create` | create sandboxes and volumes, and act on its user's: run, start processes, stdin, signals, attach, tunnels, file writes, suspend, resume, snapshots, network policy |
 | `sandbox:delete` | terminate sandboxes, delete volumes and snapshots |
 | `sandbox:ssh` | register SSH keys, issue SSH access tokens, log in over SSH — which runs commands in the sandbox |
+| `secrets:write` | set and remove the tenant's secrets. Any key of the tenant may name them in a job or a service, and so read them from inside its sandboxes: a tenant is the unit that shares secrets, and users with no tenant all share the default one |
 | `admin` | every scope, on every user's sandboxes, plus keys, nodes and cordon |
 
 A user is letters, digits and `. _ @ + -`, at most 64; so is a tenant, which
@@ -372,6 +375,10 @@ token, and have the same SSH calls ([sdk/README.md](../sdk/README.md)).
 - **A request may tighten, never loosen.** Each node still applies its own
   policy to everything the gateway forwards: the gateway adds checks and
   removes none.
+- **A job's notify URL reaches public addresses only**, checked when the
+  gateway connects, after the name is resolved, so a user cannot make the
+  gateway call its own loopback, the nodes' network or a metadata address.
+  `--notify-allow-private` lifts this for hook receivers on a private network.
 - **The guest never reaches the gateway's network.** SSH remote forwarding is
   refused, and a local forward goes only to the sandbox's own loopback. A
   session accepts only `TERM`, `LANG` and `LC_*` from the client's environment.
@@ -438,9 +445,14 @@ Creating, changing and scaling need `sandbox:create`; deleting needs
 `sandbox:delete` as well; reading needs `sandbox:read`. Another user's service
 is not found. An admin sees every service and names one in another tenant
 with `?tenant=T`. A `GET` shows env names, not values, as for a sandbox; the
-values are kept in the state file, which is why it stays 0600. `secrets:` is
-accepted in the spec and refused with `501` until the gateway has a secret
-store.
+values are kept in the state file, which is why it stays 0600. A value that
+must stay secret belongs in the secret store instead: `secrets: [NAME]` sets
+each of the tenant's secrets (`sandbox-cli secret set NAME`) in every
+replica's environment, opened as the replica is made and kept nowhere else.
+A name the tenant has no secret for is refused, a gateway started without
+`--secrets-key-file` refuses `secrets:` with `501`, and a secret removed later
+stops new replicas (the service's `error` says which) rather than starting
+one without it.
 
 **Health.** `health.http` is a `GET` on `port` through the node's tunnel —
 the guest needs no network — and a 2xx or 3xx within `timeout_secs` is
@@ -523,6 +535,11 @@ Every service is a sibling under DOMAIN, so the router strips `Domain=` from
 every cookie a replica sets, keeping cookies with the service that set them.
 Use a domain of its own for DOMAIN — not a parent of the gateway's API or of
 anything else — so that no service shares a site with something it should not.
+The router cannot stop a page's own script from setting a cookie for DOMAIN
+(`document.cookie = "…; domain=DOMAIN"`), which the browser then sends to
+every tenant's service: for tenants who do not trust each other, make DOMAIN
+a registrable domain of its own and add it to the Public Suffix List, as
+hosting providers do, so that browsers refuse such cookies.
 `--router-public-scheme` and `--router-public-port` set the URL services are
 shown with, when the router sits behind a load balancer.
 
@@ -532,7 +549,6 @@ shown with, when the router sits behind a load balancer.
   `review-bot.internal` through its allowlist; services are reached through
   the router or by their owner's tunnel.
 - **No autoscaling.** The count is what was asked for; `scale` changes it.
-- **No secrets** until the gateway has a secret store (`secrets:` is refused).
 - **Stateless only.** A replica's disk is its own and goes with it; state
   belongs in a database outside the fleet.
 - **Health is checked by the one gateway.** Checks run from the gateway

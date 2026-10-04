@@ -260,7 +260,7 @@ func newAgentRunCmd() *cobra.Command {
 	f.Var(&timeout, "timeout", "how long the agent may run, e.g. 30m (default: the gateway's, 1h)")
 	f.IntVar(&retries, "retries", 0, "attempts after a failed one")
 	f.StringArrayVar(&files, "keep-file", nil, "a guest file to keep when the run ends (absolute path; repeatable)")
-	f.StringVar(&notify, "notify", "", "a URL POSTed the run's state when it ends (https, or http to loopback)")
+	f.StringVar(&notify, "notify", "", "a URL POSTed the run's state when it ends (https to a public address, unless the gateway allows private ones)")
 	f.BoolVar(&wait, "wait", false, "wait, print the output, and exit with the agent's exit code")
 	return cmd
 }

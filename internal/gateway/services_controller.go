@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -261,7 +262,7 @@ func (g *Gateway) decide(s *service, now time.Time) action {
 // does (userActive): revoking a user's keys stops what runs in their name
 // from growing. What already runs stays until an admin deletes the service.
 func (g *Gateway) ownerActive(s *service) bool {
-	if userActive(g.store, s.rec.User) {
+	if userActive(g.store, s.rec.User, s.rec.Tenant) {
 		return true
 	}
 	s.lastErr = "the service's owner holds no active API key; no replica is created"
@@ -416,10 +417,27 @@ func (e *startError) Error() string { return "starting the command: " + e.err.Er
 
 // startReplica creates one replica's sandbox through the gateway's own
 // create path, with the service's labels, and starts its command.
+//
+// The secrets the spec names are opened for each replica, as for a job's run
+// (secretValues), and go no further than the create request: the record and
+// the spec hold their names only, so a secret set again reaches the next
+// replica made.
 func (g *Gateway) startReplica(ctx context.Context, p Principal, name string, rev revision, spread map[string]int) (replicaRecord, error) {
 	sp := rev.Spec
+	secrets, err := g.secretValues(p.Tenant, sp.Secrets)
+	if err != nil {
+		// Not waited out: a secret removed, or a gateway restarted without
+		// its key, is a spec that cannot be honoured until someone acts.
+		return replicaRecord{}, &createError{fail: failWith(http.StatusBadRequest, api.CodeInvalidRequest, "secrets: "+err.Error())}
+	}
+	env := sp.Env
+	if len(secrets) > 0 {
+		env = make(map[string]string, len(sp.Env)+len(secrets))
+		maps.Copy(env, sp.Env)
+		maps.Copy(env, secrets)
+	}
 	req := api.CreateSandboxRequest{Image: sp.Image, CPUs: sp.Resources.CPUs, MemoryMB: sp.Resources.MemoryMB,
-		DiskMB: sp.Resources.DiskMB, Env: sp.Env, Network: sp.Network}
+		DiskMB: sp.Resources.DiskMB, Env: env, Network: sp.Network}
 	opts := createOpts{spread: spread, labels: map[string]string{
 		api.LabelService: name, api.LabelServiceRevision: strconv.Itoa(rev.Rev)}}
 	c, cerr := g.createFor(ctx, p, req, opts)

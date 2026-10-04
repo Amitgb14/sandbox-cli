@@ -37,6 +37,7 @@ type memStore struct {
 	keys    []SSHKey
 	tokens  map[string]SSHToken
 	revoked map[string]bool // users whose API keys are all revoked
+	extra   []Key           // further API keys, as given
 }
 
 // Keys reports one API key per user the store knows, revoked for the users in
@@ -58,7 +59,7 @@ func (m *memStore) Keys() []Key {
 	for _, t := range m.tokens {
 		add(t.User)
 	}
-	return out
+	return append(out, m.extra...)
 }
 
 func (m *memStore) SSHKeysByFingerprint(fp string) []SSHKey {
@@ -905,5 +906,30 @@ func TestSSHRevokedUserCannotLogIn(t *testing.T) {
 	if c, err := h.dial("sgt_valid", nil); err == nil {
 		c.Close()
 		t.Error("a revoked user's token still logged in")
+	}
+}
+
+// A user is a name within a tenant. Alice of the default tenant, revoked,
+// once kept her SSH access because some other tenant had an active "alice":
+// the check matched the name alone.
+func TestSSHRevokedUserIsNotKeptActiveByAnotherTenantsNamesake(t *testing.T) {
+	h := newHarness(t, nil)
+	k, _ := newKey(t)
+	h.store.addKey(t, "sk_1", "alice", "", k.PublicKey())
+	h.store.tokens["sgt_valid"] = SSHToken{User: "alice", Sandbox: h.a, Expires: time.Now().Add(time.Hour)}
+	h.store.mu.Lock()
+	h.store.revoked = map[string]bool{"alice": true}
+	h.store.extra = []Key{{ID: "k-other", User: "alice", Tenant: "elsewhere"}}
+	h.store.mu.Unlock()
+	if !userActive(h.store, "alice", "elsewhere") {
+		t.Fatal("precondition: the other tenant's alice is not active")
+	}
+	if c, err := h.dial(h.a, nil, ssh.PublicKeys(k)); err == nil {
+		c.Close()
+		t.Error("a revoked user's SSH key logged in on another tenant's namesake")
+	}
+	if c, err := h.dial("sgt_valid", nil); err == nil {
+		c.Close()
+		t.Error("a revoked user's token logged in on another tenant's namesake")
 	}
 }

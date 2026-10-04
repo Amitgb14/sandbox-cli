@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -450,8 +452,20 @@ func TestJobSpecIsChecked(t *testing.T) {
 	_, err := ana.CreateJob(ctx, api.JobSpec{Command: []string{"true"}, Env: map[string]string{"SANDBOX_RUN_AS": "0"}})
 	wantCode(t, err, api.CodeRefused)
 	for _, u := range []string{"https://hooks.example.com/x", "http://127.0.0.1:9/x", "http://localhost/x", "http://[::1]:8/x"} {
-		if err := checkNotifyURL(u); err != nil {
+		if err := checkNotifyURL(u, true); err != nil {
 			t.Errorf("%s: %v", u, err)
+		}
+	}
+	// Without the operator's leave, nothing but a public address.
+	if err := checkNotifyURL("https://hooks.example.com/x", false); err != nil {
+		t.Error(err)
+	}
+	for _, u := range []string{"http://127.0.0.1:9/x", "http://localhost/x", "https://localhost./x", "https://app.localhost/x",
+		"https://127.0.0.1/x", "https://[::1]/x", "https://10.0.0.5/x", "https://192.168.1.1/x", "https://172.16.0.1/x",
+		"https://169.254.169.254/x", "https://[fe80::1]/x", "https://[fd00::1]/x", "https://100.64.0.1/x",
+		"https://0.0.0.0/x", "https://[::ffff:127.0.0.1]/x", "https://224.0.0.1/x"} {
+		if err := checkNotifyURL(u, false); err == nil {
+			t.Errorf("%s was accepted without --notify-allow-private", u)
 		}
 	}
 	// A gateway.* label cannot be smuggled through the create path.
@@ -504,7 +518,7 @@ func TestJobSecretsReachTheRunOnly(t *testing.T) {
 }
 
 func TestNotifyPostsStatesOnly(t *testing.T) {
-	tg := startGateway(t, withKey, startNode(t, "n1", allCaps...))
+	tg := startGateway(t, func(c *Config) { withKey(c); c.NotifyAllowPrivate = true }, startNode(t, "n1", allCaps...))
 	ctx := ctxT(t)
 	ana := tg.jobUser("ana")
 	var mu sync.Mutex
@@ -551,6 +565,65 @@ func TestNotifyPostsStatesOnly(t *testing.T) {
 	if events["run.finished"] != 2 || events["job.finished"] != 1 {
 		t.Fatalf("events = %v", events)
 	}
+}
+
+// A notify URL is the job owner's text, and the gateway sits on the
+// operator's network. Once, a job naming https://127.0.0.1:PORT had the
+// gateway connect there when a run ended: any user could make it reach its
+// own loopback, the nodes' network or a metadata address. Now the address is
+// refused when the job is submitted, and a name is checked again as it is
+// dialled, after resolving.
+func TestNotifyReachesOnlyPublicAddresses(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var accepted atomic.Int64
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			c.Close()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	tg := startGateway(t, nil, startNode(t, "n1", allCaps...))
+	ctx := ctxT(t)
+	ana := tg.jobUser("ana")
+	j, err := ana.CreateJob(ctx, api.JobSpec{Command: []string{"true"}, Notify: fmt.Sprintf("https://127.0.0.1:%d/hook", port)})
+	if err == nil {
+		waitJob(t, ana, j.ID, "the job to end", finished)
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !api.IsCode(err, api.CodeInvalidRequest) {
+		t.Errorf("a job notifying a loopback address: %v; want invalid_request", err)
+	}
+	if n := accepted.Load(); n != 0 {
+		t.Errorf("the gateway connected to a loopback address %d times for a job's notify", n)
+	}
+
+	// A name that resolves to loopback is refused as it is dialled.
+	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://localhost:%d/hook", port), strings.NewReader("{}"))
+	if resp, err := newNotifyClient(false).Do(req); err == nil {
+		resp.Body.Close()
+		t.Error("the notify client posted to a name resolving to loopback")
+	} else if !strings.Contains(err.Error(), "not a public address") {
+		t.Errorf("refused for another reason: %v", err)
+	}
+	if n := accepted.Load(); n != 0 {
+		t.Errorf("the notify client connected to loopback %d times", n)
+	}
+	// The operator's leave lets it through: the trap was armed.
+	req, _ = http.NewRequest(http.MethodPost, fmt.Sprintf("http://localhost:%d/hook", port), strings.NewReader("{}"))
+	if resp, err := newNotifyClient(true).Do(req); err == nil {
+		resp.Body.Close()
+	}
+	waitFor(t, "a connection with --notify-allow-private", func() bool { return accepted.Load() > 0 })
 }
 
 func TestABatchOf200RunsCompletes(t *testing.T) {
@@ -765,5 +838,31 @@ func TestCappedKeepsTheStart(t *testing.T) {
 	c.Write([]byte("ij"))
 	if c.buf.String() != "abcde" || !c.cut {
 		t.Fatalf("%q %v", c.buf.String(), c.cut)
+	}
+}
+
+// A hook's URL often carries its credential (.../hooks/T0K3N, ?token=...). A
+// notification that failed once logged the URL whole, as the HTTP client's
+// error quotes it, putting the job owner's credential in the operator's log.
+func TestNotifyFailureLogsNoURL(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close() // nothing listens: every try fails to connect
+	var logs syncBuf
+	tg := startGateway(t, func(c *Config) { c.NotifyAllowPrivate = true; c.Logf = logs.logf }, startNode(t, "n1", allCaps...))
+	ctx := ctxT(t)
+	ana := tg.jobUser("ana")
+	const cred = "hookcred-5f1e9a"
+	j, err := ana.CreateJob(ctx, api.JobSpec{Command: []string{"true"}, Notify: "http://" + addr + "/hooks/" + cred + "?token=" + cred})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitJob(t, ana, j.ID, "the job to end", finished)
+	waitFor(t, "a failed notification to be logged", func() bool { return strings.Contains(logs.String(), "notify (job.finished)") })
+	if strings.Contains(logs.String(), cred) {
+		t.Fatalf("the log holds the notify URL's credential:\n%s", logs.String())
 	}
 }

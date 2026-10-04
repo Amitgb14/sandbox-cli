@@ -69,7 +69,9 @@ type JobSpec struct {
 	FromSnapshot string         `json:"from_snapshot,omitempty"`
 	Keep         *JobKeep       `json:"keep,omitempty"`
 	// Notify is a URL POSTed a JobNotification when a run ends and when the
-	// job does: https, or http to a loopback address.
+	// job does: https to a public address. A gateway started with
+	// --notify-allow-private also posts to private and loopback addresses,
+	// and over http to loopback.
 	Notify string `json:"notify,omitempty"`
 }
 

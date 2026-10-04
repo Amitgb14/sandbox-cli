@@ -43,11 +43,6 @@ func validServiceName(s string) bool {
 // the line or start another.
 var healthPathRE = regexp.MustCompile(`^/[\x21-\x7e]{0,1000}$`)
 
-// errSecretsUnsupported is the answer to a spec naming secrets: the
-// gateway has no secret store yet, and a service started without the
-// secrets it asked for is not the service that was asked for.
-var errSecretsUnsupported = errors.New("secrets need the secret store, which this gateway does not have yet")
-
 // specError is a refused spec, as the HTTP front answers it.
 type specError struct {
 	status int
@@ -139,8 +134,38 @@ func checkServiceSpec(sp *api.ServiceSpec, tenant string) *specError {
 			return badServiceSpec("tenant %q cannot be named in a DNS label (lowercase letters, digits and dashes, at most 63 with the service's name), so its services cannot be public", tenant)
 		}
 	}
-	if len(sp.Secrets) > 0 {
-		return &specError{http.StatusNotImplemented, api.CodeUnsupported, errSecretsUnsupported.Error()}
+	seen := map[string]bool{}
+	for _, name := range sp.Secrets {
+		if err := checkSecretName(name); err != nil {
+			return badServiceSpec("secrets: %v", err)
+		}
+		if seen[name] {
+			return badServiceSpec("secrets: %s is named twice", name)
+		}
+		seen[name] = true
+		if _, ok := sp.Env[name]; ok {
+			return badServiceSpec("%s is both in env and in secrets", name)
+		}
+	}
+	return nil
+}
+
+// checkServiceSecrets refuses a spec naming secrets the gateway cannot give
+// it, as a job's are refused (checkJobSpec): a service started without the
+// secrets it asked for is not the service that was asked for. A secret
+// removed later is the replica's create failing, said in the service's
+// error, never a replica started without it.
+func (g *Gateway) checkServiceSecrets(sp api.ServiceSpec, tenant string) *specError {
+	if len(sp.Secrets) == 0 {
+		return nil
+	}
+	if g.sealer == nil {
+		return &specError{http.StatusNotImplemented, api.CodeUnsupported, ErrNoSecretsKey.Error()}
+	}
+	for _, name := range sp.Secrets {
+		if _, ok := g.store.SealedSecret(tenant, name); !ok {
+			return badServiceSpec("secret %s does not exist (sandbox-cli secret set %s)", name, name)
+		}
 	}
 	return nil
 }
@@ -262,6 +287,10 @@ func (g *Gateway) createService(w http.ResponseWriter, r *http.Request, p Princi
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
+	if e := g.checkServiceSecrets(sp, p.Tenant); e != nil {
+		writeErr(w, e.status, e.code, e.msg)
+		return
+	}
 	now := time.Now().UTC()
 	s := &service{health: map[string]*replicaHealth{}, rec: serviceRecord{
 		Name: sp.Name, User: p.User, Tenant: p.Tenant, Spec: sp, Revision: 1,
@@ -348,6 +377,10 @@ func (g *Gateway) updateService(w http.ResponseWriter, r *http.Request, p Princi
 		return
 	}
 	if e := checkServiceSpec(&sp, s.rec.Tenant); e != nil {
+		writeErr(w, e.status, e.code, e.msg)
+		return
+	}
+	if e := g.checkServiceSecrets(sp, s.rec.Tenant); e != nil {
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
