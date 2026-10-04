@@ -41,7 +41,10 @@ export function useCaller(): Caller {
     queryKey: whoamiKey,
     queryFn: async (): Promise<Whoami | null> => {
       try {
-        return await apiFetch<Whoami>("/v1/whoami");
+        // Without the organisation: a gateway answers 404 for one the key
+        // may not select, which must not read as a plain sandboxd. Whether
+        // the selection is allowed is checked apart (OrgSync).
+        return await apiFetch<Whoami>("/v1/whoami", { noOrg: true });
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;

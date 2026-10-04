@@ -3,6 +3,7 @@ import { AppSidebar } from "@/components/shell/app-sidebar";
 import { TokenGate } from "@/components/shell/token-gate";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { GlobalShortcuts } from "@/components/shell/global-shortcuts";
+import { OrgScope, OrgSync } from "@/components/shell/org-switcher";
 
 /**
  * The sidebar is the only chrome. On a phone, where it is a drawer, a slim
@@ -12,6 +13,10 @@ import { GlobalShortcuts } from "@/components/shell/global-shortcuts";
 export default function StudioLayout({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider>
+      <OrgSync />
+      {/* Everything below is remounted when the organisation changes, so
+          nothing of the previous one survives in a component's state. */}
+      <OrgScope>
       <AppSidebar />
       <SidebarInset className="min-w-0">
         <div className="sticky top-0 z-30 flex h-12 items-center gap-2 border-b bg-background/80 px-3 backdrop-blur md:hidden">
@@ -26,6 +31,7 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
       </SidebarInset>
       <CommandPalette />
       <GlobalShortcuts />
+      </OrgScope>
     </SidebarProvider>
   );
 }

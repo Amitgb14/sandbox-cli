@@ -109,6 +109,8 @@ export interface Info {
   version: string;
   /** The client's built-in allowlist, which --allow adds to under a non-allowlist default. */
   baseline_egress?: string[];
+  /** The context's own organisation (sandbox-cli org use), which Studio starts in. */
+  org?: string;
   capabilities?: Capabilities;
   error?: string;
 }
@@ -164,7 +166,7 @@ export interface AgentState {
 // 404. The admin-only shapes are in lib/admin, which a build without admin
 // screens leaves out.
 
-export type Scope = "sandbox:read" | "sandbox:create" | "sandbox:delete" | "sandbox:ssh" | "secrets:write" | "admin";
+export type Scope = "sandbox:read" | "sandbox:create" | "sandbox:delete" | "sandbox:ssh" | "secrets:write" | "org:create" | "admin";
 
 /** GET /v1/whoami: the caller as the gateway sees its key. */
 export interface Whoami {
@@ -172,6 +174,24 @@ export interface Whoami {
   tenant: string;
   key_id: string;
   scopes: string[];
+  /** The organisation the request acted in, after X-Sandbox-Org; "default" for the default tenant. */
+  org?: string;
+}
+
+/** GET /v1/orgs: one organisation the caller may act in. */
+export interface Org {
+  name: string;
+  role: "owner" | "member";
+  created?: string;
+  current: boolean;
+}
+
+/** GET /v1/orgs/{name}/members. tenant is the tenant of the member's own keys; absent is the default one. */
+export interface OrgMember {
+  user: string;
+  tenant?: string;
+  role: "owner" | "member";
+  added?: string;
 }
 
 export interface SSHInfo {

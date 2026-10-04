@@ -71,6 +71,16 @@ export interface LostSandbox {
   node_down_since?: string;
 }
 
+/** GET /v1/admin/orgs: one organisation, as an operator sees it. */
+export interface AdminOrg {
+  name: string;
+  created: string;
+  created_by: string;
+  created_by_tenant?: string;
+  members: number;
+  owners: number;
+}
+
 export interface KeyInfo {
   id: string;
   user: string;
@@ -87,7 +97,7 @@ export interface CreatedKey extends KeyInfo {
 
 export interface AuditEntry {
   time: string;
-  kind: "api" | "ssh";
+  kind: "api" | "ssh" | "job" | "org";
   action: string;
   key_id?: string;
   user?: string;
@@ -136,6 +146,15 @@ export function useLost() {
     queryKey: akeys.lost,
     queryFn: async () => (await apiFetch<{ sandboxes: LostSandbox[] }>("/v1/admin/lost")).sandboxes ?? [],
     refetchInterval: 10_000,
+  });
+}
+
+export function useAdminOrgs() {
+  return useQuery({
+    queryKey: ["admin-orgs"],
+    // Every organisation, whatever this browser has selected.
+    queryFn: async () => (await apiFetch<{ orgs: AdminOrg[] }>("/v1/admin/orgs", { noOrg: true })).orgs ?? [],
+    refetchInterval: 30_000,
   });
 }
 

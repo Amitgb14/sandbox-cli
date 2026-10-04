@@ -10,6 +10,19 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Organizations on a gateway.** The top of the sidebar is an organization
+  switcher: the key's own tenant and every organization you belong to, with a
+  check on the current one, *Create organization* (with `org:create`; the name
+  is checked as you type) and *Members*. Choosing one shows only that
+  organization's sandboxes, jobs, services and secrets: the selection is sent on
+  every call, terminal and streams included, and everything of the previous one
+  is dropped. It is remembered per browser; one you no longer belong to falls
+  back to your key's own tenant, with a notice. **Members** lists who belongs;
+  owners add, remove and change roles. **Account** shows the current
+  organization, and an admin key gets **All organizations**, which an
+  admin-off build leaves out. A plain sandboxd shows none of this and is never
+  asked about organizations. See the main [CHANGELOG.md](../CHANGELOG.md).
+
 - **Studio's text is set in Inter,** bundled with the UI so it needs no font
   service and works offline. Column headings are small monospace capitals,
   page titles a medium weight; code, ids and the terminal stay in Geist Mono.

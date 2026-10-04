@@ -4,6 +4,7 @@ import { PageHeader, SectionHeader } from "@/components/common/page-header";
 import { Gate } from "@/components/shell/gate";
 import { Badge } from "@/components/ui/badge";
 import { useCaller } from "@/lib/caller";
+import { useCurrentOrg } from "@/components/shell/org-switcher";
 import { cn } from "@/lib/utils";
 
 /** What each scope lets a key do (docs/fleet.md, "Giving users keys"). */
@@ -13,6 +14,7 @@ const SCOPES: [string, string][] = [
   ["sandbox:delete", "Terminate sandboxes; delete volumes, snapshots and services"],
   ["sandbox:ssh", "Register SSH keys, issue SSH access tokens, and log in over SSH"],
   ["secrets:write", "Set and remove the tenant's secrets"],
+  ["org:create", "Create organizations, each with its own sandboxes, secrets and quota"],
   ["admin", "Every scope, on every user's sandboxes, plus keys, nodes and the audit record"],
 ];
 
@@ -23,6 +25,7 @@ const SCOPES: [string, string][] = [
  */
 function Account() {
   const caller = useCaller();
+  const org = useCurrentOrg();
   if (caller.kind !== "gateway") return null;
   const { who } = caller;
   const holds = (s: string) => who.scopes.includes(s) || who.scopes.includes("admin");
@@ -34,6 +37,8 @@ function Account() {
         <dd className="font-mono">{who.user}</dd>
         <dt className="text-muted-foreground">tenant</dt>
         <dd className="font-mono">{who.tenant || <span className="text-muted-foreground">the default tenant</span>}</dd>
+        <dt className="text-muted-foreground">organization</dt>
+        <dd className="font-mono" data-testid="account-org">{org}</dd>
         <dt className="text-muted-foreground">key</dt>
         <dd className="font-mono">{who.key_id}</dd>
       </dl>
