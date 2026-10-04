@@ -83,6 +83,45 @@ hand it only to whoever should have that access. Against a plain sandboxd,
 `sandbox-cli ssh` opens the session through the API instead, since a sandboxd
 has no SSH server.
 
+### Agents and jobs on a fleet
+
+A gateway also runs work after you have gone. A job is a command, or an agent
+and a prompt, run in a fresh sandbox per run: the gateway places it, starts
+it, waits with a timeout, keeps its output (1 MiB per stream) and the files
+you name (8 MiB each), terminates the sandbox, and retries a run that failed.
+`prompts` makes a batch, one run per prompt; `parallelism` bounds how many
+run at once. A run that does not fit the tenant's quota waits for room.
+
+```sh
+sandbox-cli secret set ANTHROPIC_API_KEY < key.txt      # sealed on the gateway, never shown again
+sandbox-cli agent-run claude "fix the failing test" --secret ANTHROPIC_API_KEY --wait
+
+cat > job.yaml <<'YAML'
+agent: claude
+prompts: ["review internal/api", "review internal/gateway"]
+parallelism: 2
+retries: 1
+timeout_secs: 1800
+secrets: [ANTHROPIC_API_KEY]
+keep: {files: [/sandbox/home/review.md]}
+notify: https://hooks.example.com/sandbox    # POSTed {job, run, state}; never output
+YAML
+sandbox-cli job run -f job.yaml
+sandbox-cli job ls · job get ID · job output ID 0 [--file PATH] · job cancel ID
+```
+
+An agent runs in its verified headless mode (claude, codex, gemini, opencode,
+cline). Your saved login does not come along — the CLI's run copies it in
+from your machine, and a job has none — so the agent authenticates with an
+API key you keep as a secret: `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY`
+for codex, `GEMINI_API_KEY` for gemini, the provider's for opencode and cline.
+The agent must be in the image or installable from it. A secret goes into a
+run's environment by name, only for jobs that name it; the API never returns
+it. Secrets need the gateway started with `--secrets-key-file` (32 random
+bytes, mode 0600), and setting one needs a key with the `secrets:write` scope.
+A finished job is kept for a day (`--job-retention`). A restarted gateway
+picks its jobs up again: a running command is followed where it runs.
+
 ## Coding agents
 
 `sandbox-cli agent <name>` is `run` with a coding agent's conveniences on top:

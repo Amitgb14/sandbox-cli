@@ -82,7 +82,9 @@ type serveOptions struct {
 	metricsListen, auditLog                           string
 	nodeLostAfter                                     time.Duration
 	// metricsReady, when set, is told the metrics address (tests).
-	metricsReady func(string)
+	metricsReady            func(string)
+	secretsKeyFile, jobsDir string
+	jobRetention            time.Duration
 }
 
 func newServe(state *string) *cobra.Command {
@@ -117,6 +119,9 @@ func newServe(state *string) *cobra.Command {
 	f.StringVar(&o.metricsListen, "metrics-listen", "", "loopback host:port to serve Prometheus metrics on, without a credential; off when empty")
 	f.StringVar(&o.auditLog, "audit-log", "", `who did what, as JSONL (default: audit/gateway.jsonl beside the state file; "none" keeps no log)`)
 	f.DurationVar(&o.nodeLostAfter, "node-lost-after", 5*time.Minute, "how long a node may not answer before its sandboxes are reported lost and stop counting against quotas")
+	f.StringVar(&o.secretsKeyFile, "secrets-key-file", "", "32 random bytes (mode 0600) sealing secrets and jobs' environments; without it there are no secrets")
+	f.StringVar(&o.jobsDir, "jobs-dir", "", "where jobs' runs keep output and files (default: jobs/ beside the state file)")
+	f.DurationVar(&o.jobRetention, "job-retention", 24*time.Hour, "how long a finished job, and what it kept, is kept")
 	return cmd
 }
 
@@ -154,10 +159,17 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 		auditPath = ""
 	}
 	auditLog := gateway.NewAuditLog(auditPath)
+	var secretsKey []byte
+	if o.secretsKeyFile != "" {
+		if secretsKey, err = gateway.LoadSecretsKey(o.secretsKeyFile); err != nil {
+			return err
+		}
+	}
 	g, err := gateway.New(gateway.Config{
 		Store: st, StaticNodes: static, PollInterval: o.pollInterval, Quota: o.quota,
 		NodeFilesDir: o.nodeFilesDir, CORSOrigins: o.corsOrigins, Logf: logf,
 		NodeLostAfter: o.nodeLostAfter, Audit: auditLog,
+		SecretsKey: secretsKey, JobsDir: o.jobsDir, JobRetention: o.jobRetention,
 	})
 	if err != nil {
 		return err

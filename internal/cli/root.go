@@ -33,6 +33,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newAgentGroupCmd(), newVolumeCmd(), newStudioCmd())
 	root.AddCommand(newSSHCmd(), newSSHKeyCmd(), newSSHAccessCmd(), newWhoamiCmd())
 	root.AddCommand(newGatewayCmd())
+	root.AddCommand(newJobCmd(), newAgentRunCmd(), newSecretCmd())
 	return root
 }
 

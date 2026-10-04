@@ -60,6 +60,11 @@ type fileState struct {
 	Volumes   map[string]Owner         `json:"volumes"`
 	Snapshots map[string]Owner         `json:"snapshots"`
 	Nodes     []NodeConfig             `json:"nodes"`
+	// Secrets hold values sealed with the secrets key (secrets.go), and
+	// jobs their specs and runs' outcomes (jobs.go); what runs kept is in
+	// files beside the state, not in it.
+	Secrets []secretRecord        `json:"secrets,omitempty"`
+	Jobs    map[string]*jobRecord `json:"jobs,omitempty"`
 }
 
 type tokenRecord struct {
@@ -165,6 +170,9 @@ func (s *FileStore) init() {
 	}
 	if s.st.Snapshots == nil {
 		s.st.Snapshots = map[string]Owner{}
+	}
+	if s.st.Jobs == nil {
+		s.st.Jobs = map[string]*jobRecord{}
 	}
 }
 

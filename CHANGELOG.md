@@ -167,6 +167,25 @@ in `_old/` as reference, to be ported where this design still wants it.
   key before it serves; after that, keys and nodes are managed through
   `/v1/admin/…`. A non-loopback `--listen` needs TLS. The SSH endpoints are
   in place; the SSH server itself lands separately.
+- **A gateway runs jobs and agent runs after you have gone.** `POST /v1/jobs`
+  (`sandbox-cli job run -f job.yaml`) runs a command, or an agent on a prompt
+  or on a batch of prompts, in a fresh sandbox per run made through the same
+  path as any other create — scheduled, counted against the quota, owned by
+  you, labelled `gateway.job`. The gateway waits for each run with its
+  timeout, keeps its output (1 MiB per stream) and the files the job names
+  (8 MiB each), terminates the sandbox, retries a failed run up to
+  `retries`, keeps `parallelism` runs going at most, and can POST each run's
+  state to a `notify` URL (https, or http to loopback; never output). `job
+  ls`, `get`, `output` and `cancel` follow it; a finished job is kept for
+  `--job-retention` (a day). `sandbox-cli agent-run claude "…" --secret
+  ANTHROPIC_API_KEY --wait` is the one-run case. An agent's saved login does
+  not reach a fleet; it authenticates with an API key kept as a **secret**:
+  `sandbox-cli secret set NAME` (value from stdin) stores it per tenant,
+  sealed with `--secrets-key-file`, put in a run's environment only for a
+  job that names it, and never returned. Setting one needs the new
+  `secrets:write` scope. A restarted gateway carries its jobs on, following
+  a command that was running where it runs. The Python and TypeScript SDKs
+  have the same calls.
 
 **Added:**
 
