@@ -5,6 +5,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -47,5 +48,43 @@ func TestConnectRunsInAnExistingSandbox(t *testing.T) {
 	}
 	if err := connectWith(ctx, c, "conn", []string{"true"}, ""); err == nil || !strings.Contains(err.Error(), "resume it first") {
 		t.Errorf("a suspended sandbox: %v", err)
+	}
+}
+
+// `sandbox-cli ssh` against a plain sandboxd, which has no SSH server, goes
+// through the API with the same connection `exec` uses: the command's exit
+// status comes back, and a sandbox that is not running is refused the same
+// way, not attached to.
+func TestSSHToAPlainSandboxdConnectsThroughTheAPI(t *testing.T) {
+	be := fake.New(api.CapEgressAllowlist, api.CapSuspend)
+	srv := httptest.NewServer((&server.Server{Backend: be, Policy: spec.DefaultPolicyFor(be.Capabilities())}).Handler())
+	defer srv.Close()
+	c, _ := api.NewClient(srv.URL, "")
+	ctx := context.Background()
+	sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{Name: "plain"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	useEndpoint(t, srv.URL)
+	run := func(args ...string) error {
+		root := NewRootCmd()
+		root.SetOut(io.Discard)
+		root.SetErr(io.Discard)
+		root.SetArgs(append([]string{"ssh"}, args...))
+		return root.Execute()
+	}
+
+	if err := run("plain", "true"); err != nil {
+		t.Errorf("ssh plain true: %v", err)
+	}
+	var ee exitError
+	if err := run("plain", "false"); !errors.As(err, &ee) || ee.code != 1 {
+		t.Errorf("ssh plain false: %v; want exit status 1", err)
+	}
+	if _, err := c.Suspend(ctx, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := run("plain", "true"); err == nil || !strings.Contains(err.Error(), "resume it first") {
+		t.Errorf("ssh to a suspended sandbox: %v", err)
 	}
 }

@@ -406,9 +406,9 @@ func newSSHCmd() *cobra.Command {
 					termsafe.Clean(name))
 				argv := command
 				if len(argv) == 0 {
-					argv = apiShellArgv
+					argv = shellArgv
 				}
-				return apiSession(ctx, c, ref, argv)
+				return connectWith(ctx, c, ref, argv, agenthome.GuestHome)
 			}
 			return sshThroughGateway(ctx, c, ref, identity, command)
 		},
@@ -473,53 +473,6 @@ func sshThroughGateway(ctx context.Context, c *api.Client, ref, identityFlag str
 		return exitError{255}
 	}
 	return err
-}
-
-// apiShellArgv is the guest's best interactive shell: bash when the image has
-// it, sh otherwise, as a login shell so the image's profile applies.
-var apiShellArgv = []string{"/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"}
-
-// apiSession starts argv in a running sandbox and attaches this terminal to
-// it until it exits — the plain-sandboxd side of `sandbox-cli ssh`. The
-// process is the caller's, so Ctrl-C without a terminal is forwarded to it;
-// the sandbox carries on either way.
-func apiSession(ctx context.Context, c *api.Client, ref string, argv []string) error {
-	sb, err := c.Sandbox(ctx, ref)
-	if err != nil {
-		return err
-	}
-	if sb.State != api.StateRunning {
-		hint := ""
-		if sb.State == api.StateSuspended {
-			hint = " (resume it first: it keeps its memory and processes)"
-		}
-		return fmt.Errorf("%s is %s, not running%s", termsafe.Clean(ref), sb.State, hint)
-	}
-	tty := isTerminal(os.Stdin) && isTerminal(os.Stdout)
-	rows, cols := termSize(os.Stdout)
-	req := api.RunRequest{Argv: argv, Cwd: agenthome.GuestHome, Tty: tty, Rows: rows, Cols: cols}
-	if tty {
-		term := os.Getenv("TERM")
-		if term == "" || term == "dumb" {
-			term = "xterm-256color"
-		}
-		req.Env = map[string]string{"TERM": term}
-	}
-	p, err := c.StartProcess(ctx, sb.ID, req)
-	if err != nil {
-		return err
-	}
-	code, err := attach(ctx, c, sb.ID, p.PID, tty, true)
-	if errors.Is(err, errDetached) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if code != 0 {
-		return exitError{code}
-	}
-	return nil
 }
 
 func newSSHKeyCmd() *cobra.Command {
