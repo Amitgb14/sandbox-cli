@@ -11,6 +11,7 @@ credential changed. What it adds is what one machine never needed:
 - **a scheduler** that picks the node for each new sandbox, and **routing** of
   every later call to the node that holds it;
 - **quotas** per tenant;
+- **organisations**: tenants users create and share, chosen per request;
 - **an SSH server** on one port for every sandbox: `ssh SANDBOX@gateway`.
 
 Users talk to the gateway only. Nodes are reached only by the gateway, with
@@ -249,7 +250,8 @@ system and only its state directory writable.
 | `--router-domain DOMAIN` | | what the router serves under: `<service>.DOMAIN`, `<service>--<tenant>.DOMAIN`. Required with `--router-listen`. |
 | `--router-tls-cert`, `--router-tls-key` | | the router's certificate and key, for `*.DOMAIN`. |
 | `--router-public-scheme`, `--router-public-port` | `https` with a router certificate, else `http`; the `--router-listen` port | the URL services are shown with. |
-| `--quota-sandboxes`, `--quota-cpus`, `--quota-memory-mb` | 0 (unlimited) | most one tenant may hold at once. |
+| `--quota-sandboxes`, `--quota-cpus`, `--quota-memory-mb` | 0 (unlimited) | most one tenant (or organisation) may hold at once. |
+| `--max-orgs-per-user N` | `10` | most [organisations](#organisations) one user may create or own; each has a quota of its own, so this bounds how far one user multiplies theirs. 0 is unlimited. |
 | `--poll-interval` | `5s` | how often each node is asked for its status. |
 | `--cors-origin ORIGIN` | | a browser origin allowed to call the API (repeatable). Others are refused. |
 | `--secrets-key-file FILE` | | 32 random bytes, mode 0600, sealing the tenants' secrets and jobs' environments. Without it there are no secrets. |
@@ -299,7 +301,8 @@ sudo -u sandbox-gateway sandbox-gateway --state … keys create --user alice --t
 | `sandbox:delete` | terminate sandboxes, delete volumes and snapshots |
 | `sandbox:ssh` | register SSH keys, issue SSH access tokens, log in over SSH — which runs commands in the sandbox. A login, by SSH key or token, needs its user to hold an active key with this scope at the time, and an open connection ends when they no longer do |
 | `secrets:write` | set and remove the tenant's secrets. Any key of the tenant may name them in a job or a service, and so read them from inside its sandboxes: a tenant is the unit that shares secrets, and users with no tenant all share the default one |
-| `admin` | every scope, on every user's sandboxes, plus keys, nodes and cordon |
+| `org:create` | create [organisations](#organisations), up to `--max-orgs-per-user`. Joining one needs no scope: an owner adds you |
+| `admin` | every scope, on every user's sandboxes, plus keys, nodes and cordon; may act in any organisation |
 
 A user is letters, digits and `. _ @ + -`, at most 64; so is a tenant, which
 is optional and is what quotas count. A key acts as its user: two keys for one
@@ -392,6 +395,88 @@ hours): anyone holding it can log in.
 The Python and TypeScript SDKs take the gateway's URL and the key as their
 token, and have the same SSH calls ([sdk/README.md](../sdk/README.md)).
 
+## Organisations
+
+An organisation is a tenant that users create and share, rather than one the
+operator writes on their keys. It is the same tenant everything else is keyed
+on, so it has all of a tenant's guarantees: its sandboxes, volumes,
+snapshots, secrets, jobs and services are its own, it has its own quota, and
+its services are routed as `<service>--<org>.DOMAIN`. Nothing in one is
+visible or reachable from another, or from its members' own tenants.
+
+```sh
+sandbox-cli org create acme              # needs org:create; you become its owner
+sandbox-cli org members add bob          # bob, of your own tenant (--tenant T for another; --role owner)
+sandbox-cli org use acme                 # this context now acts in acme
+sandbox-cli run --keep --name web -- …   # made in acme, counted against acme's quota
+sandbox-cli --org default ls             # one command in your key's own tenant
+sandbox-cli org ls                       # yours, * on the current one
+sandbox-cli org members                  # anyone in it may list them
+sandbox-cli org members rm bob           # bob's open streams and SSH sessions in acme end now
+```
+
+**Choosing one.** Every API request may carry `X-Sandbox-Org: NAME`. Without
+it a request acts in its key's own tenant, as before organisations existed.
+With it, the gateway checks once, as the request is authenticated, that the
+key's user is a member of NAME, and the whole request then acts in NAME: the
+router, every listing and lookup, the quota, the audit record. The key's own
+tenant is always allowed; the default tenant (keys issued with no tenant) is
+called `default`. Not a member and no such organisation are the same answer,
+`404 not_found` "no such organization", so names cannot be probed. The CLI
+sends the header from `--org`, else `SANDBOX_ORG`, else the context's
+(`org use`, or `context add --org`); the SDKs take `org`.
+
+**Who is in one.** Memberships come from two places only: creating an
+organisation, which makes you its owner, and being added by one of its
+owners. A key issued before organisations has none, and can select nothing it
+could not reach already. A member is a user and the tenant of their own keys
+(a user name is unique only within a tenant), so `org members add` takes
+`--tenant` for someone from another tenant; a second user of the same name
+in one organisation is refused, because ownership inside it is keyed on the
+name. Owners add and remove members and change roles (`owner` or `member`);
+members may list them. The last owner cannot be removed or demoted. There is
+no deleting an organisation yet.
+
+**Inside one,** sandboxes are still their user's, as within any tenant: two
+members do not see each other's sandboxes, while secrets and services are
+the organisation's, as they are a tenant's.
+
+**Names.** An organisation name is a DNS label: 1 to 30 lowercase letters,
+digits and dashes, starting with a letter, with no `--` (the router splits
+`<service>--<org>` on it) and not `default` or `admin`. It may not be a
+tenant already in use — by a key, a sandbox, a volume, a secret, a job or a
+service, compared without case — or creating it would make its creator a
+member of someone else's tenant.
+
+**The cap.** Each organisation has its own quota, so one user may make or own
+at most `--max-orgs-per-user` (10). An organisation counts against its
+creator for as long as it exists, even after they hand it to another owner.
+
+**Leaving ends access at once.** Removing a member, before the call returns,
+ends what they had open in that organisation, as revoking a key does
+([Revoking](#revoking)): open forwarded API requests (`api.revoked`), SSH
+connections to its sandboxes (`ssh.revoked`), and their running jobs there
+(`job.revoked`); their services there stop being routed and get no new
+replicas. What they hold in their own tenant is untouched.
+
+**SSH.** An SSH key is its user's, kept under their own tenant whatever
+organisation registered it. Logging in by key, a sandbox *name* is looked up
+in the key's own tenant only; a sandbox *id* also reaches the user's own
+sandboxes in an organisation they are a member of. `sandbox-cli ssh --org
+acme web` resolves `web` in acme and logs in by its id. `sandbox-cli
+ssh-access --org acme web` issues a token for acme's `web`.
+
+**The header cannot loosen anything else.** Scopes are the key's whatever it
+selects: a member's key cannot reach the admin endpoints in an organisation
+any more than outside one. An admin key may act in any organisation, or the
+default tenant, as it may already act on every sandbox.
+
+**The audit record** names each change by key id, user and organisation:
+`org.created`, `org.member_added` and `org.member_role` (result: the role),
+`org.member_removed`. Never a secret.
+
+The endpoints are in [api/v1.md](api/v1.md#organisations).
+
 ## Studio
 
 `sandbox-cli studio --context fleet` opens Studio on a gateway context. It is
@@ -403,12 +488,20 @@ and those decide the screens:
 
 | The key holds | Studio adds |
 |---|---|
-| any scope | **Jobs** (list, detail with each run's kept output and files), **Services** (list, detail with replicas, health and rollout), **Secrets** (names only), **SSH** (where to connect, the host key to pin), **Account** (user, tenant, key id, scopes) |
+| any scope | **Jobs** (list, detail with each run's kept output and files), **Services** (list, detail with replicas, health and rollout), **Secrets** (names only), **SSH** (where to connect, the host key to pin), **Account** (user, tenant, current organisation, key id, scopes), the **organisation switcher** at the top of the sidebar and **Members** (list; add, remove and change roles as an owner) |
+| `org:create` | **Create organization** in the switcher |
 | `sandbox:create` | the Playground, submitting and cancelling jobs, deploying (a JSON spec) and scaling services, creating volumes, a sandbox's Terminal, Suspend and Snapshot |
 | `sandbox:delete` | terminating sandboxes, deleting volumes and snapshots; with `sandbox:create`, removing a service |
 | `sandbox:ssh` | adding and removing your SSH keys, issuing a short-lived access token for a sandbox (shown once) |
 | `secrets:write` | setting and removing secrets. A value goes in a password field and is never shown: no call returns it |
-| `admin` | everything above, plus **Nodes** (health, allocated capacity, cordon, uncordon, drain, add, remove), **Lost sandboxes**, **Users & keys** (issue and revoke API keys, any user's SSH keys) and **Audit** |
+| `admin` | everything above, plus **Nodes** (health, allocated capacity, cordon, uncordon, drain, add, remove), **Lost sandboxes**, **Users & keys** (issue and revoke API keys, any user's SSH keys), **Organizations** (every organisation, with its members and owners) and **Audit** |
+
+The switcher keeps its choice per browser and sends `X-Sandbox-Org` on every
+call Studio makes, a terminal's included; switching clears what was loaded,
+so nothing of the previous organisation stays on screen. If the remembered
+one is no longer allowed — you were removed — Studio goes back to your key's
+own tenant and says so. On a plain `sandboxd` there is no switcher and Studio
+never asks for `/v1/orgs`.
 
 An action the key's scopes do not allow is not offered, rather than offered
 and refused. A screen the key may not have — an admin screen for a tenant's
@@ -455,6 +548,11 @@ in it.
   anything is looked up.
 - **Scopes are fixed at issue.** A key holds the scopes it was given; `admin`
   holds all of them.
+- **An organisation is chosen, never assumed.** `X-Sandbox-Org` selects a
+  tenant only for a key whose user is a member, checked once per request
+  before any handler runs; memberships come only from creating one or being
+  added by an owner, and an organisation's name cannot be a tenant already
+  in use ([Organisations](#organisations)).
 - **SSH is a scope of its own, and access ends with it.** An SSH key or token
   logs in only while its user holds an active key with `sandbox:ssh`, so a user
   left with read-only keys cannot open a shell. Revoking ends open connections,
@@ -675,7 +773,11 @@ atomically on every change).
   `sandbox:ssh` ([Revoking](#revoking)). An admin lists and removes any user's
   SSH keys with `GET /v1/admin/ssh-keys?user=U` and
   `DELETE /v1/admin/ssh-keys/{id}`.
-- **Quotas are per tenant and the same for every tenant**, set by flags.
+- **Quotas are per tenant and the same for every tenant**, set by flags; an
+  organisation is a tenant.
+- **Organisations cannot be deleted or renamed** yet, and memberships are
+  managed through the API, the CLI and Studio only (`sandbox-gateway` has no
+  offline command for them).
 - **No usage metering** beyond the per-node audit logs; each node keeps its own.
 - **The gateway does not proxy `GET /v1/node`**; node status is
   `GET /v1/admin/nodes`.
