@@ -421,7 +421,9 @@ func (g *Gateway) selectOrg(w http.ResponseWriter, r *http.Request, p Principal)
 		return p, true
 	}
 	t := tenantOfOrg(name)
-	if t == p.KeyTenant {
+	if t == p.KeyTenant || name == p.KeyTenant {
+		// The key's own tenant, by its wire name or, for a tenant an
+		// operator happened to call "default", by its own.
 		return p, true
 	}
 	allowed := false

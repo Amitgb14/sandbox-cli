@@ -433,7 +433,9 @@ could not reach already. A member is a user and the tenant of their own keys
 (a user name is unique only within a tenant), so `org members add` takes
 `--tenant` for someone from another tenant; a second user of the same name
 in one organisation is refused, because ownership inside it is keyed on the
-name. Owners add and remove members and change roles (`owner` or `member`);
+name. A key an operator issues with an organisation's name as its tenant is
+in that organisation from the start, as its own tenant, and can be made an
+owner like anyone else. Owners add and remove members and change roles (`owner` or `member`);
 members may list them. The last owner cannot be removed or demoted. There is
 no deleting an organisation yet.
 
