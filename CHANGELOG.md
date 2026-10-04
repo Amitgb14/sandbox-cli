@@ -277,6 +277,27 @@ In the rewrite:
   authentication. The Python and TypeScript SDKs gain `whoami`, `ssh_info`,
   `add_ssh_key`, `ssh_keys`, `remove_ssh_key` and `ssh_access` (camelCase in
   TypeScript), and the Go client gains these and the gateway's admin calls.
+- **A gateway's fleet can be watched, audited, drained and upgraded.**
+  `sandbox-gateway serve --metrics-listen` and `sandboxd --metrics-listen`
+  serve Prometheus metrics on a loopback address (nothing else is accepted,
+  since the endpoint has no credential): on the gateway, requests by route
+  and status, creates and their latency, refusals for quota or capacity,
+  scheduler decisions and health, capacity and free resources per node, SSH
+  connections, sessions and failed logins; on a node, sandboxes by state,
+  processes, pools and create latency. No label carries a user, a tenant or
+  a sandbox's name. The gateway keeps an audit log (`--audit-log`, by
+  default `audit/gateway.jsonl` beside its state file, mode 0600, rotated
+  like a node's) of every authenticated request and every SSH login and
+  session, naming key ids and key fingerprints and never a secret; an admin
+  reads it with `GET /v1/admin/audit` or `sandbox-cli gateway audit`.
+  `sandbox-cli gateway drain NODE [--terminate]` cordons a node and reports or
+  ends its sandboxes, and the gateway keeps it cordoned across the node's
+  restart until `sandbox-cli gateway uncordon NODE`, which makes a rolling
+  upgrade cordon, drain, upgrade, uncordon (docs/self-hosting.md). A sandbox
+  on a node that stops answering is now `503 unavailable` (was `internal`);
+  past `--node-lost-after` (5 minutes) it is listed by `sandbox-cli gateway
+  lost` and stops counting against its tenant's quota, and it is reconciled
+  from the node's own listing as soon as the node answers again.
 
 - **Studio is simpler.** It opens on the sandbox list instead of an overview of
   counts, in a near-monochrome theme with one quiet sidebar: Sandboxes,

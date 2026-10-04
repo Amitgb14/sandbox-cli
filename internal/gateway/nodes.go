@@ -40,6 +40,13 @@ type node struct {
 	status   *api.NodeStatus
 	placed   map[*placement]struct{}
 	heldFree int // polls in a row whose Free was not taken (poll)
+
+	// downSince is when the node last answered, or was added if never
+	// (lost.go); meaningful only while it is unhealthy. Under mu.
+	downSince time.Time
+	// wantCordon is the cordon the gateway asked for (drain.go), put back
+	// on a node that restarted without it. Under mu.
+	wantCordon bool
 }
 
 // placement is a sandbox the scheduler sent to a node and the node's status
@@ -52,7 +59,8 @@ type placement struct {
 
 func newNode(cfg NodeConfig, static bool, c *api.Client) *node {
 	base, rt, token := c.Transport()
-	return &node{cfg: cfg, static: static, client: c, base: base, rt: rt, token: token, placed: map[*placement]struct{}{}}
+	return &node{cfg: cfg, static: static, client: c, base: base, rt: rt, token: token, placed: map[*placement]struct{}{},
+		downSince: time.Now()}
 }
 
 // do sends one request to the node with the node's token.
@@ -131,6 +139,9 @@ func (n *node) candidate() (Candidate, bool) {
 		return Candidate{}, false
 	}
 	c := Candidate{Name: n.cfg.Name, Status: *n.status}
+	// A node the gateway cordoned and that restarted without it gets
+	// nothing new before the cordon is back (drain.go).
+	c.Status.Cordoned = c.Status.Cordoned || n.wantCordon
 	for p := range n.placed {
 		c.Reserved.CPUs += p.res.CPUs
 		c.Reserved.MemoryMB += p.res.MemoryMB
@@ -165,6 +176,11 @@ type poolConfig struct {
 	failAfter int
 	newClient func(NodeConfig) (*api.Client, error)
 	logf      func(string, ...any)
+	// changed, when set, is told when a node becomes healthy or unhealthy,
+	// after the poll that decided it has let go of the node's lock; and
+	// polled after every successful poll.
+	changed func(n *node, healthy bool)
+	polled  func(n *node, st api.NodeStatus)
 }
 
 // nodePool is every node the gateway knows, polled for health and capacity.
@@ -279,6 +295,13 @@ func (p *nodePool) poll(ctx context.Context, n *node) {
 		n.fails = p.cfg.failAfter
 		n.mu.Unlock()
 	}
+	// Run after the unlock below: the callbacks take locks of their own.
+	var after []func()
+	defer func() {
+		for _, f := range after {
+			f()
+		}
+	}()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err != nil {
@@ -287,14 +310,24 @@ func (p *nodePool) poll(ctx context.Context, n *node) {
 		if n.healthy && n.fails >= p.cfg.failAfter {
 			n.healthy = false
 			p.cfg.logf("node %s is not answering; it gets no new sandboxes: %v", n.cfg.Name, err)
+			if p.cfg.changed != nil {
+				after = append(after, func() { p.cfg.changed(n, false) })
+			}
 		}
 		return
 	}
 	if !n.healthy {
 		p.cfg.logf("node %s is answering", n.cfg.Name)
+		if p.cfg.changed != nil {
+			after = append(after, func() { p.cfg.changed(n, true) })
+		}
+	}
+	if p.cfg.polled != nil {
+		after = append(after, func() { p.cfg.polled(n, st) })
 	}
 	n.healthy, n.fails, n.lastErr = true, 0, ""
 	n.lastSeen = time.Now().UTC()
+	n.downSince = n.lastSeen
 	// A create in flight when the status was asked for may or may not be in
 	// its Free, and counting it both there and as a placement refuses
 	// creates there is room for — a burst near capacity would be turned

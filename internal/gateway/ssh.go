@@ -49,6 +49,11 @@ type SSHConfig struct {
 
 	// Now is the clock tokens are checked against; nil is time.Now.
 	Now func() time.Time
+
+	// Audit records every login and session (Gateway.AuditLog); Metrics
+	// counts them (Gateway.SSHMetrics). Either may be nil.
+	Audit   *AuditLog
+	Metrics *SSHMetrics
 }
 
 // DefaultShellArgv is the guest's best interactive shell, the same one
@@ -249,16 +254,25 @@ func (s *SSHServer) Close() error {
 // handleConn runs one connection: handshake and authentication (which
 // resolves the sandbox, once), then its channels until it ends.
 func (s *SSHServer) handleConn(nc net.Conn) {
+	s.cfg.Metrics.connOpened()
+	defer s.cfg.Metrics.connClosed()
 	login := &sshLogin{}
 	_ = nc.SetDeadline(time.Now().Add(s.cfg.HandshakeTimeout))
 	sconn, chans, reqs, err := ssh.NewServerConn(nc, s.serverConfig(login))
 	if err != nil {
 		// Authentication failures were logged where they were decided; this
 		// is the handshake ending, which is noise unless it says more.
+		if login.refused != "" {
+			s.cfg.Metrics.authFailed()
+			s.cfg.Audit.write(api.AuditEntry{Kind: "ssh", Action: "ssh.login", Result: "refused",
+				Remote: remoteIP(nc.RemoteAddr().String()), Fingerprint: login.refused})
+		}
 		return
 	}
 	_ = nc.SetDeadline(time.Time{})
 	defer sconn.Close()
+	login.remote = remoteIP(nc.RemoteAddr().String())
+	s.audit(login, "ssh.login", "")
 
 	ctx, cancel := context.WithCancel(s.baseCtx)
 	defer cancel()
@@ -286,6 +300,10 @@ func (s *SSHServer) handleConn(nc net.Conn) {
 			continue
 		}
 		release := func() { <-open }
+		if t := nch.ChannelType(); t == "session" || t == "direct-tcpip" {
+			s.cfg.Metrics.sessionOpened()
+			release = func() { s.cfg.Metrics.sessionClosed(); <-open }
+		}
 		switch nch.ChannelType() {
 		case "session":
 			wg.Add(1)

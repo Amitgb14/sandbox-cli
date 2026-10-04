@@ -127,6 +127,7 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 	res := api.NodeResources{CPUs: want.CPUs, MemoryMB: want.MemoryMB, DiskMB: want.DiskMB}
 	hold, err := g.reserveQuota(p.Tenant, res)
 	if err != nil {
+		g.metrics.refused.Inc(refusedQuota)
 		writeErr(w, http.StatusForbidden, api.CodeRefused, err.Error())
 		return
 	}
@@ -162,6 +163,7 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 			return
 		}
 		if err != nil {
+			g.metrics.refused.Inc(refusedCapacity)
 			msg := err.Error()
 			if want.Node != "" {
 				msg = "node " + want.Node + ", which holds what this sandbox needs, is not taking new sandboxes"
@@ -219,6 +221,7 @@ func (g *Gateway) createSandbox(w http.ResponseWriter, r *http.Request, p Princi
 			return
 		}
 		n.finishIf(pl, true)
+		noteSandbox(r.Context(), sb.ID, n.cfg.Name)
 		relay(w, resp, data)
 		return
 	}
@@ -252,6 +255,7 @@ func (g *Gateway) place(want Want, tried []string, res api.NodeResources) (*node
 	if n == nil {
 		return nil, nil, errNoCandidate
 	}
+	g.metrics.scheduled.Inc(name)
 	return n, n.reserve(res), nil
 }
 
@@ -401,6 +405,9 @@ func (g *Gateway) afterDelete(resp *http.Response, id string, o Owner) error {
 		return nil
 	}
 	g.tombs.add(id, o)
+	if _, held := g.store.OwnerOf(id); held {
+		g.metrics.terminated.Inc("delete")
+	}
 	if err := g.store.ForgetSandbox(id); err != nil {
 		g.logf("forgetting %s: %v", id, err)
 	}

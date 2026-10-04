@@ -37,7 +37,7 @@ type handlerFunc func(w http.ResponseWriter, r *http.Request, p Principal)
 func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
 	route := func(pattern string, raw bool, h handlerFunc) {
-		mux.Handle(pattern, g.guard(raw, h))
+		mux.Handle(pattern, g.observe(g.guard(raw, h)))
 	}
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -100,6 +100,9 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/admin/nodes", false, g.adminAddNode)
 	route("DELETE /v1/admin/nodes/{name}", false, g.adminRemoveNode)
 	route("POST /v1/admin/nodes/{name}/cordon", false, g.adminCordon)
+	route("POST /v1/admin/nodes/{name}/drain", false, g.adminDrain)
+	route("GET /v1/admin/lost", false, g.adminLost)
+	route("GET /v1/admin/audit", false, g.adminAudit)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")
@@ -122,6 +125,7 @@ func (g *Gateway) guard(raw bool, next handlerFunc) http.Handler {
 			writeErr(w, http.StatusUnauthorized, api.CodeUnauthorized, "missing or unknown API key")
 			return
 		}
+		notePrincipal(r.Context(), p)
 		if err := checkContentType(r, raw); err != nil {
 			writeErr(w, http.StatusUnsupportedMediaType, api.CodeInvalidRequest, err.Error())
 			return
@@ -229,7 +233,9 @@ func writeRouteErr(w http.ResponseWriter, err error, scope string) {
 	case errors.Is(err, ErrNotFound):
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
 	case errors.Is(err, ErrNodeDown):
-		writeErr(w, http.StatusServiceUnavailable, api.CodeInternal, ErrNodeDown.Error())
+		// Unavailable, not a state: the node may come back with the
+		// sandbox running (lost.go).
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, ErrNodeDown.Error())
 	case errors.As(err, &ae):
 		writeErr(w, ae.Status, ae.Code, ae.Message)
 	default:

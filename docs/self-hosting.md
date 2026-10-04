@@ -127,6 +127,42 @@ already there carry on. A cordon is held in memory, so a restart clears it;
 the gateway sees that on its next poll and cordons the node again if it still
 means to.
 
+`--metrics-listen 127.0.0.1:9100` serves Prometheus metrics at `/metrics`:
+sandboxes by state, processes running, pool sizes by image, capacity and
+free, cordon, and creates by status with a latency histogram. It has no
+credential, so `sandboxd` refuses any address but loopback; put a proxy with
+its own authentication in front if the scraper is elsewhere.
+
+### Upgrading nodes behind a gateway
+
+One node at a time, from a machine whose current context holds a gateway
+admin key:
+
+```sh
+sandbox-cli gateway drain n17               # cordon; prints how many sandboxes still run there
+sandbox-cli gateway drain n17               # again, until it says 0 — or end them now:
+sandbox-cli gateway drain n17 --terminate
+systemctl stop sandboxd && <install the new sandboxd> && systemctl start sandboxd
+sandbox-cli gateway nodes                   # n17 healthy, cordoned, on the new version
+sandbox-cli gateway uncordon n17
+```
+
+The gateway remembers that it cordoned the node: the restart clears the
+node's own cordon, and the gateway puts it back on its next poll and places
+nothing there in between, so the node takes new sandboxes only once you
+uncordon it. Without the CLI, the same calls are `POST
+/v1/admin/nodes/{name}/drain` with `{"terminate": false|true}` and `POST
+/v1/admin/nodes/{name}/cordon` with `{"cordoned": false}`.
+
+A node that stops answering is not drained: calls on its sandboxes answer
+`503 unavailable`, and after `--node-lost-after` (5 minutes by default) its
+sandboxes are listed by `sandbox-cli gateway lost` and stop counting against
+their tenants' quotas. They are not reported terminated, because the node may
+come back with them running; when it answers again they are reconciled from
+its own listing. Running several gateway replicas, and network isolation
+between tenants across nodes, are not done yet: today one gateway process
+holds its state file.
+
 ## Volumes
 
 Volumes are sparse ext4 files under `<state-dir>/volumes/`, attached to a VM as

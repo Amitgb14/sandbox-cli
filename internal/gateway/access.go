@@ -1,8 +1,6 @@
 package gateway
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -310,19 +308,10 @@ func (g *Gateway) adminCordon(w http.ResponseWriter, r *http.Request, p Principa
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such node")
 		return
 	}
-	body, _ := json.Marshal(req)
-	resp, err := n.do(r.Context(), http.MethodPost, "/v1/node/cordon", nil, bytes.NewReader(body), "application/json")
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
-		return
-	}
-	if resp.StatusCode >= 300 {
-		err := readAPIError(resp)
-		resp.Body.Close()
+	if err := g.cordonNode(r.Context(), n, req.Cordoned); err != nil {
 		writeRouteErr(w, err, ScopeAdmin)
 		return
 	}
-	resp.Body.Close()
 	g.nodes.poll(r.Context(), n)
 	g.logf("node %s cordoned=%v by %s", n.cfg.Name, req.Cordoned, p.KeyID)
 	writeJSON(w, http.StatusOK, n.info())

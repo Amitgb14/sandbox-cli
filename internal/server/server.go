@@ -83,6 +83,8 @@ type Server struct {
 	reaper        sync.Once
 	snapshotStore *snapshots
 	cordoned      bool // under mu; see node.go
+	metricsOnce   sync.Once
+	nm            *nodeMetrics // metrics.go
 }
 
 type record struct {
@@ -128,7 +130,7 @@ func (s *Server) Handler() http.Handler {
 	route("GET /v1/capabilities", false, s.capabilities)
 	route("GET /v1/node", false, s.node)
 	route("POST /v1/node/cordon", false, s.cordon)
-	route("POST /v1/sandboxes", false, s.createSandbox)
+	route("POST /v1/sandboxes", false, s.timedCreate)
 	route("GET /v1/sandboxes", false, s.listSandboxes)
 	route("GET /v1/sandboxes/{ref}", false, s.getSandbox)
 	route("PATCH /v1/sandboxes/{ref}", false, s.updateSandbox)

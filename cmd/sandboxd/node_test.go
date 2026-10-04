@@ -64,6 +64,11 @@ func TestRunRefusesABadNodeID(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "--client-ca") {
 		t.Fatalf("--client-ca without TLS: %v", err)
 	}
+	// Metrics have no credential: loopback only.
+	err = run([]string{"--backend", "fake", "--metrics-listen", "0.0.0.0:9100", "--listen", "unix://" + filepath.Join(t.TempDir(), "s.sock")})
+	if err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("--metrics-listen off loopback: %v", err)
+	}
 }
 
 func TestMemTotalMB(t *testing.T) {

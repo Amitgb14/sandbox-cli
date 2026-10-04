@@ -46,6 +46,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/macos"
+	"github.com/Amitgb14/sandbox-cli/internal/metrics"
 	"github.com/Amitgb14/sandbox-cli/internal/server"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
@@ -91,6 +92,7 @@ func run(args []string) error {
 	fl.IntVar(&node.memoryMB, "capacity-memory-mb", 0, "memory offered to sandboxes, MiB (default: all of it, on Linux)")
 	fl.IntVar(&node.diskMB, "capacity-disk-mb", 0, "disk offered to sandboxes, MiB (default: the size of the state directory's filesystem)")
 	fl.StringVar(&node.clientCA, "client-ca", "", "CA (PEM) whose certificates alone may connect; needs --tls-cert (mutual TLS, for a node behind a gateway)")
+	metricsListen := fl.String("metrics-listen", "", "loopback host:port to serve Prometheus metrics on, without a credential; off when empty")
 	showVersion := fl.Bool("version", false, "print the version and exit")
 	if err := fl.Parse(args); err != nil {
 		return err
@@ -103,6 +105,11 @@ func run(args []string) error {
 	labels, err := checkNodeFlags(node, *tlsCert != "")
 	if err != nil {
 		return err
+	}
+	if *metricsListen != "" {
+		if err := metrics.CheckAddr(*metricsListen); err != nil {
+			return err
+		}
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "sandboxd: "+format+"\n", a...) }
 
@@ -161,10 +168,11 @@ func run(args []string) error {
 		logPath = ""
 	}
 	nodeCap := capacity(node, *stateDir)
+	apiSrv := &server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts,
+		Audit: audit.NewLog(logPath), Logf: logf,
+		NodeID: node.id, NodeLabels: labels, Capacity: nodeCap}
 	srv := &http.Server{
-		Handler: (&server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts,
-			Audit: audit.NewLog(logPath), Logf: logf,
-			NodeID: node.id, NodeLabels: labels, Capacity: nodeCap}).Handler(),
+		Handler: apiSrv.Handler(),
 		// Output streams are long-lived, so there is no WriteTimeout; a client that
 		// stops reading is noticed through its context.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -194,7 +202,18 @@ func run(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
+	if *metricsListen != "" {
+		mln, err := metrics.Listen(*metricsListen)
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		msrv := &http.Server{Handler: apiSrv.MetricsHandler(), ReadHeaderTimeout: 10 * time.Second}
+		defer msrv.Close()
+		go func() { errc <- fmt.Errorf("metrics: %w", msrv.Serve(mln)) }()
+		logf("serving metrics on http://%s/metrics", mln.Addr())
+	}
 	go func() { errc <- srv.Serve(ln) }()
 	select {
 	case err := <-errc:
