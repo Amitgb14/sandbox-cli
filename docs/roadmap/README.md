@@ -32,6 +32,7 @@ earlier decisions are reversed and why.
 | # | Task | State |
 |---|------|-------|
 | 7 | [A gateway in front of many sandboxd nodes](task-7-fleet-gateway.md): sandboxes by API and SSH on one port across hundreds of machines, then agents, jobs and services, as a platform beside Kubernetes | **Proposed** 2026-10-04; five decisions needed before phase 1 |
+| 8 | [The gateway's state in PostgreSQL](task-8-postgres-store.md): several gateways serving one fleet, row-level security as a second wall between tenants, the file store kept as the default | **Proposed** 2026-10-04; five decisions, the driver first |
 
 ## Reversed decisions
 
