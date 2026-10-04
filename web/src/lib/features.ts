@@ -120,7 +120,7 @@ export const FEATURES: Feature[] = [
     title: "Egress is an allowlist of names",
     group: "network",
     flag: "--allow / --deny",
-    body: "The default policy permits the agent APIs and package registries and nothing else. The check is by name — TLS SNI, HTTP Host — so a host sharing an allowed address does not ride in on it; deny wins over allow, wildcards included.",
+    body: "Open by default; under an allowlist only the agent's API, package registries and the names you add get through. The check is by name — TLS SNI, HTTP Host — so a host sharing an allowed address does not ride in on it; deny wins over allow, wildcards included.",
     code: "sandbox-cli run --allow internal.registry.example.com -- npm ci",
     state: "default",
   },

@@ -87,9 +87,13 @@ type NetworkPolicy struct {
 }
 
 // DefaultPolicy is the policy a server starts with when its operator configured
-// nothing: the allowlist with the built-in baseline, which a request may extend
-// with any name and may never turn into open egress. That is the dev profile's
-// posture — open egress is a decision the operator makes, not one a request can.
+// nothing: open egress by default, so a sandbox reaches what any machine does
+// and an agent or a package install works without a list to maintain. A request
+// may still ask for less — an allowlist, which the backend enforces on the host,
+// or none — and the prod profile always does. An operator who wants the
+// allowlist as the floor sets it in the policy file (policy.example.yaml does),
+// and a request can then never widen it: the ceiling is the operator's, not the
+// request's.
 func DefaultPolicy() Policy {
 	return Policy{
 		DefaultImage:    policy.DefaultImage,
@@ -99,11 +103,19 @@ func DefaultPolicy() Policy {
 		DefaultIdleSecs: 1800,
 		Limits:          api.Limits{MaxCPUs: 8, MaxMemoryMB: 16384, MaxDiskMB: 102400, MaxIdleTimeoutSecs: 7 * 24 * 3600},
 		Network: NetworkPolicy{
-			Default:  api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: policy.BaselineEgress()},
-			Ceiling:  api.NetworkAllowlist,
+			Default:  api.NetworkPolicy{Mode: api.NetworkOpen},
+			Ceiling:  api.NetworkOpen,
 			MayAllow: []string{"*"},
 		},
 	}
+}
+
+// DefaultPolicyFor is DefaultPolicy fitted to a backend's capabilities, as
+// sandboxd does at startup: what a server with no policy file serves on that
+// backend.
+func DefaultPolicyFor(caps map[string]bool) Policy {
+	p, _ := DefaultPolicy().FitTo(caps)
+	return p
 }
 
 // Validate checks the policy is coherent, so a misconfigured server fails at
@@ -170,10 +182,15 @@ func (p Policy) FitTo(caps map[string]bool) (Policy, []string) {
 		n.Default = api.NetworkPolicy{Mode: api.NetworkNone}
 		n.MayAllow = nil
 	} else if !caps[api.CapEgressOpen] && n.Ceiling == api.NetworkOpen {
-		notes = append(notes, "this backend cannot offer open egress: the ceiling is allowlist")
 		n.Ceiling = api.NetworkAllowlist
+		// An open default this backend cannot give becomes the next thing it
+		// can: the allowlist with the built-in baseline, so agents still reach
+		// their APIs and registries. Never none by surprise, and never open.
 		if n.Default.Mode == api.NetworkOpen {
-			n.Default = api.NetworkPolicy{Mode: api.NetworkNone}
+			notes = append(notes, "this backend cannot offer open egress: the default is the allowlist, and the ceiling too")
+			n.Default = api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: policy.BaselineEgress()}
+		} else {
+			notes = append(notes, "this backend cannot offer open egress: the ceiling is allowlist")
 		}
 	}
 	p.Network = n
@@ -399,6 +416,14 @@ func ResolveNetworkUpdate(p *api.NetworkPolicy, pol Policy) (api.NetworkPolicy, 
 	return resolveNetwork(p, pol.Network)
 }
 
+// defaultAllow is the list an allowlist request without one gets.
+func defaultAllow(pol NetworkPolicy) []string {
+	if pol.Default.Mode == api.NetworkAllowlist {
+		return pol.Default.Allow
+	}
+	return policy.BaselineEgress()
+}
+
 func resolveNetwork(p *api.NetworkPolicy, pol NetworkPolicy) (api.NetworkPolicy, error) {
 	if p == nil {
 		return copyPolicy(pol.Default), nil
@@ -436,14 +461,17 @@ func resolveNetwork(p *api.NetworkPolicy, pol NetworkPolicy) (api.NetworkPolicy,
 		return out, nil
 	}
 
-	// allowlist. An omitted allow list means the server's default one; a given
-	// list is the whole list, so narrowing is just sending fewer names. Names
-	// from the default are always permitted, since the server already chose them.
+	// allowlist. An omitted allow list means the server's default one — or,
+	// when the default is not itself an allowlist (open, say), the built-in
+	// baseline, so "an allowlist" always means agents' APIs and registries
+	// rather than nothing. A given list is the whole list, so narrowing is
+	// just sending fewer names. Names from the default are always permitted,
+	// since the server already chose them.
 	if p.Allow == nil {
-		allow = append([]string(nil), pol.Default.Allow...)
+		allow = append([]string(nil), defaultAllow(pol)...)
 	} else {
 		for _, name := range allow {
-			if !contains(pol.Default.Allow, name) && !permitted(name, pol.MayAllow) {
+			if !contains(defaultAllow(pol), name) && !permitted(name, pol.MayAllow) {
 				return api.NetworkPolicy{}, refused("allow %q: this server does not let a request add that name (may_allow: %v)", name, pol.MayAllow)
 			}
 		}

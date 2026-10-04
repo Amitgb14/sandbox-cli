@@ -158,6 +158,21 @@ func TestProjectConfigNetworkDirectionOfTravel(t *testing.T) {
 		}
 	})
 
+	// With no user config the mode is the server's choice, which may be an
+	// operator's allowlist: a repository asking for open would widen it.
+	t.Run("asking for open over the server's choice is refused", func(t *testing.T) {
+		withUserConfig(t, "")
+		dir := t.TempDir()
+		writeProjectConfig(t, dir, "network:\n  mode: default\n")
+		if _, err := Load(dir, ""); err == nil {
+			t.Error("a project config asked for open egress over the server's default")
+		}
+		writeProjectConfig(t, dir, "network:\n  mode: allowlist\n")
+		if _, err := Load(dir, ""); err != nil {
+			t.Errorf("a project asking for an allowlist tightens, and must be allowed: %v", err)
+		}
+	})
+
 	t.Run("strengthening allowlist to none is allowed", func(t *testing.T) {
 		withAllowlistUser(t)
 		dir := t.TempDir()

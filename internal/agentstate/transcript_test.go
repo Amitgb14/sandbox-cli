@@ -15,7 +15,7 @@ import (
 // The transcript comes out of the guest: only .jsonl files in the agent's
 // bucket are read, and the conversation that ended last is the one handed on.
 func TestReadTranscriptFromTheSandbox(t *testing.T) {
-	srv := httptest.NewServer((&server.Server{Backend: fake.New(), Policy: spec.DefaultPolicy()}).Handler())
+	srv := httptest.NewServer((&server.Server{Backend: fake.New(), Policy: spec.DefaultPolicyFor(fake.New().Capabilities())}).Handler())
 	defer srv.Close()
 	c, err := api.NewClient(srv.URL, "")
 	if err != nil {

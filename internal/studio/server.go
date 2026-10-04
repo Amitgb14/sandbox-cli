@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/policy"
 )
 
 // LaunchRequest is a run started from Studio. It becomes the same request a
@@ -190,7 +191,10 @@ func (s *Server) proxy() http.HandlerFunc {
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	out := map[string]any{"context": s.Context, "version": s.Version}
+	// baseline_egress is the client's built-in allowlist, which --allow adds
+	// to when the server's default is not itself an allowlist: the Playground
+	// needs it to write API code that means what the CLI line does.
+	out := map[string]any{"context": s.Context, "version": s.Version, "baseline_egress": policy.BaselineEgress()}
 	if caps, err := s.Client.Capabilities(ctx); err == nil {
 		out["capabilities"] = caps
 	} else {

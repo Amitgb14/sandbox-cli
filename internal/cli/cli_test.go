@@ -46,10 +46,21 @@ func TestNetworkFollowsTheConfigAndTheProfile(t *testing.T) {
 	cases := []struct {
 		name, config string
 		rf           runFlags
+		agentHost    string
 		want         *api.NetworkPolicy // nil: the server's default
 		refused      bool
 	}{
 		{name: "nothing set", want: nil},
+		// The hole an open server default would open: an explicit allowlist
+		// sent as "nothing", and so served open.
+		{name: "an explicit allowlist is sent as one", config: "network:\n  mode: allowlist\n",
+			want: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com"}}},
+		{name: "an agent's API joins an explicit allowlist", config: "network:\n  mode: allowlist\n", agentHost: "api.anthropic.com",
+			want: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com", "api.anthropic.com"}}},
+		{name: "prod running an agent reaches its API and nothing else", config: "profile: prod\n", agentHost: "api.anthropic.com",
+			want: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"api.anthropic.com"}}},
+		{name: "an agent under none stays none", rf: runFlags{network: "none"}, agentHost: "api.anthropic.com",
+			want: &api.NetworkPolicy{Mode: api.NetworkNone}},
 		{name: "--allow adds to the baseline", rf: runFlags{allow: []string{"example.com"}},
 			want: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com", "example.com"}}},
 		{name: "--network none", rf: runFlags{network: "none"}, want: &api.NetworkPolicy{Mode: api.NetworkNone}},
@@ -77,7 +88,7 @@ func TestNetworkFollowsTheConfigAndTheProfile(t *testing.T) {
 			}
 			rf := tc.rf
 			var req api.CreateSandboxRequest
-			err := applyConfig(&rf, t.TempDir(), &req, caps)
+			err := applyConfig(&rf, t.TempDir(), &req, caps, tc.agentHost)
 			if tc.refused {
 				if err == nil {
 					t.Fatalf("not refused; network %+v", req.Network)
@@ -91,6 +102,27 @@ func TestNetworkFollowsTheConfigAndTheProfile(t *testing.T) {
 				t.Fatalf("network %+v, want %+v", req.Network, tc.want)
 			}
 		})
+	}
+}
+
+// With nothing asked for, the server's default applies; an agent run spells it
+// out only when that default is an allowlist missing the agent's API.
+func TestWithAgentAPI(t *testing.T) {
+	claude, _ := agents.Lookup("claude")
+	allowCaps := api.Capabilities{Network: api.NetworkCeiling{Default: api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"pypi.org"}}}}
+	openCaps := api.Capabilities{Network: api.NetworkCeiling{Default: api.NetworkPolicy{Mode: api.NetworkOpen}}}
+	if got := withAgentAPI(nil, &claude, allowCaps); got == nil || !reflect.DeepEqual(got.Allow, []string{"pypi.org", "api.anthropic.com"}) {
+		t.Errorf("an allowlist default without the agent's API: %+v", got)
+	}
+	if got := withAgentAPI(nil, &claude, openCaps); got != nil {
+		t.Errorf("an open default was spelled out: %+v", got)
+	}
+	if got := withAgentAPI(nil, nil, allowCaps); got != nil {
+		t.Errorf("a plain command was given an agent's API: %+v", got)
+	}
+	none := &api.NetworkPolicy{Mode: api.NetworkNone}
+	if got := withAgentAPI(none, &claude, allowCaps); got != none {
+		t.Errorf("none was changed: %+v", got)
 	}
 }
 
@@ -222,7 +254,7 @@ func TestProdTurnsPersistedLoginsOff(t *testing.T) {
 	os.MkdirAll(filepath.Join(home, "sandbox"), 0o700)
 	os.WriteFile(filepath.Join(home, "sandbox", "config.yaml"), []byte("profile: prod\nnetwork:\n  allow: [api.example]\n"), 0o600)
 	rf := &runFlags{}
-	if err := applyConfig(rf, t.TempDir(), &api.CreateSandboxRequest{}, api.Capabilities{}); err != nil {
+	if err := applyConfig(rf, t.TempDir(), &api.CreateSandboxRequest{}, api.Capabilities{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !rf.noPersistAuth {

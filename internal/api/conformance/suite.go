@@ -555,8 +555,8 @@ func testNetworkAboveCeiling(t *testing.T, e *env) {
 }
 
 func testNetworkEmptyAllowlist(t *testing.T, e *env) {
-	if api.NetworkRank(e.caps.Network.Ceiling) < api.NetworkRank(api.NetworkAllowlist) {
-		t.Skip("ceiling is below allowlist")
+	if api.NetworkRank(e.caps.Network.Ceiling) < api.NetworkRank(api.NetworkAllowlist) || !e.caps.Has(api.CapEgressAllowlist) {
+		t.Skip("no enforceable allowlist here")
 	}
 	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{
 		Network: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{}},
@@ -565,8 +565,8 @@ func testNetworkEmptyAllowlist(t *testing.T, e *env) {
 }
 
 func testNetworkDeny(t *testing.T, e *env) {
-	if api.NetworkRank(e.caps.Network.Ceiling) < api.NetworkRank(api.NetworkAllowlist) {
-		t.Skip("ceiling is below allowlist")
+	if api.NetworkRank(e.caps.Network.Ceiling) < api.NetworkRank(api.NetworkAllowlist) || !e.caps.Has(api.CapEgressAllowlist) {
+		t.Skip("no enforceable allowlist here")
 	}
 	sb := e.newSandbox(t, api.CreateSandboxRequest{
 		Network: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Deny: []string{"Gist.GitHub.com.", "gist.github.com"}},

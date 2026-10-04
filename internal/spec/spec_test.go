@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/policy"
 )
 
 func isRefused(err error) bool { var r *Refused; return errors.As(err, &r) }
@@ -23,6 +24,7 @@ func TestDefaultPolicyIsValid(t *testing.T) {
 // gives more to a client who asks for nothing than to one who asks politely.
 func TestValidateRefusesADefaultAboveTheCeiling(t *testing.T) {
 	p := DefaultPolicy()
+	p.Network.Ceiling = api.NetworkAllowlist
 	p.Network.Default = api.NetworkPolicy{Mode: api.NetworkOpen}
 	if err := p.Validate(); err == nil {
 		t.Fatal("a default of open under an allowlist ceiling was accepted")
@@ -44,14 +46,63 @@ func TestResolveAppliesDefaults(t *testing.T) {
 		s.MemoryMB != p.DefaultMemoryMB || s.DiskMB != p.DefaultDiskMB {
 		t.Errorf("defaults not applied: %+v", s)
 	}
-	if !reflect.DeepEqual(s.Network.Allow, p.Network.Default.Allow) || s.Network.Mode != api.NetworkAllowlist {
+	// With no policy file the default is open.
+	if s.Network.Mode != api.NetworkOpen || len(s.Network.Allow) != 0 {
 		t.Errorf("network default not applied: %+v", s.Network)
 	}
-	// The default is copied, not aliased: a later edit to one sandbox's policy
-	// must not reach the server's default.
+	// An operator's allowlist default is applied as given, and copied, not
+	// aliased: a later edit to one sandbox's policy must not reach the
+	// server's default.
+	p.Network.Default = api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"pypi.org", "github.com"}}
+	s, err = Resolve(api.CreateSandboxRequest{}, p, "sbx_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(s.Network.Allow, p.Network.Default.Allow) || s.Network.Mode != api.NetworkAllowlist {
+		t.Errorf("an allowlist default not applied: %+v", s.Network)
+	}
 	s.Network.Allow[0] = "mutated.example"
 	if p.Network.Default.Allow[0] == "mutated.example" {
 		t.Error("the resolved allow list aliases the policy's default")
+	}
+}
+
+// Open by default, fitted to what a backend can give: open where it can, the
+// allowlist with the baseline where it can only filter, none where it can do
+// neither. Never none by surprise on a backend that can filter, and never open
+// on one that cannot.
+func TestDefaultPolicyFitsTheBackend(t *testing.T) {
+	for name, c := range map[string]struct {
+		caps          map[string]bool
+		mode, ceiling string
+	}{
+		"open and allowlist": {map[string]bool{api.CapEgressOpen: true, api.CapEgressAllowlist: true}, api.NetworkOpen, api.NetworkOpen},
+		"allowlist only":     {map[string]bool{api.CapEgressAllowlist: true}, api.NetworkAllowlist, api.NetworkAllowlist},
+		"open only":          {map[string]bool{api.CapEgressOpen: true}, api.NetworkOpen, api.NetworkOpen},
+		"no networking":      {map[string]bool{}, api.NetworkNone, api.NetworkNone},
+	} {
+		p := DefaultPolicyFor(c.caps)
+		if p.Network.Default.Mode != c.mode || p.Network.Ceiling != c.ceiling {
+			t.Errorf("%s: default %s, ceiling %s; want %s, %s", name, p.Network.Default.Mode, p.Network.Ceiling, c.mode, c.ceiling)
+		}
+		if c.mode == api.NetworkAllowlist && !reflect.DeepEqual(p.Network.Default.Allow, policy.BaselineEgress()) {
+			t.Errorf("%s: the fallback allowlist is %v, want the baseline", name, p.Network.Default.Allow)
+		}
+		if err := p.Validate(); err != nil {
+			t.Errorf("%s: the fitted policy is invalid: %v", name, err)
+		}
+	}
+}
+
+// Under an open default, "an allowlist" without names is the built-in
+// baseline — agents' APIs and registries — and never an empty list.
+func TestAnUnnamedAllowlistUnderAnOpenDefaultIsTheBaseline(t *testing.T) {
+	s, err := Resolve(api.CreateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkAllowlist}}, DefaultPolicy(), "sbx_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Network.Mode != api.NetworkAllowlist || !reflect.DeepEqual(s.Network.Allow, policy.BaselineEgress()) {
+		t.Errorf("got %+v; want the allowlist with the baseline", s.Network)
 	}
 }
 
@@ -153,6 +204,7 @@ func TestNetworkTightenNeverLoosen(t *testing.T) {
 // may_allow ["*"] permits any name — and still not a mode above the ceiling.
 func TestMayAllowStarIsNotACeiling(t *testing.T) {
 	pol := DefaultPolicy().Network
+	pol.Ceiling = api.NetworkAllowlist
 	if _, err := resolveNetwork(net(api.NetworkAllowlist, []string{"anything.dev"}, nil), pol); err != nil {
 		t.Fatalf("may_allow [*] refused a name: %v", err)
 	}
@@ -178,6 +230,7 @@ func TestDenyIsAlwaysAccepted(t *testing.T) {
 
 func TestUpdateUsesTheSameRule(t *testing.T) {
 	p := DefaultPolicy()
+	p.Network.Ceiling, p.Network.Default = api.NetworkAllowlist, api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: policy.BaselineEgress()}
 	if _, err := ResolveNetworkUpdate(nil, p); !isInvalid(err) {
 		t.Errorf("nil update: %v", err)
 	}

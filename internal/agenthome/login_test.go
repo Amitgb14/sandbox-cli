@@ -26,7 +26,7 @@ import (
 func TestSavedLoginsCarryNoCommands(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	ctx := context.Background()
-	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy()}).Handler())
+	srv := httptest.NewServer((&server.Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicyFor(fake.New(api.CapEgressAllowlist).Capabilities())}).Handler())
 	defer srv.Close()
 	c, _ := api.NewClient(srv.URL, "")
 	newSB := func() string {

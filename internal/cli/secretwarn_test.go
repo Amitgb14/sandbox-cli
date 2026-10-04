@@ -113,7 +113,7 @@ func TestApplyConfigWarnsOnALongLivedSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := api.CreateSandboxRequest{}
-	if err := applyConfig(&runFlags{}, t.TempDir(), &req, api.Capabilities{}); err != nil {
+	if err := applyConfig(&runFlags{}, t.TempDir(), &req, api.Capabilities{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if req.Env["GITHUB_TOKEN"] != pat {

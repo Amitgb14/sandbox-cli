@@ -199,10 +199,10 @@ func restrictedProjectKeys(src, inherited Config) []string {
 }
 
 // inheritedNetworkMode spells the mode in force for a message, including the
-// empty value that means "the built-in default".
+// empty value that means "the server's default".
 func inheritedNetworkMode(inherited Config) string {
 	if inherited.Network.Mode == "" {
-		return "default"
+		return "server's default"
 	}
 	return inherited.Network.Mode
 }
@@ -214,10 +214,13 @@ func networkStrength(mode string) int {
 	switch mode {
 	case "none":
 		return 2 // no network at all
-	case "allowlist":
-		return 1 // default-deny egress
+	case "allowlist", "":
+		// "" is the server's choice, which may be an allowlist: ranked with it,
+		// so a project can ask for an allowlist or none but never for open on
+		// a server whose operator chose less. Open is the user's to choose.
+		return 1
 	default:
-		return 0 // "" / "default": unrestricted bridge
+		return 0 // "default": open egress
 	}
 }
 

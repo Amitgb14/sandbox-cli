@@ -3,8 +3,10 @@ package cli
 import (
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/creds"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
@@ -47,7 +49,7 @@ func loadConfig(project, configPath, profile string, ov policy.Overrides) (polic
 // names forwarded from the host, and secrets resolved here on the host by the
 // credential broker), and network. The prod profile turns persisted logins
 // off, so a refresh token never enters a sandbox there.
-func applyConfig(rf *runFlags, project string, req *api.CreateSandboxRequest, caps api.Capabilities) error {
+func applyConfig(rf *runFlags, project string, req *api.CreateSandboxRequest, caps api.Capabilities, agentHost string) error {
 	ov, err := rf.overrides()
 	if err != nil {
 		return err
@@ -94,7 +96,7 @@ func applyConfig(rf *runFlags, project string, req *api.CreateSandboxRequest, ca
 			set(v.Name, v.Value)
 		}
 	}
-	if req.Network, err = resolveNetwork(cfg, rf.allow, rf.deny, caps); err != nil {
+	if req.Network, err = resolveNetwork(cfg, rf.allow, rf.deny, caps, agentHost); err != nil {
 		return err
 	}
 	if !cfg.PersistAuthEnabled() {
@@ -120,6 +122,37 @@ func (rf *runFlags) overrides() (policy.Overrides, error) {
 	return ov, nil
 }
 
+// withAgentAPI adds an agent run's own API host to an allowlist that lacks it.
+//
+// An agent that cannot reach its model does not run at all, so under any
+// allowlist — the prod profile's, which starts empty, included — the agent's
+// provider is the one name it always gets. It is the host the agent was going
+// to talk to anyway, chosen by sandbox-cli's descriptor table and never by the
+// repository or the agent; every other name still has to be asked for. Open
+// and none are left as they are: open already reaches it, and none was a
+// request for nothing.
+func withAgentAPI(n *api.NetworkPolicy, agent *agents.Descriptor, caps api.Capabilities) *api.NetworkPolicy {
+	if agent == nil || agent.ProviderHost == "" {
+		return n
+	}
+	host := agent.ProviderHost
+	if n == nil {
+		// The server's default applies. Only an allowlist default lacking the
+		// host needs spelling out; an open or none default stays the server's.
+		d := caps.Network.Default
+		if d.Mode != api.NetworkAllowlist || slices.Contains(d.Allow, host) {
+			return nil
+		}
+		return &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: append(append([]string{}, d.Allow...), host)}
+	}
+	if n.Mode != api.NetworkAllowlist || slices.Contains(n.Allow, host) {
+		return n
+	}
+	out := *n
+	out.Allow = append(append([]string{}, n.Allow...), host)
+	return &out
+}
+
 // resolveNetwork is the network a run asks for: the resolved config, with
 // --allow and --deny on top. It is the one place that decides it, for run,
 // the agent commands, routing and Studio, so none of them
@@ -133,7 +166,7 @@ func (rf *runFlags) overrides() (policy.Overrides, error) {
 // An allowlist that resolves to nothing is refused. That is prod's shape until
 // it names its hosts, and sending nothing instead would hand the run the
 // server's default, whose baseline prod exists to turn off.
-func resolveNetwork(cfg policy.Config, allow, deny []string, caps api.Capabilities) (*api.NetworkPolicy, error) {
+func resolveNetwork(cfg policy.Config, allow, deny []string, caps api.Capabilities, agentHost string) (*api.NetworkPolicy, error) {
 	switch cfg.Network.Mode {
 	case "none":
 		return &api.NetworkPolicy{Mode: api.NetworkNone}, nil
@@ -141,12 +174,29 @@ func resolveNetwork(cfg policy.Config, allow, deny []string, caps api.Capabiliti
 		return &api.NetworkPolicy{Mode: api.NetworkOpen, Deny: deny}, nil
 	}
 	named := policy.DedupeDomains(append(append([]string{}, cfg.Network.Allow...), allow...))
-	if cfg.Network.BaselineEnabled() && len(named) == 0 && len(deny) == 0 {
+	// Nothing asked for: the server's default, whatever it is (open on a
+	// sandboxd with no policy file). An explicit allowlist is never this:
+	// sending nothing for it would hand the run the server's default, which
+	// may be open.
+	if cfg.Network.Mode == "" && len(named) == 0 && len(deny) == 0 {
 		return nil, nil
 	}
 	var domains []string
 	if cfg.Network.BaselineEnabled() {
-		domains = append(domains, caps.Network.Default.Allow...)
+		// The server's default list, or the built-in baseline when its default
+		// is not an allowlist (open, say): --allow adds to agents' APIs and
+		// registries, as it always has, rather than replacing them.
+		if caps.Network.Default.Mode == api.NetworkAllowlist {
+			domains = append(domains, caps.Network.Default.Allow...)
+		} else {
+			domains = append(domains, policy.BaselineEgress()...)
+		}
+	}
+	// An agent run's own API is the one host an allowlist always has: an agent
+	// that cannot reach its model does not run at all (see withAgentAPI). It
+	// counts as named, so prod's empty list resolves to just that host.
+	if agentHost != "" {
+		named = append(named, agentHost)
 	}
 	domains = policy.DedupeDomains(append(domains, named...))
 	if len(domains) == 0 {

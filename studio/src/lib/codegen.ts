@@ -20,9 +20,11 @@ export interface RunConfig {
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
   /**
-   * The server's default allowlist. `--allow` on the CLI adds to it, where the
-   * API's `allow` replaces it, so an API snippet spells the list out whole —
-   * otherwise the same run is stricter from code than from the terminal.
+   * What `--allow` on the CLI adds to: the server's default allowlist, or the
+   * built-in baseline when the server's default is not an allowlist. The
+   * API's `allow` replaces rather than adds, so an API snippet spells the list
+   * out whole — otherwise the same run is stricter from code than from the
+   * terminal.
    */
   defaultAllow?: string[];
 }

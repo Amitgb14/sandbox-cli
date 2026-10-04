@@ -29,7 +29,8 @@ func serveFake(t *testing.T, pol spec.Policy, withAudit bool, caps ...string) *a
 // The suite against the fake, with the default policy and every capability the
 // fake can pretend to have.
 func TestFakeDefaultPolicy(t *testing.T) {
-	Run(t, serveFake(t, spec.DefaultPolicy(), true, api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot, api.CapVolumes))
+	caps := []string{api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot, api.CapVolumes}
+	Run(t, serveFake(t, spec.DefaultPolicyFor(capSet(caps...)), true, caps...))
 }
 
 // An endpoint that cannot filter egress — a backend without host networking.
@@ -44,7 +45,7 @@ func TestFakeNoEgress(t *testing.T) {
 // permits no names beyond its default — so the capability-gated and
 // may_allow-gated branches of the suite run too, not only their happy paths.
 func TestFakeNarrowPolicy(t *testing.T) {
-	pol := spec.DefaultPolicy()
+	pol := spec.DefaultPolicyFor(capSet(api.CapEgressAllowlist))
 	pol.Network.MayAllow = nil
 	Run(t, serveFake(t, pol, false, api.CapEgressAllowlist))
 }
@@ -72,4 +73,13 @@ func TestEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	Run(t, c)
+}
+
+// capSet is a capability list as the map a backend reports.
+func capSet(caps ...string) map[string]bool {
+	m := map[string]bool{}
+	for _, c := range caps {
+		m[c] = true
+	}
+	return m
 }

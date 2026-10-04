@@ -229,6 +229,25 @@ In the rewrite:
 
 ### Changed
 
+- **Egress is open by default, and an agent under an allowlist can always
+  reach its API.** A `sandboxd` with no policy file now gives a sandbox open
+  egress unless the run asks for less. Where the backend can filter but not
+  open, the default is the allowlist with the built-in list, never none by
+  surprise. Without root there is still no network at all, and `run` now says
+  so when it refuses one. An allowlist is what `--network allowlist`,
+  `--allow` and the `prod` profile ask for, and under any of them an agent run
+  always has its own API host, so `--profile prod` runs claude against
+  api.anthropic.com and nothing else unless you name more. A config that says
+  `network: mode: allowlist` is sent as an allowlist, never left to a server
+  default that may now be open, and a project `.sandbox.yaml` still cannot
+  ask for open. The example operator policy keeps the allowlist as its
+  default for shared machines.
+
+- **`run` shows progress while it waits.** The first use of an image pulls it
+  and builds its disk before anything runs, which can take minutes and used to
+  look like a hang. `run` now says what it is waiting for, how long it has
+  taken, and that interrupting stops the build.
+
 - **Studio is reorganised around sandboxes, the way hosted sandbox dashboards
   are.** The Overview shows what is running, agents waiting for you, snapshots
   and volumes, and a quick start in the CLI, curl, Python or TypeScript when

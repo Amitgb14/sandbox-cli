@@ -14,7 +14,7 @@ import (
 )
 
 func newServer(token string) *Server {
-	return &Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy(), Token: token}
+	return &Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicyFor(fake.New(api.CapEgressAllowlist).Capabilities()), Token: token}
 }
 
 func do(t *testing.T, h http.Handler, method, target, host, origin, token, ct string, body []byte) *httptest.ResponseRecorder {
@@ -182,7 +182,7 @@ func TestFollowAfterExit(t *testing.T) {
 // it first: `kill db` must stop the running db, not report the dead one
 // already gone and leave the live one running.
 func TestANameResolvesToTheLiveSandbox(t *testing.T) {
-	srv := httptest.NewServer((&Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicy()}).Handler())
+	srv := httptest.NewServer((&Server{Backend: fake.New(api.CapEgressAllowlist), Policy: spec.DefaultPolicyFor(fake.New(api.CapEgressAllowlist).Capabilities())}).Handler())
 	defer srv.Close()
 	c, _ := api.NewClient(srv.URL, "")
 	ctx := context.Background()

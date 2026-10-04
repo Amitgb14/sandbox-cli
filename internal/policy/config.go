@@ -535,7 +535,11 @@ func Default() Config {
 		// phase was hardened — BASH_ENV and friends reserved, PATH pinned, the
 		// agent HOME off the image PATH — and it costs ~166ms of startup. Still a
 		// privileged phase, no longer the larger risk.
-		Network: NetworkSpec{Mode: "allowlist"},
+		// "" is the server's choice: open on a sandboxd with no policy file,
+		// the allowlist where the backend can only filter, whatever the
+		// operator set otherwise. --network and network.mode ask for more or
+		// less; the prod profile always asks for the allowlist.
+		Network: NetworkSpec{Mode: ""},
 		// Secure-by-default hardening. Dropping all capabilities and forbidding
 		// privilege escalation is essentially free for the non-root `sandbox`
 		// user and closes the obvious escape routes; the pids cap blunts fork
