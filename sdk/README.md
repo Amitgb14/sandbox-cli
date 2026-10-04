@@ -40,7 +40,22 @@ request that started it has gone (README, "Agents and jobs on a fleet"):
 | `secrets()` | `secrets()` | the tenant's secrets by name |
 | `delete_secret(name)` | `deleteSecret(name)` | |
 
-The gateway's admin calls (API keys, nodes, cordon) are in the Go client only.
+And organizations (docs/fleet.md, "Organisations"). A client made with
+`org="acme"` (Python) or `{ org: "acme" }` (TypeScript), or derived with
+`with_org("acme")` / `withOrg("acme")`, sends `X-Sandbox-Org: acme` on every
+request, so everything it does acts in that organization; the gateway answers
+`not_found` for one the key's user is not a member of.
+
+| Python | TypeScript | |
+|---|---|---|
+| `orgs()` | `orgs()` | the organizations the key may act in, its own tenant first (`default` when unnamed) |
+| `create_org(name)` | `createOrg(name)` | needs `org:create`; you become its owner |
+| `org_members(org)` | `orgMembers(org)` | any member may list them |
+| `set_org_member(org, user, role="", tenant="")` | `setOrgMember(org, user, {role?, tenant?})` | owners add a member or change a role |
+| `remove_org_member(org, user, tenant="")` | `removeOrgMember(org, user, tenant?)` | owners; what the member had open there ends at once |
+
+The gateway's admin calls (API keys, nodes, cordon) are in the Go client only;
+`admin_orgs()` / `adminOrgs()` lists every organization for an admin key.
 
 Byte fields are bytes (`bytes` / `Uint8Array`); the wire format's base64 is
 handled inside. A sandbox has no repository: put code in with the files calls,

@@ -26,6 +26,13 @@ REPLIES = {
     ("GET", "/v1/ssh-keys"): {"keys": [{"id": "sk_1", "fingerprint": "SHA256:k", "key": "ssh-ed25519 AAAA me",
                                         "created": "2026-10-04T00:00:00Z"}]},
     ("DELETE", "/v1/ssh-keys/sk%2F1"): None,
+    ("GET", "/v1/orgs"): {"orgs": [{"name": "default", "role": "member", "current": True},
+                                   {"name": "acme", "role": "owner", "current": False}]},
+    ("POST", "/v1/orgs"): {"name": "acme", "role": "owner", "current": False},
+    ("GET", "/v1/orgs/acme/members"): {"members": [{"user": "ana", "role": "owner"}]},
+    ("POST", "/v1/orgs/acme/members"): {"user": "bob", "tenant": "t2", "role": "member"},
+    ("DELETE", "/v1/orgs/acme/members/bob?tenant=t2"): None,
+    ("GET", "/v1/admin/orgs"): {"orgs": [{"name": "acme", "members": 2, "owners": 1}]},
     ("POST", "/v1/sandboxes/demo/ssh-access"): {"user": "tok", "host": "gw.example", "port": 2222,
                                                 "expires_at": "2026-10-04T00:15:00Z",
                                                 "command": "ssh -p 2222 tok@gw.example"},
@@ -37,6 +44,7 @@ class _Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n)) if n else None
         self.server.seen.append((self.command, self.path, self.headers.get("Authorization"), body))
+        self.server.orgs.append(self.headers.get("X-Sandbox-Org"))
         key = (self.command, self.path)
         if key not in REPLIES:
             data = json.dumps({"error": {"code": "not_found", "message": "no such endpoint"}}).encode()
@@ -61,6 +69,7 @@ class GatewayTest(unittest.TestCase):
     def setUpClass(cls):
         cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         cls.srv.seen = []
+        cls.srv.orgs = []
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls.c = Client(f"http://127.0.0.1:{cls.srv.server_address[1]}", token="gw-key")
 
@@ -71,6 +80,32 @@ class GatewayTest(unittest.TestCase):
 
     def last(self):
         return self.srv.seen[-1]
+
+    def test_org_header(self):
+        # Sent on every request of a client made with org=, or with_org; not
+        # otherwise, and the original is left as it was.
+        c = Client(f"http://127.0.0.1:{self.srv.server_address[1]}", token="gw-key", org="acme")
+        c.whoami()
+        self.assertEqual(self.srv.orgs[-1], "acme")
+        c.ssh_keys()
+        self.assertEqual(self.srv.orgs[-1], "acme")
+        self.c.whoami()
+        self.assertIsNone(self.srv.orgs[-1])
+        self.c.with_org("beta").whoami()
+        self.assertEqual(self.srv.orgs[-1], "beta")
+        self.c.whoami()
+        self.assertIsNone(self.srv.orgs[-1])
+
+    def test_orgs(self):
+        self.assertEqual([o["name"] for o in self.c.orgs()], ["default", "acme"])
+        self.assertEqual(self.c.create_org("acme")["role"], "owner")
+        self.assertEqual(self.last(), ("POST", "/v1/orgs", "Bearer gw-key", {"name": "acme"}))
+        self.assertEqual(self.c.org_members("acme")[0]["user"], "ana")
+        self.c.set_org_member("acme", "bob", tenant="t2")
+        self.assertEqual(self.last(), ("POST", "/v1/orgs/acme/members", "Bearer gw-key", {"user": "bob", "tenant": "t2"}))
+        self.c.remove_org_member("acme", "bob", tenant="t2")
+        self.assertEqual(self.last()[:2], ("DELETE", "/v1/orgs/acme/members/bob?tenant=t2"))
+        self.assertEqual(self.c.admin_orgs()[0]["members"], 2)
 
     def test_whoami(self):
         self.assertEqual(self.c.whoami()["user"], "ana")
