@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -231,12 +232,30 @@ func writeRouteErr(w http.ResponseWriter, err error, scope string) {
 	case errors.Is(err, ErrNotFound):
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
 	case errors.Is(err, ErrNodeDown):
-		writeErr(w, http.StatusServiceUnavailable, api.CodeInternal, ErrNodeDown.Error())
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, ErrNodeDown.Error())
 	case errors.As(err, &ae):
 		writeErr(w, ae.Status, ae.Code, ae.Message)
+	case errors.As(err, new(*net.OpError)):
+		// A node stopped answering before a poll noticed: unavailable,
+		// as once it has.
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "a node did not answer")
 	default:
 		writeErr(w, http.StatusBadGateway, api.CodeInternal, "a node did not answer")
 	}
+}
+
+// writeUnreachable answers for a node a request could not reach:
+// unavailable, as for a node the gateway already knows is down. A node not
+// answering is not a bug, and the client may try again.
+func writeUnreachable(w http.ResponseWriter, n *node) {
+	writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "node "+n.cfg.Name+" did not answer")
+}
+
+// neverSent reports whether a round trip's error means no connection to the
+// node was made, so the node cannot have acted on the request.
+func neverSent(err error) bool {
+	var oe *net.OpError
+	return errors.As(err, &oe) && oe.Op == "dial"
 }
 
 // relay writes a node's response as it came.

@@ -51,6 +51,7 @@ make build                  # -> bin/sandbox-cli
 go vet ./...
 go test ./...               # unit tests; no VM, no daemon
 go test -race ./...
+make e2e                    # the real binaries: two fake-backend nodes, a gateway, sandbox-cli and ssh
 go test ./internal/policy -run TestProjectConfigRefusesPrivilegedKeys   # one test
 go build -o bin/sandboxd ./cmd/sandboxd
 
@@ -97,6 +98,7 @@ internal/
 packaging/systemd/      sandboxd and sandbox-gateway units, an example operator policy (docs/self-hosting.md)
 packaging/fleet/        certificates for a gateway and its nodes, an example node file (docs/fleet.md)
 packaging/launchd/      the macOS launch agent (docs/local-macos.md)
+test/e2e/               the real binaries end to end (build tag e2e; make e2e)
 sdk/                    Python (tested: make test-sdk) and TypeScript clients
   agenthome/  agent logins and the tools volume, copied in and out of the sandbox user's home
   state/ cli/ version/

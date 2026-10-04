@@ -3,7 +3,7 @@ PKG := github.com/Amitgb14/sandbox-cli
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build studio install test test-sdk test-integration lint fmt clean snapshot release docker-build image
+.PHONY: build studio install test test-sdk test-integration e2e lint fmt clean snapshot release docker-build image
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
@@ -55,6 +55,12 @@ test:
 # The Python SDK against a real sandboxd (the in-memory backend).
 test-sdk: build
 	SANDBOXD=$(CURDIR)/bin/sandboxd python3 -m unittest discover -s sdk/python/tests
+
+# The real binaries end to end: two sandboxd nodes on the fake backend,
+# sandbox-gateway in front, sandbox-cli and the system ssh (if any) against it.
+# No VM, no root; builds into a temporary directory (test/e2e).
+e2e:
+	go test -tags e2e -count=1 -v ./test/e2e
 
 # Requires a running Docker daemon; builds the base image on first run.
 test-integration:

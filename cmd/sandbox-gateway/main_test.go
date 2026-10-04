@@ -218,7 +218,7 @@ func TestServe(t *testing.T) {
 	if who.User != "root" {
 		t.Fatalf("whoami %+v", who)
 	}
-	if _, err := c.Capabilities(context.Background()); !api.IsCode(err, api.CodeInternal) {
+	if _, err := c.Capabilities(context.Background()); !api.IsCode(err, api.CodeUnavailable) {
 		t.Fatalf("capabilities with no nodes: %v", err)
 	}
 	if _, err := run(t, "--state", state, "keys", "revoke", "key_x"); err == nil || !strings.Contains(err.Error(), "admin API") {

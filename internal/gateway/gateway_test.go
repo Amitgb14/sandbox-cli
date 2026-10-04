@@ -154,7 +154,9 @@ func TestUnhealthyNodeGetsNoNewSandboxes(t *testing.T) {
 	resp := tg.raw(http.MethodGet, "/v1/sandboxes/"+on1, "", "")
 	resp.Body.Close()
 	_, err := alice.Sandbox(ctx, on1)
-	if e, ok := err.(*api.Error); !ok || e.Status != http.StatusServiceUnavailable {
+	// unavailable, not internal: a node that is down is not a bug, and a
+	// client may try again.
+	if e, ok := err.(*api.Error); !ok || e.Status != http.StatusServiceUnavailable || e.Code != api.CodeUnavailable {
 		t.Fatalf("a sandbox on a down node: %v", err)
 	}
 	var info api.NodeList
@@ -549,12 +551,28 @@ func TestNoNodeAnswering(t *testing.T) {
 	tg := startGateway(t, nil, n1)
 	alice := tg.user("alice")
 	_, err := alice.Capabilities(ctxT(t))
-	if e, ok := err.(*api.Error); !ok || e.Status != http.StatusServiceUnavailable {
+	if e, ok := err.(*api.Error); !ok || e.Status != http.StatusServiceUnavailable || e.Code != api.CodeUnavailable {
 		t.Fatalf("capabilities with no node: %v", err)
 	}
 	_, err = alice.CreateSandbox(ctxT(t), api.CreateSandboxRequest{})
-	if e, ok := err.(*api.Error); !ok || e.Status != http.StatusServiceUnavailable {
+	if e, ok := err.(*api.Error); !ok || e.Status != http.StatusServiceUnavailable || e.Code != api.CodeUnavailable {
 		t.Fatalf("create with no node: %v", err)
+	}
+	_, err = alice.CreateVolume(ctxT(t), api.CreateVolumeRequest{Name: "cache"})
+	if e, ok := err.(*api.Error); !ok || e.Status != http.StatusServiceUnavailable || e.Code != api.CodeUnavailable {
+		t.Fatalf("volume with no node: %v", err)
+	}
+}
+
+// A fleet whose every node is cordoned answers unavailable, as one cordoned
+// node does: the client is told to wait or go elsewhere, not that it hit a bug.
+func TestEveryNodeCordoned(t *testing.T) {
+	n1 := startNode(t, "n1", allCaps...)
+	n1.cordoned.Store(true)
+	tg := startGateway(t, nil, n1)
+	_, err := tg.user("alice").CreateSandbox(ctxT(t), api.CreateSandboxRequest{})
+	if e, ok := err.(*api.Error); !ok || e.Status != http.StatusServiceUnavailable || e.Code != api.CodeUnavailable {
+		t.Fatalf("create on a cordoned fleet: %v", err)
 	}
 }
 
@@ -586,5 +604,60 @@ func TestNodeConfigChecks(t *testing.T) {
 	}
 	if _, err := NewNodeClient(NodeConfig{Name: "n1", Endpoint: "unix:///x", TokenFile: tok}); err == nil || !strings.Contains(err.Error(), "readable by others") {
 		t.Fatalf("a token file others can read: %v", err)
+	}
+}
+
+// A node that stops answering between polls is still marked healthy for a
+// while. A create placed on it must not fail when the request never reached
+// it: the next node is tried. A call to a sandbox on it is unavailable, as
+// once the gateway knows the node is down — not a bug, and worth a retry.
+func TestNodeGoneBetweenPolls(t *testing.T) {
+	n1 := startNode(t, "n1", allCaps...)
+	n2 := startNode(t, "n2", allCaps...)
+	tg := startGateway(t, func(c *Config) { c.PollInterval = time.Hour }, n1, n2)
+	alice := tg.user("alice")
+	ctx := ctxT(t)
+	var onN2 string
+	for range 6 {
+		sb, err := alice.CreateSandbox(ctx, api.CreateSandboxRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nodeOf(tg, sb.ID) == "n2" {
+			onN2 = sb.ID
+			break
+		}
+	}
+	if onN2 == "" {
+		t.Fatal("no sandbox was placed on n2")
+	}
+	n2.ts.Close() // connections to it are refused from now on
+
+	for i := range 6 {
+		sb, err := alice.CreateSandbox(ctx, api.CreateSandboxRequest{})
+		if err != nil {
+			t.Fatalf("create %d with n2 gone but not yet noticed: %v", i, err)
+		}
+		if nodeOf(tg, sb.ID) != "n1" {
+			t.Fatalf("create %d landed on %s", i, sb.ID)
+		}
+	}
+	_, err := alice.Sandbox(ctx, onN2)
+	if e, ok := err.(*api.Error); !ok || e.Status != http.StatusServiceUnavailable || e.Code != api.CodeUnavailable {
+		t.Fatalf("a sandbox on a node that stopped answering: %v", err)
+	}
+	// The listing leaves the node out, as it does once a poll marks it
+	// down, rather than failing for every user.
+	list, err := alice.Sandboxes(ctx)
+	if err != nil {
+		t.Fatalf("listing with a node that stopped answering: %v", err)
+	}
+	for _, sb := range list {
+		if nodeOf(tg, sb.ID) != "n1" {
+			t.Fatalf("listed %s", sb.ID)
+		}
+	}
+	if len(list) < 6 {
+		t.Fatalf("listed %d sandboxes, want n1's (at least 6)", len(list))
 	}
 }
