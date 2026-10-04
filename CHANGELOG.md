@@ -89,6 +89,12 @@ in `_old/` as reference, to be ported where this design still wants it.
   boot anything. A development build now defaults to
   `ghcr.io/amitgb14/sandbox-base:edge`. A release build is stamped with the
   image published under its own tag, so it never drifts onto a newer one.
+- **The installer checks everything before installing anything.** It used to
+  install the client and then look for `sandboxd`. Run against a release from
+  before the rewrite (0.0.1, which ships only the container-based client), that
+  left the old client installed and then failed. Now every binary is extracted
+  and verified first, nothing is installed if one is missing, and the error says
+  the release predates the rewrite and how to build the current one.
 - **Work that comes back can be mirrored to S3, so it outlives the machine.**
   Mirroring is off unless you add `mirror:` to `~/.config/sandbox/config.yaml`;
   a project's `.sandbox.yaml` cannot set it. When it is on, every bring-back
