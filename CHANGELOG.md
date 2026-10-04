@@ -316,6 +316,13 @@ that fails on the code before the fix:
 
 ### Changed
 
+- **The site's fleet setup goes past the first key.** `/setup` now shows using a
+  fleet — SSH on one port, `scp` and `ssh-access`, secrets, jobs and services —
+  organizations (create, switch, members, and what isolates them), and that
+  revoking a key ends what it has open at once, with a link to the walkthrough
+  that checks a fleet end to end. `/studio` describes the organization switcher
+  and the hosted build without admin screens.
+
 - **Studio's screens have their own changelog,** [studio/CHANGELOG.md](studio/CHANGELOG.md).
   This file keeps what changes the CLI, the API or a command Studio runs.
 

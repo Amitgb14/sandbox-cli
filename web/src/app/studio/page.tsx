@@ -49,6 +49,14 @@ const SCREENS = [
     name: "Through a gateway",
     what: "When the context is a sandbox-gateway, Studio asks who the API key is and adds what that key may use: Jobs, Services, Secrets (names only), SSH and Account — and for an admin key, Nodes, Lost sandboxes, Users & keys and Audit. Actions the key's scopes do not allow are not offered. A plain sandboxd shows exactly the screens above.",
   },
+  {
+    name: "Organizations",
+    what: "On a gateway, a switcher at the top of the sidebar lists the organizations you belong to. Switching clears everything shown, so nothing of the last one stays on screen; Create organization (with org:create) makes one you own, and Members lets an owner add and remove people. On a plain sandboxd there is no switcher.",
+  },
+  {
+    name: "A hosted dashboard",
+    what: "Built with NEXT_PUBLIC_STUDIO_ADMIN=off, Studio leaves the admin screens out of the bundle entirely, for a dashboard served to many tenants. The gateway's refusal stays the control; the build only means they are not shipped.",
+  },
 ];
 
 const GUARDS = [

@@ -11,6 +11,9 @@ import {
   FLEET_GATEWAY_CODE,
   FLEET_NODE_CODE,
   FLEET_USER_CODE,
+  FLEET_USE_CODE,
+  FLEET_ORGS_CODE,
+  FLEET_REVOKE_CODE,
   INSTALL_STEP,
   LAUNCH_AGENT_CODE,
   UNINSTALL_STEPS,
@@ -289,6 +292,42 @@ const FLEET_STEPS: Step[] = [
       </>
     ),
   },
+  {
+    title: "Use it: SSH, secrets, jobs and services",
+    code: FLEET_USE_CODE,
+    body: (
+      <>
+        One SSH port reaches every sandbox, with no tunnel or port per sandbox: the user name is the sandbox.
+        Logging in needs a key with <code>sandbox:ssh</code>. A secret is sealed on the gateway and reaches only
+        the runs that name it. A job runs each attempt in a fresh sandbox and keeps its output and the files it
+        names; a service keeps its replicas healthy, rolls a new spec out one at a time, and with{" "}
+        <code>serve --router-domain</code> answers at <code>&lt;service&gt;--&lt;org&gt;.DOMAIN</code>.
+      </>
+    ),
+  },
+  {
+    title: "Organizations",
+    code: FLEET_ORGS_CODE,
+    body: (
+      <>
+        An organization is isolated: its sandboxes, secrets, jobs, services and quota are its own, and a name or
+        an id from another one answers as if it did not exist. A key acts in its own organization, and in those
+        its user created or was added to; nothing else, whatever a request asks for. Removing a member ends what
+        they had open there at once. Studio has the same switcher at the top of its sidebar.
+      </>
+    ),
+  },
+  {
+    title: "Revoke a key: access ends now",
+    code: FLEET_REVOKE_CODE,
+    body: (
+      <>
+        Revoking ends what the key already has open — SSH sessions, followed logs, attach sessions and tunnels —
+        and cancels its user&apos;s running jobs when no other key of theirs is active, rather than waiting for
+        them to finish. Each is recorded in the audit log, by key id and never by secret.
+      </>
+    ),
+  },
 ];
 
 const TROUBLE: { symptom: React.ReactNode; fix: React.ReactNode }[] = [
@@ -521,7 +560,9 @@ export default function SetupPage() {
           <p className="mt-8 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             On one machine the gateway can sit beside sandboxd, reaching it on a loopback port with its token. Node
             and gateway flags, the admin API, scopes, quotas, the security model and what is not done yet are in{" "}
-            <a className="underline" href={DOC_URL.fleet}>docs/fleet.md</a>.
+            <a className="underline" href={DOC_URL.fleet}>docs/fleet.md</a>. To check a fleet end to end — one KVM
+            machine and a laptop, every step with what a pass looks like — follow{" "}
+            <a className="underline" href={DOC_URL.fleetWalkthrough}>the fleet walkthrough</a>.
           </p>
         </Section>
 

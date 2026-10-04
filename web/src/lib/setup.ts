@@ -199,3 +199,22 @@ sandbox-cli context add fleet https://gateway.example.internal:8443 \\
   --token-file fleet.key --ca ca.pem
 sandbox-cli context use fleet && sandbox-cli whoami
 sandbox-cli ssh demo`;
+
+export const FLEET_USE_CODE = `sandbox-cli run --keep --name demo -- uname -a
+sandbox-cli ssh demo                          # a shell; exit leaves demo running
+scp -P 2222 file demo@gateway.example.internal:   # sftp, rsync and ssh -L work too
+sandbox-cli ssh-access demo --ttl 10m         # a one-off ssh line, no key registered
+
+printf %s "$TOKEN" | sandbox-cli secret set GITHUB_TOKEN   # sealed; never shown again
+sandbox-cli job run -f job.yaml --wait        # a fresh sandbox per run, output kept a day
+sandbox-cli service deploy -f service.yaml    # replicas kept healthy, rolled out one at a time`;
+
+export const FLEET_ORGS_CODE = `sandbox-cli org create acme                   # needs a key with org:create; you own it
+sandbox-cli org use acme                      # this context now acts in acme
+sandbox-cli org members add bob               # owners only; --role owner to share ownership
+sandbox-cli --org team-a ls                   # one command in another organization
+sandbox-cli org ls                            # the organizations you may act in`;
+
+export const FLEET_REVOKE_CODE = `curl -sS --cacert ca.pem -H "Authorization: Bearer $(cat ops.key)" \\
+  -X DELETE https://gateway.example.internal:8443/v1/admin/keys/KEY_ID
+sandbox-cli gateway audit                     # ssh.revoked, api.revoked, job.revoked`;
