@@ -35,6 +35,7 @@ export const DOC_URL = {
   localMac: `${BLOB}/docs/local-macos.md`,
   selfHosting: `${BLOB}/docs/self-hosting.md`,
   fleet: `${BLOB}/docs/fleet.md`,
+  fleetWalkthrough: `${BLOB}/docs/testing/fleet-walkthrough.md`,
   agents: `${REPO_URL}#coding-agents`,
   security: `${BLOB}/docs/security/README.md`,
   changelog: `${BLOB}/CHANGELOG.md`,
