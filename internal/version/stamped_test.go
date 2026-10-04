@@ -40,4 +40,9 @@ func TestEveryShippedBuildStampsTheVersion(t *testing.T) {
 	if stamped := strings.Count(string(b), flag); builds == 0 || stamped < builds {
 		t.Errorf(".goreleaser.yaml has %d builds and stamps the version in %d", builds, stamped)
 	}
+	// And its own base image, so a release boots the image published with it
+	// rather than whatever :edge has become (policy.DefaultImage).
+	if img := strings.Count(string(b), "internal/policy.DefaultImage=ghcr.io/amitgb14/sandbox-base:{{ .Tag }}"); img < builds {
+		t.Errorf(".goreleaser.yaml has %d builds and stamps the default image in %d", builds, img)
+	}
 }

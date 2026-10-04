@@ -65,3 +65,13 @@ func TestMirrorIsValidated(t *testing.T) {
 		t.Error("defaults")
 	}
 }
+
+// The default image is one a registry serves: a host, a path and a tag. The
+// bare name it used to be was beta.15's local docker tag, and a sandboxd
+// started without --default-image could boot nothing.
+func TestDefaultImageIsPullable(t *testing.T) {
+	host, rest, ok := strings.Cut(DefaultImage, "/")
+	if !ok || !strings.Contains(host, ".") || !strings.Contains(rest, ":") {
+		t.Errorf("DefaultImage %q is not a fully qualified image reference", DefaultImage)
+	}
+}

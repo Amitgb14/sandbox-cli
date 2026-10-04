@@ -83,6 +83,12 @@ in `_old/` as reference, to be ported where this design still wants it.
   settings the new client reads.
 - **`agent claude` runs the image's Claude Code.** It no longer downloads a
   self-updating copy at the start of each run.
+- **`sandboxd` boots a published image when none is named.** The built-in
+  default was `sandbox-base`, beta.15's local docker tag, which no registry
+  serves. A `sandboxd` started without `--default-image` therefore could not
+  boot anything. A development build now defaults to
+  `ghcr.io/amitgb14/sandbox-base:edge`. A release build is stamped with the
+  image published under its own tag, so it never drifts onto a newer one.
 - **The installer checks everything before installing anything.** It used to
   install the client and then look for `sandboxd`. Run against a release from
   before the rewrite (0.0.1, which ships only the container-based client), that

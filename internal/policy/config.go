@@ -478,11 +478,19 @@ func dedupePaths(in []string) []string {
 	return out
 }
 
-// DefaultImage is the base image a config names when nothing else does. The
-// image package owns the real reference (a hash of the embedded image
-// definition) and sets this at startup; it is a variable rather than an import
-// so policy depends on nothing below it.
-var DefaultImage = "sandbox-base"
+// DefaultImage is the image a sandbox boots when nothing names one: the
+// published base image (images/base, built by the base-image workflow).
+//
+// A development build follows main: :edge is built from the same commits as
+// the guest agent it runs with. A release build is stamped at link time with
+// its own tag (.goreleaser.yaml), so a release never drifts onto a newer image:
+//
+//	-X github.com/Amitgb14/sandbox-cli/internal/policy.DefaultImage=ghcr.io/amitgb14/sandbox-base:<tag>
+//
+// It was the bare name "sandbox-base", beta.15's local docker tag, which no
+// registry serves, so a sandboxd started without --default-image could boot
+// nothing.
+var DefaultImage = "ghcr.io/amitgb14/sandbox-base:edge"
 
 // Default returns the built-in base configuration.
 // PersistAuthEnabled reports the effective value: on unless explicitly off.
