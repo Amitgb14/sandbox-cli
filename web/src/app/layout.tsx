@@ -23,7 +23,7 @@ const geistMono = Geist_Mono({
 
 const TITLE = "sandbox-cli — isolated microVM sandboxes, on your Mac, your server or the cloud";
 const DESCRIPTION =
-  "A disposable microVM for any command — a test suite, or Claude Code and Codex at full autonomy — behind one API, on your Mac, a Linux machine you control, or the cloud. Your repository goes in as a git bundle; nothing of yours is mounted; egress is an allowlist enforced outside the guest.";
+  "A disposable microVM for any command — a test suite, or Claude Code and Codex at full autonomy — behind one API, on your Mac, a Linux machine you control, or the cloud. A sandbox starts in its own home directory; nothing of yours is mounted; egress is an allowlist enforced outside the guest.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://github.com/Amitgb14/sandbox-cli"),

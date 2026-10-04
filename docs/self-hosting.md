@@ -60,8 +60,8 @@ booted ahead of requests. A create that names nothing fixed at boot beyond
 that image is then a claim rather than a boot, under a millisecond rather than
 about 100 ms, and the pool refills behind it. Requests may still differ in
 environment, name, labels and idle timeout, because the server applies those.
-Anything else boots fresh: other resources, another network policy, volumes, a
-bind or a snapshot.
+Anything else boots fresh: other resources, another network policy, volumes or
+a snapshot.
 
 ```yaml
 pools:

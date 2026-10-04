@@ -161,7 +161,7 @@ const AgentLabel = "agent"
 // Look gathers the evidence for one sandbox over the API and decides.
 //
 // The agent is the sandbox's first process: a run starts it first, and what
-// sandbox-cli runs beside it later — checkpoints, bring-back — comes after. A
+// sandbox-cli runs beside it later — saving its login — comes after. A
 // sandbox with no agent label is not an agent run, and is Unknown rather than
 // read as one.
 func Look(ctx context.Context, c *api.Client, sb api.Sandbox, now time.Time) Report {

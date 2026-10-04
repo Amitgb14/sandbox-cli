@@ -4,16 +4,16 @@ Isolated microVM sandboxes for any command — on your Mac, on a Linux machine y
 control, or in the cloud, behind one API. Coding agents are a layer on top
 (`sandbox-cli agent`), not a requirement.
 
-Every sandbox is a VM with its own kernel. Your repository goes in as a git
-bundle and the agent's work comes back as one, into `refs/sandbox/<name>`, for
-you to review and merge. Nothing on your machine is mounted into the guest
-unless you ask (and never your home directory). Egress is an allowlist of names,
-enforced outside the guest where the agent cannot reach it.
+Every sandbox is a VM with its own kernel. A sandbox is not built around your
+repository: every process starts in the sandbox user's home, `/sandbox/home`,
+and code gets in the way it gets into any machine, by `git clone` inside the
+sandbox or through the files API. None of your files are mounted into the
+guest, and nothing comes back to your machine except an agent's saved login. Egress is an
+allowlist of names, enforced outside the guest where the agent cannot reach it.
 
 ```
-  your repo ── git bundle ──►  sandbox VM  (/workspace, its own kernel)
-            ◄── git bundle ──  the agent's commits → refs/sandbox/<name>
-
+  sandbox VM  (its own kernel; processes start in /sandbox/home)
+  code:     git clone inside the sandbox, or the files API; volumes keep data between runs
   network:  only names on the allowlist; DNS answers nothing else
   logins:   copied in and out per run, never a mounted host directory
 ```
@@ -39,33 +39,20 @@ beyond what `sandbox-cli doctor` reports.
 sandbox-cli context add box https://sandbox.example.internal:7443 --token-file ~/box.token --ca ~/box-ca.pem
 sandbox-cli context use box          # or stay on "local"
 
-cd ~/projects/myapp
-sandbox-cli run -- npm test          # a fresh VM on a clone of this repo; its exit code is yours
+sandbox-cli run -- uname -a         # a fresh VM; its exit code is yours
+sandbox-cli run -- sh -c 'git clone https://github.com/you/app && cd app && npm test'   # needs a network that reaches github.com
 sandbox-cli run --network none -- make
 sandbox-cli run --keep --name dev -- bash
-sandbox-cli list · logs ID · attach ID · kill ID · bring-back ID
+sandbox-cli list · logs ID · attach ID · kill ID
 sandbox-cli snapshot · suspend · resume · tunnel
 sandbox-cli events ID                # what the sandbox was asked to do, and how it ended
 sandbox-cli volume create cache; sandbox-cli run --volume cache:/sandbox/home/.cache -- npm ci
 sandbox-cli run --label team=infra -- make; sandbox-cli list --label team=infra
 ```
 
-When a run ends, new commits — including anything left uncommitted — are
-fetched into `refs/sandbox/<name>`. Your branches are never touched:
-
-```sh
-git log -p HEAD..refs/sandbox/sbx_…
-git merge refs/sandbox/sbx_…
-```
-
-While a run is attached, its working tree is also checkpointed to
-`refs/sandbox/checkpoints/<id>` every five minutes (`--checkpoint-every`). So is
-a detached run while you are attached to it (`sandbox-cli attach`), and each
-fleet task while `agent fleet run` waits on it. That doesn't touch the sandbox's
-own index or branches. If the CLI is killed, the
-machine sleeps or the VM dies, `sandbox-cli recover` says where each run's work
-still is: in a sandbox you can still bring back, in its last checkpoint, or
-nowhere.
+Work done in a sandbox stays there. To keep it, push it from inside (a commit
+made in a sandbox carries a neutral `sandbox` identity), read it out through the
+files API, or write it to a volume, which outlives the VM.
 
 ## Coding agents
 
@@ -89,17 +76,11 @@ When a provider is down, a run can fall through to another agent:
 sandbox-cli agent claude --fallback codex -p "fix the failing test"
 ```
 
-Each provider is probed before a sandbox is made for it. A run that fails
-having changed nothing is retried with the next agent in a fresh sandbox, with
-a briefing from the first agent at `/sandbox/context`. That briefing is not a
-resumed conversation. A run that changed files is never retried. Put
+Each provider is probed before a sandbox is made for it, and one that is down
+is skipped for the next. A run that started is never retried with another
+agent: it may have done work, and that work must not be done twice. Put
 `routing: [claude, codex]` in `~/.config/sandbox/config.yaml` to make a chain
 the default; a project's `.sandbox.yaml` cannot set it.
-
-To keep work that comes back beyond this machine, add a `mirror:` block to your
-own config. Every bring-back is then also copied to an S3-compatible bucket.
-`sandbox-cli mirror fetch` brings it back on any clone, checked before it lands.
-`sandbox-cli mirror --help` has the config.
 
 With several agents going, `sandbox-cli agent state` says which one needs
 you. It reports working, blocked (quiet at a terminal, so waiting for an
@@ -112,22 +93,14 @@ sandbox-cli agent state
 sandbox-cli agent wait fix-auth --state blocked --state done --state failed --timeout 30m
 ```
 
-```sh
-sandbox-cli agent fleet run -f fleet.yaml  # one agent per branch, in parallel sandboxes
-sandbox-cli agent fleet status
-sandbox-cli agent fleet land --all         # merge what verified
-```
-
 ## Studio
 
 ```sh
-cd ~/projects/myapp
 sandbox-cli studio          # prints http://127.0.0.1:7080/#token=…
 ```
 
-The same sandboxes in a browser: launch a command or an agent on a clone of the
-repository, use its terminal, watch its output, files and audit events, bring
-its work back and review the diff, land a fleet. Studio is served by
+The same sandboxes in a browser: launch a command or an agent, use its
+terminal, watch its output, files and audit events. Studio is served by
 `sandbox-cli` itself on a loopback port, needs the token it prints, and talks to
 the current context's `sandboxd` without handing that `sandboxd`'s token to the
 browser. See [studio/README.md](studio/README.md).

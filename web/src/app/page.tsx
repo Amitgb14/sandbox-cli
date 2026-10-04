@@ -21,7 +21,7 @@ import { CodeBlock } from "@/components/code-block";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { AGENTS } from "@/lib/agents";
-import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, SETUP_PATH } from "@/lib/site";
+import { DOC_URL, REPO_URL, SETUP_PATH } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const EXPOSED = [
@@ -33,7 +33,7 @@ const EXPOSED = [
 
 const CONTAINED = [
   "Nothing of yours is mounted — there is nothing to read",
-  "The repository is a clone; your checkout is never written",
+  "It starts in its own home directory; nothing comes back but the agent's login",
   "Injection lands in a VM that is discarded with the sandbox",
   "Its own kernel, behind a hypervisor, not a namespace",
 ];
@@ -47,7 +47,7 @@ const INVARIANTS = [
   {
     icon: ShieldCheck,
     title: "The guest is hostile",
-    body: "The host talks to one agent in the VM over a bounded protocol and never acts on what the guest volunteers. A bundle coming back is verified against your repository and must carry exactly one ref; host-side git runs with every hook and filter neutralised.",
+    body: "The host talks to one agent in the VM over a bounded protocol and never acts on what the guest volunteers. Nothing in the guest can name a host path for the host to read, and the only thing that comes back is the agent's saved login.",
   },
   {
     icon: Cpu,
@@ -56,28 +56,20 @@ const INVARIANTS = [
   },
 ];
 
-const RECOVER = `sandbox-cli recover
-# SANDBOX               STARTED  SANDBOX STATE  CHECKPOINT  REPOSITORY
-# sbx_579194ea61058897  4m ago   gone           1m ago      /home/you/src/app
-#
-# sbx_579194ea61058897: the sandbox is gone; its last checkpoint is refs/sandbox/checkpoints/sbx_579194ea61058897
-#   review: git log -p HEAD..refs/sandbox/checkpoints/sbx_579194ea61058897 · merge: git merge …`;
-
-const BRING_BACK = `sandbox-cli run -- sh -c 'make fix && git commit -qam fix; echo note > TODO'
-# sandbox-cli: work brought back to refs/sandbox/sbx_cf20dd8c24c71989
-#   review: git log -p HEAD..refs/sandbox/sbx_cf20dd8c24c71989 · merge: git merge refs/sandbox/sbx_cf20dd8c24c71989`;
+const HOME = `sandbox-cli run -- pwd
+# /sandbox/home
+sandbox-cli agent claude -p "clone github.com/you/app and fix its failing test"`;
 
 const EVENTS = `sandbox-cli events sbx_cf20dd8c24c71989
 # 2026-10-02 03:17:02  sandbox.created     image sandbox-base · network none · env SECRET_TOKEN · labels team=infra
-# 2026-10-02 03:17:02  workspace.in        branch sandbox
 # 2026-10-02 03:17:02  process.started     pid 1 · sh -c echo hi > note.txt; exit 4
 # 2026-10-02 03:17:02  process.exited      pid 1 exit 4 after 0s
-# 2026-10-02 03:17:02  workspace.out       ab74a8aab9aed487e0714e71d9dd3f8fe306985e..sandbox
 # 2026-10-02 03:17:02  sandbox.terminated  request`;
 
-const FLEET = `sandbox-cli agent claude --fallback codex -p "fix the flaky test"
-sandbox-cli agent fleet run -f fleet.yaml   # one agent per branch, in parallel sandboxes
-sandbox-cli agent fleet land --all          # merge only what its verify accepted`;
+const PARALLEL = `sandbox-cli agent claude --fallback codex -p "fix the flaky test"   # codex if claude's provider is down
+sandbox-cli agent claude --detach -p "clone github.com/you/app and fix issue 12"
+sandbox-cli agent codex --detach -- exec "clone github.com/you/app and fix issue 31"
+sandbox-cli agent state                    # what each one is doing`;
 
 export default function Home() {
   return (
@@ -196,7 +188,7 @@ export default function Home() {
           <SectionHead
             eyebrow="the network half of the problem"
             title="An allowlist of names, enforced where the agent cannot reach"
-            lead="A sandbox can still read your repository, so the question is where that can go. The default policy permits the agent APIs and package registries and nothing else, checked by name on the host — so npm install works and a POST to somebody's webhook does not."
+            lead="A sandbox can still read whatever the agent cloned into it, so the question is where that can go. The default policy permits the agent APIs and package registries and nothing else, checked by name on the host — so npm install works and a POST to somebody's webhook does not."
           />
           <EgressVisualizer />
         </Section>
@@ -204,20 +196,11 @@ export default function Home() {
         {/* ------------------------------------------------------ workspace */}
         <Section id="workspace" tinted>
           <SectionHead
-            eyebrow="your repository"
-            title="A git bundle in, verified commits out"
-            lead="The sandbox gets a clone, never your checkout. When the run ends, everything it left — committed or not — comes back into refs/sandbox/<id>, verified against your repository, and your branches do not move until you merge. While a run is attached, its working tree is checkpointed every five minutes, so a crash costs minutes rather than the run."
+            eyebrow="where the work happens"
+            title="A sandbox starts in its own home directory"
+            lead="Every process starts in /sandbox/home, the sandbox user's home. Nothing on your machine is mounted in: code gets there the way it gets onto any machine — the agent or the command runs git clone, or the files API writes it. When the sandbox ends, nothing comes back to your machine but the agent's saved login."
           />
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <p className="eyebrow">when the run ends</p>
-              <CodeBlock code={BRING_BACK} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <p className="eyebrow">when something ended it first</p>
-              <CodeBlock code={RECOVER} />
-            </div>
-          </div>
+          <CodeBlock code={HOME} />
         </Section>
 
         {/* ------------------------------------------------------- sessions */}
@@ -258,18 +241,15 @@ export default function Home() {
           />
           <AgentExplorer />
           <div className="mt-6 flex flex-col gap-3 rounded-2xl border bg-card p-5">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="text-[0.95rem] font-semibold tracking-tight">
-                Fallbacks when a provider is down, and fleets of agents
-              </h3>
-              <Link
-                href={MULTI_AGENT_PATH}
-                className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                running a fleet <ArrowUpRight className="size-3.5" />
-              </Link>
-            </div>
-            <CodeBlock code={FLEET} />
+            <h3 className="text-[0.95rem] font-semibold tracking-tight">
+              Fallbacks when a provider is down, and several agents at once
+            </h3>
+            <p className="text-[0.82rem] leading-relaxed text-muted-foreground">
+              --fallback probes each agent&apos;s provider before launch and starts the first one
+              that answers. Several agents are several independent runs, each in its own sandbox:
+              start them with --detach and check on them with agent state.
+            </p>
+            <CodeBlock code={PARALLEL} />
           </div>
         </Section>
 

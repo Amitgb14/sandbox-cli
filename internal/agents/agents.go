@@ -1,10 +1,10 @@
 // Package agents describes the AI coding agents sandbox-cli knows how to start,
 // as data rather than as code duplicated per subcommand.
 //
-// Each agent needs the same four things known in two different places: the
-// interactive `sandbox-cli agent claude` / `sandbox-cli agent codex` wrappers, and the
-// headless fleet runner that launches many agents at once. Keeping that
-// knowledge in one table is what stops the two paths from drifting — a fleet run
+// Each agent needs the same four things known in several places: the
+// interactive `sandbox-cli agent claude` / `sandbox-cli agent codex` wrappers,
+// a routed run's fallback, and Studio's unattended launch. Keeping that
+// knowledge in one table is what stops the paths from drifting — a headless run
 // must forward the same environment and persist the same login as the wrapper,
 // or an agent that works interactively fails detached for reasons nobody can see.
 //
@@ -18,7 +18,7 @@ import "sort"
 
 // Descriptor is everything sandbox-cli needs to know to start one agent.
 type Descriptor struct {
-	// Name is the subcommand and the fleet `agent:` value, e.g. "claude".
+	// Name is the subcommand and the routing: value, e.g. "claude".
 	Name string
 
 	// PersistDir names the sandbox-owned host directory that holds this agent's
@@ -45,8 +45,8 @@ type Descriptor struct {
 	// — a keyring that is not there, a browser that cannot open — and the values
 	// are constants compiled in here, never anything read from the host.
 	//
-	// In the descriptor rather than in the wrapper because a fleet gets no
-	// wrapper: a setting left behind there — a keyring the sandbox has no daemon
+	// In the descriptor rather than in the wrapper because a headless run gets
+	// no wrapper: a setting left behind there — a keyring the sandbox has no daemon
 	// for is the standing example — is an agent that logs in every run and,
 	// unattended, cannot.
 	//
@@ -63,8 +63,8 @@ type Descriptor struct {
 	// AutonomousArgs returns the arguments that make the agent run prompt to
 	// completion without ever asking a human anything.
 	//
-	// This is the contract that makes detached runs possible at all: a fleet
-	// container has no terminal attached, so an agent that stops to ask for
+	// This is the contract that makes detached runs possible at all: a headless
+	// run has no terminal attached, so an agent that stops to ask for
 	// permission does not fail — it hangs until someone kills it. Every
 	// descriptor must therefore return a genuinely non-interactive argv, which
 	// for most agents means opting out of their approval prompts. Detached and
@@ -118,7 +118,7 @@ type Descriptor struct {
 	// truth, and assuming it was cost a real run: opencode reads a lone
 	// positional as **the project directory to open**, so a console run carrying
 	// a prompt became `opencode "review the code"` and died with "Failed to
-	// change directory to /workspace/review the code". The prompt was never a
+	// change directory to <cwd>/review the code". The prompt was never a
 	// prompt to it.
 	//
 	// Nil is therefore a first-class answer and means *do not seed* — the same
@@ -137,8 +137,7 @@ type Descriptor struct {
 }
 
 // Autonomous returns the full container argv for a headless run of prompt.
-// extra is appended last so a caller can override the agent's own defaults
-// (e.g. a fleet task's `args:`).
+// extra is appended last so a caller can override the agent's own defaults.
 func (d Descriptor) Autonomous(prompt string, extra []string) []string {
 	return concat(d.Command, d.AutonomousArgs(prompt), d.SkipPermissionArgs, extra)
 }
@@ -176,17 +175,6 @@ func (d Descriptor) CanSeedConsole() bool { return d.ConsolePromptArgs != nil }
 
 // CanSkipPermissions reports whether this agent has a flag for it.
 func (d Descriptor) CanSkipPermissions() bool { return len(d.SkipPermissionArgs) > 0 }
-
-// Invocation is the same run written the way a person would type it: the agent's
-// name and its arguments, without the shell bootstrap that finds the binary.
-//
-// For display only — `fleet run --dry-run` reports what a task will *do*, and an
-// eight-line install script pasted in front of every prompt buries exactly the
-// two things the reader is checking. Never use it to start anything: the
-// bootstrap it omits is what makes the agent exist in the container.
-func (d Descriptor) Invocation(prompt string, extra []string) []string {
-	return concat([]string{d.Name}, d.AutonomousArgs(prompt), extra)
-}
 
 // registry is the set of known agents, keyed by Name.
 var registry = map[string]Descriptor{
@@ -238,9 +226,9 @@ var registry = map[string]Descriptor{
 		Command: []string{"codex"},
 		AutonomousArgs: func(prompt string) []string {
 			// `codex exec` is Codex CLI's non-interactive subcommand. Codex applies
-			// its own approval policy on top; a task that needs it relaxed passes
-			// the relevant flag through the fleet task's `args:` rather than having
-			// sandbox-cli guess at flag names that change between releases.
+			// its own approval policy on top; a run that needs it relaxed passes
+			// the relevant flag itself rather than having sandbox-cli guess at
+			// flag names that change between releases.
 			return []string{"exec", prompt}
 		},
 	},

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { GithubMark, Wordmark } from "@/components/logo";
-import { DOC_URL, MULTI_AGENT_PATH, REPO_URL, SETUP_PATH } from "@/lib/site";
+import { DOC_URL, REPO_URL, SETUP_PATH } from "@/lib/site";
 
 /**
  * Outbound links only. There is deliberately no "on this page" index here — the
@@ -17,7 +17,6 @@ const COLUMNS = [
       { label: "API v1", href: DOC_URL.api },
       { label: "Local on a Mac", href: DOC_URL.localMac },
       { label: "Self-hosting", href: DOC_URL.selfHosting },
-      { label: "Running agents in parallel", href: MULTI_AGENT_PATH },
       { label: "Changelog", href: DOC_URL.changelog },
     ],
   },

@@ -127,7 +127,7 @@ class Client:
     def create_sandbox(self, *, name: str = "", image: str = "", cpus: float = 0, memory_mb: int = 0,
                        disk_mb: int = 0, env: Optional[Dict[str, str]] = None,
                        network: Optional[Dict[str, Any]] = None, idle_timeout_secs: int = 0,
-                       snapshot_id: str = "", bind: Optional[Dict[str, Any]] = None,
+                       snapshot_id: str = "",
                        labels: Optional[Dict[str, str]] = None,
                        volumes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """Create a sandbox. ``network`` is ``{"mode": "none"|"allowlist"|"open",
@@ -140,7 +140,7 @@ class Client:
         req: Dict[str, Any] = {}
         for k, v in (("name", name), ("image", image), ("cpus", cpus), ("memory_mb", memory_mb),
                      ("disk_mb", disk_mb), ("env", env), ("network", network),
-                     ("idle_timeout_secs", idle_timeout_secs), ("snapshot_id", snapshot_id), ("bind", bind),
+                     ("idle_timeout_secs", idle_timeout_secs), ("snapshot_id", snapshot_id),
                      ("labels", labels), ("volumes", volumes)):
             if v:
                 req[k] = v
@@ -255,7 +255,7 @@ class Client:
     def signal(self, ref: str, pid: int, signal: str) -> None:
         self._json("POST", f"{self._sbx(ref)}/processes/{pid}/signal", {"signal": signal})
 
-    # --- files and workspace ---------------------------------------------------
+    # --- files -----------------------------------------------------------------
 
     def read_file(self, ref: str, path: str) -> bytes:
         return self._read(self._request("GET", self._sbx(ref) + "/files", {"path": path}))
@@ -269,13 +269,3 @@ class Client:
 
     def list_dir(self, ref: str, path: str) -> List[Dict[str, Any]]:
         return json.loads(self._read(self._request("GET", self._sbx(ref) + "/dirs", {"path": path})))["entries"]
-
-    def put_workspace(self, ref: str, branch: str, bundle: bytes) -> None:
-        """Clone a git bundle (which must carry HEAD) into /workspace as ``branch``."""
-        self._read(self._request("POST", self._sbx(ref) + "/workspace", {"branch": branch}, body=bundle,
-                      content_type="application/octet-stream"))
-
-    def get_workspace_bundle(self, ref: str, base: str, branch: str) -> bytes:
-        """``base..branch`` as a git bundle. It comes from the guest: verify it
-        (``git bundle verify``) before fetching from it."""
-        return self._read(self._request("GET", self._sbx(ref) + "/workspace/bundle", {"base": base, "branch": branch}))

@@ -7,7 +7,7 @@
 // the record no longer depends on which of them started the sandbox, and an
 // operator of a self-hosted machine has it for every user. Clients say why a
 // sandbox exists through labels, which the log carries; routing's attempt ids
-// and a fleet task's branch arrive that way, without the server knowing what
+// and Studio's mark arrive that way, without the server knowing what
 // an agent is.
 //
 // What it deliberately does not record: any environment *value*. Names, yes —
@@ -130,8 +130,8 @@ func (l *Log) Read(sandbox string, max int) (events []api.Event, truncated bool,
 // It used to be one, and that quietly deleted history. At the density this
 // writes — a few hundred bytes per run — 8 MiB is roughly twelve thousand runs,
 // so a single previous generation meant the twelve-thousandth-oldest run
-// vanished with nothing recording that it had ever existed. A fleet running
-// fifty tasks a day reached that in about eighteen months; one running five
+// vanished with nothing recording that it had ever existed. A team running
+// fifty sandboxes a day reached that in about eighteen months; one running five
 // hundred, in six weeks.
 //
 // Five generations is ~40 MiB and ~60,000 runs. That is a bounded cost in a

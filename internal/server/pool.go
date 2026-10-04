@@ -38,7 +38,7 @@ type pool struct {
 // poolKey is the part of a resolved spec that is fixed at boot. Env and the
 // idle timeout are deliberately absent: they are applied by the server.
 func poolKey(s backend.Spec) string {
-	if s.FromSnapshot != "" || s.Bind != nil || len(s.Volumes) > 0 {
+	if s.FromSnapshot != "" || len(s.Volumes) > 0 {
 		return ""
 	}
 	b, _ := json.Marshal(struct {

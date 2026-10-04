@@ -113,68 +113,6 @@ export interface Info {
   error?: string;
 }
 
-export interface Repo {
-  id: string;
-  path: string;
-  name: string;
-  added: string;
-  missing?: boolean;
-}
-
-/** A session record joined with its sandbox's state ("gone" once it is not). */
-export interface Run {
-  sandbox: string;
-  repo: string;
-  repo_id: string;
-  agent?: string;
-  started: string;
-  state: SandboxState | "gone";
-  labels?: Record<string, string>;
-  done: boolean;
-  brought_back?: string;
-  checkpoint?: string;
-  checkpoint_at?: string;
-}
-
-export interface SandboxRef {
-  ref: string;
-  commit: string;
-  subject: string;
-  author: string;
-  date: string;
-  ahead: number;
-}
-
-export interface Diff {
-  ref: string;
-  files: { path: string; added: number; removed: number }[];
-  patch: string;
-  truncated: boolean;
-}
-
-export type TaskStateName = "running" | "verified" | "failed" | "rejected" | "lost";
-
-export interface TaskState {
-  branch: string;
-  agent: string;
-  sandbox: string;
-  state: TaskStateName;
-  exit_code: number;
-  ref?: string;
-  /** The latest checkpoint taken while it ran: where a lost task's work is. */
-  checkpoint?: string;
-  log: string;
-  error?: string;
-}
-
-export interface FleetState {
-  repo: string;
-  base_branch: string;
-  base_commit: string;
-  started_at: string;
-  tasks: Record<string, TaskState>;
-}
-
 /** An agent Studio can run: only those with a verified headless mode are listed. */
 export interface Agent {
   name: string;
@@ -182,8 +120,6 @@ export interface Agent {
 }
 
 export interface LaunchRequest {
-  /** A registered repository's id; absent starts with an empty /workspace. */
-  repo?: string;
   agent?: string;
   prompt?: string;
   console?: boolean;
@@ -193,7 +129,6 @@ export interface LaunchRequest {
   allow?: string[];
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
-  git?: boolean;
   profile?: "" | "dev" | "prod";
   rows?: number;
   cols?: number;

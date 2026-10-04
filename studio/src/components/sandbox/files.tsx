@@ -9,14 +9,14 @@ import { formatBytes } from "@/lib/format";
 
 /**
  * A sandbox's filesystem, read through the API: what the guest has, not your
- * machine's — the repository there is a clone. Read-only on purpose: an
- * editor in the browser would be a second writer to a tree the agent is
- * editing, with none of the bring-back verification the first one gets.
+ * machine's. It opens on the sandbox user's home, where the work happens.
+ * Read-only on purpose: an editor in the browser would be a second writer to
+ * a tree the agent is editing.
  */
 const MAX_PREVIEW = 512 << 10;
 
 export function SandboxFiles({ sandbox }: { sandbox: string }) {
-  const [path, setPath] = useState("/workspace");
+  const [path, setPath] = useState("/sandbox/home");
   const [preview, setPreview] = useState<{ path: string; text: string } | null>(null);
   const { data, error, isLoading } = useDir(sandbox, path);
   const parts = path.split("/").filter(Boolean);

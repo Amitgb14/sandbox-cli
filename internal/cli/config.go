@@ -122,7 +122,7 @@ func (rf *runFlags) overrides() (policy.Overrides, error) {
 
 // resolveNetwork is the network a run asks for: the resolved config, with
 // --allow and --deny on top. It is the one place that decides it, for run,
-// the agent commands, routing, Studio and every fleet task, so none of them
+// the agent commands, routing and Studio, so none of them
 // can disagree about what a config means.
 //
 // nil asks for the server's default, and is returned only when nothing was

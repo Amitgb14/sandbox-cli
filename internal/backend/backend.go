@@ -36,9 +36,6 @@ type Spec struct {
 	// IdleTimeoutSecs is enforced by the server, not the backend; carried here
 	// so the resolved spec is the whole decision.
 	IdleTimeoutSecs int
-	// Bind, when set, is a host directory — already resolved and checked by
-	// hostpath — to mount at /workspace.
-	Bind *Bind
 	// FromSnapshot, when set, starts the sandbox from a snapshot of another —
 	// memory, processes and disk as they were — instead of booting the image.
 	FromSnapshot string
@@ -92,12 +89,6 @@ type SnapshotInfo struct {
 // publishing anything on the network.
 type Dialer interface {
 	DialGuest(ctx context.Context, id string, port int) (io.ReadWriteCloser, error)
-}
-
-// Bind is a host directory mounted at /workspace.
-type Bind struct {
-	HostPath string // absolute, symlinks resolved, refused if /, home or an ancestor
-	ReadOnly bool
 }
 
 // ProcSpec is one process to start inside a sandbox. Env is merged over the

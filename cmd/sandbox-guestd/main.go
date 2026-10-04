@@ -76,14 +76,13 @@ const (
 	defaultHome = "/sandbox/home"
 )
 
-// missingDirs makes the workspace and the sandbox user's home exist under root,
-// as init's sandboxDirs does on Firecracker, for an image that lacks them
-// (alpine, say): without /workspace every request to run there fails. Unlike
-// sandboxDirs it gives away only what it made. A /workspace that already exists
-// may be a bind of a directory on the user's Mac, and its owner is not ours to
-// change.
+// missingDirs makes the sandbox user's home exist under root, as init's
+// sandboxDirs does on Firecracker, for an image that lacks it (alpine, say):
+// without it every process, which starts there, fails. Unlike sandboxDirs it
+// gives away only what it made: a directory that already exists is the
+// image's, and its owner is not ours to change.
 func missingDirs(root string) {
-	for _, d := range []string{"/workspace", defaultHome} {
+	for _, d := range []string{defaultHome} {
 		p := filepath.Join(root, d)
 		if _, err := os.Lstat(p); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -121,7 +120,7 @@ func serve(args []string) error {
 	if *root == "/" {
 		imageEnv(env)
 	}
-	s := &guestproto.Server{Root: *root, UID: *uid, GID: *gid, BaseEnv: env}
+	s := &guestproto.Server{Root: *root, UID: *uid, GID: *gid, BaseEnv: env, Home: *home}
 	switch {
 	case *stdio:
 		s.ServeConn(stdioConn{})

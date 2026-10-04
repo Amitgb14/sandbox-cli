@@ -52,14 +52,13 @@ RUN npm install -g @google/gemini-cli || true
 RUN npm install -g opencode-ai || true
 
 # The sandbox user. uid and gid are fixed at 1001 because the guest agent runs
-# processes by number (it does not consult /etc/passwd), and on macOS the bind
-# mount ownership model is keyed on the same number. The node image already
-# uses 1000.
+# processes by number (it does not consult /etc/passwd). The node image already
+# uses 1000. Its home is where every process starts and where a sandbox's work
+# happens; there is no separate workspace.
 RUN groupadd -g 1001 sandbox \
     && useradd -m -u 1001 -g 1001 -d /sandbox/home -s /bin/bash sandbox \
-    && mkdir -p /workspace \
-       /sandbox/home/.npm /sandbox/home/.cache/pip /sandbox/home/go/pkg/mod \
-    && chown -R 1001:1001 /sandbox/home /workspace
+    && mkdir -p /sandbox/home/.npm /sandbox/home/.cache/pip /sandbox/home/go/pkg/mod \
+    && chown -R 1001:1001 /sandbox/home
 
 # Present in the image for the macOS backend, which runs
 # `sandbox-guestd serve --stdio` per request. On Linux, BuildRootFS injects the
@@ -67,7 +66,7 @@ RUN groupadd -g 1001 sandbox \
 COPY --from=guestd /sandbox-guestd /sbin/sandbox-guestd
 
 ENV HOME=/sandbox/home
-WORKDIR /workspace
+WORKDIR /sandbox/home
 # No ENTRYPOINT and no USER: on Linux the guest agent is PID 1 (named on the
 # kernel command line) and drops to uid 1001 for every process it starts; on
 # macOS the backend names the command. The image decides neither.

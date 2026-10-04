@@ -142,12 +142,12 @@ func overlayRoot(dev string) error {
 	return nil
 }
 
-// sandboxDirs makes the workspace and the sandbox user's home exist and belong
-// to that user. An image built for this (the base image) already has them; any
+// sandboxDirs makes the sandbox user's home exist and belong to that user. An
+// image built for this (the base image) already has it; any
 // other image — alpine, say — does not, and a disk built without root cannot
 // set ownership, so the guest does it at boot, on its own writable layer.
 func sandboxDirs() {
-	for _, d := range []string{"/workspace", defaultHome} {
+	for _, d := range []string{defaultHome} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			fmt.Printf("sandbox-guestd: %s: %v\n", d, err)
 			continue

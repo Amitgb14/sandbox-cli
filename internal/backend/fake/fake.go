@@ -130,7 +130,7 @@ func (b *Backend) Create(_ context.Context, spec backend.Spec) error {
 	if _, dup := b.sandboxes[spec.ID]; dup {
 		return fmt.Errorf("fake: sandbox %s already exists", spec.ID)
 	}
-	files := map[string]*node{"/": {dir: true}, "/tmp": {dir: true}, "/workspace": {dir: true}}
+	files := map[string]*node{"/": {dir: true}, "/tmp": {dir: true}, "/sandbox": {dir: true}, "/sandbox/home": {dir: true}}
 	if spec.FromSnapshot != "" {
 		snap, ok := b.snapshots[spec.FromSnapshot]
 		if !ok {
@@ -479,7 +479,7 @@ func (s *sandbox) exec(p *proc, ps backend.ProcSpec, stdout, stderr io.Writer) i
 	args := ps.Argv[1:]
 	cwd := ps.Cwd
 	if cwd == "" {
-		cwd = "/workspace"
+		cwd = "/sandbox/home"
 	}
 	switch ps.Argv[0] {
 	case "true":

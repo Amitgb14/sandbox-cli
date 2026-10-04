@@ -7,22 +7,19 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
-	"github.com/Amitgb14/sandbox-cli/internal/mirror"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
-	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // runFlags are the sandbox options shared by `run` and every agent wrapper.
@@ -35,22 +32,21 @@ type runFlags struct {
 	network       string
 	allow, deny   []string
 	env           []string
-	bind          string
-	bindReadOnly  bool
-	noWorkspace   bool
 	detach, keep  bool
 	name          string
 	noPersistAuth bool
-	project       string
-	noBringBack   bool
 	fromSnapshot  string
 	profile       string
 	configPath    string
 	fallback      []string
-	checkpoint    time.Duration
 	labels        []string
 	volumes       []string
-	git           bool
+
+	// project is the directory whose .sandbox.yaml applies; empty is the
+	// current directory. Not a flag: Studio sets it, to a directory with no
+	// project config, so a run it starts does not pick up whatever
+	// .sandbox.yaml sits where Studio happened to be started.
+	project string
 
 	// flags is the set these were parsed from, to tell a flag that was given
 	// from one left at its default.
@@ -70,23 +66,16 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringArrayVar(&rf.allow, "allow", nil, "also allow egress to this host (repeatable; implies allowlist)")
 	f.StringArrayVar(&rf.deny, "deny", nil, "refuse egress to this host even if allowed (repeatable)")
 	f.StringArrayVarP(&rf.env, "env", "e", nil, "KEY=VALUE, or KEY to forward the host's value (repeatable)")
-	f.StringVar(&rf.bind, "bind", "", "mount this directory at /workspace instead of cloning (local endpoints)")
-	f.BoolVar(&rf.bindReadOnly, "bind-read-only", false, "mount --bind read-only")
-	f.BoolVar(&rf.noWorkspace, "no-workspace", false, "start with an empty /workspace")
 	f.BoolVarP(&rf.detach, "detach", "d", false, "start, print how to attach, and return")
 	f.BoolVar(&rf.keep, "keep", false, "keep the sandbox when the command ends")
 	f.StringVar(&rf.name, "name", "", "name the sandbox")
 	f.BoolVar(&rf.noPersistAuth, "no-persist-auth", false, "do not restore or save the agent's login")
-	f.StringVar(&rf.project, "project", "", "repository to work on (default: the current directory)")
-	f.BoolVar(&rf.noBringBack, "no-bring-back", false, "do not fetch the sandbox's commits when the command ends")
 	f.StringVar(&rf.profile, "profile", "", "dev or prod (prod: no persisted logins)")
 	f.StringVar(&rf.fromSnapshot, "from-snapshot", "", "start from a snapshot (sandbox-cli snapshot) instead of the image")
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
-	f.DurationVar(&rf.checkpoint, "checkpoint-every", 5*time.Minute, "fetch the sandbox's working tree to refs/sandbox/checkpoints/<id> this often while attached (and again whenever you attach), so a dead VM loses minutes rather than the run (0: never)")
-	f.BoolVar(&rf.git, "git", false, "make the sandbox's commits with your own git user.name and user.email (default: a neutral sandbox identity)")
 	f.StringArrayVar(&rf.volumes, "volume", nil, "mount a named volume, NAME:/path or NAME:/path:ro (repeatable; sandbox-cli volume)")
 	f.StringArrayVar(&rf.labels, "label", nil, "label the sandbox, key=value (repeatable); shown by list and recorded in its audit events")
-	f.StringArrayVar(&rf.fallback, "fallback", nil, "an agent to try next if this one's provider is down or it fails having changed nothing (repeatable; agent wrappers only)")
+	f.StringArrayVar(&rf.fallback, "fallback", nil, "an agent to try next if this one's provider is down (repeatable; agent wrappers only)")
 }
 
 // sandboxFlagNames lists the long flags a wrapper consumes before handing the
@@ -106,8 +95,7 @@ func sandboxFlagNames() map[string]bool {
 type runSpec struct {
 	argv  []string
 	agent *agents.Descriptor
-	// before runs once the workspace and login are in place, before the
-	// command starts; after runs once it has exited, before the sandbox goes.
+	// before runs once the login is in place, before the command starts; after runs once it has exited, before the sandbox goes.
 	before, after func(ctx context.Context, c *api.Client, sandbox string)
 	// result, when set, is filled in with what the run did.
 	result *runResult
@@ -123,34 +111,28 @@ type runSpec struct {
 	labels map[string]string
 }
 
-// runResult is what a caller needs to know about a run: routing, once it has
-// ended; Studio, which sandbox it started.
+// runResult is what a caller needs to know about a run: Studio, which sandbox
+// it started.
 type runResult struct {
 	sandbox string
 	pid     int
-
-	// changed reports whether the workspace ended differently from how it
-	// began; nil when that could not be determined.
-	changed *bool
 }
 
-// execute is a var so routing's tests can script what each attempt did; a
-// real attempt needs a guest that runs git.
+// execute is a var so routing's tests can script what each attempt did.
 var execute = runSandbox
 
-// runSandbox is the whole of a run: create, set up the workspace, restore the
-// login, attach, and on the way out save the login, bring work back and clean
-// up. It returns the command's exit code.
+// runSandbox is the whole of a run: create, restore the login, start the
+// command in the sandbox user's home, attach, and on the way out save the
+// login and clean up. It returns the command's exit code.
+//
+// A sandbox needs no repository. It starts in its own home directory, and
+// code gets in the way it gets into any machine: the agent or the command
+// clones it, or the files API writes it. Nothing on the host is mounted in and
+// nothing comes back to the host but the agent's login.
 func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	project := rf.project
 	if project == "" {
 		project, _ = os.Getwd()
-	}
-	// Nothing takes checkpoints of a run nobody is connected to. Asked for and
-	// not deliverable, so refused rather than accepted and never taken.
-	if rf.detach && rf.flags != nil && rf.flags.Changed("checkpoint-every") && rf.checkpoint > 0 {
-		return 1, errors.New("--checkpoint-every needs a connected client and --detach leaves none; " +
-			"checkpoints are taken again whenever you attach (sandbox-cli attach --checkpoint-every)")
 	}
 	// The configuration first: a mistake in your own files is yours to fix
 	// whether or not a sandboxd is answering, and should not wait behind one.
@@ -158,8 +140,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	cfg, err := loadConfig(project, rf.configPath, rf.profile, ov)
-	if err != nil {
+	if _, err := loadConfig(project, rf.configPath, rf.profile, ov); err != nil {
 		return 1, err
 	}
 	c, ctxName, err := newClient(rf.context)
@@ -192,32 +173,22 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	// on this endpoint once. Not for a sandbox from a snapshot, which brings
 	// its own disk, nor where the user mounted something of their own.
 	if rs.agent != nil && rf.fromSnapshot == "" && !mountsNear(req.Volumes, agents.ToolsDir) {
-		if m := workspace.AgentTools(ctx, c, caps, *rs.agent, stderrf); m != nil {
+		if m := agenthome.AgentTools(ctx, c, caps, *rs.agent, stderrf); m != nil {
 			req.Volumes = append(req.Volumes, *m)
 		}
 	}
 	if err := applyConfig(rf, project, &req, caps); err != nil {
 		return 1, err
 	}
-	// A cloned workspace needs an identity for its commits; one set by the
-	// user (--env, or env: in their config) wins.
-	repo := ""
-	if rf.bind == "" && !rf.noWorkspace && rf.fromSnapshot == "" {
-		repo = workspace.RepoRoot(project)
-	}
-	if repo != "" {
-		for k, v := range workspace.Identity(repo, rf.git) {
-			if _, set := req.Env[k]; !set {
-				req.Env[k] = v
-			}
+	// git in the guest refuses every commit without an identity, and the image
+	// sets none; a neutral one, unless the user set their own (--env, or env:
+	// in their config). Theirs is never read from the host: whose name goes on
+	// the work is not something to copy into a guest running somebody else's
+	// instructions without being asked.
+	for k, v := range guestGitIdentity {
+		if _, set := req.Env[k]; !set {
+			req.Env[k] = v
 		}
-	}
-	if rf.bind != "" {
-		abs, err := filepath.Abs(policy.ExpandTilde(rf.bind))
-		if err != nil {
-			return 1, err
-		}
-		req.Bind = &api.Bind{HostPath: abs, ReadOnly: rf.bindReadOnly}
 	}
 
 	sb, err := c.CreateSandbox(ctx, req)
@@ -234,26 +205,9 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		}
 	}()
 
-	var sess *workspace.Session
-	if rf.bind == "" && !rf.noWorkspace && rf.fromSnapshot == "" {
-		if repo != "" {
-			base, err := workspace.CloneIn(ctx, c, sb.ID, repo)
-			if err != nil {
-				return 1, err
-			}
-			sess = &workspace.Session{Sandbox: sb.ID, Context: ctxName, Repo: repo, Base: base, Branch: workspace.SandboxBranch, Started: time.Now().UTC()}
-			if rs.agent != nil {
-				sess.Agent = rs.agent.Name
-			}
-			_ = sess.Save()
-		} else {
-			fmt.Fprintln(os.Stderr, "sandbox-cli: not in a git repository; /workspace starts empty (use --bind on a local endpoint to mount a directory)")
-		}
-	}
-
 	persist := rs.agent != nil && !rf.noPersistAuth && len(rs.agent.AuthPaths) > 0
 	if persist {
-		workspace.RestoreLogin(ctx, c, sb.ID, *rs.agent)
+		agenthome.RestoreLogin(ctx, c, sb.ID, *rs.agent)
 	}
 
 	if rs.before != nil {
@@ -265,7 +219,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	if rs.console {
 		tty, rows, cols = true, rs.rows, rs.cols
 	}
-	p, err := c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: rs.argv, Cwd: "/workspace", Tty: tty, Rows: rows, Cols: cols})
+	p, err := c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: rs.argv, Cwd: agenthome.GuestHome, Tty: tty, Rows: rows, Cols: cols})
 	if err != nil {
 		return 1, err
 	}
@@ -279,20 +233,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		return 0, nil
 	}
 
-	stopCheckpoints := func() error { return nil }
-	reportMirror := func() {}
-	if sess != nil && rf.checkpoint > 0 {
-		var mirrorTaken func(string)
-		mirrorTaken, reportMirror = checkpointMirror(ctx, cfg.Mirror, sess)
-		stopCheckpoints = workspace.SessionCheckpoints(ctx, c, sess, rf.checkpoint, mirrorTaken)
-	}
 	code, err := attach(ctx, c, sb.ID, p.PID, tty, true)
-	// Reported only now: while attached, the agent owns the terminal, and a
-	// line printed over its UI is a line nobody can read.
-	if cerr := stopCheckpoints(); cerr != nil {
-		fmt.Fprintf(os.Stderr, "sandbox-cli: checkpoints failed during the run: %v\n", cerr)
-	}
-	reportMirror()
 	if err != nil {
 		return 1, err
 	}
@@ -301,33 +242,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		rs.after(context.Background(), c, sb.ID)
 	}
 	if persist {
-		workspace.SaveLogin(context.Background(), c, sb.ID, *rs.agent)
-	}
-	if sess != nil && !rf.noBringBack {
-		name := sb.ID
-		if rf.name != "" {
-			name = rf.name
-		}
-		ref, err := workspace.BringBack(context.Background(), c, *sess, name)
-		switch {
-		case err != nil:
-			keep = true
-			fmt.Fprintf(os.Stderr, "sandbox-cli: bringing work back failed: %v\n  the sandbox is kept: sandbox-cli bring-back %s\n", err, sb.ID)
-		case ref == "":
-			sess.MarkBroughtBack("")
-			fmt.Fprintln(os.Stderr, "sandbox-cli: no new commits to bring back")
-			if rs.result != nil {
-				rs.result.changed = new(bool)
-			}
-		default:
-			sess.MarkBroughtBack(ref)
-			if rs.result != nil {
-				changed := true
-				rs.result.changed = &changed
-			}
-			fmt.Fprintf(os.Stderr, "sandbox-cli: work brought back to %s\n  review: git log -p HEAD..%s · merge: git merge %s\n", ref, ref, ref)
-			sayMirror(mirrorWork(context.Background(), cfg.Mirror, sess, ref, mirror.KindBringBack))
-		}
+		agenthome.SaveLogin(context.Background(), c, sb.ID, *rs.agent)
 	}
 	if keep && !rf.detach {
 		fmt.Fprintf(os.Stderr, "sandbox-cli: kept %s (sandbox-cli kill %s)\n", sb.ID, sb.ID)
@@ -390,6 +305,13 @@ func attach(ctx context.Context, c *api.Client, sandbox string, pid int, tty, fo
 		return 0, errDetached
 	}
 	return code, err
+}
+
+// guestGitIdentity is the identity commits made in a sandbox carry by
+// default, as the environment variables git reads.
+var guestGitIdentity = map[string]string{
+	"GIT_AUTHOR_NAME": "sandbox", "GIT_AUTHOR_EMAIL": "sandbox@localhost",
+	"GIT_COMMITTER_NAME": "sandbox", "GIT_COMMITTER_EMAIL": "sandbox@localhost",
 }
 
 // errDetached is attach ending because the viewer left, not the process.

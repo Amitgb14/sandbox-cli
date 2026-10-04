@@ -11,23 +11,24 @@ self-contained beats one that is severe but blocked on a decision.
 ## In the rewrite
 
 The items below were found in beta.15's container design. On the `rewrite`
-branch the boundary is a VM, the host mounts nothing a guest wrote, and work
-comes back as a verified git bundle. Where each item stands there:
+branch the boundary is a VM and the host mounts nothing a guest wrote. Since
+2026-10-04 a sandbox has no repository either: nothing comes back to the host
+except an agent's saved login. Where each item stands there:
 
 | Item | In the rewrite |
 |---|---|
 | 1. Egress by IP | The allowlist is by name (`internal/egressproxy`), enforced on the host, under a root sandboxd (`--network`). Unprivileged, a sandbox has no network at all. |
 | DNS exfiltration ("Not on this list", and item 2) | **Closed under an allowlist.** The guest's resolver (`egressproxy.DNS`) never forwards a query. An allowed name gets an address on the host, which the proxy handles; any other name gets NXDOMAIN. So no query leaves the host on a guest's behalf, however a name is spelled (`TestDNSNeverForwards`). `--network open` is open by definition. |
 | 2. Raw credentials in the agent | **Unchanged.** A secret reaches the guest's environment by name and the agent can read its value. The mitigations listed there still apply. |
-| 3. `.git/config` and hooks | **Obsolete.** The host never mounts the workspace. A run's commits come back as a bundle that is verified and fetched through `githard` into `refs/sandbox/…`, so no hook or config the agent wrote runs on the host. |
+| 3. `.git/config` and hooks | **Obsolete.** The host never mounts a workspace, and since 2026-10-04 no work comes back from a guest at all: no bundle is fetched, so no hook or config the agent wrote reaches a host repository. Until then a run's commits came back as a bundle verified and fetched through `githard` into `refs/sandbox/…`. |
 | 4. Sandboxes see each other | **Obsolete.** Each sandbox is its own VM with its own network device, or with none at all. |
 | 5. `host.docker.internal` | **Obsolete.** No such name, and nothing on the host is listening for the guest. |
 | 6. seccomp and limits | **Obsolete as stated.** The boundary is the hypervisor. Memory, CPUs and disk are bounded by sandboxd's policy. |
 | 7. Denial logging on macOS | Waits on the macOS backend's real-runtime run (end-to-end row 15). |
 | 8. Cross-project persistence | **Narrowed further** (see below). No agent HOME persists. Only named login files cross between runs, and since 2026-10-02 they carry only the login (`agents.FilterAuth`). An agent the image lacks runs from a tools volume that its runs mount read-only. A volume the user mounts writable in several projects is a shared channel by design, as `--cache` was. |
 | 9. Agents downloaded on first run | Pins unchanged. The download now happens once per endpoint, in a sandbox that does nothing else, into a volume that runs cannot write. The registry is still trusted as before. |
-| Detached-run snapshots, snapshot provenance (two of the three sections after item 10) | Written on beta.15's line after 0.0.1, for features that stay in `_old/`. The rewrite's answer to the first: a detached run is checkpointed while someone is attached (`attach`), a fleet task while `agent fleet run` waits on it. |
-| Mirroring to S3 (the section after item 10) | **Ported 2026-10-03** as `mirror:` (`internal/mirror`, `internal/s3`). Every rule in that section is kept: the credential is named and never held (`policy.S3Spec`); `mirror` is refused from a project config (`TestProjectConfigRefusesPrivilegedKeys`); a fetched bundle must carry exactly the commit its name says, descend from this repository's root, and on the uploading machine match the recorded commit (`TestFetchRefusesWhatIsNotWhatWasMirrored`); nothing deletes from the bucket; there is no server-side check endpoint, because mirroring runs on the client. |
+| Detached-run snapshots, snapshot provenance (two of the three sections after item 10) | Written on beta.15's line after 0.0.1, for features that stay in `_old/`. The rewrite's answer to the first was checkpoints while a client was attached; **moot: the feature was removed (2026-10-04)**, since a sandbox has no repository to checkpoint. |
+| Mirroring to S3 (the section after item 10) | **Moot: the feature was removed (2026-10-04).** It was ported on 2026-10-03 as `mirror:` with every rule in that section kept, and removed a day later with the repository model: no work comes back to mirror. A config that still sets `mirror:` is refused, not ignored. |
 | 10. Prompt in a container label | **Closed in the rewrite.** No label holds it. The audit log, where it moved, now keeps a process's program, argument count and a hash, never the arguments (item 11). |
 
 ## 11. The audit log keeps every argv, prompts included — **DONE**
@@ -957,7 +958,11 @@ same branch, same agent, most recent — and restore the state the run started
 from. Not an error; a restore that looked like it worked. Baselines are now
 excluded there and from the snapshot listing.
 
-## Mirroring snapshots to S3 moves the working tree off the machine
+## Mirroring snapshots to S3 moves the working tree off the machine — **moot**
+
+> Moot: the feature was removed (2026-10-04). A sandbox has no repository, so
+> no work comes back to mirror, and `mirror:` in a config is refused. The text
+> below is kept as the record of what the decisions were.
 
 `snapshot.s3` uploads a git bundle of the workspace to object storage. That is
 the whole point of it and it is also, plainly, the repository's contents leaving

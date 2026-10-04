@@ -147,7 +147,7 @@ export function EgressVisualizer({ className }: { className?: string }) {
           <>
             Open egress is a mode the server&apos;s operator has to permit (its policy&apos;s
             ceiling), and a request cannot raise it. A default sandboxd offers the allowlist and no
-            network at all, never open — the guest can still read your repository, and a
+            network at all, never open — the guest can still read the code its agent cloned, and a
             prompt-injected agent should not be able to post it anywhere it likes.
           </>
         )}

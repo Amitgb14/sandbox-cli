@@ -10,7 +10,7 @@ export const metadata: Metadata = {
     template: "%s · Sandbox Studio",
   },
   description:
-    "The browser view of your sandboxes: what is running, what came back, and what each sandbox did.",
+    "The browser view of your sandboxes: what is running, which agents are waiting for you, and what each sandbox did.",
 };
 
 export const viewport: Viewport = {

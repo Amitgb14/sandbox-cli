@@ -33,10 +33,16 @@ func TestCheckLiveKeys(t *testing.T) {
 	if !errors.As(err, &dead) || strings.Join(dead.Keys, ",") != "mounts,netwrok,security" {
 		t.Fatalf("err = %v", err)
 	}
-	for _, want := range []string{"the boundary is a VM", "--bind", "not a setting"} {
+	for _, want := range []string{"the boundary is a VM", "--volume", "not a setting"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message lacks %q:\n%s", want, err)
 		}
+	}
+	// mirror went with the repository: a config still setting it is told so,
+	// rather than believing its work is being copied somewhere.
+	err = CheckLiveKeys(write("mirror:\n  s3:\n    bucket: b\n"))
+	if !errors.As(err, &dead) || strings.Join(dead.Keys, ",") != "mirror" || !strings.Contains(err.Error(), "no repository") {
+		t.Errorf("a mirror block: %v", err)
 	}
 	if CheckLiveKeys(filepath.Join(t.TempDir(), "absent.yaml")) != nil || CheckLiveKeys("") != nil {
 		t.Error("an absent file is not an error")

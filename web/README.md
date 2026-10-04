@@ -17,7 +17,6 @@ npm run build    # static export -> web/out
 | Route | What it is |
 |---|---|
 | `/` | The landing page — the argument, the three ways to run it, the API, the interactive proofs, setup, install. |
-| `/multi-agent` | **Running agents in parallel**: fallbacks and the fleet. One agent per task in its own sandbox, mixing agents, `verify`, landing from refs, the guardrails. Linked from the header nav, the footer, and the landing page's agents section. |
 | `/studio` | Studio, the browser client of the same API. |
 | `/setup` | **The setup guide**: a Mac, Linux without root, a Linux server under systemd, and a client, each from install to `sandbox-cli doctor` and a first run, then troubleshooting by the error you saw. The landing page's setup band is the short version and links here. |
 
@@ -26,13 +25,9 @@ paraphrased, and every claim about a platform says what is verified and what is
 not: the macOS backend has not yet run on a real Mac, and the page says so where
 it matters. No company names: alternatives are described by kind.
 
-The multi-agent story got its own route rather than another band on the landing
-page because it is the one feature people arrive already looking for, and it is
-long: a file format, five eligible agents, a lifecycle and seven refusals. The
-landing page argues *why containment*; this argues *how to run ten agents inside
-it*. `MULTI_AGENT_PATH` in `src/lib/site.ts` is the only place the path appears,
-and it carries a trailing slash because `trailingSlash: true` makes the export
-emit `multi-agent/index.html`.
+`STUDIO_PATH` and `SETUP_PATH` in `src/lib/site.ts` are the only places those
+paths appear, and they carry a trailing slash because `trailingSlash: true` makes
+the export emit `studio/index.html` and `setup/index.html`.
 
 Cross-route links go through `next/link`, not a raw `<a href>`, so `basePath`
 is applied if the site is ever served from a subpath. In-page anchors stay plain
@@ -65,13 +60,12 @@ throughout.
 
 | Component | What it does |
 |---|---|
-| `containment-canvas.tsx` | The centrepiece. A `<canvas>` particle system: commands launch from the host side, ones that reach past the workspace **shatter** against the wall in 22 physics-driven shards, ordinary work passes through the one opening into `/workspace`. DPI-aware; every colour is read from CSS custom properties each frame. |
+| `containment-canvas.tsx` | The centrepiece. A `<canvas>` particle system: commands launch from the host side, ones that reach past the workspace **shatter** against the wall in 22 physics-driven shards, ordinary work passes through the one opening into `/sandbox/home`, the sandbox's own home. DPI-aware; every colour is read from CSS custom properties each frame. |
 | `containment-simulator.tsx` | Wraps the canvas with presets, a **free-text prompt** (type any command and it is classified for real), and a verdict log naming the mechanism that decided it. Autoplays once on scroll, then hands over. |
 | `blast-radius.tsx` | One switch flips twelve host locations between *reachable* and *not a path at all*, with a live count and the stake behind each one. |
 | `dry-run-builder.tsx` | Toggle real sandbox flags and watch the actual `docker` argv assemble, line by line, in the order `runtime.BuildArgs` emits them. Each flag is marked as widening or tightening the boundary, and a counter tracks host paths in reach. |
 | `egress-visualizer.tsx` | Requests fly at the firewall: registries and agent APIs sail through, exfiltration stops dead. One switch turns the allowlist off to show the difference. |
-| `parallel-agents.tsx` | Three branches, three containers, one repo — the `--worktree` story as a diagram. Used on both routes. |
-| `code-block.tsx` | The dark terminal block, extracted so the multi-agent doc can use it six times. `lang` decides one thing: whether a `$` is drawn, and it is drawn per *command* — a line after one ending in `\` is the same command continued. |
+| `code-block.tsx` | The dark terminal block, extracted so every route can use it. `lang` decides one thing: whether a `$` is drawn, and it is drawn per *command* — a line after one ending in `\` is the same command continued. |
 | `live-gauge.tsx` | The three places sandbox-cli reports usage (footer gauge, Claude status line, peak summary), with numbers that walk client-side only. |
 | `agent-explorer.tsx` | All twelve adapters: install route, forwarded env, `--allow` domains, and the per-agent gotcha. |
 | `deploy-guide.tsx` | Local development and production as two step-by-step paths, over a matrix of what `--profile` changes — the selected column stays lit while you read, because the section is about the difference. The prod path ends with the invariants re-checked on the fully-merged config. |
@@ -93,10 +87,6 @@ Copy and data mirror the repository — `README.md`, `CLAUDE.md`,
 - `reach.ts` — host paths and what is at stake in each
 - `egress.ts` — destinations and their verdicts
 - `classify.ts` — the boundary classifier behind the simulator
-- `fleet.ts` — the multi-agent doc: the four rungs, the agents eligible for a
-  fleet and the argv each is started with, the lifecycle, `land`'s refusals and
-  which of them `--all` skips versus stops on, the share convention. Mirrors
-  `internal/fleet`, `internal/agents` and `docs/examples/fleet.yaml`
 
 If the CLI's behaviour changes, update those files and the page follows.
 **`VERSION` in `src/lib/site.ts` is the only place the release number appears.**

@@ -6,11 +6,12 @@ import (
 )
 
 // The container-side install scripts, here rather than in internal/cli because
-// the fleet needs the same argv the interactive wrapper uses. They started in
-// the wrappers, which was fine while only claude and codex could be launched
-// headlessly; the moment a fleet task could name `gemini`, a second copy of this
-// script would have had to exist to build that task's Command — and the package
-// doc above says what two copies of a security-relevant script do.
+// a headless run (a routed fallback, a Studio launch) needs the same argv the
+// interactive wrapper uses. They started in the wrappers, which was fine while
+// only claude and codex could be launched headlessly; the moment another agent
+// could be, a second copy of this script would have had to exist to build its
+// Command — and the package doc above says what two copies of a
+// security-relevant script do.
 //
 // internal/cli keeps one-line aliases (agentBootstrap / npmAgentBootstrap) so
 // the twelve wrappers read as they did.

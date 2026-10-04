@@ -169,7 +169,7 @@ func cleanBody(s string) string {
 // one, and a long transcript is megabytes of tool results.
 //
 // This exists to tell two concurrent sessions apart. Sandbox runs pool into one
-// `-workspace` directory, so a time window alone cannot say which transcript
+// project directory, so a time window alone cannot say which transcript
 // belongs to which container — demonstrated the expensive way, with one run's
 // conversation shown under another run's id. A run's first prompt is recorded
 // on its container as a label, and comparing the two is an actual answer rather

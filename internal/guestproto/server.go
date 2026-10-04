@@ -32,6 +32,9 @@ type Server struct {
 	// BaseEnv is the environment every process starts from; a request's env is
 	// merged over it.
 	BaseEnv map[string]string
+	// Home is the directory a process starts in when its request names none:
+	// the sandbox user's home, where a sandbox's work happens. Empty is "/".
+	Home string
 }
 
 // Serve answers connections from l until it is closed.
@@ -282,8 +285,11 @@ func (s *Server) exec(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
 		return
 	}
 	cwd := "/"
-	if req.Cwd != "" {
+	switch {
+	case req.Cwd != "":
 		cwd = req.Cwd
+	case s.Home != "":
+		cwd = s.Home
 	}
 	dir, err := s.resolve(cwd)
 	if err != nil {

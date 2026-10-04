@@ -8,69 +8,6 @@ import (
 	"testing"
 )
 
-func boolp(b bool) *bool { return &b }
-
-// The failover rule, which is the whole feature in four lines.
-//
-// It gates on the **workspace**, never on the conversation, and every unknown
-// resolves to "do not retry". The two are not symmetric: a retry that should not
-// have happened puts a second agent on top of the first one's edits, while a
-// retry that did not happen costs a command somebody types again.
-func TestShouldFailOver(t *testing.T) {
-	cases := []struct {
-		name string
-		o    Outcome
-		want bool
-		why  string
-	}{
-		{
-			name: "a run that worked is never retried",
-			o:    Outcome{ExitCode: 0, WorkspaceChanged: boolp(false)},
-			want: false,
-		},
-		{
-			name: "failed having written nothing — the outage case",
-			o:    Outcome{ExitCode: 1, WorkspaceChanged: boolp(false)},
-			want: true,
-			why:  "this is what a provider dying mid-run looks like, and the only case where retrying is safe",
-		},
-		{
-			name: "failed having changed files is an attempt, not an outage",
-			o:    Outcome{ExitCode: 1, WorkspaceChanged: boolp(true)},
-			want: false,
-			why:  "retrying would hand the next agent the first one's half-finished edits",
-		},
-		{
-			name: "a verify that said no changed files, so it is not retried",
-			o:    Outcome{ExitCode: 91, WorkspaceChanged: boolp(true)},
-			want: false,
-			why:  "the work was done and judged; a second agent re-running it is not failover",
-		},
-		{
-			name: "unknowable workspace state is treated as work done",
-			o:    Outcome{ExitCode: 1, WorkspaceChanged: nil},
-			want: false,
-			why:  "reading unknown as unchanged would retry a run that may have done real work",
-		},
-		{
-			name: "killed having written nothing is still an outage-shaped failure",
-			o:    Outcome{ExitCode: 137, WorkspaceChanged: boolp(false)},
-			want: true,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, reason := ShouldFailOver(tc.o)
-			if got != tc.want {
-				t.Errorf("ShouldFailOver(%+v) = %v (%s), want %v — %s", tc.o, got, reason, tc.want, tc.why)
-			}
-			if reason == "" {
-				t.Error("no reason given; the decision is written to the audit line and shown on screen, so it has to say why")
-			}
-		})
-	}
-}
-
 func TestResolve(t *testing.T) {
 	t.Run("orders primary first and keeps the fallbacks", func(t *testing.T) {
 		c, err := Resolve("claude", []string{"codex", "gemini"}, true)

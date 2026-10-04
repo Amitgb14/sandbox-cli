@@ -93,7 +93,7 @@ internal/
 packaging/systemd/      sandboxd unit and an example operator policy (docs/self-hosting.md)
 packaging/launchd/      the macOS launch agent (docs/local-macos.md)
 sdk/                    Python (tested: make test-sdk) and TypeScript clients
-  workspace/    clone-in, bring-back
+  agenthome/  agent logins and the tools volume, copied in and out of the sandbox user's home
   state/ cli/ version/
 ```
 

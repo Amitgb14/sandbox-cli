@@ -20,6 +20,10 @@ cp packaging/launchd/dev.sandbox.sandboxd.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandbox.sandboxd.plist
 ```
 
+If you installed the launch agent from an earlier build, copy it again: that one
+passes `--allow-bind`, which `sandboxd` no longer has, so it refuses to start
+rather than run with a flag it does not understand.
+
 The guest agent is mounted read-only into every sandbox from beside
 `sandboxd`, so any image works and the agent always matches the server.
 
@@ -29,7 +33,6 @@ The guest agent is mounted read-only into every sandbox from beside
 |---|---|---|
 | Sandbox | VM of the `container` runtime | Firecracker microVM |
 | Egress | `none`, or `open` if your policy allows it | `none` or an allowlist, enforced on the host |
-| Workspace | a git bundle in and out, or a **bind** of a directory | a git bundle in and out |
 | Live network policy change | no | yes |
 
 **Egress.** The runtime's own network is open NAT. Until it is measured whether
@@ -38,21 +41,18 @@ for an allowlist is refused, never served open, and the default is `none`. To
 let sandboxes reach the network at all, set `ceiling: open` in a policy file you
 pass with `--policy`, knowing that is what it means.
 
-**Bind.** With `--allow-bind` (the launch agent sets it), a request may mount a
-directory at `/workspace`, optionally read-only. These are never mounted: `/`,
-your home directory, or anything above it.
+**No host directory.** A sandbox has no repository, and nothing of your Mac is
+mounted into it but the guest agent, read-only; every process starts in `/sandbox/home`. The bind mount this
+backend used to offer (`--allow-bind`) was removed with the repository model.
 
 ## Open points, decided by the M3 macOS run
 
 Seen on a Mac with macOS 26.1 (2026-10-03), `alpine:3.20`: a sandbox with
-`--network none` comes up in under a second, and a file the guest writes into a
-bind belongs to you on the Mac. Whether you can `git commit` such files
-afterwards is still to be checked, as is everything below.
+`--network none` comes up in under a second. Everything below is still to be
+checked.
 
 - Whether the runtime supports `--network none` as rendered. If it does not,
   creating a sandbox fails, rather than running one with a network.
-- Who owns files the guest writes into a bind, and whether you can still edit
-  them and `git commit` afterwards.
 - Whether an allowlist can be enforced: in the guest (iptables or nftables), or
   outside it.
 - The shape of `container ls --format json`, which is how leftover sandboxes are

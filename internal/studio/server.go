@@ -4,10 +4,9 @@
 //
 // It owns no sandbox logic. Sandbox calls are proxied to sandboxd under
 // /api/v1, so every isolation rule is the server's, unchanged. What it adds is
-// what only the machine with your repository can do — launching a run on a
-// clone of it, bringing work back, recovering, landing a fleet — and for those
-// it calls the same code the CLI does (a Launcher the CLI supplies, and the
-// workspace and fleet packages directly).
+// what needs the client's own config and the agents' saved logins — launching
+// a run — and for that it calls the same code the CLI does, through a
+// Launcher the CLI supplies.
 //
 // The question beta.15's studioapi had to answer is the same one here: who may
 // ask this process to act? It listens on loopback only; it answers only Host
@@ -32,15 +31,11 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
-	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // LaunchRequest is a run started from Studio. It becomes the same request a
 // detached `sandbox-cli run` or `sandbox-cli agent` makes.
 type LaunchRequest struct {
-	// Repo is a registered repository's id, cloned into /workspace. Empty
-	// starts the sandbox with an empty /workspace instead.
-	Repo string `json:"repo,omitempty"`
 	// Agent, when set, runs that agent: headless with Prompt, or — Console —
 	// interactive on a terminal the browser attaches to. Otherwise Command.
 	Agent   string   `json:"agent,omitempty"`
@@ -53,9 +48,7 @@ type LaunchRequest struct {
 	Allow   []string          `json:"allow,omitempty"`
 	Labels  map[string]string `json:"labels,omitempty"`
 	Volumes []api.VolumeMount `json:"volumes,omitempty"`
-	// Git makes the run's commits with your own git identity (--git).
-	Git     bool   `json:"git,omitempty"`
-	Profile string `json:"profile,omitempty"`
+	Profile string            `json:"profile,omitempty"`
 	// Rows and Cols size a console run's terminal before anyone attaches.
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`
@@ -67,9 +60,8 @@ type LaunchResult struct {
 	PID     int    `json:"pid"`
 }
 
-// Launcher starts a run on a repository at repoPath, or with an empty
-// /workspace when repoPath is empty; the CLI supplies it.
-type Launcher func(ctx context.Context, repoPath string, req LaunchRequest) (LaunchResult, error)
+// Launcher starts a run; the CLI supplies it.
+type Launcher func(ctx context.Context, req LaunchRequest) (LaunchResult, error)
 
 // Server is one Studio.
 type Server struct {
@@ -78,13 +70,8 @@ type Server struct {
 	Token   string      // required on /api; generated per launch
 	UI      fs.FS       // the built UI; nil serves a page saying how to build it
 	Launch  Launcher
-	// ReposFile is where registered repositories are kept.
-	ReposFile string
-	Version   string
-	Logf      func(format string, a ...any)
-	// Mirror copies brought-back work to the user's mirror, if one is
-	// configured; nil is none. Set by the CLI, which owns the config.
-	Mirror func(ctx context.Context, se *workspace.Session, ref string) (msg string, err error)
+	Version string
+	Logf    func(format string, a ...any)
 }
 
 // Handler is everything Studio serves.
@@ -95,18 +82,8 @@ func (s *Server) Handler() http.Handler {
 	api("GET /api/info", s.info)
 	api("/api/v1/", s.proxy())
 	api("GET /api/ws/attach", s.attach)
-	api("GET /api/repos", s.listRepos)
-	api("POST /api/repos", s.addRepo)
-	api("DELETE /api/repos/{id}", s.removeRepo)
-	api("GET /api/repos/{id}/refs", s.refs)
-	api("GET /api/repos/{id}/diff", s.diff)
-	api("GET /api/repos/{id}/fleet", s.fleetState)
-	api("POST /api/repos/{id}/fleet/land", s.fleetLand)
-	api("GET /api/runs", s.listRuns)
 	api("GET /api/agents/state", s.agentStates)
 	api("POST /api/runs", s.launch)
-	api("POST /api/runs/{sandbox}/bring-back", s.bringBack)
-	api("DELETE /api/runs/{sandbox}", s.forgetRun)
 	api("GET /api/agents", s.agents)
 	mux.Handle("/api/", s.guard(func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")

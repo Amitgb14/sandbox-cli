@@ -8,30 +8,19 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
-	"github.com/Amitgb14/sandbox-cli/internal/agentstate"
-	"github.com/Amitgb14/sandbox-cli/internal/api"
-	"github.com/Amitgb14/sandbox-cli/internal/handoff"
 	"github.com/Amitgb14/sandbox-cli/internal/routing"
 )
 
 // A routed run is a wrapper run with somewhere to fall through to:
-// `--fallback codex`, or `routing: [claude, codex]` in the user's config. The
-// two rules are internal/routing's — probe each provider before creating a
-// sandbox for it, and retry only a run that failed **having changed nothing**
-// — and what is new in the rewrite is only where their inputs come from.
+// `--fallback codex`, or `routing: [claude, codex]` in the user's config. Each
+// agent's provider is probed before a sandbox is created for it, and one that
+// is down is skipped for the next.
 //
-//   - "Changed nothing" is bring-back's answer. Bring-back commits whatever the
-//     agent left before bundling it, so a bring-back that succeeded with no ref
-//     is a workspace that ended as it began. Anything that cannot say — a
-//     bring-back that failed, --bind, --no-bring-back, no repository — is
-//     unknown, and routing reads unknown as work done.
-//   - Every attempt is a **fresh sandbox** cloned from the host repository, not
-//     the failed one reused. A guest that lied about having done nothing then
-//     cannot hand anything to the next agent: there is nothing of it left.
-//   - The briefing is read out of the failed sandbox before it is terminated,
-//     and written into the next one over the API (handoff.GuestDir).
+// A run that started is never retried with another agent. Retrying is safe
+// only for a run that failed having changed nothing, and that was bring-back's
+// answer: with no repository there is nothing to compare, and a run that may
+// have done work must not be done twice.
 
 // configuredRouting is the chain's fallbacks and the probe overrides: flags
 // first, then the user's config. routing: and providers: are refused from a
@@ -92,7 +81,6 @@ func routedRun(ctx context.Context, rf *runFlags, primary agents.Descriptor, age
 	prompt, promptErr := promptFrom(agentArgs)
 
 	var skipped []string
-	var carried *handoff.Export
 	// One id for the whole episode, on every attempt including the first:
 	// without it the two sandboxes of a failover read as two unrelated runs,
 	// and "did routing help" is unanswerable.
@@ -135,31 +123,9 @@ func routedRun(ctx context.Context, rf *runFlags, primary agents.Descriptor, age
 			if promptErr != nil {
 				return 1, promptErr
 			}
-			rs.argv = fallbackArgv(d, prompt, carried, unattended)
-			if carried != nil {
-				rs.before = writeBriefing(carried)
-			}
+			rs.argv = fallbackArgv(d, prompt, unattended)
 		}
-		var collected []agentctx.Message
-		rs.after = func(ctx context.Context, c *api.Client, sandbox string) {
-			collected = agentstate.ReadTranscript(ctx, c, sandbox, name)
-		}
-		code, err := execute(ctx, rf, rs)
-		if err != nil || code == 0 {
-			return code, err
-		}
-
-		over, why := routing.ShouldFailOver(routing.Outcome{Agent: name, ExitCode: code, WorkspaceChanged: rs.result.changed})
-		if !over || i == len(chain)-1 {
-			if over {
-				fmt.Fprintf(os.Stderr, "sandbox-cli: %s %s, and it was the last agent in the chain\n", name, why)
-			}
-			return code, nil
-		}
-		fmt.Fprintf(os.Stderr, "sandbox-cli: %s %s — trying %s\n", name, why, chain[i+1])
-		skipped = append(skipped, fmt.Sprintf("%s (exit %d, nothing written)", name, code))
-		routedFrom, routeReason = name, why
-		carried = handoff.Build(name, collected, nil)
+		return execute(ctx, rf, rs)
 	}
 	return 1, nil
 }
@@ -195,12 +161,9 @@ func promptFrom(args []string) (string, error) {
 		"  Put the prompt last, or drop --fallback for this run", last)
 }
 
-func fallbackArgv(d agents.Descriptor, prompt string, carried *handoff.Export, unattended bool) []string {
+func fallbackArgv(d agents.Descriptor, prompt string, unattended bool) []string {
 	if prompt == "" {
 		return d.Command
-	}
-	if carried != nil {
-		prompt = carried.Prompt(prompt)
 	}
 	if !unattended {
 		return d.Console(prompt, false)
@@ -221,16 +184,4 @@ func asksForAutonomy(agent string, args []string) bool {
 		}
 	}
 	return false
-}
-
-func writeBriefing(ex *handoff.Export) func(context.Context, *api.Client, string) {
-	return func(ctx context.Context, c *api.Client, sandbox string) {
-		for name, data := range ex.Files {
-			if err := c.WriteFile(ctx, sandbox, handoff.GuestDir+"/"+name, data); err != nil {
-				fmt.Fprintf(os.Stderr, "sandbox-cli: the briefing could not be written (%v); %s starts from the prompt alone\n", err, sandbox)
-				return
-			}
-		}
-		fmt.Fprintf(os.Stderr, "sandbox-cli: carrying %s's briefing forward — %d prompt(s), at %s\n", ex.From, ex.Turns, handoff.GuestDir)
-	}
 }

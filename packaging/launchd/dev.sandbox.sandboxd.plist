@@ -8,10 +8,8 @@
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandbox.sandboxd.plist
 
   Needs the `container` CLI and its system service (`container system start`),
-  and sandbox-guestd (linux/arm64) installed beside sandboxd.
-  allow-bind is on because this endpoint is local: whoever can open the socket
-  is the person whose directories they are. The home directory and its
-  ancestors are still refused.
+  and sandbox-guestd (linux/arm64) installed beside sandboxd. No host
+  directory is ever mounted into a sandbox.
 -->
 <plist version="1.0">
 <dict>
@@ -20,7 +18,6 @@
   <array>
     <string>/usr/local/bin/sandboxd</string>
     <string>--backend</string><string>macos</string>
-    <string>--allow-bind</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

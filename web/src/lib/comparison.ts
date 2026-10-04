@@ -57,7 +57,7 @@ export const ROWS: Row[] = [
     label: "Your files",
     note: "What is reachable by default",
     cells: {
-      sandbox: s("Nothing mounted; the repo goes in as a git bundle"),
+      sandbox: s("Nothing mounted; the agent clones what it needs"),
       builtin: w("Your filesystem, minus what the rules forbid"),
       container: o("The directories you mount, read-write"),
       os: w("Your filesystem, minus what the rules forbid"),
@@ -132,9 +132,9 @@ export const ROWS: Row[] = [
   },
   {
     label: "Coding agents",
-    note: "Logins, fleets, fallbacks",
+    note: "Logins, fallbacks",
     cells: {
-      sandbox: s("Twelve agents; logins kept; fleets and fallbacks"),
+      sandbox: s("Twelve agents; logins kept; fallbacks"),
       builtin: s("Built for one agent"),
       container: o("Some, per tool"),
       os: n("You wire it yourself"),
@@ -201,15 +201,7 @@ export const PLATFORMS = [
     windows: "—",
   },
   {
-    capability: "--bind a host directory",
-    macos: "yes",
-    linux: "no",
-    windows: "—",
-    footnote:
-      "A local Mac may mount one directory at /workspace when the operator allows it. Never your home or an ancestor of it.",
-  },
-  {
-    capability: "The client: run, agent, fleet, recover, events",
+    capability: "The client: run, agent, list, attach, events",
     macos: "yes",
     linux: "yes",
     windows: "yes",

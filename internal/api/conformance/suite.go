@@ -24,9 +24,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -86,7 +83,6 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"NetworkUpdateFollowsTheSameRules", testNetworkUpdate},
 		{"IdleSandboxIsTerminated", testIdleTimeout},
 		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
-		{"WorkspaceRoundTripsAsABundle", testWorkspaceBundle},
 		{"AttachStreamsInputAndOutput", testAttach},
 		{"SuspendKeepsTheSandbox", testSuspend},
 		{"ASnapshotForksTheSandbox", testSnapshot},
@@ -375,10 +371,11 @@ func testRunCwd(t *testing.T, e *env) {
 	if !errors.As(err, &ae) || !strings.Contains(ae.Message, "cwd") {
 		t.Errorf("a missing cwd was reported as %v; want it named as the cwd", err)
 	}
-	// The workspace exists in every sandbox, whatever the image.
-	res = e.run(t, sb.ID, api.RunRequest{Argv: []string{"pwd"}, Cwd: "/workspace"})
-	if strings.TrimSpace(string(res.Stdout)) != "/workspace" {
-		t.Errorf("pwd in /workspace printed %q", res.Stdout)
+	// A process starts in the sandbox user's home, whatever the image: it is
+	// where a sandbox's work happens, and there is no other workspace.
+	res = e.run(t, sb.ID, api.RunRequest{Argv: []string{"pwd"}})
+	if strings.TrimSpace(string(res.Stdout)) != "/sandbox/home" {
+		t.Errorf("pwd with no cwd printed %q, want /sandbox/home", res.Stdout)
 	}
 }
 
@@ -464,38 +461,38 @@ func testFilesRoundTrip(t *testing.T, e *env) {
 	sb := e.newSandbox(t, api.CreateSandboxRequest{})
 	ctx := ctxT(t)
 	data := []byte("package main\n\x00binary-safe\xff\n")
-	if err := e.c.WriteFile(ctx, sb.ID, "/workspace/nested/dir/f.txt", data); err != nil {
+	if err := e.c.WriteFile(ctx, sb.ID, "/sandbox/home/nested/dir/f.txt", data); err != nil {
 		t.Fatal(err)
 	}
-	got, err := e.c.ReadFile(ctx, sb.ID, "/workspace/nested/dir/f.txt")
+	got, err := e.c.ReadFile(ctx, sb.ID, "/sandbox/home/nested/dir/f.txt")
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("read back %q, %v", got, err)
 	}
-	entries, err := e.c.ListDir(ctx, sb.ID, "/workspace/nested/dir")
+	entries, err := e.c.ListDir(ctx, sb.ID, "/sandbox/home/nested/dir")
 	if err != nil || len(entries) != 1 || entries[0].Name != "f.txt" || entries[0].Type != "file" || entries[0].Size != int64(len(data)) {
 		t.Fatalf("listing: %+v, %v", entries, err)
 	}
-	entries, err = e.c.ListDir(ctx, sb.ID, "/workspace/nested")
+	entries, err = e.c.ListDir(ctx, sb.ID, "/sandbox/home/nested")
 	if err != nil || len(entries) != 1 || entries[0].Type != "dir" {
 		t.Fatalf("parent listing: %+v, %v", entries, err)
 	}
-	if err := e.c.RemoveFile(ctx, sb.ID, "/workspace/nested/dir/f.txt"); err != nil {
+	if err := e.c.RemoveFile(ctx, sb.ID, "/sandbox/home/nested/dir/f.txt"); err != nil {
 		t.Fatal(err)
 	}
-	_, err = e.c.ReadFile(ctx, sb.ID, "/workspace/nested/dir/f.txt")
+	_, err = e.c.ReadFile(ctx, sb.ID, "/sandbox/home/nested/dir/f.txt")
 	wantCode(t, err, api.CodeNotFound)
 }
 
 func testFilesShared(t *testing.T, e *env) {
 	sb := e.newSandbox(t, api.CreateSandboxRequest{})
-	if err := e.c.WriteFile(ctxT(t), sb.ID, "/workspace/shared.txt", []byte("via the API\n")); err != nil {
+	if err := e.c.WriteFile(ctxT(t), sb.ID, "/sandbox/home/shared.txt", []byte("via the API\n")); err != nil {
 		t.Fatal(err)
 	}
-	res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"cat", "/workspace/shared.txt"}})
+	res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"cat", "/sandbox/home/shared.txt"}})
 	if string(res.Stdout) != "via the API\n" {
 		t.Errorf("a process read %q", res.Stdout)
 	}
-	res = e.run(t, sb.ID, api.RunRequest{Argv: []string{"cat", "shared.txt"}, Cwd: "/workspace"})
+	res = e.run(t, sb.ID, api.RunRequest{Argv: []string{"cat", "shared.txt"}, Cwd: "/sandbox/home"})
 	if string(res.Stdout) != "via the API\n" {
 		t.Errorf("a relative path from cwd read %q", res.Stdout)
 	}
@@ -504,10 +501,10 @@ func testFilesShared(t *testing.T, e *env) {
 func testRemoveNonEmpty(t *testing.T, e *env) {
 	sb := e.newSandbox(t, api.CreateSandboxRequest{})
 	ctx := ctxT(t)
-	if err := e.c.WriteFile(ctx, sb.ID, "/workspace/d/x", []byte("x")); err != nil {
+	if err := e.c.WriteFile(ctx, sb.ID, "/sandbox/home/d/x", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	wantCode(t, e.c.RemoveFile(ctx, sb.ID, "/workspace/d"), api.CodeConflict)
+	wantCode(t, e.c.RemoveFile(ctx, sb.ID, "/sandbox/home/d"), api.CodeConflict)
 }
 
 func testPathTraversal(t *testing.T, e *env) {
@@ -532,7 +529,7 @@ func testTerminatedRefuses(t *testing.T, e *env) {
 	}
 	_, err := e.c.Run(ctx, sb.ID, api.RunRequest{Argv: []string{"true"}})
 	wantCode(t, err, api.CodeConflict)
-	wantCode(t, e.c.WriteFile(ctx, sb.ID, "/workspace/x", []byte("x")), api.CodeConflict)
+	wantCode(t, e.c.WriteFile(ctx, sb.ID, "/sandbox/home/x", []byte("x")), api.CodeConflict)
 }
 
 func testNetworkDefault(t *testing.T, e *env) {
@@ -656,90 +653,6 @@ func testIdleTimeoutLimit(t *testing.T, e *env) {
 	wantCode(t, err, api.CodeInvalidRequest)
 }
 
-// The workspace model end to end: a repository goes in as a bundle, the agent
-// commits inside, and the work comes back as a bundle the client verifies and
-// fetches — the host never mounts the repository into the guest.
-func testWorkspaceBundle(t *testing.T, e *env) {
-	if !e.caps.Has(api.CapWorkspaceBundle) {
-		sb := e.newSandbox(t, api.CreateSandboxRequest{})
-		err := e.c.PutWorkspace(ctxT(t), sb.ID, "main", bytes.NewReader(nil))
-		wantCode(t, err, api.CodeUnsupported)
-		return
-	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("no git on the client to make a bundle with")
-	}
-	host := t.TempDir()
-	git := func(args ...string) string {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", host, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	git("init", "-q", "-b", "feat")
-	if err := os.WriteFile(filepath.Join(host, "README"), []byte("from the host\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	git("add", "README")
-	git("commit", "-q", "-m", "host commit")
-	base := git("rev-parse", "HEAD")
-	in := filepath.Join(t.TempDir(), "in.bundle")
-	git("bundle", "create", "-q", in, "HEAD")
-
-	sb := e.newSandbox(t, api.CreateSandboxRequest{})
-	if res, err := e.c.Run(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"git", "--version"}}); err != nil || res.ExitCode != 0 {
-		t.Skip("the sandbox image has no git")
-	}
-	f, _ := os.Open(in)
-	defer f.Close()
-	if err := e.c.PutWorkspace(ctxT(t), sb.ID, "feat", f); err != nil {
-		t.Fatalf("put workspace: %v", err)
-	}
-	got, err := e.c.ReadFile(ctxT(t), sb.ID, "/workspace/README")
-	if err != nil || string(got) != "from the host\n" {
-		t.Fatalf("the cloned workspace has README = %q, %v", got, err)
-	}
-
-	// Nothing new yet: nothing to bring back.
-	err = e.c.GetWorkspaceBundle(ctxT(t), sb.ID, base, "feat", io.Discard)
-	wantCode(t, err, api.CodeConflict)
-
-	if err := e.c.WriteFile(ctxT(t), sb.ID, "/workspace/agent.txt", []byte("from the agent\n")); err != nil {
-		t.Fatal(err)
-	}
-	res := e.run(t, sb.ID, api.RunRequest{Cwd: "/workspace", Argv: []string{"sh", "-c",
-		"git add -A && git -c user.name=agent -c user.email=agent@example.com commit -q -m 'agent commit'"}})
-	if res.ExitCode != 0 {
-		t.Fatalf("commit in the sandbox: exit %d: %s", res.ExitCode, res.Stderr)
-	}
-
-	out := filepath.Join(t.TempDir(), "out.bundle")
-	of, _ := os.Create(out)
-	err = e.c.GetWorkspaceBundle(ctxT(t), sb.ID, base, "feat", of)
-	of.Close()
-	if err != nil {
-		t.Fatalf("get bundle: %v", err)
-	}
-	git("bundle", "verify", "-q", out)
-	git("fetch", "-q", out, "feat:refs/sandbox/conformance")
-	if msg := git("log", "-1", "--format=%s", "refs/sandbox/conformance"); msg != "agent commit" {
-		t.Fatalf("brought back %q, want the agent's commit", msg)
-	}
-
-	for name, call := range map[string]func() error{
-		"a range as the base":   func() error { return e.c.GetWorkspaceBundle(ctxT(t), sb.ID, "a..b", "feat", io.Discard) },
-		"an option as a branch": func() error { return e.c.GetWorkspaceBundle(ctxT(t), sb.ID, base, "--all", io.Discard) },
-		"no branch to clone":    func() error { return e.c.PutWorkspace(ctxT(t), sb.ID, "", bytes.NewReader(nil)) },
-	} {
-		if err := call(); !api.IsCode(err, api.CodeInvalidRequest) {
-			t.Errorf("%s: err = %v; want invalid_request", name, err)
-		}
-	}
-}
-
 // Attach holds a two-way stream on a running process: input reaches it, output
 // comes back, the exit code arrives last — and a second attach after it exited
 // still sees everything. Detaching does not stop a process.
@@ -802,7 +715,7 @@ func testSuspend(t *testing.T, e *env) {
 		wantCode(t, err, api.CodeUnsupported)
 		return
 	}
-	if err := e.c.WriteFile(ctx, sb.ID, "/workspace/kept.txt", []byte("before")); err != nil {
+	if err := e.c.WriteFile(ctx, sb.ID, "/sandbox/home/kept.txt", []byte("before")); err != nil {
 		t.Fatal(err)
 	}
 	p, err := e.c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"sleep", "30"}})
@@ -827,7 +740,7 @@ func testSuspend(t *testing.T, e *env) {
 	if err != nil || got.State != api.StateRunning {
 		t.Fatalf("resume: %+v, %v", got, err)
 	}
-	if data, err := e.c.ReadFile(ctx, sb.ID, "/workspace/kept.txt"); err != nil || string(data) != "before" {
+	if data, err := e.c.ReadFile(ctx, sb.ID, "/sandbox/home/kept.txt"); err != nil || string(data) != "before" {
 		t.Fatalf("after resume: %q, %v", data, err)
 	}
 	if res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"echo", "awake"}}); string(res.Stdout) != "awake\n" {
@@ -847,7 +760,7 @@ func testSnapshot(t *testing.T, e *env) {
 		wantCode(t, err, api.CodeUnsupported)
 		return
 	}
-	if err := e.c.WriteFile(ctx, sb.ID, "/workspace/state.txt", []byte("prepared")); err != nil {
+	if err := e.c.WriteFile(ctx, sb.ID, "/sandbox/home/state.txt", []byte("prepared")); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := e.c.CreateSnapshot(ctx, sb.ID)
@@ -866,15 +779,15 @@ func testSnapshot(t *testing.T, e *env) {
 	forks := make([]api.Sandbox, 2)
 	for i := range forks {
 		forks[i] = e.newSandbox(t, api.CreateSandboxRequest{SnapshotID: snap.ID, Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
-		if data, err := e.c.ReadFile(ctx, forks[i].ID, "/workspace/state.txt"); err != nil || string(data) != "prepared" {
+		if data, err := e.c.ReadFile(ctx, forks[i].ID, "/sandbox/home/state.txt"); err != nil || string(data) != "prepared" {
 			t.Fatalf("fork %d: %q, %v", i, data, err)
 		}
 	}
-	if err := e.c.WriteFile(ctx, forks[0].ID, "/workspace/state.txt", []byte("changed in fork 0")); err != nil {
+	if err := e.c.WriteFile(ctx, forks[0].ID, "/sandbox/home/state.txt", []byte("changed in fork 0")); err != nil {
 		t.Fatal(err)
 	}
 	for _, ref := range []string{forks[1].ID, sb.ID} {
-		if data, _ := e.c.ReadFile(ctx, ref, "/workspace/state.txt"); string(data) != "prepared" {
+		if data, _ := e.c.ReadFile(ctx, ref, "/sandbox/home/state.txt"); string(data) != "prepared" {
 			t.Fatalf("a write in one fork reached %s: %q", ref, data)
 		}
 	}
@@ -969,7 +882,7 @@ func testNotRoot(t *testing.T, e *env) {
 }
 
 // One sandbox cannot connect to another: each is its own boundary, and two
-// agents on one endpoint (a fleet, two users) must not be a network to each
+// agents on one endpoint (two runs, two users) must not be a network to each
 // other. The listener is checked from inside its own sandbox first, so a
 // refusal from the peer means isolation and not a listener that never
 // started.
@@ -1219,8 +1132,8 @@ func testVolumeSharing(t *testing.T, e *env) {
 	}
 }
 
-// Mount paths stay out of the system's directories and /workspace, are
-// absolute and plain, and do not nest; an unknown volume is not found.
+// Mount paths stay out of the system's directories, are absolute and plain,
+// and do not nest; an unknown volume is not found.
 func testVolumeRefusals(t *testing.T, e *env) {
 	if !e.caps.Has(api.CapVolumes) {
 		t.Skip("endpoint has no volumes (capability volumes)")
@@ -1228,8 +1141,8 @@ func testVolumeRefusals(t *testing.T, e *env) {
 	name := e.newVolume(t)
 	other := e.newVolume(t)
 	for _, mounts := range [][]api.VolumeMount{
-		{{Name: name, Path: "/workspace"}},
-		{{Name: name, Path: "/workspace/node_modules"}},
+		{{Name: name, Path: "/usr/local"}},
+		{{Name: name, Path: "/tmp/cache"}},
 		{{Name: name, Path: "/proc/x"}},
 		{{Name: name, Path: "/etc"}},
 		{{Name: name, Path: "data"}},

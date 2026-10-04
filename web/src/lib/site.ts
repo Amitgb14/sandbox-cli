@@ -19,12 +19,11 @@ export const RAW_INSTALL_URL =
   "https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh";
 
 /**
- * The multi-agent doc's route. A constant because three files link to it, and
- * with a trailing slash because `trailingSlash: true` in next.config.ts makes
- * the export emit `multi-agent/index.html` — linking without it costs a
- * redirect on the hosts that do one and a 404 on the hosts that do not.
+ * The sub-routes. Constants because several files link to them, and with a
+ * trailing slash because `trailingSlash: true` in next.config.ts makes the
+ * export emit `studio/index.html` — linking without it costs a redirect on the
+ * hosts that do one and a 404 on the hosts that do not.
  */
-export const MULTI_AGENT_PATH = "/multi-agent/";
 export const STUDIO_PATH = "/studio/";
 export const SETUP_PATH = "/setup/";
 
@@ -93,7 +92,7 @@ export const INSTALL_ROUTES: InstallRoute[] = [
 
 /** First commands after install — the “now what” block in the hero. */
 export const FIRST_RUN = [
-  { cmd: "sandbox-cli run -- npm test", note: "a fresh VM on a clone of this repo" },
+  { cmd: "sandbox-cli run -- uname -a", note: "a fresh VM, its own kernel" },
   { cmd: "sandbox-cli agent claude", note: "a coding agent, its login kept" },
   { cmd: "sandbox-cli list", note: "what is running, wherever it runs" },
 ];
@@ -101,6 +100,6 @@ export const FIRST_RUN = [
 export const HERO_STATS = [
   { value: "~80 ms", label: "to a running VM", sub: "Firecracker, image cached", mono: true },
   { value: "<1 ms", label: "from a pool", sub: "sandboxes booted ahead", mono: true },
-  { value: "0", label: "host paths mounted", sub: "your repo goes in as a git bundle" },
+  { value: "0", label: "host paths mounted", sub: "nothing on your machine is mounted in" },
   { value: "1", label: "API, three places", sub: "your Mac, your Linux box, the cloud" },
 ];

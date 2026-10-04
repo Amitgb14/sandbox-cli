@@ -82,12 +82,12 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(res["exit_code"], 0)
         self.assertEqual(res["stdout"], b"hello\n")
         self.assertEqual(self.c.run(sb["id"], ["cat"], stdin=b"in\x00out")["stdout"], b"in\x00out")
-        self.c.write_file(sb["id"], "/workspace/a/b.bin", b"\x00\xffbytes")
-        self.assertEqual(self.c.read_file(sb["id"], "/workspace/a/b.bin"), b"\x00\xffbytes")
-        self.assertEqual([e["name"] for e in self.c.list_dir(sb["id"], "/workspace/a")], ["b.bin"])
-        self.c.remove_file(sb["id"], "/workspace/a/b.bin")
+        self.c.write_file(sb["id"], "/sandbox/home/a/b.bin", b"\x00\xffbytes")
+        self.assertEqual(self.c.read_file(sb["id"], "/sandbox/home/a/b.bin"), b"\x00\xffbytes")
+        self.assertEqual([e["name"] for e in self.c.list_dir(sb["id"], "/sandbox/home/a")], ["b.bin"])
+        self.c.remove_file(sb["id"], "/sandbox/home/a/b.bin")
         with self.assertRaises(ApiError) as e:
-            self.c.read_file(sb["id"], "/workspace/a/b.bin")
+            self.c.read_file(sb["id"], "/sandbox/home/a/b.bin")
         self.assertEqual(e.exception.code, "not_found")
 
     def test_background_process(self):

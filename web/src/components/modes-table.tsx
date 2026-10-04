@@ -22,7 +22,7 @@ const MODES = [
     status: { label: "not yet run on a real Mac", tone: "caution" as const },
     backend: "the native container runtime — a VM per sandbox",
     needs: "macOS 26 on Apple silicon",
-    good: "Iterating on an agent or a harness: offline, no cost per second, a directory mounted when you want one (--bind).",
+    good: "Iterating on an agent or a harness: offline, no cost per second, nothing to set up beyond the runtime.",
     guide: { label: "docs/local-macos.md", href: DOC_URL.localMac },
   },
   {
@@ -33,7 +33,7 @@ const MODES = [
     status: { label: "verified on KVM", tone: "contained" as const },
     backend: "Firecracker microVMs, egress enforced on the host",
     needs: "Linux with /dev/kvm, x86_64 or arm64",
-    good: "Code that cannot leave the building, a team's shared box, fleets of agents: nothing phones home.",
+    good: "Code that cannot leave the building, a team's shared box, many agents at once: nothing phones home.",
     guide: { label: "docs/self-hosting.md", href: DOC_URL.selfHosting },
   },
   {

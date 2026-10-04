@@ -65,7 +65,7 @@ export function ContainmentSimulator({ className }: { className?: string }) {
         </span>
         <span className="inline-flex items-center gap-2 font-mono text-muted-foreground">
           <span className="size-1.5 rounded-full bg-contained" />
-          /workspace
+          /sandbox/home
         </span>
       </div>
 

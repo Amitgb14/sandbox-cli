@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
-	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // A wrapper consumes only leading sandbox flags; the agent's own flags — even
@@ -102,7 +102,7 @@ func TestWritePrivateRefusesSymlinks(t *testing.T) {
 	if err := os.Symlink(victim, filepath.Join(dir, ".claude")); err != nil {
 		t.Fatal(err)
 	}
-	if err := workspace.WritePrivate(dir, ".claude/.credentials.json", []byte("x")); err == nil {
+	if err := agenthome.WritePrivate(dir, ".claude/.credentials.json", []byte("x")); err == nil {
 		t.Fatal("wrote through a symlinked directory")
 	}
 	if _, err := os.Stat(filepath.Join(victim, ".credentials.json")); err == nil {
@@ -111,13 +111,13 @@ func TestWritePrivateRefusesSymlinks(t *testing.T) {
 	if err := os.Symlink(filepath.Join(victim, "f"), filepath.Join(dir, "file.json")); err != nil {
 		t.Fatal(err)
 	}
-	if err := workspace.WritePrivate(dir, "file.json", []byte("x")); err == nil {
+	if err := agenthome.WritePrivate(dir, "file.json", []byte("x")); err == nil {
 		t.Fatal("wrote through a symlinked file")
 	}
-	if err := workspace.WritePrivate(dir, "../escape.json", []byte("x")); err == nil {
+	if err := agenthome.WritePrivate(dir, "../escape.json", []byte("x")); err == nil {
 		t.Fatal("wrote outside the directory")
 	}
-	if err := workspace.WritePrivate(dir, "ok/auth.json", []byte("secret")); err != nil {
+	if err := agenthome.WritePrivate(dir, "ok/auth.json", []byte("secret")); err != nil {
 		t.Fatal(err)
 	}
 	fi, _ := os.Stat(filepath.Join(dir, "ok/auth.json"))

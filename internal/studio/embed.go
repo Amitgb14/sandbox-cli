@@ -23,29 +23,3 @@ func EmbeddedUI() fs.FS {
 	}
 	return sub
 }
-
-// RegisterRepo adds the repository containing dir, if it is one Studio may
-// act on, so `sandbox-cli studio` run from a checkout opens on it. A directory
-// that is not a repository, or one refused, is simply not registered.
-func (s *Server) RegisterRepo(dir string) (Repo, bool) {
-	root, err := validateRepoPath(dir)
-	if err != nil {
-		return Repo{}, false
-	}
-	reposMu.Lock()
-	defer reposMu.Unlock()
-	repos, err := s.loadRepos()
-	if err != nil {
-		return Repo{}, false
-	}
-	for _, rp := range repos {
-		if rp.Path == root {
-			return rp, true
-		}
-	}
-	rp := Repo{ID: repoID(root), Path: root, Name: lastElem(root), Added: nowUTC()}
-	if err := s.saveRepos(append(repos, rp)); err != nil {
-		return Repo{}, false
-	}
-	return rp, true
-}

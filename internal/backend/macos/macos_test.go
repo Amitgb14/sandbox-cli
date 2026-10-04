@@ -39,9 +39,9 @@ func golden(t *testing.T, name, got string) {
 	}
 }
 
-// What a sandbox is, as the runtime is told: the agent read-only, the network
-// off unless open was asked for, a bind only when there is one, and "--" before
-// the image so a reference can never be read as a flag.
+// What a sandbox is, as the runtime is told: the agent read-only and the only
+// host path, the network off unless open was asked for, and "--" before the
+// image so a reference can never be read as a flag.
 func TestBuildRunArgsGolden(t *testing.T) {
 	base := backend.Spec{ID: "sbx_0123456789abcdef", Image: "img:1", CPUs: 1.5, MemoryMB: 2048, DiskMB: 10240}
 	var out strings.Builder
@@ -51,10 +51,6 @@ func TestBuildRunArgsGolden(t *testing.T) {
 	}{
 		{"none", func(s *backend.Spec) { s.Network = api.NetworkPolicy{Mode: api.NetworkNone} }},
 		{"open", func(s *backend.Spec) { s.Network = api.NetworkPolicy{Mode: api.NetworkOpen} }},
-		{"bind read-only", func(s *backend.Spec) {
-			s.Network = api.NetworkPolicy{Mode: api.NetworkNone}
-			s.Bind = &backend.Bind{HostPath: "/Users/dev/project", ReadOnly: true}
-		}},
 	} {
 		s := base
 		c.mod(&s)
@@ -74,11 +70,6 @@ func TestBuildRunArgsRefusesAnAllowlist(t *testing.T) {
 	if _, err := BuildRunArgs(s, "/agent"); err == nil {
 		t.Fatal("an allowlist was rendered")
 	}
-	s.Network = api.NetworkPolicy{Mode: api.NetworkNone}
-	s.Bind = &backend.Bind{HostPath: "/a,b"}
-	if _, err := BuildRunArgs(s, "/agent"); err == nil {
-		t.Fatal("a bind path with a comma was rendered")
-	}
 }
 
 // fakeContainer is a `container` CLI that runs each sandbox as a directory
@@ -95,7 +86,7 @@ run)
     case "$1" in --name) id=$2; shift 2 ;; --) shift; break ;; *) shift ;; esac
   done
   cp -a "$FAKE_TEMPLATE" "$FAKE_ROOT/$id"
-  mkdir -p "$FAKE_ROOT/$id/.sbx" "$FAKE_ROOT/$id/workspace" "$FAKE_ROOT/$id/tmp"
+  mkdir -p "$FAKE_ROOT/$id/.sbx" "$FAKE_ROOT/$id/sandbox/home" "$FAKE_ROOT/$id/tmp"
   cp "$FAKE_AGENT" "$FAKE_ROOT/$id/.sbx/sandbox-guestd"
   echo "$id" ;;
 exec)

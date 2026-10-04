@@ -111,6 +111,40 @@ func TestUnknownFieldsAreRejected(t *testing.T) {
 	}
 }
 
+// Binds and the workspace endpoints are gone. A client that still asks for a
+// host directory is refused, never handed a sandbox without the mount it
+// asked for; the workspace endpoints answer as unknown routes.
+func TestRemovedWorkspaceFeaturesAreRefused(t *testing.T) {
+	h := newServer("").Handler()
+	rec := do(t, h, "POST", "/v1/sandboxes", "127.0.0.1", "", "", "application/json", []byte(`{"bind":{"host_path":"/home/you/project"}}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), api.CodeInvalidRequest) {
+		t.Errorf("a create with a bind: %d %s", rec.Code, rec.Body)
+	}
+	sb := do(t, h, "POST", "/v1/sandboxes", "127.0.0.1", "", "", "application/json", []byte(`{}`))
+	if sb.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", sb.Code, sb.Body)
+	}
+	if strings.Contains(sb.Body.String(), `"bind"`) {
+		t.Errorf("a sandbox still reports a bind: %s", sb.Body)
+	}
+	id := sb.Body.String()[strings.Index(sb.Body.String(), `"id":"`)+6:]
+	id = id[:strings.Index(id, `"`)]
+	for _, r := range []struct{ method, path, ct string }{
+		{"POST", "/v1/sandboxes/" + id + "/workspace?branch=main", "application/octet-stream"},
+		{"GET", "/v1/sandboxes/" + id + "/workspace/bundle?base=abc1234&branch=main", ""},
+	} {
+		if got := do(t, h, r.method, r.path, "127.0.0.1", "", "", r.ct, nil).Code; got != http.StatusNotFound {
+			t.Errorf("%s %s: %d", r.method, r.path, got)
+		}
+	}
+	caps := do(t, h, "GET", "/v1/capabilities", "127.0.0.1", "", "", "", nil).Body.String()
+	for _, gone := range []string{"bind_workspace", "workspace_bundle"} {
+		if strings.Contains(caps, gone) {
+			t.Errorf("capabilities still name %s: %s", gone, caps)
+		}
+	}
+}
+
 // A process that prints without end must not grow the server without end, and
 // the cut must be reported.
 func TestOutputIsCappedAndTheCutReported(t *testing.T) {

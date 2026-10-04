@@ -5,11 +5,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/server"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
-	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // The transcript comes out of the guest: only .jsonl files in the agent's
@@ -26,7 +26,7 @@ func TestReadTranscriptFromTheSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := workspace.GuestHome + "/.claude/projects/-workspace"
+	dir := agenthome.GuestHome + "/.claude/projects/-sandbox-home"
 	line := func(prompt, at string) []byte {
 		return []byte(`{"type":"user","timestamp":"` + at + `","message":{"role":"user","content":"` + prompt + `"}}` + "\n")
 	}
@@ -49,7 +49,7 @@ func TestReadTranscriptFromTheSandbox(t *testing.T) {
 			`{"timestamp":"` + at + `","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + prompt + `"}]}}` + "\n" +
 			`{"timestamp":"` + at + `","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + answer + `"}]}}` + "\n")
 	}
-	codex := workspace.GuestHome + "/.codex/sessions/2026/10/02"
+	codex := agenthome.GuestHome + "/.codex/sessions/2026/10/02"
 	c.WriteFile(ctx, sb.ID, codex+"/rollout-2026-10-02T09-00-00-a.jsonl", rollout("earlier", "ok", "2026-10-02T09:00:00Z"))
 	c.WriteFile(ctx, sb.ID, codex+"/rollout-2026-10-02T10-00-00-b.jsonl", rollout("fix the tests", "they pass", "2026-10-02T10:00:00Z"))
 	c.WriteFile(ctx, sb.ID, codex+"/notes.jsonl", rollout("not a session", "x", "2026-10-02T11:00:00Z"))

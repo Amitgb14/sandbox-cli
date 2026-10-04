@@ -16,9 +16,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
-	"github.com/Amitgb14/sandbox-cli/internal/mirror"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
-	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 // exitError carries a guest exit code out of a command, so the CLI's own exit
@@ -32,10 +30,10 @@ func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run [flags] -- COMMAND [ARGS...]",
 		Short: "Run a command in a new sandbox",
-		Long: "Creates a sandbox, clones the current git repository into /workspace, runs\n" +
-			"COMMAND on a terminal (or streamed, when stdin is not one), brings any new\n" +
-			"commits back to refs/sandbox/<name>, and removes the sandbox.",
-		Example: "  sandbox-cli run -- npm test\n  sandbox-cli run --network none -- make\n  sandbox-cli run --detach -- ./long-job.sh",
+		Long: "Creates a sandbox, runs COMMAND in the sandbox user's home directory on a\n" +
+			"terminal (or streamed, when stdin is not one), and removes the sandbox. A\n" +
+			"sandbox needs no repository: clone one inside it if the command wants code.",
+		Example: "  sandbox-cli run -- uname -a\n  sandbox-cli run -- sh -c 'git clone https://github.com/you/app && cd app && make test'\n  sandbox-cli run --network none -- make\n  sandbox-cli run --detach -- ./long-job.sh",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(rf.fallback) > 0 {
@@ -181,13 +179,12 @@ func pickProcess(ctx context.Context, c *api.Client, ref string, pid int) (int, 
 func newAttachCmd() *cobra.Command {
 	var ctxFlag string
 	var pid int
-	var every time.Duration
 	cmd := &cobra.Command{
 		Use:   "attach SANDBOX",
 		Short: "Attach your terminal to a sandbox's process; closing the terminal, or Ctrl-C without one, detaches and leaves it running",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, ctxName, err := newClient(ctxFlag)
+			c, _, err := newClient(ctxFlag)
 			if err != nil {
 				return err
 			}
@@ -199,23 +196,7 @@ func newAttachCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// A run started with --detach has nothing checkpointing it; while
-			// someone is attached to it, this does.
-			stop, reportMirror := func() error { return nil }, func() {}
-			if sess, ok := attachedSession(cmd.Context(), c, ctxName, args[0]); ok && every > 0 {
-				spec, err := mirrorSpecFor(sess.Repo)
-				if err != nil {
-					return err
-				}
-				var mirrorTaken func(string)
-				mirrorTaken, reportMirror = checkpointMirror(cmd.Context(), spec, sess)
-				stop = workspace.SessionCheckpoints(cmd.Context(), c, sess, every, mirrorTaken)
-			}
 			code, err := attach(cmd.Context(), c, args[0], p, info.Tty && isTerminal(os.Stdin), false)
-			if cerr := stop(); cerr != nil {
-				fmt.Fprintf(os.Stderr, "sandbox-cli: checkpoints failed while attached: %v\n", cerr)
-			}
-			reportMirror()
 			if errors.Is(err, errDetached) {
 				fmt.Fprintf(os.Stderr, "sandbox-cli: detached; %s keeps running (sandbox-cli attach %s · sandbox-cli kill %s)\n",
 					termsafe.Clean(args[0]), termsafe.Clean(args[0]), termsafe.Clean(args[0]))
@@ -232,28 +213,7 @@ func newAttachCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
 	cmd.Flags().IntVar(&pid, "pid", 0, "process to attach to (default: the running one)")
-	cmd.Flags().DurationVar(&every, "checkpoint-every", 5*time.Minute, "while attached to a run on a repository, fetch its working tree to refs/sandbox/checkpoints/<id> this often (0: never)")
 	return cmd
-}
-
-// attachedSession finds the run record for the sandbox ref names, if this host
-// started a run on a repository there that has not finished, and the
-// repository is still on disk. ref is resolved through the server's listing
-// first: session records are keyed by ID, and a name is what people type.
-func attachedSession(ctx context.Context, c *api.Client, ctxName, ref string) (*workspace.Session, bool) {
-	sb, err := c.Sandbox(ctx, ref)
-	if err != nil {
-		return nil, false
-	}
-	s, err := workspace.LoadSession(sb.ID)
-	// The same ID on another sandboxd is another sandbox.
-	if err != nil || s.Done || s.Repo == "" || s.Context != ctxName {
-		return nil, false
-	}
-	if _, err := os.Stat(s.Repo); err != nil {
-		return nil, false
-	}
-	return &s, true
 }
 
 func newLogsCmd() *cobra.Command {
@@ -293,7 +253,7 @@ func newKillCmd() *cobra.Command {
 	var ctxFlag string
 	cmd := &cobra.Command{
 		Use:   "kill SANDBOX...",
-		Short: "Terminate sandboxes, discarding anything not brought back",
+		Short: "Terminate sandboxes, discarding everything in them",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, _, err := newClient(ctxFlag)
@@ -309,46 +269,6 @@ func newKillCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
-	return cmd
-}
-
-func newBringBackCmd() *cobra.Command {
-	var name string
-	cmd := &cobra.Command{
-		Use:   "bring-back SANDBOX",
-		Short: "Fetch a sandbox's commits into refs/sandbox/<name> in the repository it was cloned from",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := workspace.LoadSession(args[0])
-			if err != nil {
-				return fmt.Errorf("no record of a repository cloned into %s on this machine", args[0])
-			}
-			c, _, err := newClient(s.Context)
-			if err != nil {
-				return err
-			}
-			if name == "" {
-				name = s.Sandbox
-			}
-			ref, err := workspace.BringBack(cmd.Context(), c, s, name)
-			if err != nil {
-				return err
-			}
-			s.MarkBroughtBack(ref)
-			if ref == "" {
-				fmt.Fprintln(cmd.OutOrStdout(), "no new commits")
-				return nil
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ref)
-			spec, err := mirrorSpecFor(s.Repo)
-			if err != nil {
-				return err
-			}
-			sayMirror(mirrorWork(cmd.Context(), spec, &s, ref, mirror.KindBringBack))
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&name, "name", "", "ref name under refs/sandbox/ (default: the sandbox id)")
 	return cmd
 }
 

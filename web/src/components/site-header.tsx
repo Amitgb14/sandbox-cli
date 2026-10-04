@@ -44,7 +44,7 @@ import { cn } from "@/lib/utils";
  *
  * Routes are rendered through `next/link` — via Base UI's `render` prop, so the
  * menu keeps its own behaviour (`closeOnClick`, focus handling) and only the
- * element underneath changes. A raw `<a href="/multi-agent/">` would work today
+ * element underneath changes. A raw `<a href="/studio/">` would work today
  * and break the moment the site is served from a subpath, because `basePath` is
  * applied by the framework's Link and by nothing else.
  */

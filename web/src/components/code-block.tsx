@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * The dark terminal block the rest of the page already speaks in, extracted so
- * the multi-agent doc can use it six times without six copies of the same
+ * the landing page and the sub-pages can use it without copies of the same
  * markup and the same comment-dimming rule.
  *
  * `lang` decides one thing only: whether a leading `$` is drawn. A shell block

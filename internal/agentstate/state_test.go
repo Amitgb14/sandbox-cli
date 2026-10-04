@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agentctx"
+	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/server"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
-	"github.com/Amitgb14/sandbox-cli/internal/workspace"
 )
 
 var at = time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
@@ -122,7 +122,7 @@ func TestLookReadsTheAgentFromTheSandbox(t *testing.T) {
 	// A helper started later — a checkpoint, a bring-back — is not the agent.
 	c.Run(ctx, sb.ID, api.RunRequest{Argv: []string{"true"}})
 	turn := `{"type":"assistant","timestamp":"` + at.Format(time.RFC3339) + `","message":{"role":"assistant","content":[{"type":"text","text":"Shall I go on?"}]}}` + "\n"
-	c.WriteFile(ctx, sb.ID, workspace.GuestHome+"/.claude/projects/-workspace/s.jsonl", []byte(turn))
+	c.WriteFile(ctx, sb.ID, agenthome.GuestHome+"/.claude/projects/-sandbox-home/s.jsonl", []byte(turn))
 	sb, _ = c.Sandbox(ctx, sb.ID)
 
 	if r := Look(ctx, c, sb, at.Add(time.Minute)); r.State != Blocked || r.PID != 1 || r.Agent != "claude" {
