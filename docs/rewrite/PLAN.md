@@ -885,8 +885,19 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
    `sandboxd`, `sandbox-guestd`, the CLI and the SDKs are open; the cloud
    control plane is closed, in a separate repository. Self-hosting is what
    earns trust for a sandbox.
-2. **Multi-node self-hosted.** One node at M5. Does a customer with five Linux
-   boxes get the control plane too (open, closed, or paid)?
+2. ~~**Multi-node self-hosted.**~~ *Decided provisionally 2026-10-04, as
+   recommended in [`docs/roadmap/task-7-fleet-gateway.md`](../roadmap/task-7-fleet-gateway.md),
+   for the maintainer to confirm:* yes, with an open `sandbox-gateway` in this
+   repository in front of any number of `sandboxd` nodes; metering and billing
+   for the cloud stay private. With it:
+   - `golang.org/x/crypto/ssh` is allowed **for the gateway only** (its SSH
+     server). `sandboxd`, the guest agent and the CLI stay stdlib, cobra and
+     yaml.v3. Pinned to a release that still supports Go 1.25.
+   - The gateway keeps its state in a file first; PostgreSQL is a later,
+     separate decision.
+   - A sandbox id may name its node (`sbx_<node>_<hex>`), so the gateway routes
+     without a lookup.
+   - Users authenticate with gateway-issued API keys; single sign-on later.
 3. **API compatibility.** Our own API, shaped like the reference product's where it is
    right (recommended); or a surface compatible with its SDK so those users can
    switch with a base URL?

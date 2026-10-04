@@ -71,7 +71,17 @@ func (l *Log) Record(e api.Event) {
 	if e.Time.IsZero() {
 		e.Time = time.Now().UTC()
 	}
-	line, err := json.Marshal(e)
+	l.Append(e)
+}
+
+// Append writes v as one line, with Record's rotation and file mode, and is
+// as best-effort. It is for a log of another shape: sandbox-gateway keeps its
+// record of who did what in this format.
+func (l *Log) Append(v any) {
+	if l == nil || l.Path == "" {
+		return
+	}
+	line, err := json.Marshal(v)
 	if err != nil {
 		return
 	}

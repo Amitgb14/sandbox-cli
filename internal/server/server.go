@@ -62,6 +62,17 @@ type Server struct {
 	// Logf, when set, receives the operator's messages (pool trouble).
 	Logf func(format string, a ...any)
 
+	// NodeID, when set, makes this sandboxd one node of many behind a
+	// gateway: every sandbox id it creates names it (spec.NewIDFor), so the
+	// gateway routes later calls without a lookup. Empty is a standalone
+	// sandboxd, whose ids name no node. Validated by api.ValidNodeID.
+	NodeID string
+	// Capacity is what this machine offers sandboxes, reported at GET
+	// /v1/node; Free there is Capacity less what sandboxes are given.
+	Capacity api.NodeResources
+	// NodeLabels describe the node to a gateway (region, disk class, ...).
+	NodeLabels map[string]string
+
 	now func() time.Time
 
 	mu            sync.Mutex
@@ -71,6 +82,9 @@ type Server struct {
 	poolsOnce     sync.Once
 	reaper        sync.Once
 	snapshotStore *snapshots
+	cordoned      bool // under mu; see node.go
+	metricsOnce   sync.Once
+	nm            *nodeMetrics // metrics.go
 }
 
 type record struct {
@@ -114,7 +128,9 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	route("GET /v1/capabilities", false, s.capabilities)
-	route("POST /v1/sandboxes", false, s.createSandbox)
+	route("GET /v1/node", false, s.node)
+	route("POST /v1/node/cordon", false, s.cordon)
+	route("POST /v1/sandboxes", false, s.timedCreate)
 	route("GET /v1/sandboxes", false, s.listSandboxes)
 	route("GET /v1/sandboxes/{ref}", false, s.getSandbox)
 	route("PATCH /v1/sandboxes/{ref}", false, s.updateSandbox)
@@ -184,6 +200,11 @@ func (s *Server) guard(raw bool, next http.HandlerFunc) http.Handler {
 // --- capabilities and sandboxes ---------------------------------------------
 
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.caps())
+}
+
+// caps is the body of /v1/capabilities, which GET /v1/node repeats.
+func (s *Server) caps() api.Capabilities {
 	caps := map[string]bool{
 		api.CapNetworkPolicyUpdate: false, api.CapSuspend: false,
 		api.CapMemorySnapshot: false,
@@ -192,13 +213,13 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		caps[k] = v
 	}
 	caps[api.CapAudit] = s.Audit != nil
-	writeJSON(w, http.StatusOK, api.Capabilities{
+	return api.Capabilities{
 		APIVersion:   api.Version,
 		Backend:      s.Backend.Name(),
 		Capabilities: caps,
 		Limits:       s.Policy.Limits,
 		Network:      s.Policy.Ceiling(),
-	})
+	}
 }
 
 func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
@@ -220,7 +241,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	id := spec.NewID()
+	id := s.newID()
 	bs, err := spec.Resolve(req, s.Policy, id)
 	if err != nil {
 		writeSpecErr(w, err)
@@ -256,6 +277,13 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		lastActive: s.now(),
 	}
 	s.mu.Lock()
+	// Checked under the same lock that registers the sandbox, so once a cordon
+	// has returned no create that began before it can still land.
+	if s.cordoned {
+		s.mu.Unlock()
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, cordonedMsg)
+		return
+	}
 	if req.Name != "" {
 		for _, o := range s.sandboxes {
 			if o.snapshot().Name == req.Name && o.snapshot().State != api.StateTerminated {

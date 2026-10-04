@@ -88,6 +88,81 @@ pools:
 Every pooled sandbox holds its memory while it waits, so size pools to the
 traffic you have. A restart of sandboxd discards them with every other VM.
 
+## As one node behind a gateway
+
+Several machines can serve one API: a gateway in front, each `sandboxd` a node
+behind it ([fleet.md](fleet.md) sets up both). Users reach only the gateway. A node should listen **only on the
+private network** the gateway shares with it, never on an address users can
+reach, and accept only the gateway:
+
+```sh
+sandboxd --backend firecracker --listen 10.0.0.17:7443 \
+  --token-file /etc/sandboxd/token \
+  --tls-cert /etc/sandboxd/tls/cert.pem --tls-key /etc/sandboxd/tls/key.pem \
+  --client-ca /etc/sandboxd/tls/gateway-ca.pem \
+  --node-id n17 --node-label region=west --node-label disk=nvme \
+  --allowed-host 10.0.0.17
+```
+
+- **`--node-id`** names the node: every sandbox id it makes carries it
+  (`sbx_n17_0123456789abcdef`), so the gateway routes each later call by the
+  id alone. Lowercase letters, digits and `-`, at most 31. Without it the node
+  is a standalone `sandboxd` and its ids are as before.
+- **`--client-ca`** turns on mutual TLS: a connection must present a
+  certificate this CA signed, or the handshake fails before a request is read.
+  The token is still required on every request. It needs `--tls-cert` and
+  `--tls-key`; `sandboxd` refuses to start with it alone.
+- **`--node-label key=value`** (repeatable) describes the node to the gateway.
+- **`--capacity-cpus`, `--capacity-memory-mb`, `--capacity-disk-mb`** are what
+  the node offers sandboxes. The defaults are every CPU, all the memory
+  (`/proc/meminfo`) and the size of the state directory's filesystem; set them
+  lower to leave room for the host.
+
+`GET /v1/node` reports the node's capacity, what is free (capacity less what
+every sandbox not terminated, pooled ones included, has been given), how many
+run, the pools by image, the images whose disks are already built, the labels
+and whether it is cordoned. `POST /v1/node/cordon` with `{"cordoned": true}`
+stops new sandboxes landing on the node (`503 unavailable`) while those
+already there carry on. A cordon is held in memory, so a restart clears it;
+the gateway sees that on its next poll and cordons the node again if it still
+means to.
+
+`--metrics-listen 127.0.0.1:9100` serves Prometheus metrics at `/metrics`:
+sandboxes by state, processes running, pool sizes by image, capacity and
+free, cordon, and creates by status with a latency histogram. It has no
+credential, so `sandboxd` refuses any address but loopback; put a proxy with
+its own authentication in front if the scraper is elsewhere.
+
+### Upgrading nodes behind a gateway
+
+One node at a time, from a machine whose current context holds a gateway
+admin key:
+
+```sh
+sandbox-cli gateway drain n17               # cordon; prints how many sandboxes still run there
+sandbox-cli gateway drain n17               # again, until it says 0 — or end them now:
+sandbox-cli gateway drain n17 --terminate
+systemctl stop sandboxd && <install the new sandboxd> && systemctl start sandboxd
+sandbox-cli gateway nodes                   # n17 healthy, cordoned, on the new version
+sandbox-cli gateway uncordon n17
+```
+
+The gateway remembers that it cordoned the node: the restart clears the
+node's own cordon, and the gateway puts it back on its next poll and places
+nothing there in between, so the node takes new sandboxes only once you
+uncordon it. Without the CLI, the same calls are `POST
+/v1/admin/nodes/{name}/drain` with `{"terminate": false|true}` and `POST
+/v1/admin/nodes/{name}/cordon` with `{"cordoned": false}`.
+
+A node that stops answering is not drained: calls on its sandboxes answer
+`503 unavailable`, and after `--node-lost-after` (5 minutes by default) its
+sandboxes are listed by `sandbox-cli gateway lost` and stop counting against
+their tenants' quotas. They are not reported terminated, because the node may
+come back with them running; when it answers again they are reconciled from
+its own listing. Running several gateway replicas, and network isolation
+between tenants across nodes, are not done yet: today one gateway process
+holds its state file.
+
 ## Volumes
 
 Volumes are sparse ext4 files under `<state-dir>/volumes/`, attached to a VM as

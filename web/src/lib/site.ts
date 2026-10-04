@@ -34,6 +34,7 @@ export const DOC_URL = {
   api: `${BLOB}/docs/api/v1.md`,
   localMac: `${BLOB}/docs/local-macos.md`,
   selfHosting: `${BLOB}/docs/self-hosting.md`,
+  fleet: `${BLOB}/docs/fleet.md`,
   agents: `${REPO_URL}#coding-agents`,
   security: `${BLOB}/docs/security/README.md`,
   changelog: `${BLOB}/CHANGELOG.md`,

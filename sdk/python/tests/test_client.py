@@ -115,6 +115,11 @@ class ClientTest(unittest.TestCase):
         self.assertTrue(sb["network"]["allow"])
         self.assertEqual(sb["network"]["deny"], ["gist.github.com"])
 
+    def test_a_sandboxd_has_no_gateway_endpoints(self):
+        with self.assertRaises(ApiError) as e:
+            self.c.whoami()
+        self.assertEqual(e.exception.code, "not_found")
+
     def test_wrong_token(self):
         bad = Client("unix://" + os.path.join(self.dir, "s.sock"), token="wrong")
         with self.assertRaises(ApiError) as e:

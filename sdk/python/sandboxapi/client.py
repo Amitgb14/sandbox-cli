@@ -269,3 +269,135 @@ class Client:
 
     def list_dir(self, ref: str, path: str) -> List[Dict[str, Any]]:
         return json.loads(self._read(self._request("GET", self._sbx(ref) + "/dirs", {"path": path})))["entries"]
+
+    # --- gateway ---------------------------------------------------------------
+    # A gateway in front of many sandboxd nodes adds these; a plain sandboxd
+    # answers each with ApiError code ``not_found``.
+
+    def whoami(self) -> Dict[str, Any]:
+        """The caller as the gateway sees its API key: ``user``, ``tenant``,
+        ``key_id`` and ``scopes``."""
+        return self._json("GET", "/v1/whoami")
+
+    def ssh_info(self) -> Dict[str, Any]:
+        """Where the gateway's SSH server listens (``host``, ``port``) and the
+        host keys to pin (``host_keys``, ``fingerprint``)."""
+        return self._json("GET", "/v1/ssh")
+
+    def add_ssh_key(self, key: str, sandbox: str = "") -> Dict[str, Any]:
+        """Register a public key (one authorized_keys line, no options) for SSH
+        logins: ``ssh SANDBOX@host -p port``. ``sandbox`` limits it to one."""
+        req: Dict[str, Any] = {"key": key}
+        if sandbox:
+            req["sandbox"] = sandbox
+        return self._json("POST", "/v1/ssh-keys", req)
+
+    def ssh_keys(self) -> List[Dict[str, Any]]:
+        return self._json("GET", "/v1/ssh-keys")["keys"]
+
+    def remove_ssh_key(self, key_id: str) -> None:
+        self._json("DELETE", "/v1/ssh-keys/" + urllib.parse.quote(key_id, safe=""))
+
+    def ssh_access(self, ref: str, ttl_secs: int = 0) -> Dict[str, Any]:
+        """A short-lived SSH login to one sandbox: ``user`` (the token, and the
+        whole credential until ``expires_at``), ``host``, ``port`` and the
+        ``command`` that uses it. ``ttl_secs`` 0 takes the gateway's default."""
+        req: Dict[str, Any] = {}
+        if ttl_secs:
+            req["ttl_secs"] = ttl_secs
+        return self._json("POST", self._sbx(ref) + "/ssh-access", req)
+
+    # --- jobs, agent runs and secrets (gateway) --------------------------------
+    # Work the gateway runs after the request that started it has gone: a
+    # sandbox per run, made, watched and taken down by the gateway.
+
+    def create_job(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Start a job. ``spec`` holds the API's keys: ``command`` (an argv) or
+        ``agent`` and ``prompt`` (or ``prompts``, one run each), and optionally
+        ``name``, ``image``, ``parallelism``, ``completions``, ``retries``,
+        ``timeout_secs``, ``env``, ``secrets`` (names), ``network``,
+        ``resources``, ``from_snapshot``, ``keep`` (``{"output": bool,
+        "files": [paths]}``) and ``notify`` (a URL)."""
+        return self._json("POST", "/v1/jobs", spec)
+
+    def agent_run(self, agent: str, prompt: str, **options: Any) -> Dict[str, Any]:
+        """Start a one-run job of ``agent`` on ``prompt``. ``options`` are the
+        job keys that apply to one run: ``secrets``, ``env``, ``image``,
+        ``timeout_secs``, ``retries``, ``keep``, ``notify``, ..."""
+        req: Dict[str, Any] = {"agent": agent, "prompt": prompt}
+        req.update(options)
+        return self._json("POST", "/v1/agent-runs", req)
+
+    def jobs(self) -> List[Dict[str, Any]]:
+        """The caller's jobs, newest first, without their runs."""
+        return self._json("GET", "/v1/jobs")["jobs"]
+
+    @staticmethod
+    def _job(job_id: str) -> str:
+        return "/v1/jobs/" + urllib.parse.quote(job_id, safe="")
+
+    def job(self, job_id: str) -> Dict[str, Any]:
+        """One job, with each run's state, exit code, attempts and sandbox."""
+        return self._json("GET", self._job(job_id))
+
+    def cancel_job(self, job_id: str) -> Dict[str, Any]:
+        """Cancel a job: runs not started never are; running ones' sandboxes
+        are terminated. Returns the job."""
+        return self._json("DELETE", self._job(job_id))
+
+    def job_output(self, job_id: str, run: int) -> Dict[str, Any]:
+        """What run ``run`` kept of its output: ``stdout`` and ``stderr`` as
+        bytes, and ``truncated``."""
+        out = self._json("GET", "%s/runs/%d/output" % (self._job(job_id), run))
+        return {"stdout": _unb64(out.get("stdout")), "stderr": _unb64(out.get("stderr")),
+                "truncated": out.get("truncated", False)}
+
+    def job_file(self, job_id: str, run: int, path: str) -> bytes:
+        """A file run ``run`` kept (one of the job's ``keep.files``)."""
+        return self._read(self._request("GET", "%s/runs/%d/files" % (self._job(job_id), run), {"path": path}))
+
+    def set_secret(self, name: str, value: str) -> None:
+        """Set one of the tenant's secrets. The value is never returned."""
+        self._json("PUT", "/v1/secrets/" + urllib.parse.quote(name, safe=""), {"value": value})
+
+    def secrets(self) -> List[Dict[str, Any]]:
+        """The tenant's secrets: ``name`` and ``updated_at``, never a value."""
+        return self._json("GET", "/v1/secrets")["secrets"]
+
+    def delete_secret(self, name: str) -> None:
+        self._json("DELETE", "/v1/secrets/" + urllib.parse.quote(name, safe=""))
+    # --- services (gateway) ------------------------------------------------------
+    # A sandbox spec and a count a gateway keeps true (docs/fleet.md,
+    # "Services"). A plain sandboxd answers each with ApiError ``not_found``.
+
+    @staticmethod
+    def _svc(name: str) -> str:
+        return "/v1/services/" + urllib.parse.quote(name, safe="")
+
+    def deploy_service(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a service from ``spec`` (``name``, ``image``, ``command``,
+        ``replicas``, ``resources``, ``port``, ``health``, ``env``, ``network``,
+        ``placement``, ``public``). ApiError ``conflict`` if the tenant already
+        has one by that name; change it with ``update_service``."""
+        return self._json("POST", "/v1/services", spec)
+
+    def update_service(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace a service's spec. A change to what a replica is rolls out
+        one replica at a time; ``rollout`` in the result follows it."""
+        return self._json("PUT", self._svc(spec["name"]), spec)
+
+    def services(self) -> List[Dict[str, Any]]:
+        return self._json("GET", "/v1/services")["services"]
+
+    def service(self, name: str) -> Dict[str, Any]:
+        """One service: its spec (env as ``env_names``), ``desired`` and
+        ``ready`` counts, ``rollout``, and each replica's sandbox, node, state,
+        health, last check and restarts."""
+        return self._json("GET", self._svc(name))
+
+    def scale_service(self, name: str, replicas: int) -> Dict[str, Any]:
+        return self._json("POST", self._svc(name) + "/scale", {"replicas": replicas})
+
+    def delete_service(self, name: str) -> None:
+        """Delete a service and terminate its replicas."""
+        self._json("DELETE", self._svc(name))

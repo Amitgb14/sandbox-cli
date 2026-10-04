@@ -227,7 +227,17 @@ func NewID() string {
 	return "sbx_" + hex.EncodeToString(b[:])
 }
 
-var idRE = regexp.MustCompile(`^sbx_[0-9a-f]{16}$`)
+// NewIDFor is NewID for a sandboxd that is one node of many: the id names the
+// node (api.NodeOfID), so a gateway routes every later call without a lookup.
+func NewIDFor(node string) string {
+	if node == "" {
+		return NewID()
+	}
+	id := NewID()
+	return "sbx_" + node + "_" + strings.TrimPrefix(id, "sbx_")
+}
+
+var idRE = regexp.MustCompile(`^sbx_([a-z0-9][a-z0-9-]{0,30}_)?[0-9a-f]{16}$`)
 
 // ValidID reports whether s has the shape NewID gives.
 func ValidID(s string) bool { return idRE.MatchString(s) }

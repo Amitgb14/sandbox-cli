@@ -305,3 +305,30 @@ network:
 		}
 	}
 }
+
+// A node's ids name it, and only it; a standalone sandboxd's ids name none.
+// The gateway routes by the name, so it must round-trip exactly.
+func TestNodeIDsRoundTrip(t *testing.T) {
+	id := NewIDFor("n17")
+	if !ValidID(id) {
+		t.Fatalf("%q is not a valid id", id)
+	}
+	if node, ok := api.NodeOfID(id); !ok || node != "n17" {
+		t.Errorf("NodeOfID(%q) = %q, %v", id, node, ok)
+	}
+	plain := NewID()
+	if _, ok := api.NodeOfID(plain); ok {
+		t.Errorf("a standalone id %q names a node", plain)
+	}
+	if NewIDFor("") == "" || !ValidID(NewIDFor("")) {
+		t.Error("an empty node name must give a standalone id")
+	}
+	for _, bad := range []string{"sbx_N17_0123456789abcdef", "sbx_n_17_0123456789abcdef", "sbx_n17_0123", "sbx__0123456789abcdef"} {
+		if _, ok := api.NodeOfID(bad); ok {
+			t.Errorf("NodeOfID accepted %q", bad)
+		}
+	}
+	if ValidName(id) {
+		t.Errorf("node id %q is also a valid name", id)
+	}
+}

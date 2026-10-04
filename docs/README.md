@@ -4,6 +4,7 @@
 |---|---|
 | [API v1](api/v1.md) | The API every mode serves: sandboxes, processes, attach, files, network policy, errors |
 | [Self-hosting](self-hosting.md) | sandboxd on a Linux machine: install, TLS and tokens, the operator policy, how egress is enforced |
+| [A fleet behind a gateway](fleet.md) | sandbox-gateway in front of one machine or many: certificates, nodes, users' keys, SSH, the security model |
 | [Local on a Mac](local-macos.md) | sandboxd with the native `container` runtime, and the points still to be measured |
 | [End-to-end checks](testing/end-to-end.md) | What fakes cannot prove, and the command that proves it on a real host |
 | [Rewrite plan](rewrite/PLAN.md) | Milestones, measurements and the decisions behind the design |

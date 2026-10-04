@@ -66,6 +66,23 @@ builds:
       - goos: darwin
         goarch: amd64
 
+  # The gateway in front of many sandboxd nodes (docs/fleet.md). Linux only:
+  # it is a fleet's front door, run beside Linux nodes; it needs no KVM.
+  - id: sandbox-gateway
+    main: ./cmd/sandbox-gateway
+    binary: sandbox-gateway
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/Amitgb14/sandbox-cli/internal/version.Version={{ .Version }} -X github.com/Amitgb14/sandbox-cli/internal/policy.DefaultImage=ghcr.io/amitgb14/sandbox-base:{{ .Tag }}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
   # The guest agent runs inside every VM, so it is always a Linux binary —
   # on a Mac too, where the VM is linux/arm64. Static, because it is PID 1 of
   # a guest and the image may have no libc it could link against.
@@ -91,6 +108,10 @@ archives:
     ids:
       - sandbox-cli
       - sandboxd
+    # Windows and Intel Macs get the client alone, every other platform the
+    # client and sandboxd: two counts on purpose, which goreleaser v2 refuses
+    # unless told this is intended.
+    allow_different_binary_count: true
     formats: [tar.gz]
     format_overrides:
       - goos: windows
@@ -110,6 +131,20 @@ archives:
     formats: [tar.gz]
     name_template: >-
       sandbox-guestd_{{ .Version }}_linux_{{ .Arch }}
+
+  # The gateway, in an archive of its own: most machines never run one, and
+  # install.sh fetches it only with --with-gateway. The example node file and
+  # unit go with it, since a gateway is set up from them (docs/fleet.md).
+  - id: gateway
+    ids:
+      - sandbox-gateway
+    formats: [tar.gz]
+    name_template: >-
+      sandbox-gateway_{{ .Version }}_linux_{{ .Arch }}
+    files:
+      - docs/fleet.md
+      - packaging/fleet/*
+      - packaging/systemd/sandbox-gateway.service
 
 checksum:
   name_template: checksums.txt
@@ -144,4 +179,6 @@ release:
     On Linux and Apple-silicon macOS this installs `sandbox-cli`, `sandboxd` and
     the guest agent; elsewhere, the client only. Then follow
     [local-macos.md](docs/local-macos.md) or [self-hosting.md](docs/self-hosting.md).
+    On Linux, `sh -s -- --with-gateway` adds `sandbox-gateway`, for many nodes
+    behind one endpoint ([fleet.md](docs/fleet.md)).
     Verify downloads against `checksums.txt`.

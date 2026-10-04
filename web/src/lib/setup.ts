@@ -7,7 +7,7 @@
  * allowlist, snapshots, volumes — is a property of the machine and how it was
  * started, and the point of doctor is that you find out before an agent does.
  *
- * Mirrors docs/local-macos.md and docs/self-hosting.md.
+ * Mirrors docs/local-macos.md, docs/self-hosting.md and docs/fleet.md.
  */
 
 export type SetupStep = {
@@ -163,3 +163,39 @@ export const SETUP_PATHS: SetupPath[] = [
     ],
   },
 ];
+
+/**
+ * A fleet behind a gateway, in the commands docs/fleet.md walks through. Only
+ * the setup page shows it: it is an operator's path, not a first run, so it is
+ * not one of SETUP_PATHS. Every flag here is one sandbox-gateway or sandboxd
+ * defines; the file paths are the packaged unit's.
+ */
+export const FLEET_CERTS_CODE = `sh packaging/fleet/make-certs.sh -o fleet-certs \\
+  -g gateway.example.internal 10.0.0.17 10.0.0.18`;
+
+export const FLEET_NODE_CODE = `sandboxd --backend firecracker ... \\
+  --listen 10.0.0.17:7443 --allowed-host 10.0.0.17 \\
+  --token-file /etc/sandboxd/token \\
+  --tls-cert /etc/sandboxd/tls/node-10.0.0.17.pem \\
+  --tls-key /etc/sandboxd/tls/node-10.0.0.17-key.pem \\
+  --client-ca /etc/sandboxd/tls/ca.pem --node-id n17`;
+
+export const FLEET_GATEWAY_CODE = `curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\
+  | sudo sh -s -- --dest /usr/local/bin --no-config --client-only --with-gateway
+sudo useradd --system --home-dir /var/lib/sandbox-gateway --shell /usr/sbin/nologin sandbox-gateway
+sudo install -d -o sandbox-gateway -g sandbox-gateway -m 0700 /etc/sandbox-gateway /var/lib/sandbox-gateway
+# certificates, node tokens and nodes.yaml into /etc/sandbox-gateway, owned by it, 0600
+sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.json \\
+  keys create --user ops --scope admin
+sudo cp packaging/systemd/sandbox-gateway.service /etc/systemd/system/
+sudo systemctl enable --now sandbox-gateway`;
+
+export const FLEET_USER_CODE = `sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.json keys create \\
+  --user alice --tenant team-a --scope sandbox:read --scope sandbox:create \\
+  --scope sandbox:delete --scope sandbox:ssh      # with the gateway stopped, or POST /v1/admin/keys
+
+# on alice's machine
+sandbox-cli context add fleet https://gateway.example.internal:8443 \\
+  --token-file fleet.key --ca ca.pem
+sandbox-cli context use fleet && sandbox-cli whoami
+sandbox-cli ssh demo`;

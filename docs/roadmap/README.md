@@ -27,6 +27,12 @@ earlier decisions are reversed and why.
 | 5 | [Checkpoint and fork](task-5-checkpoint-and-fork.md) | Snapshots, suspend/resume and clone on Firecracker (M8); macOS reports the capability off | Not started; the "do it on Docker first" path is gone |
 | 6 | [macOS microVM](task-6-macos-microvm.md) | **Superseded.** The native macOS `container` runtime instead of libkrun; the OS runs the VM, sandbox-cli ships the image and the guest agent (M6) | Not started |
 
+## New work
+
+| # | Task | State |
+|---|------|-------|
+| 7 | [A gateway in front of many sandboxd nodes](task-7-fleet-gateway.md): sandboxes by API and SSH on one port across hundreds of machines, then agents, jobs and services, as a platform beside Kubernetes | **Proposed** 2026-10-04; five decisions needed before phase 1 |
+
 ## Reversed decisions
 
 The roadmap used to decline several of these for good reasons. The reasons were about

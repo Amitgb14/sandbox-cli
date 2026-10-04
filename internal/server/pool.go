@@ -108,7 +108,7 @@ func (s *Server) fill(p *pool) {
 		time.Sleep(delay)
 
 		bs := p.template
-		bs.ID = spec.NewID()
+		bs.ID = s.newID()
 		err := s.Backend.Create(context.Background(), bs)
 		p.mu.Lock()
 		p.filling--
