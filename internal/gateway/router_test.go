@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -317,5 +318,39 @@ func TestSSHAccessHugeTTLIsRefused(t *testing.T) {
 	secret, _, _ := tg.store.CreateKey("alice", "", []string{ScopeSSH})
 	if code := tg.do(secret, http.MethodPost, "/v1/sandboxes/box/ssh-access", api.SSHAccessRequest{TTLSecs: 9223372037}, nil); code != http.StatusBadRequest {
 		t.Fatalf("ttl_secs that overflows: %d", code)
+	}
+}
+
+// An admin can see and remove any user's SSH keys; a user cannot reach the
+// admin listing at all.
+func TestAdminManagesAnyUsersSSHKeys(t *testing.T) {
+	n := startNode(t, "n1")
+	tg := startGateway(t, nil, n)
+	pub := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl alice@laptop"
+	k, err := tg.store.AddSSHKey("alice", "", "", pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userSecret, _, _ := tg.store.CreateKey("bob", "", []string{ScopeSSH, ScopeRead})
+	if r := tg.raw("GET", "/v1/admin/ssh-keys?user=alice", userSecret, ""); r.StatusCode != http.StatusForbidden {
+		t.Errorf("a user listed another user's SSH keys: %d", r.StatusCode)
+	}
+	adminSecret, _, _ := tg.store.CreateKey("root2", "", []string{ScopeAdmin})
+	r := tg.raw("GET", "/v1/admin/ssh-keys?user=alice", adminSecret, "")
+	var list api.SSHKeyList
+	if r.StatusCode != http.StatusOK || json.NewDecoder(r.Body).Decode(&list) != nil || len(list.Keys) != 1 || list.Keys[0].ID != k.ID {
+		t.Fatalf("admin listing: %d %+v", r.StatusCode, list)
+	}
+	if r := tg.raw("GET", "/v1/admin/ssh-keys", adminSecret, ""); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("a listing without ?user= : %d", r.StatusCode)
+	}
+	if r := tg.raw("DELETE", "/v1/admin/ssh-keys/"+k.ID, adminSecret, ""); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("admin remove: %d", r.StatusCode)
+	}
+	if got := tg.store.SSHKeysFor("alice"); len(got) != 0 {
+		t.Errorf("the key is still stored: %+v", got)
+	}
+	if r := tg.raw("DELETE", "/v1/admin/ssh-keys/"+k.ID, adminSecret, ""); r.StatusCode != http.StatusNotFound {
+		t.Errorf("removing it again: %d", r.StatusCode)
 	}
 }

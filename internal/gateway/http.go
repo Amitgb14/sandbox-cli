@@ -96,6 +96,8 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/admin/keys", false, g.adminCreateKey)
 	route("GET /v1/admin/keys", false, g.adminListKeys)
 	route("DELETE /v1/admin/keys/{id}", false, g.adminRevokeKey)
+	route("GET /v1/admin/ssh-keys", false, g.adminListSSHKeys)
+	route("DELETE /v1/admin/ssh-keys/{id}", false, g.adminRemoveSSHKey)
 	route("GET /v1/admin/nodes", false, g.adminListNodes)
 	route("POST /v1/admin/nodes", false, g.adminAddNode)
 	route("DELETE /v1/admin/nodes/{name}", false, g.adminRemoveNode)

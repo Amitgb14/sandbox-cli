@@ -190,6 +190,42 @@ func (g *Gateway) adminRevokeKey(w http.ResponseWriter, r *http.Request, p Princ
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// adminListSSHKeys lists one user's SSH keys (?user=, required), so an
+// operator can see what a person can still log in with.
+func (g *Gateway) adminListSSHKeys(w http.ResponseWriter, r *http.Request, p Principal) {
+	if !need(w, p, ScopeAdmin) {
+		return
+	}
+	user := r.URL.Query().Get("user")
+	if user == "" {
+		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "user is required (?user=)")
+		return
+	}
+	out := api.SSHKeyList{Keys: []api.SSHKeyInfo{}}
+	for _, k := range g.store.SSHKeysFor(user) {
+		out.Keys = append(out.Keys, sshKeyInfo(k))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// adminRemoveSSHKey removes any user's SSH key by id.
+func (g *Gateway) adminRemoveSSHKey(w http.ResponseWriter, r *http.Request, p Principal) {
+	if !need(w, p, ScopeAdmin) {
+		return
+	}
+	id := r.PathValue("id")
+	if err := g.store.RemoveSSHKey(id); err != nil {
+		if errors.Is(err, ErrNoSuchKey) {
+			writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such key")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "removing the key failed")
+		return
+	}
+	g.logf("ssh key %s removed by %s", id, p.KeyID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- admin: nodes -------------------------------------------------------------
 
 func (g *Gateway) adminListNodes(w http.ResponseWriter, r *http.Request, p Principal) {

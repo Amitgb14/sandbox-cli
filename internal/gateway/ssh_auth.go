@@ -102,6 +102,19 @@ func usernameForLog(u string) string {
 	return fmt.Sprintf("%q", termsafe.Clean(u))
 }
 
+// userActive reports whether user still holds an API key that is not
+// revoked. An SSH key or token is a credential the user made with an API key;
+// revoking a user's keys must end their SSH access too, or a revoked user
+// keeps every sandbox they own for as long as their SSH keys are registered.
+func userActive(st Store, user string) bool {
+	for _, k := range st.Keys() {
+		if k.User == user && !k.Revoked {
+			return true
+		}
+	}
+	return false
+}
+
 // authToken is "none" authentication: the username is a short-lived token.
 func (s *SSHServer) authToken(cm ssh.ConnMetadata, login *sshLogin) error {
 	user := cm.User()
@@ -116,6 +129,10 @@ func (s *SSHServer) authToken(cm ssh.ConnMetadata, login *sshLogin) error {
 	if !ok || tok.Sandbox == "" || tok.User == "" || tok.Expires.IsZero() || !s.cfg.Now().Before(tok.Expires) {
 		s.cfg.Logf("ssh: %s: a token was refused (unknown or expired)", cm.RemoteAddr())
 		return errors.New("token refused")
+	}
+	if !userActive(s.cfg.Store, tok.User) {
+		s.cfg.Logf("ssh: %s: a token for user %q was refused: the user holds no active API key", cm.RemoteAddr(), termsafe.Clean(tok.User))
+		return refusal(ErrNotFound)
 	}
 	p := Principal{User: tok.User, Tenant: tok.Tenant, KeyID: "ssh-token", Scopes: sshScopes, Sandbox: tok.Sandbox}
 	id, c, err := s.resolve(p, tok.Sandbox)
@@ -168,6 +185,10 @@ func (s *SSHServer) authKey(cm ssh.ConnMetadata, key ssh.PublicKey, login *sshLo
 	var found *sshLogin
 	var lastErr error = ErrNotFound
 	for _, k := range s.keyCandidates(ref, key) {
+		if !userActive(s.cfg.Store, k.User) {
+			s.cfg.Logf("ssh: %s: key %s (%s) refused: user %q holds no active API key", cm.RemoteAddr(), k.ID, fp, termsafe.Clean(k.User))
+			continue
+		}
 		p := Principal{User: k.User, Tenant: k.Tenant, KeyID: k.ID, Scopes: sshScopes, Sandbox: k.Sandbox}
 		id, c, err := s.resolve(p, ref)
 		// A key limited to one sandbox reaches only that one. The principal

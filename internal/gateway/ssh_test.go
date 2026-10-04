@@ -33,9 +33,32 @@ import (
 // which is the test failing loudly.
 type memStore struct {
 	Store
-	mu     sync.Mutex
-	keys   []SSHKey
-	tokens map[string]SSHToken
+	mu      sync.Mutex
+	keys    []SSHKey
+	tokens  map[string]SSHToken
+	revoked map[string]bool // users whose API keys are all revoked
+}
+
+// Keys reports one API key per user the store knows, revoked for the users in
+// revoked: what SSH login checks to see that a user is still active.
+func (m *memStore) Keys() []Key {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := map[string]bool{}
+	var out []Key
+	add := func(u string) {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, Key{ID: "k-" + u, User: u, Revoked: m.revoked[u]})
+		}
+	}
+	for _, k := range m.keys {
+		add(k.User)
+	}
+	for _, t := range m.tokens {
+		add(t.User)
+	}
+	return out
 }
 
 func (m *memStore) SSHKeysByFingerprint(fp string) []SSHKey {
@@ -822,4 +845,28 @@ func TestSSHDisconnectHangsUpTheProcess(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Error("the process kept running after its client disconnected")
+}
+
+// Revoking a user's API keys ends their SSH access too: their registered SSH
+// keys and any token they already hold stop working at once. Before this a
+// revoked user kept every sandbox they owned over SSH.
+func TestSSHRevokedUserCannotLogIn(t *testing.T) {
+	h := newHarness(t, nil)
+	k, _ := newKey(t)
+	h.store.addKey(t, "sk_1", "alice", "", k.PublicKey())
+	h.store.tokens["sgt_valid"] = SSHToken{User: "alice", Sandbox: h.a, Expires: time.Now().Add(time.Hour)}
+	h.mustDial(h.a, ssh.PublicKeys(k)).Close()
+	h.mustDial("sgt_valid").Close()
+
+	h.store.mu.Lock()
+	h.store.revoked = map[string]bool{"alice": true}
+	h.store.mu.Unlock()
+	if c, err := h.dial(h.a, nil, ssh.PublicKeys(k)); err == nil {
+		c.Close()
+		t.Error("a revoked user's SSH key still logged in")
+	}
+	if c, err := h.dial("sgt_valid", nil); err == nil {
+		c.Close()
+		t.Error("a revoked user's token still logged in")
+	}
 }

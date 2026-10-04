@@ -410,12 +410,11 @@ atomically on every change).
 - **No admin commands in `sandbox-cli`.** Use `sandbox-gateway keys|nodes` with
   the gateway stopped, or the admin API with `curl` (above); the Go client
   (`internal/api`) has the admin calls.
-- **An admin cannot list or remove another user's SSH keys.** `GET` and
-  `DELETE /v1/ssh-keys` act on the caller's own keys only, and revoking a
-  user's API key does not remove the SSH keys they registered: a revoked user
-  can still log in over SSH to sandboxes they own. Until this is fixed, stop
-  the gateway and remove their entries from `ssh_keys` in the state file, or
-  terminate their sandboxes.
+- **SSH access follows a user's API keys.** An SSH key or token logs in only
+  while its user still holds an active API key, so revoking a user's keys ends
+  their SSH access at once, tokens included. An admin lists and removes any
+  user's SSH keys with `GET /v1/admin/ssh-keys?user=U` and
+  `DELETE /v1/admin/ssh-keys/{id}`.
 - **Quotas are per tenant and the same for every tenant**, set by flags.
 - **No usage metering** beyond the per-node audit logs; each node keeps its own.
 - **The gateway does not proxy `GET /v1/node`**; node status is

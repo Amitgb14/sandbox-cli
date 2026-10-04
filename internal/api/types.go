@@ -436,6 +436,8 @@ func NodeOfID(id string) (string, bool) {
 //	POST   /v1/admin/keys        CreateKeyRequest -> CreatedKey      (admin)
 //	GET    /v1/admin/keys                      -> KeyList            (admin)
 //	DELETE /v1/admin/keys/{id}                                       (admin)
+//	GET    /v1/admin/ssh-keys?user=U           -> SSHKeyList         (admin)
+//	DELETE /v1/admin/ssh-keys/{id}                                   (admin)
 //	GET    /v1/admin/nodes                     -> NodeList           (admin)
 //	POST   /v1/admin/nodes       NodeSpec      -> NodeInfo           (admin)
 //	DELETE /v1/admin/nodes/{name}                                    (admin)
