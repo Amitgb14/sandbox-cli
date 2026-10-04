@@ -26,7 +26,8 @@ type AgentState struct {
 func (s *Server) agentStates(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	list, err := s.Client.Sandboxes(ctx)
+	c := s.clientFor(r)
+	list, err := c.Sandboxes(ctx)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -37,7 +38,7 @@ func (s *Server) agentStates(w http.ResponseWriter, r *http.Request) {
 		if sb.Labels[agentstate.AgentLabel] == "" || sb.State == api.StateTerminated {
 			continue
 		}
-		rep := agentstate.Look(ctx, s.Client, sb, now)
+		rep := agentstate.Look(ctx, c, sb, now)
 		out = append(out, AgentState{Sandbox: rep.Sandbox, Name: rep.Name, Agent: rep.Agent, State: rep.State, Why: agentstate.Describe(rep.State)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Sandbox < out[j].Sandbox })

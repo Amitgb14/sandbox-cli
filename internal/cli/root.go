@@ -25,6 +25,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.PersistentFlags().StringVar(&orgFlag, "org", "", "on a gateway, the organization to act in (default: SANDBOX_ORG, then the context's, then the key's own tenant)")
 	root.AddCommand(
 		newVersionCmd(), newContextCmd(), newRunCmd(), newListCmd(), newAttachCmd(), newShellCmd(), newExecCmd(),
 		newLogsCmd(), newKillCmd(), newEventsCmd(), newDoctorCmd(), newTunnelCmd(),
@@ -34,7 +35,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newSSHCmd(), newSSHKeyCmd(), newSSHAccessCmd(), newWhoamiCmd())
 	root.AddCommand(newGatewayCmd())
 	root.AddCommand(newJobCmd(), newAgentRunCmd(), newSecretCmd())
-	root.AddCommand(newServiceCmd())
+	root.AddCommand(newServiceCmd(), newOrgCmd())
 	return root
 }
 

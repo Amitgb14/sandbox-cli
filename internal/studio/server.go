@@ -53,6 +53,9 @@ type LaunchRequest struct {
 	// Rows and Cols size a console run's terminal before anyone attaches.
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`
+	// Org is the organisation the browser has selected (X-Sandbox-Org),
+	// never part of the body: a gateway checks it like any request's.
+	Org string `json:"-"`
 }
 
 // LaunchResult is what a launch started.
@@ -156,8 +159,27 @@ func loopbackHost(hostport string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// orgOf is the organisation a browser request selects: X-Sandbox-Org, or for
+// a WebSocket, which a browser cannot give headers, the org query parameter.
+// It is a selection only — the gateway decides whether the key's user may
+// make it — so it is passed on as given, and "" acts in the key's own tenant.
+func orgOf(r *http.Request) string {
+	if v := r.Header.Get(api.OrgHeader); v != "" {
+		return v
+	}
+	if isWebSocketUpgrade(r) {
+		return r.URL.Query().Get("org")
+	}
+	return ""
+}
+
+// clientFor is the context's client acting in the organisation r selects.
+func (s *Server) clientFor(r *http.Request) *api.Client { return s.Client.WithOrg(orgOf(r)) }
+
 // proxy forwards /api/v1/... to sandboxd's /v1/..., replacing the browser's
-// Studio token with the context's own. An upgrade is refused here: a browser
+// Studio token with the context's own. The browser's X-Sandbox-Org passes
+// through as it came: a selection the gateway checks against the key's
+// memberships, never a credential. An upgrade is refused here: a browser
 // cannot speak the API's stream protocols, and /api/ws/attach is the bridge.
 func (s *Server) proxy() http.HandlerFunc {
 	base, rt, token := s.Client.Transport()
@@ -194,7 +216,9 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	// baseline_egress is the client's built-in allowlist, which --allow adds
 	// to when the server's default is not itself an allowlist: the Playground
 	// needs it to write API code that means what the CLI line does.
-	out := map[string]any{"context": s.Context, "version": s.Version, "baseline_egress": policy.BaselineEgress()}
+	// org is the context's own selection (sandbox-cli org use), which Studio
+	// starts in when the browser has chosen none.
+	out := map[string]any{"context": s.Context, "version": s.Version, "baseline_egress": policy.BaselineEgress(), "org": s.Client.Org()}
 	if caps, err := s.Client.Capabilities(ctx); err == nil {
 		out["capabilities"] = caps
 	} else {
@@ -225,8 +249,9 @@ func (s *Server) attach(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer cancel()
+	c := s.clientFor(r)
 	if pid == 0 {
-		ps, err := s.Client.Processes(ctx, ref)
+		ps, err := c.Processes(ctx, ref)
 		if err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return
@@ -241,7 +266,7 @@ func (s *Server) attach(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	stream, err := s.Client.Attach(ctx, ref, pid)
+	stream, err := c.Attach(ctx, ref, pid)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

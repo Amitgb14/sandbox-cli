@@ -100,7 +100,7 @@ func studioLauncher(ctxName string) studio.Launcher {
 			return studio.LaunchResult{}, err
 		}
 		defer os.RemoveAll(dir)
-		rf := &runFlags{context: ctxName, project: dir, detach: true, name: req.Name,
+		rf := &runFlags{context: ctxName, org: req.Org, project: dir, detach: true, name: req.Name,
 			network: req.Network, allow: req.Allow, profile: req.Profile}
 		for k, v := range req.Labels {
 			rf.labels = append(rf.labels, k+"="+v)

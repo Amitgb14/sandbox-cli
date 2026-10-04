@@ -25,7 +25,10 @@ import (
 
 // runFlags are the sandbox options shared by `run` and every agent wrapper.
 type runFlags struct {
-	context       string
+	context string
+	// org, when set, overrides the context's organisation: Studio's
+	// launches, which act in the one the browser selected.
+	org           string
 	image         string
 	cpus          float64
 	memory, disk  int
@@ -145,6 +148,9 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		return 1, err
 	}
 	c, ctxName, err := newClient(rf.context)
+	if err == nil && rf.org != "" {
+		c = c.WithOrg(rf.org)
+	}
 	if err != nil {
 		return 1, err
 	}
