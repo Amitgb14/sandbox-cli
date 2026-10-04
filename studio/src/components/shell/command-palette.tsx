@@ -14,7 +14,7 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "@/components/ui/command";
-import { ALL_NAV_ITEMS } from "@/lib/nav";
+import { useNav } from "@/lib/nav";
 import { useUi } from "@/lib/store";
 import { useSandboxes } from "@/lib/api/queries";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -31,6 +31,7 @@ export function CommandPalette() {
   const toggle = useUi((s) => s.togglePalette);
   const { setTheme, theme } = useTheme();
   const { data: sandboxes } = useSandboxes();
+  const items = useNav().flatMap((g) => g.items);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -55,7 +56,7 @@ export function CommandPalette() {
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
         <CommandGroup heading="Screens">
-          {ALL_NAV_ITEMS.map((i) => (
+          {items.map((i) => (
             <CommandItem key={i.href} value={`${i.title} ${i.hint}`} onSelect={() => go(i.href)}>
               <i.icon />
               <span>{i.title}</span>

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useDeleteSnapshot, useInfo, useSnapshots } from "@/lib/api/queries";
 import { formatBytes, formatRelative } from "@/lib/format";
+import { useCan } from "@/lib/caller";
 
 /**
  * Snapshots: a sandbox's memory, processes and disk, captured so new
@@ -21,6 +22,7 @@ export default function SnapshotsPage() {
   const can = info?.capabilities?.capabilities?.memory_snapshot;
   const { data, isLoading, error } = useSnapshots(can !== false);
   const del = useDeleteSnapshot();
+  const allows = useCan();
   const rows = [...(data ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
   return (
@@ -66,7 +68,7 @@ export default function SnapshotsPage() {
                 <TableCell className="text-right text-xs tabular-nums">{formatBytes(s.bytes)}</TableCell>
                 <TableCell className="text-right text-xs text-muted-foreground">{formatRelative(s.created_at)}</TableCell>
                 <TableCell className="text-right">
-                  <Button
+                  {allows("sandbox:delete") && <Button
                     size="sm"
                     variant="ghost"
                     disabled={del.isPending}
@@ -77,7 +79,7 @@ export default function SnapshotsPage() {
                     }}
                   >
                     Delete
-                  </Button>
+                  </Button>}
                 </TableCell>
               </TableRow>
             ))}

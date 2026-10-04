@@ -136,6 +136,35 @@ export function formatArgv(argv: string[]): string {
   return argv.map(shellQuote).join(" ");
 }
 
+/** Splits a command line the way a shell would for plain words and quotes. */
+export function splitArgs(s: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  let any = false;
+  for (const ch of s) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      any = true;
+    } else if (/\s/.test(ch)) {
+      if (cur || any) out.push(cur);
+      cur = "";
+      any = false;
+    } else cur += ch;
+  }
+  if (cur || any) out.push(cur);
+  return out;
+}
+
+/** MiB as people read it: 512 MiB, 2 GiB. */
+export function formatMiB(mb: number | null | undefined): string {
+  if (mb === null || mb === undefined || !Number.isFinite(mb)) return DASH;
+  return mb >= 1024 ? `${+(mb / 1024).toFixed(1)} GiB` : `${mb} MiB`;
+}
+
 /** A path with the user's home collapsed, as every CLI output does. */
 export function tildify(path: string, home = "/Users/amitghadge"): string {
   return path.startsWith(home) ? `~${path.slice(home.length)}` : path;

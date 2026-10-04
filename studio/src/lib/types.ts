@@ -158,3 +158,170 @@ export interface AgentState {
   state: AgentStateName;
   why: string;
 }
+
+// --- a gateway's own endpoints (internal/api/gateway.go, jobs_types.go,
+// services_types.go; docs/api/v1.md "Gateway"). A plain sandboxd answers each
+// 404. The admin-only shapes are in lib/admin, which a build without admin
+// screens leaves out.
+
+export type Scope = "sandbox:read" | "sandbox:create" | "sandbox:delete" | "sandbox:ssh" | "secrets:write" | "admin";
+
+/** GET /v1/whoami: the caller as the gateway sees its key. */
+export interface Whoami {
+  user: string;
+  tenant: string;
+  key_id: string;
+  scopes: string[];
+}
+
+export interface SSHInfo {
+  host: string;
+  port: number;
+  host_keys: string[];
+  fingerprint: string;
+}
+
+export interface SSHKey {
+  id: string;
+  fingerprint: string;
+  key: string;
+  sandbox?: string;
+  created: string;
+}
+
+/** POST /v1/sandboxes/{ref}/ssh-access. `user` is the whole credential until it expires. */
+export interface SSHAccess {
+  user: string;
+  host: string;
+  port: number;
+  expires_at: string;
+  command: string;
+}
+
+export interface SecretInfo {
+  name: string;
+  updated_at: string;
+}
+
+export type JobState = "running" | "succeeded" | "failed" | "cancelled";
+export type RunState = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
+
+export interface JobSpec {
+  name?: string;
+  image?: string;
+  command?: string[];
+  agent?: string;
+  prompt?: string;
+  prompts?: string[];
+  parallelism?: number;
+  completions?: number;
+  retries?: number;
+  timeout_secs?: number;
+  env?: Record<string, string>;
+  secrets?: string[];
+  network?: NetworkPolicy;
+  resources?: { cpus?: number; memory_mb?: number; disk_mb?: number };
+  from_snapshot?: string;
+  keep?: { output?: boolean; files?: string[] };
+  notify?: string;
+}
+
+export interface JobFile {
+  path: string;
+  size: number;
+  truncated?: boolean;
+  error?: string;
+}
+
+export interface JobRun {
+  n: number;
+  state: RunState;
+  sandbox?: string;
+  pid?: number;
+  attempts: number;
+  exit_code?: number;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+  output_truncated?: boolean;
+  files?: JobFile[];
+}
+
+export interface Job {
+  id: string;
+  name?: string;
+  state: JobState;
+  spec: JobSpec;
+  env_names?: string[];
+  created_at: string;
+  finished_at?: string;
+  expires_at?: string;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  runs?: JobRun[];
+  error?: string;
+}
+
+/** What was kept of a run's output, base64. */
+export interface JobOutput {
+  stdout: string | null;
+  stderr: string | null;
+  truncated: boolean;
+}
+
+export interface ServiceHealth {
+  http?: string;
+  command?: string[];
+  every_secs?: number;
+  timeout_secs?: number;
+  failures?: number;
+}
+
+export interface ServiceSpec {
+  name: string;
+  image?: string;
+  command?: string[];
+  replicas: number;
+  resources?: { cpus?: number; memory_mb?: number; disk_mb?: number };
+  port?: number;
+  health?: ServiceHealth;
+  env?: Record<string, string>;
+  network?: NetworkPolicy;
+  placement?: { spread?: string };
+  public?: boolean;
+  secrets?: string[];
+}
+
+export type ReplicaState = "starting" | "healthy" | "unhealthy" | "lost";
+
+export interface ServiceReplica {
+  sandbox: string;
+  node: string;
+  revision: number;
+  state: ReplicaState;
+  healthy: boolean;
+  last_check?: string;
+  last_error?: string;
+  restarts: number;
+  created_at: string;
+}
+
+export interface Service {
+  spec: ServiceSpec;
+  env_names?: string[];
+  owner: string;
+  tenant?: string;
+  revision: number;
+  serving: number;
+  desired: number;
+  ready: number;
+  restarts: number;
+  rollout?: { state: "in_progress" | "done" | "failed"; from: number; to: number; reason?: string };
+  error?: string;
+  url?: string;
+  replicas: ServiceReplica[];
+  created_at: string;
+  updated_at: string;
+}

@@ -405,6 +405,20 @@ that fails on the code before the fix:
   to open, copy or terminate the sandbox; with none, a first-run panel offers
   the Playground and the same start in Python, TypeScript, curl or the CLI.
 
+- **Studio has screens for a gateway.** On a gateway context Studio asks who
+  the API key is (`GET /v1/whoami`) and adds Jobs (submit, cancel, each run's
+  kept output and files), Services (deploy from a JSON spec, replicas and
+  health, scale, remove), Secrets (names only; set and remove with
+  `secrets:write`), SSH (how to connect, your SSH keys, a short-lived access
+  token shown once) and Account. An admin key also gets Nodes (capacity,
+  cordon, drain, add, remove — never a node's endpoint), Lost sandboxes, Users
+  & keys (a new key's secret shown once) and Audit. Actions the key's scopes do
+  not allow are not offered, and a screen it may not have is *Not available*
+  by URL too, without a request; the gateway's 403 stays the control. A plain
+  `sandboxd` shows the same screens as before. `NEXT_PUBLIC_STUDIO_ADMIN=off`
+  at build time leaves the admin screens out of the bundle, for a dashboard
+  hosted for many tenants ([fleet.md](docs/fleet.md#studio)).
+
 - **Egress is open by default, and an agent under an allowlist can always
   reach its API.** A `sandboxd` with no policy file now gives a sandbox open
   egress unless the run asks for less. Where the backend can filter but not

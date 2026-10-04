@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useCreateVolume, useDeleteVolume, useInfo, useVolumes } from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
+import { useCan } from "@/lib/caller";
 
 /**
  * An agent's tools volume, which sandbox-cli makes on the first run of an agent
@@ -25,6 +26,7 @@ export default function VolumesPage() {
   const { data, error } = useVolumes(!!supported);
   const create = useCreateVolume();
   const del = useDeleteVolume();
+  const can = useCan();
   const [name, setName] = useState("");
   const [size, setSize] = useState("");
 
@@ -38,7 +40,7 @@ export default function VolumesPage() {
         <EmptyState icon={HardDrive} title="This sandboxd has no volumes" description="Its backend does not offer them (capability volumes)." />
       ) : (
         <>
-          <form
+          {can("sandbox:create") && <form
             className="flex flex-wrap items-end gap-2"
             onSubmit={(e) => {
               e.preventDefault();
@@ -51,7 +53,7 @@ export default function VolumesPage() {
             <Input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} className="w-48 font-mono" required />
             <Input placeholder="size MiB (default: server's)" value={size} onChange={(e) => setSize(e.target.value.replace(/\D/g, ""))} className="w-56" />
             <Button type="submit" disabled={create.isPending}>Create</Button>
-          </form>
+          </form>}
           {error ? <p className="text-sm text-destructive">{error.message}</p> : null}
           <Table>
             <TableHeader>
@@ -80,10 +82,10 @@ export default function VolumesPage() {
                     {v.attached_to ? <Link href={`/sandbox?id=${v.attached_to}`} className="hover:underline">{v.attached_to}</Link> : "—"}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button size="sm" variant="ghost" disabled={!!v.attached_to || del.isPending}
+                    {can("sandbox:delete") && <Button size="sm" variant="ghost" disabled={!!v.attached_to || del.isPending}
                       onClick={() => confirm(`Delete ${v.name} and everything on it?`) && del.mutate(v.name, { onError: (e) => toast.error(e.message) })}>
                       Delete
-                    </Button>
+                    </Button>}
                   </TableCell>
                 </TableRow>
               ))}

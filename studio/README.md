@@ -55,8 +55,12 @@ npm run test:e2e              # needs bin/ (make build) and out/ (npm run build)
 ```
 
 The end-to-end suite (`e2e/`) runs against the real thing: `sandbox-cli studio`
-serving `out/`, in front of a `sandboxd` on its in-memory backend, both started
-by `e2e/global-setup.ts`.
+serving `out/`, in front of a `sandboxd` on its in-memory backend, and three more
+in front of a real `sandbox-gateway` (one node, on the same backend), one per
+API key — admin, a tenant's, and a read-only one (`e2e/state.ts`) — all started
+by `e2e/global-setup.ts`. `npm run check` also runs `check:admin-off`, which
+builds with `NEXT_PUBLIC_STUDIO_ADMIN=off` and fails if anything of the admin
+screens is in that build.
 
 ## Screens
 
@@ -66,3 +70,29 @@ by `e2e/global-setup.ts`.
 | `/launch` | The Playground: a command, an unattended agent or an agent's console, starting in `/sandbox/home`, with the same command run written as CLI, curl, Python and TypeScript beside the form |
 | `/snapshots` | Sandboxes captured whole, to start new ones from; delete one |
 | `/agents`, `/volumes`, `/settings` | The agents Studio runs (those with a verified headless mode) and their logins; volumes; the context |
+
+### Through a gateway
+
+On load Studio asks `GET /v1/whoami` (`src/lib/caller.ts`). A plain sandboxd
+answers 404 and gets the screens above and nothing else. A gateway answers with
+the key's scopes, which decide the rest ([docs/fleet.md](../docs/fleet.md#studio)):
+
+| Route | Screen | Shown to |
+|---|---|---|
+| `/jobs`, `/job?id=` | Jobs: submit, cancel; a job's runs, each run's kept output and files | any key |
+| `/services`, `/service?name=` | Services: deploy from a JSON spec, replicas and health, scale, remove | any key |
+| `/secrets` | The tenant's secrets by name; set and remove with `secrets:write` | any key |
+| `/ssh` | Where to connect; your SSH keys and a short-lived access token with `sandbox:ssh` | any key |
+| `/account` | User, tenant, key id and scopes | any key |
+| `/admin/nodes`, `/admin/lost`, `/admin/keys`, `/admin/audit` | Nodes (cordon, drain, add, remove), lost sandboxes, API keys and any user's SSH keys, the audit record | `admin` |
+
+Actions a key's scopes do not allow are hidden, everywhere (`useCan`); a screen
+the caller may not have renders *Not available* inside `<Gate>`, which mounts
+nothing — and so requests nothing — until whoami allows it. Hiding is
+cosmetic; the gateway's 403 is the control. The admin API lives in
+`src/lib/admin` and is imported only by the admin pages, which are named
+`page.admin.tsx`: `NEXT_PUBLIC_STUDIO_ADMIN=off` at build time drops
+`admin.tsx` from the page extensions (`next.config.ts`), so those pages are
+not routes and none of their code is bundled — for a dashboard hosted for many
+tenants. `NEXT_PUBLIC_STUDIO_ADMIN=off make studio build` builds a sandbox-cli
+with that Studio.

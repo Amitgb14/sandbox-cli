@@ -2,22 +2,27 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ALL_NAV_ITEMS } from "@/lib/nav";
+import { useNav } from "@/lib/nav";
 
 /**
  * The nav shortcuts the palette advertises.
  *
  * They exist because the palette lists them: a shortcut shown next to a menu
- * item and not wired up is worse than no shortcut. Ignored while focus is in a
- * text field, so typing `d` into the runs filter does not navigate away.
+ * item and not wired up is worse than no shortcut. Only the caller's screens
+ * have one (lib/nav.ts). Ignored while focus is in a text field, so typing `d`
+ * into the runs filter does not navigate away.
  */
 export function GlobalShortcuts() {
   const router = useRouter();
+  // A string, so the effect re-binds when the screens change and not on every render.
+  const keyed = useNav()
+    .flatMap((g) => g.items)
+    .filter((i) => i.shortcut)
+    .map((i) => `${i.shortcut!.toLowerCase()} ${i.href}`)
+    .join("\n");
 
   useEffect(() => {
-    const byKey = new Map(
-      ALL_NAV_ITEMS.filter((i) => i.shortcut).map((i) => [i.shortcut!.toLowerCase(), i.href]),
-    );
+    const byKey = new Map(keyed.split("\n").filter(Boolean).map((l) => l.split(" ") as [string, string]));
 
     function onKey(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
@@ -38,7 +43,7 @@ export function GlobalShortcuts() {
 
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [router]);
+  }, [router, keyed]);
 
   return null;
 }

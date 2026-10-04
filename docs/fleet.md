@@ -380,6 +380,52 @@ hours): anyone holding it can log in.
 The Python and TypeScript SDKs take the gateway's URL and the key as their
 token, and have the same SSH calls ([sdk/README.md](../sdk/README.md)).
 
+## Studio
+
+`sandbox-cli studio --context fleet` opens Studio on a gateway context. It is
+the same Studio as for a plain `sandboxd`: `sandbox-cli studio` holds the API
+key and adds it to each call it proxies, and the browser never sees the key.
+On load Studio asks `GET /v1/whoami`; a plain `sandboxd` answers 404 and gets
+exactly the screens it always had. A gateway answers with the key's scopes,
+and those decide the screens:
+
+| The key holds | Studio adds |
+|---|---|
+| any scope | **Jobs** (list, detail with each run's kept output and files), **Services** (list, detail with replicas, health and rollout), **Secrets** (names only), **SSH** (where to connect, the host key to pin), **Account** (user, tenant, key id, scopes) |
+| `sandbox:create` | the Playground, submitting and cancelling jobs, deploying (a JSON spec) and scaling services, creating volumes, a sandbox's Terminal, Suspend and Snapshot |
+| `sandbox:delete` | terminating sandboxes, deleting volumes and snapshots; with `sandbox:create`, removing a service |
+| `sandbox:ssh` | adding and removing your SSH keys, issuing a short-lived access token for a sandbox (shown once) |
+| `secrets:write` | setting and removing secrets. A value goes in a password field and is never shown: no call returns it |
+| `admin` | everything above, plus **Nodes** (health, allocated capacity, cordon, uncordon, drain, add, remove), **Lost sandboxes**, **Users & keys** (issue and revoke API keys, any user's SSH keys) and **Audit** |
+
+An action the key's scopes do not allow is not offered, rather than offered
+and refused. A screen the key may not have — an admin screen for a tenant's
+key, or a gateway screen on a plain `sandboxd` — is missing from the sidebar
+and the palette, and a typed URL shows a plain *Not available* page that makes
+no request for it. That is a convenience, not the control: the gateway refuses
+a call without its scope (`403`) whoever sends it.
+
+Two things Studio never shows: a node's endpoint, which is dropped as the node
+list is read (and taken out of a node's error text), and a secret value. A new
+API key's secret is in one answer only; Studio shows it once, with a copy
+button and a warning, and drops it when you click Done. An SSH access token is
+shown the same way.
+
+**A hosted dashboard without the admin screens.** Building Studio with
+`NEXT_PUBLIC_STUDIO_ADMIN=off` leaves the admin screens out of the bundle
+altogether — their pages are not routes in that build and nothing they import
+is included — so a Studio served to many tenants does not carry the
+operator's UI at all:
+
+```sh
+NEXT_PUBLIC_STUDIO_ADMIN=off make studio build   # a sandbox-cli whose Studio has no admin screens
+```
+
+The default build keeps them, for an operator running their own gateway.
+`npm run check:admin-off` in `studio/` (part of `npm run check`) makes such a
+build and fails if any admin route, admin API path or admin screen title is
+in it.
+
 ## The security model
 
 - **Users never hold node tokens.** The gateway strips the caller's

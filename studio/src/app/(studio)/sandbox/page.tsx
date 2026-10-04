@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useInfo, useKill, useOpenShell, useProcesses, useSandbox, useSnapshot, useSuspend } from "@/lib/api/queries";
 import { formatRelative } from "@/lib/format";
+import { useCan } from "@/lib/caller";
 
 /**
  * One sandbox: an overview of what it is and was given, then its terminal,
@@ -31,6 +32,7 @@ function SandboxDetail() {
   const { data: info } = useInfo();
   const caps = info?.capabilities?.capabilities ?? {};
   const kill = useKill();
+  const can = useCan();
   const openShell = useOpenShell();
   const [shellPid, setShellPid] = useState<number | null>(null);
   const suspend = useSuspend();
@@ -65,7 +67,7 @@ function SandboxDetail() {
         actions={
           live ? (
             <div className="flex gap-2">
-              {sb.state === "running" && (
+              {sb.state === "running" && can("sandbox:create") && (
                 <Button
                   size="sm"
                   disabled={openShell.isPending}
@@ -83,26 +85,26 @@ function SandboxDetail() {
                   Terminal
                 </Button>
               )}
-              {caps.suspend && (
+              {caps.suspend && can("sandbox:create") && (
                 <Button variant="outline" size="sm" disabled={suspend.isPending}
                   onClick={() => act(suspend.mutateAsync({ id, resume: sb.state === "suspended" }), sb.state === "suspended" ? "Resumed" : "Suspended")}>
                   {sb.state === "suspended" ? "Resume" : "Suspend"}
                 </Button>
               )}
-              {caps.memory_snapshot && sb.state === "running" && (
+              {caps.memory_snapshot && sb.state === "running" && can("sandbox:create") && (
                 <Button variant="outline" size="sm" disabled={snapshot.isPending}
                   onClick={() => act(snapshot.mutateAsync(id), "Snapshot taken")}>
                   Snapshot
                 </Button>
               )}
-              <Button variant="destructive" size="sm" disabled={kill.isPending}
+              {can("sandbox:delete") && <Button variant="destructive" size="sm" disabled={kill.isPending}
                 onClick={() => {
                   if (confirm("Terminate this sandbox? Everything in it goes with it.")) {
                     act(kill.mutateAsync(id), "Terminated").then(() => router.push("/sandboxes"));
                   }
                 }}>
                 Terminate
-              </Button>
+              </Button>}
             </div>
           ) : undefined
         }

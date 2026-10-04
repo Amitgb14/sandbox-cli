@@ -8,7 +8,9 @@ const ROUTES = ["/", "/sandboxes/", "/launch/", "/snapshots/", "/agents/", "/vol
 test("every screen renders with no console errors", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  // Except whoami's 404: it is how a plain sandboxd says it is not a gateway
+  // (lib/caller.ts), and the browser logs every 4xx a page fetches.
+  page.on("console", (m) => m.type() === "error" && !m.location().url.endsWith("/api/v1/whoami") && errors.push(m.text()));
   await page.goto(`/#token=${token}`);
   await expect(page.getByText("e2e · fake")).toBeVisible();
   expect(page.url()).not.toContain("token=");

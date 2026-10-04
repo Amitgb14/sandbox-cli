@@ -5,6 +5,7 @@ import { KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError, setToken } from "@/lib/api/client";
+import { useQueryClient } from "@tanstack/react-query";
 import { useInfo } from "@/lib/api/queries";
 
 /**
@@ -14,7 +15,8 @@ import { useInfo } from "@/lib/api/queries";
  * screen of empty tables would not say why.
  */
 export function TokenGate() {
-  const { error, refetch } = useInfo();
+  const { error } = useInfo();
+  const qc = useQueryClient();
   const [value, setValue] = useState("");
   if (!(error instanceof ApiError) || error.status !== 401) return null;
   return (
@@ -34,7 +36,8 @@ export function TokenGate() {
           if (m) {
             setToken(m[1]);
             setValue("");
-            refetch();
+            // Every query, whoami included: what failed without the token is retried with it.
+            qc.invalidateQueries();
           }
         }}
       >
