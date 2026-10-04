@@ -290,6 +290,14 @@ that fails on the code before the fix:
 
 ### Changed
 
+- **Connect to a running sandbox: `sandbox-cli shell` and `exec`, and a
+  Terminal button in Studio.** `shell SANDBOX` opens bash (or sh) in a running
+  sandbox, in `/sandbox/home`, and exiting leaves the sandbox running; `exec
+  SANDBOX -- COMMAND` runs one command there and exits with its status. Both
+  work through any context, so a Mac connected to a Linux sandboxd opens a
+  shell in a sandbox there. In Studio, Terminal on a running sandbox opens the
+  same shell in the browser. A suspended sandbox is refused with how to resume
+  it, never started behind your back.
 - **Services on the gateway.** `sandbox-gateway` keeps a sandbox spec and a
   count running: `POST /v1/services` (and `sandbox-cli service deploy -f
   service.yaml`, `ls`, `get`, `scale`, `rm`; `deploy_service` and friends in

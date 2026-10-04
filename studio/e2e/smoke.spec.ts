@@ -41,6 +41,8 @@ test("a sandbox started elsewhere is listed, labelled, and has events", async ({
   await expect(page.getByText("suite=studio-e2e")).toBeVisible();
   await page.getByRole("link", { name: created.id }).click();
   await expect(page.getByRole("heading", { name: created.id })).toBeVisible();
+  // A running sandbox can be connected to from here, as from sandbox-cli shell.
+  await expect(page.getByRole("button", { name: "Terminal" })).toBeVisible();
   await page.getByRole("tab", { name: "Overview" }).click();
   await expect(page.getByText("echo hi")).toBeVisible();
   await page.getByRole("tab", { name: "Logs" }).click();

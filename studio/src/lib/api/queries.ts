@@ -178,6 +178,29 @@ export function useUpdateNetwork() {
   );
 }
 
+/**
+ * A shell in a running sandbox, on a terminal the browser then attaches to:
+ * the same process `sandbox-cli shell` starts — bash where the image has it,
+ * sh otherwise, in the sandbox user's home.
+ */
+export function useOpenShell() {
+  return useInvalidating(
+    ({ id, rows, cols }: { id: string; rows: number; cols: number }) =>
+      apiFetch<Process>(`${sbx(id)}/processes`, {
+        method: "POST",
+        json: {
+          argv: ["/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"],
+          cwd: "/sandbox/home",
+          tty: true,
+          rows,
+          cols,
+          env: { TERM: "xterm-256color" },
+        },
+      }),
+    ({ id }) => [[...keys.processes(id)]],
+  );
+}
+
 export function useSignal() {
   return useMutation({
     mutationFn: ({ id, pid, signal }: { id: string; pid: number; signal: string }) =>
