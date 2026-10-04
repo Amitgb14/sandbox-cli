@@ -658,6 +658,12 @@ func (g *Gateway) removeOrgMember(w http.ResponseWriter, r *http.Request, p Prin
 	}
 	user := r.PathValue("user")
 	tenant := memberTenant(r.URL.Query().Get("tenant"), p)
+	if !ValidUser(user) || (tenant != "" && !ValidUser(tenant)) {
+		// Caller's text, about to reach the log and the audit record: no
+		// stored member has a name like it.
+		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such member")
+		return
+	}
 	err := g.store.RemoveMember(rec.Name, user, tenant)
 	switch {
 	case errors.Is(err, ErrLastOwner):

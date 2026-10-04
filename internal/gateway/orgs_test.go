@@ -462,6 +462,9 @@ func TestOrgMembers(t *testing.T) {
 		t.Errorf("alice after removal: %v", err)
 	}
 	wantCode(t, bob.RemoveOrgMember(ctx, "aa", "alice", ""), api.CodeNotFound)
+	// A name no member could have never reaches the log.
+	wantCode(t, bob.RemoveOrgMember(ctx, "aa", "x\nforged log line", ""), api.CodeNotFound)
+	wantCode(t, bob.RemoveOrgMember(ctx, "aa", "alice", "t\nx"), api.CodeNotFound)
 
 	_, entries := readAudit(t, auditPath)
 	var got []string
