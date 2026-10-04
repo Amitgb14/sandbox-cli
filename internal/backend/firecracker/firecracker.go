@@ -71,6 +71,24 @@ type Backend struct {
 	// answers; an open descriptor survives the next VM's chown.
 	volBootMu sync.Mutex
 	volBoot   map[string]*sync.Mutex
+
+	// built are the image references a root disk has been built or found for
+	// since this process started, under mu. The disks themselves are cached by
+	// a digest of image and guest agent, which names no reference, so the
+	// record of which references they serve is kept here. A restart forgets
+	// it, which costs a gateway one hint, not a sandbox.
+	built map[string]bool
+}
+
+// CachedImages is backend.ImageLister.
+func (b *Backend) CachedImages() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, 0, len(b.built))
+	for ref := range b.built {
+		out = append(out, ref)
+	}
+	return out
 }
 
 // lockVolumes takes the boot lock of each volume s mounts, in name order so
@@ -230,6 +248,12 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 		b.cfg.Logf("sandbox %s: image %s: %v", s.ID, s.Image, err)
 		return fmt.Errorf("image %s: %w", s.Image, err)
 	}
+	b.mu.Lock()
+	if b.built == nil {
+		b.built = map[string]bool{}
+	}
+	b.built[s.Image] = true
+	b.mu.Unlock()
 	if rootfs.OwnedByHost {
 		b.cfg.Logf("sandbox %s: image %s was built without root, so its files are owned by the building user", s.ID, s.Image)
 	}

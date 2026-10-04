@@ -130,6 +130,167 @@ export interface Snapshot {
   created_at: string;
 }
 
+/** GET /v1/whoami on a gateway: who the API key belongs to. */
+export interface Whoami {
+  user: string;
+  tenant: string;
+  key_id: string;
+  scopes: string[];
+}
+
+/** GET /v1/ssh on a gateway. */
+export interface SSHInfo {
+  host: string;
+  port: number;
+  /** Public host keys as known_hosts lines without the host ("ssh-ed25519 AAAA…"). */
+  host_keys: string[];
+  /** SHA256:… of the first host key. */
+  fingerprint: string;
+}
+
+/** A registered SSH public key. */
+export interface SSHKeyInfo {
+  id: string;
+  fingerprint: string;
+  key: string;
+  /** Set when the key is limited to one sandbox. */
+  sandbox?: string;
+  created: string;
+}
+
+/** A short-lived SSH login: `user` is the token, and the whole credential until it expires. */
+export interface SSHAccess {
+  user: string;
+  host: string;
+  port: number;
+  expires_at: string;
+  command: string;
+}
+
+/** A job: one sandbox per run, made, watched and taken down by a gateway. */
+export interface JobSpec {
+  name?: string;
+  image?: string;
+  /** The argv each run starts; or `agent` and `prompt` (or `prompts`, one run each). */
+  command?: string[];
+  agent?: string;
+  prompt?: string;
+  prompts?: string[];
+  parallelism?: number;
+  completions?: number;
+  retries?: number;
+  timeout_secs?: number;
+  env?: Record<string, string>;
+  /** Names of the tenant's secrets, each set in the run's environment under its name. */
+  secrets?: string[];
+  network?: NetworkPolicy;
+  resources?: { cpus?: number; memory_mb?: number; disk_mb?: number };
+  from_snapshot?: string;
+  keep?: { output?: boolean; files?: string[] };
+  /** POSTed the run's and the job's state when each ends: https, or http to loopback. */
+  notify?: string;
+}
+
+/** POST /v1/agent-runs: a job of one agent run. */
+export type AgentRunOptions = Omit<JobSpec, "agent" | "prompt" | "command" | "prompts" | "parallelism" | "completions">;
+
+export interface JobRun {
+  n: number;
+  state: "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
+  sandbox?: string;
+  pid?: number;
+  attempts: number;
+  exit_code?: number;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+  output_truncated?: boolean;
+  files?: { path: string; size: number; truncated?: boolean; error?: string }[];
+}
+
+export interface Job {
+  id: string;
+  name?: string;
+  state: "running" | "succeeded" | "failed" | "cancelled";
+  spec: JobSpec;
+  env_names?: string[];
+  created_at: string;
+  finished_at?: string;
+  expires_at?: string;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  /** Absent in a listing. */
+  runs?: JobRun[];
+  error?: string;
+}
+
+export interface JobOutput {
+  stdout: Uint8Array;
+  stderr: Uint8Array;
+  truncated: boolean;
+}
+
+/** A secret as listed: its name, never its value. */
+export interface SecretInfo {
+  name: string;
+  updated_at: string;
+}
+
+/** What POST /v1/services and PUT /v1/services/{name} send (docs/fleet.md, "Services"). */
+export interface ServiceSpec {
+  /** A DNS label with no "--"; unique within the tenant. */
+  name: string;
+  image?: string;
+  /** Started in each replica as a detached process; a replica whose command exits is replaced. */
+  command?: string[];
+  replicas: number;
+  resources?: { cpus?: number; memory_mb?: number; disk_mb?: number };
+  /** The port on each replica's loopback: where an HTTP health check and the router go. */
+  port?: number;
+  /** Exactly one of `http` (a path; 2xx or 3xx is healthy) or `command` (exit 0 is healthy). */
+  health?: { http?: string; command?: string[]; every_secs?: number; timeout_secs?: number; failures?: number };
+  env?: Record<string, string>;
+  network?: NetworkPolicy;
+  placement?: { spread?: "node" };
+  /** Routed through the gateway's HTTP router. */
+  public?: boolean;
+  /** Names of the tenant's secrets, each set in every replica's environment. */
+  secrets?: string[];
+}
+
+export interface ServiceReplica {
+  sandbox: string;
+  node: string;
+  revision: number;
+  state: "starting" | "healthy" | "unhealthy" | "lost";
+  healthy: boolean;
+  last_check?: string;
+  last_error?: string;
+  restarts: number;
+  created_at: string;
+}
+
+export interface Service {
+  /** The spec, without env values: their names are in env_names. */
+  spec: ServiceSpec;
+  env_names?: string[];
+  owner: string;
+  tenant?: string;
+  revision: number;
+  serving: number;
+  desired: number;
+  ready: number;
+  restarts: number;
+  rollout?: { state: "in_progress" | "done" | "failed"; from: number; to: number; reason?: string };
+  error?: string;
+  url?: string;
+  replicas: ServiceReplica[];
+  created_at: string;
+  updated_at: string;
+}
+
 /** A non-2xx response; `code` is the API's error code (refused, unsupported, not_found, ...). */
 export class ApiError extends Error {
   constructor(
@@ -374,5 +535,130 @@ export class Client {
   async listDir(ref: string, path: string): Promise<DirEntry[]> {
     const resp = await this.request("GET", this.sbx(ref) + "/dirs", { query: { path } });
     return ((await resp.json()) as { entries: DirEntry[] }).entries;
+  }
+
+  // Gateway only. A gateway in front of many sandboxd nodes adds these; a
+  // plain sandboxd answers each with ApiError code "not_found".
+
+  /** The caller as the gateway sees its API key. */
+  whoami(): Promise<Whoami> {
+    return this.json("GET", "/v1/whoami");
+  }
+
+  /** Where the gateway's SSH server listens, and the host keys to pin. */
+  sshInfo(): Promise<SSHInfo> {
+    return this.json("GET", "/v1/ssh");
+  }
+
+  /**
+   * Register a public key (one authorized_keys line, no options) for SSH
+   * logins: `ssh SANDBOX@host -p port`. `sandbox` limits it to one sandbox.
+   */
+  addSSHKey(key: string, sandbox?: string): Promise<SSHKeyInfo> {
+    return this.json("POST", "/v1/ssh-keys", sandbox ? { key, sandbox } : { key });
+  }
+
+  async sshKeys(): Promise<SSHKeyInfo[]> {
+    return (await this.json<{ keys: SSHKeyInfo[] }>("GET", "/v1/ssh-keys")).keys;
+  }
+
+  async removeSSHKey(id: string): Promise<void> {
+    await this.json("DELETE", "/v1/ssh-keys/" + encodeURIComponent(id));
+  }
+
+  /**
+   * A short-lived SSH login to one sandbox. `user` is the token and the whole
+   * credential until `expires_at`. `ttlSecs` 0 or absent takes the gateway's
+   * default.
+   */
+  sshAccess(ref: string, ttlSecs?: number): Promise<SSHAccess> {
+    return this.json("POST", this.sbx(ref) + "/ssh-access", ttlSecs ? { ttl_secs: ttlSecs } : {});
+  }
+
+  // Jobs, agent runs and secrets (gateway only): work the gateway runs after
+  // the request that started it has gone.
+
+  private job_(id: string): string {
+    return "/v1/jobs/" + encodeURIComponent(id);
+  }
+
+  createJob(spec: JobSpec): Promise<Job> {
+    return this.json("POST", "/v1/jobs", spec);
+  }
+
+  /** A one-run job of `agent` on `prompt`. */
+  agentRun(agent: string, prompt: string, opts: AgentRunOptions = {}): Promise<Job> {
+    return this.json("POST", "/v1/agent-runs", { ...opts, agent, prompt });
+  }
+
+  /** The caller's jobs, newest first, without their runs. */
+  async jobs(): Promise<Job[]> {
+    return (await this.json<{ jobs: Job[] }>("GET", "/v1/jobs")).jobs;
+  }
+
+  job(id: string): Promise<Job> {
+    return this.json("GET", this.job_(id));
+  }
+
+  /** Runs not started never are; running ones' sandboxes are terminated. */
+  cancelJob(id: string): Promise<Job> {
+    return this.json("DELETE", this.job_(id));
+  }
+
+  async jobOutput(id: string, run: number): Promise<JobOutput> {
+    const o = await this.json<{ stdout?: string; stderr?: string; truncated: boolean }>(
+      "GET", `${this.job_(id)}/runs/${run}/output`);
+    return { stdout: fromB64(o.stdout), stderr: fromB64(o.stderr), truncated: o.truncated };
+  }
+
+  async jobFile(id: string, run: number, path: string): Promise<Uint8Array> {
+    const resp = await this.request("GET", `${this.job_(id)}/runs/${run}/files`, { query: { path } });
+    return new Uint8Array(await resp.arrayBuffer());
+  }
+
+  /** Set one of the tenant's secrets. The value is never returned. */
+  async setSecret(name: string, value: string): Promise<void> {
+    await this.json("PUT", "/v1/secrets/" + encodeURIComponent(name), { value });
+  }
+
+  async secrets(): Promise<SecretInfo[]> {
+    return (await this.json<{ secrets: SecretInfo[] }>("GET", "/v1/secrets")).secrets;
+  }
+
+  async deleteSecret(name: string): Promise<void> {
+    await this.json("DELETE", "/v1/secrets/" + encodeURIComponent(name));
+  }
+
+  // Services, on a gateway: a sandbox spec and a count it keeps true.
+
+  private svc(name: string): string {
+    return "/v1/services/" + encodeURIComponent(name);
+  }
+
+  /** Create a service. ApiError "conflict" if the tenant has one by that name: use updateService. */
+  deployService(spec: ServiceSpec): Promise<Service> {
+    return this.json("POST", "/v1/services", spec);
+  }
+
+  /** Replace a service's spec; a change to what a replica is rolls out one replica at a time. */
+  updateService(spec: ServiceSpec): Promise<Service> {
+    return this.json("PUT", this.svc(spec.name), spec);
+  }
+
+  async services(): Promise<Service[]> {
+    return (await this.json<{ services: Service[] }>("GET", "/v1/services")).services;
+  }
+
+  service(name: string): Promise<Service> {
+    return this.json("GET", this.svc(name));
+  }
+
+  scaleService(name: string, replicas: number): Promise<Service> {
+    return this.json("POST", this.svc(name) + "/scale", { replicas });
+  }
+
+  /** Delete a service and terminate its replicas. */
+  async deleteService(name: string): Promise<void> {
+    await this.json("DELETE", this.svc(name));
   }
 }

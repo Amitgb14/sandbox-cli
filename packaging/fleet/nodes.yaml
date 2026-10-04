@@ -1,0 +1,39 @@
+# /etc/sandbox-gateway/nodes.yaml — the nodes sandbox-gateway reaches, read
+# at start (serve --node-config). docs/fleet.md.
+#
+# Unknown keys are refused, so a misspelt ca_file cannot quietly mean "trust
+# the system's CAs". A node named here is changed by editing this file and
+# restarting; the admin API refuses to change or remove it, and a name may not
+# also be in the state file (`sandbox-gateway nodes add`).
+#
+#   name        the node's --node-id: lowercase letters, digits and -, at most
+#               31. It is the <node> in sbx_<node>_<hex>, and a node that
+#               reports another name is marked unhealthy.
+#   endpoint    https://host:port; unix:///path or plain http:// only for a
+#               node on this machine (loopback). The host part must be one the
+#               node answers to (its --allowed-host) and the name in its
+#               certificate.
+#   token_file  the node's bearer token (its --token-file), mode 0600
+#   ca_file     the CA that signed the node's certificate (instead of the
+#               system's): make-certs.sh's ca.pem
+#   cert_file   the gateway's client certificate, for the node's --client-ca
+#   key_file    its key, mode 0600
+nodes:
+  - name: n17
+    endpoint: https://10.0.0.17:7443
+    token_file: /etc/sandbox-gateway/n17.token
+    ca_file: /etc/sandbox-gateway/tls/ca.pem
+    cert_file: /etc/sandbox-gateway/tls/gateway-client.pem
+    key_file: /etc/sandbox-gateway/tls/gateway-client-key.pem
+
+  - name: n18
+    endpoint: https://10.0.0.18:7443
+    token_file: /etc/sandbox-gateway/n18.token
+    ca_file: /etc/sandbox-gateway/tls/ca.pem
+    cert_file: /etc/sandbox-gateway/tls/gateway-client.pem
+    key_file: /etc/sandbox-gateway/tls/gateway-client-key.pem
+
+  # sandboxd on this machine, on a loopback port with a token
+  # - name: local
+  #   endpoint: http://127.0.0.1:7443
+  #   token_file: /etc/sandbox-gateway/local.token

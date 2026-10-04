@@ -5,7 +5,11 @@
 // two disagree, the document is fixed first and the types follow.
 package api
 
-import "time"
+import (
+	"regexp"
+	"strings"
+	"time"
+)
 
 // Version is the API version this package speaks.
 const Version = "v1"
@@ -344,6 +348,7 @@ const (
 	CodeNotFound        = "not_found"
 	CodeConflict        = "conflict"
 	CodeUnsupported     = "unsupported"
+	CodeUnavailable     = "unavailable"
 	CodeInternal        = "internal"
 )
 
@@ -356,4 +361,198 @@ type ErrorBody struct {
 type ErrorDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// NodeStatus is GET /v1/node: what a sandboxd reports about itself to a
+// gateway in front of many nodes (docs/roadmap/task-7-fleet-gateway.md). A
+// single sandboxd serves it too; it is how a gateway decides where a sandbox
+// goes and whether a node is healthy.
+type NodeStatus struct {
+	// Node is this sandboxd's name, set with --node-id; it is the <node> in
+	// the ids of the sandboxes it creates. Empty on a standalone sandboxd.
+	Node         string       `json:"node"`
+	Version      string       `json:"version"`
+	Capabilities Capabilities `json:"capabilities"`
+	// Capacity is what the machine has for sandboxes, and Free what is not
+	// yet given to running or suspended ones: allocations, not live usage.
+	Capacity NodeResources `json:"capacity"`
+	Free     NodeResources `json:"free"`
+	Running  int           `json:"running"`
+	// Pooled counts sandboxes booted ahead, by image.
+	Pooled map[string]int `json:"pooled,omitempty"`
+	// Images are those whose root disk is already built here, so a create
+	// for them skips the pull and the build.
+	Images []string          `json:"images,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
+	// Cordoned nodes take no new sandboxes; what runs there carries on.
+	Cordoned bool `json:"cordoned"`
+}
+
+// NodeResources is a quantity of the resources sandboxes are given.
+type NodeResources struct {
+	CPUs     float64 `json:"cpus"`
+	MemoryMB int     `json:"memory_mb"`
+	DiskMB   int     `json:"disk_mb"`
+}
+
+// CordonRequest is POST /v1/node/cordon.
+type CordonRequest struct {
+	Cordoned bool `json:"cordoned"`
+}
+
+// nodeIDRE is a node name as it appears in a sandbox id: short, lowercase,
+// no underscore, so the id splits unambiguously.
+var nodeIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}$`)
+
+// ValidNodeID reports whether s may name a node.
+func ValidNodeID(s string) bool { return nodeIDRE.MatchString(s) }
+
+// NodeOfID returns the node a sandbox id names — "n17" for
+// "sbx_n17_0123456789abcdef" — and false for an id that names none, which is
+// every id a standalone sandboxd makes. A gateway routes by it; the state
+// store, not the id, remains the authority on who owns the sandbox.
+func NodeOfID(id string) (string, bool) {
+	rest, ok := strings.CutPrefix(id, "sbx_")
+	if !ok {
+		return "", false
+	}
+	node, hex, ok := strings.Cut(rest, "_")
+	if !ok || !ValidNodeID(node) || len(hex) != 16 {
+		return "", false
+	}
+	return node, true
+}
+
+// Gateway-only endpoints. A sandboxd answers none of these; a gateway in front
+// of many nodes adds them (docs/roadmap/task-7-fleet-gateway.md). The sandbox
+// endpoints above are the same on both.
+//
+//	GET    /v1/whoami                          -> Whoami
+//	GET    /v1/ssh                             -> SSHInfo
+//	POST   /v1/ssh-keys          SSHKeyRequest -> SSHKeyInfo
+//	GET    /v1/ssh-keys                        -> SSHKeyList
+//	DELETE /v1/ssh-keys/{id}
+//	POST   /v1/sandboxes/{ref}/ssh-access  SSHAccessRequest -> SSHAccess
+//	POST   /v1/admin/keys        CreateKeyRequest -> CreatedKey      (admin)
+//	GET    /v1/admin/keys                      -> KeyList            (admin)
+//	DELETE /v1/admin/keys/{id}                                       (admin)
+//	GET    /v1/admin/ssh-keys?user=U           -> SSHKeyList         (admin)
+//	DELETE /v1/admin/ssh-keys/{id}                                   (admin)
+//	GET    /v1/admin/nodes                     -> NodeList           (admin)
+//	POST   /v1/admin/nodes       NodeSpec      -> NodeInfo           (admin)
+//	DELETE /v1/admin/nodes/{name}                                    (admin)
+//	POST   /v1/admin/nodes/{name}/cordon  CordonRequest -> NodeInfo  (admin)
+
+// Whoami is the caller as the gateway sees its credential.
+type Whoami struct {
+	User   string   `json:"user"`
+	Tenant string   `json:"tenant"`
+	KeyID  string   `json:"key_id"`
+	Scopes []string `json:"scopes"`
+}
+
+// SSHInfo is where the gateway's SSH server listens and the host key to pin.
+type SSHInfo struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+	// HostKeys are the server's public host keys as known_hosts lines
+	// without the host field ("ssh-ed25519 AAAA…").
+	HostKeys    []string `json:"host_keys"`
+	Fingerprint string   `json:"fingerprint"` // SHA256:… of the first host key
+}
+
+// SSHKeyRequest registers a public key for SSH logins.
+type SSHKeyRequest struct {
+	// Key is one authorized_keys line: type, base64 key, optional comment.
+	// Options (command=, from=, …) are refused.
+	Key string `json:"key"`
+	// Sandbox, when set, limits the key to that sandbox.
+	Sandbox string `json:"sandbox,omitempty"`
+}
+
+// SSHKeyInfo is a registered key, as returned to its owner.
+type SSHKeyInfo struct {
+	ID          string    `json:"id"`
+	Fingerprint string    `json:"fingerprint"`
+	Key         string    `json:"key"`
+	Sandbox     string    `json:"sandbox,omitempty"`
+	Created     time.Time `json:"created"`
+}
+
+// SSHKeyList is GET /v1/ssh-keys.
+type SSHKeyList struct {
+	Keys []SSHKeyInfo `json:"keys"`
+}
+
+// SSHAccessRequest asks for a short-lived SSH login to one sandbox.
+type SSHAccessRequest struct {
+	// TTLSecs is how long the token is valid; 0 takes the gateway's default,
+	// and more than its maximum is refused.
+	TTLSecs int `json:"ttl_secs,omitempty"`
+}
+
+// SSHAccess is a short-lived SSH login: the token is the SSH username, and
+// it is the whole credential until it expires.
+type SSHAccess struct {
+	User      string    `json:"user"`
+	Host      string    `json:"host"`
+	Port      int       `json:"port"`
+	ExpiresAt time.Time `json:"expires_at"`
+	// Command is the ssh command line that uses it.
+	Command string `json:"command"`
+}
+
+// CreateKeyRequest issues an API key (admin).
+type CreateKeyRequest struct {
+	User   string   `json:"user"`
+	Tenant string   `json:"tenant,omitempty"`
+	Scopes []string `json:"scopes"`
+}
+
+// KeyInfo is an API key without its secret.
+type KeyInfo struct {
+	ID      string    `json:"id"`
+	User    string    `json:"user"`
+	Tenant  string    `json:"tenant"`
+	Scopes  []string  `json:"scopes"`
+	Created time.Time `json:"created"`
+	Revoked bool      `json:"revoked,omitempty"`
+}
+
+// CreatedKey is returned once, when a key is issued: Secret is never shown
+// again.
+type CreatedKey struct {
+	KeyInfo
+	Secret string `json:"secret"`
+}
+
+// KeyList is GET /v1/admin/keys.
+type KeyList struct {
+	Keys []KeyInfo `json:"keys"`
+}
+
+// NodeSpec adds a node to a gateway (admin).
+type NodeSpec struct {
+	Name      string `json:"name"`
+	Endpoint  string `json:"endpoint"`
+	TokenFile string `json:"token_file,omitempty"`
+	CAFile    string `json:"ca_file,omitempty"`
+	CertFile  string `json:"cert_file,omitempty"`
+	KeyFile   string `json:"key_file,omitempty"`
+}
+
+// NodeInfo is a node as the gateway sees it: its configuration, whether it
+// answers, and its last status.
+type NodeInfo struct {
+	Name     string      `json:"name"`
+	Endpoint string      `json:"endpoint"`
+	Healthy  bool        `json:"healthy"`
+	LastSeen time.Time   `json:"last_seen,omitempty"`
+	Error    string      `json:"error,omitempty"`
+	Status   *NodeStatus `json:"status,omitempty"`
+}
+
+// NodeList is GET /v1/admin/nodes.
+type NodeList struct {
+	Nodes []NodeInfo `json:"nodes"`
 }

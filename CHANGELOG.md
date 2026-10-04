@@ -148,6 +148,43 @@ in `_old/` as reference, to be ported where this design still wants it.
   and forwards nothing.
 - **Agent logins** are copied out of a sandbox when a run ends and back in when
   the next starts. The prod profile still turns this off.
+- **`sandbox-gateway` puts one address in front of many `sandboxd` nodes.**
+  It speaks the same API, so the CLI, the SDKs and Studio work against it
+  with only the address and the credential changed, and the conformance
+  suite passes through it. Users hold gateway-issued API keys with scopes
+  (`sandbox:read`, `sandbox:create`, `sandbox:delete`, `sandbox:ssh`,
+  `admin`); a node's token never leaves the gateway. Every sandbox belongs to
+  the user who made it: another user asking for it, by id or by name, is
+  told it does not exist. The gateway picks a node for each sandbox (a warm
+  pool for the image first, then a built image, then the most free memory),
+  sends a fork to its snapshot's node and a mount to its volume's, stops
+  placing on a node that stops answering or is cordoned (a call that needs
+  a node which is not answering is `503 unavailable`, and a create that
+  finds its node gone before a poll noticed goes to the next), and holds each
+  tenant to a quota (`--quota-sandboxes`, `--quota-cpus`,
+  `--quota-memory-mb`). State is one file, `--state`, holding only hashes
+  of keys and tokens. `sandbox-gateway keys create` makes the first admin
+  key before it serves; after that, keys and nodes are managed through
+  `/v1/admin/…`. A non-loopback `--listen` needs TLS.
+- **A gateway runs jobs and agent runs after you have gone.** `POST /v1/jobs`
+  (`sandbox-cli job run -f job.yaml`) runs a command, or an agent on a prompt
+  or on a batch of prompts, in a fresh sandbox per run made through the same
+  path as any other create — scheduled, counted against the quota, owned by
+  you, labelled `gateway.job`. The gateway waits for each run with its
+  timeout, keeps its output (1 MiB per stream) and the files the job names
+  (8 MiB each), terminates the sandbox, retries a failed run up to
+  `retries`, keeps `parallelism` runs going at most, and can POST each run's
+  state to a `notify` URL (https to a public address; never output). `job
+  ls`, `get`, `output` and `cancel` follow it; a finished job is kept for
+  `--job-retention` (a day). `sandbox-cli agent-run claude "…" --secret
+  ANTHROPIC_API_KEY --wait` is the one-run case. An agent's saved login does
+  not reach a fleet; it authenticates with an API key kept as a **secret**:
+  `sandbox-cli secret set NAME` (value from stdin) stores it per tenant,
+  sealed with `--secrets-key-file`, put in a run's environment only for a
+  job that names it, and never returned. Setting one needs the new
+  `secrets:write` scope. A restarted gateway carries its jobs on, following
+  a command that was running where it runs. The Python and TypeScript SDKs
+  have the same calls.
 
 **Added:**
 
@@ -227,7 +264,114 @@ In the rewrite:
   agent's terminal. Serve locally on the default unix socket, which only its
   owner can open, or pass `--token-file`.
 
+On the gateway, found in review before its first release; each has a test
+that fails on the code before the fix:
+
+- **Another user's volume or snapshot is not found in a mixed fleet either.**
+  Where only some nodes had volumes or memory snapshots, the fleet's combined
+  capabilities had neither, and a create naming a volume or snapshot skipped
+  the ownership check: placed on the node holding it, the sandbox mounted
+  another user's volume or started from their snapshot. The check now runs
+  whenever any node offers the capability, and such a create goes to the node
+  that holds what it names.
+- **A job's `notify` URL reaches public addresses only.** It was any https
+  host, so any user could make the gateway connect to its own loopback, the
+  nodes' network or a cloud metadata address. A loopback, private, link-local
+  or shared address is now refused when the job is submitted and again when
+  the gateway connects, after resolving the name. `serve
+  --notify-allow-private` allows them, and with it http to loopback, for hook
+  receivers on a private network. A notification that fails is logged
+  without its URL, which often carries the hook's credential.
+- **A revoked user's SSH access and public services end even when another
+  tenant has a user of the same name.** The check that a user still holds an
+  active API key matched the name alone, so revoking `ci` in one tenant left
+  its SSH keys, tokens and routed services working while another tenant had a
+  `ci`.
+
 ### Changed
+
+- **Services on the gateway.** `sandbox-gateway` keeps a sandbox spec and a
+  count running: `POST /v1/services` (and `sandbox-cli service deploy -f
+  service.yaml`, `ls`, `get`, `scale`, `rm`; `deploy_service` and friends in
+  the Python and TypeScript SDKs). Each replica is a sandbox made by the
+  gateway's own create path, owned and counted against quota like the user's
+  others. Replicas are health-checked through the guest agent (an HTTP probe
+  over the node's tunnel, or a command), replaced when they fail, spread
+  across nodes with `placement: { spread: node }`, and replaced elsewhere
+  when their node is lost. A changed spec rolls out one replica at a time and
+  stops, keeping the old replicas serving, if the new revision fails. State
+  is in the gateway's state file, so a restarted gateway resumes each
+  service. `serve --router-listen --router-domain` adds an HTTP router for
+  services marked `public`, at `<service>.DOMAIN` or
+  `<service>--<tenant>.DOMAIN` under one wildcard name. `secrets: [NAME]`
+  sets the tenant's secrets in every replica's environment, opened from the
+  secret store as each replica is made, as for a job. Not yet: internal
+  service names, autoscaling. See docs/fleet.md, "Services".
+- **A guide and packaging for running a gateway.** `docs/fleet.md` takes an
+  operator from one machine to many: which shape needs a gateway at all, the
+  certificates (`packaging/fleet/make-certs.sh` makes a private CA, the
+  gateway's client certificate and each node's server certificate with
+  openssl), the node and gateway flags, the first admin key, giving users keys
+  and scopes, the users' side with `sandbox-cli ssh`, the security model, and
+  what is not done yet. `packaging/systemd/sandbox-gateway.service` runs the
+  gateway as a user of its own with no capabilities and only its state
+  directory writable, since unlike `sandboxd` it needs no root;
+  `packaging/fleet/nodes.yaml` is an example node file. Releases carry
+  `sandbox-gateway` for Linux in an archive of its own, and
+  `install.sh --with-gateway` installs it. The API doc gains the gateway's
+  endpoints, scopes and errors, and the site's setup page a fleet path.
+- **`sandboxd` can be one node of many behind a gateway.** `--node-id` names
+  the node in every sandbox id it makes, so a gateway routes each call by the
+  id; `GET /v1/node` reports the node's capacity, what is free, its pools,
+  built images and labels (`--capacity-*`, `--node-label`); and `POST
+  /v1/node/cordon` stops new sandboxes landing on it with `503 unavailable`
+  while the running ones carry on. `--client-ca` requires a client certificate
+  from that CA on top of the token, so a node on a private network answers
+  only its gateway. Without these flags `sandboxd` behaves exactly as before.
+- **SSH into any sandbox through one port on the gateway.** `ssh SANDBOX@gateway`
+  opens a shell in the sandbox's home on a terminal sized to yours; `ssh … CMD`
+  runs one command and exits with its status; `sftp`, `scp` and `rsync` copy
+  files; `ssh -L` forwards to a port on the sandbox's own loopback. Log in with
+  a public key registered to your user (optionally limited to one sandbox), or
+  with a short-lived token as the username and nothing else. There is no sshd
+  in any guest: the gateway terminates SSH and runs each session as a process
+  in the sandbox. Remote forwarding, agent forwarding and X11 are refused, and
+  the base image gains `sftp-server` and `rsync` (not the SSH server).
+- **The CLI and the SDKs speak to a gateway: SSH, keys and who you are.** A
+  context can now point at a gateway in front of many sandboxd nodes, with a
+  gateway API key as its token file. `sandbox-cli ssh SANDBOX` registers your
+  public key there if it is not already, pins the gateway's SSH host key in
+  the CLI's own `known_hosts`, and hands the terminal to your `ssh`; after
+  that, plain `ssh SANDBOX@gateway -p PORT` works too. Against a plain
+  sandboxd, which has no SSH server, it says so and opens the same session
+  through the API instead. `ssh-key add | list | rm` manages your keys,
+  `ssh-access SANDBOX` prints a short-lived ssh command that needs no
+  registered key, and `whoami` shows the user, tenant, scopes and key behind
+  the credential. The CLI reads only the public half of a key; ssh does the
+  authentication. The Python and TypeScript SDKs gain `whoami`, `ssh_info`,
+  `add_ssh_key`, `ssh_keys`, `remove_ssh_key` and `ssh_access` (camelCase in
+  TypeScript), and the Go client gains these and the gateway's admin calls.
+- **A gateway's fleet can be watched, audited, drained and upgraded.**
+  `sandbox-gateway serve --metrics-listen` and `sandboxd --metrics-listen`
+  serve Prometheus metrics on a loopback address (nothing else is accepted,
+  since the endpoint has no credential): on the gateway, requests by route
+  and status, creates and their latency, refusals for quota or capacity,
+  scheduler decisions and health, capacity and free resources per node, SSH
+  connections, sessions and failed logins; on a node, sandboxes by state,
+  processes, pools and create latency. No label carries a user, a tenant or
+  a sandbox's name. The gateway keeps an audit log (`--audit-log`, by
+  default `audit/gateway.jsonl` beside its state file, mode 0600, rotated
+  like a node's) of every authenticated request and every SSH login and
+  session, naming key ids and key fingerprints and never a secret; an admin
+  reads it with `GET /v1/admin/audit` or `sandbox-cli gateway audit`.
+  `sandbox-cli gateway drain NODE [--terminate]` cordons a node and reports or
+  ends its sandboxes, and the gateway keeps it cordoned across the node's
+  restart until `sandbox-cli gateway uncordon NODE`, which makes a rolling
+  upgrade cordon, drain, upgrade, uncordon (docs/self-hosting.md). A sandbox
+  on a node that stops answering is now `503 unavailable` (was `internal`);
+  past `--node-lost-after` (5 minutes) it is listed by `sandbox-cli gateway
+  lost` and stops counting against its tenant's quota, and it is reconciled
+  from the node's own listing as soon as the node answers again.
 
 - **Studio is simpler.** It opens on the sandbox list instead of an overview of
   counts, in a near-monochrome theme with one quiet sidebar: Sandboxes,

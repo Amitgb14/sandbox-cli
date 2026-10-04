@@ -29,11 +29,12 @@ API always on it.
 | | Where | Isolation | Guide |
 |---|---|---|---|
 | **Local** | your Mac (macOS 26+, arm64) | a VM of the native `container` runtime | [docs/local-macos.md](docs/local-macos.md) |
-| **Self-hosted** | a Linux machine with KVM | Firecracker microVMs, egress enforced on the host | [docs/self-hosting.md](docs/self-hosting.md) |
+| **Self-hosted** | a Linux machine with KVM, or many behind one gateway | Firecracker microVMs, egress enforced on the host | [docs/self-hosting.md](docs/self-hosting.md), [docs/fleet.md](docs/fleet.md) |
 | **Cloud** | hosted | the same as self-hosted | (coming) |
 
 `sandboxd` serves the API on each machine. The CLI and the SDKs are clients; they cannot tell which of the three they are talking to,
-beyond what `sandbox-cli doctor` reports.
+beyond what `sandbox-cli doctor` reports. `sandbox-gateway` serves the same API in front of many machines, with a key per
+user, sandboxes only their owner can see, and SSH on one port ([docs/fleet.md](docs/fleet.md)).
 
 ## Use it
 
@@ -55,6 +56,71 @@ sandbox-cli run --label team=infra -- make; sandbox-cli list --label team=infra
 Work done in a sandbox stays there. To keep it, push it from inside (a commit
 made in a sandbox carries a neutral `sandbox` identity), read it out through the
 files API, or write it to a volume, which outlives the VM.
+
+### Through a gateway
+
+A gateway puts many sandboxd nodes behind one address, with a user for every
+API key and one SSH port for every sandbox. The CLI uses it like any other
+context:
+
+```sh
+sandbox-cli context add fleet https://gateway.example.internal --token-file ~/fleet.key
+sandbox-cli context use fleet
+sandbox-cli whoami                   # user, tenant, scopes and key id
+sandbox-cli run --keep --name demo -- sleep infinity
+sandbox-cli ssh demo                 # registers ~/.ssh/id_ed25519.pub, pins the host key, runs ssh
+sandbox-cli ssh demo -- uname -a
+
+sandbox-cli ssh-key add              # or register a key yourself; then plain ssh works:
+ssh demo@gateway.example.internal -p 2222
+sandbox-cli ssh-key list · ssh-key rm ID
+
+sandbox-cli ssh-access demo --ttl 15m   # a short-lived `ssh TOKEN@gateway …` line, no key needed
+```
+
+The token in an `ssh-access` line is the whole credential until it expires;
+hand it only to whoever should have that access. Against a plain sandboxd,
+`sandbox-cli ssh` opens the session through the API instead, since a sandboxd
+has no SSH server.
+
+### Agents and jobs on a fleet
+
+A gateway also runs work after you have gone. A job is a command, or an agent
+and a prompt, run in a fresh sandbox per run: the gateway places it, starts
+it, waits with a timeout, keeps its output (1 MiB per stream) and the files
+you name (8 MiB each), terminates the sandbox, and retries a run that failed.
+`prompts` makes a batch, one run per prompt; `parallelism` bounds how many
+run at once. A run that does not fit the tenant's quota waits for room.
+
+```sh
+sandbox-cli secret set ANTHROPIC_API_KEY < key.txt      # sealed on the gateway, never shown again
+sandbox-cli agent-run claude "fix the failing test" --secret ANTHROPIC_API_KEY --wait
+
+cat > job.yaml <<'YAML'
+agent: claude
+prompts: ["review internal/api", "review internal/gateway"]
+parallelism: 2
+retries: 1
+timeout_secs: 1800
+secrets: [ANTHROPIC_API_KEY]
+keep: {files: [/sandbox/home/review.md]}
+notify: https://hooks.example.com/sandbox    # POSTed {job, run, state}; never output
+YAML
+sandbox-cli job run -f job.yaml
+sandbox-cli job ls · job get ID · job output ID 0 [--file PATH] · job cancel ID
+```
+
+An agent runs in its verified headless mode (claude, codex, gemini, opencode,
+cline). Your saved login does not come along — the CLI's run copies it in
+from your machine, and a job has none — so the agent authenticates with an
+API key you keep as a secret: `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY`
+for codex, `GEMINI_API_KEY` for gemini, the provider's for opencode and cline.
+The agent must be in the image or installable from it. A secret goes into a
+run's environment by name, only for jobs that name it; the API never returns
+it. Secrets need the gateway started with `--secrets-key-file` (32 random
+bytes, mode 0600), and setting one needs a key with the `secrets:write` scope.
+A finished job is kept for a day (`--job-retention`). A restarted gateway
+picks its jobs up again: a running command is followed where it runs.
 
 ## Coding agents
 
@@ -121,6 +187,7 @@ The microVM tests need `/dev/kvm`; see [AGENTS.md](AGENTS.md) and
 
 - [docs/api/v1.md](docs/api/v1.md): the API every mode serves.
 - [docs/self-hosting.md](docs/self-hosting.md), [docs/local-macos.md](docs/local-macos.md): running sandboxd.
+- [docs/fleet.md](docs/fleet.md): many sandboxd nodes behind one `sandbox-gateway`, for one machine or many.
 - [docs/rewrite/PLAN.md](docs/rewrite/PLAN.md): the plan, milestones and what was measured.
 - [docs/security/](docs/security/): the audit ledger and open items.
 - [AGENTS.md](AGENTS.md): for anyone, human or agent, changing this repository.

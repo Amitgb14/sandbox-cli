@@ -1,29 +1,37 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, ArrowRight, Cable, Laptop, Server, Terminal } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Cable, Laptop, Network, Server, Terminal } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
 import { CodeBlock } from "@/components/code-block";
 import { type NavEntry } from "@/lib/nav";
-import { INSTALL_STEP, LAUNCH_AGENT_CODE, UNINSTALL_STEPS } from "@/lib/setup";
+import {
+  FLEET_CERTS_CODE,
+  FLEET_GATEWAY_CODE,
+  FLEET_NODE_CODE,
+  FLEET_USER_CODE,
+  INSTALL_STEP,
+  LAUNCH_AGENT_CODE,
+  UNINSTALL_STEPS,
+} from "@/lib/setup";
 import { DOC_URL, STUDIO_PATH } from "@/lib/site";
 
 /**
  * The setup guide: a Mac, a Linux machine for a quick try, a Linux server, and
  * a client pointed at any of them, each from a cold machine to a sandbox that
- * ran. The landing page's setup band is the short version; this is the one to
+ * ran; then, for an operator, many servers behind one gateway. The landing page's setup band is the short version; this is the one to
  * follow with a terminal open.
  *
- * Mirrors docs/local-macos.md and docs/self-hosting.md, and every command here
- * is one of theirs, the install script's or the packaging's. Where a path is
+ * Mirrors docs/local-macos.md, docs/self-hosting.md and docs/fleet.md, and
+ * every command here is one of theirs, the install script's or the packaging's. Where a path is
  * unverified (the Mac) or degraded (Linux without root), it says so before its
  * first step.
  */
 
 const TITLE = "Setup — sandbox-cli";
 const DESCRIPTION =
-  "Set up sandbox-cli on a Mac or a Linux machine: install, start sandboxd, check what it can deliver, and run a first sandbox. Plus a client pointed at a server, and what to do when a step fails.";
+  "Set up sandbox-cli on a Mac or a Linux machine: install, start sandboxd, check what it can deliver, and run a first sandbox. Plus a client pointed at a server, a fleet behind a gateway, and what to do when a step fails.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -37,6 +45,7 @@ const NAV: NavEntry[] = [
   { kind: "link", href: "#linux", label: "Linux" },
   { kind: "link", href: "#server", label: "Linux server" },
   { kind: "link", href: "#client", label: "Client" },
+  { kind: "link", href: "#fleet", label: "Fleet" },
   { kind: "link", href: "#troubleshooting", label: "Troubleshooting" },
 ];
 
@@ -232,6 +241,56 @@ const CLIENT_STEPS: Step[] = [
   },
 ];
 
+const FLEET_STEPS: Step[] = [
+  {
+    title: "Make the certificates",
+    code: FLEET_CERTS_CODE,
+    body: (
+      <>
+        A private CA, the gateway&apos;s client certificate, and a server certificate per node for the address the
+        gateway dials (<code>-g</code> adds one for the gateway&apos;s own API). Nodes accept a connection only with
+        the gateway&apos;s certificate, and still check their token on every request. Keep <code>ca-key.pem</code>{" "}
+        offline.
+      </>
+    ),
+  },
+  {
+    title: "Start each node on the private network",
+    code: FLEET_NODE_CODE,
+    body: (
+      <>
+        Each node is a Linux server as above, listening only on an address the gateway shares with it.{" "}
+        <code>--client-ca</code> turns on mutual TLS; <code>--node-id</code> must match the name the gateway knows
+        it by, and every sandbox id the node makes carries it; <code>--allowed-host</code> is the host the gateway
+        dials.
+      </>
+    ),
+  },
+  {
+    title: "Install the gateway and make the first admin key",
+    code: FLEET_GATEWAY_CODE,
+    body: (
+      <>
+        <code>sandbox-gateway</code> needs no root and no KVM: the unit runs it as a user of its own with no
+        capabilities. Nodes go in <code>/etc/sandbox-gateway/nodes.yaml</code> (an example is in{" "}
+        <code>packaging/fleet/</code>) or are added with <code>sandbox-gateway nodes add</code>. The key&apos;s
+        secret is printed once and stored only as a hash.
+      </>
+    ),
+  },
+  {
+    title: "Give users keys",
+    code: FLEET_USER_CODE,
+    body: (
+      <>
+        Each user gets an API key with the scopes they need, and sees only the sandboxes they made. Users never
+        hold a node&apos;s token. <code>sandbox-cli ssh</code> registers their public key and pins the
+        gateway&apos;s host key, after which plain <code>ssh demo@gateway -p 2222</code> works too.
+      </>
+    ),
+  },
+];
+
 const TROUBLE: { symptom: React.ReactNode; fix: React.ReactNode }[] = [
   {
     symptom: <code>firecracker backend: /dev/kvm: open /dev/kvm: permission denied</code>,
@@ -328,6 +387,7 @@ const PATHS = [
   { href: "#linux", icon: Terminal, title: "Linux, quick try", what: "Any Linux with KVM, no root. Everything works except the network." },
   { href: "#server", icon: Server, title: "A Linux server", what: "systemd, root, TLS and a token. The enforced egress allowlist and the jailer." },
   { href: "#client", icon: Cable, title: "A client", what: "A laptop pointed at a server. Nothing runs locally." },
+  { href: "#fleet", icon: Network, title: "A fleet", what: "Many servers behind one gateway: a key per user, ownership, SSH on one port." },
 ];
 
 export default function SetupPage() {
@@ -348,7 +408,7 @@ export default function SetupPage() {
             title="From a cold machine to a sandbox that ran"
             lead="Pick where sandboxes will run. Every path installs the binaries, starts sandboxd, and ends with sandbox-cli doctor, because installing is the easy half: what a sandboxd can actually deliver depends on the machine and how it was started."
           />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {PATHS.map((p) => (
               <a
                 key={p.href}
@@ -451,7 +511,21 @@ export default function SetupPage() {
           <Steps steps={CLIENT_STEPS} />
         </Section>
 
-        <Section id="troubleshooting" tinted>
+        <Section id="fleet" tinted>
+          <SectionHead
+            eyebrow="fleet"
+            title="Many servers behind a gateway"
+            lead="sandbox-gateway serves the same API in front of any number of sandboxd nodes. Users reach only the gateway, each with an API key of their own; the gateway picks a node for every sandbox and routes every later call to it."
+          />
+          <Steps steps={FLEET_STEPS} />
+          <p className="mt-8 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            On one machine the gateway can sit beside sandboxd, reaching it on a loopback port with its token. Node
+            and gateway flags, the admin API, scopes, quotas, the security model and what is not done yet are in{" "}
+            <a className="underline" href={DOC_URL.fleet}>docs/fleet.md</a>.
+          </p>
+        </Section>
+
+        <Section id="troubleshooting">
           <SectionHead
             eyebrow="troubleshooting"
             title="When a step fails"
@@ -469,7 +543,7 @@ export default function SetupPage() {
           </div>
         </Section>
 
-        <Section id="uninstall">
+        <Section id="uninstall" tinted>
           <SectionHead eyebrow="uninstall" title="Taking it off again" />
           <Steps steps={UNINSTALL_STEPS} />
         </Section>
