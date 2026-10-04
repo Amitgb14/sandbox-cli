@@ -150,7 +150,7 @@ function Deploy({ existing, onClose }: { existing: Service[]; onClose: () => voi
       <CardContent className="p-4">
         <form onSubmit={send} className="flex flex-col gap-3">
           <p className="text-xs text-muted-foreground">
-            A ServiceSpec as JSON (docs/fleet.md, Services). One with the name of an existing service updates it. Environment values are kept by the gateway; a value
+            A ServiceSpec as JSON (docs/services.md). One with the name of an existing service updates it. Environment values are kept by the gateway; a value
             that must stay secret belongs in Secrets, named under <code className="font-mono">secrets</code>.
           </p>
           <Textarea aria-label="Service spec" value={text} onChange={(e) => setText(e.target.value)} className="min-h-56 font-mono text-xs" spellCheck={false} />

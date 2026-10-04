@@ -17,8 +17,20 @@ credential changed. What it adds is what one machine never needed:
 Users talk to the gateway only. Nodes are reached only by the gateway, with
 tokens users never hold.
 
-This guide covers running it. The node side of a single machine is
-[self-hosting.md](self-hosting.md); the gateway's own endpoints are in
+This page covers setting it up and the model it works by. Each part the
+gateway adds has a page of its own:
+
+| Page | |
+|---|---|
+| [SSH](ssh.md) | one SSH port for every sandbox: keys, short-lived tokens, scp, sftp, port forwards, the host key |
+| [Organizations](organizations.md) | tenants users create and share, chosen per request with `X-Sandbox-Org` |
+| [Jobs and secrets](jobs.md) | commands and agent runs the gateway runs after you have gone, batches, the secret store, notify webhooks |
+| [Services and the router](services.md) | a spec and a count kept true: health, rollouts, placement, public HTTP names |
+| [Operations](operations.md) | metrics, the audit log, drain, lost nodes, revocation, changing a serving gateway |
+| [Studio](studio.md) | the browser view, and which screens a key's scopes open |
+
+The node side of a single machine is [self-hosting.md](self-hosting.md) and
+[sandboxd.md](sandboxd.md); the gateway's own endpoints are in
 [api/v1.md](api/v1.md#gateway).
 
 ## Which shape you need
@@ -219,7 +231,7 @@ gateway cannot open.
 While the gateway serves it holds the state file, and `keys` and `nodes` refuse
 with *another process holds …state.json.lock*: a change made beside a running
 gateway would be overwritten by it, and a revoked key would come back. Change
-a serving gateway through the [admin API](#changing-a-serving-gateway).
+a serving gateway through the [admin API](operations.md#changing-a-serving-gateway).
 
 ### Serve
 
@@ -246,16 +258,21 @@ system and only its state directory writable.
 | `--ssh-listen HOST:PORT` | off | the SSH server. |
 | `--ssh-host-key FILE` | `ssh_host_ed25519_key` beside the state file | created 0600 when missing; one key for the whole fleet. |
 | `--ssh-public-host`, `--ssh-public-port` | the `--ssh-listen` host and port | what clients are told to connect to. Required when listening on `0.0.0.0` or behind a load balancer. |
-| `--router-listen HOST:PORT` | off | the HTTP router for public [services](#the-router). Off loopback, refused without `--router-tls-cert` and `--router-tls-key`. |
+| `--router-listen HOST:PORT` | off | the HTTP router for public [services](services.md#the-router). Off loopback, refused without `--router-tls-cert` and `--router-tls-key`. |
 | `--router-domain DOMAIN` | | what the router serves under: `<service>.DOMAIN`, `<service>--<tenant>.DOMAIN`. Required with `--router-listen`. |
 | `--router-tls-cert`, `--router-tls-key` | | the router's certificate and key, for `*.DOMAIN`. |
 | `--router-public-scheme`, `--router-public-port` | `https` with a router certificate, else `http`; the `--router-listen` port | the URL services are shown with. |
 | `--quota-sandboxes`, `--quota-cpus`, `--quota-memory-mb` | 0 (unlimited) | most one tenant (or organisation) may hold at once. |
-| `--max-orgs-per-user N` | `10` | most [organisations](#organisations) one user may create or own; each has a quota of its own, so this bounds how far one user multiplies theirs. 0 is unlimited. |
+| `--max-orgs-per-user N` | `10` | most [organisations](organizations.md) one user may create or own; each has a quota of its own, so this bounds how far one user multiplies theirs. 0 is unlimited. |
 | `--poll-interval` | `5s` | how often each node is asked for its status. |
 | `--cors-origin ORIGIN` | | a browser origin allowed to call the API (repeatable). Others are refused. |
 | `--secrets-key-file FILE` | | 32 random bytes, mode 0600, sealing the tenants' secrets and jobs' environments. Without it there are no secrets. |
 | `--notify-allow-private` | off | lets a job's `notify` URL reach loopback, private and link-local addresses (and http to loopback). Off, the gateway posts only to public addresses, checked as it connects. |
+| `--metrics-listen HOST:PORT` | off | Prometheus metrics, on loopback only ([operations.md](operations.md#metrics)). |
+| `--audit-log FILE` | `audit/gateway.jsonl` beside the state file | who did what, as JSONL; `none` keeps no log ([operations.md](operations.md#the-audit-log)). |
+| `--node-lost-after` | `5m` | how long a node may not answer before its sandboxes are reported lost and stop counting against quotas ([operations.md](operations.md#node-loss-and-lost-sandboxes)). |
+| `--jobs-dir DIR` | `jobs/` beside the state file | where jobs' runs keep output and files ([jobs.md](jobs.md)). |
+| `--job-retention` | `24h` | how long a finished job, and what it kept, is kept. |
 
 To serve SSH on port 22 or the API on 443, give the unit
 `AmbientCapabilities=CAP_NET_BIND_SERVICE` (it is in the unit, commented out),
@@ -266,26 +283,11 @@ for a load balancer's health check.
 
 ### Changing a serving gateway
 
-`sandbox-cli` has no admin commands; the admin API is plain HTTP with an admin
-key ([api/v1.md](api/v1.md#gateway)):
-
-```sh
-GW=https://gateway.example.internal:8443
-AUTH="Authorization: Bearer $(cat ops.key)"
-
-curl -sS --cacert ca.pem -H "$AUTH" $GW/v1/admin/nodes          # health, capacity, last error
-curl -sS --cacert ca.pem -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"user": "alice", "tenant": "team-a", "scopes": ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh"]}' \
-  $GW/v1/admin/keys                                              # prints the secret once
-curl -sS --cacert ca.pem -H "$AUTH" -X DELETE $GW/v1/admin/keys/key_…
-curl -sS --cacert ca.pem -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"cordoned": true}' $GW/v1/admin/nodes/n17/cordon           # drain before maintenance
-```
-
-A node added through the API (`POST /v1/admin/nodes`) may name files only
-under `--node-files-dir`: the gateway sends what a token file holds to the
-endpoint beside it, so an admin key that could name any path could read any
-file the gateway can.
+While it serves, the gateway holds its state file, so keys and nodes change
+through the admin API — plain HTTP with an admin key — or, for nodes, through
+`sandbox-cli gateway`. The calls, and why a node added at run time may name
+files only under `--node-files-dir`, are in
+[operations.md](operations.md#changing-a-serving-gateway).
 
 ## Giving users keys
 
@@ -301,7 +303,7 @@ sudo -u sandbox-gateway sandbox-gateway --state … keys create --user alice --t
 | `sandbox:delete` | terminate sandboxes, delete volumes and snapshots |
 | `sandbox:ssh` | register SSH keys, issue SSH access tokens, log in over SSH — which runs commands in the sandbox. A login, by SSH key or token, needs its user to hold an active key with this scope at the time, and an open connection ends when they no longer do |
 | `secrets:write` | set and remove the tenant's secrets. Any key of the tenant may name them in a job or a service, and so read them from inside its sandboxes: a tenant is the unit that shares secrets, and users with no tenant all share the default one |
-| `org:create` | create [organisations](#organisations), up to `--max-orgs-per-user`. Joining one needs no scope: an owner adds you |
+| `org:create` | create [organisations](organizations.md), up to `--max-orgs-per-user`. Joining one needs no scope: an owner adds you |
 | `admin` | every scope, on every user's sandboxes, plus keys, nodes and cordon; may act in any organisation |
 
 A user is letters, digits and `. _ @ + -`, at most 64; so is a tenant, which
@@ -311,45 +313,12 @@ a file. `keys list` shows ids, never secrets; `keys revoke ID` ends a key.
 
 ### Revoking
 
-Revoking a key (`DELETE /v1/admin/keys/{id}`) acts on what is already running,
-not only on what starts next, before the call returns:
-
-- **Open API requests.** Every request on a sandbox that is still open — an
-  attached terminal (`sandbox-cli attach`, `shell` against the API), a followed
-  output stream (`sandbox-cli logs`), a tunnel, a `run` waiting on its command,
-  a file transfer — is held to its key again, and ended if the key is revoked,
-  gone from the state, or no longer holds the scope the request needed. The
-  request to the node is cancelled and, for an attach or a tunnel, both the
-  client's and the node's connections are closed. The client sees its stream
-  cut off; one ended before the node answered gets `401`. Another key of the
-  same user is not affected.
-- **SSH.** Every open SSH connection whose user no longer holds an active key
-  with `sandbox:ssh` (or `admin`) in that tenant is closed, its sessions and
-  forwards with it, and the processes they ran are hung up. A connection made
-  with an `ssh-access` token is held to the same check: it stays while its
-  user still may use SSH. Removing an SSH key (`sandbox-cli ssh-key remove`, or
-  `DELETE /v1/admin/ssh-keys/{id}`) closes the connections that logged in with
-  it.
-- **Jobs and agent runs.** A running job whose owner holds no active key at all
-  in that tenant is cancelled as `DELETE /v1/jobs/{id}` would: its running
-  sandboxes are terminated, its queued runs never start, and the job and each
-  run say `cancelled: the owner's access was revoked`. Every run also checks its
-  owner before it makes a sandbox.
-- **Services** are routed to and given new replicas only while their owner
-  holds an active key, which is checked on every request and every step, so
-  revoking the owner's last key stops a service's traffic at once. Its
-  replicas stay until an admin deletes the service.
-- **The audit record** says what revocation ended: `api.revoked` (result
-  `closed`) per open API request, with its key id, sandbox, node and route
-  (`target`, e.g. `GET /v1/sandboxes/{ref}/processes/{pid}/output`);
-  `ssh.revoked` (result `closed`) per connection, with the credential's key id
-  and fingerprint; and `job.revoked` (result `cancelled`) per job, with its id.
-  Never a secret.
-
-Every API request checks its key as it arrives, so a revoked key's next call
-is refused. The gateway also rechecks open API requests, open SSH connections
-and running jobs every 30 seconds, and running jobs at start, for a state file
-changed while it was stopped (`keys revoke` with the gateway down).
+Revoking a key (`DELETE /v1/admin/keys/{id}`, or `keys revoke` with the
+gateway stopped) ends what is already running, not only what starts next:
+open API streams, SSH connections and running jobs, before the call returns,
+each recorded in the audit log. What exactly ends, and how a gateway catches
+a state file changed while it was stopped, is in
+[operations.md](operations.md#revoking).
 
 ## Users' side
 
@@ -370,27 +339,12 @@ holds. Two exceptions: a sandbox may not set labels starting with `gateway.`
 (the gateway stamps `gateway.owner` and `gateway.tenant` itself), and through a
 gateway at most 30 labels.
 
-**SSH**, when the gateway serves it:
-
-```sh
-sandbox-cli ssh demo                 # registers ~/.ssh/id_ed25519.pub if needed, pins the host key, runs ssh
-sandbox-cli ssh demo -- uname -a
-
-sandbox-cli ssh-key add              # or register a key yourself (--sandbox NAME limits it to one)
-sandbox-cli ssh-key list
-ssh -p 2222 -o UserKnownHostsFile=~/.config/sandbox/known_hosts demo@gateway.example.internal
-scp -P 2222 -o UserKnownHostsFile=~/.config/sandbox/known_hosts file demo@gateway.example.internal:
-
-sandbox-cli ssh-access demo --ttl 10m   # prints a one-off `ssh -p 2222 sgt_…@gateway` line
-```
-
-The SSH user name is the sandbox (its id, or a name among your own). Logins are
-by a registered public key, or by an `ssh-access` token as the user name; there
-are no passwords. A session is a shell, a command, sftp (so `scp` works) or a
-local forward (`ssh -L`) to a port on the sandbox's own loopback. Agent
-forwarding, X11 and remote forwards (`-R`) are refused. An `ssh-access` line is
-the whole credential until it expires (15 minutes by default, at most 24
-hours): anyone holding it can log in.
+**SSH**, when the gateway serves it: `sandbox-cli ssh demo` registers your
+public key, pins the gateway's host key and runs `ssh`; afterwards plain
+`ssh -p 2222 demo@gateway.example.internal`, `scp`, `sftp` and `ssh -L` work
+too, and `sandbox-cli ssh-access demo` prints a short-lived login that needs
+no key. Logins need an active key with `sandbox:ssh`. All of it is in
+[ssh.md](ssh.md).
 
 The Python and TypeScript SDKs take the gateway's URL and the key as their
 token, and have the same SSH calls ([sdk/README.md](../sdk/README.md)).
@@ -398,140 +352,21 @@ token, and have the same SSH calls ([sdk/README.md](../sdk/README.md)).
 ## Organisations
 
 An organisation is a tenant that users create and share, rather than one the
-operator writes on their keys. It is the same tenant everything else is keyed
-on, so it has all of a tenant's guarantees: its sandboxes, volumes,
-snapshots, secrets, jobs and services are its own, it has its own quota, and
-its services are routed as `<service>--<org>.DOMAIN`. Nothing in one is
-visible or reachable from another, or from its members' own tenants.
-
-```sh
-sandbox-cli org create acme              # needs org:create; you become its owner
-sandbox-cli org members add bob          # bob, of your own tenant (--tenant T for another; --role owner)
-sandbox-cli org use acme                 # this context now acts in acme
-sandbox-cli run --keep --name web -- …   # made in acme, counted against acme's quota
-sandbox-cli --org default ls             # one command in your key's own tenant
-sandbox-cli org ls                       # yours, * on the current one
-sandbox-cli org members                  # anyone in it may list them
-sandbox-cli org members rm bob           # bob's open streams and SSH sessions in acme end now
-```
-
-**Choosing one.** Every API request may carry `X-Sandbox-Org: NAME`. Without
-it a request acts in its key's own tenant, as before organisations existed.
-With it, the gateway checks once, as the request is authenticated, that the
-key's user is a member of NAME, and the whole request then acts in NAME: the
-router, every listing and lookup, the quota, the audit record. The key's own
-tenant is always allowed; the default tenant (keys issued with no tenant) is
-called `default`. Not a member and no such organisation are the same answer,
-`404 not_found` "no such organization", so names cannot be probed. The CLI
-sends the header from `--org`, else `SANDBOX_ORG`, else the context's
-(`org use`, or `context add --org`); the SDKs take `org`.
-
-**Who is in one.** Memberships come from two places only: creating an
-organisation, which makes you its owner, and being added by one of its
-owners. A key issued before organisations has none, and can select nothing it
-could not reach already. A member is a user and the tenant of their own keys
-(a user name is unique only within a tenant), so `org members add` takes
-`--tenant` for someone from another tenant; a second user of the same name
-in one organisation is refused, because ownership inside it is keyed on the
-name. A key an operator issues with an organisation's name as its tenant is
-in that organisation from the start, as its own tenant, and can be made an
-owner like anyone else. Owners add and remove members and change roles (`owner` or `member`);
-members may list them. The last owner cannot be removed or demoted. There is
-no deleting an organisation yet.
-
-**Inside one,** sandboxes are still their user's, as within any tenant: two
-members do not see each other's sandboxes, while secrets and services are
-the organisation's, as they are a tenant's.
-
-**Names.** An organisation name is a DNS label: 1 to 30 lowercase letters,
-digits and dashes, starting with a letter, with no `--` (the router splits
-`<service>--<org>` on it) and not `default` or `admin`. It may not be a
-tenant already in use — by a key, a sandbox, a volume, a secret, a job or a
-service, compared without case — or creating it would make its creator a
-member of someone else's tenant.
-
-**The cap.** Each organisation has its own quota, so one user may make or own
-at most `--max-orgs-per-user` (10). An organisation counts against its
-creator for as long as it exists, even after they hand it to another owner.
-
-**Leaving ends access at once.** Removing a member, before the call returns,
-ends what they had open in that organisation, as revoking a key does
-([Revoking](#revoking)): open forwarded API requests (`api.revoked`), SSH
-connections to its sandboxes (`ssh.revoked`), and their running jobs there
-(`job.revoked`); their services there stop being routed and get no new
-replicas. What they hold in their own tenant is untouched.
-
-**SSH.** An SSH key is its user's, kept under their own tenant whatever
-organisation registered it. Logging in by key, a sandbox *name* is looked up
-in the key's own tenant only; a sandbox *id* also reaches the user's own
-sandboxes in an organisation they are a member of. `sandbox-cli ssh --org
-acme web` resolves `web` in acme and logs in by its id. `sandbox-cli
-ssh-access --org acme web` issues a token for acme's `web`.
-
-**The header cannot loosen anything else.** Scopes are the key's whatever it
-selects: a member's key cannot reach the admin endpoints in an organisation
-any more than outside one. An admin key may act in any organisation, or the
-default tenant, as it may already act on every sandbox.
-
-**The audit record** names each change by key id, user and organisation:
-`org.created`, `org.member_added` and `org.member_role` (result: the role),
-`org.member_removed`. Never a secret.
-
-The endpoints are in [api/v1.md](api/v1.md#organisations).
+operator writes on their keys, with all of a tenant's guarantees: its own
+sandboxes, secrets, jobs, services and quota, invisible from any other.
+`sandbox-cli org create`, `org use` and `org members` manage them, and every
+request picks one with the `X-Sandbox-Org` header, checked against the key's
+user's memberships. The model, the header, members, what is guaranteed and
+the per-user cap are in [organizations.md](organizations.md).
 
 ## Studio
 
 `sandbox-cli studio --context fleet` opens Studio on a gateway context. It is
-the same Studio as for a plain `sandboxd`: `sandbox-cli studio` holds the API
-key and adds it to each call it proxies, and the browser never sees the key.
-On load Studio asks `GET /v1/whoami`; a plain `sandboxd` answers 404 and gets
-exactly the screens it always had. A gateway answers with the key's scopes,
-and those decide the screens:
-
-| The key holds | Studio adds |
-|---|---|
-| any scope | **Jobs** (list, detail with each run's kept output and files), **Services** (list, detail with replicas, health and rollout), **Secrets** (names only), **SSH** (where to connect, the host key to pin), **Account** (user, tenant, current organisation, key id, scopes), the **organisation switcher** at the top of the sidebar and **Members** (list; add, remove and change roles as an owner) |
-| `org:create` | **Create organization** in the switcher |
-| `sandbox:create` | the Playground, submitting and cancelling jobs, deploying (a JSON spec) and scaling services, creating volumes, a sandbox's Terminal, Suspend and Snapshot |
-| `sandbox:delete` | terminating sandboxes, deleting volumes and snapshots; with `sandbox:create`, removing a service |
-| `sandbox:ssh` | adding and removing your SSH keys, issuing a short-lived access token for a sandbox (shown once) |
-| `secrets:write` | setting and removing secrets. A value goes in a password field and is never shown: no call returns it |
-| `admin` | everything above, plus **Nodes** (health, allocated capacity, cordon, uncordon, drain, add, remove), **Lost sandboxes**, **Users & keys** (issue and revoke API keys, any user's SSH keys), **Organizations** (every organisation, with its members and owners) and **Audit** |
-
-The switcher keeps its choice per browser and sends `X-Sandbox-Org` on every
-call Studio makes, a terminal's included; switching clears what was loaded,
-so nothing of the previous organisation stays on screen. If the remembered
-one is no longer allowed — you were removed — Studio goes back to your key's
-own tenant and says so. On a plain `sandboxd` there is no switcher and Studio
-never asks for `/v1/orgs`.
-
-An action the key's scopes do not allow is not offered, rather than offered
-and refused. A screen the key may not have — an admin screen for a tenant's
-key, or a gateway screen on a plain `sandboxd` — is missing from the sidebar
-and the palette, and a typed URL shows a plain *Not available* page that makes
-no request for it. That is a convenience, not the control: the gateway refuses
-a call without its scope (`403`) whoever sends it.
-
-Two things Studio never shows: a node's endpoint, which is dropped as the node
-list is read (and taken out of a node's error text), and a secret value. A new
-API key's secret is in one answer only; Studio shows it once, with a copy
-button and a warning, and drops it when you click Done. An SSH access token is
-shown the same way.
-
-**A hosted dashboard without the admin screens.** Building Studio with
-`NEXT_PUBLIC_STUDIO_ADMIN=off` leaves the admin screens out of the bundle
-altogether — their pages are not routes in that build and nothing they import
-is included — so a Studio served to many tenants does not carry the
-operator's UI at all:
-
-```sh
-NEXT_PUBLIC_STUDIO_ADMIN=off make studio build   # a sandbox-cli whose Studio has no admin screens
-```
-
-The default build keeps them, for an operator running their own gateway.
-`npm run check:admin-off` in `studio/` (part of `npm run check`) makes such a
-build and fails if any admin route, admin API path or admin screen title is
-in it.
+the same Studio as for a plain `sandboxd`, with screens added for what the
+key's scopes allow — jobs, services, secrets, SSH, organisations, and for an
+admin key nodes, lost sandboxes, keys and the audit log — and a build without
+the admin screens for a dashboard hosted for many tenants. See
+[studio.md](studio.md).
 
 ## The security model
 
@@ -554,12 +389,12 @@ in it.
   tenant only for a key whose user is a member, checked once per request
   before any handler runs; memberships come only from creating one or being
   added by an owner, and an organisation's name cannot be a tenant already
-  in use ([Organisations](#organisations)).
+  in use ([organizations.md](organizations.md)).
 - **SSH is a scope of its own, and access ends with it.** An SSH key or token
   logs in only while its user holds an active key with `sandbox:ssh`, so a user
   left with read-only keys cannot open a shell. Revoking ends open connections,
   open API streams and running jobs, not only the next login
-  ([Revoking](#revoking)).
+  ([operations.md](operations.md#revoking)).
 - **Secrets travel by reference.** API keys and SSH tokens are random 256-bit
   strings stored only as their SHA-256; logs name a key by its id. The state
   file holds no secret, and is still 0600 and refused if others can read it,
@@ -600,158 +435,22 @@ in it.
 ## Services
 
 A service is a sandbox spec and a count the gateway keeps true: a stateless
-microservice, or a long-lived agent. Its replicas are ordinary sandboxes,
-owned by the user who deployed it and made by the same create path as theirs
-— placed by the scheduler, counted against the tenant's quota, labelled
-`gateway.owner` — with two more labels the gateway sets and a request may
-not: `gateway.service=<name>` and `gateway.service.rev=<revision>`.
+microservice, or a long-lived agent, with health checks, rolling updates,
+spread across nodes, and an HTTP router that serves public ones as
+`<service>.DOMAIN`. See [services.md](services.md).
 
-```yaml
-# service.yaml
-name: review-bot                  # a DNS label with no "--"; unique in the tenant
-image: ghcr.io/you/review-bot:1.4.2
-command: [./serve, --port, "8080"] # started in each replica, detached
-replicas: 3
-resources: { cpus: 1, memory_mb: 1024, disk_mb: 4096 }
-port: 8080                        # on the replica's own loopback
-health: { http: /healthz, every_secs: 10, timeout_secs: 5, failures: 3 }
-env: { MODE: prod }
-network: { mode: allowlist, allow: [api.github.com] }
-placement: { spread: node }
-public: true                      # served by the router (below)
-```
+## Jobs and secrets
 
-```sh
-sandbox-cli service deploy -f service.yaml   # creates it, or updates it if it exists
-sandbox-cli service ls
-sandbox-cli service get review-bot           # each replica: sandbox, node, state, last check, restarts
-sandbox-cli service scale review-bot 5
-sandbox-cli service rm review-bot            # terminates the replicas
-```
+A job is a command, or an agent and a prompt, that the gateway runs in a
+fresh sandbox per run after you have gone, keeping its output and the files
+you name; a batch runs one per prompt. Secrets are kept sealed on the
+gateway and set in a run's environment by name. See [jobs.md](jobs.md).
 
-The API is `POST /v1/services`, `GET /v1/services`,
-`GET|PUT|DELETE /v1/services/{name}` and `POST /v1/services/{name}/scale`
-(types in [`internal/api/services_types.go`](../internal/api/services_types.go));
-the Python and TypeScript SDKs have `deploy_service`/`deployService`,
-`update_service`, `services`, `service`, `scale_service` and `delete_service`.
-Creating, changing and scaling need `sandbox:create`; deleting needs
-`sandbox:delete` as well; reading needs `sandbox:read`. Another user's service
-is not found. An admin sees every service and names one in another tenant
-with `?tenant=T`. A `GET` shows env names, not values, as for a sandbox; the
-values are kept in the state file, which is why it stays 0600. A value that
-must stay secret belongs in the secret store instead: `secrets: [NAME]` sets
-each of the tenant's secrets (`sandbox-cli secret set NAME`) in every
-replica's environment, opened as the replica is made and kept nowhere else.
-A name the tenant has no secret for is refused, a gateway started without
-`--secrets-key-file` refuses `secrets:` with `501`, and a secret removed later
-stops new replicas (the service's `error` says which) rather than starting
-one without it.
+## Operations
 
-**Health.** `health.http` is a `GET` on `port` through the node's tunnel —
-the guest needs no network — and a 2xx or 3xx within `timeout_secs` is
-healthy; `health.command` runs in the replica and exit 0 is healthy. Checks
-run every `every_secs` (10), and `failures` (3) in a row replace the replica.
-Without a health check a replica is healthy while its sandbox lives and its
-command runs. A replica whose command exits, or whose sandbox is gone (an
-idle timeout, someone deleting it), is replaced at once. Replacements after
-repeated failures back off, up to a minute apart; each replica shows how many
-replacements came before it (`restarts`).
-
-**Placement.** `spread: node` puts each new replica on a node holding the
-fewest of the service's replicas among those with room, so losing a machine
-costs as few as it can; two replicas share a node only when no other fits.
-
-**A lost node.** When the gateway marks a node unhealthy (three failed polls
-by default), its replicas are replaced elsewhere at once. They are queued for
-termination, and terminated when the node answers again, so a node that comes
-back does not run a second copy.
-
-**Rolling update.** A `PUT` that changes what a replica is — image, command,
-resources, port, health, env, network — is a new revision. The gateway starts
-one replica of it, waits until it is healthy, retires one old replica, and
-repeats; while it runs `rollout.state` is `in_progress`, and at the end
-`done`. A change to only `replicas`, `public` or `placement` applies to the
-replicas there are, with no new revision. If a new replica fails its health
-check `failures` times in a row, or a node refuses to create one (a bad
-image, a reserved variable, over quota), the rollout stops: `rollout.state`
-is `failed` with the reason, the old revision's replicas keep serving, and
-any new replicas are replaced by old ones. Deploy a fixed spec to try again.
-
-**Restarts.** The controller's state — specs, revisions, rollouts, which
-sandbox is which replica, replicas waiting to be terminated — is in the state
-file, so a restarted gateway resumes each service where it was, with the same
-replicas, after checking each once.
-
-**Owners.** A service runs in its owner's name. Once the owner holds no
-active API key, no new replica is made and the router stops serving it; what
-runs stays until an admin deletes it (`DELETE /v1/services/{name}?tenant=T`).
-
-### The router
-
-```sh
-sandbox-gateway serve … \
-  --router-listen 0.0.0.0:443 --router-domain apps.example.com \
-  --router-tls-cert /etc/sandbox-gateway/tls/apps.pem \
-  --router-tls-key /etc/sandbox-gateway/tls/apps-key.pem
-```
-
-The router is the gateway's ingress for services with `public: true`, on its
-own listener, held to the API's rule: an address other machines can reach
-needs TLS. It takes no API key — a public service is public — and sends each
-request to a healthy replica of the service, round robin, through that
-replica's node's tunnel to `port`, as plain HTTP/1.1. WebSocket and other
-upgrades pass through. Hop-by-hop headers are removed, `X-Forwarded-For`,
-`X-Forwarded-Proto` and `X-Forwarded-Host` are the router's own (one a client
-sent is replaced), and the `Host` the client asked for is passed on.
-
-Names live under one wildcard name, so one certificate for `*.DOMAIN` serves
-them all:
-
-| Host | Service |
-|---|---|
-| `<service>.DOMAIN` | `<service>` of the default tenant (users with no tenant) |
-| `<service>--<tenant>.DOMAIN` | `<service>` of tenant `<tenant>` |
-
-They cannot collide: a service name never contains `--`, so the first `--`
-always ends it and the rest is the tenant, exactly. A tenant that is not
-itself a lowercase DNS label (tenants may hold capitals, dots and `@`) has no
-name here, and its services cannot be made public. Names are per tenant, not
-per user, because that is what a host name can carry.
-
-| The router answers | when |
-|---|---|
-| `404` | the host names no service, a service that is not public, or nothing under DOMAIN |
-| `503` | no replica is healthy (or the owner holds no active key) |
-| `502` | the chosen replica did not answer |
-
-Every service is a sibling under DOMAIN, so the router strips `Domain=` from
-every cookie a replica sets, keeping cookies with the service that set them.
-Use a domain of its own for DOMAIN — not a parent of the gateway's API or of
-anything else — so that no service shares a site with something it should not.
-The router cannot stop a page's own script from setting a cookie for DOMAIN
-(`document.cookie = "…; domain=DOMAIN"`), which the browser then sends to
-every tenant's service: for tenants who do not trust each other, make DOMAIN
-a registrable domain of its own and add it to the Public Suffix List, as
-hosting providers do, so that browsers refuse such cookies.
-`--router-public-scheme` and `--router-public-port` set the URL services are
-shown with, when the router sits behind a load balancer.
-
-### What services do not do yet
-
-- **No internal names.** A sandbox in the fleet cannot reach a service as
-  `review-bot.internal` through its allowlist; services are reached through
-  the router or by their owner's tunnel.
-- **No autoscaling.** The count is what was asked for; `scale` changes it.
-- **Stateless only.** A replica's disk is its own and goes with it; state
-  belongs in a database outside the fleet.
-- **Health is checked by the one gateway.** Checks run from the gateway
-  process, one per replica per interval, through each node's API.
-- **No retry in the router.** A request sent to a replica whose node has
-  just died answers `502`; the router stops choosing it when the next check
-  fails or the gateway marks the node unhealthy (three polls, 15 s by default).
-- **Services without a `command` run nothing.** A sandbox has no entrypoint
-  of its own, and one with no process running idles out like any other and
-  is replaced.
+Metrics, the gateway's audit log, cordon and drain, what happens when a node
+is lost, revocation and changing a serving gateway are in
+[operations.md](operations.md).
 
 ## Back up
 
@@ -767,12 +466,14 @@ atomically on every change).
 - **One gateway process per state file.** The state is a JSON file one process
   holds; there is no second gateway for failover, and no database yet.
 - **No single sign-on.** Users authenticate with gateway-issued API keys.
-- **No admin commands in `sandbox-cli`.** Use `sandbox-gateway keys|nodes` with
-  the gateway stopped, or the admin API with `curl` (above); the Go client
-  (`internal/api`) has the admin calls.
+- **No API-key commands in `sandbox-cli`.** `sandbox-cli gateway` covers
+  nodes, drain, lost sandboxes and the audit log; issue and revoke keys with
+  `sandbox-gateway keys` while the gateway is stopped, the admin API with
+  `curl` ([operations.md](operations.md#changing-a-serving-gateway)), or
+  Studio. The Go client (`internal/api`) has every admin call.
 - **SSH access follows a user's API keys.** An SSH key or token logs in, and
   stays connected, only while its user holds an active API key with
-  `sandbox:ssh` ([Revoking](#revoking)). An admin lists and removes any user's
+  `sandbox:ssh` ([operations.md](operations.md#revoking)). An admin lists and removes any user's
   SSH keys with `GET /v1/admin/ssh-keys?user=U` and
   `DELETE /v1/admin/ssh-keys/{id}`.
 - **Quotas are per tenant and the same for every tenant**, set by flags; an

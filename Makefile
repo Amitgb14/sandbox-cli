@@ -3,7 +3,7 @@ PKG := github.com/Amitgb14/sandbox-cli
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build studio install test test-sdk test-integration e2e lint fmt clean snapshot release docker-build image
+.PHONY: build studio install test docs-cli test-sdk test-integration e2e lint fmt clean snapshot release docker-build image
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
@@ -51,6 +51,12 @@ install:
 
 test:
 	go test ./...
+
+# docs/cli.md, the CLI reference, generated from the command tree
+# (internal/cli/docs.go). TestCLIReferenceIsCurrent fails until this is run
+# after a change to a command, a flag or its help.
+docs-cli:
+	UPDATE_CLI_DOCS=1 go test ./internal/cli -run '^TestCLIReferenceIsCurrent$$' -count=1
 
 # The Python SDK against a real sandboxd (the in-memory backend).
 test-sdk: build

@@ -84,7 +84,7 @@ sandbox-cli ssh-access demo --ttl 15m   # a short-lived `ssh TOKEN@gateway …` 
 The token in an `ssh-access` line is the whole credential until it expires;
 hand it only to whoever should have that access. Every SSH login needs an
 active API key with the `sandbox:ssh` scope, and revoking it closes open
-sessions too ([docs/fleet.md](docs/fleet.md#revoking)). Against a plain sandboxd,
+sessions too ([docs/operations.md](docs/operations.md#revoking); all of SSH is in [docs/ssh.md](docs/ssh.md)). Against a plain sandboxd,
 `sandbox-cli ssh` opens the session through the API instead, since a sandboxd
 has no SSH server.
 
@@ -125,7 +125,10 @@ run's environment by name, only for jobs that name it; the API never returns
 it. Secrets need the gateway started with `--secrets-key-file` (32 random
 bytes, mode 0600), and setting one needs a key with the `secrets:write` scope.
 A finished job is kept for a day (`--job-retention`). A restarted gateway
-picks its jobs up again: a running command is followed where it runs.
+picks its jobs up again: a running command is followed where it runs. Jobs,
+batches, secrets and notify webhooks are in [docs/jobs.md](docs/jobs.md);
+services, which keep a count of sandboxes running, in
+[docs/services.md](docs/services.md).
 
 ## Coding agents
 
@@ -176,7 +179,7 @@ The same sandboxes in a browser: launch a command or an agent, use its
 terminal, watch its output, files and audit events. Studio is served by
 `sandbox-cli` itself on a loopback port, needs the token it prints, and talks to
 the current context's `sandboxd` without handing that `sandboxd`'s token to the
-browser. See [studio/README.md](studio/README.md).
+browser. See [docs/studio.md](docs/studio.md).
 
 ## Build
 
@@ -192,7 +195,11 @@ The microVM tests need `/dev/kvm`; see [AGENTS.md](AGENTS.md) and
 
 - [docs/api/v1.md](docs/api/v1.md): the API every mode serves.
 - [docs/self-hosting.md](docs/self-hosting.md), [docs/local-macos.md](docs/local-macos.md): running sandboxd.
-- [docs/fleet.md](docs/fleet.md): many sandboxd nodes behind one `sandbox-gateway`, for one machine or many.
+- [docs/fleet.md](docs/fleet.md): many sandboxd nodes behind one `sandbox-gateway`, for one machine or many;
+  with [SSH](docs/ssh.md), [organizations](docs/organizations.md), [jobs and secrets](docs/jobs.md),
+  [services](docs/services.md) and [operations](docs/operations.md) on pages of their own.
+- [docs/cli.md](docs/cli.md), [docs/sandboxd.md](docs/sandboxd.md), [docs/studio.md](docs/studio.md): the CLI's every command, the server's flags and policy file, Studio.
+- [docs/README.md](docs/README.md): every page, grouped as on the website's `/docs`.
 - [docs/rewrite/PLAN.md](docs/rewrite/PLAN.md): the plan, milestones and what was measured.
 - [docs/security/](docs/security/): the audit ledger and open items.
 - [AGENTS.md](AGENTS.md): for anyone, human or agent, changing this repository.
