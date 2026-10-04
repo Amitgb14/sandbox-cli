@@ -269,3 +269,40 @@ class Client:
 
     def list_dir(self, ref: str, path: str) -> List[Dict[str, Any]]:
         return json.loads(self._read(self._request("GET", self._sbx(ref) + "/dirs", {"path": path})))["entries"]
+
+    # --- gateway ---------------------------------------------------------------
+    # A gateway in front of many sandboxd nodes adds these; a plain sandboxd
+    # answers each with ApiError code ``not_found``.
+
+    def whoami(self) -> Dict[str, Any]:
+        """The caller as the gateway sees its API key: ``user``, ``tenant``,
+        ``key_id`` and ``scopes``."""
+        return self._json("GET", "/v1/whoami")
+
+    def ssh_info(self) -> Dict[str, Any]:
+        """Where the gateway's SSH server listens (``host``, ``port``) and the
+        host keys to pin (``host_keys``, ``fingerprint``)."""
+        return self._json("GET", "/v1/ssh")
+
+    def add_ssh_key(self, key: str, sandbox: str = "") -> Dict[str, Any]:
+        """Register a public key (one authorized_keys line, no options) for SSH
+        logins: ``ssh SANDBOX@host -p port``. ``sandbox`` limits it to one."""
+        req: Dict[str, Any] = {"key": key}
+        if sandbox:
+            req["sandbox"] = sandbox
+        return self._json("POST", "/v1/ssh-keys", req)
+
+    def ssh_keys(self) -> List[Dict[str, Any]]:
+        return self._json("GET", "/v1/ssh-keys")["keys"]
+
+    def remove_ssh_key(self, key_id: str) -> None:
+        self._json("DELETE", "/v1/ssh-keys/" + urllib.parse.quote(key_id, safe=""))
+
+    def ssh_access(self, ref: str, ttl_secs: int = 0) -> Dict[str, Any]:
+        """A short-lived SSH login to one sandbox: ``user`` (the token, and the
+        whole credential until ``expires_at``), ``host``, ``port`` and the
+        ``command`` that uses it. ``ttl_secs`` 0 takes the gateway's default."""
+        req: Dict[str, Any] = {}
+        if ttl_secs:
+            req["ttl_secs"] = ttl_secs
+        return self._json("POST", self._sbx(ref) + "/ssh-access", req)

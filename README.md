@@ -56,6 +56,32 @@ Work done in a sandbox stays there. To keep it, push it from inside (a commit
 made in a sandbox carries a neutral `sandbox` identity), read it out through the
 files API, or write it to a volume, which outlives the VM.
 
+### Through a gateway
+
+A gateway puts many sandboxd nodes behind one address, with a user for every
+API key and one SSH port for every sandbox. The CLI uses it like any other
+context:
+
+```sh
+sandbox-cli context add fleet https://gateway.example.internal --token-file ~/fleet.key
+sandbox-cli context use fleet
+sandbox-cli whoami                   # user, tenant, scopes and key id
+sandbox-cli run --keep --name demo -- sleep infinity
+sandbox-cli ssh demo                 # registers ~/.ssh/id_ed25519.pub, pins the host key, runs ssh
+sandbox-cli ssh demo -- uname -a
+
+sandbox-cli ssh-key add              # or register a key yourself; then plain ssh works:
+ssh demo@gateway.example.internal -p 2222
+sandbox-cli ssh-key list · ssh-key rm ID
+
+sandbox-cli ssh-access demo --ttl 15m   # a short-lived `ssh TOKEN@gateway …` line, no key needed
+```
+
+The token in an `ssh-access` line is the whole credential until it expires;
+hand it only to whoever should have that access. Against a plain sandboxd,
+`sandbox-cli ssh` opens the session through the API instead, since a sandboxd
+has no SSH server.
+
 ## Coding agents
 
 `sandbox-cli agent <name>` is `run` with a coding agent's conveniences on top:
