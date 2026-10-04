@@ -27,7 +27,7 @@ func newServiceCmd() *cobra.Command {
 			"true: it replaces a replica that fails its health check or is lost with its\n" +
 			"node, spreads replicas across nodes, rolls a change out one replica at a\n" +
 			"time, and routes HTTP to the healthy ones when the service is public.\n" +
-			"Services need a gateway; a single sandboxd has none. See docs/fleet.md.",
+			"Services need a gateway; a single sandboxd has none. See docs/services.md.",
 	}
 	cmd.PersistentFlags().StringVar(&ctxFlag, "context", "", "which gateway to use")
 

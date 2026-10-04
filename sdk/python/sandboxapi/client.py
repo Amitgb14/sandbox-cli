@@ -415,8 +415,8 @@ class Client:
     def delete_secret(self, name: str) -> None:
         self._json("DELETE", "/v1/secrets/" + urllib.parse.quote(name, safe=""))
     # --- services (gateway) ------------------------------------------------------
-    # A sandbox spec and a count a gateway keeps true (docs/fleet.md,
-    # "Services"). A plain sandboxd answers each with ApiError ``not_found``.
+    # A sandbox spec and a count a gateway keeps true (docs/services.md).
+    # A plain sandboxd answers each with ApiError ``not_found``.
 
     @staticmethod
     def _svc(name: str) -> str:

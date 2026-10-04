@@ -268,7 +268,7 @@ export interface SecretInfo {
   updated_at: string;
 }
 
-/** What POST /v1/services and PUT /v1/services/{name} send (docs/fleet.md, "Services"). */
+/** What POST /v1/services and PUT /v1/services/{name} send (docs/services.md). */
 export interface ServiceSpec {
   /** A DNS label with no "--"; unique within the tenant. */
   name: string;

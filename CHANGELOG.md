@@ -316,6 +316,20 @@ that fails on the code before the fix:
 
 ### Changed
 
+- **The documentation is a page per component, and the site renders it at
+  `/docs`.** `docs/fleet.md` keeps setting up a gateway and its model; SSH
+  (`docs/ssh.md`), organizations (`docs/organizations.md`), jobs and secrets
+  (`docs/jobs.md`), services and the router (`docs/services.md`) and running a
+  fleet — metrics, the audit log, drain, lost nodes, revocation, the admin API
+  (`docs/operations.md`) — have pages of their own, and `docs/fleet.md` links
+  each. New: `docs/studio.md` (Studio for its users; `studio/README.md` stays
+  the developer's page), `docs/sandboxd.md` (every flag and the policy file),
+  and `docs/cli.md`, every command and flag generated from the CLI itself
+  (`make docs-cli`; a test fails when it is stale). `docs/README.md` indexes
+  them in the site's groups. The website's new `/docs` renders these files at
+  build time — nothing is copied — with a sidebar, "On this page", links
+  between pages, and a check that fails the build on a broken link or anchor;
+  the header's Docs, the footer, `/setup` and `/studio` link there.
 - **The site's fleet setup goes past the first key.** `/setup` now shows using a
   fleet — SSH on one port, `scp` and `ssh-access`, secrets, jobs and services —
   organizations (create, switch, members, and what isolates them), and that

@@ -15,7 +15,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
 )
 
-// Services (docs/fleet.md, "Services"): a sandbox spec and a count the
+// Services (docs/services.md): a sandbox spec and a count the
 // gateway keeps true. This file is the API; services_controller.go keeps the
 // count, services_health.go checks replicas, router_http.go routes traffic.
 //

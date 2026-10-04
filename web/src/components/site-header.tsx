@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/navigation-menu";
 import { GithubMark, Wordmark } from "@/components/logo";
 import { NAV, type NavEntry } from "@/lib/nav";
-import { CHANNEL, DOC_URL, REPO_URL } from "@/lib/site";
+import { CHANNEL, DOCS_PATH, REPO_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 /**
@@ -168,11 +168,13 @@ export function SiteHeader({
                 </NavigationMenuItem>
               ),
             )}
+            {/* Docs is on every page's header, whatever nav the page passes:
+                it is a route of its own (/docs), rendered from docs/. */}
             <NavigationMenuItem>
               <NavigationMenuLink
-                href={DOC_URL.readme}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={DOCS_PATH}
+                closeOnClick
+                render={<Link href={DOCS_PATH} />}
                 className={cn(
                   navigationMenuTriggerStyle(),
                   "text-muted-foreground hover:text-foreground",
@@ -240,14 +242,12 @@ export function SiteHeader({
                     </div>
                   ),
                 )}
-                <a
-                  href={DOC_URL.readme}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-md px-2 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  Docs
-                </a>
+                <MobileNavLink
+                  href={DOCS_PATH}
+                  label="Docs"
+                  onNavigate={() => setOpen(false)}
+                  className="px-2 py-2"
+                />
                 <a
                   href={installHref}
                   onClick={() => setOpen(false)}

@@ -6,6 +6,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
 import { CodeBlock } from "@/components/code-block";
 import { type NavEntry } from "@/lib/nav";
+import { docPath } from "@/lib/site";
 
 const TITLE = "Sandbox Studio — sandbox-cli";
 const DESCRIPTION =
@@ -77,7 +78,7 @@ const GUARDS = [
 export default function StudioPage() {
   return (
     <div id="top">
-      <SiteHeader nav={NAV} />
+      <SiteHeader nav={NAV} installHref="/#install" />
       <main className="flex-1">
         <Section id="what">
           <Link
@@ -96,7 +97,12 @@ export default function StudioPage() {
           <p className="mt-4 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             Open the address it prints. <code className="font-mono">--context</code> picks another
             sandboxd, <code className="font-mono">--port</code> another port. Closing Studio leaves every
-            sandbox it started running; the next Studio finds them again.
+            sandbox it started running; the next Studio finds them again. Every screen, which ones a
+            gateway key&apos;s scopes open, organizations and the hosted build are in{" "}
+            <Link href={docPath("studio")} className="underline underline-offset-4">
+              the Studio docs
+            </Link>
+            .
           </p>
         </Section>
 

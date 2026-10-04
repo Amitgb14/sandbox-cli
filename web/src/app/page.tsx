@@ -21,7 +21,7 @@ import { CodeBlock } from "@/components/code-block";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { AGENTS } from "@/lib/agents";
-import { DOC_URL, REPO_URL, SETUP_PATH } from "@/lib/site";
+import { DOC_URL, REPO_URL, SETUP_PATH, docPath } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const EXPOSED = [
@@ -157,14 +157,9 @@ export default function Home() {
               <>
                 Make a sandbox, run something, read what it printed, throw it away. The CLI, curl, and
                 the Python and TypeScript SDKs do it with the same calls — documented in{" "}
-                <a
-                  href={DOC_URL.api}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline underline-offset-4"
-                >
-                  docs/api/v1.md
-                </a>
+                <Link href={docPath("api")} className="underline underline-offset-4">
+                  the API reference
+                </Link>
                 , with files, background processes, a real terminal over attach, tunnels, snapshots,
                 volumes and an event log on top.
               </>

@@ -11,6 +11,10 @@ sandbox-cli studio          # prints http://127.0.0.1:7080/#token=…
 Next.js 15 (App Router) · TypeScript · Tailwind CSS 4 · shadcn/ui (on Radix) ·
 TanStack Query · Zustand · xterm.js. Dark by default.
 
+This is the developer's page. What each screen does for a user, how scopes
+decide them on a gateway, organizations and the hosted build are in
+[docs/studio.md](../docs/studio.md), which the website renders too.
+
 ## How it is served
 
 Studio is a **static export embedded in `sandbox-cli`** (`internal/studio`).
@@ -82,7 +86,7 @@ API goes in the main one.
 
 On load Studio asks `GET /v1/whoami` (`src/lib/caller.ts`). A plain sandboxd
 answers 404 and gets the screens above and nothing else. A gateway answers with
-the key's scopes, which decide the rest ([docs/fleet.md](../docs/fleet.md#studio)):
+the key's scopes, which decide the rest ([docs/studio.md](../docs/studio.md#scopes-and-screens)):
 
 | Route | Screen | Shown to |
 |---|---|---|

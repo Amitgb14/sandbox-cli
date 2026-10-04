@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && node scripts/check-docs.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
     "start": "next start",
     "lint": "eslint"
   },
@@ -13,6 +14,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.26.0",
+    "marked": "^18.0.14",
     "motion": "^12.42.2",
     "next": "16.2.11",
     "react": "19.2.4",
