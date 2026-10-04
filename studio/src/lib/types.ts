@@ -175,14 +175,15 @@ export interface FleetState {
   tasks: Record<string, TaskState>;
 }
 
+/** An agent Studio can run: only those with a verified headless mode are listed. */
 export interface Agent {
   name: string;
-  unattended: boolean;
   login: "saved" | "-" | "not kept";
 }
 
 export interface LaunchRequest {
-  repo: string;
+  /** A registered repository's id; absent starts with an empty /workspace. */
+  repo?: string;
   agent?: string;
   prompt?: string;
   console?: boolean;

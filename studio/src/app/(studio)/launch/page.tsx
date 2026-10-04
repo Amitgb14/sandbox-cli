@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { Bot, Check, ChevronRight, FolderGit2, SquareTerminal, TerminalSquare, type LucideIcon } from "lucide-react";
 import { PageHeader } from "@/components/common/page-header";
-import { RepoGate } from "@/components/common/repo-gate";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -12,8 +13,10 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useAgents, useInfo, useLaunch } from "@/lib/api/queries";
-import type { LaunchRequest, NetworkMode, Repo } from "@/lib/types";
+import { useAgents, useInfo, useLaunch, useRepos } from "@/lib/api/queries";
+import { useUi } from "@/lib/store";
+import { cn } from "@/lib/utils";
+import type { LaunchRequest, NetworkMode } from "@/lib/types";
 
 type Kind = "headless" | "console" | "command";
 
@@ -49,11 +52,38 @@ function pairs(s: string): Record<string, string> {
   return out;
 }
 
-function LaunchForm({ repo }: { repo: Repo }) {
+/** The select's value for "no repository": Radix gives "" a meaning of its own. */
+const NO_REPO = "none";
+
+const KINDS: [Kind, string, string, LucideIcon][] = [
+  ["headless", "Agent, unattended", "Runs the prompt to completion and exits", Bot],
+  ["console", "Agent, interactive", "A terminal you attach to here", TerminalSquare],
+  ["command", "Command", "Anything the image can run", SquareTerminal],
+];
+
+function Section({ step, title, children }: { step: number; title: string; children: React.ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <span className="flex size-5 items-center justify-center rounded-full bg-muted text-[11px] text-muted-foreground tabular-nums">
+          {step}
+        </span>
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function LaunchForm() {
   const router = useRouter();
   const { data: agents } = useAgents();
   const { data: info } = useInfo();
+  const { data: repos } = useRepos();
+  const sidebarRepo = useUi((s) => s.repo);
   const launch = useLaunch();
+  // The sidebar's repository is the default; null until the user picks here.
+  const [picked, setPicked] = useState<string | null>(null);
   const [kind, setKind] = useState<Kind>("headless");
   const [agent, setAgent] = useState("claude");
   const [prompt, setPrompt] = useState("");
@@ -65,12 +95,15 @@ function LaunchForm({ repo }: { repo: Repo }) {
   const [volumes, setVolumes] = useState("");
   const [git, setGit] = useState(false);
 
-  const offered = (agents ?? []).filter((a) => kind !== "headless" || a.unattended);
+  const usable = (repos ?? []).filter((r) => !r.missing);
+  const repoId = picked ?? (usable.some((r) => r.id === sidebarRepo) ? sidebarRepo! : NO_REPO);
+  const repo = usable.find((r) => r.id === repoId);
   const ceiling = info?.capabilities?.network.ceiling;
+  const chosen = agents?.find((a) => a.name === agent);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    const req: LaunchRequest = { repo: repo.id, name: name || undefined, git: git || undefined };
+    const req: LaunchRequest = { repo: repo?.id, name: name || undefined, git: (repo && git) || undefined };
     if (kind === "command") req.command = splitArgs(command);
     else {
       req.agent = agent;
@@ -105,113 +138,187 @@ function LaunchForm({ repo }: { repo: Repo }) {
   }
 
   return (
-    <form onSubmit={submit} className="flex max-w-3xl flex-col gap-6">
-      <p className="text-sm text-muted-foreground">
-        On a clone of <span className="font-mono text-foreground">{repo.path}</span> at its HEAD. When the run ends, bring
-        its work back from Runs; nothing on your machine is written until you merge it.
-      </p>
+    <form onSubmit={submit} className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <div className="flex min-w-0 flex-col gap-8">
+        <Section step={1} title="Workspace">
+          <Select value={repoId} onValueChange={setPicked}>
+            <SelectTrigger className="w-full sm:w-96" aria-label="Repository">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_REPO}>No repository · an empty /workspace</SelectItem>
+              {usable.map((r) => (
+                <SelectItem key={r.id} value={r.id}>
+                  {r.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {repo ? (
+              <>
+                A clone of <span className="font-mono text-foreground">{repo.path}</span> at its HEAD. When the run ends,
+                bring its work back from Runs; nothing on your machine is written until you merge it.
+              </>
+            ) : (
+              <>Nothing is cloned in and nothing comes back. Add a repository from the sidebar to work on one.</>
+            )}
+          </p>
+        </Section>
 
-      <RadioGroup value={kind} onValueChange={(v) => setKind(v as Kind)} className="grid gap-2 sm:grid-cols-3">
-        {(
-          [
-            ["headless", "An agent, unattended", "runs the prompt to completion; only agents that never stop to ask"],
-            ["console", "An agent, interactive", "a terminal you attach to here"],
-            ["command", "A command", "anything the image can run"],
-          ] as const
-        ).map(([v, title, hint]) => (
-          <Label key={v} htmlFor={`kind-${v}`} className="flex cursor-pointer flex-col items-start gap-1 rounded-md border p-3 has-[[data-state=checked]]:border-primary">
-            <span className="flex items-center gap-2">
-              <RadioGroupItem id={`kind-${v}`} value={v} />
-              {title}
-            </span>
-            <span className="text-xs font-normal text-muted-foreground">{hint}</span>
-          </Label>
-        ))}
-      </RadioGroup>
+        <Section step={2} title="What to run">
+          <RadioGroup value={kind} onValueChange={(v) => setKind(v as Kind)} className="grid gap-2 sm:grid-cols-3">
+            {KINDS.map(([v, title, hint, Icon]) => (
+              <Label
+                key={v}
+                htmlFor={`kind-${v}`}
+                className="flex cursor-pointer flex-col items-start gap-2 rounded-lg border bg-card p-3.5 transition-colors hover:border-foreground/20 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5"
+              >
+                <span className="flex w-full items-center justify-between">
+                  <Icon className="size-4 text-muted-foreground" aria-hidden />
+                  <RadioGroupItem id={`kind-${v}`} value={v} />
+                </span>
+                <span className="text-sm font-medium">{title}</span>
+                <span className="text-xs font-normal text-muted-foreground">{hint}</span>
+              </Label>
+            ))}
+          </RadioGroup>
+        </Section>
 
-      {kind === "command" ? (
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="command">Command</Label>
-          <Input id="command" className="font-mono" placeholder="npm test" value={command} onChange={(e) => setCommand(e.target.value)} required />
-        </div>
-      ) : (
-        <>
-          <div className="flex flex-col gap-2">
-            <Label>Agent</Label>
-            <Select value={agent} onValueChange={setAgent}>
-              <SelectTrigger className="w-56">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {offered.map((a) => (
-                  <SelectItem key={a.name} value={a.name}>
-                    {a.name} {a.login === "saved" ? "· logged in" : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="prompt">{kind === "console" ? "First turn (optional)" : "Prompt"}</Label>
-            <Textarea id="prompt" rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} required={kind === "headless"} />
-          </div>
-        </>
-      )}
+        {kind === "command" ? (
+          <Section step={3} title="Command">
+            <Input id="command" aria-label="Command" className="font-mono" placeholder="npm test" value={command} onChange={(e) => setCommand(e.target.value)} required />
+          </Section>
+        ) : (
+          <Section step={3} title="Agent">
+            <div role="radiogroup" aria-label="Agent" className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+              {(agents ?? []).map((a) => {
+                const on = a.name === agent;
+                return (
+                  <button
+                    key={a.name}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    onClick={() => setAgent(a.name)}
+                    className={cn(
+                      "flex flex-col items-start gap-1 rounded-lg border bg-card px-3 py-2.5 text-left transition-colors hover:border-foreground/20",
+                      on && "border-primary bg-primary/5",
+                    )}
+                  >
+                    <span className="flex w-full items-center justify-between font-mono text-sm">
+                      {a.name}
+                      {on && <Check className="size-3.5 text-primary" aria-hidden />}
+                    </span>
+                    <span className={cn("text-[11px]", a.login === "saved" ? "text-contained" : "text-muted-foreground")}>
+                      {a.login === "saved" ? "logged in" : a.login === "not kept" ? "login not kept" : "not logged in"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <Label htmlFor="prompt" className="mt-2">
+              {kind === "console" ? "First turn (optional)" : "Prompt"}
+            </Label>
+            <Textarea
+              id="prompt"
+              rows={5}
+              placeholder={kind === "console" ? "Leave empty to start at the agent's prompt" : "What should the agent do?"}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              required={kind === "headless"}
+            />
+          </Section>
+        )}
 
-      <details className="rounded-md border p-4">
-        <summary className="cursor-pointer text-sm font-medium">Sandbox options</summary>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="name">Name</Label>
-            <Input id="name" placeholder="optional" value={name} onChange={(e) => setName(e.target.value)} />
+        <details className="group rounded-lg border bg-card">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium">
+            <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden />
+            Sandbox options
+            <span className="ml-auto text-xs font-normal text-muted-foreground">name, network, labels, volumes</span>
+          </summary>
+          <div className="grid gap-4 border-t p-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="name">Name</Label>
+              <Input id="name" placeholder="optional" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label>Network</Label>
+              <Select value={network || "default"} onValueChange={(v) => setNetwork(v === "default" ? "" : (v as NetworkMode))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">the server&apos;s default</SelectItem>
+                  <SelectItem value="none">none</SelectItem>
+                  <SelectItem value="allowlist">allowlist</SelectItem>
+                  {ceiling === "open" ? <SelectItem value="open">open</SelectItem> : null}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="allow">Also allow</Label>
+              <Input id="allow" className="font-mono" placeholder="proxy.golang.org, …" value={allow} onChange={(e) => setAllow(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="labels">Labels</Label>
+              <Input id="labels" className="font-mono" placeholder="team=infra, ticket=123" value={labels} onChange={(e) => setLabels(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="volumes">Volumes</Label>
+              <Input id="volumes" className="font-mono" placeholder="cache:/sandbox/home/.cache" value={volumes} onChange={(e) => setVolumes(e.target.value)} />
+            </div>
+            {/* Identity is for the commits of a cloned repository; with none
+                there is nothing to commit to. */}
+            {repo && (
+              <Label className="flex items-center gap-2 self-end text-sm font-normal">
+                <Checkbox checked={git} onCheckedChange={(v) => setGit(v === true)} />
+                Commit with my git name and email
+              </Label>
+            )}
           </div>
-          <div className="flex flex-col gap-2">
-            <Label>Network</Label>
-            <Select value={network || "default"} onValueChange={(v) => setNetwork(v === "default" ? "" : (v as NetworkMode))}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="default">the server&apos;s default</SelectItem>
-                <SelectItem value="none">none</SelectItem>
-                <SelectItem value="allowlist">allowlist</SelectItem>
-                {ceiling === "open" ? <SelectItem value="open">open</SelectItem> : null}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="allow">Also allow</Label>
-            <Input id="allow" className="font-mono" placeholder="proxy.golang.org, …" value={allow} onChange={(e) => setAllow(e.target.value)} />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="labels">Labels</Label>
-            <Input id="labels" className="font-mono" placeholder="team=infra, ticket=123" value={labels} onChange={(e) => setLabels(e.target.value)} />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="volumes">Volumes</Label>
-            <Input id="volumes" className="font-mono" placeholder="cache:/sandbox/home/.cache" value={volumes} onChange={(e) => setVolumes(e.target.value)} />
-          </div>
-          <Label className="flex items-center gap-2 self-end text-sm font-normal">
-            <Checkbox checked={git} onCheckedChange={(v) => setGit(v === true)} />
-            Commit with my git name and email
-          </Label>
-        </div>
-      </details>
-
-      <div>
-        <Button type="submit" disabled={launch.isPending}>
-          {launch.isPending ? "Starting…" : "Launch"}
-        </Button>
+        </details>
       </div>
+
+      <Card className="surface-sheen gap-0 py-0 lg:sticky lg:top-20">
+        <CardContent className="flex flex-col gap-4 p-4">
+          <h2 className="text-sm font-semibold">This run</h2>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
+            <dt className="text-muted-foreground">Workspace</dt>
+            <dd className="flex min-w-0 items-center gap-1.5 truncate">
+              {repo ? <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden /> : null}
+              <span className="truncate">{repo ? repo.name : "empty"}</span>
+            </dd>
+            <dt className="text-muted-foreground">Runs</dt>
+            <dd className="truncate font-mono text-[13px]">
+              {kind === "command" ? command || "—" : `${agent}${kind === "console" ? " (console)" : ""}`}
+            </dd>
+            <dt className="text-muted-foreground">Network</dt>
+            <dd className="font-mono text-[13px]">{network || info?.capabilities?.network.default.mode || "default"}</dd>
+            {kind !== "command" && (
+              <>
+                <dt className="text-muted-foreground">Login</dt>
+                <dd className={chosen?.login === "saved" ? "text-contained" : "text-muted-foreground"}>
+                  {chosen?.login === "saved" ? "saved" : chosen?.login === "not kept" ? "not kept" : "not yet"}
+                </dd>
+              </>
+            )}
+          </dl>
+          <Button type="submit" disabled={launch.isPending} className="w-full shadow-sm shadow-primary/20">
+            {launch.isPending ? "Starting…" : "Launch"}
+          </Button>
+          <p className="text-xs text-muted-foreground">Your config, profile and the server&apos;s policy apply. A control that cannot be delivered refuses the run.</p>
+        </CardContent>
+      </Card>
     </form>
   );
 }
 
 export default function LaunchPage() {
   return (
-    <div className="flex flex-col gap-4">
-      <PageHeader title="Launch" description="A fresh sandbox on a clone of the repository, with your config, profile and the server's policy applied." />
-      <RepoGate>{(repo) => <LaunchForm repo={repo} />}</RepoGate>
+    <div className="flex flex-col gap-6">
+      <PageHeader title="Launch" description="A fresh microVM sandbox for an agent or a command, on a clone of a repository or an empty workspace." />
+      <LaunchForm />
     </div>
   );
 }

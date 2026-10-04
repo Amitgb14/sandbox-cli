@@ -28,7 +28,7 @@ export function AppHeader() {
   const setPaletteOpen = useUi((s) => s.setPaletteOpen);
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur-md">
+    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/70 px-4 backdrop-blur-xl md:px-6">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="mr-1 h-4" />
 
@@ -67,11 +67,11 @@ export function AppHeader() {
           variant="outline"
           size="sm"
           onClick={() => setPaletteOpen(true)}
-          className="h-8 gap-2 text-muted-foreground"
+          className="h-8 w-40 justify-start gap-2 bg-muted/40 text-muted-foreground max-sm:w-auto"
         >
           <Search className="size-3.5" />
           <span className="hidden sm:inline">Search…</span>
-          <kbd className="ml-1 hidden rounded border bg-muted px-1 font-mono text-[10px] sm:inline">
+          <kbd className="ml-auto hidden rounded border bg-background px-1 font-mono text-[10px] sm:inline">
             ⌘K
           </kbd>
         </Button>

@@ -54,8 +54,12 @@ export function MetricTile({
     <Card className={cn("surface-sheen relative gap-0 overflow-hidden py-4", className)}>
       <CardContent className="px-4">
         <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            {Icon && <Icon className="size-3.5" aria-hidden />}
+          <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            {Icon && (
+              <span className="flex size-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <Icon className="size-3.5" aria-hidden />
+              </span>
+            )}
             <span>{label}</span>
           </div>
           {hint && (
@@ -73,7 +77,7 @@ export function MetricTile({
           )}
         </div>
 
-        <div className="mt-2 flex items-baseline gap-1.5">
+        <div className="mt-3 flex items-baseline gap-1.5">
           {loading ? (
             <Skeleton className="h-8 w-20" />
           ) : (

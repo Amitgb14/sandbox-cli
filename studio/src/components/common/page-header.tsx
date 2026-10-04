@@ -14,12 +14,12 @@ export function PageHeader({
   children?: React.ReactNode;
 }) {
   return (
-    <div className={cn("flex flex-col gap-4", className)}>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 space-y-1">
-          <h1 className="truncate text-2xl font-semibold tracking-tight">{title}</h1>
+    <div className={cn("flex flex-col gap-4 pb-2", className)}>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0 space-y-1.5">
+          <h1 className="truncate text-[1.75rem] leading-tight font-semibold tracking-tight">{title}</h1>
           {description && (
-            <p className="max-w-3xl text-sm text-muted-foreground">{description}</p>
+            <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{description}</p>
           )}
         </div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
@@ -43,7 +43,7 @@ export function SectionHeader({
   return (
     <div className={cn("flex items-end justify-between gap-4", className)}>
       <div className="space-y-0.5">
-        <h2 className="text-sm font-medium">{title}</h2>
+        <h2 className="text-sm font-semibold">{title}</h2>
         {description && <p className="text-xs text-muted-foreground">{description}</p>}
       </div>
       {actions}
