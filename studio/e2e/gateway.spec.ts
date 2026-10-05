@@ -208,7 +208,10 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
   expect(html).not.toContain(e2eState().dir);
   await page.getByRole("button", { name: "Actions for n1" }).click();
   await page.getByRole("menuitem", { name: "Cordon" }).click();
-  await expect(page.locator("main").getByText("Cordoned")).toBeVisible();
+  // Exact: the page's description says "A cordoned node…", and a substring
+  // match found it and the badge both, failing before the uncordon below —
+  // which left the node cordoned for every test after this one.
+  await expect(page.locator("main").getByText("Cordoned", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Actions for n1" }).click();
   await page.getByRole("menuitem", { name: "Uncordon" }).click();
   await expect(page.locator("main").getByText("Healthy")).toBeVisible();
