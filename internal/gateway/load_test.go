@@ -27,7 +27,18 @@ func TestLoadThousandConcurrentCreates(t *testing.T) {
 		n.capacity = api.NodeResources{CPUs: 400, MemoryMB: 400 << 10, DiskMB: 1 << 30}
 		nodes = append(nodes, n)
 	}
-	tg := startGateway(t, func(c *Config) { c.Quota = Quota{Sandboxes: total} }, nodes...)
+	// A node's last exact Free is held for maxHeldFree polls while creates
+	// are in flight, then taken anyway, counting those twice. At the
+	// harness's 100ms that is one second, which a burst under -race on a
+	// shared runner outlasts, and the nodes' last 70-odd slots each look
+	// taken: a few creates were refused "no node has room". A one-second
+	// poll gives the burst ten, as the default five-second poll gives a
+	// real one fifty. What this test checks, that reservations spread a
+	// burst between two polls, is the same either way.
+	tg := startGateway(t, func(c *Config) {
+		c.Quota = Quota{Sandboxes: total}
+		c.PollInterval = time.Second
+	}, nodes...)
 	secret, _, err := tg.store.CreateKey("load", "bench", []string{ScopeCreate, ScopeRead})
 	if err != nil {
 		t.Fatal(err)
