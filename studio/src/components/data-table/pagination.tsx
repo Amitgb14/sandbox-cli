@@ -20,9 +20,12 @@ import { pluralize } from "@/lib/format";
 export function DataTablePagination<TData>({
   table,
   noun = "run",
+  nouns,
 }: {
   table: Table<TData>;
   noun?: string;
+  /** The plural, where adding an s is wrong: "sandboxes". */
+  nouns?: string;
 }) {
   const selected = table.getFilteredSelectedRowModel().rows.length;
   const total = table.getFilteredRowModel().rows.length;
@@ -32,7 +35,7 @@ export function DataTablePagination<TData>({
       <p className="text-xs text-muted-foreground tabular-nums">
         {selected > 0
           ? `${selected} of ${total} selected`
-          : `${pluralize(total, noun)}`}
+          : `${pluralize(total, noun, nouns)}`}
       </p>
 
       <div className="flex items-center gap-4">

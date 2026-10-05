@@ -1,14 +1,13 @@
 "use client";
 
-import { Cpu, Globe, HardDrive, ListTree, Timer } from "lucide-react";
+import { useState } from "react";
+import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Labels } from "@/components/sandbox/labels";
+import { ResourceChips } from "@/components/sandbox/resource-chips";
+import { StateDot } from "@/components/sandbox/state-dot";
 import { formatArgv, formatDateTime, formatRelative } from "@/lib/format";
 import type { Process, Sandbox } from "@/lib/types";
-
-function mib(n: number): string {
-  return n >= 1024 ? `${+(n / 1024).toFixed(1)} GiB` : `${n} MiB`;
-}
 
 function idle(secs: number): string {
   if (!secs) return "never";
@@ -17,34 +16,59 @@ function idle(secs: number): string {
   return `${secs} s`;
 }
 
-function Panel({ icon: Icon, title, children }: { icon: React.ComponentType<{ className?: string }>; title: string; children: React.ReactNode }) {
+function Section({ title, aside, children }: { title?: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <Card className="surface-sheen gap-0 py-0">
-      <CardContent className="flex flex-col gap-3 p-4">
-        <h3 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Icon className="size-3.5" />
-          {title}
-        </h3>
-        {children}
-      </CardContent>
-    </Card>
+    <section className="flex flex-col gap-2.5 border-b px-5 py-4 last:border-b-0">
+      {title ? (
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">{title}</h3>
+          {aside}
+        </div>
+      ) : null}
+      {children}
+    </section>
   );
 }
 
-function Row({ k, children }: { k: string; children: React.ReactNode }) {
+function Row({ k, copy, children }: { k: string; copy?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 text-sm">
-      <dt className="text-muted-foreground">{k}</dt>
-      <dd className="min-w-0 truncate text-right font-mono text-[13px]">{children}</dd>
+    <div className="flex min-h-6 items-center justify-between gap-4 text-sm">
+      <dt className="shrink-0 text-muted-foreground">{k}</dt>
+      <dd className="flex min-w-0 items-center justify-end gap-1">
+        <span className="min-w-0 truncate text-right">{children}</span>
+        {copy ? <CopyButton value={copy} label={`Copy ${k.toLowerCase()}`} className="size-6 shrink-0" /> : null}
+      </dd>
     </div>
   );
 }
 
+function Network({ sb }: { sb: Sandbox }) {
+  const [open, setOpen] = useState(false);
+  const allow = sb.network.allow ?? [];
+  return (
+    <>
+      <Row k="Network">
+        <span className="font-mono text-[13px]">{sb.network.mode}</span>
+        {sb.network.mode === "allowlist" ? (
+          <button type="button" onClick={() => setOpen(!open)} className="ml-2 text-xs text-muted-foreground underline-offset-2 hover:underline">
+            {allow.length} {allow.length === 1 ? "name" : "names"}
+          </button>
+        ) : null}
+      </Row>
+      {open && allow.length ? (
+        <p className="rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px] leading-relaxed break-all text-muted-foreground">{allow.join(", ")}</p>
+      ) : null}
+      {sb.network.deny?.length ? <Row k="Denied">{sb.network.deny.length} names</Row> : null}
+    </>
+  );
+}
+
 /**
- * What a sandbox is: what it was given, what it may reach, how long it lives,
- * what is mounted in it, and what has run. Everything here is the API's own
- * record of the sandbox; resources are allocations, not live usage, which
- * this sandboxd does not report.
+ * What a sandbox is, in sections a reader can scan down: what it is, what it
+ * was given, how long it lives, how it is labelled, what is in its
+ * environment and mounted in it, and what has run. Everything here is the
+ * API's own record of the sandbox; resources are allocations, not live usage,
+ * which sandboxd does not report.
  */
 export function SandboxOverview({
   sb,
@@ -55,92 +79,98 @@ export function SandboxOverview({
   processes: Process[];
   onLogs: (pid: number) => void;
 }) {
+  const labels = Object.keys(sb.labels ?? {}).length;
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid gap-3 md:grid-cols-3">
-        <Panel icon={Cpu} title="Resources">
-          <dl className="flex flex-col gap-1.5">
-            <Row k="vCPU">{sb.cpus}</Row>
-            <Row k="Memory">{mib(sb.memory_mb)}</Row>
-            <Row k="Disk">{mib(sb.disk_mb)}</Row>
-            <Row k="Image">
-              <span title={sb.image}>{sb.image}</span>
-            </Row>
-          </dl>
-        </Panel>
-        <Panel icon={Globe} title="Network">
-          <dl className="flex flex-col gap-1.5">
-            <Row k="Mode">{sb.network.mode}</Row>
-            {sb.network.mode === "allowlist" ? <Row k="Allowed">{sb.network.allow?.length ?? 0} names</Row> : null}
-            {sb.network.deny?.length ? <Row k="Denied">{sb.network.deny.length} names</Row> : null}
-          </dl>
-          {sb.network.allow?.length ? (
-            <p className="line-clamp-3 font-mono text-[11px] leading-relaxed text-muted-foreground">{sb.network.allow.join(", ")}</p>
-          ) : null}
-        </Panel>
-        <Panel icon={Timer} title="Lifecycle">
-          <dl className="flex flex-col gap-1.5">
-            <Row k="State">
-              <StatusBadge outcome={sb.state} size="sm" />
-            </Row>
-            <Row k="Started">
-              <span title={formatDateTime(sb.created_at)}>{formatRelative(sb.created_at)}</span>
-            </Row>
-            <Row k="Idle timeout">{idle(sb.idle_timeout_secs)}</Row>
-            <Row k="Starts in">/sandbox/home</Row>
-          </dl>
-        </Panel>
-      </div>
+    <div className="flex flex-col">
+      <Section>
+        <dl className="flex flex-col gap-1.5">
+          <Row k="ID" copy={sb.id}>
+            <span className="font-mono text-[13px]">{sb.id}</span>
+          </Row>
+          <Row k="Image" copy={sb.image}>
+            <span className="font-mono text-[13px]" title={sb.image}>
+              {sb.image}
+            </span>
+          </Row>
+          <Network sb={sb} />
+          <Row k="Starts in">
+            <span className="font-mono text-[13px]">/sandbox/home</span>
+          </Row>
+        </dl>
+      </Section>
 
-      {(sb.volumes?.length || sb.env_names?.length) ? (
-        <div className="grid gap-3 md:grid-cols-2">
-          <Panel icon={HardDrive} title="Volumes">
-            {sb.volumes?.length ? (
-              <dl className="flex flex-col gap-1.5">
-                {sb.volumes.map((v) => (
-                  <Row key={v.name} k={v.name}>
-                    {v.path}
-                    {v.read_only ? " (read-only)" : ""}
-                  </Row>
-                ))}
-              </dl>
-            ) : (
-              <p className="text-sm text-muted-foreground">None mounted.</p>
-            )}
-          </Panel>
-          <Panel icon={ListTree} title="Environment">
-            {/* Names only: the API never returns a value, and neither does this. */}
-            {sb.env_names?.length ? (
-              <p className="font-mono text-[12px] leading-relaxed">{sb.env_names.join("  ")}</p>
-            ) : (
-              <p className="text-sm text-muted-foreground">No variables set.</p>
-            )}
-          </Panel>
-        </div>
+      <Section title="Resources">
+        <ResourceChips sb={sb} />
+      </Section>
+
+      <Section title="Lifecycle">
+        <dl className="flex flex-col gap-1.5">
+          <Row k="State">
+            <StateDot state={sb.state} />
+          </Row>
+          <Row k="Created">
+            <span title={formatDateTime(sb.created_at)}>{formatRelative(sb.created_at)}</span>
+          </Row>
+          <Row k="Idle auto-stop">{idle(sb.idle_timeout_secs)}</Row>
+        </dl>
+      </Section>
+
+      {labels ? (
+        <Section title="Labels">
+          <Labels labels={sb.labels} />
+        </Section>
       ) : null}
 
-      <Panel icon={ListTree} title="Processes">
+      {sb.env_names?.length ? (
+        <Section title="Environment">
+          {/* Names only: the API never returns a value, and neither does this. */}
+          <div className="flex flex-wrap gap-1">
+            {sb.env_names.map((n) => (
+              <span key={n} className="rounded-md border px-1.5 py-0.5 font-mono text-[11px]">
+                {n}
+              </span>
+            ))}
+          </div>
+        </Section>
+      ) : null}
+
+      {sb.volumes?.length ? (
+        <Section title="Volumes">
+          <dl className="flex flex-col gap-1.5">
+            {sb.volumes.map((v) => (
+              <Row key={v.name} k={v.name}>
+                <span className="font-mono text-[13px]">
+                  {v.path}
+                  {v.read_only ? " (read-only)" : ""}
+                </span>
+              </Row>
+            ))}
+          </dl>
+        </Section>
+      ) : null}
+
+      <Section title="Processes" aside={processes.length ? <span className="text-xs text-muted-foreground tabular-nums">{processes.length}</span> : null}>
         {processes.length ? (
           <div className="flex flex-col divide-y">
             {[...processes].reverse().map((p) => (
-              <div key={p.pid} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
-                <span className="w-10 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{p.pid}</span>
-                <span className="min-w-0 flex-1 truncate font-mono text-xs" title={formatArgv(p.argv)}>
-                  {formatArgv(p.argv)}
-                </span>
-                {p.tty ? <span className="text-[11px] text-muted-foreground">terminal</span> : null}
+              <button
+                type="button"
+                key={p.pid}
+                onClick={() => onLogs(p.pid)}
+                title="Show its logs"
+                className="flex items-center gap-3 py-1.5 text-left first:pt-0 last:pb-0 hover:text-foreground"
+              >
+                <span className="w-8 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{p.pid}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">{formatArgv(p.argv)}</span>
                 <StatusBadge outcome={p.state} exitCode={p.exit_code} size="sm" />
-                <span className="hidden w-20 text-right text-xs text-muted-foreground sm:block">{formatRelative(p.started_at)}</span>
-                <button type="button" onClick={() => onLogs(p.pid)} className="text-xs text-muted-foreground hover:text-foreground">
-                  logs →
-                </button>
-              </div>
+                <span className="hidden w-16 text-right text-xs text-muted-foreground sm:block">{formatRelative(p.started_at)}</span>
+              </button>
             ))}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">Nothing has run in this sandbox yet.</p>
         )}
-      </Panel>
+      </Section>
     </div>
   );
 }

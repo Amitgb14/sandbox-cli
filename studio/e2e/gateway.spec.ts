@@ -83,6 +83,19 @@ test("a tenant key sees the tenant screens and not the admin ones, by sidebar or
   await expect(page.getByTestId("account-org")).toHaveText("team-a");
 });
 
+test("the sandbox list on a gateway sums what was given, and never asks for a node's status", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  const seen = record(page);
+  await page.goto(`${base}/sandboxes/`);
+  await expect(page.locator("main h1")).toHaveText("Sandboxes");
+  await page.waitForTimeout(1500);
+  // Totals from the list, with no capacity to measure them against.
+  if (await page.getByText("vCPU given").count()) {
+    await expect(page.getByRole("meter")).toHaveCount(0);
+  }
+  expect(seen.filter((p) => p === "/api/v1/node")).toEqual([]);
+});
+
 test("a tenant submits a job and reads its output", async ({ page }) => {
   const base = await open(page, "gw-tenant", "alice@team-a");
   await page.goto(`${base}/jobs/`);

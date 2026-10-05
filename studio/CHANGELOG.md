@@ -10,6 +10,23 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **A sandbox opens beside the list.** A click on a row slides its details in
+  from the right: who it is and its actions at the top, then its overview in
+  sections (id, image, network, resources, lifecycle, labels, environment
+  names, volumes, processes) and its Terminal, Logs, Files and Events. Its up
+  and down buttons step through the list as it is filtered and sorted; *Widen* puts the
+  overview beside the tabs, and *Open as a page* is the same view at
+  `/sandbox?id=`, two panes on a wide screen. The row's terminal button opens
+  the panel with a shell already started.
+- **The sandbox list.** Above it, how many sandboxes are running and the vCPU,
+  memory and disk given to them, against the machine's capacity where the
+  endpoint reports it (`GET /v1/node`); a gateway that does not gives totals.
+  These are allocations, not live usage, which sandboxd does not report. Each
+  row shows its state as a dot and its resources as chips; the State filter
+  takes several states at once with a count for each; columns sort and hide;
+  the list pages; and selected sandboxes are terminated together. The Agent
+  column shows only where a sandbox runs one.
+
 - **Organizations on a gateway.** The top of the sidebar is an organization
   switcher: the key's own tenant and every organization you belong to, with a
   check on the current one, *Create organization* (with `org:create`; the name

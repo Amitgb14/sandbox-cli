@@ -104,6 +104,23 @@ export interface Snapshot {
 }
 
 /** GET /api/info */
+/** What a sandboxd has for sandboxes (GET /v1/node): allocations, not live usage. */
+export interface NodeResources {
+  cpus: number;
+  memory_mb: number;
+  disk_mb: number;
+}
+
+export interface NodeStatus {
+  node: string;
+  version: string;
+  capacity: NodeResources;
+  /** Capacity less what running and suspended sandboxes were given. */
+  free: NodeResources;
+  running: number;
+  cordoned: boolean;
+}
+
 export interface Info {
   context: string;
   version: string;
