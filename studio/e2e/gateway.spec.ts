@@ -83,6 +83,19 @@ test("a tenant key sees the tenant screens and not the admin ones, by sidebar or
   await expect(page.getByTestId("account-org")).toHaveText("team-a");
 });
 
+test("the sandbox list on a gateway sums what was given, and never asks for a node's status", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  const seen = record(page);
+  await page.goto(`${base}/sandboxes/`);
+  await expect(page.locator("main h1")).toHaveText("Sandboxes");
+  await page.waitForTimeout(1500);
+  // Totals from the list, with no capacity to measure them against.
+  if (await page.getByText("vCPU given").count()) {
+    await expect(page.getByRole("meter")).toHaveCount(0);
+  }
+  expect(seen.filter((p) => p === "/api/v1/node")).toEqual([]);
+});
+
 test("a tenant submits a job and reads its output", async ({ page }) => {
   const base = await open(page, "gw-tenant", "alice@team-a");
   await page.goto(`${base}/jobs/`);
@@ -195,7 +208,10 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
   expect(html).not.toContain(e2eState().dir);
   await page.getByRole("button", { name: "Actions for n1" }).click();
   await page.getByRole("menuitem", { name: "Cordon" }).click();
-  await expect(page.locator("main").getByText("Cordoned")).toBeVisible();
+  // Exact: the page's description says "A cordoned node…", and a substring
+  // match found it and the badge both, failing before the uncordon below —
+  // which left the node cordoned for every test after this one.
+  await expect(page.locator("main").getByText("Cordoned", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Actions for n1" }).click();
   await page.getByRole("menuitem", { name: "Uncordon" }).click();
   await expect(page.locator("main").getByText("Healthy")).toBeVisible();

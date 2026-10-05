@@ -41,19 +41,63 @@ test("a sandbox started elsewhere is listed, labelled, and has events", async ({
   await expect(page.getByText("e2e · fake")).toBeVisible();
   await page.goto("/sandboxes/");
   await expect(page.getByText("suite=studio-e2e")).toBeVisible();
-  await page.getByRole("link", { name: created.id }).click();
-  await expect(page.getByRole("heading", { name: created.id })).toBeVisible();
+  // A click on the row opens it in a panel beside the list.
+  await page.getByRole("row").filter({ hasText: created.id }).getByText(created.id).click();
+  const panel = page.getByRole("dialog");
+  await expect(panel.getByRole("heading", { name: created.id })).toBeVisible();
   // A running sandbox can be connected to from here, as from sandbox-cli shell.
-  await expect(page.getByRole("button", { name: "Terminal" })).toBeVisible();
-  await page.getByRole("tab", { name: "Overview" }).click();
-  await expect(page.getByText("echo hi")).toBeVisible();
-  await page.getByRole("tab", { name: "Logs" }).click();
-  await expect(page.getByText("hi", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Events" }).click();
-  await expect(page.getByText("process.exited")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Terminal", exact: true })).toBeVisible();
+  await panel.getByRole("tab", { name: "Overview" }).click();
+  await expect(panel.getByText("echo hi")).toBeVisible();
+  await panel.getByRole("tab", { name: "Logs" }).click();
+  await expect(panel.getByText("hi", { exact: true })).toBeVisible();
+  await panel.getByRole("tab", { name: "Events" }).click();
+  await expect(panel.getByText("process.exited")).toBeVisible();
+
+  // The same details, as a page of their own.
+  await panel.getByRole("link", { name: "Open as a page" }).click();
+  await expect(page).toHaveURL(/\/sandbox\/?\?id=sbx_/);
+  await expect(page.getByRole("heading", { level: 1, name: created.id })).toBeVisible();
+  // Wide, the overview is beside the tabs rather than one of them.
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveCount(0);
+  await expect(page.getByText("echo hi").first()).toBeVisible();
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Terminate" }).click();
   await expect(page).toHaveURL(/\/sandboxes\//);
+});
+
+test("the list sums what sandboxes were given, walks them in its panel, and terminates a selection", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
+  const a = await (await api("/v1/sandboxes", "POST", { name: "walk-a", cpus: 2, memory_mb: 2048 })).json();
+  const b = await (await api("/v1/sandboxes", "POST", { name: "walk-b" })).json();
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  // Allocations from the node, against its capacity.
+  await expect(page.getByRole("meter", { name: "vCPU given" })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "walk-a" }).getByText("2 vCPU")).toBeVisible();
+
+  await page.getByPlaceholder(/Search/).fill("walk-");
+  await page.getByRole("row").filter({ hasText: "walk-b" }).getByText("walk-b").click();
+  const panel = page.getByRole("dialog");
+  await expect(panel.getByRole("heading", { name: "walk-b" })).toBeVisible();
+  // Newest first: walk-b, then walk-a.
+  await panel.getByRole("button", { name: "Next sandbox" }).click();
+  await expect(panel.getByRole("heading", { name: "walk-a" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Next sandbox" })).toBeDisabled();
+  await panel.getByRole("button", { name: "Close" }).click();
+  await expect(panel).toHaveCount(0);
+
+  await page.getByRole("checkbox", { name: "Select all on this page" }).click();
+  await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "Terminate 2" }).click();
+  await expect(page.getByText("Terminated 2")).toBeVisible();
+  for (const s of [a, b]) {
+    expect((await (await api(`/v1/sandboxes/${s.id}`)).json()).state).toBe("terminated");
+  }
 });
 
 test("Agents lists only the verified agents, and Launch starts a sandbox", async ({ page }) => {
@@ -109,8 +153,9 @@ test("the Playground writes the same sandbox as code, and the list filters by st
   await api(`/v1/sandboxes/${gone.id}`, "DELETE");
   await page.goto("/sandboxes/");
   await page.getByPlaceholder(/Search/).fill("filter-");
-  await page.getByRole("combobox", { name: "State" }).click();
-  await page.getByRole("option", { name: "Running" }).click();
+  await page.getByRole("button", { name: "State" }).click();
+  await page.getByRole("option", { name: /Running/ }).click();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("filter-keep")).toBeVisible();
   await expect(page.getByText("filter-gone")).toHaveCount(0);
   await api(`/v1/sandboxes/${keep.id}`, "DELETE");

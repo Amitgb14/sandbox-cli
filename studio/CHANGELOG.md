@@ -10,6 +10,38 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **A sandbox opens beside the list.** A click on a row slides its details in
+  from the right: who it is and its actions at the top, then its overview in
+  sections (id, image, network, resources, lifecycle, labels, environment
+  names, volumes, processes) and its Terminal, Logs, Files and Events. Its up
+  and down buttons step through the list as it is filtered and sorted; *Widen* puts the
+  overview beside the tabs, and *Open as a page* is the same view at
+  `/sandbox?id=`, two panes on a wide screen. The row's terminal button opens
+  the panel with a shell already started.
+- **Terminals are kept, not multiplied.** *Terminal* goes back to the shell
+  already open and starts one only when there is none; it used to start a new
+  shell on every click. The Terminal tab lists every process with a terminal —
+  an agent's console and each shell — to attach to any of them, and *New
+  shell* starts another. An agent's sandbox opens on its console. A click on
+  such a process in the overview attaches to it instead of showing its output
+  as lines, and its Logs say why that output reads poorly. Logs drop the
+  cursor moves, erases and mode switches a terminal program writes, which
+  showed as boxes and brackets, and keep its colours.
+- **What an agent is doing, under its sandbox's state.** A running sandbox
+  with an agent says whether it is working, waiting for you, idle, done or
+  failed (the same check as `sandbox-cli agent state`; the reason on hover),
+  in the list and the panel; that replaces the Agent column. The panel shows
+  *Interactive* when a process there has a terminal, with how many, and a
+  click on it opens the Terminal tab; such a process is *Interactive* in the
+  process list rather than a spinner.
+- **The sandbox list.** Above it, how many sandboxes are running and the vCPU,
+  memory and disk given to them, against the machine's capacity where the
+  endpoint reports it (`GET /v1/node`); a gateway that does not gives totals.
+  These are allocations, not live usage, which sandboxd does not report. Each
+  row shows its state as a dot and its resources as chips; the State filter
+  takes several states at once with a count for each; columns sort and hide;
+  the list pages; and selected sandboxes are terminated together.
+
 - **Organizations on a gateway.** The top of the sidebar is an organization
   switcher: the key's own tenant and every organization you belong to, with a
   check on the current one, *Create organization* (with `org:create`; the name

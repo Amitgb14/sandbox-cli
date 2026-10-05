@@ -17,6 +17,7 @@ import type {
   LaunchRequest,
   LaunchResult,
   NetworkPolicy,
+  NodeStatus,
   Process,
   Sandbox,
   Snapshot,
@@ -27,6 +28,7 @@ const sbx = (id: string) => `/v1/sandboxes/${encodeURIComponent(id)}`;
 
 export const keys = {
   info: ["info"] as const,
+  node: ["node"] as const,
   sandboxes: ["sandboxes"] as const,
   sandbox: (id: string) => ["sandbox", id] as const,
   processes: (id: string) => ["processes", id] as const,
@@ -42,6 +44,21 @@ export const keys = {
 
 export function useInfo() {
   return useQuery({ queryKey: keys.info, queryFn: () => apiFetch<Info>("/info"), refetchInterval: 30_000 });
+}
+
+/**
+ * The machine's capacity and what is free of it: a plain sandboxd's. A
+ * gateway has no such endpoint, so callers enable this only once whoami says
+ * this is not one, and a refusal is still an answer, not an error to retry.
+ */
+export function useNode(enabled = true) {
+  return useQuery({
+    queryKey: keys.node,
+    queryFn: () => apiFetch<NodeStatus>("/v1/node"),
+    enabled,
+    refetchInterval: 10_000,
+    retry: false,
+  });
 }
 
 export function useSandboxes() {
@@ -183,13 +200,16 @@ export function useUpdateNetwork() {
  * the same process `sandbox-cli shell` starts — bash where the image has it,
  * sh otherwise, in the sandbox user's home.
  */
+/** The shell Studio opens: bash if the image has it, else sh, as a login shell. */
+export const SHELL_ARGV = ["/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"];
+
 export function useOpenShell() {
   return useInvalidating(
     ({ id, rows, cols }: { id: string; rows: number; cols: number }) =>
       apiFetch<Process>(`${sbx(id)}/processes`, {
         method: "POST",
         json: {
-          argv: ["/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"],
+          argv: SHELL_ARGV,
           cwd: "/sandbox/home",
           tty: true,
           rows,
