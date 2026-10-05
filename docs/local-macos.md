@@ -61,7 +61,10 @@ agent fails with `Bootstrap failed: 5: Input/output error`:
 launchctl kickstart -k gui/$(id -u)/dev.sandbox.sandboxd
 ```
 
-If you installed the launch agent from an earlier build, copy it again: that one
+If you installed the launch agent from an earlier build, copy it again. An
+older plist sets no `PATH`, so under launchd `sandboxd` cannot find the
+`container` CLI in `/usr/local/bin` and exits, and `/tmp/sandboxd.log` fills
+with `the container CLI: executable file not found in $PATH`. An even older one
 passes `--allow-bind`, which `sandboxd` no longer has, so it refuses to start
 rather than run with a flag it does not understand.
 
@@ -74,6 +77,11 @@ sandbox-cli doctor                          # reaches sandboxd and lists what it
 sandbox-cli run --network none -- uname -a  # a first sandbox: prints an aarch64 Linux kernel
 tail -f /tmp/sandboxd.log                   # sandboxd's log, if either fails
 ```
+
+**Another sandboxd beside it** (a dev build, say) needs its own
+`--state-dir` and `--listen`. Two sharing a state directory take each
+other's sandboxes for their own leftovers, and each one starting removes the
+other's.
 
 **Upgrading.** `git pull && make build`, install the two binaries again as
 above, then `launchctl kickstart -k gui/$(id -u)/dev.sandbox.sandboxd`.
