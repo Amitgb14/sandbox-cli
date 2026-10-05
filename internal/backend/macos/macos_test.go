@@ -3,6 +3,7 @@ package macos
 import (
 	"context"
 	"flag"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -54,7 +55,7 @@ func TestBuildRunArgsGolden(t *testing.T) {
 	} {
 		s := base
 		c.mod(&s)
-		args, err := BuildRunArgs(s, "/usr/local/libexec/sandboxd")
+		args, err := BuildRunArgs(s, "/usr/local/libexec/sandboxd", "0123456789abcdef")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,7 +68,7 @@ func TestBuildRunArgsGolden(t *testing.T) {
 // An allowlist this backend cannot enforce is refused, never rendered open.
 func TestBuildRunArgsRefusesAnAllowlist(t *testing.T) {
 	s := backend.Spec{ID: "sbx_1", Image: "img", Network: api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com"}}}
-	if _, err := BuildRunArgs(s, "/agent"); err == nil {
+	if _, err := BuildRunArgs(s, "/agent", "me"); err == nil {
 		t.Fatal("an allowlist was rendered")
 	}
 }
@@ -148,7 +149,7 @@ func TestConformanceThroughAFakeRuntime(t *testing.T) {
 	t.Setenv("FAKE_ROOT", roots)
 	t.Setenv("FAKE_AGENT", agent)
 
-	be, err := New(Config{Container: script, Agent: agent, Logf: t.Logf})
+	be, err := New(Config{Container: script, Agent: agent, Logf: t.Logf, Owner: "me"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestBuildRunArgsCarryNoEnvironmentValue(t *testing.T) {
 	const secret = "s3cret-value-in-env"
 	s := backend.Spec{ID: "sbx_0123456789abcdef", Image: "img:1", Env: map[string]string{"API_TOKEN": secret},
 		Network: api.NetworkPolicy{Mode: api.NetworkNone}}
-	args, err := BuildRunArgs(s, "/agent")
+	args, err := BuildRunArgs(s, "/agent", "me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,8 +189,10 @@ func TestBuildRunArgsCarryNoEnvironmentValue(t *testing.T) {
 
 // The runtime is shared with whatever else the user runs in it, so this
 // backend removes only what it started: on startup, the containers carrying
-// its label that an earlier sandboxd left; afterwards, only ids it created. A
-// reference to someone's `postgres` never becomes a `container rm`.
+// its own owner label that an earlier run of it left; afterwards, only ids it
+// created. The runtime is shared by every sandboxd on the Mac, so a sandbox
+// another one is running, and one from a build before owner labels, are left
+// alone. A reference to someone's `postgres` never becomes a `container rm`.
 func TestOnlyItsOwnContainersAreRemoved(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("a shell script stands in for the runtime")
@@ -200,12 +203,15 @@ func TestOnlyItsOwnContainersAreRemoved(t *testing.T) {
 	os.WriteFile(script, []byte(`#!/bin/sh
 echo "$*" >> "`+logf+`"
 case "$1" in
-ls) echo '[{"configuration":{"id":"sbx_left","labels":{"sbx.managed":"1"}}},{"configuration":{"id":"postgres","labels":{"app":"db"}}}]' ;;
+ls) echo '[{"configuration":{"id":"sbx_left","labels":{"sbx.managed":"1","sbx.owner":"me"}}},{"configuration":{"id":"sbx_theirs","labels":{"sbx.managed":"1","sbx.owner":"other"}}},{"configuration":{"id":"sbx_unlabelled","labels":{"sbx.managed":"1"}}},{"configuration":{"id":"postgres","labels":{"app":"db"}}}]' ;;
 esac
 `), 0o755)
 	agent := filepath.Join(work, "sandbox-guestd")
 	os.WriteFile(agent, []byte("x"), 0o755)
-	be, err := New(Config{Container: script, Agent: agent, Logf: t.Logf})
+	var logged strings.Builder
+	be, err := New(Config{Container: script, Agent: agent, Owner: "me", Logf: func(f string, a ...any) {
+		fmt.Fprintf(&logged, f+"\n", a...)
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +223,42 @@ esac
 	if !strings.Contains(string(calls), "rm --force sbx_left") {
 		t.Errorf("a sandbox an earlier run left was not removed:\n%s", calls)
 	}
-	if strings.Contains(string(calls), "postgres") {
-		t.Errorf("a container this backend did not start was touched:\n%s", calls)
+	for _, id := range []string{"sbx_theirs", "sbx_unlabelled", "postgres"} {
+		if strings.Contains(string(calls), "rm --force "+id) || (id == "postgres" && strings.Contains(string(calls), id)) {
+			t.Errorf("%s, which this sandboxd did not start, was touched:\n%s", id, calls)
+		}
+	}
+	if !strings.Contains(logged.String(), "left alone: sbx_unlabelled") {
+		t.Errorf("an unlabelled sandbox was not reported:\n%s", logged.String())
+	}
+}
+
+// Without an owner a restart can only remove every sandboxd's sandboxes or
+// none, so the backend refuses to start.
+func TestNewRefusesNoOwner(t *testing.T) {
+	agent := filepath.Join(t.TempDir(), "sandbox-guestd")
+	os.WriteFile(agent, []byte("x"), 0o755)
+	if _, err := New(Config{Container: "sh", Agent: agent}); err == nil || !strings.Contains(err.Error(), "owner") {
+		t.Fatalf("got %v; want a refusal naming the owner", err)
+	}
+}
+
+// Owner is stable for one state directory, through a symlink to it too, and
+// differs for another.
+func TestOwnerIsPerStateDirectory(t *testing.T) {
+	root := t.TempDir()
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	os.Mkdir(a, 0o700)
+	os.Mkdir(b, 0o700)
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(a, link); err != nil {
+		t.Skip(err)
+	}
+	oa, _ := Owner(a)
+	oa2, _ := Owner(a + "/")
+	ol, _ := Owner(link)
+	ob, _ := Owner(b)
+	if oa == "" || oa != oa2 || oa != ol || oa == ob {
+		t.Fatalf("a %q, a/ %q, link %q, b %q", oa, oa2, ol, ob)
 	}
 }

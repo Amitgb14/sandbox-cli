@@ -24,6 +24,8 @@ package macos
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +49,29 @@ const AgentDir = "/.sbx"
 // remove what an earlier sandboxd left behind — and touch nothing else.
 const LabelManaged = "sbx.managed"
 
+// LabelOwner says which sandboxd created a container: Owner of its state
+// directory. The runtime is one per Mac and shared, so "managed" alone was
+// every sandboxd's: one starting removed the running sandboxes of another —
+// a dev build beside the launch agent, or either restarted by launchd.
+const LabelOwner = "sbx.owner"
+
+// Owner is the owner label of the sandboxd whose state directory is dir: the
+// same across its restarts, different for any other on the Mac. A hash, so a
+// path is not published in every `container ls`. Two spellings of one
+// directory (a symlink) make two owners, and each leaves the other's leftovers
+// alone, which errs toward a leak rather than a removal.
+func Owner(stateDir string) (string, error) {
+	dir, err := filepath.Abs(stateDir)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
+	sum := sha256.Sum256([]byte(dir))
+	return hex.EncodeToString(sum[:8]), nil
+}
+
 // Config is how this Mac runs sandboxes.
 type Config struct {
 	Container string // the `container` CLI
@@ -54,6 +79,10 @@ type Config struct {
 	// read-only into every sandbox.
 	Agent string
 	Logf  func(format string, a ...any)
+	// Owner labels every sandbox this backend creates, and it removes
+	// leftovers carrying it alone (Owner). Required: without it, a restart
+	// could only remove every sandboxd's sandboxes or none.
+	Owner string
 	// BootTimeout bounds how long a create waits for the guest agent.
 	BootTimeout time.Duration
 }
@@ -72,6 +101,9 @@ func New(cfg Config) (*Backend, error) {
 		return nil, fmt.Errorf("macos backend: the container CLI: %w", err)
 	}
 	cfg.Container = bin
+	if cfg.Owner == "" {
+		return nil, errors.New("macos backend: no owner: the label that tells this sandboxd's sandboxes from another's")
+	}
 	if _, err := os.Stat(cfg.Agent); err != nil {
 		return nil, fmt.Errorf("macos backend: guest agent: %w", err)
 	}
@@ -96,9 +128,10 @@ func (b *Backend) Capabilities() map[string]bool {
 }
 
 // BuildRunArgs is the `container run` argument list for a sandbox: a pure
-// function of the resolved spec and the host's agent directory. The agent is
-// mounted read-only, and it is the only host path a sandbox ever sees.
-func BuildRunArgs(s backend.Spec, agentDir string) ([]string, error) {
+// function of the resolved spec, the host's agent directory and the owner
+// label. The agent is mounted read-only, and it is the only host path a
+// sandbox ever sees.
+func BuildRunArgs(s backend.Spec, agentDir, owner string) ([]string, error) {
 	if s.Network.Mode == api.NetworkAllowlist {
 		return nil, errors.New("the macos backend cannot enforce an egress allowlist")
 	}
@@ -110,6 +143,7 @@ func BuildRunArgs(s backend.Spec, agentDir string) ([]string, error) {
 		"run", "--detach",
 		"--name", s.ID,
 		"--label", LabelManaged + "=1",
+		"--label", LabelOwner + "=" + owner,
 		"--cpus", fmt.Sprint(cpus),
 		"--memory", fmt.Sprintf("%dM", s.MemoryMB),
 		"--mount", "type=bind,source=" + agentDir + ",target=" + AgentDir + ",readonly",
@@ -149,9 +183,18 @@ func (b *Backend) reapLeftovers() {
 		return
 	}
 	for _, c := range list {
-		if c.Configuration.Labels[LabelManaged] == "1" {
+		labels := c.Configuration.Labels
+		if labels[LabelManaged] != "1" {
+			continue
+		}
+		switch labels[LabelOwner] {
+		case b.cfg.Owner:
 			_, _ = b.cli(context.Background(), "rm", "--force", c.Configuration.ID)
 			b.cfg.Logf("removed a sandbox left by an earlier run: %s", c.Configuration.ID)
+		case "":
+			// Made before sandboxes carried an owner: perhaps by a sandboxd
+			// still running. Say so, and leave it to whoever knows.
+			b.cfg.Logf("left alone: %s, a sandbox from a build without owner labels; `container rm --force %s` if nothing uses it", c.Configuration.ID, c.Configuration.ID)
 		}
 	}
 }
@@ -173,7 +216,7 @@ func (b *Backend) known(id string) error {
 
 // Create starts the sandbox and waits for the guest agent to answer.
 func (b *Backend) Create(ctx context.Context, s backend.Spec) error {
-	args, err := BuildRunArgs(s, filepath.Dir(b.cfg.Agent))
+	args, err := BuildRunArgs(s, filepath.Dir(b.cfg.Agent), b.cfg.Owner)
 	if err != nil {
 		return err
 	}
