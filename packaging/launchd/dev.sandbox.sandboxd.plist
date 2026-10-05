@@ -19,6 +19,16 @@
     <string>/usr/local/bin/sandboxd</string>
     <string>--backend</string><string>macos</string>
   </array>
+  <!--
+    launchd starts a program with PATH=/usr/bin:/bin:/usr/sbin:/sbin, which
+    leaves out /usr/local/bin, where the container CLI installs. Without
+    this, sandboxd exits "the container CLI: executable file not found" and
+    launchd restarts it every ten seconds.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardErrorPath</key><string>/tmp/sandboxd.log</string>

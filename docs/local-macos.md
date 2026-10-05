@@ -12,17 +12,79 @@ unix socket that only you can open.
 
 ## Install
 
+You need macOS 26 or later on an arm64 Mac, Go 1.25+ and the `container`
+runtime (its signed installer package is on
+<https://github.com/apple/container/releases>).
+
+**Build from source.** No published release has `sandboxd` yet: 0.0.1 is the
+last release of the container design, and `install.sh` refuses it rather than
+install half of it. Until the rewrite's first release, build all three
+binaries from a checkout:
+
 ```sh
-container system start                      # the runtime's own service
-install -m 0755 sandboxd /usr/local/bin/
-install -m 0755 sandbox-guestd /usr/local/bin/   # the linux/arm64 build, beside sandboxd
+git clone https://github.com/Amitgb14/sandbox-cli && cd sandbox-cli
+make build        # -> bin/sandbox-cli, bin/sandboxd, bin/sandbox-gateway, bin/sandbox-guestd
+file bin/sandbox-guestd   # must say: ELF 64-bit LSB executable, ARM aarch64
+```
+
+For [Studio](studio.md), the browser view, run `make studio` (Node 20+)
+*before* `make build`: the UI is built into `sandbox-cli`, so a client built
+first serves only Studio's API and a page saying how to build the rest.
+
+`sandbox-guestd` is a Linux binary even on a Mac: it runs inside the VM, which
+is linux/arm64. `make build` cross-compiles it for Linux on your Mac's
+architecture, which must be arm64.
+
+**Install the binaries.** The launch agent runs `/usr/local/bin/sandboxd`, and
+`sandboxd` finds the guest agent beside itself, so both go there. That directory
+belongs to root and may not exist yet on a new Mac:
+
+```sh
+sudo install -d -m 0755 /usr/local/bin
+sudo install -m 0755 bin/sandboxd bin/sandbox-guestd /usr/local/bin/
+install -m 0755 bin/sandbox-cli ~/.local/bin/   # or anywhere on your PATH
+```
+
+**Start the runtime, then sandboxd:**
+
+```sh
+container system start        # the runtime's own service; the first run offers to install its kernel
 cp packaging/launchd/dev.sandbox.sandboxd.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandbox.sandboxd.plist
 ```
 
-If you installed the launch agent from an earlier build, copy it again: that one
+If the launch agent was already loaded (you ran `bootstrap` before the binary
+was in place, or you are upgrading), restart it instead; `bootstrap` on a loaded
+agent fails with `Bootstrap failed: 5: Input/output error`:
+
+```sh
+launchctl kickstart -k gui/$(id -u)/dev.sandbox.sandboxd
+```
+
+If you installed the launch agent from an earlier build, copy it again. An
+older plist sets no `PATH`, so under launchd `sandboxd` cannot find the
+`container` CLI in `/usr/local/bin` and exits, and `/tmp/sandboxd.log` fills
+with `the container CLI: executable file not found in $PATH`. An even older one
 passes `--allow-bind`, which `sandboxd` no longer has, so it refuses to start
 rather than run with a flag it does not understand.
+
+**Check it.** `sandboxd` listens on `~/.config/sandbox/sandboxd.sock` (a launch
+agent has no `$XDG_RUNTIME_DIR`), which is where `sandbox-cli` looks by default,
+so no context needs adding:
+
+```sh
+sandbox-cli doctor                          # reaches sandboxd and lists what it offers
+sandbox-cli run --network none -- uname -a  # a first sandbox: prints an aarch64 Linux kernel
+tail -f /tmp/sandboxd.log                   # sandboxd's log, if either fails
+```
+
+**Another sandboxd beside it** (a dev build, say) needs its own
+`--state-dir` and `--listen`. Two sharing a state directory take each
+other's sandboxes for their own leftovers, and each one starting removes the
+other's.
+
+**Upgrading.** `git pull && make build`, install the two binaries again as
+above, then `launchctl kickstart -k gui/$(id -u)/dev.sandbox.sandboxd`.
 
 The guest agent is mounted read-only into every sandbox from beside
 `sandboxd`, so any image works and the agent always matches the server.
