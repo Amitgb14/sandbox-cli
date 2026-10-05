@@ -541,6 +541,15 @@ that fails on the code before the fix:
   before the state directory existed; it is now the filesystem that directory
   will be made on. `--capacity-memory-mb` and `--capacity-disk-mb` still win.
 
+- **On macOS, a sandboxd starting no longer removes another's sandboxes.**
+  Every Mac has one `container` runtime, and a sandboxd starting removed every
+  sandbox any sandboxd had made, taking it for its own leftovers: a dev build
+  beside the launch agent, or either restarted by launchd, ended the other's
+  running sandboxes. Each sandbox now carries its sandboxd's owner label (a
+  hash of its `--state-dir`), and only those are removed. Sandboxes from an
+  earlier build carry none: they are left alone and named in the log, with the
+  command to remove one.
+
 - **On macOS, an image without the sandbox user's home failed every run with
   "no such command".** Firecracker guests make `/sandbox/home` at boot; the
   macOS backend's guest did not, so with an image like alpine the command could

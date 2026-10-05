@@ -260,7 +260,11 @@ func newBackend(name string, o backendOptions) (backend.Backend, error) {
 			self, _ := os.Executable()
 			agent = filepath.Join(filepath.Dir(self), "sandbox-guestd")
 		}
-		return macos.New(macos.Config{Container: o.container, Agent: agent, Logf: o.logf})
+		owner, err := macos.Owner(o.stateDir)
+		if err != nil {
+			return nil, fmt.Errorf("macos backend: --state-dir: %w", err)
+		}
+		return macos.New(macos.Config{Container: o.container, Agent: agent, Logf: o.logf, Owner: owner})
 	case "":
 		return nil, errors.New("--backend is required: firecracker, macos or fake")
 	}

@@ -79,9 +79,7 @@ tail -f /tmp/sandboxd.log                   # sandboxd's log, if either fails
 ```
 
 **Another sandboxd beside it** (a dev build, say) needs its own
-`--state-dir` and `--listen`. Two sharing a state directory take each
-other's sandboxes for their own leftovers, and each one starting removes the
-other's.
+`--state-dir` and `--listen`; *More than one sandboxd*, below, says why.
 
 **Upgrading.** `git pull && make build`, install the two binaries again as
 above, then `launchctl kickstart -k gui/$(id -u)/dev.sandbox.sandboxd`.
@@ -106,6 +104,13 @@ default to `none` in a policy file you pass with `--policy`.
 **No host directory.** A sandbox has no repository, and nothing of your Mac is
 mounted into it but the guest agent, read-only; every process starts in `/sandbox/home`. The bind mount this
 backend used to offer (`--allow-bind`) was removed with the repository model.
+
+**More than one sandboxd.** The `container` runtime is one per Mac and shared.
+Each sandbox carries its sandboxd's owner label, from its `--state-dir`, and a
+sandboxd starting removes only what it left itself; give each sandboxd its own
+`--state-dir` (and `--listen`), and they leave each other alone. A sandbox
+from a build before owner labels is named in the log and left for you to
+remove.
 
 ## Open points, decided by the M3 macOS run
 
