@@ -72,7 +72,30 @@ interface State {
   color?: string;
 }
 
-export function parseAnsi(line: string): AnsiSpan[] {
+// Every escape sequence there is: CSI (any final), OSC (a title, a link),
+// a charset or keypad switch, a single-character escape; and a carriage return.
+const CONTROL = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[()*+][0-9A-Za-z]|\u001b[=>78DEHMNOZc]|\r/g;
+
+/**
+ * Output written for a terminal, made readable as lines: colours are kept
+ * for parseAnsi, and every other control — cursor moves, erases, mode
+ * switches, titles — is dropped, so it no longer shows as boxes and brackets.
+ * A move right becomes that many spaces and a move to a column one space, so
+ * words a full-screen program placed apart stay apart. A screen drawn by
+ * moving the cursor around still reads poorly; that is what a terminal is for.
+ */
+export function dropControls(text: string): string {
+  return text.replace(CONTROL, (seq) => {
+    if (/^\u001b\[[0-9;:]*m$/.test(seq)) return seq;
+    const fwd = /^\u001b\[(\d*)C$/.exec(seq);
+    if (fwd) return " ".repeat(Math.min(Number(fwd[1] || 1), 200));
+    if (/^\u001b\[\d*G$/.test(seq)) return " ";
+    return "";
+  });
+}
+
+export function parseAnsi(raw: string): AnsiSpan[] {
+  const line = dropControls(raw);
   const spans: AnsiSpan[] = [];
   let state: State = {};
   let last = 0;

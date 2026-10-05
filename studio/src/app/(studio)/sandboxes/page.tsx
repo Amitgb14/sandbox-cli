@@ -20,14 +20,13 @@ import {
 } from "@tanstack/react-table";
 import { MoreHorizontal, Plus, RefreshCw, Search, SquareTerminal, Trash2 } from "lucide-react";
 import { QuickStart } from "@/components/common/quick-start";
-import { StatusBadge } from "@/components/common/status-badge";
 import { ColumnHeader } from "@/components/data-table/column-header";
 import { FacetedFilter } from "@/components/data-table/faceted-filter";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { ViewOptions } from "@/components/data-table/view-options";
 import { SandboxDetails } from "@/components/sandbox/details";
 import { ResourceChips } from "@/components/sandbox/resource-chips";
-import { StateDot } from "@/components/sandbox/state-dot";
+import { AgentActivity, StateDot } from "@/components/sandbox/state-dot";
 import { SandboxSummary } from "@/components/sandbox/summary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,7 +46,7 @@ import { useAgentStates, useInfo, useKill, useSandboxes, useSuspend } from "@/li
 import { useCan } from "@/lib/caller";
 import { formatDateTime, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { AgentState, Sandbox } from "@/lib/types";
+import type { Sandbox } from "@/lib/types";
 
 const STATES = [
   { value: "pending", label: "Starting", tone: "var(--status-running)" },
@@ -143,7 +142,15 @@ export default function SandboxesPage() {
         id: "state",
         accessorKey: "state",
         header: "State",
-        cell: ({ row }) => <StateDot state={row.original.state} />,
+        cell: ({ row }) => {
+          const a = row.original.state === "running" ? agentOf.get(row.original.id) : undefined;
+          return (
+            <div className="flex flex-col gap-0.5">
+              <StateDot state={row.original.state} />
+              {a ? <AgentActivity agent={a} className="pl-4" /> : null}
+            </div>
+          );
+        },
         filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue(id)),
         meta: { label: "State" },
       },
@@ -182,22 +189,6 @@ export default function SandboxesPage() {
           );
         },
         meta: { label: "Labels" },
-      },
-      {
-        id: "agent",
-        header: "Agent",
-        cell: ({ row }) => {
-          const a: AgentState | undefined = agentOf.get(row.original.id);
-          return a ? (
-            <span className="flex items-center gap-1.5" title={a.why}>
-              <span className="font-mono text-xs">{a.agent}</span>
-              {a.state === "blocked" ? <StatusBadge outcome="blocked" size="sm" /> : null}
-            </span>
-          ) : (
-            <span className="text-xs text-muted-foreground">—</span>
-          );
-        },
-        meta: { label: "Agent" },
       },
       {
         id: "created",
@@ -274,8 +265,7 @@ export default function SandboxesPage() {
   const table = useReactTable({
     data: all,
     columns,
-    // Agent is a column only where a sandbox runs one, unless the View menu says otherwise.
-    state: { sorting, rowSelection: selection, columnVisibility: { agent: agentOf.size > 0, ...visibility }, globalFilter: query },
+    state: { sorting, rowSelection: selection, columnVisibility: visibility, globalFilter: query },
     getRowId: (s) => s.id,
     onSortingChange: setSorting,
     onRowSelectionChange: setSelection,

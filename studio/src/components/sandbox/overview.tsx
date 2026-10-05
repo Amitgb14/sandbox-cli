@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SquareTerminal } from "lucide-react";
 import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Labels } from "@/components/sandbox/labels";
@@ -73,11 +74,12 @@ function Network({ sb }: { sb: Sandbox }) {
 export function SandboxOverview({
   sb,
   processes,
-  onLogs,
+  onOpen,
 }: {
   sb: Sandbox;
   processes: Process[];
-  onLogs: (pid: number) => void;
+  /** A process clicked: its terminal if it has one running, else its logs. */
+  onOpen: (pid: number) => void;
 }) {
   const labels = Object.keys(sb.labels ?? {}).length;
   return (
@@ -156,13 +158,20 @@ export function SandboxOverview({
               <button
                 type="button"
                 key={p.pid}
-                onClick={() => onLogs(p.pid)}
-                title="Show its logs"
+                onClick={() => onOpen(p.pid)}
+                title={p.tty && p.state === "running" ? "Open its terminal" : "Show its logs"}
                 className="flex items-center gap-3 py-1.5 text-left first:pt-0 last:pb-0 hover:text-foreground"
               >
                 <span className="w-8 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{p.pid}</span>
                 <span className="min-w-0 flex-1 truncate font-mono text-xs">{formatArgv(p.argv)}</span>
-                <StatusBadge outcome={p.state} exitCode={p.exit_code} size="sm" />
+                {p.tty && p.state === "running" ? (
+                  <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] text-status-running">
+                    <SquareTerminal className="size-3" />
+                    Interactive
+                  </span>
+                ) : (
+                  <StatusBadge outcome={p.state} exitCode={p.exit_code} size="sm" />
+                )}
                 <span className="hidden w-16 text-right text-xs text-muted-foreground sm:block">{formatRelative(p.started_at)}</span>
               </button>
             ))}

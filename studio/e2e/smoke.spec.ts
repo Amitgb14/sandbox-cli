@@ -100,6 +100,39 @@ test("the list sums what sandboxes were given, walks them in its panel, and term
   }
 });
 
+test("Terminal goes back to the shell already open, and New shell starts another", async ({ page, request }) => {
+  test.skip(process.platform === "darwin", "the fake backend allocates a terminal only in a Linux guest");
+  const api = (path: string, method = "GET", data?: unknown) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
+  const sb = await (await api("/v1/sandboxes", "POST", { name: "tty-reuse" })).json();
+  const shells = async () =>
+    ((await (await api(`/v1/sandboxes/${sb.id}/processes`)).json()).processes as { tty: boolean; state: string }[]).filter(
+      (p) => p.tty && p.state === "running",
+    ).length;
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  await page.getByRole("row").filter({ hasText: "tty-reuse" }).getByText("tty-reuse").click();
+  const panel = page.getByRole("dialog");
+  await panel.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(panel.getByRole("button", { name: /· shell$/ })).toHaveCount(1);
+  await expect.poll(shells).toBe(1);
+
+  // Again: the same shell, not a second one.
+  await panel.getByRole("tab", { name: "Events" }).click();
+  await panel.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(panel.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
+  await page.waitForTimeout(500);
+  expect(await shells()).toBe(1);
+
+  // A second one only when asked for, and both can be chosen.
+  await panel.getByRole("button", { name: "New shell" }).click();
+  await expect(panel.getByRole("button", { name: /· shell$/ })).toHaveCount(2);
+  await expect.poll(shells).toBe(2);
+  await api(`/v1/sandboxes/${sb.id}`, "DELETE");
+});
+
 test("Agents lists only the verified agents, and Launch starts a sandbox", async ({ page }) => {
   await page.goto(`/#token=${token}`);
   await expect(page.getByText("e2e · fake")).toBeVisible();
