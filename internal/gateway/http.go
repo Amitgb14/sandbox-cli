@@ -84,6 +84,7 @@ func (g *Gateway) Handler() http.Handler {
 		{"DELETE /v1/sandboxes/{ref}/files", false, ScopeCreate, nil},
 		{"GET /v1/sandboxes/{ref}/dirs", false, ScopeRead, nil},
 		{"GET /v1/sandboxes/{ref}/events", false, ScopeRead, nil},
+		{"GET /v1/sandboxes/{ref}/metrics", false, ScopeRead, nil},
 	} {
 		route(rt.pattern, rt.raw, g.forward(rt.scope, rt.after))
 	}

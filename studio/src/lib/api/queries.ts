@@ -16,6 +16,7 @@ import type {
   Info,
   LaunchRequest,
   LaunchResult,
+  MetricsList,
   NetworkPolicy,
   NodeStatus,
   Process,
@@ -33,6 +34,7 @@ export const keys = {
   sandbox: (id: string) => ["sandbox", id] as const,
   processes: (id: string) => ["processes", id] as const,
   events: (id: string) => ["events", id] as const,
+  metrics: (id: string) => ["metrics", id] as const,
   dir: (id: string, path: string) => ["dir", id, path] as const,
   volumes: ["volumes"] as const,
   snapshots: ["snapshots"] as const,
@@ -105,6 +107,17 @@ export function noAnswer(e: unknown): Error {
   return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")
     ? new Error(`The sandbox did not answer within ${FILES_TIMEOUT_MS / 1000} seconds.`)
     : (e as Error);
+}
+
+/** The last hour of a sandbox's usage, read while something shows it. */
+export function useMetrics(id: string, enabled = true) {
+  return useQuery({
+    queryKey: keys.metrics(id),
+    queryFn: () => apiFetch<MetricsList>(`${sbx(id)}/metrics`),
+    enabled: !!id && enabled,
+    refetchInterval: 10_000,
+    retry: false,
+  });
 }
 
 export function useDir(id: string, path: string, enabled = true) {

@@ -72,6 +72,9 @@ type Server struct {
 	Capacity api.NodeResources
 	// NodeLabels describe the node to a gateway (region, disk class, ...).
 	NodeLabels map[string]string
+	// MetricsInterval is how often sandboxes' usage is sampled, where the
+	// backend can read it; 0 is ten seconds.
+	MetricsInterval time.Duration
 
 	now func() time.Time
 
@@ -94,6 +97,7 @@ type record struct {
 	procs      map[int]*procRecord
 	nextPID    int
 	lastActive time.Time
+	metrics    metricsState // metrics_sampler.go
 	// lastScheduled is when the snapshot schedule last ran (or started), and
 	// snapshotting is set while one of its snapshots is being taken.
 	lastScheduled time.Time
@@ -159,11 +163,13 @@ func (s *Server) Handler() http.Handler {
 	route("DELETE /v1/sandboxes/{ref}/files", false, s.removeFile)
 	route("GET /v1/sandboxes/{ref}/dirs", false, s.listDir)
 	route("GET /v1/sandboxes/{ref}/events", false, s.events)
+	route("GET /v1/sandboxes/{ref}/metrics", false, s.sandboxMetrics)
 	route("POST /v1/volumes", false, s.createVolume)
 	route("GET /v1/volumes", false, s.listVolumes)
 	route("DELETE /v1/volumes/{name}", false, s.deleteVolume)
 	s.reaper.Do(func() {
 		go s.reapIdle()
+		go s.runMetrics()
 		go s.runSchedules()
 	})
 	s.poolsOnce.Do(s.startPools)
@@ -221,6 +227,7 @@ func (s *Server) caps() api.Capabilities {
 		caps[k] = v
 	}
 	caps[api.CapAudit] = s.Audit != nil
+	_, caps[api.CapMetrics] = s.usageReader()
 	return api.Capabilities{
 		APIVersion:   api.Version,
 		Backend:      s.Backend.Name(),

@@ -297,3 +297,17 @@ esac
 		t.Fatalf("the runtime was asked %d times; want once in 30 seconds", n)
 	}
 }
+
+// Usage is the runtime's counters for this backend's own sandboxes only.
+func TestParseStatsKeepsItsOwn(t *testing.T) {
+	out := `[{"id":"sbx_mine","cpuUsageUsec":47276,"memoryUsageBytes":9248768,"memoryLimitBytes":1073741824,"networkRxBytes":60916,"networkTxBytes":602,"blockReadBytes":5402624,"blockWriteBytes":0,"numProcesses":4},
+{"id":"sbx_theirs","cpuUsageUsec":1,"memoryUsageBytes":1,"memoryLimitBytes":1},{"id":"buildkit","cpuUsageUsec":1}]`
+	got, err := parseStats(out, map[string]bool{"sbx_mine": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, ok := got["sbx_mine"]
+	if len(got) != 1 || !ok || u.CPUUsec != 47276 || u.MemoryBytes != 9248768 || u.MemoryLimitBytes != 1<<30 || u.NetRxBytes != 60916 || u.DiskReadBytes != 5402624 || u.Processes != 4 {
+		t.Fatalf("usage %+v", got)
+	}
+}

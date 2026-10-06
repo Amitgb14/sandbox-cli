@@ -233,6 +233,16 @@ in `_old/` as reference, to be ported where this design still wants it.
   nodes snapshot disks only checks ownership as one that snapshots whole
   machines does.
 
+- **A sandbox's CPU and memory over the last hour.** `GET
+  /v1/sandboxes/{id}/metrics`, where the endpoint has the new `metrics`
+  capability (macOS, Firecracker and the fake backend all do): CPU as a share
+  of the vCPUs given, memory against its limit, network and disk byte counts,
+  sampled every 10 seconds by sandboxd from what the host measures — the
+  runtime's counters on macOS, the VMM's process on Linux — and never from the
+  guest. An hour is kept per sandbox, in memory. Reading it does not count as
+  activity for the idle timeout. Behind a gateway it is the owner's. Studio
+  opens it from a sandbox's resources.
+
 ### Security
 
 Four ways a run could reach the host, or a later run, through files it is allowed

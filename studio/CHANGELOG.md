@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Metrics.** A sandbox's resources, in the list and its overview, open the
+  last hour of its CPU and memory as charts, with its current network and disk
+  rates, where the endpoint measures them (see
+  [CHANGELOG.md](../CHANGELOG.md), "A sandbox's CPU and memory over the last
+  hour").
 - **A Snapshots column, and a Snapshot button that stands out.** Where the
   endpoint takes snapshots, the sandbox list has a column with each sandbox's
   snapshot count, marked scheduled or manual, and "Inactive" for one with no

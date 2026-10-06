@@ -886,3 +886,24 @@ func TestScheduledSnapshotsBelongToTheSandboxOwner(t *testing.T) {
 		}
 	}
 }
+
+// A sandbox's metrics go to its owner through the gateway, as its other reads
+// do, and to no one else.
+func TestMetricsAreTheOwners(t *testing.T) {
+	n1 := startNode(t, "n1", api.CapEgressAllowlist)
+	tg := startGateway(t, nil, n1)
+	alice, bob := tg.user("alice"), tg.user("bob")
+	ctx := ctxT(t)
+	if caps, err := bob.Capabilities(ctx); err != nil || !caps.Has(api.CapMetrics) {
+		t.Fatalf("precondition: the fleet measures usage (%v)", err)
+	}
+	sb, err := bob.CreateSandbox(ctx, api.CreateSandboxRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, err := bob.Metrics(ctx, sb.ID); err != nil || m.IntervalSecs < 1 {
+		t.Fatalf("bob's metrics: %+v, %v", m, err)
+	}
+	_, err = alice.Metrics(ctx, sb.ID)
+	wantCode(t, err, api.CodeNotFound)
+}

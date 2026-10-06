@@ -25,7 +25,7 @@ import { FacetedFilter } from "@/components/data-table/faceted-filter";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { ViewOptions } from "@/components/data-table/view-options";
 import { SandboxDetails } from "@/components/sandbox/details";
-import { ResourceChips } from "@/components/sandbox/resource-chips";
+import { ResourcesWithMetrics } from "@/components/sandbox/metrics";
 import { AgentActivity, StateDot } from "@/components/sandbox/state-dot";
 import { SandboxSummary } from "@/components/sandbox/summary";
 import { every } from "@/components/sandbox/snapshots";
@@ -181,7 +181,7 @@ export default function SandboxesPage() {
       {
         id: "resources",
         header: "Resources",
-        cell: ({ row }) => <ResourceChips sb={row.original} className="flex-nowrap" />,
+        cell: ({ row }) => <ResourcesWithMetrics sb={row.original} />,
         meta: { label: "Resources" },
       },
       {

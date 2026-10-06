@@ -340,6 +340,13 @@ func (c *Client) SetSnapshotSchedule(ctx context.Context, ref string, sched Snap
 	return out, c.json(ctx, http.MethodPut, sbx(ref)+"/snapshot-schedule", sched, &out)
 }
 
+// Metrics returns the last hour of a sandbox's usage samples (capability
+// metrics).
+func (c *Client) Metrics(ctx context.Context, ref string) (MetricsList, error) {
+	var out MetricsList
+	return out, c.json(ctx, http.MethodGet, sbx(ref)+"/metrics", nil, &out)
+}
+
 // Snapshots lists this endpoint's snapshots.
 func (c *Client) Snapshots(ctx context.Context) ([]Snapshot, error) {
 	var out SnapshotList
