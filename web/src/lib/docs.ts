@@ -78,6 +78,12 @@ export const DOC_SEGMENTS: DocSegment[] = [
         description: "Studio, the browser view of your sandboxes: its screens, gateway scopes, organizations and the hosted build.",
       },
       {
+        slug: "desktop",
+        source: "docs/desktop.md",
+        title: "Desktop",
+        description: "A sandbox with a screen, a terminal and a browser, used from Studio's Desktop tab.",
+      },
+      {
         slug: "sdk",
         source: "sdk/README.md",
         title: "SDKs",

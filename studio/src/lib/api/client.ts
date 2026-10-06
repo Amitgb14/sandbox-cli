@@ -151,6 +151,15 @@ export async function followOutput(
 }
 
 /** The WebSocket address of a process's terminal bridge. */
+/** A sandbox's desktop: its VNC stream, bridged by Studio's server (internal/studio/desktop.go). */
+export function desktopURL(sandbox: string): string {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const q = new URLSearchParams({ sandbox, token: getToken() });
+  const org = currentOrg();
+  if (org) q.set("org", org);
+  return `${proto}//${window.location.host}/api/ws/desktop?${q.toString()}`;
+}
+
 export function attachURL(sandbox: string, pid?: number): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const q = new URLSearchParams({ sandbox, token: getToken() });
