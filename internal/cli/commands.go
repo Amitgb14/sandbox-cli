@@ -299,6 +299,10 @@ func newDoctorCmd() *cobra.Command {
 			sort.Strings(on)
 			fmt.Fprintf(out, "can:       %s\n", strings.Join(on, ", "))
 			fmt.Fprintf(out, "limits:    %v cpus, %d MiB memory, %d MiB disk\n", caps.Limits.MaxCPUs, caps.Limits.MaxMemoryMB, caps.Limits.MaxDiskMB)
+			if caps.Has(api.CapMemorySnapshot) || caps.Has(api.CapDiskSnapshot) {
+				fmt.Fprintf(out, "schedules: a snapshot every %v or longer, at most %d kept\n",
+					time.Duration(caps.Limits.MinSnapshotEverySecs)*time.Second, caps.Limits.MaxSnapshotKeep)
+			}
 			return nil
 		},
 	}
@@ -336,7 +340,49 @@ func newSuspendCmds() []*cobra.Command {
 			}
 			return err
 		}),
+		newSnapshotScheduleCmd(),
 	}
+}
+
+// newSnapshotScheduleCmd sets a running sandbox's snapshot schedule: one every
+// --every while it runs, the newest --keep kept, taken by the server whether
+// or not anything is watching.
+func newSnapshotScheduleCmd() *cobra.Command {
+	var ctxFlag string
+	var every time.Duration
+	var keep int
+	var off bool
+	cmd := &cobra.Command{
+		Use:   "snapshot-schedule SANDBOX",
+		Short: "Snapshot a running sandbox on a schedule, keeping the newest few",
+		Example: "  sandbox-cli snapshot-schedule demo --every 30m --keep 3\n" +
+			"  sandbox-cli snapshot-schedule demo --off",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if off == (every != 0) {
+				return errors.New("give --every (and --keep), or --off")
+			}
+			c, _, err := newClient(ctxFlag)
+			if err != nil {
+				return err
+			}
+			sb, err := c.SetSnapshotSchedule(cmd.Context(), args[0], api.SnapshotSchedule{EverySecs: int(every / time.Second), Keep: keep})
+			if err != nil {
+				return err
+			}
+			if sb.SnapshotEverySecs == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: no scheduled snapshots\n", sb.ID)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: a snapshot every %v, the newest %d kept\n", sb.ID, time.Duration(sb.SnapshotEverySecs)*time.Second, sb.SnapshotKeep)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().DurationVar(&every, "every", 0, "how often, e.g. 30m (the server sets the shortest allowed)")
+	cmd.Flags().IntVar(&keep, "keep", 0, "how many to keep, newest first (default 1)")
+	cmd.Flags().BoolVar(&off, "off", false, "stop the schedule; snapshots already taken stay")
+	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
+	return cmd
 }
 
 // newTunnelCmd forwards a local port to a port on a sandbox's loopback. It

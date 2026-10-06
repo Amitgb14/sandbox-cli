@@ -210,6 +210,24 @@ in `_old/` as reference, to be ported where this design still wants it.
   local images at `GET /v1/node` (`images`), as Linux lists those it has built:
   what a sandbox starts without a pull, and what Studio's Playground suggests.
   Snapshot images are left out; they are started from as snapshots.
+- **Snapshots on macOS: the files.** The macOS backend offers a new
+  capability, `disk_snapshot`: a running sandbox's files, exported and kept as
+  an image a new sandbox starts from, booting afresh. Snapshots now say their
+  `kind` (`memory` or `disk`); a fork of a disk snapshot keeps its image but
+  may ask for other resources. Studio's Snapshot button and Snapshots screen
+  work with either. See docs/local-macos.md and docs/api/v1.md.
+- **Scheduled snapshots.** A sandbox can be snapshotted every so often while it
+  runs, keeping the newest few: `snapshot_every_secs` and `snapshot_keep` on
+  create, `PUT …/snapshot-schedule` on a running sandbox, `run --snapshot-every
+  30m --snapshot-keep 3` and `sandbox-cli snapshot-schedule` in the CLI, and
+  both SDKs. sandboxd takes them, whatever is watching; retention removes only
+  scheduled ones, and logs each. The operator bounds them with
+  `limits.min_snapshot_every_secs` (default five minutes) and
+  `limits.max_snapshot_keep` (default 5); a schedule outside them, on an
+  endpoint without snapshots or on a sandbox with volumes is refused. Behind a
+  gateway a scheduled snapshot belongs to the sandbox's owner, and a fleet whose
+  nodes snapshot disks only checks ownership as one that snapshots whole
+  machines does.
 
 ### Security
 

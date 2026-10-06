@@ -33,6 +33,8 @@ type runFlags struct {
 	cpus          float64
 	memory, disk  int
 	idle          int
+	snapEvery     time.Duration
+	snapKeep      int
 	network       string
 	allow, deny   []string
 	env           []string
@@ -66,6 +68,8 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.IntVar(&rf.memory, "memory", 0, "memory in MiB")
 	f.IntVar(&rf.disk, "disk", 0, "writable disk in MiB")
 	f.IntVar(&rf.idle, "idle", 0, "terminate after this many idle seconds (default: the server's)")
+	f.DurationVar(&rf.snapEvery, "snapshot-every", 0, "snapshot the sandbox this often while it runs, e.g. 30m (the server sets the shortest allowed)")
+	f.IntVar(&rf.snapKeep, "snapshot-keep", 0, "how many scheduled snapshots to keep, newest first (default 1)")
 	f.StringVar(&rf.network, "network", "", "none, allowlist or open (default: the server's)")
 	f.StringArrayVar(&rf.allow, "allow", nil, "also allow egress to this host (repeatable; implies allowlist)")
 	f.StringArrayVar(&rf.deny, "deny", nil, "refuse egress to this host even if allowed (repeatable)")
@@ -162,6 +166,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	req := api.CreateSandboxRequest{
 		Name: rf.name, Image: rf.image, CPUs: rf.cpus, MemoryMB: rf.memory, DiskMB: rf.disk,
 		IdleTimeoutSecs: rf.idle, SnapshotID: rf.fromSnapshot,
+		SnapshotEverySecs: int(rf.snapEvery / time.Second), SnapshotKeep: rf.snapKeep,
 	}
 	if req.Env, err = buildEnv(rf.env, rs.agent); err != nil {
 		return 1, err

@@ -31,6 +31,9 @@ export interface Sandbox {
   network: NetworkPolicy;
   created_at: string;
   idle_timeout_secs: number;
+  /** The snapshot schedule, when it has one. */
+  snapshot_every_secs?: number;
+  snapshot_keep?: number;
   labels?: Record<string, string>;
 }
 
@@ -44,6 +47,9 @@ export interface CreateSandboxRequest {
   network?: NetworkPolicy;
   idle_timeout_secs?: number;
   snapshot_id?: string;
+  /** Snapshot the sandbox this often while it runs, keeping the newest `snapshot_keep` (default 1); within the server's limits. */
+  snapshot_every_secs?: number;
+  snapshot_keep?: number;
   /** Your own metadata: returned with the sandbox, filters `sandboxes()`, recorded in its audit events. */
   labels?: Record<string, string>;
   /** Named volumes to mount (capability `volumes`); one live sandbox at a time. */
@@ -126,6 +132,10 @@ export interface Snapshot {
   id: string;
   sandbox: string;
   image: string;
+  /** "memory": memory, processes and disk; "disk": the files only, a fork boots afresh. */
+  kind: "memory" | "disk";
+  /** Taken by the sandbox's schedule, which may remove it. */
+  scheduled?: boolean;
   bytes: number;
   created_at: string;
 }
@@ -495,6 +505,11 @@ export class Client {
 
   createSnapshot(ref: string): Promise<Snapshot> {
     return this.json("POST", this.sbx(ref) + "/snapshots");
+  }
+
+  /** Snapshot a running sandbox every `everySecs`, keeping the newest `keep`; 0 stops it. */
+  setSnapshotSchedule(ref: string, everySecs: number, keep = 0): Promise<Sandbox> {
+    return this.json("PUT", this.sbx(ref) + "/snapshot-schedule", { every_secs: everySecs, keep });
   }
 
   async snapshots(): Promise<Snapshot[]> {

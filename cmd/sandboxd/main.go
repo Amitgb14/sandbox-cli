@@ -264,7 +264,10 @@ func newBackend(name string, o backendOptions) (backend.Backend, error) {
 		if err != nil {
 			return nil, fmt.Errorf("macos backend: --state-dir: %w", err)
 		}
-		return macos.New(macos.Config{Container: o.container, Agent: agent, Logf: o.logf, Owner: owner})
+		// A snapshot's archive is the size of the sandbox's files: made beside
+		// the rest of this sandboxd's state, not wherever $TMPDIR points.
+		scratch := filepath.Join(o.stateDir, "snapshot-tmp")
+		return macos.New(macos.Config{Container: o.container, Agent: agent, Logf: o.logf, Owner: owner, ScratchDir: scratch})
 	case "":
 		return nil, errors.New("--backend is required: firecracker, macos or fake")
 	}

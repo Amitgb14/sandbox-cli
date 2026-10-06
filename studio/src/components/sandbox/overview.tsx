@@ -6,6 +6,7 @@ import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Labels } from "@/components/sandbox/labels";
 import { ResourceChips } from "@/components/sandbox/resource-chips";
+import { SandboxSnapshots } from "@/components/sandbox/snapshots";
 import { StateDot } from "@/components/sandbox/state-dot";
 import { formatArgv, formatDateTime, formatRelative } from "@/lib/format";
 import type { Process, Sandbox } from "@/lib/types";
@@ -115,6 +116,10 @@ export function SandboxOverview({
           </Row>
           <Row k="Idle auto-stop">{idle(sb.idle_timeout_secs)}</Row>
         </dl>
+      </Section>
+
+      <Section title="Snapshots">
+        <SandboxSnapshots sb={sb} />
       </Section>
 
       {labels ? (

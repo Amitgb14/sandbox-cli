@@ -333,6 +333,13 @@ func (c *Client) CreateSnapshot(ctx context.Context, ref string) (Snapshot, erro
 	return out, c.json(ctx, http.MethodPost, sbx(ref)+"/snapshots", nil, &out)
 }
 
+// SetSnapshotSchedule replaces a sandbox's snapshot schedule; EverySecs 0
+// stops it.
+func (c *Client) SetSnapshotSchedule(ctx context.Context, ref string, sched SnapshotSchedule) (Sandbox, error) {
+	var out Sandbox
+	return out, c.json(ctx, http.MethodPut, sbx(ref)+"/snapshot-schedule", sched, &out)
+}
+
 // Snapshots lists this endpoint's snapshots.
 func (c *Client) Snapshots(ctx context.Context) ([]Snapshot, error) {
 	var out SnapshotList

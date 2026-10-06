@@ -86,13 +86,18 @@ type Config struct {
 	Owner string
 	// BootTimeout bounds how long a create waits for the guest agent.
 	BootTimeout time.Duration
+	// ScratchDir holds a snapshot's archive while it is made: the size of
+	// the sandbox's files, for the minute it takes to load. Empty is the
+	// system's temporary directory.
+	ScratchDir string
 }
 
 // Backend runs sandboxes with the `container` runtime.
 type Backend struct {
-	cfg Config
-	mu  sync.Mutex
-	ids map[string]bool
+	cfg   Config
+	mu    sync.Mutex
+	specs map[string]backend.Spec // the sandboxes this backend started
+	snaps map[string]string       // snapshot id -> the image it is
 	// images is the runtime's image list as last read, at imagesAt.
 	images   []string
 	imagesAt time.Time
@@ -117,8 +122,14 @@ func New(cfg Config) (*Backend, error) {
 	if cfg.BootTimeout == 0 {
 		cfg.BootTimeout = 60 * time.Second
 	}
-	b := &Backend{cfg: cfg, ids: map[string]bool{}}
+	if cfg.ScratchDir != "" {
+		if err := os.MkdirAll(cfg.ScratchDir, 0o700); err != nil {
+			return nil, fmt.Errorf("macos backend: scratch directory: %w", err)
+		}
+	}
+	b := &Backend{cfg: cfg, specs: map[string]backend.Spec{}, snaps: map[string]string{}}
 	b.reapLeftovers()
+	b.reapSnapshots()
 	return b, nil
 }
 
@@ -128,6 +139,8 @@ func (b *Backend) Capabilities() map[string]bool {
 	return map[string]bool{
 		api.CapEgressOpen: true,
 		api.CapTunnel:     true,
+		// The files only (snapshot.go): the runtime cannot capture memory.
+		api.CapDiskSnapshot: true,
 	}
 }
 
@@ -212,7 +225,7 @@ func (b *Backend) client(id string) *guestproto.Client {
 func (b *Backend) known(id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.ids[id] {
+	if _, ok := b.specs[id]; !ok {
 		return backend.ErrNotFound
 	}
 	return nil
@@ -220,7 +233,17 @@ func (b *Backend) known(id string) error {
 
 // Create starts the sandbox and waits for the guest agent to answer.
 func (b *Backend) Create(ctx context.Context, s backend.Spec) error {
-	args, err := BuildRunArgs(s, filepath.Dir(b.cfg.Agent), b.cfg.Owner)
+	run := s
+	if s.FromSnapshot != "" {
+		// A disk snapshot is an image of the files: the fork runs it, with
+		// the original's image kept in the record for what it was made from.
+		ref, err := b.snapshotImage(s.FromSnapshot)
+		if err != nil {
+			return backend.ErrNotFound
+		}
+		run.Image = ref
+	}
+	args, err := BuildRunArgs(run, filepath.Dir(b.cfg.Agent), b.cfg.Owner)
 	if err != nil {
 		return err
 	}
@@ -237,7 +260,7 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) error {
 	}
 	b.cfg.Logf("sandbox %s: ready in %v", s.ID, time.Since(t0).Round(time.Millisecond))
 	b.mu.Lock()
-	b.ids[s.ID] = true
+	b.specs[s.ID] = s
 	b.mu.Unlock()
 	return nil
 }
@@ -248,8 +271,8 @@ func (b *Backend) UpdateNetwork(context.Context, string, api.NetworkPolicy) erro
 
 func (b *Backend) Terminate(ctx context.Context, id string) error {
 	b.mu.Lock()
-	known := b.ids[id]
-	delete(b.ids, id)
+	_, known := b.specs[id]
+	delete(b.specs, id)
 	b.mu.Unlock()
 	if !known {
 		return nil
@@ -261,8 +284,8 @@ func (b *Backend) Terminate(ctx context.Context, id string) error {
 // Close removes every sandbox this backend started.
 func (b *Backend) Close() {
 	b.mu.Lock()
-	ids := make([]string, 0, len(b.ids))
-	for id := range b.ids {
+	ids := make([]string, 0, len(b.specs))
+	for id := range b.specs {
 		ids = append(ids, id)
 	}
 	b.mu.Unlock()

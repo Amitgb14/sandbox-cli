@@ -36,6 +36,10 @@ type Spec struct {
 	// IdleTimeoutSecs is enforced by the server, not the backend; carried here
 	// so the resolved spec is the whole decision.
 	IdleTimeoutSecs int
+	// SnapshotEverySecs and SnapshotKeep are the snapshot schedule, kept by
+	// the server like the idle timeout; carried for the same reason.
+	SnapshotEverySecs int
+	SnapshotKeep      int
 	// FromSnapshot, when set, starts the sandbox from a snapshot of another —
 	// memory, processes and disk as they were — instead of booting the image.
 	FromSnapshot string
@@ -67,8 +71,10 @@ type Suspender interface {
 	Resume(ctx context.Context, id string) error
 }
 
-// Snapshotter can capture a running sandbox — memory and disk — without
-// stopping it, and start new sandboxes from the capture (Spec.FromSnapshot).
+// Snapshotter can capture a running sandbox without stopping it, and start
+// new sandboxes from the capture (Spec.FromSnapshot): memory and disk where
+// the backend has CapMemorySnapshot, the files only where it has
+// CapDiskSnapshot.
 type Snapshotter interface {
 	Snapshot(ctx context.Context, id, snapshotID string) (SnapshotInfo, error)
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
@@ -76,7 +82,9 @@ type Snapshotter interface {
 
 // SnapshotInfo describes a capture.
 type SnapshotInfo struct {
-	ID       string
+	ID string
+	// Kind is api.SnapshotMemory or api.SnapshotDisk.
+	Kind     string
 	Bytes    int64 // on the host's disk
 	Image    string
 	CPUs     float64

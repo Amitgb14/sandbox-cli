@@ -49,6 +49,8 @@ test("a sandbox started elsewhere is listed, labelled, and has events", async ({
   await expect(panel.getByRole("button", { name: "Terminal", exact: true })).toBeVisible();
   await panel.getByRole("tab", { name: "Overview" }).click();
   await expect(panel.getByText("echo hi")).toBeVisible();
+  // The fake backend takes no snapshots, and the overview says so rather than offering a schedule.
+  await expect(panel.getByText("This endpoint takes no snapshots.")).toBeVisible();
   await panel.getByRole("tab", { name: "Logs" }).click();
   await expect(panel.getByText("hi", { exact: true })).toBeVisible();
   await panel.getByRole("tab", { name: "Events" }).click();

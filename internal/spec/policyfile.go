@@ -37,6 +37,9 @@ type policyFile struct {
 		MaxMemoryMB        *int     `yaml:"max_memory_mb"`
 		MaxDiskMB          *int     `yaml:"max_disk_mb"`
 		MaxIdleTimeoutSecs *int     `yaml:"max_idle_timeout_secs"`
+		// Scheduled snapshots: how often at most, and how many of one sandbox.
+		MinSnapshotEverySecs *int `yaml:"min_snapshot_every_secs"`
+		MaxSnapshotKeep      *int `yaml:"max_snapshot_keep"`
 	} `yaml:"limits"`
 	Network *struct {
 		Default *struct {
@@ -85,6 +88,8 @@ func LoadPolicy(path string) (Policy, error) {
 		set(&p.Limits.MaxMemoryMB, l.MaxMemoryMB)
 		set(&p.Limits.MaxDiskMB, l.MaxDiskMB)
 		set(&p.Limits.MaxIdleTimeoutSecs, l.MaxIdleTimeoutSecs)
+		set(&p.Limits.MinSnapshotEverySecs, l.MinSnapshotEverySecs)
+		set(&p.Limits.MaxSnapshotKeep, l.MaxSnapshotKeep)
 	}
 	if n := f.Network; n != nil {
 		if n.Default != nil {

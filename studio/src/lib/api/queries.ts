@@ -123,6 +123,8 @@ export function useSnapshots(enabled = true) {
     queryFn: async () => (await apiFetch<{ snapshots: Snapshot[] }>("/v1/snapshots")).snapshots,
     enabled,
     retry: false,
+    // A sandbox's schedule adds and removes them while a screen is open.
+    refetchInterval: 10_000,
   });
 }
 
@@ -229,6 +231,14 @@ export function useStartDesktop() {
     ({ id }: { id: string }) =>
       apiFetch<Process>(`${sbx(id)}/processes`, { method: "POST", json: { argv: [DESKTOP_COMMAND], cwd: "/sandbox/home" } }),
     ({ id }) => [[...keys.processes(id)]],
+  );
+}
+
+export function useSetSnapshotSchedule() {
+  return useInvalidating(
+    ({ id, every_secs, keep }: { id: string; every_secs: number; keep: number }) =>
+      apiFetch<Sandbox>(`${sbx(id)}/snapshot-schedule`, { method: "PUT", json: { every_secs, keep } }),
+    ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes], [...keys.snapshots]],
   );
 }
 

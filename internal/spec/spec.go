@@ -101,7 +101,11 @@ func DefaultPolicy() Policy {
 		DefaultMemoryMB: 1024,
 		DefaultDiskMB:   10240,
 		DefaultIdleSecs: 1800,
-		Limits:          api.Limits{MaxCPUs: 8, MaxMemoryMB: 16384, MaxDiskMB: 102400, MaxIdleTimeoutSecs: 7 * 24 * 3600},
+		// A scheduled snapshot is a copy of the sandbox on the host's disk —
+		// about 2 GB of the base image on macOS — so how often, and how many,
+		// is the operator's to bound.
+		Limits: api.Limits{MaxCPUs: 8, MaxMemoryMB: 16384, MaxDiskMB: 102400, MaxIdleTimeoutSecs: 7 * 24 * 3600,
+			MinSnapshotEverySecs: 300, MaxSnapshotKeep: 5},
 		Network: NetworkPolicy{
 			Default:  api.NetworkPolicy{Mode: api.NetworkOpen},
 			Ceiling:  api.NetworkOpen,
@@ -155,6 +159,10 @@ func (p Policy) Validate() error {
 		p.DefaultMemoryMB <= 0 || p.DefaultMemoryMB > p.Limits.MaxMemoryMB ||
 		p.DefaultDiskMB <= 0 || p.DefaultDiskMB > p.Limits.MaxDiskMB {
 		return fmt.Errorf("policy: default resources must be positive and within the limits")
+	}
+	// Under a second, a schedule is a sandbox being copied continuously.
+	if p.Limits.MinSnapshotEverySecs < 1 || p.Limits.MaxSnapshotKeep < 0 {
+		return fmt.Errorf("policy: limits.min_snapshot_every_secs must be at least 1, and limits.max_snapshot_keep not negative")
 	}
 	return nil
 }
@@ -378,6 +386,12 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 		s.IdleTimeoutSecs = idle
 	}
 
+	sched, err := ResolveSchedule(api.SnapshotSchedule{EverySecs: req.SnapshotEverySecs, Keep: req.SnapshotKeep}, pol.Limits)
+	if err != nil {
+		return backend.Spec{}, err
+	}
+	s.SnapshotEverySecs, s.SnapshotKeep = sched.EverySecs, sched.Keep
+
 	env, err := ResolveEnv(req.Env)
 	if err != nil {
 		return backend.Spec{}, err
@@ -556,4 +570,28 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// ResolveSchedule checks a snapshot schedule against the server's limits, and
+// fills in what it leaves out: one kept. A schedule the limits do not allow
+// is refused, not narrowed to one they do: a sandbox asked to be captured
+// every minute and captured every five would not be what was asked for.
+func ResolveSchedule(s api.SnapshotSchedule, l api.Limits) (api.SnapshotSchedule, error) {
+	switch {
+	case s.EverySecs < 0 || s.Keep < 0:
+		return api.SnapshotSchedule{}, invalid("snapshot_every_secs and snapshot_keep must not be negative")
+	case s.EverySecs == 0 && s.Keep != 0:
+		return api.SnapshotSchedule{}, invalid("snapshot_keep needs snapshot_every_secs")
+	case s.EverySecs == 0:
+		return api.SnapshotSchedule{}, nil
+	case s.EverySecs < l.MinSnapshotEverySecs:
+		return api.SnapshotSchedule{}, invalid("snapshot_every_secs %d: at least %d", s.EverySecs, l.MinSnapshotEverySecs)
+	}
+	if s.Keep == 0 {
+		s.Keep = 1
+	}
+	if s.Keep > l.MaxSnapshotKeep {
+		return api.SnapshotSchedule{}, invalid("snapshot_keep %d: at most %d", s.Keep, l.MaxSnapshotKeep)
+	}
+	return s, nil
 }

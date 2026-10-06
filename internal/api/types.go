@@ -72,6 +72,10 @@ const (
 	CapNetworkPolicyUpdate = "network_policy_update"
 	CapSuspend             = "suspend"
 	CapMemorySnapshot      = "memory_snapshot"
+	// CapDiskSnapshot: a sandbox's files can be captured, and new sandboxes
+	// started from them, booting afresh: nothing that was running is kept.
+	// What a backend offers when it cannot capture memory (the macOS one).
+	CapDiskSnapshot = "disk_snapshot"
 	// CapEgressAllowlist: network mode allowlist is enforced. Without it, the
 	// endpoint offers only none — a sandbox there has no network at all.
 	CapEgressAllowlist = "egress_allowlist"
@@ -94,6 +98,18 @@ type Limits struct {
 	MaxDiskMB   int     `json:"max_disk_mb"`
 	// MaxIdleTimeoutSecs bounds idle_timeout_secs; 0 means no bound.
 	MaxIdleTimeoutSecs int `json:"max_idle_timeout_secs"`
+	// MinSnapshotEverySecs is the shortest interval a snapshot schedule may
+	// ask for, and MaxSnapshotKeep the most scheduled snapshots of one
+	// sandbox it may keep: each is a copy of the sandbox, on the host's disk.
+	MinSnapshotEverySecs int `json:"min_snapshot_every_secs"`
+	MaxSnapshotKeep      int `json:"max_snapshot_keep"`
+}
+
+// SnapshotSchedule is a sandbox's scheduled snapshots: one every EverySecs
+// while it runs, the newest Keep kept. EverySecs 0 is no schedule.
+type SnapshotSchedule struct {
+	EverySecs int `json:"every_secs"`
+	Keep      int `json:"keep"`
 }
 
 // NetworkCeiling is the server's network policy floor and ceiling, as a client
@@ -116,10 +132,18 @@ type CreateSandboxRequest struct {
 	// IdleTimeoutSecs terminates the sandbox after this long with no request
 	// touching it and no process running. 0 takes the server's default.
 	IdleTimeoutSecs int `json:"idle_timeout_secs,omitempty"`
-	// SnapshotID starts the sandbox from a snapshot (capability
-	// memory_snapshot): memory, processes and disk as they were captured. Its
-	// image and resources are the snapshot's.
+	// SnapshotID starts the sandbox from a snapshot. A memory snapshot
+	// (capability memory_snapshot) brings back memory, processes and disk as
+	// they were, so its image and resources are the snapshot's. A disk
+	// snapshot (disk_snapshot) brings back the files only and boots afresh,
+	// so only its image is fixed; resources are the request's.
 	SnapshotID string `json:"snapshot_id,omitempty"`
+	// SnapshotEverySecs takes a snapshot of the sandbox this often while it
+	// runs, keeping the newest SnapshotKeep of them (default 1); a manual
+	// snapshot is never removed by it. Needs a snapshot capability, and is
+	// bounded by min_snapshot_every_secs and max_snapshot_keep.
+	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`
+	SnapshotKeep      int `json:"snapshot_keep,omitempty"`
 	// Labels are the client's own metadata: up to 32 keys of lowercase letters,
 	// digits and . _ / -, values up to 256 printable bytes. They decide nothing
 	// about the sandbox; they are returned with it, filter the listing
@@ -178,9 +202,13 @@ type Sandbox struct {
 	Network   NetworkPolicy `json:"network"`
 	CreatedAt time.Time     `json:"created_at"`
 	// IdleTimeoutSecs is in force for this sandbox; 0 means it never idles out.
-	IdleTimeoutSecs int               `json:"idle_timeout_secs"`
-	Labels          map[string]string `json:"labels,omitempty"`
-	Volumes         []VolumeMount     `json:"volumes,omitempty"`
+	IdleTimeoutSecs int `json:"idle_timeout_secs"`
+	// SnapshotEverySecs and SnapshotKeep are the sandbox's snapshot
+	// schedule; 0 is none.
+	SnapshotEverySecs int               `json:"snapshot_every_secs,omitempty"`
+	SnapshotKeep      int               `json:"snapshot_keep,omitempty"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	Volumes           []VolumeMount     `json:"volumes,omitempty"`
 }
 
 // Event types in the audit log.
@@ -191,6 +219,7 @@ const (
 	EventSandboxSuspended  = "sandbox.suspended"
 	EventSandboxResumed    = "sandbox.resumed"
 	EventSnapshotCreated   = "snapshot.created"
+	EventSnapshotDeleted   = "snapshot.deleted" // Reason: "request" or "retention"
 	EventProcessStarted    = "process.started"
 	EventProcessExited     = "process.exited"
 	EventFileRead          = "file.read"
@@ -245,11 +274,22 @@ type EventList struct {
 	Truncated bool `json:"truncated,omitempty"`
 }
 
-// Snapshot is a capture of a sandbox's memory and disk.
+// Snapshot kinds.
+const (
+	SnapshotMemory = "memory" // memory, processes and disk
+	SnapshotDisk   = "disk"   // the files only
+)
+
+// Snapshot is a capture of a sandbox: its memory and disk, or its files only,
+// as Kind says.
 type Snapshot struct {
-	ID        string    `json:"id"`
-	Sandbox   string    `json:"sandbox"`
-	Image     string    `json:"image"`
+	ID      string `json:"id"`
+	Sandbox string `json:"sandbox"`
+	Image   string `json:"image"`
+	Kind    string `json:"kind"`
+	// Scheduled is set on a snapshot the sandbox's schedule took, which its
+	// retention may remove; a snapshot taken by request never is.
+	Scheduled bool      `json:"scheduled,omitempty"`
 	Bytes     int64     `json:"bytes"`
 	CreatedAt time.Time `json:"created_at"`
 }

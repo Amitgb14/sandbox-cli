@@ -3,6 +3,7 @@ package spec
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -330,5 +331,56 @@ func TestNodeIDsRoundTrip(t *testing.T) {
 	}
 	if ValidName(id) {
 		t.Errorf("node id %q is also a valid name", id)
+	}
+}
+
+// A snapshot schedule is checked against the server's limits and refused, not
+// narrowed, when it asks for more: an interval under the minimum, more kept
+// than the maximum, or a count kept with no interval to keep them by.
+func TestResolveSchedule(t *testing.T) {
+	l := api.Limits{MinSnapshotEverySecs: 300, MaxSnapshotKeep: 5}
+	for _, c := range []struct {
+		in   api.SnapshotSchedule
+		want api.SnapshotSchedule
+		ok   bool
+	}{
+		{api.SnapshotSchedule{}, api.SnapshotSchedule{}, true},
+		{api.SnapshotSchedule{EverySecs: 300}, api.SnapshotSchedule{EverySecs: 300, Keep: 1}, true},
+		{api.SnapshotSchedule{EverySecs: 3600, Keep: 5}, api.SnapshotSchedule{EverySecs: 3600, Keep: 5}, true},
+		{api.SnapshotSchedule{EverySecs: 299}, api.SnapshotSchedule{}, false},
+		{api.SnapshotSchedule{EverySecs: 300, Keep: 6}, api.SnapshotSchedule{}, false},
+		{api.SnapshotSchedule{Keep: 2}, api.SnapshotSchedule{}, false},
+		{api.SnapshotSchedule{EverySecs: -1}, api.SnapshotSchedule{}, false},
+	} {
+		got, err := ResolveSchedule(c.in, l)
+		if (err == nil) != c.ok || (c.ok && got != c.want) {
+			t.Errorf("%+v: got %+v, %v; want %+v, ok %v", c.in, got, err, c.want, c.ok)
+		}
+	}
+	if _, err := Resolve(api.CreateSandboxRequest{SnapshotEverySecs: 60}, DefaultPolicy(), "sbx_1"); err == nil {
+		t.Error("the default policy took a schedule under its five-minute minimum")
+	}
+}
+
+// The operator sets the snapshot limits in the policy file, and one that makes
+// no sense is refused when the file is loaded.
+func TestPolicyFileSnapshotLimits(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "policy.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	p, err := LoadPolicy(write("limits:\n  min_snapshot_every_secs: 60\n  max_snapshot_keep: 2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Limits.MinSnapshotEverySecs != 60 || p.Limits.MaxSnapshotKeep != 2 {
+		t.Fatalf("limits %+v", p.Limits)
+	}
+	if _, err := LoadPolicy(write("limits:\n  min_snapshot_every_secs: 0\n")); err == nil {
+		t.Fatal("a zero minimum interval was accepted")
 	}
 }

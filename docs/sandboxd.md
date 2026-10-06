@@ -90,6 +90,7 @@ pools:                                     # sandboxes booted ahead of time
 | `images` | any | when set, the only images a request may name. |
 | `defaults.cpus`, `.memory_mb`, `.disk_mb`, `.idle_timeout_secs` | 1, 1024, 10240, 1800 | what a request that asks for nothing gets. Each must be within the limits. |
 | `limits.max_cpus`, `.max_memory_mb`, `.max_disk_mb`, `.max_idle_timeout_secs` | 8, 16384, 102400, 604800 (a week) | the most a request may ask for. |
+| `limits.min_snapshot_every_secs`, `.max_snapshot_keep` | 300 (five minutes), 5 | how often at most a sandbox's schedule may snapshot it, and how many of its scheduled snapshots it may keep. Each is a copy of the sandbox on this machine's disk (about 2 GB of the base image on macOS), so these bound what schedules can cost. At least 1 second. |
 | `network.default` | `{mode: open}` | `mode` is `none`, `allowlist` or `open`; `allow` and `deny` are names, wildcards allowed. `deny` wins over `allow`. The default must itself be something the ceiling permits. |
 | `network.ceiling` | `open` | the most open mode a request may ask for. |
 | `network.may_allow` | `["*"]` | the names a request may add to an allowlist; `[]` allows only the default list. |

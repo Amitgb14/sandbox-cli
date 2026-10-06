@@ -774,3 +774,115 @@ func TestTerminatedSandboxesGiveTheirRoomBackBeforeThePoll(t *testing.T) {
 		t.Fatal("a fifth live sandbox was placed on a node with room for four")
 	}
 }
+
+// A fleet whose nodes snapshot disks only, as macOS nodes do, keeps
+// snapshots owned as a fleet that snapshots whole machines does. The ownership
+// check was gated on memory_snapshot alone, so with disk_snapshot it was
+// skipped: a create naming another user's snapshot went to the node holding
+// it, which started a sandbox from it for them.
+func TestDiskSnapshotFleetKeepsSnapshotsOwned(t *testing.T) {
+	n1 := startNode(t, "n1", api.CapEgressAllowlist, api.CapDiskSnapshot)
+	tg := startGateway(t, nil, n1)
+	alice, bob := tg.user("alice"), tg.user("bob")
+	ctx := ctxT(t)
+	if caps, err := alice.Capabilities(ctx); err != nil || caps.Has(api.CapMemorySnapshot) || !caps.Has(api.CapDiskSnapshot) {
+		t.Fatalf("precondition: a fleet with disk snapshots and no memory snapshots (%v)", err)
+	}
+	src, err := bob.CreateSandbox(ctx, api.CreateSandboxRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := bob.CreateSnapshot(ctx, src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Kind != api.SnapshotDisk {
+		t.Fatalf("precondition: bob's snapshot is a %q one", snap.Kind)
+	}
+	_, err = alice.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID})
+	wantCode(t, err, api.CodeNotFound)
+	if list, err := alice.Snapshots(ctx); err != nil || len(list) != 0 {
+		t.Fatalf("alice sees %v, %v", list, err)
+	}
+	if _, err := bob.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID}); err != nil {
+		t.Fatalf("bob's own snapshot: %v", err)
+	}
+}
+
+// A sandbox's schedule takes snapshots on its node, not through the gateway,
+// so the gateway never recorded them: its owner could not see or fork them.
+// They belong to whoever owns the sandbox — to no one else, by listing, fork,
+// delete or a schedule set on someone else's sandbox — and the records of the
+// ones retention removed do not pile up.
+func TestScheduledSnapshotsBelongToTheSandboxOwner(t *testing.T) {
+	n1 := startNode(t, "n1", api.CapEgressAllowlist, api.CapDiskSnapshot)
+	tg := startGateway(t, nil, n1)
+	alice, bob := tg.user("alice"), tg.user("bob")
+	ctx := ctxT(t)
+	direct, err := api.NewClient(n1.ts.URL, n1.token) // the node itself, past the gateway
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := bob.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotEverySecs: 1, SnapshotKeep: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.SetSnapshotSchedule(ctx, src.ID, api.SnapshotSchedule{EverySecs: 1, Keep: 3}); err == nil {
+		t.Fatal("alice set the schedule of bob's sandbox")
+	}
+
+	// A scheduled snapshot exists on the node; ask alice first, so the
+	// gateway meets it on her request.
+	var sched string
+	deadline := time.Now().Add(10 * time.Second)
+	for sched == "" && time.Now().Before(deadline) {
+		list, err := direct.Snapshots(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range list {
+			if s.Scheduled && s.Sandbox == src.ID {
+				sched = s.ID
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if sched == "" {
+		t.Fatal("precondition: the node took no scheduled snapshot")
+	}
+	if list, err := alice.Snapshots(ctx); err != nil || len(list) != 0 {
+		t.Fatalf("alice sees %v, %v", list, err)
+	}
+	_, err = alice.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: sched})
+	wantCode(t, err, api.CodeNotFound)
+	err = alice.DeleteSnapshot(ctx, sched)
+	wantCode(t, err, api.CodeNotFound)
+
+	list, err := bob.Snapshots(ctx)
+	if err != nil || len(list) == 0 {
+		t.Fatalf("bob does not see his scheduled snapshots: %v, %v", list, err)
+	}
+	fork, err := bob.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: list[0].ID})
+	if err != nil {
+		t.Fatalf("bob's fork of his scheduled snapshot: %v", err)
+	}
+	if nodeOf(tg, fork.ID) != "n1" {
+		t.Fatalf("the fork went to %s", nodeOf(tg, fork.ID))
+	}
+
+	// keep 1: the gateway's records follow what the node still holds.
+	time.Sleep(3 * time.Second)
+	if _, err := bob.Snapshots(ctx); err != nil {
+		t.Fatal(err)
+	}
+	held, _ := direct.Snapshots(ctx)
+	on := map[string]bool{}
+	for _, s := range held {
+		on[s.ID] = true
+	}
+	for id, o := range tg.store.st.Snapshots {
+		if o.Node == "n1" && !on[id] {
+			t.Errorf("a record of %s, which n1 no longer holds, was kept", id)
+		}
+	}
+}

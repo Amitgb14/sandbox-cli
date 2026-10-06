@@ -38,13 +38,24 @@ export interface Sandbox {
   idle_timeout_secs: number;
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
+  /** The snapshot schedule: one every so many seconds while it runs, the newest kept. */
+  snapshot_every_secs?: number;
+  snapshot_keep?: number;
 }
 
 export interface Capabilities {
   api_version: string;
   backend: string;
   capabilities: Record<string, boolean>;
-  limits: { max_cpus: number; max_memory_mb: number; max_disk_mb: number; max_idle_timeout_secs: number };
+  limits: {
+    max_cpus: number;
+    max_memory_mb: number;
+    max_disk_mb: number;
+    max_idle_timeout_secs: number;
+    /** The shortest snapshot schedule allowed, and the most scheduled snapshots kept. */
+    min_snapshot_every_secs?: number;
+    max_snapshot_keep?: number;
+  };
   network: { default: NetworkPolicy; ceiling: NetworkMode; may_allow: string[] | null };
 }
 
@@ -99,6 +110,10 @@ export interface Snapshot {
   id: string;
   sandbox: string;
   image: string;
+  /** memory: memory, processes and disk; disk: the files only, forks boot afresh. */
+  kind?: "memory" | "disk";
+  /** Taken by the sandbox's schedule, whose retention may remove it. */
+  scheduled?: boolean;
   bytes: number;
   created_at: string;
 }

@@ -77,6 +77,7 @@ func (g *Gateway) Handler() http.Handler {
 		{"POST /v1/sandboxes/{ref}/suspend", false, ScopeCreate, nil},
 		{"POST /v1/sandboxes/{ref}/resume", false, ScopeCreate, nil},
 		{"POST /v1/sandboxes/{ref}/snapshots", false, ScopeCreate, g.afterSnapshot},
+		{"PUT /v1/sandboxes/{ref}/snapshot-schedule", false, ScopeCreate, nil},
 		{"GET /v1/sandboxes/{ref}/tunnel", false, ScopeCreate, nil},
 		{"GET /v1/sandboxes/{ref}/files", false, ScopeRead, nil},
 		{"PUT /v1/sandboxes/{ref}/files", true, ScopeCreate, nil},
