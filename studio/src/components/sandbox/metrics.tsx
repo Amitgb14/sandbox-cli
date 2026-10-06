@@ -106,11 +106,33 @@ function MetricsBody({ sb }: { sb: Sandbox }) {
   );
 }
 
+/** A sandbox's metrics in a dialog, polled only while it is open. */
+export function MetricsDialog({ sb, open, onOpenChange }: { sb: Sandbox; open: boolean; onOpenChange: (open: boolean) => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {/* React carries a click in a portal up its component tree, so one in
+          here would reach a list row's handler and open the sandbox's panel too. */}
+      <DialogContent className="sm:max-w-3xl" onClick={(e) => e.stopPropagation()}>
+        <DialogHeader>
+          <DialogTitle>Metrics of {sb.name || sb.id}</DialogTitle>
+          <DialogDescription>The last hour</DialogDescription>
+        </DialogHeader>
+        {open ? <MetricsBody sb={sb} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /**
  * A sandbox's resource chips, which open its metrics where the endpoint
  * measures usage, and are plain chips where it does not.
+ *
+ * With onOpen the caller owns the dialog. A table must: its cells are
+ * remounted whenever its column definitions change, which a list polling
+ * every few seconds does, and a dialog whose state lived in the cell closed
+ * with each poll.
  */
-export function ResourcesWithMetrics({ sb, className }: { sb: Sandbox; className?: string }) {
+export function ResourcesWithMetrics({ sb, className, onOpen }: { sb: Sandbox; className?: string; onOpen?: () => void }) {
   const { data: info } = useInfo();
   const [open, setOpen] = useState(false);
   const can = !!info?.capabilities?.capabilities?.metrics;
@@ -119,7 +141,7 @@ export function ResourcesWithMetrics({ sb, className }: { sb: Sandbox; className
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => (onOpen ? onOpen() : setOpen(true))}
         title="CPU and memory over the last hour"
         aria-label={`Metrics of ${sb.name || sb.id}`}
         className={cn("group flex items-center gap-1.5 rounded-md text-left hover:opacity-90", className)}
@@ -127,17 +149,7 @@ export function ResourcesWithMetrics({ sb, className }: { sb: Sandbox; className
         <ResourceChips sb={sb} className="flex-nowrap group-hover:[&>span]:border-status-running/50" />
         <Activity className="size-3.5 shrink-0 text-muted-foreground group-hover:text-status-running" />
       </button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        {/* React carries a click in a portal up its component tree, so one in
-            here would reach a list row's handler and open the sandbox's panel too. */}
-        <DialogContent className="sm:max-w-3xl" onClick={(e) => e.stopPropagation()}>
-          <DialogHeader>
-            <DialogTitle>Metrics of {sb.name || sb.id}</DialogTitle>
-            <DialogDescription>The last hour</DialogDescription>
-          </DialogHeader>
-          {open ? <MetricsBody sb={sb} /> : null}
-        </DialogContent>
-      </Dialog>
+      {onOpen ? null : <MetricsDialog sb={sb} open={open} onOpenChange={setOpen} />}
     </>
   );
 }

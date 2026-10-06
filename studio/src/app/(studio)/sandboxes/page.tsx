@@ -25,7 +25,7 @@ import { FacetedFilter } from "@/components/data-table/faceted-filter";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { ViewOptions } from "@/components/data-table/view-options";
 import { SandboxDetails } from "@/components/sandbox/details";
-import { ResourcesWithMetrics } from "@/components/sandbox/metrics";
+import { MetricsDialog, ResourcesWithMetrics } from "@/components/sandbox/metrics";
 import { AgentActivity, StateDot } from "@/components/sandbox/state-dot";
 import { SandboxSummary } from "@/components/sandbox/summary";
 import { every } from "@/components/sandbox/snapshots";
@@ -97,6 +97,8 @@ export default function SandboxesPage() {
   const [visibility, setVisibility] = useState<VisibilityState>({});
   const [open, setOpen] = useState<{ id: string; shell: boolean } | null>(null);
   const [wide, setWide] = useState(false);
+  // The metrics dialog is the page's, not a cell's: see ResourcesWithMetrics.
+  const [metricsOf, setMetricsOf] = useState<string | null>(null);
 
   const all = useMemo(() => data ?? [], [data]);
   const agentOf = useMemo(() => new Map((agentStates ?? []).map((a) => [a.sandbox, a])), [agentStates]);
@@ -181,7 +183,7 @@ export default function SandboxesPage() {
       {
         id: "resources",
         header: "Resources",
-        cell: ({ row }) => <ResourcesWithMetrics sb={row.original} />,
+        cell: ({ row }) => <ResourcesWithMetrics sb={row.original} onOpen={() => setMetricsOf(row.original.id)} />,
         meta: { label: "Resources" },
       },
       {
@@ -433,6 +435,10 @@ export default function SandboxesPage() {
         </>
       )}
 
+      {(() => {
+        const sb = metricsOf ? all.find((s) => s.id === metricsOf) : undefined;
+        return sb ? <MetricsDialog sb={sb} open onOpenChange={(o) => !o && setMetricsOf(null)} /> : null;
+      })()}
       <Sheet open={!!open} onOpenChange={(o) => !o && setOpen(null)}>
         <SheetContent
           side="right"
