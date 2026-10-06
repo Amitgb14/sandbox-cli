@@ -1,10 +1,12 @@
 name: base-image
 
-# Publishes the sandbox base image (images/base/Dockerfile) for linux/amd64 and
+# Publishes the sandbox base image (images/base/Dockerfile), and the desktop
+# image built on it (images/desktop/Dockerfile), for linux/amd64 and
 # linux/arm64:
 #
-#   ghcr.io/<owner>/sandbox-base:<tag>    on a version tag, and :latest
-#   ghcr.io/<owner>/sandbox-base:edge     on every push to main
+#   ghcr.io/<owner>/sandbox-base:<tag>       on a version tag, and :latest
+#   ghcr.io/<owner>/sandbox-base:edge        on every push to main
+#   ghcr.io/<owner>/sandbox-desktop:<same>   from the base just published
 #
 # This is the only place a container engine is used: users never build the
 # image. sandboxd pulls it — on Linux it becomes a read-only ext4 disk booted
@@ -18,6 +20,7 @@ on:
     tags: ["*"]
     paths: &paths
       - "images/base/**"
+      - "images/desktop/**"
       - "cmd/sandbox-guestd/**"
       - "internal/guestproto/**"
       - "internal/vsock/**"
@@ -69,3 +72,54 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ github.ref_name }}
+
+  # The desktop image is the base plus a screen, so it is built from the base
+  # the job above has just published, under the same tag. A pull request
+  # publishes nothing, so it builds on the current edge instead: what it is
+  # there to find is a broken desktop Dockerfile.
+  desktop:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: base
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # ghcr.io names are lowercase.
+          owner=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
+          tag=edge
+          if [ "$REF_TYPE" = tag ]; then tag=$REF_NAME; fi
+          echo "image=ghcr.io/$owner/sandbox-base:$tag" >> "$GITHUB_OUTPUT"
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/sandbox-desktop
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=pr
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: images/desktop
+          file: images/desktop/Dockerfile
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: BASE=${{ steps.base.outputs.image }}

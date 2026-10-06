@@ -25,6 +25,14 @@ const nextConfig: NextConfig = {
   pageExtensions: admin ? ["admin.tsx", "tsx", "ts"] : ["tsx", "ts"],
   // A second build (the admin-off check) goes elsewhere, so it never replaces out/.
   distDir: process.env.STUDIO_DIST_DIR || ".next",
+  // noVNC (the Desktop tab) awaits at the top level of a module. Every browser
+  // Studio runs in has async functions, but webpack's default target does not
+  // say so, and it warned that the output might not run. Saying so is what
+  // makes the generated code right, not just quiet.
+  webpack(config) {
+    config.output.environment = { ...config.output.environment, asyncFunction: true };
+    return config;
+  },
 };
 
 export default nextConfig;

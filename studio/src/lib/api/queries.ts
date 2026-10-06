@@ -221,6 +221,17 @@ export function useOpenShell() {
   );
 }
 
+/** The command images/desktop provides: a desktop served over VNC on the guest's loopback. */
+export const DESKTOP_COMMAND = "sandbox-desktop";
+
+export function useStartDesktop() {
+  return useInvalidating(
+    ({ id }: { id: string }) =>
+      apiFetch<Process>(`${sbx(id)}/processes`, { method: "POST", json: { argv: [DESKTOP_COMMAND], cwd: "/sandbox/home" } }),
+    ({ id }) => [[...keys.processes(id)]],
+  );
+}
+
 export function useSignal() {
   return useMutation({
     mutationFn: ({ id, pid, signal }: { id: string; pid: number; signal: string }) =>

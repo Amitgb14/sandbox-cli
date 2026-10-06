@@ -5,6 +5,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { ChevronDown, ChevronUp, ExternalLink, Maximize2, Minimize2, Plus, SquareTerminal, Trash2, X } from "lucide-react";
 import { CopyButton } from "@/components/common/copy-button";
+import { SandboxDesktop } from "@/components/sandbox/desktop";
 import { SandboxEvents } from "@/components/sandbox/events";
 import { SandboxFiles } from "@/components/sandbox/files";
 import { ProcessOutput } from "@/components/sandbox/output";
@@ -287,6 +288,7 @@ export function SandboxDetails({
           <TabsTrigger value="terminal" disabled={!tty}>
             Terminal
           </TabsTrigger>
+          {sb.state === "running" && <TabsTrigger value="desktop">Desktop</TabsTrigger>}
           <TabsTrigger value="output" disabled={processes.length === 0}>
             Logs
           </TabsTrigger>
@@ -328,6 +330,11 @@ export function SandboxDetails({
             <p className="text-sm text-muted-foreground">No process here has a terminal. Start a shell with Terminal above.</p>
           )}
         </TabsContent>
+        {sb.state === "running" && (
+          <TabsContent value="desktop" className="mt-0 p-5">
+            <SandboxDesktop sandbox={id} image={sb.image} processes={processes} canStart={can("sandbox:create")} />
+          </TabsContent>
+        )}
         <TabsContent value="output" className="mt-0 flex flex-col gap-3 p-5">
           <div className="flex flex-wrap gap-1.5">
             {processes.map((p) => (

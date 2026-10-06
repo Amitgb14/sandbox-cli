@@ -198,6 +198,14 @@ in `_old/` as reference, to be ported where this design still wants it.
   a failed run changed nothing took a repository to compare, and a run that may
   have done work must not be done twice. A `--detach` run with `--fallback` is
   refused, because nothing watches a detached run's exit.
+- **A desktop image, used from Studio** ([docs/desktop.md](docs/desktop.md)).
+  `ghcr.io/<owner>/sandbox-desktop` is the base image plus a screen: a window
+  manager, a terminal and Chromium, started by `sandbox-desktop` and served
+  over VNC on the guest's loopback. Studio's new Desktop tab starts it and
+  draws it with its own VNC client, through a bridge (`/api/ws/desktop`) that
+  reaches that one port through the API's tunnel and nothing else; nothing the
+  guest serves is shown as a page on Studio's address. Published with the base
+  image, under the same tags.
 
 ### Security
 
