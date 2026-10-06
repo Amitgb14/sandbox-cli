@@ -50,6 +50,12 @@ type LaunchRequest struct {
 	Labels  map[string]string `json:"labels,omitempty"`
 	Volumes []api.VolumeMount `json:"volumes,omitempty"`
 	Profile string            `json:"profile,omitempty"`
+	// Image runs that image instead of the server's default, and Snapshot
+	// starts from a snapshot instead of an image: the CLI's --image and
+	// --from-snapshot. Either is only asked for; sandboxd decides, under its
+	// policy's image list and the snapshot's owner, as for any client.
+	Image    string `json:"image,omitempty"`
+	Snapshot string `json:"snapshot,omitempty"`
 	// Rows and Cols size a console run's terminal before anyone attaches.
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`

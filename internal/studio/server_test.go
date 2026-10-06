@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -130,8 +132,10 @@ func TestProxyCarriesTheContextsToken(t *testing.T) {
 func TestLaunchValidates(t *testing.T) {
 	s, st, _ := studioUnderTest(t)
 	launched := 0
-	s.Launch = func(context.Context, LaunchRequest) (LaunchResult, error) {
+	var last LaunchRequest
+	s.Launch = func(_ context.Context, req LaunchRequest) (LaunchResult, error) {
 		launched++
+		last = req
 		return LaunchResult{Sandbox: "sbx_x"}, nil
 	}
 	for name, req := range map[string]LaunchRequest{
@@ -142,6 +146,7 @@ func TestLaunchValidates(t *testing.T) {
 		"unverified headless":   {Agent: "goose", Prompt: "x"},
 		"unverified console":    {Agent: "goose", Console: true},
 		"unknown agent":         {Agent: "nope", Prompt: "x"},
+		"image and snapshot":    {Command: []string{"true"}, Image: "img:1", Snapshot: "snp_1"},
 	} {
 		if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", req); r.StatusCode < 400 {
 			t.Errorf("%s: %d %v", name, r.StatusCode, body)
@@ -160,9 +165,16 @@ func TestLaunchValidates(t *testing.T) {
 	for name, req := range map[string]LaunchRequest{
 		"a command":                         {Command: []string{"true"}},
 		"a console run of a verified agent": {Agent: "claude", Console: true},
+		"a command from an image":           {Command: []string{"true"}, Image: "img:1"},
+		"a command from a snapshot":         {Command: []string{"true"}, Snapshot: "snp_1"},
 	} {
 		if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", req); r.StatusCode != http.StatusCreated {
 			t.Errorf("%s: %d %v", name, r.StatusCode, body)
+		}
+		// What was asked for reaches the launcher, which hands it to sandboxd
+		// to decide on, as the CLI's --image and --from-snapshot do.
+		if last.Image != req.Image || last.Snapshot != req.Snapshot {
+			t.Errorf("%s: launched %+v", name, last)
 		}
 	}
 }
@@ -289,5 +301,52 @@ func TestAgentStatesListsAgentSandboxes(t *testing.T) {
 	// No conversation written yet: unknown, with the reason, rather than a guess.
 	if len(got) != 1 || got[0].Sandbox != agent.ID || got[0].Agent != "claude" || got[0].State != "unknown" || got[0].Why == "" {
 		t.Errorf("got %+v", got)
+	}
+}
+
+// Each agent says where its login is kept, which API it always reaches, and
+// which of the variables it reads are set where Studio runs — by name, and
+// never with a value, which a launch forwards and nothing else may show.
+func TestAgentsDescribeTheirLoginWithoutValues(t *testing.T) {
+	const secret = "sk-test-do-not-show-0123456789"
+	t.Setenv("ANTHROPIC_API_KEY", secret)
+	os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
+	_, st, _ := studioUnderTest(t)
+	req, _ := http.NewRequest("GET", st.URL+"/api/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), secret) {
+		t.Fatal("an environment value reached the response")
+	}
+	var got struct{ Agents []Agent }
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	var claude *Agent
+	for i := range got.Agents {
+		if got.Agents[i].Name == "claude" {
+			claude = &got.Agents[i]
+		}
+	}
+	if claude == nil {
+		t.Fatal("no claude")
+	}
+	if claude.ProviderHost != "api.anthropic.com" || len(claude.LoginFiles) == 0 {
+		t.Errorf("claude: %+v", claude)
+	}
+	set := map[string]bool{}
+	for _, e := range claude.Env {
+		set[e.Name] = e.Set
+	}
+	if v, ok := set["ANTHROPIC_API_KEY"]; !ok || !v {
+		t.Errorf("ANTHROPIC_API_KEY: listed %v, set %v; want listed and set", ok, v)
+	}
+	if v, ok := set["ANTHROPIC_AUTH_TOKEN"]; !ok || v {
+		t.Errorf("ANTHROPIC_AUTH_TOKEN: listed %v, set %v; want listed and unset", ok, v)
 	}
 }
