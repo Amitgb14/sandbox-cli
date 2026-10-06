@@ -1,0 +1,21 @@
+# One URL per line; split round-robin across the sandboxes.
+https://example.com
+https://www.wikipedia.org
+https://news.ycombinator.com
+https://github.com
+https://developer.mozilla.org
+https://go.dev
+https://www.python.org
+https://nodejs.org
+https://www.rust-lang.org
+https://kernel.org
+https://debian.org
+https://playwright.dev
+https://httpbin.org/html
+https://www.iana.org/domains/reserved
+https://lwn.net
+https://pkg.go.dev
+https://docs.python.org/3/
+https://www.gnu.org
+https://www.openbsd.org
+https://www.w3.org

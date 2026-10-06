@@ -100,6 +100,44 @@ test("the list sums what sandboxes were given, walks them in its panel, and term
   }
 });
 
+test("the Playground starts a sandbox from the image chosen, and says so in its code", async ({ page, request }) => {
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/launch/");
+  await page.getByText("Command", { exact: true }).first().click();
+  await page.getByRole("textbox", { name: "Command" }).fill("echo from-an-image");
+  // The fake backend takes no snapshots, so that choice is offered but off.
+  await expect(page.getByText("(this endpoint takes none)")).toBeVisible();
+  await page.getByRole("combobox", { name: "Image" }).click();
+  await page.getByPlaceholder("Search, or type any image…").fill("e2e-image:1");
+  await page.getByRole("option", { name: /Use e2e-image:1/ }).click();
+  await expect(page.getByRole("combobox", { name: "Image" })).toContainText("e2e-image:1");
+  const code = page.locator("pre").last();
+  await expect(code).toContainText("sandbox-cli run --image e2e-image:1 -- echo from-an-image");
+  await page.getByRole("tab", { name: "curl" }).click();
+  await expect(code).toContainText('"image":"e2e-image:1"');
+  await page.locator("form").getByRole("button", { name: "Launch" }).click();
+  await expect(page).toHaveURL(/\/sandbox\/?\?id=sbx_/);
+  const id = new URL(page.url()).searchParams.get("id");
+  const sb = await (await request.fetch(`/api/v1/sandboxes/${id}`, { headers: { Authorization: `Bearer ${token}` } })).json();
+  expect(sb.image).toBe("e2e-image:1");
+});
+
+test("the Playground lists agents with what each needs to log in", async ({ page }) => {
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/launch/");
+  const agents = page.getByRole("radiogroup", { name: "Agent" });
+  await agents.getByRole("radio", { name: /codex/ }).click();
+  await expect(agents.getByRole("radio", { name: /codex/ })).toHaveAttribute("aria-checked", "true");
+  await expect(page.locator("pre").last()).toContainText("sandbox-cli agent codex");
+  // Opened, a row says where the login is kept, which keys it takes, and what it reaches.
+  await page.getByRole("button", { name: "Show claude's login details" }).click();
+  await expect(agents.getByText("~/.claude/.credentials.json")).toBeVisible();
+  await expect(agents.getByText("ANTHROPIC_API_KEY")).toBeVisible();
+  await expect(agents.getByText("api.anthropic.com").first()).toBeVisible();
+});
+
 test("the Desktop tab explains a sandbox whose image has no desktop", async ({ page, request }) => {
   const api = (path: string, method = "GET", data?: unknown) =>
     request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });

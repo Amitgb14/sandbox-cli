@@ -10,6 +10,19 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Agents, one row each, with what each needs to log in.** The Playground's
+  agents are a list: each row says whether it is logged in, has an API key set
+  where Studio runs (which a launch forwards), or needs one, and opens for
+  where its login is kept between runs, the variables it reads and which are
+  set (names only, never values), and the API it always reaches.
+- **The Playground starts from the image or snapshot you choose.** A new
+  *Start from* step takes an image, from a searchable picker grouped into the
+  desktop image, those the machine has already built and those its sandboxes
+  run, or typed; or a snapshot, where the endpoint takes them.
+  Empty is the server's default, as before. The code beside the form follows:
+  `--image` or `--from-snapshot` for the CLI, `image` or `snapshot_id` for the
+  API and the SDKs. Studio's launch request carries `image` and `snapshot`,
+  one or neither; sandboxd's policy still decides whether they run.
 - **A Desktop tab.** A running sandbox's panel has a Desktop tab: in a sandbox
   made from the desktop image it starts the desktop and shows its screen — a
   terminal and a browser to use — scaled to fit, with Reconnect and Full

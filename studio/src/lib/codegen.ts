@@ -8,12 +8,17 @@ import type { NetworkMode, VolumeMount } from "@/lib/types";
  *
  * Every line here must be exactly what the client accepts: a snippet that
  * almost works teaches the wrong call. So it covers what all four can say —
- * a command, its name, network, allowlist, labels and volumes. An agent run is
+ * a command, its image or snapshot, name, network, allowlist, labels and
+ * volumes. An agent run is
  * the CLI's alone (the agent's login is copied in by sandbox-cli, not by the
  * API), so for one the code tabs show only the CLI.
  */
 export interface RunConfig {
   command: string[];
+  /** An image instead of the server's default (--image; "image"). */
+  image?: string;
+  /** A snapshot to start from instead of an image (--from-snapshot; "snapshot_id"). */
+  snapshot?: string;
   name?: string;
   network?: "" | NetworkMode;
   allow?: string[];
@@ -34,6 +39,8 @@ export const ENDPOINT_PLACEHOLDER = "https://sandboxd.example:7443";
 
 function cliFlags(c: Omit<RunConfig, "command" | "defaultAllow">): string[] {
   const f: string[] = [];
+  if (c.snapshot) f.push("--from-snapshot", c.snapshot);
+  else if (c.image) f.push("--image", c.image);
   if (c.name) f.push("--name", c.name);
   if (c.network) f.push("--network", c.network);
   for (const a of c.allow ?? []) f.push("--allow", a);
@@ -56,6 +63,8 @@ export function cliAgent(agent: string, c: Omit<RunConfig, "command" | "defaultA
 /** The create request body every API client sends. */
 function createBody(c: Omit<RunConfig, "command">): Record<string, unknown> {
   const body: Record<string, unknown> = {};
+  if (c.snapshot) body.snapshot_id = c.snapshot;
+  else if (c.image) body.image = c.image;
   if (c.name) body.name = c.name;
   const allow = c.allow?.length ? [...new Set([...(c.defaultAllow ?? []), ...c.allow])] : undefined;
   if (c.network === "allowlist" || (!c.network && allow)) body.network = { mode: "allowlist", ...(allow ? { allow } : {}) };

@@ -1,0 +1,7 @@
+{
+  "name": "sandbox-browser-job",
+  "private": true,
+  "dependencies": {
+    "playwright-core": "^1.48.0"
+  }
+}

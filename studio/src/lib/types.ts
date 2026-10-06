@@ -118,6 +118,8 @@ export interface NodeStatus {
   /** Capacity less what running and suspended sandboxes were given. */
   free: NodeResources;
   running: number;
+  /** Images whose root disk is already built here, so a sandbox of one starts without a pull. */
+  images?: string[];
   cordoned: boolean;
 }
 
@@ -136,6 +138,12 @@ export interface Info {
 export interface Agent {
   name: string;
   login: "saved" | "-" | "not kept";
+  /** The agent's API, which its runs may always reach. */
+  provider_host?: string;
+  /** What is kept of its login between runs, relative to the sandbox user's home. */
+  login_files?: string[];
+  /** The variables it reads, and whether each is set where Studio runs. Names only. */
+  env?: { name: string; set: boolean }[];
 }
 
 export interface LaunchRequest {
@@ -151,6 +159,9 @@ export interface LaunchRequest {
   profile?: "" | "dev" | "prod";
   rows?: number;
   cols?: number;
+  /** An image instead of the server's default, or a snapshot to start from: one or neither. */
+  image?: string;
+  snapshot?: string;
 }
 
 export interface LaunchResult {

@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Bot, Check, ChevronRight, SquareTerminal, TerminalSquare, type LucideIcon } from "lucide-react";
+import { Bot, ChevronRight, SquareTerminal, TerminalSquare, type LucideIcon } from "lucide-react";
 import { CodeTabs } from "@/components/common/code-tabs";
 import { PageHeader } from "@/components/common/page-header";
+import { AgentList } from "@/components/launch/agent-list";
+import { ImagePicker } from "@/components/launch/image-picker";
 import { Gate } from "@/components/shell/gate";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,9 +16,10 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useAgents, useInfo, useLaunch } from "@/lib/api/queries";
+import { useAgents, useInfo, useLaunch, useNode, useSandboxes, useSnapshots } from "@/lib/api/queries";
+import { useCaller } from "@/lib/caller";
 import { cliAgent, snippets } from "@/lib/codegen";
-import { splitArgs } from "@/lib/format";
+import { formatRelative, splitArgs } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { LaunchRequest, NetworkMode } from "@/lib/types";
 
@@ -65,6 +68,17 @@ function LaunchForm() {
   const [allow, setAllow] = useState("");
   const [labels, setLabels] = useState("");
   const [volumes, setVolumes] = useState("");
+  const [from, setFrom] = useState<"image" | "snapshot">("image");
+  const [image, setImage] = useState("");
+  const [snapshot, setSnapshot] = useState("");
+  const canSnapshot = !!(info?.capabilities?.capabilities?.memory_snapshot || info?.capabilities?.capabilities?.disk_snapshot);
+  const { data: snapshots } = useSnapshots(canSnapshot);
+  const { data: node } = useNode(useCaller().kind === "sandboxd");
+  const { data: sandboxes } = useSandboxes();
+  const built = node?.images ?? [];
+  const inUse = (sandboxes ?? []).map((sb) => sb.image);
+  const fromSnapshot = from === "snapshot" && canSnapshot;
+  const start = fromSnapshot ? { snapshot: snapshot || undefined } : { image: image.trim() || undefined };
 
   const ceiling = info?.capabilities?.network.ceiling;
   const chosen = agents?.find((a) => a.name === agent);
@@ -79,7 +93,7 @@ function LaunchForm() {
       return { name: n, path: p, read_only: ro === "ro" || undefined };
     });
   // What the code panel shows: the same choices, for each client.
-  const sandboxOpts = { name: name || undefined, network, allow: allowList, labels: labelMap, volumes: vols };
+  const sandboxOpts = { ...start, name: name || undefined, network, allow: allowList, labels: labelMap, volumes: vols };
   const code =
     kind === "command"
       ? snippets({ ...sandboxOpts, command: splitArgs(command), defaultAllow:
@@ -101,6 +115,11 @@ function LaunchForm() {
         req.cols = 110;
       }
     }
+    if (fromSnapshot && !snapshot) {
+      toast.error("Choose a snapshot to start from, or start from an image");
+      return;
+    }
+    Object.assign(req, start);
     if (network) req.network = network;
     if (allowList.length) req.allow = allowList;
     if (Object.keys(labelMap).length) req.labels = labelMap;
@@ -142,32 +161,7 @@ function LaunchForm() {
           </Section>
         ) : (
           <Section step={2} title="Agent">
-            <div role="radiogroup" aria-label="Agent" className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
-              {(agents ?? []).map((a) => {
-                const on = a.name === agent;
-                return (
-                  <button
-                    key={a.name}
-                    type="button"
-                    role="radio"
-                    aria-checked={on}
-                    onClick={() => setAgent(a.name)}
-                    className={cn(
-                      "flex flex-col items-start gap-1 rounded-lg border bg-card px-3 py-2.5 text-left transition-colors hover:border-foreground/20",
-                      on && "border-primary bg-primary/5",
-                    )}
-                  >
-                    <span className="flex w-full items-center justify-between font-mono text-sm">
-                      {a.name}
-                      {on && <Check className="size-3.5 text-primary" aria-hidden />}
-                    </span>
-                    <span className={cn("text-[11px]", a.login === "saved" ? "text-contained" : "text-muted-foreground")}>
-                      {a.login === "saved" ? "logged in" : a.login === "not kept" ? "login not kept" : "not logged in"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            <AgentList agents={agents ?? []} value={agent} onChange={setAgent} />
             <Label htmlFor="prompt" className="mt-2">
               {kind === "console" ? "First turn (optional)" : "Prompt"}
             </Label>
@@ -181,6 +175,46 @@ function LaunchForm() {
             />
           </Section>
         )}
+
+        <Section step={3} title="Start from">
+          <RadioGroup value={fromSnapshot ? "snapshot" : "image"} onValueChange={(v) => setFrom(v as "image" | "snapshot")} className="flex flex-wrap gap-4" aria-label="Start from">
+            <Label className="flex items-center gap-2 font-normal">
+              <RadioGroupItem value="image" />
+              An image
+            </Label>
+            <Label className={cn("flex items-center gap-2 font-normal", !canSnapshot && "text-muted-foreground")}>
+              <RadioGroupItem value="snapshot" disabled={!canSnapshot} />
+              A snapshot
+              {!canSnapshot ? <span className="text-xs">(this endpoint takes none)</span> : null}
+            </Label>
+          </RadioGroup>
+          {fromSnapshot ? (
+            snapshots?.length ? (
+              <Select value={snapshot} onValueChange={setSnapshot}>
+                <SelectTrigger aria-label="Snapshot" className="font-mono text-[13px]">
+                  <SelectValue placeholder="Choose a snapshot" />
+                </SelectTrigger>
+                <SelectContent>
+                  {snapshots.map((s) => (
+                    <SelectItem key={s.id} value={s.id} className="font-mono text-[13px]">
+                      {s.id} · {s.image.replace(/^.*\//, "")} · {formatRelative(s.created_at)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="text-sm text-muted-foreground">No snapshots yet. Take one from a running sandbox&apos;s panel, with Snapshot.</p>
+            )
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <ImagePicker value={image} onChange={setImage} built={built} inUse={inUse} />
+              <p className="text-xs text-muted-foreground">
+                A desktop image gives the sandbox a screen, in its Desktop tab; it runs best with 2 GiB (the CLI&apos;s{" "}
+                <span className="font-mono">--memory 2048</span>).
+              </p>
+            </div>
+          )}
+        </Section>
 
         <details className="group rounded-lg border bg-card">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium">
@@ -228,6 +262,8 @@ function LaunchForm() {
           <CardContent className="flex flex-col gap-4 p-4">
             <h2 className="text-sm font-semibold">This run</h2>
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
+              <dt className="text-muted-foreground">From</dt>
+              <dd className="truncate font-mono text-[13px]">{start.snapshot ?? start.image ?? "the server's image"}</dd>
               <dt className="text-muted-foreground">Starts in</dt>
               <dd className="truncate font-mono text-[13px]">/sandbox/home</dd>
               <dt className="text-muted-foreground">Runs</dt>
