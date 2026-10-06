@@ -99,6 +99,22 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(b"".join(e.get("data", b"") for e in events), b"one\ntwo\n")
         self.assertEqual(events[-1]["exit_code"], 0)
 
+    def test_snapshot_schedule_needs_snapshots(self):
+        # The fake sandboxd takes no snapshots: a schedule is refused, typed,
+        # and the limits a schedule would be bound by are still published.
+        limits = self.c.capabilities()["limits"]
+        self.assertGreaterEqual(limits["min_snapshot_every_secs"], 1)
+        with self.assertRaises(ApiError) as e:
+            self.c.create_sandbox(snapshot_every_secs=limits["min_snapshot_every_secs"])
+        self.assertEqual(e.exception.code, "unsupported")
+        sb = self.c.create_sandbox()
+        try:
+            with self.assertRaises(ApiError) as e:
+                self.c.set_snapshot_schedule(sb["id"], limits["min_snapshot_every_secs"], 1)
+            self.assertEqual(e.exception.code, "unsupported")
+        finally:
+            self.c.terminate_sandbox(sb["id"])
+
     def test_refusals_are_typed(self):
         with self.assertRaises(ApiError) as e:
             self.c.create_sandbox(network={"mode": "open"})

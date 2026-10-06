@@ -86,6 +86,7 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"AttachStreamsInputAndOutput", testAttach},
 		{"SuspendKeepsTheSandbox", testSuspend},
 		{"ASnapshotForksTheSandbox", testSnapshot},
+		{"AScheduleKeepsTheNewestSnapshots", testSnapshotSchedule},
 		{"ATunnelReachesAGuestPort", testTunnel},
 		{"LabelsAreKeptAndFilterTheListing", testLabels},
 		{"TheAuditLogRecordsWhatHappened", testAudit},
@@ -755,8 +756,11 @@ func testSuspend(t *testing.T, e *env) {
 func testSnapshot(t *testing.T, e *env) {
 	sb := e.newSandbox(t, api.CreateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
 	ctx := ctxT(t)
-	if !e.caps.Has(api.CapMemorySnapshot) {
+	memory, disk := e.caps.Has(api.CapMemorySnapshot), e.caps.Has(api.CapDiskSnapshot)
+	if !memory && !disk {
 		_, err := e.c.CreateSnapshot(ctx, sb.ID)
+		wantCode(t, err, api.CodeUnsupported)
+		_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: "snp_0000000000000000"})
 		wantCode(t, err, api.CodeUnsupported)
 		return
 	}
@@ -768,6 +772,11 @@ func testSnapshot(t *testing.T, e *env) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	t.Cleanup(func() { _ = e.c.DeleteSnapshot(context.Background(), snap.ID) })
+	// The kind says what a fork gets back: whole where the endpoint captures
+	// memory, the files only where it captures disks.
+	if want := map[bool]string{true: api.SnapshotMemory, false: api.SnapshotDisk}[memory]; snap.Kind != want {
+		t.Fatalf("snapshot kind %q; the endpoint's capabilities say %q", snap.Kind, want)
+	}
 	if res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"echo", "still"}}); string(res.Stdout) != "still\n" {
 		t.Fatalf("the original stopped working after a snapshot: %q", res.Stdout)
 	}
@@ -791,8 +800,25 @@ func testSnapshot(t *testing.T, e *env) {
 			t.Fatalf("a write in one fork reached %s: %q", ref, data)
 		}
 	}
-	_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID, MemoryMB: 1})
+	_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID, Image: "another:1"})
 	wantCode(t, err, api.CodeInvalidRequest)
+	if !memory {
+		// A disk snapshot fixes the files, not the resources: nothing captured
+		// was running with the original's, so a fork may ask for others.
+		big := e.newSandbox(t, api.CreateSandboxRequest{SnapshotID: snap.ID, MemoryMB: sb.MemoryMB * 2, Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+		if big.MemoryMB != sb.MemoryMB*2 {
+			t.Fatalf("a fork of a disk snapshot asked for %d MiB and got %d", sb.MemoryMB*2, big.MemoryMB)
+		}
+		if data, err := e.c.ReadFile(ctx, big.ID, "/sandbox/home/state.txt"); err != nil || string(data) != "prepared" {
+			t.Fatalf("the larger fork: %q, %v", data, err)
+		}
+	} else {
+		// A memory snapshot is a running machine: its resources come with it.
+		for _, mb := range []int{1, sb.MemoryMB * 2} {
+			_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID, MemoryMB: mb})
+			wantCode(t, err, api.CodeInvalidRequest)
+		}
+	}
 	_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: "snp_0000000000000000"})
 	wantCode(t, err, api.CodeNotFound)
 }
@@ -1159,4 +1185,67 @@ func testVolumeRefusals(t *testing.T, e *env) {
 	wantCode(t, err, api.CodeNotFound)
 	_, err = e.c.CreateVolume(ctxT(t), api.CreateVolumeRequest{Name: "Bad_Name"})
 	wantCode(t, err, api.CodeInvalidRequest)
+}
+
+// A snapshot schedule is bounded by limits the endpoint publishes, refused
+// where it cannot be kept, and — where the endpoint allows an interval short
+// enough to wait for — takes snapshots and keeps the newest it was told to.
+func testSnapshotSchedule(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	l := e.caps.Limits
+	if !e.caps.Has(api.CapMemorySnapshot) && !e.caps.Has(api.CapDiskSnapshot) {
+		_, err := e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotEverySecs: max(l.MinSnapshotEverySecs, 1)})
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	if l.MinSnapshotEverySecs < 1 || l.MaxSnapshotKeep < 1 {
+		t.Fatalf("limits %+v: a snapshot schedule needs min_snapshot_every_secs and max_snapshot_keep", l)
+	}
+	bad := []api.CreateSandboxRequest{
+		{SnapshotEverySecs: l.MinSnapshotEverySecs, SnapshotKeep: l.MaxSnapshotKeep + 1},
+		{SnapshotKeep: 1},
+	}
+	if l.MinSnapshotEverySecs > 1 { // one second under a minimum of 1 is 0: no schedule, which is allowed
+		bad = append(bad, api.CreateSandboxRequest{SnapshotEverySecs: l.MinSnapshotEverySecs - 1})
+	}
+	for _, req := range bad {
+		_, err := e.c.CreateSandbox(ctx, req)
+		wantCode(t, err, api.CodeInvalidRequest)
+	}
+	if l.MinSnapshotEverySecs > 3 {
+		t.Logf("min_snapshot_every_secs is %d: the schedule's timing is not waited for here", l.MinSnapshotEverySecs)
+		return
+	}
+	every := l.MinSnapshotEverySecs
+	sb := e.newSandbox(t, api.CreateSandboxRequest{SnapshotEverySecs: every, SnapshotKeep: 1, Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	if sb.SnapshotEverySecs != every || sb.SnapshotKeep != 1 {
+		t.Fatalf("the sandbox says its schedule is %d/%d", sb.SnapshotEverySecs, sb.SnapshotKeep)
+	}
+	t.Cleanup(func() {
+		list, _ := e.c.Snapshots(context.Background())
+		for _, s := range list {
+			if s.Sandbox == sb.ID {
+				_ = e.c.DeleteSnapshot(context.Background(), s.ID)
+			}
+		}
+	})
+	// Three intervals and some: at least two scheduled snapshots were taken,
+	// and one is kept.
+	time.Sleep(time.Duration(3*every)*time.Second + 1500*time.Millisecond)
+	list, err := e.c.Snapshots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine []api.Snapshot
+	for _, s := range list {
+		if s.Sandbox == sb.ID && s.Scheduled {
+			mine = append(mine, s)
+		}
+	}
+	if len(mine) != 1 {
+		t.Fatalf("%d scheduled snapshots after three intervals with keep 1: %v", len(mine), mine)
+	}
+	if out, err := e.c.SetSnapshotSchedule(ctx, sb.ID, api.SnapshotSchedule{}); err != nil || out.SnapshotEverySecs != 0 {
+		t.Fatalf("stopping the schedule: %+v, %v", out, err)
+	}
 }

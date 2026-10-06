@@ -136,6 +136,7 @@ class Client:
                        disk_mb: int = 0, env: Optional[Dict[str, str]] = None,
                        network: Optional[Dict[str, Any]] = None, idle_timeout_secs: int = 0,
                        snapshot_id: str = "",
+                       snapshot_every_secs: int = 0, snapshot_keep: int = 0,
                        labels: Optional[Dict[str, str]] = None,
                        volumes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """Create a sandbox. ``network`` is ``{"mode": "none"|"allowlist"|"open",
@@ -144,11 +145,14 @@ class Client:
         ``labels`` are your own metadata: returned with the sandbox, usable to
         filter ``sandboxes()``, and recorded in its audit events. ``volumes`` is
         ``[{"name": ..., "path": ..., "read_only": bool}]`` (capability
-        ``volumes``)."""
+        ``volumes``). ``snapshot_every_secs`` snapshots the sandbox that often
+        while it runs, keeping the newest ``snapshot_keep`` (default 1), within
+        the server's ``limits``."""
         req: Dict[str, Any] = {}
         for k, v in (("name", name), ("image", image), ("cpus", cpus), ("memory_mb", memory_mb),
                      ("disk_mb", disk_mb), ("env", env), ("network", network),
                      ("idle_timeout_secs", idle_timeout_secs), ("snapshot_id", snapshot_id),
+                     ("snapshot_every_secs", snapshot_every_secs), ("snapshot_keep", snapshot_keep),
                      ("labels", labels), ("volumes", volumes)):
             if v:
                 req[k] = v
@@ -200,6 +204,11 @@ class Client:
 
     def create_snapshot(self, ref: str) -> Dict[str, Any]:
         return self._json("POST", self._sbx(ref) + "/snapshots")
+
+    def set_snapshot_schedule(self, ref: str, every_secs: int, keep: int = 0) -> Dict[str, Any]:
+        """Snapshot a running sandbox every ``every_secs``, keeping the newest
+        ``keep``; ``every_secs=0`` stops it. Returns the sandbox."""
+        return self._json("PUT", self._sbx(ref) + "/snapshot-schedule", {"every_secs": every_secs, "keep": keep})
 
     def snapshots(self) -> List[Dict[str, Any]]:
         return self._json("GET", "/v1/snapshots")["snapshots"]

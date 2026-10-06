@@ -65,6 +65,8 @@ func startNodeWith(t *testing.T, name string, wrap func(*fake.Backend) backend.B
 	tn.reportAs.Store(&empty)
 	tn.be = fake.New(caps...)
 	pol := spec.DefaultPolicyFor(capSet(caps...))
+	// So a snapshot schedule runs within a test, not five minutes after it.
+	pol.Limits.MinSnapshotEverySecs = 1
 	var be backend.Backend = tn.be
 	if wrap != nil {
 		be = wrap(tn.be)

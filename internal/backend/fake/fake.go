@@ -240,7 +240,12 @@ func (b *Backend) Snapshot(_ context.Context, id, snapshotID string) (backend.Sn
 	}
 	s.mu.Lock()
 	files := copyFiles(s.files)
-	info := backend.SnapshotInfo{ID: snapshotID, Image: s.spec.Image, CPUs: s.spec.CPUs, MemoryMB: s.spec.MemoryMB, DiskMB: s.spec.DiskMB}
+	// The fake keeps files only, so it is whichever kind it was told it has.
+	kind := api.SnapshotDisk
+	if b.caps[api.CapMemorySnapshot] {
+		kind = api.SnapshotMemory
+	}
+	info := backend.SnapshotInfo{ID: snapshotID, Kind: kind, Image: s.spec.Image, CPUs: s.spec.CPUs, MemoryMB: s.spec.MemoryMB, DiskMB: s.spec.DiskMB}
 	s.mu.Unlock()
 	b.mu.Lock()
 	b.snapshots[snapshotID] = fakeSnapshot{info: info, files: files}

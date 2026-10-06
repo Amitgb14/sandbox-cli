@@ -137,13 +137,27 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	// mounted or restored it for them (reproduced in
 	// TestMixedFleetVolumesAndSnapshotsStayOwned).
 	switch {
-	case req.SnapshotID != "" && g.anyNodeHas(api.CapMemorySnapshot):
-		o, ok := g.store.SnapshotOwner(req.SnapshotID)
+	//
+	// Either kind of snapshot: gated on memory_snapshot alone, a fleet of
+	// nodes that snapshot disks (macOS) skipped the check, and a create naming
+	// another user's snapshot was started from it (reproduced in
+	// TestDiskSnapshotFleetKeepsSnapshotsOwned). The node holding it is the
+	// one that can, so the create is pinned there and names no capability.
+	case req.SnapshotID != "" && (g.anyNodeHas(api.CapMemorySnapshot) || g.anyNodeHas(api.CapDiskSnapshot)):
+		o, ok := g.snapshotOwner(ctx, req.SnapshotID)
 		if !ok || !mayAct(p, o) {
 			return api.Sandbox{}, failWith(http.StatusNotFound, api.CodeNotFound, "no such snapshot")
 		}
 		want.Node = o.Node
-		want.Caps = append(want.Caps, api.CapMemorySnapshot)
+	case req.SnapshotEverySecs > 0:
+		// A schedule needs a node that snapshots; placed on one that cannot,
+		// the create is refused there though another could have kept it. A
+		// fleet with whole-machine snapshots asks for those.
+		if g.anyNodeHas(api.CapMemorySnapshot) {
+			want.Caps = append(want.Caps, api.CapMemorySnapshot)
+		} else if g.anyNodeHas(api.CapDiskSnapshot) {
+			want.Caps = append(want.Caps, api.CapDiskSnapshot)
+		}
 	case len(req.Volumes) > 0 && g.anyNodeHas(api.CapVolumes):
 		for _, m := range req.Volumes {
 			o, ok := g.store.VolumeOwner(m.Name)

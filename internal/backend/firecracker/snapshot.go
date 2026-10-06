@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/image"
 )
@@ -209,7 +210,8 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 	meta, _ := json.Marshal(v.spec)
 	_ = os.WriteFile(filepath.Join(dir, "spec.json"), meta, 0o600)
 	return backend.SnapshotInfo{
-		ID: snapshotID, Bytes: diskUsage(dir), Image: v.spec.Image,
+		Kind: api.SnapshotMemory,
+		ID:   snapshotID, Bytes: diskUsage(dir), Image: v.spec.Image,
 		CPUs: v.spec.CPUs, MemoryMB: v.spec.MemoryMB, DiskMB: v.spec.DiskMB,
 	}, nil
 }

@@ -302,10 +302,17 @@ func (g *Gateway) listSnapshots(w http.ResponseWriter, r *http.Request, p Princi
 			}
 			return err
 		}
+		holds := map[string]bool{}
+		for _, s := range list.Snapshots {
+			holds[s.ID] = true
+		}
+		if err := g.store.ForgetSnapshotsGoneFrom(n.cfg.Name, holds); err != nil {
+			g.logf("forgetting %s's removed snapshots: %v", n.cfg.Name, err)
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		for _, s := range list.Snapshots {
-			if o, ok := g.store.SnapshotOwner(s.ID); ok && o.Node == n.cfg.Name && mayAct(p, o) {
+			if o, ok := g.snapshotOwnerOn(s, n.cfg.Name); ok && mayAct(p, o) {
 				out = append(out, s)
 			}
 		}
@@ -324,7 +331,7 @@ func (g *Gateway) deleteSnapshot(w http.ResponseWriter, r *http.Request, p Princ
 		return
 	}
 	id := r.PathValue("id")
-	o, ok := g.store.SnapshotOwner(id)
+	o, ok := g.snapshotOwner(r.Context(), id)
 	if !ok || !mayAct(p, o) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such snapshot")
 		return
@@ -346,4 +353,54 @@ func (g *Gateway) deleteSnapshot(w http.ResponseWriter, r *http.Request, p Princ
 		}
 	}
 	relay(w, resp, data)
+}
+
+// snapshotOwnerOn is the owner of a snapshot a node holds. One made through the
+// gateway is in its store. One a sandbox's schedule took was made by the node
+// itself, so it belongs to whoever owns that sandbox, on that node, and is
+// recorded as theirs. Anything else belongs to no one here and is shown to no
+// one: a snapshot made on a node behind the gateway's back is not adopted.
+func (g *Gateway) snapshotOwnerOn(s api.Snapshot, node string) (Owner, bool) {
+	if o, ok := g.store.SnapshotOwner(s.ID); ok {
+		return o, o.Node == node
+	}
+	if !s.Scheduled {
+		return Owner{}, false
+	}
+	o, ok := g.store.OwnerOf(s.Sandbox)
+	if !ok || o.Node != node {
+		return Owner{}, false
+	}
+	if err := g.store.SetSnapshot(s.ID, o); err != nil {
+		g.logf("recording snapshot %s: %v", s.ID, err)
+	}
+	return o, true
+}
+
+// snapshotOwner is the owner of a snapshot by id: from the store, or, for a
+// scheduled one not yet seen, from the node that holds it.
+func (g *Gateway) snapshotOwner(ctx context.Context, id string) (Owner, bool) {
+	if o, ok := g.store.SnapshotOwner(id); ok {
+		return o, true
+	}
+	var mu sync.Mutex
+	var found Owner
+	var ok bool
+	_ = fanOut(ctx, g.nodes.healthy(), func(ctx context.Context, n *node) error {
+		var list api.SnapshotList
+		if err := n.getJSON(ctx, "/v1/snapshots", nil, &list); err != nil {
+			return nil
+		}
+		for _, s := range list.Snapshots {
+			if s.ID == id {
+				if o, adopted := g.snapshotOwnerOn(s, n.cfg.Name); adopted {
+					mu.Lock()
+					found, ok = o, true
+					mu.Unlock()
+				}
+			}
+		}
+		return nil
+	})
+	return found, ok
 }

@@ -675,6 +675,30 @@ func (s *FileStore) SnapshotOwner(id string) (Owner, bool) {
 	return o, ok
 }
 
+// ForgetSnapshotsGoneFrom drops the records of a node's snapshots that it no
+// longer holds, given the whole of what it does. A schedule's retention
+// removes snapshots on the node, not through here, and each left a record
+// behind: at one every five minutes, hundreds a day per sandbox.
+func (s *FileStore) ForgetSnapshotsGoneFrom(node string, holds map[string]bool) error {
+	s.mu.RLock()
+	var gone []string
+	for id, o := range s.st.Snapshots {
+		if o.Node == node && !holds[id] {
+			gone = append(gone, id)
+		}
+	}
+	s.mu.RUnlock()
+	if len(gone) == 0 {
+		return nil
+	}
+	return s.change(func() error {
+		for _, id := range gone {
+			delete(s.st.Snapshots, id)
+		}
+		return nil
+	})
+}
+
 // ForgetSnapshot drops a snapshot's record.
 func (s *FileStore) ForgetSnapshot(id string) error {
 	return s.change(func() error { delete(s.st.Snapshots, id); return nil })

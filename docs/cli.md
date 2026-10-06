@@ -83,6 +83,7 @@ Global flags:
 | [`sandbox-cli service scale`](#sandbox-cli-service-scale) | Set how many replicas a service keeps |
 | [`sandbox-cli shell`](#sandbox-cli-shell) | Open an interactive shell in a running sandbox |
 | [`sandbox-cli snapshot`](#sandbox-cli-snapshot) | Capture a sandbox; start forks of it with run --from-snapshot |
+| [`sandbox-cli snapshot-schedule`](#sandbox-cli-snapshot-schedule) | Snapshot a running sandbox on a schedule, keeping the newest few |
 | [`sandbox-cli ssh`](#sandbox-cli-ssh) | Open an SSH session to a sandbox through a gateway (or a shell over the API on a plain sandboxd) |
 | [`sandbox-cli ssh-access`](#sandbox-cli-ssh-access) | Print a short-lived ssh command for one sandbox, needing no registered key |
 | [`sandbox-cli ssh-key`](#sandbox-cli-ssh-key) | Manage the public keys a gateway accepts for SSH logins |
@@ -885,6 +886,8 @@ Flags:
 | `--network string` |  | none, allowlist or open (default: the server's) |
 | `--no-persist-auth` |  | do not restore or save the agent's login |
 | `--profile string` |  | dev or prod (prod: no persisted logins) |
+| `--snapshot-every duration` |  | snapshot the sandbox this often while it runs, e.g. 30m (the server sets the shortest allowed) |
+| `--snapshot-keep int` |  | how many scheduled snapshots to keep, newest first (default 1) |
 | `--volume stringArray` |  | mount a named volume, NAME:/path or NAME:/path:ro (repeatable; sandbox-cli volume) |
 
 ## sandbox-cli secret
@@ -1062,6 +1065,30 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--context string` |  | which sandboxd to use |
+
+## sandbox-cli snapshot-schedule
+
+Snapshot a running sandbox on a schedule, keeping the newest few.
+
+```text
+sandbox-cli snapshot-schedule SANDBOX [flags]
+```
+
+Examples:
+
+```sh
+sandbox-cli snapshot-schedule demo --every 30m --keep 3
+sandbox-cli snapshot-schedule demo --off
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which sandboxd to use |
+| `--every duration` |  | how often, e.g. 30m (the server sets the shortest allowed) |
+| `--keep int` |  | how many to keep, newest first (default 1) |
+| `--off` |  | stop the schedule; snapshots already taken stay |
 
 ## sandbox-cli ssh
 

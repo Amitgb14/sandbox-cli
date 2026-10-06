@@ -94,6 +94,10 @@ type record struct {
 	procs      map[int]*procRecord
 	nextPID    int
 	lastActive time.Time
+	// lastScheduled is when the snapshot schedule last ran (or started), and
+	// snapshotting is set while one of its snapshots is being taken.
+	lastScheduled time.Time
+	snapshotting  bool
 }
 
 // touch records activity: any request naming the sandbox keeps it alive.
@@ -146,6 +150,7 @@ func (s *Server) Handler() http.Handler {
 	route("POST /v1/sandboxes/{ref}/suspend", false, s.suspend)
 	route("POST /v1/sandboxes/{ref}/resume", false, s.resume)
 	route("POST /v1/sandboxes/{ref}/snapshots", false, s.createSnapshot)
+	route("PUT /v1/sandboxes/{ref}/snapshot-schedule", false, s.setSnapshotSchedule)
 	route("GET /v1/snapshots", false, s.listSnapshots)
 	route("DELETE /v1/snapshots/{id}", false, s.deleteSnapshot)
 	route("GET /v1/sandboxes/{ref}/tunnel", false, s.tunnel)
@@ -157,7 +162,10 @@ func (s *Server) Handler() http.Handler {
 	route("POST /v1/volumes", false, s.createVolume)
 	route("GET /v1/volumes", false, s.listVolumes)
 	route("DELETE /v1/volumes/{name}", false, s.deleteVolume)
-	s.reaper.Do(func() { go s.reapIdle() })
+	s.reaper.Do(func() {
+		go s.reapIdle()
+		go s.runSchedules()
+	})
 	s.poolsOnce.Do(s.startPools)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")
@@ -228,7 +236,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.SnapshotID != "" {
-		if !s.Backend.Capabilities()[api.CapMemorySnapshot] {
+		if !canSnapshot(s.Backend.Capabilities()) {
 			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot start from a snapshot")
 			return
 		}
@@ -251,6 +259,12 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bs.FromSnapshot = req.SnapshotID
+	// Refused before anything is made, as any control that cannot be
+	// delivered is: a schedule that never takes a snapshot is worse than none.
+	if status, code, msg := s.scheduleRefusal(api.SnapshotSchedule{EverySecs: bs.SnapshotEverySecs, Keep: bs.SnapshotKeep}, bs.Volumes); status != 0 {
+		writeErr(w, status, code, msg)
+		return
+	}
 	if len(bs.Volumes) > 0 {
 		if bs.FromSnapshot != "" {
 			writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "a sandbox started from a snapshot cannot mount volumes")
@@ -268,13 +282,16 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			ID: id, Name: req.Name, State: api.StatePending, Image: bs.Image,
 			CPUs: bs.CPUs, MemoryMB: bs.MemoryMB, DiskMB: bs.DiskMB,
 			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: s.now().UTC(),
-			IdleTimeoutSecs: bs.IdleTimeoutSecs,
-			Labels:          copyLabels(req.Labels),
-			Volumes:         bs.Volumes,
+			IdleTimeoutSecs:   bs.IdleTimeoutSecs,
+			SnapshotEverySecs: bs.SnapshotEverySecs,
+			SnapshotKeep:      bs.SnapshotKeep,
+			Labels:            copyLabels(req.Labels),
+			Volumes:           bs.Volumes,
 		},
-		env:        bs.Env,
-		procs:      map[int]*procRecord{},
-		lastActive: s.now(),
+		env:           bs.Env,
+		procs:         map[int]*procRecord{},
+		lastActive:    s.now(),
+		lastScheduled: s.now(),
 	}
 	s.mu.Lock()
 	// Checked under the same lock that registers the sandbox, so once a cordon
@@ -1050,6 +1067,10 @@ func writeBackendErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, api.CodeConflict, "the sandbox is busy")
 	case errors.Is(err, backend.ErrUnsupported):
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, err.Error())
+	case errors.Is(err, backend.ErrNoSpace):
+		// Said plainly: "the backend failed" after two minutes of a snapshot
+		// left a full disk to be guessed at.
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, err.Error())
 	default:
 		// The message is generic on purpose: a backend error can carry host paths
 		// and engine detail that are the operator's to read, not the caller's.

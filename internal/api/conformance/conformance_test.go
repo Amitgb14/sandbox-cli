@@ -33,6 +33,16 @@ func TestFakeDefaultPolicy(t *testing.T) {
 	Run(t, serveFake(t, spec.DefaultPolicyFor(capSet(caps...)), true, caps...))
 }
 
+// An endpoint that snapshots disks rather than whole machines, as the macOS
+// backend does: forks get the files, boot afresh, and may choose resources.
+func TestFakeDiskSnapshots(t *testing.T) {
+	caps := []string{api.CapEgressAllowlist, api.CapDiskSnapshot}
+	pol := spec.DefaultPolicyFor(capSet(caps...))
+	// Short enough that the suite waits for a schedule to run.
+	pol.Limits.MinSnapshotEverySecs = 1
+	Run(t, serveFake(t, pol, false, caps...))
+}
+
 // An endpoint that cannot filter egress — a backend without host networking.
 // Its policy is narrowed to none (spec.FitTo), and the suite's network tests
 // must hold there too: every allowlist request refused, nothing served open.

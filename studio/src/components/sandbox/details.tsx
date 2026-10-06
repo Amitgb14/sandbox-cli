@@ -246,9 +246,17 @@ export function SandboxDetails({
                 {sb.state === "suspended" ? "Resume" : "Suspend"}
               </Button>
             )}
-            {caps.memory_snapshot && sb.state === "running" && can("sandbox:create") && (
-              <Button variant="outline" size="sm" disabled={snapshot.isPending} onClick={() => act(snapshot.mutateAsync(id), "Snapshot taken")}>
-                Snapshot
+            {(caps.memory_snapshot || caps.disk_snapshot) && sb.state === "running" && can("sandbox:create") && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={snapshot.isPending}
+                title={caps.memory_snapshot ? "Capture it whole: memory, processes and disk" : "Capture its files; a sandbox started from them boots afresh. About a minute."}
+                onClick={() =>
+                  act(snapshot.mutateAsync(id), caps.memory_snapshot ? "Snapshot taken" : "Snapshot of its files taken")
+                }
+              >
+                {snapshot.isPending ? "Taking snapshot…" : "Snapshot"}
               </Button>
             )}
             {can("sandbox:delete") && (

@@ -94,6 +94,17 @@ The guest agent is mounted read-only into every sandbox from beside
 | Sandbox | VM of the `container` runtime | Firecracker microVM |
 | Egress | `none`, or `open` if your policy allows it | `none` or an allowlist, enforced on the host |
 | Live network policy change | no | yes |
+| Snapshots | the files only (`disk_snapshot`) | whole: memory, processes and disk (`memory_snapshot`) |
+
+**Snapshots.** The runtime cannot capture a running VM's memory, so a snapshot
+here is the sandbox's files: exported, wrapped as an image named for this
+sandboxd's owner (`sbx-snapshot/<owner>/<id>`) and loaded into the runtime's
+store. A sandbox started from one boots afresh with those files, and may ask
+for other resources than the original's. Taking one takes about a minute and,
+briefly, the size of the sandbox's files in `--state-dir`; the image then
+stays until the snapshot is deleted. sandboxd keeps no snapshot records across
+a restart, so on start it removes its own leftover snapshot images, and no one
+else's.
 
 **Egress.** The runtime's own network is open NAT. Until it is measured whether
 an allowlist can be enforced here, this backend does not claim one. A request
