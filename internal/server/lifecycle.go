@@ -128,8 +128,11 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	out, err := s.takeSnapshot(r.Context(), rec, false)
-	if errors.Is(err, errSnapshotVolumes) {
+	// Not cancelled with the request: a snapshot takes minutes on some
+	// backends, its progress is on the sandbox for any client to follow, and
+	// a browser tab closed part way would otherwise throw the work away.
+	out, err := s.takeSnapshot(context.WithoutCancel(r.Context()), rec, false)
+	if errors.Is(err, errSnapshotVolumes) || errors.Is(err, errSnapshotBusy) {
 		writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
 		return
 	}
@@ -148,6 +151,10 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 // one filesystem.
 var errSnapshotVolumes = errors.New("a sandbox with volumes cannot be snapshotted; its forks would share them")
 
+// errSnapshotBusy refuses a second snapshot while one is being taken: two
+// exports of one disk at once take twice the room and neither finishes sooner.
+var errSnapshotBusy = errors.New("a snapshot of this sandbox is already being taken")
+
 // takeSnapshot captures a sandbox and records it: the one way a snapshot is
 // made, by request or by the sandbox's schedule, so both are refused, logged
 // and listed alike.
@@ -160,6 +167,34 @@ func (s *Server) takeSnapshot(ctx context.Context, rec *record, scheduled bool) 
 	if len(sb.Volumes) > 0 {
 		return api.Snapshot{}, errSnapshotVolumes
 	}
+	// Its progress is on the sandbox while it runs, so whoever looks — the
+	// client that asked, another, or nobody, for a scheduled one — sees the
+	// same. Each report replaces the value rather than changing it: a copy of
+	// the sandbox taken under the lock keeps the pointer, and is read without it.
+	rec.mu.Lock()
+	if rec.sbx.Snapshotting != nil {
+		rec.mu.Unlock()
+		return api.Snapshot{}, errSnapshotBusy
+	}
+	started := s.now().UTC()
+	rec.sbx.Snapshotting = &api.SnapshotProgress{StartedAt: started, Scheduled: scheduled, Phase: api.SnapshotPhaseCapture}
+	rec.mu.Unlock()
+	defer func() {
+		rec.mu.Lock()
+		rec.sbx.Snapshotting = nil
+		rec.mu.Unlock()
+	}()
+	ctx = backend.WithSnapshotProgress(ctx, func(p backend.SnapshotProgress) {
+		rec.mu.Lock()
+		if rec.sbx.Snapshotting != nil {
+			rec.sbx.Snapshotting = &api.SnapshotProgress{
+				StartedAt: started, Scheduled: scheduled,
+				Phase: p.Phase, Bytes: p.Bytes, EstimatedBytes: p.EstimatedBytes,
+			}
+		}
+		rec.mu.Unlock()
+	})
+
 	id := newSnapshotID()
 	info, err := sn.Snapshot(ctx, sb.ID, id)
 	if err != nil {

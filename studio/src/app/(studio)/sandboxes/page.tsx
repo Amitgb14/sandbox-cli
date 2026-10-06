@@ -18,7 +18,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { CalendarClock, Camera, MoreHorizontal, Plus, RefreshCw, Search, SquareTerminal, Trash2 } from "lucide-react";
+import { CalendarClock, Camera, Loader2, MoreHorizontal, Plus, RefreshCw, Search, SquareTerminal, Trash2 } from "lucide-react";
 import { QuickStart } from "@/components/common/quick-start";
 import { ColumnHeader } from "@/components/data-table/column-header";
 import { FacetedFilter } from "@/components/data-table/faceted-filter";
@@ -26,6 +26,7 @@ import { DataTablePagination } from "@/components/data-table/pagination";
 import { ViewOptions } from "@/components/data-table/view-options";
 import { SandboxDetails } from "@/components/sandbox/details";
 import { MetricsDialog, ResourcesWithMetrics } from "@/components/sandbox/metrics";
+import { capturePercent, snapshotStep, STEP_NAMES } from "@/components/sandbox/snapshot-progress";
 import { AgentActivity, StateDot } from "@/components/sandbox/state-dot";
 import { SandboxSummary } from "@/components/sandbox/summary";
 import { every } from "@/components/sandbox/snapshots";
@@ -193,6 +194,16 @@ export default function SandboxesPage() {
         // has, with the schedule's clock when one runs.
         cell: ({ row: { original: s } }) => {
           const n = snapshotsOf.get(s.id) ?? 0;
+          if (s.snapshotting) {
+            const pct = capturePercent(s.snapshotting);
+            const step = snapshotStep(s.snapshotting);
+            return (
+              <span className="inline-flex items-center gap-1.5 text-xs tabular-nums text-status-running" title={`A snapshot is being taken: ${STEP_NAMES[step].toLowerCase()}`}>
+                <Loader2 className="size-3.5 animate-spin" />
+                {step === 1 && pct !== null ? `reading ${pct}%` : STEP_NAMES[step].toLowerCase()}
+              </span>
+            );
+          }
           if (!s.snapshot_every_secs && n === 0) return <span className="text-xs text-muted-foreground">Inactive</span>;
           return (
             <span

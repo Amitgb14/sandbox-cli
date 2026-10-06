@@ -92,6 +92,31 @@ type SnapshotInfo struct {
 	DiskMB   int
 }
 
+// SnapshotProgress is what a Snapshotter reports as it goes: the phase
+// (api.SnapshotPhaseCapture, then api.SnapshotPhaseStore), the bytes read of
+// the sandbox, and an estimate of the total, 0 when there is none.
+type SnapshotProgress struct {
+	Phase          string
+	Bytes          int64
+	EstimatedBytes int64
+}
+
+type snapshotProgressKey struct{}
+
+// WithSnapshotProgress has Snapshot calls under ctx report to fn. A backend
+// that does not report leaves the caller with the phase it started in.
+func WithSnapshotProgress(ctx context.Context, fn func(SnapshotProgress)) context.Context {
+	return context.WithValue(ctx, snapshotProgressKey{}, fn)
+}
+
+// ReportSnapshotProgress is how a Snapshotter reports; without a listener it
+// does nothing.
+func ReportSnapshotProgress(ctx context.Context, p SnapshotProgress) {
+	if fn, ok := ctx.Value(snapshotProgressKey{}).(func(SnapshotProgress)); ok {
+		fn(p)
+	}
+}
+
 // ImageLister can say which images it already has a root disk for, so a
 // create naming one skips the pull and the build. A gateway in front of many
 // nodes prefers such a node (GET /v1/node). It is a placement hint, not a

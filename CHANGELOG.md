@@ -242,6 +242,13 @@ in `_old/` as reference, to be ported where this design still wants it.
   guest. An hour is kept per sandbox, in memory. Reading it does not count as
   activity for the idle timeout. Behind a gateway it is the owner's. Studio
   opens it from a sandbox's resources.
+- **A snapshot's progress.** While a snapshot is taken, the sandbox carries
+  `snapshotting`: its phase (`capture`, then `store`), the bytes read and an
+  estimate of the total where the backend has one (on macOS, from the guest's
+  `df`). On macOS the bytes are counted as the runtime exports them. A second
+  snapshot of a sandbox while one is taken is refused with `409`, and a
+  snapshot asked for now finishes even when the client that asked hangs up —
+  before, closing the browser tab threw a minute of work away.
 
 ### Security
 

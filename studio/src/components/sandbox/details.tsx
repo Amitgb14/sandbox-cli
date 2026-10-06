@@ -10,6 +10,7 @@ import { SandboxEvents } from "@/components/sandbox/events";
 import { SandboxFiles } from "@/components/sandbox/files";
 import { ProcessOutput } from "@/components/sandbox/output";
 import { SandboxOverview } from "@/components/sandbox/overview";
+import { SnapshotProgressBar } from "@/components/sandbox/snapshot-progress";
 import { AgentActivity, StateDot } from "@/components/sandbox/state-dot";
 import { SandboxTerminal } from "@/components/sandbox/terminal";
 import { Button } from "@/components/ui/button";
@@ -78,7 +79,7 @@ export function SandboxDetails({
   /** After a terminate from here. */
   onGone?: () => void;
 }) {
-  const { data: sb, error } = useSandbox(id);
+  const { data: sb, error, refetch: refetchSandbox } = useSandbox(id);
   const live = !!sb && sb.state !== "terminated";
   const { data: procs } = useProcesses(id, live);
   const { data: info } = useInfo();
@@ -246,19 +247,25 @@ export function SandboxDetails({
                 {sb.state === "suspended" ? "Resume" : "Suspend"}
               </Button>
             )}
-            {(caps.memory_snapshot || caps.disk_snapshot) && sb.state === "running" && can("sandbox:create") && (
+            {(caps.memory_snapshot || caps.disk_snapshot) && sb.state === "running" && sb.snapshotting ? (
+              <SnapshotProgressBar p={sb.snapshotting} className="order-last basis-full" />
+            ) : null}
+            {(caps.memory_snapshot || caps.disk_snapshot) && sb.state === "running" && !sb.snapshotting && can("sandbox:create") && (
               <Button
                 variant="outline"
                 className="border-status-running/40 bg-status-running/15 text-status-running hover:bg-status-running/25 hover:text-status-running"
                 size="sm"
                 disabled={snapshot.isPending}
                 title={caps.memory_snapshot ? "Capture it whole: memory, processes and disk" : "Capture its files; a sandbox started from them boots afresh. About a minute."}
-                onClick={() =>
-                  act(snapshot.mutateAsync(id), caps.memory_snapshot ? "Snapshot taken" : "Snapshot of its files taken")
-                }
+                onClick={() => {
+                  act(snapshot.mutateAsync(id), caps.memory_snapshot ? "Snapshot taken" : "Snapshot of its files taken");
+                  // Its progress is on the sandbox from the moment it starts; this
+                  // picks it up now rather than at the next poll.
+                  setTimeout(() => void refetchSandbox(), 300);
+                }}
               >
                 <Camera className="size-3.5" />
-                {snapshot.isPending ? "Taking snapshot…" : "Snapshot"}
+                {snapshot.isPending ? "Starting…" : "Snapshot"}
               </Button>
             )}
             {can("sandbox:delete") && (

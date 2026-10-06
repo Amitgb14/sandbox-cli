@@ -83,7 +83,7 @@ func (s *Server) scheduleTick(now time.Time) int {
 	for _, rec := range s.sandboxes {
 		rec.mu.Lock()
 		every := time.Duration(rec.sbx.SnapshotEverySecs) * time.Second
-		if every > 0 && rec.sbx.State == api.StateRunning && !rec.snapshotting && now.Sub(rec.lastScheduled) >= every {
+		if every > 0 && rec.sbx.State == api.StateRunning && !rec.snapshotting && rec.sbx.Snapshotting == nil && now.Sub(rec.lastScheduled) >= every {
 			rec.snapshotting = true
 			due = append(due, rec)
 		}

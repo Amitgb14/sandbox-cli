@@ -15,6 +15,13 @@ of its own: entries land under `Unreleased` and move under the version of
   rates, where the endpoint measures them (see
   [CHANGELOG.md](../CHANGELOG.md), "A sandbox's CPU and memory over the last
   hour").
+- **A snapshot's progress.** Taking a snapshot shows its three steps —
+  preparing, reading files (with a percentage where there is an estimate),
+  storing — and the time so far, in the sandbox's panel and as a short status
+  in the list's Snapshots column, in place of a button that said "Taking
+  snapshot…" for a minute and a half. It is read from the sandbox, so it is
+  still there after the panel is closed or the page reloaded (see
+  [CHANGELOG.md](../CHANGELOG.md), "A snapshot's progress").
 - **A Snapshots column, and a Snapshot button that stands out.** Where the
   endpoint takes snapshots, the sandbox list has a column with each sandbox's
   snapshot count, marked scheduled or manual, and "Inactive" for one with no

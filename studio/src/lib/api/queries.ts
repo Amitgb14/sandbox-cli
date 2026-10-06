@@ -67,7 +67,7 @@ export function useSandboxes() {
   return useQuery({
     queryKey: keys.sandboxes,
     queryFn: async () => (await apiFetch<{ sandboxes: Sandbox[] }>("/v1/sandboxes")).sandboxes,
-    refetchInterval: 5_000,
+    refetchInterval: (q) => (q.state.data?.some((s) => s.snapshotting) ? 2_000 : 5_000),
   });
 }
 
@@ -76,7 +76,8 @@ export function useSandbox(id: string) {
     queryKey: keys.sandbox(id),
     queryFn: () => apiFetch<Sandbox>(sbx(id)),
     enabled: !!id,
-    refetchInterval: 5_000,
+    // Every second while a snapshot is taken, for its progress.
+    refetchInterval: (q) => (q.state.data?.snapshotting ? 1_000 : 5_000),
   });
 }
 
@@ -211,7 +212,7 @@ export function useSuspend() {
 export function useSnapshot() {
   return useInvalidating(
     (id: string) => apiFetch<Snapshot>(`${sbx(id)}/snapshots`, { method: "POST" }),
-    () => [[...keys.snapshots]],
+    (id) => [[...keys.snapshots], [...keys.sandbox(id)], [...keys.sandboxes]],
   );
 }
 
