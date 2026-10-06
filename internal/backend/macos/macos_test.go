@@ -262,3 +262,38 @@ func TestOwnerIsPerStateDirectory(t *testing.T) {
 		t.Fatalf("a %q, a/ %q, link %q, b %q", oa, oa2, ol, ob)
 	}
 }
+
+// The images a sandbox can start from without a pull are the runtime's own,
+// but for snapshots, which are started from as snapshots; and the runtime is
+// asked at most every 30 seconds, not on every node status.
+func TestCachedImagesAreTheRuntimes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script stands in for the runtime")
+	}
+	work := t.TempDir()
+	calls := filepath.Join(work, "calls")
+	script := filepath.Join(work, "container")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo "$*" >> "`+calls+`"
+case "$1 $2" in
+"ls --all") echo '[]' ;;
+"image ls") echo '[{"configuration":{"name":"sandbox-desktop:dev"}},{"configuration":{"name":"ghcr.io/you/sandbox-base:edge"}},{"configuration":{"name":"docker.io/sbx-snapshot/me/snp_1:latest"}},{"configuration":{"name":"sbx-snapshot/other/snp_2:latest"}}]' ;;
+esac
+`), 0o755)
+	agent := filepath.Join(work, "sandbox-guestd")
+	os.WriteFile(agent, []byte("x"), 0o755)
+	be, err := New(Config{Container: script, Agent: agent, Owner: "me", Logf: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(calls) // startup may list images itself (leftover snapshots)
+	got := be.CachedImages()
+	if strings.Join(got, ",") != "ghcr.io/you/sandbox-base:edge,sandbox-desktop:dev" {
+		t.Fatalf("images %v; want the runtime's, sorted, without snapshots", got)
+	}
+	be.CachedImages()
+	log, _ := os.ReadFile(calls)
+	if n := strings.Count(string(log[len(before):]), "image ls"); n != 1 {
+		t.Fatalf("the runtime was asked %d times; want once in 30 seconds", n)
+	}
+}

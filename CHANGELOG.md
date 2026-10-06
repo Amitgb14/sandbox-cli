@@ -206,6 +206,10 @@ in `_old/` as reference, to be ported where this design still wants it.
   reaches that one port through the API's tunnel and nothing else; nothing the
   guest serves is shown as a page on Studio's address. Published with the base
   image, under the same tags.
+- **A Mac reports the images it has.** The macOS backend lists the runtime's
+  local images at `GET /v1/node` (`images`), as Linux lists those it has built:
+  what a sandbox starts without a pull, and what Studio's Playground suggests.
+  Snapshot images are left out; they are started from as snapshots.
 
 ### Security
 

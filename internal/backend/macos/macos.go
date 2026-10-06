@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,9 @@ type Backend struct {
 	cfg Config
 	mu  sync.Mutex
 	ids map[string]bool
+	// images is the runtime's image list as last read, at imagesAt.
+	images   []string
+	imagesAt time.Time
 }
 
 // New checks the CLI is there and removes sandboxes an earlier sandboxd left.
@@ -405,4 +409,47 @@ func (b *Backend) DialGuest(ctx context.Context, id string, port int) (io.ReadWr
 	}
 	conn, err := b.client(id).DialPort(ctx, port)
 	return conn, mapErr(err)
+}
+
+// CachedImages is backend.ImageLister: the images the runtime already holds,
+// which a sandbox starts from without a pull. Any of them runs here — the guest
+// agent is mounted in from the host, not looked for in the image — so all are
+// listed, but for snapshots, which are named sbx-snapshot/… and started from as
+// snapshots, not as images. Read at most every 30 seconds: the server asks on
+// every node status, and each read is a run of the container CLI.
+func (b *Backend) CachedImages() []string {
+	b.mu.Lock()
+	if !b.imagesAt.IsZero() && time.Since(b.imagesAt) < 30*time.Second {
+		out := b.images
+		b.mu.Unlock()
+		return out
+	}
+	b.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := b.cli(ctx, "image", "ls", "--format", "json")
+	if err != nil {
+		return nil
+	}
+	var list []struct {
+		Configuration struct {
+			Name string `json:"name"`
+		} `json:"configuration"`
+	}
+	if json.Unmarshal([]byte(out), &list) != nil {
+		return nil
+	}
+	images := []string{}
+	for _, img := range list {
+		name := img.Configuration.Name
+		if name == "" || strings.HasPrefix(name, "sbx-snapshot/") || strings.Contains(name, "/sbx-snapshot/") {
+			continue
+		}
+		images = append(images, name)
+	}
+	sort.Strings(images)
+	b.mu.Lock()
+	b.images, b.imagesAt = images, time.Now()
+	b.mu.Unlock()
+	return images
 }
