@@ -316,6 +316,14 @@ that fails on the code before the fix:
 
 ### Changed
 
+- **An example: browser automation across many sandboxes**
+  (`sdk/python/examples/browser-fleet`). `fleet.py` makes N sandboxes from the
+  desktop image, splits a list of URLs across them, drives each one's Chromium
+  with Playwright, and brings back the results and screenshots; every sandbox
+  is terminated at the end. It uses sandbox-cli's current context, as Studio
+  does, and `--headed --hold` keeps the browser on screen to watch in Studio's
+  Desktop tab. `--snapshot` installs once and starts the rest from a snapshot,
+  and `--network allowlist` allows only the URLs' hosts.
 - **The documentation is a page per component, and the site renders it at
   `/docs`.** `docs/fleet.md` keeps setting up a gateway and its model; SSH
   (`docs/ssh.md`), organizations (`docs/organizations.md`), jobs and secrets
