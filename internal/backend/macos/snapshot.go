@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
@@ -215,6 +216,13 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 	if err != nil {
 		return backend.SnapshotInfo{}, err
 	}
+	// The export is the size of the sandbox's files, and loading it copies
+	// it once more into the runtime's store: on a nearly full disk it would
+	// fail after a minute or two, leaving a partial image behind. Refused up
+	// front below a floor, and again once the export's size is known.
+	if err := b.roomFor(minSnapshotRoom); err != nil {
+		return backend.SnapshotInfo{}, err
+	}
 	f, err := os.CreateTemp(b.cfg.ScratchDir, "snapshot-*.tar")
 	if err != nil {
 		return backend.SnapshotInfo{}, err
@@ -234,16 +242,32 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 	}
 	ref := snapshotRef(b.cfg.Owner, snapshotID)
 	n, werr := writeImageArchive(f, out, ic, ref, map[string]string{LabelManaged: "1", LabelOwner: b.cfg.Owner})
+	if werr != nil {
+		_ = export.Process.Kill()
+		_ = export.Wait()
+		if errors.Is(werr, syscall.ENOSPC) {
+			return backend.SnapshotInfo{}, fmt.Errorf("%w: the disk filled while the snapshot was written", backend.ErrNoSpace)
+		}
+		return backend.SnapshotInfo{}, werr
+	}
 	if err := export.Wait(); err != nil {
 		return backend.SnapshotInfo{}, fmt.Errorf("container export: %v: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	if werr != nil {
-		return backend.SnapshotInfo{}, werr
 	}
 	if err := f.Close(); err != nil {
 		return backend.SnapshotInfo{}, err
 	}
+	// The load copies the archive into the store; the archive is removed
+	// only after it.
+	if err := b.roomFor(n + loadMargin); err != nil {
+		return backend.SnapshotInfo{}, err
+	}
 	if _, err := b.cli(ctx, "image", "load", "--input", f.Name()); err != nil {
+		// A load that failed part way may have left an image no snapshot
+		// will name: removed now, not left for the next restart.
+		_, _ = b.cli(context.Background(), "image", "delete", "--force", ref)
+		if strings.Contains(strings.ToLower(err.Error()), "no space left") {
+			return backend.SnapshotInfo{}, fmt.Errorf("%w: the disk filled while the snapshot was loaded", backend.ErrNoSpace)
+		}
 		return backend.SnapshotInfo{}, err
 	}
 	b.mu.Lock()
@@ -268,6 +292,31 @@ func (b *Backend) DeleteSnapshot(ctx context.Context, snapshotID string) error {
 	_, err := b.cli(ctx, "image", "delete", "--force", ref)
 	return err
 }
+
+const (
+	// minSnapshotRoom is the least free disk a snapshot is started with: a
+	// sandbox's files are rarely less, the base image alone being 2 GB.
+	minSnapshotRoom = 1 << 30
+	// loadMargin is room beyond the archive's size for the load's copy.
+	loadMargin = 512 << 20
+)
+
+// roomFor refuses when the scratch directory's filesystem has less than need
+// bytes free. Unknown free space (another system, statfs failing) is not a
+// refusal: the snapshot then fails, if it does, on the disk itself.
+func (b *Backend) roomFor(need int64) error {
+	dir := b.cfg.ScratchDir
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	free, err := b.cfg.FreeBytes(dir)
+	if err != nil || free < 0 || free >= need {
+		return nil
+	}
+	return fmt.Errorf("%w: %s free, about %s needed for this snapshot", backend.ErrNoSpace, gib(free), gib(need))
+}
+
+func gib(n int64) string { return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30)) }
 
 // snapshotImage is the image a sandbox started from a snapshot runs.
 func (b *Backend) snapshotImage(snapshotID string) (string, error) {

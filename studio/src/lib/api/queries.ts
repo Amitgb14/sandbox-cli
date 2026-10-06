@@ -97,11 +97,31 @@ export function useEvents(id: string, enabled = true) {
   });
 }
 
+/** How long a file or directory read may take before the screen says so. */
+export const FILES_TIMEOUT_MS = 20_000;
+
+/** A guest's answer that never came, said as that rather than as an abort. */
+export function noAnswer(e: unknown): Error {
+  return e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")
+    ? new Error(`The sandbox did not answer within ${FILES_TIMEOUT_MS / 1000} seconds.`)
+    : (e as Error);
+}
+
 export function useDir(id: string, path: string, enabled = true) {
   return useQuery({
     queryKey: keys.dir(id, path),
-    queryFn: async () =>
-      (await apiFetch<{ entries: DirEntry[] }>(`${sbx(id)}/dirs?path=${encodeURIComponent(path)}`)).entries,
+    // Bounded: a read the guest never answered left "reading…" up for good,
+    // with nothing to do about it.
+    queryFn: async ({ signal }) => {
+      try {
+        const out = await apiFetch<{ entries: DirEntry[] }>(`${sbx(id)}/dirs?path=${encodeURIComponent(path)}`, {
+          signal: AbortSignal.any([signal, AbortSignal.timeout(FILES_TIMEOUT_MS)]),
+        });
+        return out.entries;
+      } catch (e) {
+        throw noAnswer(e);
+      }
+    },
     enabled: !!id && enabled,
     retry: false,
   });

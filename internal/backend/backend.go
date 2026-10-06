@@ -180,4 +180,7 @@ var (
 	ErrUnavailable = errors.New("backend unavailable")
 	ErrBusy        = errors.New("busy")
 	ErrUnsupported = errors.New("unsupported for this sandbox")
+	// ErrNoSpace: the host has too little free disk for what was asked. Its
+	// message may say how much is free and needed — sizes, never paths.
+	ErrNoSpace = errors.New("the host has too little free disk")
 )

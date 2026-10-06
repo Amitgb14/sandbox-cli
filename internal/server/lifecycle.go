@@ -134,6 +134,9 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		// The caller gets a generic message for most backend errors; the
+		// operator gets the cause, or a failed snapshot has none anywhere.
+		s.logf("sandbox %s: snapshot: %v", rec.snapshot().ID, err)
 		writeBackendErr(w, err)
 		return
 	}

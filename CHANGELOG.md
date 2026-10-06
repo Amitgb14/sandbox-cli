@@ -215,7 +215,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   an image a new sandbox starts from, booting afresh. Snapshots now say their
   `kind` (`memory` or `disk`); a fork of a disk snapshot keeps its image but
   may ask for other resources. Studio's Snapshot button and Snapshots screen
-  work with either. See docs/local-macos.md and docs/api/v1.md.
+  work with either. See docs/local-macos.md and docs/api/v1.md. On a disk
+  too full for one it is refused at once, saying how much is free and about
+  how much is needed (`503`), rather than failing after the export; a load
+  that fails part way leaves no image behind; and sandboxd logs why any
+  snapshot failed, which a client is told only in general terms.
 - **Scheduled snapshots.** A sandbox can be snapshotted every so often while it
   runs, keeping the newest few: `snapshot_every_secs` and `snapshot_keep` on
   create, `PUT …/snapshot-schedule` on a running sandbox, `run --snapshot-every

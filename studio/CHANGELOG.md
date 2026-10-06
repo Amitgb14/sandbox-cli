@@ -30,6 +30,12 @@ of its own: entries land under `Unreleased` and move under the version of
   the image has no desktop and gives the command that makes one. The screen is
   drawn by noVNC, bundled in Studio. See the main
   [CHANGELOG.md](../CHANGELOG.md) and [docs/desktop.md](../docs/desktop.md).
+- **Files never waits for good.** Listing a directory or opening a file
+  gives up after 20 seconds with "The sandbox did not answer" and a Retry,
+  where a read the sandbox never answered left "reading…" up for good; a file
+  the server refused to read says why instead of showing the error as its
+  contents.
+
 - **Snapshots where the backend keeps files only.** The panel's Snapshot
   button appears where the endpoint takes either kind of snapshot, says
   "Taking snapshot…" while a disk snapshot is made (about a minute on macOS),

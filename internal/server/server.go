@@ -1067,6 +1067,10 @@ func writeBackendErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, api.CodeConflict, "the sandbox is busy")
 	case errors.Is(err, backend.ErrUnsupported):
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, err.Error())
+	case errors.Is(err, backend.ErrNoSpace):
+		// Said plainly: "the backend failed" after two minutes of a snapshot
+		// left a full disk to be guessed at.
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, err.Error())
 	default:
 		// The message is generic on purpose: a backend error can carry host paths
 		// and engine detail that are the operator's to read, not the caller's.

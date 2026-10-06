@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -151,5 +154,15 @@ func TestSnapshotScheduleRefusals(t *testing.T) {
 	caps, err := c.Capabilities(ctx)
 	if err != nil || caps.Limits.MinSnapshotEverySecs != 60 || caps.Limits.MaxSnapshotKeep != 3 {
 		t.Fatalf("the limits a client sees: %+v %v", caps.Limits, err)
+	}
+}
+
+// A full disk is said plainly, with the sizes the backend gave: not "the
+// backend failed", which a snapshot that ran out of room used to answer.
+func TestNoSpaceIsSaid(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeBackendErr(rec, fmt.Errorf("%w: 0.5 GiB free, about 2.4 GiB needed for this snapshot", backend.ErrNoSpace))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "0.5 GiB free") || !strings.Contains(rec.Body.String(), api.CodeUnavailable) {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }

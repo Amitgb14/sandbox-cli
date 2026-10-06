@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -229,4 +230,89 @@ func TestLayerHeaderFitsItsRoomAtAnySize(t *testing.T) {
 			t.Fatalf("size %d: read back %+v, %v", size, hdr, err)
 		}
 	}
+}
+
+// On a disk too full for a snapshot, the backend says so — how much is free,
+// about how much is needed — rather than failing two minutes in as "the
+// backend failed"; it checks before the export and again before the load,
+// leaves no archive behind, and a load that fails part way leaves no image.
+func TestSnapshotOnAFullDisk(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script stands in for the runtime")
+	}
+	setup := func(t *testing.T, loadFails bool, free func(string) (int64, error)) (*Backend, string, string) {
+		work := t.TempDir()
+		calls := filepath.Join(work, "calls")
+		rootfs := filepath.Join(work, "rootfs.tar")
+		os.WriteFile(rootfs, smallRootfs(t), 0o644)
+		load := ""
+		if loadFails {
+			load = `echo "Error: write: No space left on device" >&2; exit 1`
+		}
+		script := filepath.Join(work, "container")
+		os.WriteFile(script, []byte(`#!/bin/sh
+echo "$*" >> "`+calls+`"
+case "$1 $2" in
+"ls --all") echo '[]' ;;
+"image ls") echo '[]' ;;
+"image inspect") echo '[{"variants":[{"platform":{"os":"linux","architecture":"arm64"},"config":{"architecture":"arm64","os":"linux","config":{}}}]}]' ;;
+"image load") `+load+` ;;
+esac
+case "$1" in export) cat "`+rootfs+`" ;; esac
+`), 0o755)
+		agent := filepath.Join(work, "sandbox-guestd")
+		os.WriteFile(agent, []byte("x"), 0o755)
+		scratch := filepath.Join(work, "scratch")
+		be, err := New(Config{Container: script, Agent: agent, Owner: "me", ScratchDir: scratch, Logf: t.Logf, FreeBytes: free})
+		if err != nil {
+			t.Fatal(err)
+		}
+		be.specs["sbx_1"] = backend.Spec{ID: "sbx_1", Image: "base:1"}
+		return be, calls, scratch
+	}
+	ctx := context.Background()
+
+	t.Run("refused before the export", func(t *testing.T) {
+		be, calls, _ := setup(t, false, func(string) (int64, error) { return 100 << 20, nil })
+		_, err := be.Snapshot(ctx, "sbx_1", "snp_a")
+		if !errors.Is(err, backend.ErrNoSpace) || !strings.Contains(err.Error(), "0.1 GiB free") {
+			t.Fatalf("err %v; want ErrNoSpace saying what is free", err)
+		}
+		if log, _ := os.ReadFile(calls); strings.Contains(string(log), "export") {
+			t.Fatal("the sandbox was exported onto a full disk")
+		}
+	})
+	t.Run("refused before the load", func(t *testing.T) {
+		n := 0
+		be, calls, scratch := setup(t, false, func(string) (int64, error) {
+			n++
+			if n == 1 {
+				return 4 << 30, nil
+			}
+			return 1 << 20, nil
+		})
+		_, err := be.Snapshot(ctx, "sbx_1", "snp_b")
+		if !errors.Is(err, backend.ErrNoSpace) {
+			t.Fatalf("err %v; want ErrNoSpace", err)
+		}
+		if log, _ := os.ReadFile(calls); strings.Contains(string(log), "image load") {
+			t.Fatal("loaded with no room for the copy")
+		}
+		if entries, _ := os.ReadDir(scratch); len(entries) != 0 {
+			t.Fatalf("the archive was left behind: %v", entries)
+		}
+	})
+	t.Run("a failed load leaves no image", func(t *testing.T) {
+		be, calls, _ := setup(t, true, func(string) (int64, error) { return 8 << 30, nil })
+		_, err := be.Snapshot(ctx, "sbx_1", "snp_c")
+		if !errors.Is(err, backend.ErrNoSpace) {
+			t.Fatalf("err %v; want ErrNoSpace from the load's own message", err)
+		}
+		if log, _ := os.ReadFile(calls); !strings.Contains(string(log), "image delete --force sbx-snapshot/me/snp_c:latest") {
+			t.Fatalf("the partial image was not removed:\n%s", log)
+		}
+		if _, err := be.snapshotImage("snp_c"); err == nil {
+			t.Fatal("a failed snapshot was recorded")
+		}
+	})
 }

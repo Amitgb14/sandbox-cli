@@ -90,6 +90,9 @@ type Config struct {
 	// the sandbox's files, for the minute it takes to load. Empty is the
 	// system's temporary directory.
 	ScratchDir string
+	// FreeBytes reports the free space of the filesystem holding a
+	// directory; nil is the real one (statfs). A test stands in a full disk.
+	FreeBytes func(dir string) (int64, error)
 }
 
 // Backend runs sandboxes with the `container` runtime.
@@ -121,6 +124,9 @@ func New(cfg Config) (*Backend, error) {
 	}
 	if cfg.BootTimeout == 0 {
 		cfg.BootTimeout = 60 * time.Second
+	}
+	if cfg.FreeBytes == nil {
+		cfg.FreeBytes = freeBytes
 	}
 	if cfg.ScratchDir != "" {
 		if err := os.MkdirAll(cfg.ScratchDir, 0o700); err != nil {
