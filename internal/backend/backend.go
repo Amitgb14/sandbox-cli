@@ -184,3 +184,22 @@ var (
 	// message may say how much is free and needed — sizes, never paths.
 	ErrNoSpace = errors.New("the host has too little free disk")
 )
+
+// Usage is a sandbox's resource use, as the host measures it.
+type Usage struct {
+	CPUUsec          int64 // CPU time used since the sandbox started, in microseconds
+	MemoryBytes      int64
+	MemoryLimitBytes int64
+	NetRxBytes       int64
+	NetTxBytes       int64
+	DiskReadBytes    int64
+	DiskWriteBytes   int64
+	Processes        int
+}
+
+// UsageReader can say how much of the host each of its running sandboxes is
+// using, from outside the guest. All at once: one reading per sample, however
+// many sandboxes there are.
+type UsageReader interface {
+	Usage(ctx context.Context) (map[string]Usage, error)
+}

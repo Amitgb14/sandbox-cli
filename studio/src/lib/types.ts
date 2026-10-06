@@ -391,3 +391,23 @@ export interface Service {
   created_at: string;
   updated_at: string;
 }
+
+/** One reading of a sandbox's usage, taken on the host (GET …/metrics). */
+export interface MetricSample {
+  time: string;
+  /** Share of the sandbox's vCPUs used since the previous sample, 0–100. */
+  cpu_percent: number;
+  memory_bytes: number;
+  memory_limit_bytes: number;
+  /** Counters from the sandbox's start. */
+  net_rx_bytes: number;
+  net_tx_bytes: number;
+  disk_read_bytes: number;
+  disk_write_bytes: number;
+  processes?: number;
+}
+
+export interface MetricsList {
+  interval_secs: number;
+  samples: MetricSample[];
+}

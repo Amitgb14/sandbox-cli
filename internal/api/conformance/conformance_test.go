@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/audit"
@@ -17,7 +18,9 @@ import (
 // audit log when withAudit is set.
 func serveFake(t *testing.T, pol spec.Policy, withAudit bool, caps ...string) *api.Client {
 	t.Helper()
-	s := &server.Server{Backend: fake.New(caps...), Policy: pol, Token: "conformance-token"}
+	// Usage sampled every second, so the metrics test waits seconds, not
+	// the default ten-second intervals.
+	s := &server.Server{Backend: fake.New(caps...), Policy: pol, Token: "conformance-token", MetricsInterval: time.Second}
 	if withAudit {
 		s.Audit = audit.NewLog(filepath.Join(t.TempDir(), "events.jsonl"))
 	}

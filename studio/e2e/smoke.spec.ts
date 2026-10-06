@@ -80,6 +80,21 @@ test("the list sums what sandboxes were given, walks them in its panel, and term
   // Allocations from the node, against its capacity.
   await expect(page.getByRole("meter", { name: "vCPU given" })).toBeVisible();
   await expect(page.getByRole("row").filter({ hasText: "walk-a" }).getByText("2 vCPU")).toBeVisible();
+  // What it was given opens what it uses: the last hour, sampled on the host.
+  await page.getByRole("button", { name: "Metrics of walk-a" }).click();
+  const metrics = page.getByRole("dialog");
+  await expect(metrics.getByRole("heading", { name: "Metrics of walk-a" })).toBeVisible();
+  // Its charts, or, before the first sample is taken (every 10 s), how often one is.
+  await expect(metrics.getByText(/^(CPU, % of 2 vCPU|No samples yet: one is taken every 10 seconds)/)).toBeVisible();
+  // It stays open while the list polls (every 5 s) under it.
+  await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
+  await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
+  await expect(metrics.getByRole("heading", { name: "Metrics of walk-a" })).toBeVisible();
+  // A click inside it stays there, and does not open the row's panel too.
+  await metrics.getByText("The last hour", { exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(metrics).toHaveCount(0);
 
   await page.getByPlaceholder(/Search/).fill("walk-");
   await page.getByRole("row").filter({ hasText: "walk-b" }).getByText("walk-b").click();

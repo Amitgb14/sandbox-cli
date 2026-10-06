@@ -86,6 +86,7 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"AttachStreamsInputAndOutput", testAttach},
 		{"SuspendKeepsTheSandbox", testSuspend},
 		{"ASnapshotForksTheSandbox", testSnapshot},
+		{"MetricsSampleARunningSandbox", testMetrics},
 		{"AScheduleKeepsTheNewestSnapshots", testSnapshotSchedule},
 		{"ATunnelReachesAGuestPort", testTunnel},
 		{"LabelsAreKeptAndFilterTheListing", testLabels},
@@ -1247,5 +1248,47 @@ func testSnapshotSchedule(t *testing.T, e *env) {
 	}
 	if out, err := e.c.SetSnapshotSchedule(ctx, sb.ID, api.SnapshotSchedule{}); err != nil || out.SnapshotEverySecs != 0 {
 		t.Fatalf("stopping the schedule: %+v, %v", out, err)
+	}
+}
+
+// Where the endpoint measures usage, a running sandbox gets samples within a
+// few intervals, each sane: a CPU share of 0 to 100, memory within its limit,
+// in time order. Where it does not, it says so.
+func testMetrics(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	sb := e.newSandbox(t, api.CreateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	if !e.caps.Has(api.CapMetrics) {
+		_, err := e.c.Metrics(ctx, sb.ID)
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	var m api.MetricsList
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var err error
+		if m, err = e.c.Metrics(ctx, sb.ID); err != nil {
+			t.Fatal(err)
+		}
+		if m.IntervalSecs < 1 {
+			t.Fatalf("interval_secs %d", m.IntervalSecs)
+		}
+		if len(m.Samples) >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Duration(m.IntervalSecs) * time.Second / 2)
+	}
+	if len(m.Samples) < 2 {
+		t.Fatalf("%d samples in 30 s at an interval of %d s", len(m.Samples), m.IntervalSecs)
+	}
+	for i, s := range m.Samples {
+		if s.CPUPercent < 0 || s.CPUPercent > 100 || s.MemoryBytes < 0 || (s.MemoryLimitBytes > 0 && s.MemoryBytes > s.MemoryLimitBytes) {
+			t.Fatalf("sample %d is not sane: %+v", i, s)
+		}
+		if i > 0 && !s.Time.After(m.Samples[i-1].Time) {
+			t.Fatalf("samples out of order at %d", i)
+		}
+	}
+	if _, err := e.c.Metrics(ctx, "sbx_0000000000000000"); err == nil {
+		t.Fatal("metrics of a sandbox that does not exist")
 	}
 }

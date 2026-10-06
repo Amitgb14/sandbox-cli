@@ -86,6 +86,11 @@ const (
 	// CapVolumes: named volumes persist across sandboxes and are mounted at a
 	// path on create.
 	CapVolumes = "volumes"
+	// CapMetrics: the server samples each running sandbox's CPU and memory,
+	// as the host measures them, and serves the last hour at
+	// GET /v1/sandboxes/{ref}/metrics. A property of the server and its
+	// backend together: the backend must be able to read usage.
+	CapMetrics = "metrics"
 	// CapAudit: the server keeps an event log, served per sandbox at
 	// GET /v1/sandboxes/{ref}/events. A property of the server, not the backend.
 	CapAudit = "audit"
@@ -688,4 +693,29 @@ type NodeInfo struct {
 // NodeList is GET /v1/admin/nodes.
 type NodeList struct {
 	Nodes []NodeInfo `json:"nodes"`
+}
+
+// MetricSample is one reading of a running sandbox's usage, taken on the host:
+// nothing here is the guest's own account of itself.
+type MetricSample struct {
+	Time time.Time `json:"time"`
+	// CPUPercent is the share of the sandbox's vCPUs used since the previous
+	// sample, 0 to 100.
+	CPUPercent       float64 `json:"cpu_percent"`
+	MemoryBytes      int64   `json:"memory_bytes"`
+	MemoryLimitBytes int64   `json:"memory_limit_bytes"`
+	// The counters run from the sandbox's start; a rate is the difference
+	// between two samples.
+	NetRxBytes     int64 `json:"net_rx_bytes"`
+	NetTxBytes     int64 `json:"net_tx_bytes"`
+	DiskReadBytes  int64 `json:"disk_read_bytes"`
+	DiskWriteBytes int64 `json:"disk_write_bytes"`
+	Processes      int   `json:"processes,omitempty"`
+}
+
+// MetricsList is the body of GET /v1/sandboxes/{ref}/metrics: the samples of
+// the last hour, oldest first, one every IntervalSecs.
+type MetricsList struct {
+	IntervalSecs int            `json:"interval_secs"`
+	Samples      []MetricSample `json:"samples"`
 }

@@ -59,6 +59,7 @@ type node struct {
 
 type sandbox struct {
 	mu      sync.Mutex
+	used    int64 // the fake's CPU time, microseconds: grows with each reading
 	spec    backend.Spec
 	files   map[string]*node // absolute, cleaned path -> node
 	procs   []*proc
@@ -609,4 +610,37 @@ func firstOr(s []string, def string) string {
 		return def
 	}
 	return s[0]
+}
+
+// Usage is backend.UsageReader with made-up but steady numbers: no VM runs
+// here, so there is nothing to measure, and the server's sampling and the
+// API's shape still need something to carry. CPU time grows by 2% of one
+// vCPU-second per reading per running process, memory is 64 MiB and 8 MiB
+// a process, within the sandbox's memory.
+func (b *Backend) Usage(context.Context) (map[string]backend.Usage, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := map[string]backend.Usage{}
+	for id, s := range b.sandboxes {
+		s.mu.Lock()
+		if !s.stopped {
+			running := 0
+			for _, p := range s.procs {
+				select {
+				case <-p.done:
+				default:
+					running++
+				}
+			}
+			s.used += int64(20_000 * (1 + running))
+			mem := int64(64+8*running) << 20
+			limit := int64(s.spec.MemoryMB) << 20
+			if limit > 0 && mem > limit {
+				mem = limit
+			}
+			out[id] = backend.Usage{CPUUsec: s.used, MemoryBytes: mem, MemoryLimitBytes: limit, Processes: 1 + running}
+		}
+		s.mu.Unlock()
+	}
+	return out, nil
 }
