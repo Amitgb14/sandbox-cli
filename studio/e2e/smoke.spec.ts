@@ -108,8 +108,11 @@ test("the Playground starts a sandbox from the image chosen, and says so in its 
   await page.goto("/launch/");
   await page.getByText("Command", { exact: true }).first().click();
   await page.getByRole("textbox", { name: "Command" }).fill("echo from-an-image");
-  // The fake backend takes no snapshots, so that choice is offered but off.
+  // The fake backend takes no snapshots, so that choice is offered but off,
+  // and so is a schedule.
   await expect(page.getByText("(this endpoint takes none)")).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "Snapshot on a schedule" })).toBeDisabled();
+  await expect(page.getByText("(this endpoint takes no snapshots)")).toBeVisible();
   await page.getByRole("combobox", { name: "Image" }).click();
   await page.getByPlaceholder("Search, or type any image…").fill("e2e-image:1");
   await page.getByRole("option", { name: /Use e2e-image:1/ }).click();

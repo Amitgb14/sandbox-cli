@@ -56,6 +56,11 @@ type LaunchRequest struct {
 	// policy's image list and the snapshot's owner, as for any client.
 	Image    string `json:"image,omitempty"`
 	Snapshot string `json:"snapshot,omitempty"`
+	// SnapshotEverySecs and SnapshotKeep give the sandbox a snapshot schedule:
+	// the CLI's --snapshot-every and --snapshot-keep, bounded and refused by
+	// sandboxd as any client's.
+	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`
+	SnapshotKeep      int `json:"snapshot_keep,omitempty"`
 	// Rows and Cols size a console run's terminal before anyone attaches.
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`
