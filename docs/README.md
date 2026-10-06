@@ -23,6 +23,7 @@ renders them from here.
 | [sandbox-cli](cli.md) | Every command and flag, generated from the CLI itself |
 | [sandboxd](sandboxd.md) | The server's flags, the policy file, node mode and metrics |
 | [Studio](studio.md) | The browser view: each screen, how a gateway key's scopes decide them, organizations, the hosted build, its guards |
+| [Desktop](desktop.md) | A sandbox with a screen, a terminal and a browser, used in Studio's Desktop tab; how it reaches you and what it costs |
 | [SDKs](../sdk/README.md) | The Python and TypeScript clients, and their gateway calls |
 
 ## Fleet

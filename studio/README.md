@@ -26,6 +26,7 @@ from the same origin:
 | `/` and every route | this app, as files (`out/`) |
 | `/api/v1/…` | sandboxd's API, proxied to the current context with that sandboxd's token; the browser never holds it |
 | `/api/ws/attach` | a WebSocket bridge to a process's terminal |
+| `/api/ws/desktop` | a WebSocket bridge to a sandbox's desktop: its VNC port (5900) only, binary frames, drawn by the bundled noVNC ([docs/desktop.md](../docs/desktop.md)) |
 | `/api/info`, `/api/agents`, `/api/agents/state` | the context and version, the agents and their saved logins, and each agent's state |
 | `POST /api/runs` | launching a run, through the same code the CLI uses |
 

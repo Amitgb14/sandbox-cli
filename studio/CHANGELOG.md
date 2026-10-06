@@ -23,6 +23,13 @@ of its own: entries land under `Unreleased` and move under the version of
   `--image` or `--from-snapshot` for the CLI, `image` or `snapshot_id` for the
   API and the SDKs. Studio's launch request carries `image` and `snapshot`,
   one or neither; sandboxd's policy still decides whether they run.
+- **A Desktop tab.** A running sandbox's panel has a Desktop tab: in a sandbox
+  made from the desktop image it starts the desktop and shows its screen — a
+  terminal and a browser to use — scaled to fit, with Reconnect and Full
+  screen; closing it leaves the desktop running. In any other sandbox it says
+  the image has no desktop and gives the command that makes one. The screen is
+  drawn by noVNC, bundled in Studio. See the main
+  [CHANGELOG.md](../CHANGELOG.md) and [docs/desktop.md](../docs/desktop.md).
 
 - **The sandbox list shows live sandboxes by default**: starting, running and
   suspended. Terminated ones are one choice away in the State filter, and a

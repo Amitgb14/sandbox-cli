@@ -138,6 +138,26 @@ test("the Playground lists agents with what each needs to log in", async ({ page
   await expect(agents.getByText("api.anthropic.com").first()).toBeVisible();
 });
 
+test("the Desktop tab explains a sandbox whose image has no desktop", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
+  // The fake backend runs builtins only, so sandbox-desktop is "no such command" there,
+  // as it is in any image but the desktop one.
+  const sb = await (await api("/v1/sandboxes", "POST", { name: "no-desktop" })).json();
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  await page.getByRole("row").filter({ hasText: "no-desktop" }).getByText("no-desktop").click();
+  const panel = page.getByRole("dialog");
+  await panel.getByRole("tab", { name: "Desktop" }).click();
+  await expect(panel.getByText("No desktop is running in this sandbox.", { exact: false })).toBeVisible();
+  await panel.getByRole("button", { name: "Start desktop" }).click();
+  await expect(panel.getByText("image has no desktop", { exact: false })).toBeVisible();
+  await expect(panel.locator("pre").last()).toContainText("--image");
+  await expect(panel.locator("pre").last()).toContainText("sandbox-desktop");
+  await api(`/v1/sandboxes/${sb.id}`, "DELETE");
+});
+
 test("Agents lists only the verified agents, and Launch starts a sandbox", async ({ page }) => {
   await page.goto(`/#token=${token}`);
   await expect(page.getByText("e2e · fake")).toBeVisible();
