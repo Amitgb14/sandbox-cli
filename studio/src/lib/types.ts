@@ -41,6 +41,17 @@ export interface Sandbox {
   /** The snapshot schedule: one every so many seconds while it runs, the newest kept. */
   snapshot_every_secs?: number;
   snapshot_keep?: number;
+  /** The snapshot being taken of it, while one is. */
+  snapshotting?: SnapshotProgress;
+}
+
+/** How far a snapshot has got: what has been read, against an estimate where the backend has one. */
+export interface SnapshotProgress {
+  started_at: string;
+  scheduled?: boolean;
+  phase: "capture" | "store";
+  bytes: number;
+  estimated_bytes?: number;
 }
 
 export interface Capabilities {

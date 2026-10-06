@@ -178,6 +178,54 @@ test("the Desktop tab explains a sandbox whose image has no desktop", async ({ p
   await api(`/v1/sandboxes/${sb.id}`, "DELETE");
 });
 
+test("a snapshot being taken shows how far it has got, in the panel and the list", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
+  const sb = await (await api("/v1/sandboxes", "POST", { name: "snapping" })).json();
+  // The fake takes no snapshots and would take one at once if it did, so the
+  // endpoint is said to take them and the sandbox to be half way through one.
+  const progress = { started_at: new Date().toISOString(), phase: "capture", bytes: 2 ** 30, estimated_bytes: 2 * 2 ** 30 };
+  await page.route("**/api/info", async (route) => {
+    const res = await route.fetch();
+    const info = await res.json();
+    info.capabilities.capabilities.disk_snapshot = true;
+    await route.fulfill({ response: res, json: info });
+  });
+  const withProgress = (s: { id: string }) => (s.id === sb.id ? { ...s, snapshotting: progress } : s);
+  await page.route(`**/api/v1/sandboxes/${sb.id}`, async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: withProgress(await res.json()) });
+  });
+  await page.route("**/api/v1/sandboxes", async (route) => {
+    const res = await route.fetch();
+    if (route.request().method() !== "GET") return route.fulfill({ response: res });
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, sandboxes: body.sandboxes.map(withProgress) } });
+  });
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  const row = page.getByRole("row").filter({ hasText: "snapping" });
+  await expect(row.getByText("reading 50%")).toBeVisible();
+  await row.getByText("snapping").click();
+  const panel = page.getByRole("dialog");
+  // Three steps: preparing done, reading half way, storing to come.
+  await expect(panel.getByRole("progressbar", { name: "Reading files" })).toHaveAttribute("aria-valuenow", "50");
+  await expect(panel.getByText("1.0 GiB of about 2.0 GiB")).toBeVisible();
+  // One at a time: there is no Snapshot button while one is taken.
+  await expect(panel.getByRole("button", { name: "Snapshot", exact: true })).toHaveCount(0);
+
+  // Storing says nothing as it goes, so it has no percentage.
+  progress.phase = "store";
+  const storing = panel.getByRole("progressbar", { name: "Storing" });
+  await expect(storing).toBeVisible({ timeout: 8000 });
+  await expect(storing).not.toHaveAttribute("aria-valuenow", /./);
+  await panel.getByRole("button", { name: "Close" }).click();
+  await expect(row.getByText("storing")).toBeVisible({ timeout: 8000 });
+  await api(`/v1/sandboxes/${sb.id}`, "DELETE");
+});
+
 test("Agents lists only the verified agents, and Launch starts a sandbox", async ({ page }) => {
   await page.goto(`/#token=${token}`);
   await expect(page.getByText("e2e · fake")).toBeVisible();

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -309,5 +310,34 @@ func TestParseStatsKeepsItsOwn(t *testing.T) {
 	u, ok := got["sbx_mine"]
 	if len(got) != 1 || !ok || u.CPUUsec != 47276 || u.MemoryBytes != 9248768 || u.MemoryLimitBytes != 1<<30 || u.NetRxBytes != 60916 || u.DiskReadBytes != 5402624 || u.Processes != 4 {
 		t.Fatalf("usage %+v", got)
+	}
+}
+
+func TestParseDFUsed(t *testing.T) {
+	for in, want := range map[string]int64{
+		"     Used\n2260824064\n": 2260824064,
+		"Used\n-5\n":              0, // a guest's lie sizes nothing
+		"Used\n":                  0,
+		"df: not found\n":         0,
+		"Used\n12\n34\n":          0,
+	} {
+		if got := parseDFUsed(in); got != want {
+			t.Errorf("parseDFUsed(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestReportWhileEndsWithTheCount(t *testing.T) {
+	var last backend.SnapshotProgress
+	ctx := backend.WithSnapshotProgress(context.Background(), func(p backend.SnapshotProgress) { last = p })
+	c := &countingReader{r: strings.NewReader(strings.Repeat("x", 4096))}
+	stop := reportWhile(ctx, c, 8192)
+	if _, err := io.Copy(io.Discard, c); err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	stop() // twice is once
+	if last.Phase != api.SnapshotPhaseCapture || last.Bytes != 4096 || last.EstimatedBytes != 8192 {
+		t.Fatalf("last report: %+v", last)
 	}
 }

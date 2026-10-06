@@ -12,8 +12,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
@@ -237,12 +240,18 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 	if err != nil {
 		return backend.SnapshotInfo{}, err
 	}
+	// Before the export: while it runs, the runtime answers nothing else of
+	// the sandbox.
+	estimate := b.usedBytes(ctx, id)
 	if err := export.Start(); err != nil {
 		return backend.SnapshotInfo{}, err
 	}
+	read := &countingReader{r: out}
+	stop := reportWhile(ctx, read, estimate)
 	ref := snapshotRef(b.cfg.Owner, snapshotID)
-	n, werr := writeImageArchive(f, out, ic, ref, map[string]string{LabelManaged: "1", LabelOwner: b.cfg.Owner})
+	n, werr := writeImageArchive(f, read, ic, ref, map[string]string{LabelManaged: "1", LabelOwner: b.cfg.Owner})
 	if werr != nil {
+		stop()
 		_ = export.Process.Kill()
 		_ = export.Wait()
 		if errors.Is(werr, syscall.ENOSPC) {
@@ -250,6 +259,7 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 		}
 		return backend.SnapshotInfo{}, werr
 	}
+	stop()
 	if err := export.Wait(); err != nil {
 		return backend.SnapshotInfo{}, fmt.Errorf("container export: %v: %s", err, strings.TrimSpace(stderr.String()))
 	}
@@ -261,6 +271,8 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 	if err := b.roomFor(n + loadMargin); err != nil {
 		return backend.SnapshotInfo{}, err
 	}
+	// The load reports nothing as it goes; the phase says it has begun.
+	backend.ReportSnapshotProgress(ctx, backend.SnapshotProgress{Phase: api.SnapshotPhaseStore, Bytes: read.n.Load(), EstimatedBytes: estimate})
 	if _, err := b.cli(ctx, "image", "load", "--input", f.Name()); err != nil {
 		// A load that failed part way may have left an image no snapshot
 		// will name: removed now, not left for the next restart.
@@ -353,6 +365,81 @@ func (b *Backend) reapSnapshots() {
 		if i := strings.Index(name, mine); i == 0 || (i > 0 && name[i-1] == '/') {
 			_, _ = b.cli(context.Background(), "image", "delete", "--force", name)
 			b.cfg.Logf("removed a snapshot left by an earlier run: %s", name)
+		}
+	}
+}
+
+// usedBytes is about how much an export of the sandbox will read: what its
+// root filesystem has in use, by the guest's own df. It is the guest's
+// account, so it only sizes a progress bar and decides nothing; a guest that
+// lies, or has no df, gets a bar that is wrong or none (0). The host's view
+// is no better: the runtime's disk file keeps blocks the guest has freed.
+func (b *Backend) usedBytes(ctx context.Context, id string) int64 {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := b.cli(ctx, "exec", id, "df", "-B1", "--output=used", "/")
+	if err != nil {
+		return 0
+	}
+	return parseDFUsed(out)
+}
+
+// parseDFUsed reads `df --output=used`: a header, then one number.
+func parseDFUsed(out string) int64 {
+	lines := strings.Fields(out)
+	if len(lines) != 2 {
+		return 0
+	}
+	n, err := strconv.ParseInt(lines[1], 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// countingReader counts what the export has given so far.
+type countingReader struct {
+	r io.Reader
+	n atomic.Int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
+}
+
+// snapshotReportEvery is how often the capture's progress is reported.
+const snapshotReportEvery = 500 * time.Millisecond
+
+// reportWhile reports the capture's progress until stop is called, and once
+// more then.
+func reportWhile(ctx context.Context, c *countingReader, estimate int64) (stop func()) {
+	report := func() {
+		backend.ReportSnapshotProgress(ctx, backend.SnapshotProgress{Phase: api.SnapshotPhaseCapture, Bytes: c.n.Load(), EstimatedBytes: estimate})
+	}
+	report()
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		t := time.NewTicker(snapshotReportEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				report()
+				return
+			case <-t.C:
+				report()
+			}
+		}
+	}()
+	var once atomic.Bool
+	return func() {
+		if once.CompareAndSwap(false, true) {
+			close(done)
+			<-finished
 		}
 	}
 }

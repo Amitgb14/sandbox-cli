@@ -210,10 +210,30 @@ type Sandbox struct {
 	IdleTimeoutSecs int `json:"idle_timeout_secs"`
 	// SnapshotEverySecs and SnapshotKeep are the sandbox's snapshot
 	// schedule; 0 is none.
-	SnapshotEverySecs int               `json:"snapshot_every_secs,omitempty"`
-	SnapshotKeep      int               `json:"snapshot_keep,omitempty"`
-	Labels            map[string]string `json:"labels,omitempty"`
-	Volumes           []VolumeMount     `json:"volumes,omitempty"`
+	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`
+	SnapshotKeep      int `json:"snapshot_keep,omitempty"`
+	// Snapshotting is the snapshot being taken of it, while one is.
+	Snapshotting *SnapshotProgress `json:"snapshotting,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Volumes      []VolumeMount     `json:"volumes,omitempty"`
+}
+
+// Snapshot phases, in order.
+const (
+	SnapshotPhaseCapture = "capture" // reading the sandbox: its files, or its memory and disk
+	SnapshotPhaseStore   = "store"   // keeping what was read where a fork can start from it
+)
+
+// SnapshotProgress is how far a snapshot has got. Bytes is what has been read
+// of the sandbox so far; EstimatedBytes, where the backend can say, is about
+// how much there is, and 0 where it cannot. It is an estimate to draw a bar
+// with, and Bytes may pass it.
+type SnapshotProgress struct {
+	StartedAt      time.Time `json:"started_at"`
+	Scheduled      bool      `json:"scheduled,omitempty"`
+	Phase          string    `json:"phase"`
+	Bytes          int64     `json:"bytes"`
+	EstimatedBytes int64     `json:"estimated_bytes,omitempty"`
 }
 
 // Event types in the audit log.
