@@ -153,10 +153,12 @@ test("the Playground writes the same sandbox as code, and the list filters by st
   await api(`/v1/sandboxes/${gone.id}`, "DELETE");
   await page.goto("/sandboxes/");
   await page.getByPlaceholder(/Search/).fill("filter-");
-  await page.getByRole("button", { name: "State" }).click();
-  await page.getByRole("option", { name: /Running/ }).click();
-  await page.keyboard.press("Escape");
+  // Live sandboxes only, until asked for the rest.
   await expect(page.getByText("filter-keep")).toBeVisible();
   await expect(page.getByText("filter-gone")).toHaveCount(0);
+  await page.getByRole("button", { name: /^State/ }).click();
+  await page.getByRole("option", { name: /Terminated/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("filter-gone")).toBeVisible();
   await api(`/v1/sandboxes/${keep.id}`, "DELETE");
 });
