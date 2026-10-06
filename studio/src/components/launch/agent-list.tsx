@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronDown, KeyRound, Globe, FileKey2, Info } from "lucide-react";
+import { Check, ChevronDown, FileKey2, Globe, Info, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Agent } from "@/lib/types";
 
@@ -29,7 +29,9 @@ export function agentStatus(a: Agent): Status {
   };
 }
 
-function Row({ k, icon: Icon, children }: { k: string; icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }) {
+const GRID = "grid grid-cols-[1.5rem_6.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_1.75rem] items-center gap-3";
+
+function Detail({ k, icon: Icon, children }: { k: string; icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[7.5rem_1fr] items-start gap-3 text-xs">
       <dt className="flex items-center gap-1.5 text-muted-foreground">
@@ -42,108 +44,128 @@ function Row({ k, icon: Icon, children }: { k: string; icon: React.ComponentType
 }
 
 /**
- * The agents Studio runs, one row each: chosen with a click, opened for what
- * it needs to log in — where its login is kept, the API keys it takes and
- * which are set, the API it always reaches.
+ * The agents Studio runs, as a table: one row each, with what a launch hands
+ * the sandbox for it — its login (copied in), the API keys set where Studio
+ * runs (forwarded), and the API it always reaches (allowed through) — on the
+ * row itself, and the particulars a click away. A row is chosen with a click.
  */
 export function AgentList({ agents, value, onChange }: { agents: Agent[]; value: string; onChange: (name: string) => void }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
-    <div role="radiogroup" aria-label="Agent" className="divide-y overflow-hidden rounded-lg border bg-card">
-      {agents.map((a) => {
-        const on = a.name === value;
-        const expanded = open === a.name;
-        const st = agentStatus(a);
-        return (
-          <div key={a.name} className={cn("transition-colors", on && "bg-primary/5")}>
-            <div className="flex items-center gap-1 pr-2">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={on}
-                onClick={() => onChange(a.name)}
-                className="flex min-w-0 flex-1 items-center gap-3 px-3.5 py-3 text-left"
-              >
-                <span
-                  aria-hidden
+    <div className="overflow-hidden rounded-lg border bg-card">
+      <div className={cn(GRID, "border-b bg-muted/30 px-3.5 py-2 font-mono text-[10px] tracking-[0.06em] text-muted-foreground uppercase")}>
+        <span />
+        <span>Agent</span>
+        <span>Login</span>
+        <span>API keys</span>
+        <span>Reaches</span>
+        <span />
+      </div>
+      <p className="border-b px-3.5 py-1.5 text-[11px] text-muted-foreground">Handed to the sandbox at launch: the login is copied in, set keys are forwarded, the API is let through.</p>
+      <div role="radiogroup" aria-label="Agent" className="divide-y">
+        {agents.map((a) => {
+          const on = a.name === value;
+          const expanded = open === a.name;
+          const st = agentStatus(a);
+          const set = (a.env ?? []).filter((e) => e.set);
+          return (
+            <div key={a.name} className={cn("transition-colors", on && "bg-primary/5")}>
+              <div className={cn(GRID, "px-3.5 py-2.5")}>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  aria-label={a.name}
+                  onClick={() => onChange(a.name)}
                   className={cn(
-                    "flex size-4 shrink-0 items-center justify-center rounded-full border",
-                    on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40",
+                    "flex size-4 items-center justify-center rounded-full border",
+                    on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40 hover:border-foreground/60",
                   )}
                 >
                   {on ? <Check className="size-3" /> : null}
+                </button>
+                <button type="button" onClick={() => onChange(a.name)} className="truncate text-left font-mono text-sm font-medium">
+                  {a.name}
+                </button>
+                <span title={st.hint}>
+                  <span
+                    className={cn(
+                      "inline-flex rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap",
+                      st.tone === "good" && "border-status-good/30 bg-status-good/10 text-status-good",
+                      st.tone === "warn" && "border-caution/30 bg-caution/10 text-caution",
+                      st.tone === "muted" && "text-muted-foreground",
+                    )}
+                  >
+                    {st.label}
+                  </span>
                 </span>
-                <span className="w-24 shrink-0 font-mono text-sm font-medium">{a.name}</span>
-                <span className="hidden min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground sm:block">{a.provider_host}</span>
-                <span
-                  title={st.hint}
-                  className={cn(
-                    "ml-auto shrink-0 rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap",
-                    st.tone === "good" && "border-status-good/30 bg-status-good/10 text-status-good",
-                    st.tone === "warn" && "border-caution/30 bg-caution/10 text-caution",
-                    st.tone === "muted" && "text-muted-foreground",
-                  )}
-                >
-                  {st.label}
-                </span>
-              </button>
-              <button
-                type="button"
-                aria-expanded={expanded}
-                aria-label={`${expanded ? "Hide" : "Show"} ${a.name}'s login details`}
-                onClick={() => setOpen(expanded ? null : a.name)}
-                className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-              >
-                <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} />
-              </button>
-            </div>
-            {expanded ? (
-              <dl className="flex flex-col gap-2.5 border-t bg-muted/20 px-4 py-3.5 pl-[3.25rem]">
-                <Row k="Login" icon={FileKey2}>
-                  {a.login_files?.length ? (
-                    <span>
-                      kept between runs:{" "}
-                      {a.login_files.map((f) => (
-                        <code key={f} className="mr-1.5 font-mono text-[11px]">
-                          ~/{f}
-                        </code>
-                      ))}
-                    </span>
+                <span className="truncate text-xs" title={(a.env ?? []).map((e) => `${e.name}${e.set ? " (set)" : ""}`).join("\n")}>
+                  {set.length ? (
+                    <span className="font-mono text-status-good">{set.map((e) => e.name).join(", ")}</span>
                   ) : (
-                    <span className="text-muted-foreground">not kept: it logs in with an API key each run</span>
+                    <span className="text-muted-foreground">{a.env?.length ? `none set (${a.env.length})` : "—"}</span>
                   )}
-                </Row>
-                {a.env?.length ? (
-                  <Row k="API keys" icon={KeyRound}>
-                    <div className="flex flex-wrap gap-1.5">
-                      {a.env.map((e) => (
-                        <span
-                          key={e.name}
-                          className={cn(
-                            "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px]",
-                            e.set ? "border-status-good/30 text-status-good" : "text-muted-foreground",
-                          )}
-                        >
-                          {e.set ? <Check className="size-3" /> : null}
-                          {e.name}
-                        </span>
-                      ))}
-                    </div>
-                  </Row>
-                ) : null}
-                {a.provider_host ? (
-                  <Row k="Network" icon={Globe}>
-                    always reaches <code className="font-mono text-[11px]">{a.provider_host}</code>, whatever else the run may reach
-                  </Row>
-                ) : null}
-                <Row k="Status" icon={Info}>
-                  <span className="text-muted-foreground">{st.hint}</span>
-                </Row>
-              </dl>
-            ) : null}
-          </div>
-        );
-      })}
+                </span>
+                <span className="truncate font-mono text-xs text-muted-foreground">{a.provider_host ?? "—"}</span>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-label={`${expanded ? "Hide" : "Show"} ${a.name}'s login details`}
+                  onClick={() => setOpen(expanded ? null : a.name)}
+                  className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <ChevronDown className={cn("size-4 transition-transform", expanded && "rotate-180")} />
+                </button>
+              </div>
+              {expanded ? (
+                <dl className="flex flex-col gap-2.5 border-t bg-muted/20 px-4 py-3.5 pl-[2.75rem]">
+                  <Detail k="Login" icon={FileKey2}>
+                    {a.login_files?.length ? (
+                      <span>
+                        kept between runs, copied in at launch:{" "}
+                        {a.login_files.map((f) => (
+                          <code key={f} className="mr-1.5 font-mono text-[11px]">
+                            ~/{f}
+                          </code>
+                        ))}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">not kept: it logs in with an API key each run</span>
+                    )}
+                  </Detail>
+                  {a.env?.length ? (
+                    <Detail k="API keys" icon={KeyRound}>
+                      <div className="flex flex-wrap gap-1.5">
+                        {a.env.map((e) => (
+                          <span
+                            key={e.name}
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px]",
+                              e.set ? "border-status-good/30 text-status-good" : "text-muted-foreground",
+                            )}
+                          >
+                            {e.set ? <Check className="size-3" /> : null}
+                            {e.name}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">Those set where Studio runs are forwarded to the run; values are never shown.</p>
+                    </Detail>
+                  ) : null}
+                  {a.provider_host ? (
+                    <Detail k="Network" icon={Globe}>
+                      always reaches <code className="font-mono text-[11px]">{a.provider_host}</code>, whatever else the run may reach
+                    </Detail>
+                  ) : null}
+                  <Detail k="Status" icon={Info}>
+                    <span className="text-muted-foreground">{st.hint}</span>
+                  </Detail>
+                </dl>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

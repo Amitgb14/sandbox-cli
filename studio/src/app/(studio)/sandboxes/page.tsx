@@ -18,7 +18,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { MoreHorizontal, Plus, RefreshCw, Search, SquareTerminal, Trash2 } from "lucide-react";
+import { CalendarClock, Camera, MoreHorizontal, Plus, RefreshCw, Search, SquareTerminal, Trash2 } from "lucide-react";
 import { QuickStart } from "@/components/common/quick-start";
 import { ColumnHeader } from "@/components/data-table/column-header";
 import { FacetedFilter } from "@/components/data-table/faceted-filter";
@@ -28,6 +28,7 @@ import { SandboxDetails } from "@/components/sandbox/details";
 import { ResourceChips } from "@/components/sandbox/resource-chips";
 import { AgentActivity, StateDot } from "@/components/sandbox/state-dot";
 import { SandboxSummary } from "@/components/sandbox/summary";
+import { every } from "@/components/sandbox/snapshots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -42,7 +43,7 @@ import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useAgentStates, useInfo, useKill, useSandboxes, useSuspend } from "@/lib/api/queries";
+import { useAgentStates, useInfo, useKill, useSandboxes, useSnapshots, useSuspend } from "@/lib/api/queries";
 import { useCan } from "@/lib/caller";
 import { formatDateTime, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -99,6 +100,13 @@ export default function SandboxesPage() {
 
   const all = useMemo(() => data ?? [], [data]);
   const agentOf = useMemo(() => new Map((agentStates ?? []).map((a) => [a.sandbox, a])), [agentStates]);
+  const takesSnapshots = !!(caps.memory_snapshot || caps.disk_snapshot);
+  const { data: snapshots } = useSnapshots(takesSnapshots);
+  const snapshotsOf = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of snapshots ?? []) m.set(s.sandbox, (m.get(s.sandbox) ?? 0) + 1);
+    return m;
+  }, [snapshots]);
 
   const terminate = (list: Sandbox[]) => {
     const live = list.filter((s) => s.state !== "terminated");
@@ -175,6 +183,26 @@ export default function SandboxesPage() {
         header: "Resources",
         cell: ({ row }) => <ResourceChips sb={row.original} className="flex-nowrap" />,
         meta: { label: "Resources" },
+      },
+      {
+        id: "snapshots",
+        header: "Snapshots",
+        // Inactive is no schedule and nothing taken; otherwise how many it
+        // has, with the schedule's clock when one runs.
+        cell: ({ row: { original: s } }) => {
+          const n = snapshotsOf.get(s.id) ?? 0;
+          if (!s.snapshot_every_secs && n === 0) return <span className="text-xs text-muted-foreground">Inactive</span>;
+          return (
+            <span
+              className="inline-flex items-center gap-1.5 text-xs tabular-nums"
+              title={s.snapshot_every_secs ? `every ${every(s.snapshot_every_secs)}, the newest ${s.snapshot_keep} kept` : "taken by hand; no schedule"}
+            >
+              {s.snapshot_every_secs ? <CalendarClock className="size-3.5 text-status-running" /> : <Camera className="size-3.5 text-muted-foreground" />}
+              {n}
+            </span>
+          );
+        },
+        meta: { label: "Snapshots" },
       },
       {
         id: "labels",
@@ -264,13 +292,14 @@ export default function SandboxesPage() {
     // terminate and suspend close over state that changes every render; the
     // columns only need rebuilding when what they show does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [agentOf, caps.suspend, can, open],
+    [agentOf, snapshotsOf, caps.suspend, can, open],
   );
 
   const table = useReactTable({
     data: all,
     columns,
-    state: { sorting, rowSelection: selection, columnVisibility: visibility, globalFilter: query },
+    // The Snapshots column only where the endpoint takes snapshots.
+    state: { sorting, rowSelection: selection, columnVisibility: { snapshots: takesSnapshots, ...visibility }, globalFilter: query },
     getRowId: (s) => s.id,
     onSortingChange: setSorting,
     onRowSelectionChange: setSelection,
