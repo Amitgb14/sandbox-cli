@@ -1,3 +1,4 @@
+import { LiveDot } from "@/components/common/status-badge";
 import { cn } from "@/lib/utils";
 import type { AgentState, AgentStateName, SandboxState } from "@/lib/types";
 
@@ -10,13 +11,20 @@ const STATE: Record<SandboxState, { label: string; dot: string }> = {
 
 /**
  * A sandbox's state as a dot and a word: quieter than a badge in a table full
- * of them, and the colour is never the only signal.
+ * of them, and the colour is never the only signal. A running sandbox's dot
+ * pulses, so what is alive reads at a glance.
  */
 export function StateDot({ state, className }: { state: SandboxState; className?: string }) {
   const s = STATE[state] ?? { label: state, dot: "bg-muted-foreground/40" };
   return (
     <span className={cn("inline-flex items-center gap-2 text-sm whitespace-nowrap", className)}>
-      <span aria-hidden className={cn("size-2 shrink-0 rounded-full", s.dot)} />
+      {/* Running is the one state that is alive: its dot pulses, as every
+          live thing in Studio does (and holds still under reduced motion). */}
+      {state === "running" ? (
+        <LiveDot className="shrink-0" />
+      ) : (
+        <span aria-hidden className={cn("size-2 shrink-0 rounded-full", s.dot)} />
+      )}
       {s.label}
     </span>
   );

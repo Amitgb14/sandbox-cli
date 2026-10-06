@@ -10,6 +10,10 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **A running sandbox's dot pulses**, in the list and its panel, as Studio's
+  other live indicators do, so what is alive reads at a glance; every other
+  state's dot holds still, and so does this one under reduced motion.
+
 - **A sandbox opens beside the list.** A click on a row slides its details in
   from the right: who it is and its actions at the top, then its overview in
   sections (id, image, network, resources, lifecycle, labels, environment
