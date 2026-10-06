@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ChevronDown, ChevronUp, ExternalLink, Maximize2, Minimize2, Plus, SquareTerminal, Trash2, X } from "lucide-react";
+import { Camera, ChevronDown, ChevronUp, ExternalLink, Maximize2, Minimize2, Plus, SquareTerminal, Trash2, X } from "lucide-react";
 import { CopyButton } from "@/components/common/copy-button";
 import { SandboxDesktop } from "@/components/sandbox/desktop";
 import { SandboxEvents } from "@/components/sandbox/events";
@@ -249,6 +249,7 @@ export function SandboxDetails({
             {(caps.memory_snapshot || caps.disk_snapshot) && sb.state === "running" && can("sandbox:create") && (
               <Button
                 variant="outline"
+                className="border-status-running/40 bg-status-running/15 text-status-running hover:bg-status-running/25 hover:text-status-running"
                 size="sm"
                 disabled={snapshot.isPending}
                 title={caps.memory_snapshot ? "Capture it whole: memory, processes and disk" : "Capture its files; a sandbox started from them boots afresh. About a minute."}
@@ -256,6 +257,7 @@ export function SandboxDetails({
                   act(snapshot.mutateAsync(id), caps.memory_snapshot ? "Snapshot taken" : "Snapshot of its files taken")
                 }
               >
+                <Camera className="size-3.5" />
                 {snapshot.isPending ? "Taking snapshot…" : "Snapshot"}
               </Button>
             )}

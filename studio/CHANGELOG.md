@@ -10,6 +10,16 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **A Snapshots column, and a Snapshot button that stands out.** Where the
+  endpoint takes snapshots, the sandbox list has a column with each sandbox's
+  snapshot count, marked scheduled or manual, and "Inactive" for one with no
+  schedule and none taken. A running sandbox's Snapshot button is coloured,
+  with an icon.
+- **The Playground's agents as a table.** One row per agent, with what a
+  launch hands the sandbox for it: its login (copied in), the API keys set
+  where Studio runs (forwarded) and the API it reaches (let through); a row
+  expands to the login files, every key it reads and its status.
+
 - **A snapshot schedule from the Playground.** *Start from* has "Snapshot it
   on a schedule": every so often, keeping the newest few, offered only within
   the server's limits and only where the endpoint takes snapshots. The
