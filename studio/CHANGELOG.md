@@ -10,6 +10,14 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **A snapshot schedule from the Playground.** *Start from* has "Snapshot it
+  on a schedule": every so often, keeping the newest few, offered only within
+  the server's limits and only where the endpoint takes snapshots. The
+  summary shows it, and the code beside the form carries it
+  (`--snapshot-every 30m --snapshot-keep 3`, `snapshot_every_secs` and
+  `snapshot_keep`). Studio's launch request carries the two fields to the same
+  code the CLI's flags reach.
+
 - **Agents, one row each, with what each needs to log in.** The Playground's
   agents are a list: each row says whether it is logged in, has an API key set
   where Studio runs (which a launch forwards), or needs one, and opens for

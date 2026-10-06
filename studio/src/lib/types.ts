@@ -177,6 +177,9 @@ export interface LaunchRequest {
   /** An image instead of the server's default, or a snapshot to start from: one or neither. */
   image?: string;
   snapshot?: string;
+  /** A snapshot schedule: one every so many seconds while it runs, the newest kept. */
+  snapshot_every_secs?: number;
+  snapshot_keep?: number;
 }
 
 export interface LaunchResult {

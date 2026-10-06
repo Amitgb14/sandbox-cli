@@ -167,13 +167,15 @@ func TestLaunchValidates(t *testing.T) {
 		"a console run of a verified agent": {Agent: "claude", Console: true},
 		"a command from an image":           {Command: []string{"true"}, Image: "img:1"},
 		"a command from a snapshot":         {Command: []string{"true"}, Snapshot: "snp_1"},
+		"a command with a schedule":         {Command: []string{"true"}, SnapshotEverySecs: 1800, SnapshotKeep: 3},
 	} {
 		if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", req); r.StatusCode != http.StatusCreated {
 			t.Errorf("%s: %d %v", name, r.StatusCode, body)
 		}
 		// What was asked for reaches the launcher, which hands it to sandboxd
 		// to decide on, as the CLI's --image and --from-snapshot do.
-		if last.Image != req.Image || last.Snapshot != req.Snapshot {
+		if last.Image != req.Image || last.Snapshot != req.Snapshot ||
+			last.SnapshotEverySecs != req.SnapshotEverySecs || last.SnapshotKeep != req.SnapshotKeep {
 			t.Errorf("%s: launched %+v", name, last)
 		}
 	}

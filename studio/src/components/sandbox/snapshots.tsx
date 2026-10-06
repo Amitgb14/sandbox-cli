@@ -12,7 +12,12 @@ import type { Sandbox } from "@/lib/types";
 
 const INTERVALS = [300, 900, 1800, 3600, 6 * 3600, 24 * 3600];
 
-function every(secs: number): string {
+/** The intervals a schedule may offer: the usual ones the server's minimum allows, and the minimum itself. */
+export function scheduleIntervals(min: number): number[] {
+  return [...new Set([...INTERVALS.filter((s) => s >= min), Math.max(min, 1)])].sort((a, b) => a - b);
+}
+
+export function every(secs: number): string {
   if (secs % 86400 === 0) return `${secs / 86400} day${secs === 86400 ? "" : "s"}`;
   if (secs % 3600 === 0) return `${secs / 3600} h`;
   if (secs % 60 === 0) return `${secs / 60} min`;
@@ -35,7 +40,7 @@ export function SandboxSnapshots({ sb }: { sb: Sandbox }) {
   const [editing, setEditing] = useState(false);
   const min = caps?.limits.min_snapshot_every_secs ?? 300;
   const maxKeep = caps?.limits.max_snapshot_keep ?? 5;
-  const options = [...new Set([...INTERVALS.filter((s) => s >= min), Math.max(min, 1)])].sort((a, b) => a - b);
+  const options = scheduleIntervals(min);
   const [everySecs, setEvery] = useState(String(sb.snapshot_every_secs || options[0]));
   const [keep, setKeep] = useState(String(sb.snapshot_keep || 1));
 

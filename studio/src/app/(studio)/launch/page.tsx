@@ -7,9 +7,11 @@ import { Bot, ChevronRight, SquareTerminal, TerminalSquare, type LucideIcon } fr
 import { CodeTabs } from "@/components/common/code-tabs";
 import { PageHeader } from "@/components/common/page-header";
 import { AgentList } from "@/components/launch/agent-list";
+import { every, scheduleIntervals } from "@/components/sandbox/snapshots";
 import { ImagePicker } from "@/components/launch/image-picker";
 import { Gate } from "@/components/shell/gate";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -78,6 +80,16 @@ function LaunchForm() {
   const built = node?.images ?? [];
   const inUse = (sandboxes ?? []).map((sb) => sb.image);
   const fromSnapshot = from === "snapshot" && canSnapshot;
+  // A snapshot schedule, within what the server allows (its limits).
+  const minEvery = info?.capabilities?.limits.min_snapshot_every_secs ?? 300;
+  const maxKeep = info?.capabilities?.limits.max_snapshot_keep ?? 5;
+  const intervals = scheduleIntervals(minEvery);
+  const [scheduled, setScheduled] = useState(false);
+  const [everySecs, setEverySecs] = useState("");
+  const [keep, setKeep] = useState("3");
+  const schedEvery = Number(everySecs || intervals.find((s) => s >= 1800) || intervals[intervals.length - 1]);
+  const schedKeep = Math.min(Number(keep), maxKeep);
+  const schedule = scheduled && canSnapshot ? { snapshotEverySecs: schedEvery, snapshotKeep: schedKeep } : {};
   const start = fromSnapshot ? { snapshot: snapshot || undefined } : { image: image.trim() || undefined };
 
   const ceiling = info?.capabilities?.network.ceiling;
@@ -93,7 +105,7 @@ function LaunchForm() {
       return { name: n, path: p, read_only: ro === "ro" || undefined };
     });
   // What the code panel shows: the same choices, for each client.
-  const sandboxOpts = { ...start, name: name || undefined, network, allow: allowList, labels: labelMap, volumes: vols };
+  const sandboxOpts = { ...start, ...schedule, name: name || undefined, network, allow: allowList, labels: labelMap, volumes: vols };
   const code =
     kind === "command"
       ? snippets({ ...sandboxOpts, command: splitArgs(command), defaultAllow:
@@ -120,6 +132,10 @@ function LaunchForm() {
       return;
     }
     Object.assign(req, start);
+    if (schedule.snapshotEverySecs) {
+      req.snapshot_every_secs = schedule.snapshotEverySecs;
+      req.snapshot_keep = schedule.snapshotKeep;
+    }
     if (network) req.network = network;
     if (allowList.length) req.allow = allowList;
     if (Object.keys(labelMap).length) req.labels = labelMap;
@@ -214,6 +230,47 @@ function LaunchForm() {
               </p>
             </div>
           )}
+          <div className="flex flex-col gap-2 border-t pt-3">
+            <Label className={cn("flex items-center gap-2 font-normal", !canSnapshot && "text-muted-foreground")}>
+              <Checkbox checked={scheduled && canSnapshot} disabled={!canSnapshot} onCheckedChange={(v) => setScheduled(!!v)} aria-label="Snapshot on a schedule" />
+              Snapshot it on a schedule
+              {!canSnapshot ? <span className="text-xs">(this endpoint takes no snapshots)</span> : null}
+            </Label>
+            {scheduled && canSnapshot ? (
+              <div className="flex flex-wrap items-center gap-2 pl-6 text-sm">
+                <span className="text-muted-foreground">every</span>
+                <Select value={String(schedEvery)} onValueChange={setEverySecs}>
+                  <SelectTrigger size="sm" className="w-28" aria-label="Snapshot every">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {intervals.map((s) => (
+                      <SelectItem key={s} value={String(s)}>
+                        {every(s)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-muted-foreground">keep the newest</span>
+                <Select value={String(schedKeep)} onValueChange={setKeep}>
+                  <SelectTrigger size="sm" className="w-16" aria-label="Snapshots kept">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: Math.max(maxKeep, 1) }, (_, n) => n + 1).map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="w-full text-xs text-muted-foreground">
+                  sandboxd takes them while the sandbox runs, whether or not Studio is open, and removes older scheduled ones; each is a
+                  copy of the sandbox on the host&apos;s disk.
+                </span>
+              </div>
+            ) : null}
+          </div>
         </Section>
 
         <details className="group rounded-lg border bg-card">
@@ -264,6 +321,14 @@ function LaunchForm() {
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
               <dt className="text-muted-foreground">From</dt>
               <dd className="truncate font-mono text-[13px]">{start.snapshot ?? start.image ?? "the server's image"}</dd>
+              {schedule.snapshotEverySecs ? (
+                <>
+                  <dt className="text-muted-foreground">Snapshots</dt>
+                  <dd className="truncate text-[13px]">
+                    every {every(schedule.snapshotEverySecs)}, keep {schedule.snapshotKeep}
+                  </dd>
+                </>
+              ) : null}
               <dt className="text-muted-foreground">Starts in</dt>
               <dd className="truncate font-mono text-[13px]">/sandbox/home</dd>
               <dt className="text-muted-foreground">Runs</dt>

@@ -8,8 +8,8 @@ import type { NetworkMode, VolumeMount } from "@/lib/types";
  *
  * Every line here must be exactly what the client accepts: a snippet that
  * almost works teaches the wrong call. So it covers what all four can say —
- * a command, its image or snapshot, name, network, allowlist, labels and
- * volumes. An agent run is
+ * a command, its image or snapshot, its snapshot schedule, name, network,
+ * allowlist, labels and volumes. An agent run is
  * the CLI's alone (the agent's login is copied in by sandbox-cli, not by the
  * API), so for one the code tabs show only the CLI.
  */
@@ -19,6 +19,9 @@ export interface RunConfig {
   image?: string;
   /** A snapshot to start from instead of an image (--from-snapshot; "snapshot_id"). */
   snapshot?: string;
+  /** A snapshot schedule (--snapshot-every/--snapshot-keep; "snapshot_every_secs"/"snapshot_keep"). */
+  snapshotEverySecs?: number;
+  snapshotKeep?: number;
   name?: string;
   network?: "" | NetworkMode;
   allow?: string[];
@@ -34,6 +37,13 @@ export interface RunConfig {
   defaultAllow?: string[];
 }
 
+/** Seconds as a Go duration the CLI's flags take: 30m, 6h, 90s. */
+export function goDuration(secs: number): string {
+  if (secs % 3600 === 0) return `${secs / 3600}h`;
+  if (secs % 60 === 0) return `${secs / 60}m`;
+  return `${secs}s`;
+}
+
 /** The address a snippet points at: Studio proxies, so the real one is the user's. */
 export const ENDPOINT_PLACEHOLDER = "https://sandboxd.example:7443";
 
@@ -41,6 +51,10 @@ function cliFlags(c: Omit<RunConfig, "command" | "defaultAllow">): string[] {
   const f: string[] = [];
   if (c.snapshot) f.push("--from-snapshot", c.snapshot);
   else if (c.image) f.push("--image", c.image);
+  if (c.snapshotEverySecs) {
+    f.push("--snapshot-every", goDuration(c.snapshotEverySecs));
+    if (c.snapshotKeep) f.push("--snapshot-keep", String(c.snapshotKeep));
+  }
   if (c.name) f.push("--name", c.name);
   if (c.network) f.push("--network", c.network);
   for (const a of c.allow ?? []) f.push("--allow", a);
@@ -65,6 +79,10 @@ function createBody(c: Omit<RunConfig, "command">): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   if (c.snapshot) body.snapshot_id = c.snapshot;
   else if (c.image) body.image = c.image;
+  if (c.snapshotEverySecs) {
+    body.snapshot_every_secs = c.snapshotEverySecs;
+    if (c.snapshotKeep) body.snapshot_keep = c.snapshotKeep;
+  }
   if (c.name) body.name = c.name;
   const allow = c.allow?.length ? [...new Set([...(c.defaultAllow ?? []), ...c.allow])] : undefined;
   if (c.network === "allowlist" || (!c.network && allow)) body.network = { mode: "allowlist", ...(allow ? { allow } : {}) };
