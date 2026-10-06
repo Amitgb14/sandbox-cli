@@ -35,7 +35,10 @@ export function ImagePicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const all = [...built, ...inUse];
-  const desktop = [...new Set(all.filter((i) => DESKTOP.test(i)).map((i) => i.replace(DESKTOP, "sandbox-desktop")))];
+  // A desktop image is published beside a base image in a registry; a base
+  // image built locally has no desktop beside it, so none is suggested for it.
+  const fromRegistry = (i: string) => /^[^/]+[.:][^/]*\//.test(i);
+  const desktop = [...new Set(all.filter((i) => DESKTOP.test(i) && fromRegistry(i)).map((i) => i.replace(DESKTOP, "sandbox-desktop")))];
   const builtSet = new Set(built);
   const groups: { title: string; icon: React.ComponentType<{ className?: string }>; items: string[] }[] = [
     { title: "Desktop", icon: Monitor, items: desktop.filter((i) => !builtSet.has(i)) },
