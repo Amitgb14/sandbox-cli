@@ -10,6 +10,10 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **The sandbox list shows live sandboxes by default**: starting, running and
+  suspended. Terminated ones are one choice away in the State filter, and a
+  list with none live says so, with a link to show them all.
+
 - **A running sandbox's dot pulses**, in the list and its panel, as Studio's
   other live indicators do, so what is alive reads at a glance; every other
   state's dot holds still, and so does this one under reduced motion.

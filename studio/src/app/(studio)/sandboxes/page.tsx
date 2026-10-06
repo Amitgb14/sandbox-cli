@@ -48,6 +48,11 @@ import { formatDateTime, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Sandbox } from "@/lib/types";
 
+// What the list shows until the State filter says otherwise: everything alive.
+// A terminated sandbox is kept for its record, and a busy endpoint has many,
+// which buried the few in use among them.
+const LIVE = ["pending", "running", "suspended"];
+
 const STATES = [
   { value: "pending", label: "Starting", tone: "var(--status-running)" },
   { value: "running", label: "Running", tone: "var(--status-running)" },
@@ -278,7 +283,7 @@ export default function SandboxesPage() {
     getPaginationRowModel: getPaginationRowModel(),
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
-    initialState: { pagination: { pageSize: 20 } },
+    initialState: { pagination: { pageSize: 20 }, columnFilters: [{ id: "state", value: LIVE }] },
     autoResetPageIndex: false,
   });
 
@@ -375,7 +380,20 @@ export default function SandboxesPage() {
                   {table.getRowModel().rows.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={columns.length} className="py-10 text-center text-sm text-muted-foreground">
-                        No sandbox matches.
+                        {(() => {
+                          const stateFilter = (table.getColumn("state")?.getFilterValue() as string[] | undefined) ?? [];
+                          const hidden = all.filter((s) => !stateFilter.includes(s.state)).length;
+                          return stateFilter.length && hidden && !query.trim() ? (
+                            <span>
+                              None {stateFilter.length === LIVE.length && LIVE.every((s) => stateFilter.includes(s)) ? "running" : "in these states"};{" "}
+                              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => table.getColumn("state")?.setFilterValue(undefined)}>
+                                show all {hidden}
+                              </button>
+                            </span>
+                          ) : (
+                            "No sandbox matches."
+                          );
+                        })()}
                       </TableCell>
                     </TableRow>
                   )}
