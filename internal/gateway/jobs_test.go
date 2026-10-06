@@ -854,8 +854,21 @@ func TestNotifyFailureLogsNoURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Every try fails: each connection is closed unanswered. The listener is
+	// held open rather than closed, as it once was, because a closed port is
+	// free for the OS to give the fake node started next, and then the
+	// notifications reached the node, which counted them as bad auths.
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
 	addr := ln.Addr().String()
-	ln.Close() // nothing listens: every try fails to connect
 	var logs syncBuf
 	tg := startGateway(t, func(c *Config) { c.NotifyAllowPrivate = true; c.Logf = logs.logf }, startNode(t, "n1", allCaps...))
 	ctx := ctxT(t)
