@@ -198,8 +198,16 @@ export default function SandboxesPage() {
             const pct = capturePercent(s.snapshotting);
             const step = snapshotStep(s.snapshotting);
             return (
-              <span className="inline-flex items-center gap-1.5 text-xs tabular-nums text-status-running" title={`A snapshot is being taken: ${STEP_NAMES[step].toLowerCase()}`}>
+              <span
+                className="inline-flex items-center gap-1.5 text-xs tabular-nums text-status-running"
+                title={
+                  s.state === "terminated"
+                    ? "Deleted while a snapshot was taken; the snapshot still finishes, and is listed under Snapshots"
+                    : `A snapshot is being taken: ${STEP_NAMES[step].toLowerCase()}`
+                }
+              >
                 <Loader2 className="size-3.5 animate-spin" />
+                {s.state === "terminated" ? "finishing · " : ""}
                 {step === 1 && pct !== null ? `reading ${pct}%` : STEP_NAMES[step].toLowerCase()}
               </span>
             );
