@@ -248,7 +248,9 @@ in `_old/` as reference, to be ported where this design still wants it.
   `df`). On macOS the bytes are counted as the runtime exports them. A second
   snapshot of a sandbox while one is taken is refused with `409`, and a
   snapshot asked for now finishes even when the client that asked hangs up —
-  before, closing the browser tab threw a minute of work away.
+  before, closing the browser tab threw a minute of work away. Deleting the
+  sandbox part way does not stop it either: the sandbox goes at once, and the
+  snapshot is listed when it finishes, or is not there at all if it cannot.
 
 ### Security
 
