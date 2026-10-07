@@ -15,9 +15,9 @@ limits:
   max_disk_mb: 102400
   max_idle_timeout_secs: 604800
 
-# With no policy file, sandboxd's default is open egress. A machine shared by
-# a team usually wants the allowlist as the default instead, which this does;
-# the ceiling below decides whether a run may still ask for open.
+# On Firecracker egress is always an allowlist, checked by name on the host:
+# open is not offered, and asking for it gets the allowlist. This sets the
+# default list; may_allow decides which names a run may add to it.
 network:
   default:
     mode: allowlist
@@ -31,5 +31,5 @@ network:
       - codeload.github.com
       - objects.githubusercontent.com
     deny: []
-  ceiling: allowlist      # requests may ask for allowlist or none, never open
+  ceiling: allowlist      # requests may ask for allowlist or none
   may_allow: ["*"]        # names a request may add; [] allows only the default list

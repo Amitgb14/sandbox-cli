@@ -587,6 +587,26 @@ that fails on the code before the fix:
 
 ### Fixed
 
+- **sandboxd with networking now starts on a Linux machine that runs
+  avahi-daemon.** Its egress resolver listened on UDP 5353, the mDNS port,
+  which avahi-daemon holds on most Linux desktops and on EL-family servers
+  by default, so `sandboxd --network` exited with "address already in use"
+  and systemd restarted it forever. The resolver now listens on 7353. New
+  flags `--egress-dns-port` and `--egress-proxy-port` move it, or the proxy
+  (TCP 3128, also Squid's port), when another program holds one, and the
+  startup error says so.
+
+- **A name a Firecracker sandbox may not reach is now logged when its DNS
+  lookup is refused,** not only when a connection is: a site not on the
+  allowlist is refused at the lookup and never reaches the proxy, so it left
+  no trace. Each `egress denied` line quotes the name, which is the guest's
+  and may hold any byte.
+
+- **The docs no longer say a Linux sandbox gets open egress by default.** On
+  Firecracker egress is always an allowlist checked by name, and sandboxd
+  turns an `open` default or ceiling into the allowlist. `docs/self-hosting.md`
+  and the example policy now say so, and how a run adds the names it needs.
+
 - **A gateway no longer refuses a burst of short-lived sandboxes on a node
   with room.** A sandbox the gateway terminated kept counting against its node
   until the node's next status, every 5 seconds by default, so create-use-
