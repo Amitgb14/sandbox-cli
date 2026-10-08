@@ -60,6 +60,7 @@ func (s *Server) setSnapshotSchedule(w http.ResponseWriter, r *http.Request) {
 	rec.lastScheduled = s.now()
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.persist(rec)
 	s.pruneScheduled(r.Context(), out.ID, sched.Keep)
 	writeJSON(w, http.StatusOK, out)
 }

@@ -48,6 +48,34 @@ type Spec struct {
 	Volumes []api.VolumeMount
 }
 
+// Keeper can leave its sandboxes running when sandboxd exits, and take back,
+// when the next sandboxd starts on the same state directory, the ones an
+// earlier one left. That is how sandboxd is upgraded or restarted without
+// interrupting the VMs it serves: their disks, memory and network carry on.
+// Their processes do not: the guest agent ends a process whose host
+// connection goes, so a restart ends every running command.
+//
+// A backend takes back only what it can prove is its own and unchanged: a VM
+// whose record it wrote, whose VMM is the same live process, and whose guest
+// agent answers. Anything else it finds is removed, as a backend that keeps
+// nothing removes everything.
+type Keeper interface {
+	// Kept lists the sandboxes this backend took back when it started, by id.
+	// The server pairs them with its own records and terminates any it has
+	// none for, so a VM is never served without the record that says whose
+	// it is.
+	Kept() map[string]Kept
+	// Detach lets go of every sandbox without stopping it: sandboxd is about
+	// to exit and a later one will take them back. Nothing may be called
+	// after it.
+	Detach()
+}
+
+// Kept is one sandbox a Keeper took back.
+type Kept struct {
+	Suspended bool
+}
+
 // VolumeStore keeps named volumes: filesystems that outlive the sandboxes they
 // are mounted in. The backend's own storage is the record of what exists, so
 // volumes survive a restart of sandboxd, which keeps no sandbox records.

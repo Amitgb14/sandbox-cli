@@ -83,13 +83,24 @@ func (t *tap) kernelArgs() []string {
 	}
 }
 
-func (n *Network) start() error {
+// keptTap is a tap an earlier sandboxd made for a VM this one takes back.
+type keptTap struct {
+	id     string
+	idx    int
+	policy api.NetworkPolicy
+}
+
+// start installs the table and starts the proxy and the resolver. The taps of
+// VMs taken back from an earlier sandboxd (keep.go) are registered first and
+// their guests put in the egress set in the same transaction that installs
+// the table, so a kept VM's network is never off for longer than the restart.
+func (n *Network) start(kept []keptTap) (map[string]*tap, error) {
 	if os.Geteuid() != 0 {
-		return errors.New("network: tap devices and nftables need root; run sandboxd as root or without networking")
+		return nil, errors.New("network: tap devices and nftables need root; run sandboxd as root or without networking")
 	}
 	for _, bin := range []string{"ip", "nft"} {
 		if _, err := exec.LookPath(bin); err != nil {
-			return fmt.Errorf("network: %s is required", bin)
+			return nil, fmt.Errorf("network: %s is required", bin)
 		}
 	}
 	if n.ProxyPort == 0 {
@@ -108,8 +119,22 @@ func (n *Network) start() error {
 	n.used = map[int]bool{}
 	n.byIP = map[string]*tap{}
 
-	if err := n.installTable(); err != nil {
-		return err
+	byID := map[string]*tap{}
+	var allowed []string
+	for _, k := range kept {
+		t := n.tapAt(k.idx)
+		pc := k.policy
+		t.policy.Store(&pc)
+		t.matcher.Store(egressproxy.NewPolicyMatcher(pc.Allow, pc.Deny))
+		n.used[t.idx] = true
+		n.byIP[t.guest.String()] = t
+		byID[k.id] = t
+		if pc.Mode == api.NetworkAllowlist {
+			allowed = append(allowed, t.guest.String())
+		}
+	}
+	if err := n.installTable(allowed); err != nil {
+		return nil, err
 	}
 	matchFor := func(a net.Addr) *egressproxy.Matcher {
 		if t := n.lookup(a); t != nil && t.policy.Load().Mode == api.NetworkAllowlist {
@@ -125,7 +150,7 @@ func (n *Network) start() error {
 	n.proxy.MatchFor = matchFor
 	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", n.ProxyPort))
 	if err != nil {
-		return fmt.Errorf("network: proxy: %w (if another program holds tcp port %d, move the proxy with --egress-proxy-port)", err, n.ProxyPort)
+		return nil, fmt.Errorf("network: proxy: %w (if another program holds tcp port %d, move the proxy with --egress-proxy-port)", err, n.ProxyPort)
 	}
 	go n.proxy.Serve(l)
 
@@ -146,10 +171,10 @@ func (n *Network) start() error {
 	}
 	pc, err := net.ListenPacket("udp", fmt.Sprintf("0.0.0.0:%d", n.DNSPort))
 	if err != nil {
-		return fmt.Errorf("network: dns: %w (if another program holds udp port %d, move the resolver with --egress-dns-port)", err, n.DNSPort)
+		return nil, fmt.Errorf("network: dns: %w (if another program holds udp port %d, move the resolver with --egress-dns-port)", err, n.DNSPort)
 	}
 	go n.dns.ServeUDP(pc)
-	return nil
+	return byID, nil
 }
 
 // deniedLine is the log line for a refused name. The name is the guest's —
@@ -208,14 +233,30 @@ func Ruleset(table string, proxyPort, dnsPort int) string {
 `, table, proxyPort, dnsPort)
 }
 
-func (n *Network) installTable() error {
-	_ = run("nft", "delete", "table", "inet", n.table) // a leftover from an earlier run
+// installTable replaces whatever table an earlier sandboxd left with this
+// one's, and puts the guests in allowed in its egress set (installScript).
+func (n *Network) installTable(allowed []string) error {
 	cmd := exec.Command("nft", "-f", "-")
-	cmd.Stdin = strings.NewReader(Ruleset(n.table, n.ProxyPort, n.DNSPort))
+	cmd.Stdin = strings.NewReader(installScript(n.table, n.ProxyPort, n.DNSPort, allowed))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("network: installing the nftables table: %v: %s", err, out)
 	}
 	return nil
+}
+
+// installScript is one nft transaction: declare the table (so the delete
+// cannot fail when there is none), delete it, add it afresh, and put the
+// guests in allowed in its egress set. nft -f applies a file atomically, so
+// no packet meets a missing table or an empty set: a VM taken back keeps its
+// egress through the restart, and one that was refused it stays refused.
+func installScript(table string, proxyPort, dnsPort int, allowed []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "table inet %s\ndelete table inet %s\n", table, table)
+	b.WriteString(Ruleset(table, proxyPort, dnsPort))
+	if len(allowed) > 0 {
+		fmt.Fprintf(&b, "add element inet %s egress_on { %s }\n", table, strings.Join(allowed, ", "))
+	}
+	return b.String()
 }
 
 // Close removes the table. Sandboxes still running lose their network.
@@ -242,14 +283,7 @@ func (n *Network) attach(id string, p api.NetworkPolicy, owner int) (*tap, error
 	n.used[idx] = true
 	n.mu.Unlock()
 
-	base := ipAdd(n.Subnet.IP.To4(), idx*4)
-	t := &tap{
-		name:  fmt.Sprintf("sbx%d", idx),
-		idx:   idx,
-		host:  ipAdd(base, 1),
-		guest: ipAdd(base, 2),
-		mac:   fmt.Sprintf("06:00:%02x:%02x:%02x:%02x", base[0], base[1], base[2], base[3]+2),
-	}
+	t := n.tapAt(idx)
 	args := []string{"tuntap", "add", "dev", t.name, "mode", "tap"}
 	if owner >= 0 {
 		args = append(args, "user", fmt.Sprint(owner), "group", fmt.Sprint(owner))
@@ -273,6 +307,19 @@ func (n *Network) attach(id string, p api.NetworkPolicy, owner int) (*tap, error
 		return nil, err
 	}
 	return t, nil
+}
+
+// tapAt is the tap in slot idx: its name, addresses and MAC are a function
+// of the slot alone, which is what lets a later sandboxd take one back.
+func (n *Network) tapAt(idx int) *tap {
+	base := ipAdd(n.Subnet.IP.To4(), idx*4)
+	return &tap{
+		name:  fmt.Sprintf("sbx%d", idx),
+		idx:   idx,
+		host:  ipAdd(base, 1),
+		guest: ipAdd(base, 2),
+		mac:   fmt.Sprintf("06:00:%02x:%02x:%02x:%02x", base[0], base[1], base[2], base[3]+2),
+	}
 }
 
 // update applies a policy to a running sandbox. The allowlist is swapped in one

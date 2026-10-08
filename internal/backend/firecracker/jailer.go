@@ -118,6 +118,18 @@ func (j *Jailer) command(id, firecracker string, args ...string) *exec.Cmd {
 	}, args...)...)
 }
 
+// adopt records the uid of a VM taken back from an earlier sandboxd, so it is
+// neither handed to another VM nor lost when this one ends.
+func (j *Jailer) adopt(id string, uid int) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.used == nil {
+		j.used, j.uids = map[int]bool{}, map[string]int{}
+	}
+	j.used[uid-j.UIDBase] = true
+	j.uids[id] = uid
+}
+
 func (j *Jailer) cleanup(id string) {
 	_ = os.RemoveAll(filepath.Join(j.ChrootBase, "firecracker", jailID(id)))
 	j.mu.Lock()

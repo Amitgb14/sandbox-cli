@@ -88,6 +88,13 @@ type Server struct {
 	cordoned      bool // under mu; see node.go
 	metricsOnce   sync.Once
 	nm            *nodeMetrics // metrics.go
+
+	// RecordDir, when set, is where each sandbox's record is kept on disk, so
+	// a later sandboxd can take back the sandboxes this one leaves running
+	// (keep.go). It holds environment values: the operator's alone. Empty
+	// keeps records in memory only, and a restart forgets them.
+	RecordDir string
+	persistMu sync.Mutex
 }
 
 type record struct {
@@ -359,6 +366,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	rec.sbx.State = api.StateRunning
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.persist(rec)
 	ev := api.Event{Type: api.EventSandboxCreated, Sandbox: id, Name: out.Name, Image: out.Image,
 		Labels: out.Labels, Network: &out.Network, EnvNames: out.EnvNames, Snapshot: req.SnapshotID, Volumes: out.Volumes,
 		Reason: from}
@@ -551,6 +559,7 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 	rec.sbx.Network = pol
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.persist(rec)
 	s.event(api.Event{Type: api.EventNetworkUpdated, Sandbox: id, Network: &pol})
 	writeJSON(w, http.StatusOK, out)
 }
@@ -570,6 +579,7 @@ func (s *Server) terminateSandbox(w http.ResponseWriter, r *http.Request) {
 		rec.mu.Lock()
 		rec.sbx.State = api.StateTerminated
 		rec.mu.Unlock()
+		s.forget(sb.ID)
 		s.event(api.Event{Type: api.EventSandboxTerminated, Sandbox: sb.ID, Reason: "request"})
 		s.forgetOldTerminated()
 	}
@@ -647,6 +657,7 @@ func (s *Server) reapIdle() {
 			rec.mu.Lock()
 			rec.sbx.State = api.StateTerminated
 			rec.mu.Unlock()
+			s.forget(id)
 			s.event(api.Event{Type: api.EventSandboxTerminated, Sandbox: id, Reason: "idle"})
 		}
 		if len(due) > 0 {
@@ -712,6 +723,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 	rec.procs[pr.info.PID] = pr
 	pid, started := pr.info.PID, pr.info.StartedAt
 	rec.mu.Unlock()
+	s.persist(rec) // the process number, so a restart never hands it out again
 	s.event(processStarted(id, pid, ps, sortedKeys(extra)))
 
 	go func() {

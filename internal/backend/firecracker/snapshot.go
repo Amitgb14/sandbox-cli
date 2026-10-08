@@ -115,11 +115,12 @@ func (b *Backend) Suspend(ctx context.Context, id string) error {
 	if err := b.snapshotTo(ctx, v, "suspend.state", "suspend.mem"); err != nil {
 		return err
 	}
-	_ = syscall.Kill(-v.cmd.Process.Pid, syscall.SIGKILL)
+	killVMM(v)
 	<-v.exited
 	b.mu.Lock()
 	v.suspended = true
 	b.mu.Unlock()
+	b.saveKeep(v)
 	return nil
 }
 
@@ -142,6 +143,7 @@ func (b *Backend) Resume(ctx context.Context, id string) error {
 	b.mu.Lock()
 	v.suspended = false
 	b.mu.Unlock()
+	b.saveKeep(v)
 	return nil
 }
 
@@ -265,6 +267,7 @@ func (b *Backend) createFromSnapshot(ctx context.Context, s backend.Spec) (err e
 	b.mu.Lock()
 	b.vms[s.ID] = v
 	b.mu.Unlock()
+	b.saveKeep(v)
 	return nil
 }
 

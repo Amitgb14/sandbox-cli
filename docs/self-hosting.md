@@ -95,7 +95,67 @@ pools:
 ```
 
 Every pooled sandbox holds its memory while it waits, so size pools to the
-traffic you have. A restart of sandboxd discards them with every other VM.
+traffic you have. A restart of sandboxd discards them, with every other VM
+unless [`--keep-sandboxes`](#upgrading-without-stopping-sandboxes) is on; even
+then pooled sandboxes are discarded, and the pool refills.
+
+## Upgrading without stopping sandboxes
+
+By default, stopping sandboxd ends every sandbox it runs, and starting it
+removes any it finds left over. With `--keep-sandboxes`, it leaves them
+running when it exits and takes them back when it starts again on the same
+state directory. So installing a new sandboxd, or restarting it, interrupts
+no VM:
+
+```sh
+install -m 0755 sandboxd sandbox-guestd /usr/local/bin/
+systemctl restart sandboxd
+journalctl -u sandboxd -n 5      # "keeping sandboxes across restarts; took back N from an earlier run"
+```
+
+**What carries on:** each VM, with its memory, its disk and every file in
+it, a desktop and what it shows, its network policy, labels, name, snapshot
+schedule and environment. A suspended sandbox stays suspended. The VM is not
+rebooted.
+
+**What ends:** every process running in a sandbox. The guest agent ends a
+process when the host's connection to it goes, so commands, terminals and
+agent sessions end at the restart and must be started again. Their output
+and metrics, which sandboxd keeps in memory, are gone too. For about a
+second, a sandbox can reach nothing: connections through the egress proxy
+drop, and new ones succeed once the new sandboxd is serving. Process numbers
+carry on from where they were, so a new process never gets the number of
+one a client still remembers. Snapshots taken earlier are not listed after
+a restart, kept or not.
+
+**What it needs:**
+
+- The systemd unit must say `KillMode=process`, as the packaged one does.
+  The default, `control-group`, kills every process of the unit when it
+  stops, VMs included.
+- **Environment values are written to disk.** A sandbox taken back needs
+  the environment it was created with, secrets included. They are kept in
+  `<state-dir>/records/`, one file per sandbox, mode 0600 in a 0700
+  directory, like the token. sandboxd refuses to start if others can read
+  that directory. A record is deleted when its sandbox ends, and starting
+  sandboxd without `--keep-sandboxes` deletes them all. Without the flag,
+  environment values are only ever held in memory.
+- Only the Firecracker backend can keep sandboxes. Asked of another,
+  sandboxd refuses to start rather than stop them anyway.
+
+**What is checked before a sandbox is taken back.** A VM must be
+provably the one an earlier sandboxd left. Its record is intact, its VMM is
+the same process (pid and start time, so a recycled pid is never mistaken
+for it), its network device still exists, and its guest agent answers. It
+must also be one sandboxd has a record for, and its network policy must
+still be allowed by the current policy file. Anything else is ended and
+removed, as it is without the flag. So tightening the policy and then
+restarting does not let an older, wider sandbox carry on. Turning
+networking or the jailer on or off between runs ends the sandboxes that
+were started without it.
+
+To stop everything for good, end the sandboxes first (`sandbox-cli kill`),
+or restart once without `--keep-sandboxes`.
 
 ## As one node behind a gateway
 
@@ -155,6 +215,12 @@ systemctl stop sandboxd && <install the new sandboxd> && systemctl start sandbox
 sandbox-cli gateway nodes                   # n17 healthy, cordoned, on the new version
 sandbox-cli gateway uncordon n17
 ```
+
+A node running with `--keep-sandboxes` can be upgraded without draining:
+its sandboxes answer `503 unavailable` while it restarts, then the gateway
+finds them again in the node's listing. Their running processes end
+([above](#upgrading-without-stopping-sandboxes)), so drain first when those
+matter.
 
 The gateway remembers that it cordoned the node: the restart clears the
 node's own cordon, and the gateway puts it back on its next poll and places

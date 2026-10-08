@@ -64,6 +64,8 @@ type sandbox struct {
 	files   map[string]*node // absolute, cleaned path -> node
 	procs   []*proc
 	stopped bool
+	// suspended is only what Kept reports; the fake runs nothing either way.
+	suspended bool
 }
 
 // New returns an empty fake with the capabilities given (api.Cap* names).
@@ -223,13 +225,55 @@ func copyFiles(in map[string]*node) map[string]*node {
 // Suspend and Resume record nothing the fake could lose: its sandboxes have no
 // memory to keep. They exist so the server's handling of the states is tested.
 func (b *Backend) Suspend(_ context.Context, id string) error {
-	_, err := b.get(id)
+	s, err := b.get(id)
+	if err == nil {
+		s.mu.Lock()
+		s.suspended = true
+		s.mu.Unlock()
+	}
 	return err
 }
 
 func (b *Backend) Resume(_ context.Context, id string) error {
-	_, err := b.get(id)
+	s, err := b.get(id)
+	if err == nil {
+		s.mu.Lock()
+		s.suspended = false
+		s.mu.Unlock()
+	}
 	return err
+}
+
+// Kept is backend.Keeper: the fake outlives a server in a test the way a VM
+// outlives sandboxd, so every sandbox it holds is one a new server can take
+// back.
+func (b *Backend) Kept() map[string]backend.Kept {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := map[string]backend.Kept{}
+	for id, s := range b.sandboxes {
+		s.mu.Lock()
+		out[id] = backend.Kept{Suspended: s.suspended}
+		s.mu.Unlock()
+	}
+	return out
+}
+
+// Detach is backend.Keeper. The sandboxes stay; their processes end, as a
+// guest agent ends a process whose host connection is gone.
+func (b *Backend) Detach() {
+	b.mu.Lock()
+	var procs []*proc
+	for _, s := range b.sandboxes {
+		s.mu.Lock()
+		procs = append(procs, s.procs...)
+		s.procs = nil
+		s.mu.Unlock()
+	}
+	b.mu.Unlock()
+	for _, p := range procs {
+		_ = p.Signal("KILL")
+	}
 }
 
 // Snapshot captures the files; a sandbox started from it gets its own copy, so
