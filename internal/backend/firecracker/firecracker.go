@@ -193,6 +193,18 @@ func New(cfg Config) (*Backend, error) {
 	} else {
 		b.reapLeftovers()
 	}
+	// Whatever is still running or left from this state directory and is not
+	// a VM being taken back goes, kept or not: a restart leaves nothing behind
+	// that nobody manages.
+	keptPIDs, keptJails := map[int]bool{}, map[string]bool{}
+	for _, c := range kept {
+		if !c.v.suspended {
+			keptPIDs[c.v.pid] = true
+		}
+		keptJails[jailID(c.v.id)] = true
+	}
+	strays := b.sweepVMMs(keptPIDs)
+	b.sweepJails(keptJails)
 	if cfg.Network != nil {
 		var taps []keptTap
 		for _, c := range kept {
@@ -207,6 +219,9 @@ func New(cfg Config) (*Backend, error) {
 		for _, c := range kept {
 			c.v.net = byID[c.v.id]
 		}
+	}
+	if cfg.Keep || strays > 0 {
+		cfg.Logf("after the restart: %d sandbox(es) taken back, %d stray VMM(s) ended", len(kept), strays)
 	}
 	for _, c := range kept {
 		if cfg.Jailer != nil {

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -174,7 +175,47 @@ func (n *Network) start(kept []keptTap) (map[string]*tap, error) {
 		return nil, fmt.Errorf("network: dns: %w (if another program holds udp port %d, move the resolver with --egress-dns-port)", err, n.DNSPort)
 	}
 	go n.dns.ServeUDP(pc)
+	n.sweepTaps()
 	return byID, nil
+}
+
+// sweepTaps deletes the taps no VM taken back owns: one an earlier sandboxd
+// made for a VM since removed, or whose record was unreadable. Only names this
+// backend gives (sbx<n>).
+func (n *Network) sweepTaps() {
+	des, _ := os.ReadDir("/sys/class/net")
+	var names []string
+	for _, de := range des {
+		names = append(names, de.Name())
+	}
+	n.mu.Lock()
+	stray := strayTaps(names, n.used)
+	n.mu.Unlock()
+	for _, name := range stray {
+		if err := run("ip", "link", "del", name); err == nil {
+			n.Logf("network: removed a tap no sandbox owns: %s", name)
+		}
+	}
+}
+
+// strayTaps are the names among names that this backend gives (sbx<n>) and
+// that no used slot accounts for.
+func strayTaps(names []string, used map[int]bool) []string {
+	var out []string
+	for _, name := range names {
+		rest, ok := strings.CutPrefix(name, "sbx")
+		if !ok || rest == "" {
+			continue
+		}
+		idx, err := strconv.Atoi(rest)
+		if err != nil || idx < 0 || strconv.Itoa(idx) != rest {
+			continue
+		}
+		if !used[idx] {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // deniedLine is the log line for a refused name. The name is the guest's —

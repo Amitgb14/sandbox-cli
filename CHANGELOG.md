@@ -383,7 +383,9 @@ that fails on the code before the fix:
   sandboxd starts without the flag). The packaged systemd unit now sets
   `KillMode=process`, so a stop no longer kills VMs behind sandboxd's back.
   Each VMM now runs in a session of its own, so a Ctrl-C to a sandboxd run by
-  hand no longer reaches its VMs.
+  hand no longer reaches its VMs. At every start, kept or not, sandboxd ends
+  any VMM in its state directory that no sandbox accounts for, deletes network
+  devices and jails nothing owns, and logs how many it took back and ended.
 
 - **An example: browser automation across many sandboxes**
   (`sdk/python/examples/browser-fleet`). `fleet.py` makes N sandboxes from the

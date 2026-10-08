@@ -111,3 +111,35 @@ func writeKeep(dir string, ks keepState) {
 	data, _ := json.Marshal(ks)
 	_ = os.WriteFile(filepath.Join(dir, keepFile), data, 0o600)
 }
+
+// The sweep ends only firecracker processes working in this state directory:
+// another state directory's, a process of another name, or a path that only
+// starts with the same characters is never touched.
+func TestOwnedVMM(t *testing.T) {
+	roots := []string{"/var/lib/sandboxd/sandboxes", "/var/lib/sandboxd/jail/firecracker"}
+	for _, c := range []struct {
+		comm, cwd string
+		want      bool
+	}{
+		{"firecracker\n", "/var/lib/sandboxd/sandboxes/sbx_0123456789abcdef", true},
+		{"firecracker\n", "/var/lib/sandboxd/jail/firecracker/sbx-0123456789abcdef/root", true},
+		{"firecracker\n", "/var/lib/sandboxd/sandboxes/sbx_0123456789abcdef (deleted)", true},
+		{"firecracker\n", "/var/lib/other/sandboxes/sbx_0123456789abcdef", false},
+		{"firecracker\n", "/var/lib/sandboxd/sandboxes-old/x", false},
+		{"firecracker\n", "/var/lib/sandboxd/sandboxes", false},
+		{"bash\n", "/var/lib/sandboxd/sandboxes/sbx_0123456789abcdef", false},
+		{"", "", false},
+	} {
+		if got := ownedVMM(c.comm, c.cwd, roots); got != c.want {
+			t.Errorf("ownedVMM(%q, %q) = %v", c.comm, c.cwd, got)
+		}
+	}
+}
+
+func TestStrayTaps(t *testing.T) {
+	got := strayTaps([]string{"lo", "eth0", "sbx0", "sbx1", "sbx12", "sbx", "sbxfoo", "sbx01", "virbr0"}, map[int]bool{1: true})
+	want := []string{"sbx0", "sbx12"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("stray taps %v, want %v", got, want)
+	}
+}

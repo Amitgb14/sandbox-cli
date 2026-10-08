@@ -154,6 +154,17 @@ restarting does not let an older, wider sandbox carry on. Turning
 networking or the jailer on or off between runs ends the sandboxes that
 were started without it.
 
+**Nothing is left behind unmanaged.** Every VM is checked at once, and each
+guest gets the boot timeout (30 s) to answer, so a guest slow on a loaded
+host is not mistaken for a broken one. After that, sandboxd sweeps its state
+directory, with or without the flag. It ends any firecracker process working
+there that no taken-back sandbox accounts for, such as one a crash
+mid-resume left unrecorded. It also deletes `sbx` network devices and jail
+directories that nothing owns. Only firecracker processes whose working
+directory is in this state directory are touched. One line says what
+happened: `after the restart: N sandbox(es) taken back, M stray VMM(s)
+ended`, and each sandbox removed is logged with the reason.
+
 To stop everything for good, end the sandboxes first (`sandbox-cli kill`),
 or restart once without `--keep-sandboxes`.
 

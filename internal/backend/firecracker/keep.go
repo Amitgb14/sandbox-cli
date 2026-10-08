@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -152,19 +153,38 @@ type candidate struct {
 // returns the VMs that can be taken back, removing the rest. The network is
 // not touched here: the taps of the VMs returned are taken back when the
 // network starts, with the rules that let them out.
+//
+// Every VM is checked at once, and each guest is given the boot timeout to
+// answer: a guest slow to answer on a loaded host is not a broken one, and
+// removing it would destroy a sandbox that was fine.
 func (b *Backend) findKept() []candidate {
 	des, _ := os.ReadDir(b.sandboxesDir())
-	var out []candidate
-	for _, de := range des {
+	type result struct {
+		id, dir string
+		c       candidate
+		why     string
+	}
+	results := make([]result, len(des))
+	var wg sync.WaitGroup
+	for i, de := range des {
 		id := de.Name()
 		dir := filepath.Join(b.sandboxesDir(), id)
-		c, why := b.checkKept(id, dir)
-		if why != "" {
-			b.removeLeftover(id, dir)
-			b.cfg.Logf("removed a sandbox left by an earlier run: %s (%s)", id, why)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, why := b.checkKept(id, dir)
+			results[i] = result{id: id, dir: dir, c: c, why: why}
+		}()
+	}
+	wg.Wait()
+	var out []candidate
+	for _, r := range results {
+		if r.why != "" {
+			b.removeLeftover(r.id, r.dir)
+			b.cfg.Logf("removed a sandbox left by an earlier run: %s (%s)", r.id, r.why)
 			continue
 		}
-		out = append(out, c)
+		out = append(out, r.c)
 	}
 	return out
 }
@@ -212,7 +232,7 @@ func (b *Backend) checkKept(id, dir string) (candidate, string) {
 	}
 	v.client = guestClient(v.hostPath("v.sock"))
 	if !ks.Suspended {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), b.cfg.BootTimeout)
 		err := v.client.WaitReady(ctx)
 		cancel()
 		if err != nil {
@@ -245,8 +265,92 @@ func (b *Backend) removeLeftover(id, dir string) {
 	}
 	if b.cfg.Jailer != nil {
 		b.cfg.Jailer.cleanup(id)
+		// As destroy does: the jail's links to its volumes were chowned to
+		// the VM's uid, and the volumes go back to sandboxd.
+		if data, err := os.ReadFile(filepath.Join(dir, keepFile)); err == nil {
+			var ks keepState
+			if json.Unmarshal(data, &ks) == nil {
+				for _, m := range ks.Spec.Volumes {
+					_ = os.Chown(b.volumePath(m.Name), os.Geteuid(), os.Getegid())
+				}
+			}
+		}
 	}
 	_ = os.RemoveAll(dir)
+}
+
+// sweepVMMs ends every VMM still running from this state directory that no
+// VM taken back accounts for. findKept removes what its records describe, but
+// a record can be wrong: a VMM started for a resume just before sandboxd
+// crashed is not the pid its keep.json names, and without this it would run
+// on with nothing to stop it. A process is this backend's only when it is a
+// firecracker whose working directory is in this state directory — the
+// sandbox's own directory, or its jail — so nothing else on the host is ever
+// touched. It returns how many it ended.
+func (b *Backend) sweepVMMs(keep map[int]bool) int {
+	var roots []string
+	roots = append(roots, b.sandboxesDir())
+	if b.cfg.Jailer != nil {
+		roots = append(roots, filepath.Join(b.cfg.Jailer.ChrootBase, "firecracker"))
+	}
+	procs, _ := os.ReadDir("/proc")
+	n := 0
+	for _, p := range procs {
+		pid, err := strconv.Atoi(p.Name())
+		if err != nil || pid <= 1 || pid == os.Getpid() || keep[pid] {
+			continue
+		}
+		comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+		cwd, _ := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+		if !ownedVMM(string(comm), cwd, roots) {
+			continue
+		}
+		start, err := procStart(pid)
+		if err != nil {
+			continue
+		}
+		// Only the group leader: the VMM leads its own session and group.
+		if pgid, err := syscall.Getpgid(pid); err != nil || pgid != pid {
+			continue
+		}
+		if sameProcess(pid, start) {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			b.cfg.Logf("ended a VMM no sandbox accounts for: pid %d in %s", pid, strings.TrimSuffix(cwd, " (deleted)"))
+			n++
+		}
+	}
+	return n
+}
+
+// ownedVMM reports whether a process is a VMM of this state directory: named
+// firecracker, working in one of roots. A directory removed under it reads
+// back with " (deleted)" appended, and still counts.
+func ownedVMM(comm, cwd string, roots []string) bool {
+	if strings.TrimSpace(comm) != "firecracker" {
+		return false
+	}
+	cwd = strings.TrimSuffix(cwd, " (deleted)")
+	for _, r := range roots {
+		if strings.HasPrefix(cwd, filepath.Clean(r)+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// sweepJails removes jails no VM taken back owns: what a VM removed above
+// left of its jail, or a jail whose sandbox directory is gone.
+func (b *Backend) sweepJails(kept map[string]bool) {
+	if b.cfg.Jailer == nil {
+		return
+	}
+	base := filepath.Join(b.cfg.Jailer.ChrootBase, "firecracker")
+	des, _ := os.ReadDir(base)
+	for _, de := range des {
+		if !kept[de.Name()] {
+			_ = os.RemoveAll(filepath.Join(base, de.Name()))
+		}
+	}
 }
 
 // Kept is backend.Keeper.

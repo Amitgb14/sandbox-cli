@@ -4,6 +4,7 @@ package firecracker
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,6 +108,11 @@ func TestVMKeep(t *testing.T) {
 		return s
 	}
 	running, suspended, dies := mk(api.NetworkAllowlist), mk(api.NetworkNone), mk(api.NetworkNone)
+	// A VM whose record names the wrong process, as after a crash between a
+	// resume's new VMM starting and its record being written: the record is
+	// unusable, and the VMM must not be left running unmanaged.
+	stray := mk(api.NetworkNone)
+	strayPID, strayStart := be1.vms[stray.ID].pid, be1.vms[stray.ID].start
 	if err := be1.WriteFile(ctx, running.ID, "/tmp/kept", []byte("still here")); err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +126,13 @@ func TestVMKeep(t *testing.T) {
 	deadPID := be1.vms[dies.ID].pid
 	be1.Detach() // sandboxd exits
 	current = nil
+
+	ks := keepState{}
+	data, _ := os.ReadFile(filepath.Join(state, "sandboxes", stray.ID, keepFile))
+	_ = json.Unmarshal(data, &ks)
+	ks.Start++
+	data, _ = json.Marshal(ks)
+	_ = os.WriteFile(filepath.Join(state, "sandboxes", stray.ID, keepFile), data, 0o600)
 
 	// While no sandboxd runs, one VMM dies.
 	if err := syscall.Kill(-deadPID, syscall.SIGKILL); err != nil {
@@ -144,6 +157,15 @@ func TestVMKeep(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(state, "sandboxes", dies.ID)); !os.IsNotExist(err) {
 		t.Fatalf("the dead VM's files were left: %v", err)
+	}
+	if _, ok := kept[stray.ID]; ok {
+		t.Fatal("a VM whose record names another process was taken back")
+	}
+	for i := 0; i < 50 && sameProcess(strayPID, strayStart); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if sameProcess(strayPID, strayStart) {
+		t.Fatal("a VMM no record accounts for was left running")
 	}
 
 	// The same VM: same boot, same files.
