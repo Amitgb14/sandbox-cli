@@ -26,6 +26,16 @@ func keepServer(t *testing.T, b *fake.Backend, dir string) http.Handler {
 	if _, err := s.Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// Before the records directory goes (its cleanup was registered first, so
+	// runs last): end every process and wait for the record each exit writes.
+	// Without this, an exit landing during the removal failed the test with
+	// "directory not empty".
+	t.Cleanup(func() {
+		for id := range b.Kept() {
+			_ = b.Terminate(context.Background(), id)
+		}
+		s.watchers.Wait()
+	})
 	return s.Handler()
 }
 
