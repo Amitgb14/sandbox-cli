@@ -335,3 +335,74 @@ func TestProcessesAreKeptOnlyWhenSandboxesAre(t *testing.T) {
 		t.Fatal("a process not started kept outlived its connection")
 	}
 }
+
+func takeSnap(t *testing.T, h http.Handler, ref string) api.Snapshot {
+	t.Helper()
+	r := call(t, h, "POST", "/v1/sandboxes/"+ref+"/snapshots", nil)
+	if r.Code/100 != 2 {
+		t.Fatalf("snapshot: %d %s", r.Code, r.Body)
+	}
+	var sn api.Snapshot
+	_ = json.Unmarshal(r.Body.Bytes(), &sn)
+	return sn
+}
+
+func listSnaps(t *testing.T, h http.Handler) []api.Snapshot {
+	t.Helper()
+	var l api.SnapshotList
+	_ = json.Unmarshal(call(t, h, "GET", "/v1/snapshots", nil).Body.Bytes(), &l)
+	return l.Snapshots
+}
+
+// A snapshot outlives a restart like its sandbox: listed, and a sandbox can
+// still be started from it.
+func TestRestoreTakesBackSnapshots(t *testing.T) {
+	b := fake.New(api.CapEgressAllowlist, api.CapMemorySnapshot)
+	dir := newKeepDir(t)
+	h1 := keepServer(t, b, dir)
+	mustCreate(t, h1, api.CreateSandboxRequest{Name: "src", Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	sn := takeSnap(t, h1, "src")
+
+	h2 := keepServer(t, b, dir)
+	got := listSnaps(t, h2)
+	if len(got) != 1 || got[0].ID != sn.ID || got[0].Sandbox != sn.Sandbox {
+		t.Fatalf("snapshots after the restart: %+v", got)
+	}
+	mustCreate(t, h2, api.CreateSandboxRequest{Name: "fork", SnapshotID: sn.ID, Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	// Deleting it deletes its record too: a later restart does not bring it back.
+	if r := call(t, h2, "DELETE", "/v1/snapshots/"+sn.ID, nil); r.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d", r.Code)
+	}
+	if got := listSnaps(t, keepServer(t, b, dir)); len(got) != 0 {
+		t.Fatalf("a deleted snapshot came back: %+v", got)
+	}
+}
+
+// Snapshot files no record names are deleted at the restart: nothing could
+// ever use or remove them otherwise. A record whose files are gone is dropped.
+func TestRestoreDeletesSnapshotsNoRecordNames(t *testing.T) {
+	b := fake.New(api.CapEgressAllowlist, api.CapMemorySnapshot)
+	plain := &Server{Backend: b, Policy: spec.DefaultPolicyFor(b.Capabilities())} // keeps no records
+	ph := plain.Handler()
+	mustCreate(t, ph, api.CreateSandboxRequest{Name: "a", Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	takeSnap(t, ph, "a")
+	if len(b.StoredSnapshots()) != 1 {
+		t.Fatal("precondition: the fake holds the snapshot")
+	}
+	dir := newKeepDir(t)
+	keepServer(t, b, dir)
+	if n := len(b.StoredSnapshots()); n != 0 {
+		t.Fatalf("%d snapshot(s) no record names were kept", n)
+	}
+
+	h := keepServer(t, b, dir)
+	mustCreate(t, h, api.CreateSandboxRequest{Name: "b", Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	sn := takeSnap(t, h, "b")
+	_ = b.DeleteSnapshot(context.Background(), sn.ID) // its files did not survive
+	if got := listSnaps(t, keepServer(t, b, dir)); len(got) != 0 {
+		t.Fatalf("a snapshot whose files are gone is listed: %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "snapshots", sn.ID+".json")); !os.IsNotExist(err) {
+		t.Fatalf("its record was kept: %v", err)
+	}
+}
