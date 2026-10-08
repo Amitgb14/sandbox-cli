@@ -118,23 +118,36 @@ it, a desktop and what it shows, its network policy, labels, name, snapshot
 schedule and environment. A suspended sandbox stays suspended. The VM is not
 rebooted.
 
-**What ends:** every process running in a sandbox. The guest agent ends a
-process when the host's connection to it goes, so commands, terminals and
-agent sessions end at the restart and must be started again. Their output
-and metrics, which sandboxd keeps in memory, are gone too. For about a
-second, a sandbox can reach nothing: connections through the egress proxy
-drop, and new ones succeed once the new sandboxd is serving. Process numbers
-carry on from where they were, so a new process never gets the number of
-one a client still remembers. Snapshots taken earlier are not listed after
-a restart, kept or not.
+Its running processes carry on too, under the same numbers: commands,
+terminals and agent sessions. With the flag on, sandboxd starts every process
+as a *kept* process. If the host's connection to it goes, the guest agent
+keeps it running instead of ending it, and holds the newest 1 MiB of its
+output. The next sandboxd re-attaches each process its records name. A
+terminal can then attach again (`sandbox-cli attach`, Studio), and the
+output replays from what the guest held. Following a process's output after
+a restart shows that 1 MiB at most, and the log says when older output was
+dropped. A process that finished while sandboxd was down is listed with its
+exit code. One whose session the guest no longer holds is listed as exited
+with -1.
+
+**What ends:** for about a second, a sandbox can reach nothing: connections
+through the egress proxy drop, and new ones succeed once the new sandboxd is
+serving. Metrics restart from none. Snapshots taken earlier are not listed
+after a restart, kept or not. A VM started by a sandboxd from before kept
+processes has the guest agent of that time, so its processes end at the
+first upgrade; from then on they carry on. A client connected to a process
+(an attached terminal, a followed output) is disconnected by the restart and
+attaches again.
 
 **What it needs:**
 
 - The systemd unit must say `KillMode=process`, as the packaged one does.
   The default, `control-group`, kills every process of the unit when it
   stops, VMs included.
-- **Environment values are written to disk.** A sandbox taken back needs
-  the environment it was created with, secrets included. They are kept in
+- **Environment values and running processes' command lines are written to
+  disk.** A sandbox taken back needs the environment it was created with,
+  secrets included, and its processes are listed with their command lines,
+  which can hold secrets too (an agent's argument is its prompt). They are kept in
   `<state-dir>/records/`, one file per sandbox, mode 0600 in a 0700
   directory, like the token. sandboxd refuses to start if others can read
   that directory. A record is deleted when its sandbox ends, and starting
@@ -229,9 +242,8 @@ sandbox-cli gateway uncordon n17
 
 A node running with `--keep-sandboxes` can be upgraded without draining:
 its sandboxes answer `503 unavailable` while it restarts, then the gateway
-finds them again in the node's listing. Their running processes end
-([above](#upgrading-without-stopping-sandboxes)), so drain first when those
-matter.
+finds them again in the node's listing, with their running processes
+([above](#upgrading-without-stopping-sandboxes)).
 
 The gateway remembers that it cordoned the node: the restart clears the
 node's own cordon, and the gateway puts it back on its next poll and places

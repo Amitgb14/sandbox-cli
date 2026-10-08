@@ -122,6 +122,9 @@ type procRecord struct {
 	info api.Process
 	proc backend.Proc
 	log  *outputLog
+	// session is the id the process was kept under (keep.go), so a later
+	// sandboxd can take it back; empty when processes are not kept.
+	session string
 }
 
 // Handler returns the API's HTTP handler, guard included.
@@ -705,6 +708,11 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 
 	log := newOutputLog()
 	ps := backend.ProcSpec{Argv: append([]string(nil), req.Argv...), Env: env, Cwd: req.Cwd, Tty: req.Tty, Rows: req.Rows, Cols: req.Cols}
+	// A server that keeps its sandboxes keeps their processes too, where the
+	// backend can take them back: a restart then ends none of them.
+	if _, ok := s.Backend.(backend.Reattacher); ok && s.RecordDir != "" {
+		ps.Keep, ps.Session = true, newSessionID()
+	}
 	// The process outlives this request, so it gets a context of its own; it is
 	// ended by its own exit, a signal, or the sandbox being terminated.
 	proc, err := s.Backend.Start(context.WithoutCancel(r.Context()), id, ps, log.writer("stdout"), log.writer("stderr"))
@@ -716,27 +724,32 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 	rec.mu.Lock()
 	rec.nextPID++
 	pr := &procRecord{
-		info: api.Process{PID: rec.nextPID, Tty: ps.Tty, Argv: ps.Argv, State: api.ProcessRunning, StartedAt: s.now().UTC()},
-		proc: proc,
-		log:  log,
+		info:    api.Process{PID: rec.nextPID, Tty: ps.Tty, Argv: ps.Argv, State: api.ProcessRunning, StartedAt: s.now().UTC()},
+		proc:    proc,
+		log:     log,
+		session: ps.Session,
 	}
 	rec.procs[pr.info.PID] = pr
+	pid := pr.info.PID
+	rec.mu.Unlock()
+	s.persist(rec) // the process number and session, so a restart can take it back
+	s.event(processStarted(id, pid, ps, sortedKeys(extra)))
+	go s.watchProcess(rec, pr, id)
+	return pr, true
+}
+
+// watchProcess records a process's exit when it comes.
+func (s *Server) watchProcess(rec *record, pr *procRecord, id string) {
+	code := pr.proc.Wait()
+	rec.mu.Lock()
+	pr.info.State = api.ProcessExited
+	pr.info.ExitCode = &code
 	pid, started := pr.info.PID, pr.info.StartedAt
 	rec.mu.Unlock()
-	s.persist(rec) // the process number, so a restart never hands it out again
-	s.event(processStarted(id, pid, ps, sortedKeys(extra)))
-
-	go func() {
-		code := proc.Wait()
-		rec.mu.Lock()
-		pr.info.State = api.ProcessExited
-		pr.info.ExitCode = &code
-		rec.mu.Unlock()
-		log.finish(code)
-		s.event(api.Event{Type: api.EventProcessExited, Sandbox: id, PID: pid, ExitCode: &code,
-			DurationMS: s.now().Sub(started).Milliseconds()})
-	}()
-	return pr, true
+	pr.log.finish(code)
+	s.persist(rec) // no longer one to take back
+	s.event(api.Event{Type: api.EventProcessExited, Sandbox: id, PID: pid, ExitCode: &code,
+		DurationMS: s.now().Sub(started).Milliseconds()})
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {

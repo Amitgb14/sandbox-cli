@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
@@ -99,10 +100,28 @@ func TestRestoreTakesBackASandboxAsItWas(t *testing.T) {
 	if got.ID != sb.ID || got.State != api.StateRunning || got.Labels["team"] != "a" || got.Network.Mode != sb.Network.Mode {
 		t.Fatalf("taken back as %+v, was %+v", got, sb)
 	}
+	// The running process came through, under its number; the one that had
+	// finished is, if listed at all, listed as finished.
 	var procs api.ProcessList
 	_ = json.Unmarshal(call(t, h2, "GET", "/v1/sandboxes/web/processes", nil).Body.Bytes(), &procs)
-	if len(procs.Processes) != 0 {
-		t.Fatalf("processes survived the restart: %+v", procs.Processes)
+	var sleeping *api.Process
+	for i, p := range procs.Processes {
+		switch p.PID {
+		case 2:
+			sleeping = &procs.Processes[i]
+		case 1:
+			if p.State != api.ProcessExited || p.ExitCode == nil || *p.ExitCode != 0 {
+				t.Fatalf("the finished process after the restart: %+v", p)
+			}
+		default:
+			t.Fatalf("an unexpected process after the restart: %+v", p)
+		}
+	}
+	if sleeping == nil || sleeping.State != api.ProcessRunning || strings.Join(sleeping.Argv, " ") != "sleep 30" {
+		t.Fatalf("the running process was not taken back: %+v", procs.Processes)
+	}
+	if r := call(t, h2, "POST", "/v1/sandboxes/web/processes/2/signal", api.SignalRequest{Signal: "KILL"}); r.Code/100 != 2 {
+		t.Fatalf("signal to the taken-back process: %d %s", r.Code, r.Body)
 	}
 	if p := startProc(t, h2, "web", "true"); p.PID != 3 {
 		t.Fatalf("first process after the restart is %d, want 3", p.PID)
@@ -253,5 +272,56 @@ func TestRestoreEndsASandboxTheTightenedPolicyRefuses(t *testing.T) {
 	}
 	if b.Count() != 0 {
 		t.Fatal("a sandbox the new policy refuses was kept")
+	}
+}
+
+// A process the sandbox no longer holds, or a session the record names that
+// was never this sandbox's, is listed as ended (-1), not served: the guest's
+// word is not taken for what runs, and a client holding the number learns it
+// is gone.
+func TestRestoreReportsAProcessThatCannotBeTakenBack(t *testing.T) {
+	b := fake.New(api.CapEgressAllowlist)
+	dir := newKeepDir(t)
+	h1 := keepServer(t, b, dir)
+	sb := mustCreate(t, h1, api.CreateSandboxRequest{Name: "p"})
+	startProc(t, h1, "p", "sleep", "30")
+	b.Detach()
+	// The record now names a session the sandbox does not hold.
+	path := filepath.Join(dir, sb.ID+".json")
+	data, _ := os.ReadFile(path)
+	var kr keptRecord
+	if err := json.Unmarshal(data, &kr); err != nil || len(kr.Procs) != 1 {
+		t.Fatalf("precondition: the record keeps the running process: %+v, %v", kr.Procs, err)
+	}
+	kr.Procs[0].Session = "pnotthesandboxes"
+	data, _ = json.Marshal(kr)
+	_ = os.WriteFile(path, data, 0o600)
+
+	h2 := keepServer(t, b, dir)
+	var p api.Process
+	r := call(t, h2, "GET", "/v1/sandboxes/p/processes/1", nil)
+	_ = json.Unmarshal(r.Body.Bytes(), &p)
+	if p.State != api.ProcessExited || p.ExitCode == nil || *p.ExitCode != -1 {
+		t.Fatalf("a process that could not be taken back: %d %+v", r.Code, p)
+	}
+}
+
+// Without kept records, processes are not started kept: the guest's old rule
+// — a process ends with its connection — holds for everyone else.
+func TestProcessesAreKeptOnlyWhenSandboxesAre(t *testing.T) {
+	b := fake.New(api.CapEgressAllowlist)
+	s := &Server{Backend: b, Policy: spec.DefaultPolicyFor(b.Capabilities())}
+	h := s.Handler()
+	mustCreate(t, h, api.CreateSandboxRequest{Name: "plain"})
+	startProc(t, h, "plain", "sleep", "30")
+	b.Detach()
+	var p api.Process
+	deadline := time.Now().Add(5 * time.Second)
+	for p.State != api.ProcessExited && time.Now().Before(deadline) {
+		_ = json.Unmarshal(call(t, h, "GET", "/v1/sandboxes/plain/processes/1", nil).Body.Bytes(), &p)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if p.State != api.ProcessExited {
+		t.Fatal("a process not started kept outlived its connection")
 	}
 }

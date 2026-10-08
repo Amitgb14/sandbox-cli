@@ -171,6 +171,20 @@ type ProcSpec struct {
 	// are then one stream, delivered on stdout.
 	Tty        bool
 	Rows, Cols uint16
+	// Keep keeps the process running when the server goes, under Session,
+	// an id the server chooses: a Reattacher takes it back after a restart.
+	// Only asked for by a server that keeps its sandboxes.
+	Keep    bool
+	Session string
+}
+
+// Reattacher can take back a process started with ProcSpec.Keep, after the
+// server that started it has gone: its output — what the sandbox kept of it,
+// then live — goes to stdout and stderr, and dropped, if not nil, is told how
+// many bytes from before that were not kept. A session the sandbox does not
+// hold is ErrNotFound.
+type Reattacher interface {
+	Reattach(ctx context.Context, id, session string, stdout, stderr io.Writer, dropped func(int64)) (Proc, error)
 }
 
 // Resizer is a Proc on a terminal whose size can change.

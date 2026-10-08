@@ -5,11 +5,13 @@ package firecracker
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -120,6 +122,20 @@ func TestVMKeep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A process started kept, mid-run when sandboxd goes: its connection is
+	// dropped (pctx), and it must run on and be taken back with its output.
+	pctx, dropConn := context.WithCancel(ctx)
+	var before syncBuf
+	keptProc, err := be1.Start(pctx, running.ID, backend.ProcSpec{
+		Argv: []string{"sh", "-c", "echo before; sleep 2; echo after; exit 5"}, Keep: true, Session: "pkeepvmtest"}, &before, io.Discard)
+	if err != nil {
+		t.Fatalf("starting a kept process: %v", err)
+	}
+	for i := 0; i < 100 && !strings.Contains(before.String(), "before"); i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	dropConn()
+	keptProc.Wait()
 	if err := be1.Suspend(ctx, suspended.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +205,17 @@ func TestVMKeep(t *testing.T) {
 			t.Fatalf("the taken-back VM is not in the egress set: %v\n%s", err, out)
 		}
 	}
+	var after syncBuf
+	back, err := be2.Reattach(ctx, running.ID, "pkeepvmtest", &after, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("taking back the kept process: %v", err)
+	}
+	if code := back.Wait(); code != 5 || after.String() != "before\nafter\n" {
+		t.Fatalf("the kept process after the restart: exit %d, output %q", code, after.String())
+	}
+	if _, err := be2.Reattach(ctx, running.ID, "pnosuchsession", io.Discard, io.Discard, nil); err != backend.ErrNotFound {
+		t.Fatalf("an unknown session: %v", err)
+	}
 	if err := be2.Resume(ctx, suspended.ID); err != nil {
 		t.Fatalf("resuming a VM taken back suspended: %v", err)
 	}
@@ -206,3 +233,11 @@ func TestVMKeep(t *testing.T) {
 		t.Fatal("the VMM of a terminated taken-back VM is still running")
 	}
 }
+
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }

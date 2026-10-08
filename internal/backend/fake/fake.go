@@ -260,20 +260,67 @@ func (b *Backend) Kept() map[string]backend.Kept {
 }
 
 // Detach is backend.Keeper. The sandboxes stay; their processes end, as a
-// guest agent ends a process whose host connection is gone.
+// guest agent ends a process whose host connection is gone — except the kept
+// ones, which run on, their output going nowhere until they are reattached.
 func (b *Backend) Detach() {
 	b.mu.Lock()
 	var procs []*proc
 	for _, s := range b.sandboxes {
 		s.mu.Lock()
-		procs = append(procs, s.procs...)
-		s.procs = nil
+		var kept []*proc
+		for _, p := range s.procs {
+			if p.session != "" {
+				p.out.swap(io.Discard)
+				p.err.swap(io.Discard)
+				kept = append(kept, p)
+			} else {
+				procs = append(procs, p)
+			}
+		}
+		s.procs = kept
 		s.mu.Unlock()
 	}
 	b.mu.Unlock()
 	for _, p := range procs {
 		_ = p.Signal("KILL")
 	}
+}
+
+// Reattach is backend.Reattacher.
+func (b *Backend) Reattach(_ context.Context, id, session string, stdout, stderr io.Writer, _ func(int64)) (backend.Proc, error) {
+	s, err := b.get(id)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.procs {
+		if p.session != "" && p.session == session {
+			p.out.swap(stdout)
+			p.err.swap(stderr)
+			return p, nil
+		}
+	}
+	return nil, backend.ErrNotFound
+}
+
+// swapWriter is a writer whose destination can change: a kept process's
+// output goes to whoever has attached.
+type swapWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *swapWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+func (s *swapWriter) swap(w io.Writer) {
+	s.mu.Lock()
+	s.w = w
+	s.mu.Unlock()
 }
 
 // Snapshot captures the files; a sandbox started from it gets its own copy, so
@@ -475,11 +522,13 @@ func (s *sandbox) children(dir string) []string {
 // --- processes -------------------------------------------------------------
 
 type proc struct {
-	stdinR  *io.PipeReader
-	stdinW  *io.PipeWriter
-	signals chan int
-	done    chan struct{}
-	code    int
+	session  string // set when kept (ProcSpec.Keep)
+	out, err *swapWriter
+	stdinR   *io.PipeReader
+	stdinW   *io.PipeWriter
+	signals  chan int
+	done     chan struct{}
+	code     int
 }
 
 var signalNumbers = map[string]int{"HUP": 1, "INT": 2, "KILL": 9, "TERM": 15}
@@ -517,7 +566,11 @@ func (b *Backend) Start(_ context.Context, id string, ps backend.ProcSpec, stdou
 		return nil, backend.ErrNoSuchCmd
 	}
 	r, w := io.Pipe()
-	p := &proc{stdinR: r, stdinW: w, signals: make(chan int, 1), done: make(chan struct{})}
+	p := &proc{stdinR: r, stdinW: w, signals: make(chan int, 1), done: make(chan struct{}),
+		out: &swapWriter{w: stdout}, err: &swapWriter{w: stderr}}
+	if ps.Keep {
+		p.session = ps.Session
+	}
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
@@ -533,7 +586,7 @@ func (b *Backend) Start(_ context.Context, id string, ps backend.ProcSpec, stdou
 	s.mu.Unlock()
 
 	go func() {
-		p.code = s.exec(p, ps, stdout, stderr)
+		p.code = s.exec(p, ps, p.out, p.err)
 		_ = r.Close()
 		close(p.done)
 	}()
