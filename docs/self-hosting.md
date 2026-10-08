@@ -261,6 +261,17 @@ its own listing. Running several gateway replicas, and network isolation
 between tenants across nodes, are not done yet: today one gateway process
 holds its state file.
 
+## Root disks and upgrades
+
+Each image's root disk is built once and cached under
+`<state-dir>/rootfs/`, a few gigabytes each. The guest agent is part of the
+disk, and every sandboxd build has its own, so after an upgrade the first
+sandbox of each image builds a new disk (about a minute). At every start,
+sandboxd removes the disks built for any other guest agent, except those a
+sandbox it took back is still running or suspended from. The log says how
+many it removed and how much space that freed. So the cache holds the
+current build's disks and not one set per upgrade.
+
 ## Volumes
 
 Volumes are sparse ext4 files under `<state-dir>/volumes/`, attached to a VM as

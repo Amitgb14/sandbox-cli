@@ -156,6 +156,31 @@ func TestVMKeep(t *testing.T) {
 	}
 	time.Sleep(200 * time.Millisecond)
 
+	// The kept VMs' disk is labelled as an older guest agent's, as after an
+	// upgrade: pruning must not take a disk a kept VM was booted from — the
+	// suspended one is resumed from it below.
+	var labels []string
+	if jailer == "" {
+		var vc VMConfig
+		data, _ := os.ReadFile(filepath.Join(state, "sandboxes", running.ID, "vm.json"))
+		_ = json.Unmarshal(data, &vc)
+		for _, d := range vc.Drives {
+			if d.IsRootDevice {
+				l := filepath.Join(filepath.Dir(d.PathOnHost), "agent")
+				labels = append(labels, l)
+				_ = os.WriteFile(l, []byte("1:an-older-agent\n"), 0o644)
+			}
+		}
+		if len(labels) == 0 {
+			t.Fatal("precondition: the running VM's root disk was not found")
+		}
+	}
+	defer func() {
+		for _, l := range labels {
+			_ = os.Remove(l) // relabelled by the next build that uses it
+		}
+	}()
+
 	be2, err := New(config())
 	if err != nil {
 		t.Fatal(err)
@@ -215,6 +240,11 @@ func TestVMKeep(t *testing.T) {
 	}
 	if _, err := be2.Reattach(ctx, running.ID, "pnosuchsession", io.Discard, io.Discard, nil); err != backend.ErrNotFound {
 		t.Fatalf("an unknown session: %v", err)
+	}
+	for _, l := range labels {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(l), "rootfs.ext4")); err != nil {
+			t.Fatalf("a root disk kept VMs were booted from was pruned: %v", err)
+		}
 	}
 	if err := be2.Resume(ctx, suspended.ID); err != nil {
 		t.Fatalf("resuming a VM taken back suspended: %v", err)

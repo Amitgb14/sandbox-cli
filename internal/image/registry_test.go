@@ -233,6 +233,18 @@ func TestBuildRootFS(t *testing.T) {
 	if err != nil || fs3.Path == fs1.Path {
 		t.Fatalf("a changed guest agent reused the old disk: %v", err)
 	}
+	// The old agent's disk is what an upgrade leaves behind: pruning removes
+	// it and keeps the one this agent uses.
+	n, _, err := PruneRootFS(dir, agent, nil)
+	if err != nil || n != 1 {
+		t.Fatalf("prune: removed %d, %v", n, err)
+	}
+	if _, err := os.Stat(fs1.Path); !os.IsNotExist(err) {
+		t.Fatalf("the old agent's disk survived the prune: %v", err)
+	}
+	if _, err := os.Stat(fs3.Path); err != nil {
+		t.Fatalf("the current agent's disk was pruned: %v", err)
+	}
 }
 
 // A fleet creates its sandboxes together, so the first run after a new image

@@ -65,6 +65,9 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 	unlock := lockKey(out)
 	defer unlock()
 	if _, err := os.Stat(out); err == nil {
+		// A disk from before disks were labelled gets its label here: its
+		// key proves which agent it holds.
+		labelAgent(filepath.Dir(out), agentSum)
 		return res, nil
 	}
 
@@ -109,7 +112,11 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 	if res.Stats.UnmappedOwners > 0 {
 		res.OwnedByHost = true
 	}
-	return res, os.Rename(tmp, out)
+	if err := os.Rename(tmp, out); err != nil {
+		return nil, err
+	}
+	labelAgent(filepath.Dir(out), agentSum)
+	return res, nil
 }
 
 // inject adds what every sandbox needs regardless of the image: the guest
