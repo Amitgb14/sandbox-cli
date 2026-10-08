@@ -233,6 +233,7 @@ func (s *Server) Restore(ctx context.Context) (int, error) {
 		s.sandboxes[id] = rec
 	}
 	s.mu.Unlock()
+	s.restoreSnapshots(ctx)
 	for id, rec := range restored {
 		taken := s.reattach(ctx, rec, id, restoredProcs[id])
 		s.persist(rec) // its state may have changed with the restart
@@ -303,4 +304,108 @@ func readRecord(path, id string) (*record, []keptProc, error) {
 		return nil, nil, errors.New("a negative process number")
 	}
 	return &record{sbx: kr.Sandbox, env: kr.Env, nextPID: kr.NextPID}, kr.Procs, nil
+}
+
+// Snapshots are kept the same way, in RecordDir/snapshots: the list of them is
+// the server's, and without it a snapshot's files — a guest's memory and disk,
+// gigabytes each — could neither be used nor removed after a restart.
+
+type keptSnapshot struct {
+	Info api.Snapshot         `json:"info"`
+	Spec backend.SnapshotInfo `json:"spec"`
+}
+
+func (s *Server) snapshotRecordPath(id string) string {
+	return filepath.Join(s.RecordDir, "snapshots", id+".json")
+}
+
+func (s *Server) persistSnapshot(info api.Snapshot, spec backend.SnapshotInfo) {
+	if s.RecordDir == "" {
+		return
+	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	data, err := json.Marshal(keptSnapshot{Info: info, Spec: spec})
+	if err == nil {
+		if err = os.MkdirAll(filepath.Dir(s.snapshotRecordPath(info.ID)), 0o700); err == nil {
+			err = writeFileAtomic(s.snapshotRecordPath(info.ID), data)
+		}
+	}
+	if err != nil {
+		s.logf("snapshot %s: writing its record: %v", info.ID, err)
+	}
+}
+
+func (s *Server) forgetSnapshot(id string) {
+	if s.RecordDir == "" || !snapshotIDOK(id) {
+		return
+	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	if err := os.Remove(s.snapshotRecordPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.logf("snapshot %s: removing its record: %v", id, err)
+	}
+}
+
+// snapshotIDOK is the form newSnapshotID gives.
+func snapshotIDOK(id string) bool {
+	rest, ok := strings.CutPrefix(id, "snp_")
+	if !ok || len(rest) != 16 {
+		return false
+	}
+	_, err := hex.DecodeString(rest)
+	return err == nil && strings.ToLower(rest) == rest
+}
+
+// restoreSnapshots pairs the snapshot records with the snapshots the backend
+// holds: one with both is listed again; a record without its files is
+// dropped; files no record names are deleted — nothing could name them.
+func (s *Server) restoreSnapshots(ctx context.Context) {
+	sn, canSnap := s.Backend.(backend.Snapshotter)
+	lister, canList := s.Backend.(backend.SnapshotLister)
+	stored := map[string]bool{}
+	if canList {
+		for _, id := range lister.StoredSnapshots() {
+			stored[id] = true
+		}
+	}
+	dir := filepath.Join(s.RecordDir, "snapshots")
+	des, _ := os.ReadDir(dir)
+	st := s.snaps()
+	taken := 0
+	for _, de := range des {
+		path := filepath.Join(dir, de.Name())
+		id, isRecord := strings.CutSuffix(de.Name(), ".json")
+		if !isRecord || !snapshotIDOK(id) || !de.Type().IsRegular() {
+			if strings.HasPrefix(de.Name(), ".record-") {
+				_ = os.Remove(path)
+			}
+			continue
+		}
+		var ks keptSnapshot
+		data, err := os.ReadFile(path)
+		if err == nil {
+			dec := json.NewDecoder(bytes.NewReader(data))
+			dec.DisallowUnknownFields()
+			err = dec.Decode(&ks)
+		}
+		if err != nil || ks.Info.ID != id || !stored[id] {
+			_ = os.Remove(path) // unreadable, or its files did not survive
+			continue
+		}
+		st.mu.Lock()
+		st.m[id] = &snapshotRecord{info: ks.Info, spec: ks.Spec}
+		st.mu.Unlock()
+		delete(stored, id)
+		taken++
+	}
+	for id := range stored {
+		if canSnap {
+			_ = sn.DeleteSnapshot(ctx, id)
+			s.logf("snapshot %s: deleted: no record names it", id)
+		}
+	}
+	if taken > 0 {
+		s.logf("took back %d snapshot(s) from an earlier run", taken)
+	}
 }

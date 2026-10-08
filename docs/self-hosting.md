@@ -115,7 +115,8 @@ journalctl -u sandboxd -n 5      # "keeping sandboxes across restarts; took back
 
 **What carries on:** each VM, with its memory, its disk and every file in
 it, a desktop and what it shows, its network policy, labels, name, snapshot
-schedule and environment. A suspended sandbox stays suspended. The VM is not
+schedule and environment, and every snapshot, still listed and still usable
+to start a sandbox from. A suspended sandbox stays suspended. The VM is not
 rebooted.
 
 Its running processes carry on too, under the same numbers: commands,
@@ -132,8 +133,7 @@ with -1.
 
 **What ends:** for about a second, a sandbox can reach nothing: connections
 through the egress proxy drop, and new ones succeed once the new sandboxd is
-serving. Metrics restart from none. Snapshots taken earlier are not listed
-after a restart, kept or not. A VM started by a sandboxd from before kept
+serving. Metrics restart from none. A VM started by a sandboxd from before kept
 processes has the guest agent of that time, so its processes end at the
 first upgrade; from then on they carry on. A client connected to a process
 (an attached terminal, a followed output) is disconnected by the restart and
@@ -260,6 +260,16 @@ come back with them running; when it answers again they are reconciled from
 its own listing. Running several gateway replicas, and network isolation
 between tenants across nodes, are not done yet: today one gateway process
 holds its state file.
+
+## Snapshots and restarts
+
+The list of snapshots is sandboxd's own. Their files, a guest's memory and
+disk taking gigabytes each, are under `<state-dir>/snapshots/`. With
+`--keep-sandboxes`, each snapshot's record is kept in
+`<state-dir>/records/snapshots/`, and a restart lists the snapshots again.
+Files no record names are deleted, since nothing could use or remove them.
+Without the flag, a restart deletes every snapshot an earlier run left, for
+the same reason, and the log says how many.
 
 ## Root disks and upgrades
 

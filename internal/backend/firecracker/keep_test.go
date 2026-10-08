@@ -3,6 +3,7 @@
 package firecracker
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -141,5 +142,36 @@ func TestStrayTaps(t *testing.T) {
 	want := []string{"sbx0", "sbx12"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("stray taps %v, want %v", got, want)
+	}
+}
+
+// Without kept records, a restart's snapshots can never be named again, so
+// their files go; the listing names only what the server could have made; and
+// a delete never reaches outside the snapshots directory.
+func TestSnapshotsOnDisk(t *testing.T) {
+	state := t.TempDir()
+	b := &Backend{cfg: Config{StateDir: state, Logf: func(string, ...any) {}}}
+	snaps := filepath.Join(state, "snapshots")
+	for _, d := range []string{"snp_0123456789abcdef", "snp_fedcba9876543210", "not-a-snapshot"} {
+		_ = os.MkdirAll(filepath.Join(snaps, d), 0o700)
+		_ = os.WriteFile(filepath.Join(snaps, d, "snap.mem"), []byte("memory"), 0o600)
+	}
+	got := b.StoredSnapshots()
+	if len(got) != 2 {
+		t.Fatalf("StoredSnapshots = %v", got)
+	}
+	outside := filepath.Join(state, "precious")
+	_ = os.MkdirAll(outside, 0o700)
+	for _, bad := range []string{"../precious", "snp_../../precious", "", "snp_0123"} {
+		if err := b.DeleteSnapshot(context.Background(), bad); err != backend.ErrNotFound {
+			t.Errorf("DeleteSnapshot(%q) = %v", bad, err)
+		}
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("a delete reached outside the snapshots directory: %v", err)
+	}
+	b.reapSnapshots()
+	if des, _ := os.ReadDir(snaps); len(des) != 0 {
+		t.Fatalf("left after the reap: %d", len(des))
 	}
 }

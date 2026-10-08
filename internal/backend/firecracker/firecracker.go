@@ -192,6 +192,7 @@ func New(cfg Config) (*Backend, error) {
 		kept = b.findKept()
 	} else {
 		b.reapLeftovers()
+		b.reapSnapshots()
 	}
 	// Whatever is still running or left from this state directory and is not
 	// a VM being taken back goes, kept or not: a restart leaves nothing behind

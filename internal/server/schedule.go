@@ -135,6 +135,7 @@ func (s *Server) pruneScheduled(ctx context.Context, sandbox string, keep int) {
 	st.mu.Unlock()
 	sn, _ := s.Backend.(backend.Snapshotter)
 	for _, id := range drop {
+		s.forgetSnapshot(id)
 		if sn != nil {
 			_ = sn.DeleteSnapshot(ctx, id)
 		}
