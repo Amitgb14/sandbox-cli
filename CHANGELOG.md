@@ -369,6 +369,24 @@ that fails on the code before the fix:
 
 ### Changed
 
+- **sandboxd can be upgraded or restarted without stopping its sandboxes**
+  (`--keep-sandboxes`, Firecracker). On exit it leaves the VMs running, and on
+  start it takes back the ones an earlier sandboxd on the same state directory
+  left: same VM, memory, files, network policy, name, labels and environment,
+  and a suspended one stays suspended. Running processes still end at a
+  restart (commands, terminals, agent sessions), and a sandbox's network is
+  off for about a second. A VM is taken back only if it is provably the same
+  one: its record intact, its VMM the same process, its guest answering, and
+  its network policy still allowed by the current policy file. Anything else
+  is ended, as before. With the flag on, each sandbox's environment values
+  are written to `<state-dir>/records/` (0600; deleted when it ends, or when
+  sandboxd starts without the flag). The packaged systemd unit now sets
+  `KillMode=process`, so a stop no longer kills VMs behind sandboxd's back.
+  Each VMM now runs in a session of its own, so a Ctrl-C to a sandboxd run by
+  hand no longer reaches its VMs. At every start, kept or not, sandboxd ends
+  any VMM in its state directory that no sandbox accounts for, deletes network
+  devices and jails nothing owns, and logs how many it took back and ended.
+
 - **An example: browser automation across many sandboxes**
   (`sdk/python/examples/browser-fleet`). `fleet.py` makes N sandboxes from the
   desktop image, splits a list of URLs across them, drives each one's Chromium

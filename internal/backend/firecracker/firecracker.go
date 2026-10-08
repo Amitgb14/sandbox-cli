@@ -53,6 +53,10 @@ type Config struct {
 	// Logf receives operator-facing detail (paths, console output) that API
 	// errors deliberately leave out.
 	Logf func(format string, a ...any)
+	// Keep leaves VMs running when sandboxd exits (Detach) and takes back,
+	// at start, the ones an earlier sandboxd left (keep.go). Without it a
+	// start removes every VM it finds, as it always has.
+	Keep bool
 }
 
 // Backend runs sandboxes as Firecracker microVMs.
@@ -125,20 +129,25 @@ func (b *Backend) lockVolumes(s backend.Spec) func() {
 }
 
 type vm struct {
-	id        string
-	dir       string // host-side state: console log, pid, snapshot files
-	root      string // the jail's root, when there is one; else dir
-	spec      backend.Spec
-	cmd       *exec.Cmd
-	client    *guestproto.Client
-	net       *tap // nil without networking
+	id     string
+	dir    string // host-side state: console log, pid, snapshot files
+	root   string // the jail's root, when there is one; else dir
+	spec   backend.Spec
+	client *guestproto.Client
+	net    *tap // nil without networking
+	// pid and start name the VMM: a pid alone can be reused once it exits,
+	// and a VMM taken back from an earlier sandboxd is watched by both.
+	pid       int
+	start     uint64
 	exited    chan struct{}
 	suspended bool
+	adopted   bool // taken back from an earlier sandboxd (keep.go)
 }
 
-// New checks the configuration and returns a backend. It removes what an
-// earlier sandboxd left behind: records do not survive a restart, so neither
-// may the VMs they described.
+// New checks the configuration and returns a backend. What an earlier
+// sandboxd left behind it takes back when VMs are kept (Config.Keep, keep.go),
+// and otherwise removes: without kept records, nothing could say whose a VM
+// is, so neither may the VM survive.
 func New(cfg Config) (*Backend, error) {
 	for name, p := range map[string]string{"firecracker": cfg.Firecracker, "kernel": cfg.Kernel, "guest agent": cfg.Agent} {
 		if p == "" {
@@ -178,11 +187,52 @@ func New(cfg Config) (*Backend, error) {
 	if err := os.MkdirAll(b.sandboxesDir(), 0o700); err != nil {
 		return nil, err
 	}
-	b.reapLeftovers()
+	var kept []candidate
+	if cfg.Keep {
+		kept = b.findKept()
+	} else {
+		b.reapLeftovers()
+	}
+	// Whatever is still running or left from this state directory and is not
+	// a VM being taken back goes, kept or not: a restart leaves nothing behind
+	// that nobody manages.
+	keptPIDs, keptJails := map[int]bool{}, map[string]bool{}
+	for _, c := range kept {
+		if !c.v.suspended {
+			keptPIDs[c.v.pid] = true
+		}
+		keptJails[jailID(c.v.id)] = true
+	}
+	strays := b.sweepVMMs(keptPIDs)
+	b.sweepJails(keptJails)
 	if cfg.Network != nil {
-		if err := cfg.Network.start(); err != nil {
+		var taps []keptTap
+		for _, c := range kept {
+			if c.ks.Tap >= 0 {
+				taps = append(taps, keptTap{id: c.v.id, idx: c.ks.Tap, policy: c.ks.Spec.Network})
+			}
+		}
+		byID, err := cfg.Network.start(taps)
+		if err != nil {
 			return nil, err
 		}
+		for _, c := range kept {
+			c.v.net = byID[c.v.id]
+		}
+	}
+	if cfg.Keep || strays > 0 {
+		cfg.Logf("after the restart: %d sandbox(es) taken back, %d stray VMM(s) ended", len(kept), strays)
+	}
+	for _, c := range kept {
+		if cfg.Jailer != nil {
+			cfg.Jailer.adopt(c.v.id, c.ks.UID)
+		}
+		b.vms[c.v.id] = c.v
+		if b.built == nil {
+			b.built = map[string]bool{}
+		}
+		b.built[c.v.spec.Image] = true
+		cfg.Logf("sandbox %s: found running from an earlier run", c.v.id)
 	}
 	return b, nil
 }
@@ -326,6 +376,7 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 	b.mu.Lock()
 	b.vms[s.ID] = v
 	b.mu.Unlock()
+	b.saveKeep(v)
 	return nil
 }
 
@@ -367,26 +418,36 @@ func (b *Backend) vmm(v *vm, args ...string) error {
 		return err
 	}
 	defer console.Close()
+	var cmd *exec.Cmd
 	if b.cfg.Jailer != nil {
-		v.cmd = b.cfg.Jailer.command(v.id, b.cfg.Firecracker, args...)
+		cmd = b.cfg.Jailer.command(v.id, b.cfg.Firecracker, args...)
 	} else {
-		v.cmd = exec.Command(b.cfg.Firecracker, append([]string{"--api-sock", "api.sock"}, args...)...)
-		v.cmd.Dir = v.dir
+		cmd = exec.Command(b.cfg.Firecracker, append([]string{"--api-sock", "api.sock"}, args...)...)
+		cmd.Dir = v.dir
 	}
-	v.cmd.Stdout, v.cmd.Stderr = console, console
-	v.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	v.exited = make(chan struct{})
-	if err := v.cmd.Start(); err != nil {
+	cmd.Stdout, cmd.Stderr = console, console
+	// A session of its own, not only a process group: a VMM must outlive
+	// sandboxd when VMs are kept (keep.go), and a signal to sandboxd's
+	// process group or session — Ctrl-C, a closed terminal — is not one
+	// to its VMs. The VMM still leads its own group, which destroy kills.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	exited := make(chan struct{})
+	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting the VMM: %w", err)
 	}
-	_ = os.WriteFile(filepath.Join(v.dir, "vmm.pid"), []byte(fmt.Sprint(v.cmd.Process.Pid)), 0o600)
-	cmd, exited := v.cmd, v.exited
 	go func() { _ = cmd.Wait(); close(exited) }()
-	uds := v.hostPath("v.sock")
-	v.client = &guestproto.Client{Dial: func(ctx context.Context) (io.ReadWriteCloser, error) {
+	start, _ := procStart(cmd.Process.Pid)
+	v.pid, v.start, v.exited = cmd.Process.Pid, start, exited
+	_ = os.WriteFile(filepath.Join(v.dir, "vmm.pid"), []byte(fmt.Sprint(v.pid)), 0o600)
+	v.client = guestClient(v.hostPath("v.sock"))
+	return nil
+}
+
+// guestClient talks to a VM's guest agent over its vsock socket.
+func guestClient(uds string) *guestproto.Client {
+	return &guestproto.Client{Dial: func(ctx context.Context) (io.ReadWriteCloser, error) {
 		return vsock.DialFirecracker(ctx, uds, guestPort)
 	}}
-	return nil
 }
 
 // waitReady waits for the guest agent, or for the VMM to die trying.
@@ -416,7 +477,11 @@ func (b *Backend) UpdateNetwork(_ context.Context, id string, p api.NetworkPolic
 	if v.net == nil {
 		return errors.New("this sandbox has no network")
 	}
-	return b.cfg.Network.update(v.net, p)
+	if err := b.cfg.Network.update(v.net, p); err != nil {
+		return err
+	}
+	b.saveKeep(v)
+	return nil
 }
 
 func (b *Backend) Terminate(_ context.Context, id string) error {
@@ -433,8 +498,8 @@ func (b *Backend) Terminate(_ context.Context, id string) error {
 
 // destroy kills the VMM's process group and removes everything the sandbox had.
 func (b *Backend) destroy(v *vm) {
-	if v.cmd != nil && v.cmd.Process != nil && v.exited != nil {
-		_ = syscall.Kill(-v.cmd.Process.Pid, syscall.SIGKILL)
+	if v.exited != nil {
+		killVMM(v)
 		select {
 		case <-v.exited:
 		case <-time.After(5 * time.Second):

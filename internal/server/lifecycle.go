@@ -87,6 +87,7 @@ func (s *Server) suspend(w http.ResponseWriter, r *http.Request) {
 	rec.sbx.State = api.StateSuspended
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.persist(rec)
 	s.event(api.Event{Type: api.EventSandboxSuspended, Sandbox: out.ID})
 	writeJSON(w, http.StatusOK, out)
 }
@@ -115,6 +116,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	rec.lastActive = s.now()
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.persist(rec)
 	s.event(api.Event{Type: api.EventSandboxResumed, Sandbox: out.ID})
 	writeJSON(w, http.StatusOK, out)
 }

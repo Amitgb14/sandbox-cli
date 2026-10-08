@@ -31,10 +31,10 @@ func (b *Backend) Usage(context.Context) (map[string]backend.Usage, error) {
 	b.mu.Unlock()
 	out := map[string]backend.Usage{}
 	for _, v := range vms {
-		if v.cmd == nil || v.cmd.Process == nil || v.suspended {
+		if v.pid <= 1 || v.suspended {
 			continue
 		}
-		u, err := processUsage(fmt.Sprintf("/proc/%d", v.cmd.Process.Pid))
+		u, err := processUsage(fmt.Sprintf("/proc/%d", v.pid))
 		if err != nil {
 			continue
 		}

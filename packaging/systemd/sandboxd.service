@@ -25,6 +25,11 @@ Restart=on-failure
 RestartSec=2s
 # sandboxd terminates its sandboxes on SIGTERM; give it time to.
 TimeoutStopSec=60s
+# Stop signals sandboxd alone; it ends its VMs itself. With --keep-sandboxes
+# added to ExecStart it leaves them running for the next sandboxd to take
+# back, and the default, control-group, would kill them all on every stop
+# (docs/self-hosting.md, "Upgrading without stopping sandboxes").
+KillMode=process
 LimitNOFILE=1048576
 
 [Install]

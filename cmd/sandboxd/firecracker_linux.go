@@ -32,7 +32,7 @@ func newFirecracker(o backendOptions) (backend.Backend, error) {
 	}
 	cfg := fc.Config{
 		Firecracker: bin, Kernel: o.kernel, Agent: agent, StateDir: o.stateDir,
-		Puller: puller, Logf: o.logf,
+		Puller: puller, Logf: o.logf, Keep: o.keep,
 	}
 	if o.network {
 		cfg.Network = &fc.Network{ProxyPort: o.proxyPort, DNSPort: o.dnsPort, Logf: o.logf}
