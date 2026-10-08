@@ -279,7 +279,7 @@ func (s *Server) reattach(ctx context.Context, rec *record, id string, procs []k
 		rec.mu.Lock()
 		rec.procs[kp.PID] = pr
 		rec.mu.Unlock()
-		go s.watchProcess(rec, pr, id)
+		s.watch(rec, pr, id)
 		taken++
 	}
 	return taken

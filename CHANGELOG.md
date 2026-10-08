@@ -616,6 +616,16 @@ that fails on the code before the fix:
 
 ### Fixed
 
+- **Upgrading sandboxd no longer fills its disk with old root disks.** Each
+  image's root disk is cached per guest agent, and every sandboxd build has its
+  own agent, so each upgrade built a new set (about 3.7 GB for the base image)
+  and nothing removed the last. A machine filled its root filesystem after a
+  few upgrades, and creating a sandbox failed with "the backend failed" (mkfs:
+  no space left on device). sandboxd now removes, at start, the root disks
+  built for another guest agent. It keeps the ones a sandbox it took back is
+  still running or suspended from. Disks from before this version are treated
+  as stale and rebuilt once, on first use.
+
 - **sandboxd with networking now starts on a Linux machine that runs
   avahi-daemon.** Its egress resolver listened on UDP 5353, the mDNS port,
   which avahi-daemon holds on most Linux desktops and on EL-family servers

@@ -95,6 +95,9 @@ type Server struct {
 	// keeps records in memory only, and a restart forgets them.
 	RecordDir string
 	persistMu sync.Mutex
+	// watchers are the goroutines waiting on processes; each writes the
+	// sandbox's record when its process ends.
+	watchers sync.WaitGroup
 }
 
 type record struct {
@@ -734,8 +737,17 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 	rec.mu.Unlock()
 	s.persist(rec) // the process number and session, so a restart can take it back
 	s.event(processStarted(id, pid, ps, sortedKeys(extra)))
-	go s.watchProcess(rec, pr, id)
+	s.watch(rec, pr, id)
 	return pr, true
+}
+
+// watch starts waiting on a process in the background.
+func (s *Server) watch(rec *record, pr *procRecord, id string) {
+	s.watchers.Add(1)
+	go func() {
+		defer s.watchers.Done()
+		s.watchProcess(rec, pr, id)
+	}()
 }
 
 // watchProcess records a process's exit when it comes.

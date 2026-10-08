@@ -205,6 +205,7 @@ func New(cfg Config) (*Backend, error) {
 	}
 	strays := b.sweepVMMs(keptPIDs)
 	b.sweepJails(keptJails)
+	b.pruneRootDisks(kept)
 	if cfg.Network != nil {
 		var taps []keptTap
 		for _, c := range kept {
