@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Bot, ChevronRight, SquareTerminal, TerminalSquare, type LucideIcon } from "lucide-react";
 import { CodeTabs } from "@/components/common/code-tabs";
@@ -9,6 +10,7 @@ import { PageHeader } from "@/components/common/page-header";
 import { AgentList } from "@/components/launch/agent-list";
 import { every, scheduleIntervals } from "@/components/sandbox/snapshots";
 import { ImagePicker } from "@/components/launch/image-picker";
+import { applyRules } from "@/components/settings/egress-rules";
 import { Gate } from "@/components/shell/gate";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -18,10 +20,11 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useAgents, useInfo, useLaunch, useNode, useSandboxes, useSnapshots } from "@/lib/api/queries";
+import { useAgents, useEgressRules, useInfo, useLaunch, useNode, useSandboxes, useSnapshots, useTemplates } from "@/lib/api/queries";
 import { useCaller } from "@/lib/caller";
 import { cliAgent, snippets } from "@/lib/codegen";
-import { formatRelative, splitArgs } from "@/lib/format";
+import { formatMiB, formatRelative, splitArgs } from "@/lib/format";
+import { overLimits } from "@/lib/templates";
 import { cn } from "@/lib/utils";
 import type { LaunchRequest, NetworkMode } from "@/lib/types";
 
@@ -58,6 +61,11 @@ function Section({ step, title, children }: { step: number; title: string; child
 
 function LaunchForm() {
   const router = useRouter();
+  const params = useSearchParams();
+  const { data: templates } = useTemplates();
+  const { data: egressRules } = useEgressRules();
+  // "" is the server's default size; a link from Templates names one.
+  const [templateName, setTemplateName] = useState(params.get("template") ?? "");
   const { data: agents } = useAgents();
   const { data: info } = useInfo();
   const launch = useLaunch();
@@ -93,6 +101,10 @@ function LaunchForm() {
   const start = fromSnapshot ? { snapshot: snapshot || undefined } : { image: image.trim() || undefined };
 
   const ceiling = info?.capabilities?.network.ceiling;
+  const limits = info?.capabilities?.limits;
+  const template = templates?.find((t) => t.name === templateName);
+  const size = template ? { cpus: template.cpus, memoryMb: template.memory_mb, diskMb: template.disk_mb || undefined } : {};
+  const sizeOver = template ? overLimits(template, limits) : "";
   const chosen = agents?.find((a) => a.name === agent);
   const allowList = allow.split(",").map((a) => a.trim()).filter(Boolean);
   const labelMap = pairs(labels);
@@ -104,8 +116,22 @@ function LaunchForm() {
       const [n, p, ro] = v.split(":");
       return { name: n, path: p, read_only: ro === "ro" || undefined };
     });
+  // The egress rules Studio's server adds to the launch, so the code says
+  // what the launch will do.
+  const egress = applyRules(egressRules, network, allowList, info?.capabilities?.network.default.mode);
+  const ruled = { allow: egress.allow.length - allowList.length, deny: egress.deny.length };
   // What the code panel shows: the same choices, for each client.
-  const sandboxOpts = { ...start, ...schedule, name: name || undefined, network, allow: allowList, labels: labelMap, volumes: vols };
+  const sandboxOpts = {
+    ...start,
+    ...schedule,
+    ...size,
+    name: name || undefined,
+    network,
+    allow: egress.allow,
+    deny: egress.deny,
+    labels: labelMap,
+    volumes: vols,
+  };
   const code =
     kind === "command"
       ? snippets({ ...sandboxOpts, command: splitArgs(command), defaultAllow:
@@ -136,7 +162,17 @@ function LaunchForm() {
       req.snapshot_every_secs = schedule.snapshotEverySecs;
       req.snapshot_keep = schedule.snapshotKeep;
     }
+    if (sizeOver) {
+      toast.error(`${template!.name}: ${sizeOver}`);
+      return;
+    }
+    if (template) {
+      req.cpus = template.cpus;
+      req.memory_mb = template.memory_mb;
+      if (template.disk_mb) req.disk_mb = template.disk_mb;
+    }
     if (network) req.network = network;
+    // The user's own names only: the server adds the egress rules itself.
     if (allowList.length) req.allow = allowList;
     if (Object.keys(labelMap).length) req.labels = labelMap;
     if (vols.length) req.volumes = vols;
@@ -273,6 +309,41 @@ function LaunchForm() {
           </div>
         </Section>
 
+        <Section step={4} title="Size">
+          <RadioGroup value={templateName || "default"} onValueChange={(v) => setTemplateName(v === "default" ? "" : v)} aria-label="Size" className="grid gap-2 sm:grid-cols-3 xl:grid-cols-4">
+            {[{ name: "default", description: "What sandboxd gives a request that names none" } as const, ...(templates ?? [])].map((t) => {
+              const over = "cpus" in t ? overLimits(t, limits) : "";
+              return (
+                <Label
+                  key={t.name}
+                  htmlFor={`size-${t.name}`}
+                  title={over || t.description}
+                  className={cn(
+                    "flex cursor-pointer flex-col items-start gap-1 rounded-lg border bg-card p-3 transition-colors hover:border-foreground/20 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5",
+                    over && "opacity-50",
+                  )}
+                >
+                  <span className="flex w-full items-center justify-between">
+                    <span className="font-mono text-sm font-medium">{t.name}</span>
+                    <RadioGroupItem id={`size-${t.name}`} value={t.name} disabled={!!over} />
+                  </span>
+                  <span className="font-mono text-[11px] font-normal text-muted-foreground">
+                    {"cpus" in t ? `${t.cpus} vCPU · ${formatMiB(t.memory_mb)}${t.disk_mb ? ` · ${formatMiB(t.disk_mb)} disk` : ""}` : "no size asked for"}
+                  </span>
+                  {over ? <span className="text-[11px] font-normal text-caution">above this endpoint&apos;s limits</span> : null}
+                </Label>
+              );
+            })}
+          </RadioGroup>
+          <p className="text-xs text-muted-foreground">
+            Sizes are kept in{" "}
+            <Link href="/templates" className="underline underline-offset-2 hover:text-foreground">
+              Templates
+            </Link>
+            , where you can add your own.
+          </p>
+        </Section>
+
         <details className="group rounded-lg border bg-card">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium">
             <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden />
@@ -329,6 +400,20 @@ function LaunchForm() {
                   </dd>
                 </>
               ) : null}
+              <dt className="text-muted-foreground">Size</dt>
+              <dd className="truncate text-[13px]">
+                {template ? (
+                  <>
+                    <span className="font-mono">{template.name}</span>
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · {template.cpus} vCPU · {formatMiB(template.memory_mb)}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">the server&apos;s default</span>
+                )}
+              </dd>
               <dt className="text-muted-foreground">Starts in</dt>
               <dd className="truncate font-mono text-[13px]">/sandbox/home</dd>
               <dt className="text-muted-foreground">Runs</dt>
@@ -337,6 +422,16 @@ function LaunchForm() {
               </dd>
               <dt className="text-muted-foreground">Network</dt>
               <dd className="font-mono text-[13px]">{network || info?.capabilities?.network.default.mode || "default"}</dd>
+              {ruled.allow > 0 || ruled.deny > 0 ? (
+                <>
+                  <dt className="text-muted-foreground">Rules</dt>
+                  <dd className="truncate text-[13px]">
+                    <Link href="/settings" className="hover:underline">
+                      {[ruled.allow ? `+${ruled.allow} allowed` : "", ruled.deny ? `${ruled.deny} denied` : ""].filter(Boolean).join(", ")}
+                    </Link>
+                  </dd>
+                </>
+              ) : null}
               {kind !== "command" && (
                 <>
                   <dt className="text-muted-foreground">Login</dt>
@@ -379,7 +474,9 @@ export default function LaunchPage() {
         title="Playground"
         description="Set up a sandbox, launch it, or copy the same setup as code. A sandbox starts in its own home directory and needs no repository: ask the agent, or the command, to clone what it needs."
       />
-      <LaunchForm />
+      <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
+        <LaunchForm />
+      </Suspense>
     </div>
     </Gate>
   );

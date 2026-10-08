@@ -70,6 +70,8 @@ export interface Capabilities {
   network: { default: NetworkPolicy; ceiling: NetworkMode; may_allow: string[] | null };
 }
 
+export type Limits = Capabilities["limits"];
+
 export interface Process {
   pid: number;
   tty?: boolean;
@@ -168,8 +170,31 @@ export interface Agent {
   provider_host?: string;
   /** What is kept of its login between runs, relative to the sandbox user's home. */
   login_files?: string[];
-  /** The variables it reads, and whether each is set where Studio runs. Names only. */
-  env?: { name: string; set: boolean }[];
+  /**
+   * The variables it reads: whether each is set where Studio runs, and
+   * whether a key is saved for it. A run forwards the environment's value,
+   * else the saved one. Names only: a value is never served.
+   */
+  env?: { name: string; set: boolean; saved?: boolean }[];
+}
+
+/** A size to launch a sandbox at (Templates). The built-in ones cannot be changed. */
+export interface VmTemplate {
+  name: string;
+  description?: string;
+  cpus: number;
+  memory_mb: number;
+  /** 0 or absent: the server's default. */
+  disk_mb?: number;
+  builtin?: boolean;
+}
+
+/** A host every Studio launch allows or denies (Settings, Egress rules). */
+export interface EgressRule {
+  host: string;
+  action: "allow" | "deny";
+  enabled: boolean;
+  note?: string;
 }
 
 export interface LaunchRequest {
@@ -180,8 +205,13 @@ export interface LaunchRequest {
   name?: string;
   network?: "" | NetworkMode;
   allow?: string[];
+  deny?: string[];
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
+  /** A template's size; absent is the server's default. */
+  cpus?: number;
+  memory_mb?: number;
+  disk_mb?: number;
   profile?: "" | "dev" | "prod";
   rows?: number;
   cols?: number;

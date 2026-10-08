@@ -9,6 +9,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
+	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
 
 func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +33,9 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 		// by one reading and obeyed by another.
 		writeErr(w, http.StatusBadRequest, "start from an image or a snapshot, not both")
 		return
+	case req.CPUs < 0 || req.MemoryMB < 0 || req.DiskMB < 0:
+		writeErr(w, http.StatusBadRequest, "cpus, memory_mb and disk_mb: zero for the server's default, or more")
+		return
 	}
 	// Studio offers only the agents with a verified headless mode, console
 	// runs included. Headless needs it outright: nobody will answer a
@@ -51,6 +55,10 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Launch == nil {
 		writeErr(w, http.StatusNotImplemented, "this Studio cannot launch runs")
+		return
+	}
+	if err := s.applyEgressRules(r, &req); err != nil {
+		writeErr(w, http.StatusInternalServerError, "egress rules: "+err.Error())
 		return
 	}
 	// Not the request's context: a run outlives the request that started it.
@@ -83,7 +91,11 @@ type Agent struct {
 // AgentEnv is one variable an agent reads, by name.
 type AgentEnv struct {
 	Name string `json:"name"`
-	Set  bool   `json:"set"`
+	// Set is whether the environment Studio runs in sets it, and Saved
+	// whether a key is saved for it (agenthome.SaveKey). A run forwards the
+	// environment's value, else the saved one.
+	Set   bool `json:"set"`
+	Saved bool `json:"saved"`
 }
 
 func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
@@ -101,11 +113,52 @@ func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 		a := Agent{Name: name, Login: login, ProviderHost: d.ProviderHost, LoginFiles: d.AuthPaths}
+		saved := agenthome.SavedKeys(d)
 		for _, e := range d.EnvAllow {
 			_, set := os.LookupEnv(e)
-			a.Env = append(a.Env, AgentEnv{Name: e, Set: set})
+			_, kept := saved[e]
+			a.Env = append(a.Env, AgentEnv{Name: e, Set: set, Saved: kept})
 		}
 		out = append(out, a)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": out})
+}
+
+// applyEgressRules adds the enabled egress rules to a launch, after what the
+// request named itself.
+//
+// A deny rule applies to every run that has a network. An allow rule applies
+// to a run that will be an allowlist — one that asks for it, or asks for
+// nothing on a server whose default is one — and to no other: a run on open
+// egress reaches the host already, and turning it into an allowlist because a
+// rule named one host would cut it off from every other.
+func (s *Server) applyEgressRules(r *http.Request, req *LaunchRequest) error {
+	allow, deny, err := egressFor()
+	if err != nil || (len(allow) == 0 && len(deny) == 0) {
+		return err
+	}
+	req.Deny = append(req.Deny, deny...)
+	switch req.Network {
+	case api.NetworkAllowlist:
+		req.Allow = append(req.Allow, allow...)
+	case "":
+		if len(req.Allow) > 0 {
+			// An allowlist already, by its own --allow.
+			req.Allow = append(req.Allow, allow...)
+			return nil
+		}
+		if len(allow) == 0 {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		caps, err := s.clientFor(r).Capabilities(ctx)
+		if err != nil {
+			return err
+		}
+		if caps.Network.Default.Mode == api.NetworkAllowlist {
+			req.Allow = append(req.Allow, allow...)
+		}
+	}
+	return nil
 }

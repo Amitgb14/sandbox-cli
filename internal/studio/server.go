@@ -47,6 +47,7 @@ type LaunchRequest struct {
 	Name    string            `json:"name,omitempty"`
 	Network string            `json:"network,omitempty"` // "", none, allowlist, open
 	Allow   []string          `json:"allow,omitempty"`
+	Deny    []string          `json:"deny,omitempty"`
 	Labels  map[string]string `json:"labels,omitempty"`
 	Volumes []api.VolumeMount `json:"volumes,omitempty"`
 	Profile string            `json:"profile,omitempty"`
@@ -61,6 +62,12 @@ type LaunchRequest struct {
 	// sandboxd as any client's.
 	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`
 	SnapshotKeep      int `json:"snapshot_keep,omitempty"`
+	// CPUs, MemoryMB and DiskMB size the sandbox — a template's, in the
+	// Playground: the CLI's --cpus, --memory and --disk. Zero is the server's
+	// default; the server's limits bound the rest.
+	CPUs     float64 `json:"cpus,omitempty"`
+	MemoryMB int     `json:"memory_mb,omitempty"`
+	DiskMB   int     `json:"disk_mb,omitempty"`
 	// Rows and Cols size a console run's terminal before anyone attaches.
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`
@@ -101,6 +108,13 @@ func (s *Server) Handler() http.Handler {
 	api("GET /api/agents/state", s.agentStates)
 	api("POST /api/runs", s.launch)
 	api("GET /api/agents", s.agents)
+	api("PUT /api/agents/{agent}/keys/{var}", s.putAgentKey)
+	api("DELETE /api/agents/{agent}/keys/{var}", s.deleteAgentKey)
+	api("GET /api/templates", s.templates)
+	api("PUT /api/templates/{name}", s.putTemplate)
+	api("DELETE /api/templates/{name}", s.deleteTemplate)
+	api("GET /api/egress", s.egress)
+	api("PUT /api/egress", s.putEgress)
 	mux.Handle("/api/", s.guard(func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
 	}))

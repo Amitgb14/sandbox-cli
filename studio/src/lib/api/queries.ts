@@ -13,6 +13,7 @@ import type {
   AgentState,
   AuditEvent,
   DirEntry,
+  EgressRule,
   Info,
   LaunchRequest,
   LaunchResult,
@@ -22,6 +23,7 @@ import type {
   Process,
   Sandbox,
   Snapshot,
+  VmTemplate,
   Volume,
 } from "@/lib/types";
 
@@ -40,6 +42,8 @@ export const keys = {
   snapshots: ["snapshots"] as const,
   agents: ["agents"] as const,
   agentStates: ["agent-states"] as const,
+  templates: ["templates"] as const,
+  egress: ["egress"] as const,
 };
 
 // --- reads -------------------------------------------------------------------------
@@ -175,6 +179,16 @@ export function useAgents() {
   return useQuery({ queryKey: keys.agents, queryFn: async () => (await apiFetch<{ agents: Agent[] }>("/agents")).agents });
 }
 
+/** Sizes to launch at: the built-in ones, then this user's (~/.config/sandbox/studio.json). */
+export function useTemplates() {
+  return useQuery({ queryKey: keys.templates, queryFn: async () => (await apiFetch<{ templates: VmTemplate[] }>("/templates")).templates });
+}
+
+/** The egress rules every Studio launch carries. */
+export function useEgressRules() {
+  return useQuery({ queryKey: keys.egress, queryFn: async () => (await apiFetch<{ rules: EgressRule[] }>("/egress")).rules });
+}
+
 // --- writes ------------------------------------------------------------------------
 
 function useInvalidating<V, R>(fn: (v: V) => Promise<R>, invalidate: (v: V) => readonly unknown[][]) {
@@ -298,3 +312,46 @@ export function useDeleteVolume() {
   );
 }
 
+
+export function useSaveTemplate() {
+  return useInvalidating(
+    (t: VmTemplate) =>
+      apiFetch<VmTemplate>(`/templates/${encodeURIComponent(t.name)}`, {
+        method: "PUT",
+        json: { description: t.description ?? "", cpus: t.cpus, memory_mb: t.memory_mb, disk_mb: t.disk_mb ?? 0 },
+      }),
+    () => [[...keys.templates]],
+  );
+}
+
+export function useDeleteTemplate() {
+  return useInvalidating(
+    (name: string) => apiFetch<void>(`/templates/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    () => [[...keys.templates]],
+  );
+}
+
+/** Replaces the rules whole, as the server stores them. */
+export function useSaveEgressRules() {
+  return useInvalidating(
+    (rules: EgressRule[]) => apiFetch<{ rules: EgressRule[] }>("/egress", { method: "PUT", json: { rules } }),
+    () => [[...keys.egress]],
+  );
+}
+
+/** Saves an agent's key. Write-only: no call returns it. */
+export function useSaveAgentKey() {
+  return useInvalidating(
+    ({ agent, name, value }: { agent: string; name: string; value: string }) =>
+      apiFetch<void>(`/agents/${encodeURIComponent(agent)}/keys/${encodeURIComponent(name)}`, { method: "PUT", json: { value } }),
+    () => [[...keys.agents]],
+  );
+}
+
+export function useDeleteAgentKey() {
+  return useInvalidating(
+    ({ agent, name }: { agent: string; name: string }) =>
+      apiFetch<void>(`/agents/${encodeURIComponent(agent)}/keys/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    () => [[...keys.agents]],
+  );
+}

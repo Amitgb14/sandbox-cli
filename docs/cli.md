@@ -112,7 +112,9 @@ sandbox-cli agent [command]
 Runs a coding agent in a new sandbox, in the sandbox user's home, like `run`.
 On top of `run`, the agent's login is restored into the sandbox and saved again
 when the run ends, and the agent's own environment variables are forwarded when
-set. The sandbox needs no repository: ask the agent to clone one.
+set — or, where one is not, the API key saved for it in Studio's Agents screen
+(~/.config/sandbox/agent-keys.json). The sandbox needs no repository: ask the
+agent to clone one.
 
 Leading sandbox flags are consumed; everything after them, or after --, goes
 to the agent.

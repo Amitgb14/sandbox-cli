@@ -101,7 +101,8 @@ func studioLauncher(ctxName string) studio.Launcher {
 		}
 		defer os.RemoveAll(dir)
 		rf := &runFlags{context: ctxName, org: req.Org, project: dir, detach: true, name: req.Name,
-			network: req.Network, allow: req.Allow, profile: req.Profile,
+			network: req.Network, allow: req.Allow, deny: req.Deny, profile: req.Profile,
+			cpus: req.CPUs, memory: req.MemoryMB, disk: req.DiskMB,
 			image: req.Image, fromSnapshot: req.Snapshot,
 			snapEvery: time.Duration(req.SnapshotEverySecs) * time.Second, snapKeep: req.SnapshotKeep}
 		for k, v := range req.Labels {

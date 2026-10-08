@@ -1,0 +1,350 @@
+package studio
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"math"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"sync"
+
+	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
+	"github.com/Amitgb14/sandbox-cli/internal/agents"
+)
+
+// Studio's own settings: VM templates (a size to launch at, by name) and
+// egress rules (hosts every Studio launch allows or denies). They are this
+// machine's user's, kept in ~/.config/sandbox/studio.json, so they are the
+// same in every Studio this user starts, on whichever port.
+//
+// Neither widens anything sandboxd decides. A template is a request for
+// resources, bounded and refused by the server's limits like the CLI's
+// --cpus; a rule is an --allow or --deny, which the server checks against its
+// ceiling and may_allow like any request's.
+
+const settingsFile = "studio.json"
+
+// Template is a size a sandbox can be launched at.
+type Template struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description,omitempty"`
+	CPUs        float64 `json:"cpus"`
+	MemoryMB    int     `json:"memory_mb"`
+	// DiskMB is the writable disk; 0 is the server's default.
+	DiskMB int `json:"disk_mb,omitempty"`
+	// Builtin marks the sizes Studio ships with: listed always, never saved
+	// or removed, so a Playground always has something to offer.
+	Builtin bool `json:"builtin,omitempty"`
+}
+
+// builtinTemplates are micro to xlarge. Whole vCPUs: a microVM's vCPU count
+// is an integer, and a fraction would be rounded where nobody sees it.
+var builtinTemplates = []Template{
+	{Name: "micro", Description: "Scripts and one-off commands", CPUs: 1, MemoryMB: 512, Builtin: true},
+	{Name: "small", Description: "An agent on a small repository", CPUs: 1, MemoryMB: 1024, Builtin: true},
+	{Name: "medium", Description: "Builds and test suites; a desktop image", CPUs: 2, MemoryMB: 2048, Builtin: true},
+	{Name: "large", Description: "Heavy builds, several services at once", CPUs: 4, MemoryMB: 8192, Builtin: true},
+	{Name: "xlarge", Description: "The biggest jobs this machine takes", CPUs: 8, MemoryMB: 16384, Builtin: true},
+}
+
+// EgressRule is a host every Studio launch allows or denies.
+type EgressRule struct {
+	Host    string `json:"host"`
+	Action  string `json:"action"` // allow | deny
+	Enabled bool   `json:"enabled"`
+	Note    string `json:"note,omitempty"`
+}
+
+type settings struct {
+	Templates []Template   `json:"templates,omitempty"`
+	Egress    []EgressRule `json:"egress,omitempty"`
+}
+
+// settingsMu serialises read-modify-write of the file within this Studio.
+var settingsMu sync.Mutex
+
+func settingsPath() string { return filepath.Join(agenthome.ConfigDir(), settingsFile) }
+
+func loadSettings() (settings, error) {
+	var st settings
+	p := settingsPath()
+	fi, err := os.Lstat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return st, nil
+	}
+	if err != nil {
+		return st, err
+	}
+	if !fi.Mode().IsRegular() {
+		return st, fmt.Errorf("%s is not a regular file", p)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return st, err
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		return st, fmt.Errorf("%s: %w", p, err)
+	}
+	return st, nil
+}
+
+func updateSettings(change func(*settings) error) (settings, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+	st, err := loadSettings()
+	if err != nil {
+		return st, err
+	}
+	if err := change(&st); err != nil {
+		return st, err
+	}
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return st, err
+	}
+	return st, agenthome.WritePrivate(agenthome.ConfigDir(), settingsFile, data)
+}
+
+// --- templates --------------------------------------------------------------------
+
+var templateName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
+
+func validTemplate(t Template) error {
+	switch {
+	case !templateName.MatchString(t.Name):
+		return errors.New("name: lowercase letters, digits and dashes, up to 32")
+	case len(t.Description) > 200:
+		return errors.New("description: up to 200 characters")
+	case !(t.CPUs > 0) || t.CPUs > 256 || t.CPUs != math.Trunc(t.CPUs):
+		return errors.New("cpus: a whole number from 1 to 256")
+	case t.MemoryMB < 128 || t.MemoryMB > 1<<20:
+		return errors.New("memory_mb: from 128 to 1048576")
+	case t.DiskMB != 0 && (t.DiskMB < 256 || t.DiskMB > 1<<24):
+		return errors.New("disk_mb: 0 for the server's default, or from 256")
+	}
+	return nil
+}
+
+func allTemplates(st settings) []Template {
+	out := append([]Template{}, builtinTemplates...)
+	return append(out, st.Templates...)
+}
+
+func isBuiltin(name string) bool {
+	return slices.ContainsFunc(builtinTemplates, func(t Template) bool { return t.Name == name })
+}
+
+func (s *Server) templates(w http.ResponseWriter, _ *http.Request) {
+	st, err := loadSettings()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"templates": allTemplates(st)})
+}
+
+// putTemplate creates or replaces a saved template.
+func (s *Server) putTemplate(w http.ResponseWriter, r *http.Request) {
+	var t Template
+	if !decode(w, r, &t) {
+		return
+	}
+	t.Name, t.Builtin = r.PathValue("name"), false
+	t.Description = strings.TrimSpace(t.Description)
+	if isBuiltin(t.Name) {
+		writeErr(w, http.StatusConflict, t.Name+" is a built-in template; save yours under another name")
+		return
+	}
+	if err := validTemplate(t); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	_, err := updateSettings(func(st *settings) error {
+		if i := slices.IndexFunc(st.Templates, func(x Template) bool { return x.Name == t.Name }); i >= 0 {
+			st.Templates[i] = t
+			return nil
+		}
+		if len(st.Templates) >= 100 {
+			return errors.New("100 templates is the most Studio keeps")
+		}
+		st.Templates = append(st.Templates, t)
+		return nil
+	})
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if isBuiltin(name) {
+		writeErr(w, http.StatusConflict, name+" is a built-in template")
+		return
+	}
+	found := false
+	_, err := updateSettings(func(st *settings) error {
+		st.Templates = slices.DeleteFunc(st.Templates, func(x Template) bool {
+			found = found || x.Name == name
+			return x.Name == name
+		})
+		return nil
+	})
+	switch {
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err.Error())
+	case !found:
+		writeErr(w, http.StatusNotFound, "no template "+name)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// --- egress rules -----------------------------------------------------------------
+
+// hostPattern is a DNS name, optionally behind one leading "*." wildcard: the
+// names sandboxd's allow and deny lists take (spec.hostRE). Checked here too
+// so a rule that can never apply is refused when it is saved, not at every
+// launch after.
+var hostPattern = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func normalizeRules(in []EgressRule) ([]EgressRule, error) {
+	if len(in) > 200 {
+		return nil, errors.New("200 rules is the most Studio keeps")
+	}
+	seen := map[string]bool{}
+	out := make([]EgressRule, 0, len(in))
+	for _, r := range in {
+		r.Host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(r.Host)), ".")
+		r.Note = strings.TrimSpace(r.Note)
+		if len(r.Host) > 253 || !hostPattern.MatchString(r.Host) {
+			return nil, fmt.Errorf("%q: a host name, optionally *.name; no scheme, port or path", r.Host)
+		}
+		if r.Action != "allow" && r.Action != "deny" {
+			return nil, fmt.Errorf("%s: action allow or deny", r.Host)
+		}
+		if len(r.Note) > 200 {
+			return nil, fmt.Errorf("%s: a note of up to 200 characters", r.Host)
+		}
+		if seen[r.Host] {
+			return nil, fmt.Errorf("%s has two rules; keep one", r.Host)
+		}
+		seen[r.Host] = true
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func (s *Server) egress(w http.ResponseWriter, _ *http.Request) {
+	st, err := loadSettings()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rules := st.Egress
+	if rules == nil {
+		rules = []EgressRule{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
+}
+
+// putEgress replaces the rules whole: the screen edits a list, and a list
+// saved as one write cannot be left half changed by two tabs.
+func (s *Server) putEgress(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Rules []EgressRule `json:"rules"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	rules, err := normalizeRules(body.Rules)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := updateSettings(func(st *settings) error { st.Egress = rules; return nil }); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
+}
+
+// egressFor is the hosts the enabled rules add to a launch's --allow and
+// --deny.
+func egressFor() (allow, deny []string, err error) {
+	st, err := loadSettings()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, r := range st.Egress {
+		if !r.Enabled {
+			continue
+		}
+		if r.Action == "allow" {
+			allow = append(allow, r.Host)
+		} else {
+			deny = append(deny, r.Host)
+		}
+	}
+	return allow, deny, nil
+}
+
+// --- agent keys -------------------------------------------------------------------
+
+// putAgentKey saves a key for one of an agent's variables. The value is
+// write-only: nothing Studio serves ever returns it.
+func (s *Server) putAgentKey(w http.ResponseWriter, r *http.Request) {
+	d, name, ok := agentVar(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Value string `json:"value"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := agenthome.SaveKey(d, name, body.Value); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// The name only, as the audit record keeps it.
+	s.logf("saved a key for %s's %s", d.Name, name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteAgentKey(w http.ResponseWriter, r *http.Request) {
+	d, name, ok := agentVar(w, r)
+	if !ok {
+		return
+	}
+	if err := agenthome.DeleteKey(d, name); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.logf("removed the saved key for %s's %s", d.Name, name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// agentVar is the agent and variable a key request names: an agent Studio
+// lists, and a variable that agent reads.
+func agentVar(w http.ResponseWriter, r *http.Request) (agents.Descriptor, string, bool) {
+	d, ok := agents.Lookup(r.PathValue("agent"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such agent")
+		return d, "", false
+	}
+	name := r.PathValue("var")
+	if !slices.Contains(d.EnvAllow, name) {
+		writeErr(w, http.StatusBadRequest, d.Name+" does not read "+name)
+		return d, "", false
+	}
+	return d, name, true
+}

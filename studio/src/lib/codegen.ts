@@ -8,8 +8,8 @@ import type { NetworkMode, VolumeMount } from "@/lib/types";
  *
  * Every line here must be exactly what the client accepts: a snippet that
  * almost works teaches the wrong call. So it covers what all four can say —
- * a command, its image or snapshot, its snapshot schedule, name, network,
- * allowlist, labels and volumes. An agent run is
+ * a command, its image or snapshot, its snapshot schedule, size, name,
+ * network, allow and deny lists, labels and volumes. An agent run is
  * the CLI's alone (the agent's login is copied in by sandbox-cli, not by the
  * API), so for one the code tabs show only the CLI.
  */
@@ -22,9 +22,15 @@ export interface RunConfig {
   /** A snapshot schedule (--snapshot-every/--snapshot-keep; "snapshot_every_secs"/"snapshot_keep"). */
   snapshotEverySecs?: number;
   snapshotKeep?: number;
+  /** A size (--cpus/--memory/--disk; "cpus"/"memory_mb"/"disk_mb"); absent is the server's default. */
+  cpus?: number;
+  memoryMb?: number;
+  diskMb?: number;
   name?: string;
   network?: "" | NetworkMode;
   allow?: string[];
+  /** Hosts refused even where allowed (--deny; network "deny"). */
+  deny?: string[];
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
   /**
@@ -55,9 +61,13 @@ function cliFlags(c: Omit<RunConfig, "command" | "defaultAllow">): string[] {
     f.push("--snapshot-every", goDuration(c.snapshotEverySecs));
     if (c.snapshotKeep) f.push("--snapshot-keep", String(c.snapshotKeep));
   }
+  if (c.cpus) f.push("--cpus", String(c.cpus));
+  if (c.memoryMb) f.push("--memory", String(c.memoryMb));
+  if (c.diskMb) f.push("--disk", String(c.diskMb));
   if (c.name) f.push("--name", c.name);
   if (c.network) f.push("--network", c.network);
   for (const a of c.allow ?? []) f.push("--allow", a);
+  for (const d of c.deny ?? []) f.push("--deny", d);
   for (const [k, v] of Object.entries(c.labels ?? {})) f.push("--label", `${k}=${v}`);
   for (const v of c.volumes ?? []) f.push("--volume", `${v.name}:${v.path}${v.read_only ? ":ro" : ""}`);
   return f;
@@ -83,10 +93,16 @@ function createBody(c: Omit<RunConfig, "command">): Record<string, unknown> {
     body.snapshot_every_secs = c.snapshotEverySecs;
     if (c.snapshotKeep) body.snapshot_keep = c.snapshotKeep;
   }
+  if (c.cpus) body.cpus = c.cpus;
+  if (c.memoryMb) body.memory_mb = c.memoryMb;
+  if (c.diskMb) body.disk_mb = c.diskMb;
   if (c.name) body.name = c.name;
   const allow = c.allow?.length ? [...new Set([...(c.defaultAllow ?? []), ...c.allow])] : undefined;
-  if (c.network === "allowlist" || (!c.network && allow)) body.network = { mode: "allowlist", ...(allow ? { allow } : {}) };
-  else if (c.network) body.network = { mode: c.network };
+  // A deny list means nothing to a run that reaches nothing.
+  const deny = c.network !== "none" && c.deny?.length ? { deny: c.deny } : {};
+  if (c.network === "allowlist" || (!c.network && allow)) body.network = { mode: "allowlist", ...(allow ? { allow } : {}), ...deny };
+  else if (c.network) body.network = { mode: c.network, ...deny };
+  else if (deny.deny) body.network = deny;
   if (c.labels && Object.keys(c.labels).length) body.labels = c.labels;
   if (c.volumes?.length) body.volumes = c.volumes.map((v) => (v.read_only ? v : { name: v.name, path: v.path }));
   return body;
