@@ -35,7 +35,7 @@ func newFirecracker(o backendOptions) (backend.Backend, error) {
 		Puller: puller, Logf: o.logf,
 	}
 	if o.network {
-		cfg.Network = &fc.Network{Logf: o.logf}
+		cfg.Network = &fc.Network{ProxyPort: o.proxyPort, DNSPort: o.dnsPort, Logf: o.logf}
 	} else {
 		o.logf("networking off: sandboxes have no network interface")
 	}

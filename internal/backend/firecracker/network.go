@@ -37,7 +37,8 @@ import (
 // `none` guest is not, so its packets meet the drop), and the proxy and the
 // resolver hold its allowlist.
 type Network struct {
-	// ProxyPort and DNSPort are where redirected traffic arrives on the host.
+	// ProxyPort and DNSPort are where redirected traffic arrives on the host;
+	// zero means DefaultProxyPort and DefaultDNSPort.
 	ProxyPort, DNSPort int
 	// Subnet is the pool tap /30s are carved from; default 172.16.0.0/16.
 	Subnet *net.IPNet
@@ -50,6 +51,20 @@ type Network struct {
 	proxy *egressproxy.Server
 	dns   *egressproxy.DNS
 }
+
+// The host ports the proxy and the resolver listen on. They bind every
+// address, so they must not be a port another service on the host already
+// holds: sandboxd would refuse to start. The resolver was on 5353 once, which
+// is mDNS: avahi-daemon holds it on most Linux desktops and on EL-family
+// servers by default. 7353 is in no common services list and sits below the
+// kernel's ephemeral range, so an outgoing socket cannot be holding it. The
+// guest never sees either port: it sends to 53, 80 and 443, and nftables
+// redirects. An operator whose host does use one moves it with
+// --egress-proxy-port or --egress-dns-port.
+const (
+	DefaultProxyPort = 3128
+	DefaultDNSPort   = 7353
+)
 
 type tap struct {
 	name    string
@@ -78,10 +93,10 @@ func (n *Network) start() error {
 		}
 	}
 	if n.ProxyPort == 0 {
-		n.ProxyPort = 3128
+		n.ProxyPort = DefaultProxyPort
 	}
 	if n.DNSPort == 0 {
-		n.DNSPort = 5353
+		n.DNSPort = DefaultDNSPort
 	}
 	if n.Subnet == nil {
 		_, n.Subnet, _ = net.ParseCIDR("172.16.0.0/16")
@@ -104,13 +119,13 @@ func (n *Network) start() error {
 	}
 	n.proxy = egressproxy.New(nil, func(d egressproxy.Decision) {
 		if !d.Allowed {
-			n.Logf("egress denied: %s:%d (%s)", d.Host, d.Port, d.Reason)
+			n.Logf("%s", deniedLine(d))
 		}
 	})
 	n.proxy.MatchFor = matchFor
 	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", n.ProxyPort))
 	if err != nil {
-		return fmt.Errorf("network: proxy: %w", err)
+		return fmt.Errorf("network: proxy: %w (if another program holds tcp port %d, move the proxy with --egress-proxy-port)", err, n.ProxyPort)
 	}
 	go n.proxy.Serve(l)
 
@@ -122,13 +137,30 @@ func (n *Network) start() error {
 			}
 			return nil
 		},
+		// A name the resolver refuses never reaches the proxy, so without
+		// this the commonest refusal — a site not on the list — leaves no
+		// trace for the operator.
+		Log: func(d egressproxy.Decision) {
+			n.Logf("%s", deniedLine(d))
+		},
 	}
 	pc, err := net.ListenPacket("udp", fmt.Sprintf("0.0.0.0:%d", n.DNSPort))
 	if err != nil {
-		return fmt.Errorf("network: dns: %w", err)
+		return fmt.Errorf("network: dns: %w (if another program holds udp port %d, move the resolver with --egress-dns-port)", err, n.DNSPort)
 	}
 	go n.dns.ServeUDP(pc)
 	return nil
+}
+
+// deniedLine is the log line for a refused name. The name is the guest's —
+// from its DNS query, TLS handshake or Host header — and a DNS label may hold
+// any byte, so it is quoted: a newline or an escape sequence must not forge a
+// line or reach the operator's terminal raw.
+func deniedLine(d egressproxy.Decision) string {
+	if d.Port == 0 { // the resolver: a name, no connection yet
+		return fmt.Sprintf("egress denied: %q (%s)", d.Host, d.Reason)
+	}
+	return fmt.Sprintf("egress denied: %q port %d (%s)", d.Host, d.Port, d.Reason)
 }
 
 func (n *Network) lookup(a net.Addr) *tap {

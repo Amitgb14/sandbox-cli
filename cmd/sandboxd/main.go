@@ -79,6 +79,8 @@ func run(args []string) error {
 	jailer := fl.String("jailer", "", "firecracker: the jailer binary; enables it (root only)")
 	agent := fl.String("agent", "", "firecracker: sandbox-guestd for the guest (default: beside this binary)")
 	network := fl.Bool("network", os.Geteuid() == 0, "firecracker: host-enforced egress (root only)")
+	proxyPort := fl.Int("egress-proxy-port", 0, "firecracker: host TCP port the egress proxy listens on (default 3128)")
+	dnsPort := fl.Int("egress-dns-port", 0, "firecracker: host UDP port the egress resolver listens on (default 7353)")
 	defaultImage := fl.String("default-image", "", "image for requests that name none (overrides the policy file)")
 	var allowedHosts, insecureRegistries listFlag
 	fl.Var(&allowedHosts, "allowed-host", "a Host name to answer besides loopback (repeatable)")
@@ -111,6 +113,11 @@ func run(args []string) error {
 			return err
 		}
 	}
+	for name, port := range map[string]int{"--egress-proxy-port": *proxyPort, "--egress-dns-port": *dnsPort} {
+		if port < 0 || port > 65535 {
+			return fmt.Errorf("%s %d: not a port", name, port)
+		}
+	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "sandboxd: "+format+"\n", a...) }
 
 	pol := spec.DefaultPolicy()
@@ -127,7 +134,8 @@ func run(args []string) error {
 
 	be, err := newBackend(*backendName, backendOptions{
 		stateDir: *stateDir, kernel: *kernel, firecracker: *firecracker, jailer: *jailer,
-		agent: *agent, network: *network, logf: logf, insecureRegistries: insecureRegistries,
+		agent: *agent, network: *network, proxyPort: *proxyPort, dnsPort: *dnsPort,
+		logf: logf, insecureRegistries: insecureRegistries,
 		container: *containerBin,
 	})
 	if err != nil {
@@ -232,6 +240,7 @@ func run(args []string) error {
 type backendOptions struct {
 	stateDir, kernel, firecracker, jailer, agent string
 	network                                      bool
+	proxyPort, dnsPort                           int // 0: the backend's defaults
 	logf                                         func(string, ...any)
 	insecureRegistries                           []string
 	container                                    string

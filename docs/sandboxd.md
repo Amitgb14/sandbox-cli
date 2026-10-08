@@ -46,6 +46,7 @@ sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
 | `--jailer FILE` | | firecracker: the jailer binary; enables it (root only). |
 | `--agent FILE` | `sandbox-guestd` beside `sandboxd` | firecracker: the guest agent put into every image's root disk, so it always matches the server. |
 | `--network` | on as root | firecracker: host-enforced egress (root only). Without it every sandbox has no network ([self-hosting.md](self-hosting.md#how-egress-is-enforced)). |
+| `--egress-proxy-port`, `--egress-dns-port` | 3128, 7353 | firecracker: the host ports the egress proxy (TCP) and resolver (UDP) listen on. Move one only if another program on the host holds it; the guest never sees them ([self-hosting.md](self-hosting.md#how-egress-is-enforced)). |
 | `--container FILE` | `container` | macos: the `container` CLI. |
 
 ### As a node behind a gateway
@@ -98,7 +99,9 @@ pools:                                     # sandboxes booted ahead of time
 
 Where a backend cannot deliver what the policy asks — no root, so no network
 devices — the ceiling becomes `none` and the startup line says so, and a
-request for an allowlist is refused, never served open. How the network
+request for an allowlist is refused, never served open. Where it can filter
+by name but not offer open — Firecracker, always — an `open` default and
+ceiling become the allowlist, with the built-in list as the default. How the network
 default and the profiles interact is in
 [self-hosting.md](self-hosting.md#the-network-default) and
 [security/README.md](security/README.md#security-profiles).

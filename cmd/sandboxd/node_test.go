@@ -70,6 +70,10 @@ func TestRunRefusesABadNodeID(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "loopback") {
 		t.Fatalf("--metrics-listen off loopback: %v", err)
 	}
+	err = run([]string{"--backend", "fake", "--egress-dns-port", "70000", "--listen", "unix://" + filepath.Join(t.TempDir(), "s.sock")})
+	if err == nil || !strings.Contains(err.Error(), "--egress-dns-port") {
+		t.Fatalf("--egress-dns-port out of range: %v", err)
+	}
 }
 
 func TestMemTotalMB(t *testing.T) {

@@ -44,18 +44,27 @@ put into every image's root disk, so the guest agent always matches the server.
 
 ## The network default
 
-With no policy file, a sandbox gets **open** egress unless the run asks for
-less. That is the easy default for one person's machine. A run asks for an
-allowlist with `--network allowlist` (or `--allow host`), and the `prod`
-profile always uses one: then only the names on it get through, checked on
-the host by name. An agent run always has its own API on the list, because an
+A Firecracker sandbox's egress is always by name: there is no open mode on
+this backend, because everything a guest sends goes through sandboxd's proxy
+and resolver on the host (below), and they let through only names on the
+sandbox's allowlist. So with no policy file — whose built-in default is open —
+or with a policy that asks for `open`, the default becomes the **allowlist**
+and so does the ceiling; the startup line says so. A run adds the names it
+needs with `--allow host` (`--allow '*.example.com'` for a domain and every
+name under it), and the built-in `may_allow: ["*"]` lets it add any. The
+`prod` profile always uses an allowlist.
+
+An allowlist entry is a name, never a bare `*`, so "every site" is not
+something a run can ask for. A browser in a sandbox needs the page's own
+host and every host it loads from — its CDN, fonts, sign-in provider. A name
+that is refused is logged (`egress denied: …` in sandboxd's log). An agent run always has its own API on the list, because an
 agent that cannot reach its model cannot run at all, so claude reaches
 api.anthropic.com, codex api.openai.com, and so on. Every other name has to be
 asked for, and under `prod` the built-in list of registries is off too.
 
-A machine shared by a team usually wants the allowlist as the floor:
-`packaging/systemd/policy.example.yaml` sets it as the default with an
-`allowlist` ceiling, so no request can ask for open. Without root,
+A machine shared by a team usually wants to choose what every run may reach:
+`packaging/systemd/policy.example.yaml` sets the default list, and
+`may_allow` narrows the names a run may add. Without root,
 `sandboxd` has no network devices at all, and every sandbox gets none.
 
 ## What sandboxd refuses
@@ -214,6 +223,13 @@ arrives DNAT'd. firewalld and similar firewalls typically accept DNAT'd traffic
 and reject the rest, so they let exactly that through. sandboxd never assumes
 its table is the only one. A connection to the proxy or resolver port that was
 *not* redirected is dropped, so neither is reachable from other machines.
+
+**The host ports.** The proxy listens on TCP 3128 and the resolver on UDP
+7353, on every host address (a connection that was not redirected is
+dropped, as above). If another program on the host already holds one —
+3128 is also Squid's port — sandboxd refuses to start and names the port;
+move it with `--egress-proxy-port` or `--egress-dns-port`. The guest never
+sees either: it sends to 53, 80 and 443 and is redirected.
 
 **What allowlist mode does not cover:** traffic that is not on tcp/80, tcp/443
 or DNS. `ssh` to a git host, for example, is dropped.

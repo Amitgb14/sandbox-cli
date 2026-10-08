@@ -12,6 +12,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
+	"github.com/Amitgb14/sandbox-cli/internal/egressproxy"
 )
 
 // -update rewrites the golden files. Do it deliberately, and read the diff: a
@@ -51,7 +52,28 @@ func TestBuildConfigGolden(t *testing.T) {
 
 // The host firewall, as text, because that is how it is reviewed.
 func TestRulesetGolden(t *testing.T) {
-	golden(t, "ruleset.nft", []byte(Ruleset("sandboxd", 3128, 5353)))
+	golden(t, "ruleset.nft", []byte(Ruleset("sandboxd", DefaultProxyPort, DefaultDNSPort)))
+}
+
+// The proxy and the resolver bind every host address, so a default port that
+// a common host service holds stops sandboxd from starting at all. The
+// resolver's was once 5353, and avahi-daemon (mDNS) holds that on most Linux
+// machines; these are the ports such services hold.
+func TestDefaultPortsAvoidHostServices(t *testing.T) {
+	taken := map[int]string{
+		53: "DNS", 67: "DHCP", 68: "DHCP", 123: "NTP", 323: "chronyd",
+		5353: "mDNS (avahi-daemon)", 5355: "LLMNR (systemd-resolved)",
+	}
+	for name, port := range map[string]int{"proxy": DefaultProxyPort, "dns": DefaultDNSPort} {
+		if s, ok := taken[port]; ok {
+			t.Errorf("default %s port %d is %s's", name, port, s)
+		}
+		// The kernel hands out ports from here (net.ipv4.ip_local_port_range)
+		// to outgoing sockets, which could be holding it when sandboxd starts.
+		if port >= 32768 {
+			t.Errorf("default %s port %d is in the ephemeral range", name, port)
+		}
+	}
 }
 
 // Volumes are drives after the root and scratch disks, writable unless mounted
@@ -84,5 +106,27 @@ func TestBuildConfigCarriesNoEnvironmentValue(t *testing.T) {
 	out, _ := json.Marshal(BuildConfig(s, p, "console=ttyS0 ro", nil))
 	if strings.Contains(string(out), secret) || strings.Contains(string(out), "API_TOKEN") {
 		t.Errorf("an environment variable reached the VM config: %s", out)
+	}
+}
+
+// A refused name is the guest's, and a DNS label may hold any byte: the log
+// line quotes it, so a guest cannot write a line of its own into sandboxd's
+// log or send escape sequences to the operator's terminal.
+func TestDeniedLineQuotesTheGuestsName(t *testing.T) {
+	forged := "x.example\nsandboxd: policy: ceiling open\x1b[2J"
+	for _, d := range []egressproxy.Decision{
+		{Host: forged, Reason: "DNS: not on the egress allowlist"},
+		{Host: forged, Port: 443, Reason: "not on the egress allowlist"},
+	} {
+		line := deniedLine(d)
+		if strings.ContainsAny(line, "\n\x1b") {
+			t.Errorf("raw control bytes in %q", line)
+		}
+		if !strings.Contains(line, `"x.example\nsandboxd`) {
+			t.Errorf("name not quoted: %s", line)
+		}
+	}
+	if got := deniedLine(egressproxy.Decision{Host: "a.example.com", Port: 443, Reason: "r"}); got != `egress denied: "a.example.com" port 443 (r)` {
+		t.Errorf("got %s", got)
 	}
 }
