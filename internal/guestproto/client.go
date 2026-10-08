@@ -225,12 +225,13 @@ func (d *dialed) CloseWrite() error {
 
 // Process is a command running in the guest.
 type Process struct {
-	cn     *conn
-	done   func()
-	wmu    sync.Mutex    // serializes frames to the guest
-	exited chan struct{} // closed once code is final
-	code   int
-	stdinW *stdinWriter
+	cn      *conn
+	done    func()
+	dropped func(int64)   // FrameDropped, on an attach
+	wmu     sync.Mutex    // serializes frames to the guest
+	exited  chan struct{} // closed once code is final
+	code    int
+	stdinW  *stdinWriter
 }
 
 // Exec starts a command. Output is copied to stdout and stderr as it arrives;
@@ -258,6 +259,37 @@ func (c *Client) ExecRequest(ctx context.Context, req Request, stdout, stderr io
 	return p, nil
 }
 
+// Attach rejoins a kept process (Request.Keep) by its session id: its output
+// from offset on — what the guest still holds of it — then live, and its exit
+// code. dropped, if not nil, is told how many bytes before what is replayed
+// the guest no longer had. The guest answers not_found for a session it does
+// not hold.
+func (c *Client) Attach(ctx context.Context, session string, offset int64, stdout, stderr io.Writer, dropped func(int64)) (*Process, error) {
+	cn, done, err := c.open(ctx, Request{Op: OpAttach, Session: session, Offset: offset})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := cn.response(); err != nil {
+		done()
+		return nil, err
+	}
+	p := &Process{cn: cn, done: done, exited: make(chan struct{}), dropped: dropped}
+	p.stdinW = &stdinWriter{p: p}
+	go p.pump(stdout, stderr)
+	return p, nil
+}
+
+// Sessions lists the kept processes the guest holds.
+func (c *Client) Sessions(ctx context.Context) ([]SessionInfo, error) {
+	cn, done, err := c.open(ctx, Request{Op: OpSessions})
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	resp, err := cn.response()
+	return resp.Sessions, err
+}
+
 func (p *Process) pump(stdout, stderr io.Writer) {
 	code := -1
 	defer func() {
@@ -280,6 +312,11 @@ func (p *Process) pump(stdout, stderr io.Writer) {
 				code = int(int32(binary.BigEndian.Uint32(payload)))
 			}
 			return
+		case FrameDropped:
+			if p.dropped != nil && len(payload) == 8 {
+				// The guest's count, untrusted: reported, never allocated for.
+				p.dropped(int64(binary.BigEndian.Uint64(payload) & (1<<62 - 1)))
+			}
 		default:
 			return // a protocol violation ends the conversation
 		}

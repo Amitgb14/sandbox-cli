@@ -524,7 +524,26 @@ func (b *Backend) Start(ctx context.Context, id string, p backend.ProcSpec, stdo
 	if err != nil {
 		return nil, err
 	}
-	proc, err := v.client.ExecRequest(ctx, guestproto.Request{Argv: p.Argv, Env: p.Env, Cwd: p.Cwd, Tty: p.Tty, Rows: p.Rows, Cols: p.Cols}, stdout, stderr)
+	proc, err := v.client.ExecRequest(ctx, guestproto.Request{Argv: p.Argv, Env: p.Env, Cwd: p.Cwd, Tty: p.Tty, Rows: p.Rows, Cols: p.Cols,
+		Keep: p.Keep, Session: p.Session}, stdout, stderr)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return proc, nil
+}
+
+// Reattach is backend.Reattacher: it rejoins a kept process in the guest. A
+// guest agent from before kept processes answers that it does not know the
+// operation, which is the same as not holding the session.
+func (b *Backend) Reattach(ctx context.Context, id, session string, stdout, stderr io.Writer, dropped func(int64)) (backend.Proc, error) {
+	v, err := b.get(id)
+	if err != nil {
+		return nil, err
+	}
+	proc, err := v.client.Attach(ctx, session, 0, stdout, stderr, dropped)
+	if guestproto.IsCode(err, guestproto.CodeNotFound) || guestproto.IsCode(err, guestproto.CodeBadRequest) {
+		return nil, backend.ErrNotFound
+	}
 	if err != nil {
 		return nil, mapErr(err)
 	}

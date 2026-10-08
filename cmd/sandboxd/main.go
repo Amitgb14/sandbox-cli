@@ -81,7 +81,7 @@ func run(args []string) error {
 	network := fl.Bool("network", os.Geteuid() == 0, "firecracker: host-enforced egress (root only)")
 	proxyPort := fl.Int("egress-proxy-port", 0, "firecracker: host TCP port the egress proxy listens on (default 3128)")
 	dnsPort := fl.Int("egress-dns-port", 0, "firecracker: host UDP port the egress resolver listens on (default 7353)")
-	keep := fl.Bool("keep-sandboxes", false, "on exit, leave sandboxes running for the next sandboxd on this state directory to take back, so an upgrade does not stop them; their processes end (firecracker)")
+	keep := fl.Bool("keep-sandboxes", false, "on exit, leave sandboxes running for the next sandboxd on this state directory to take back, so an upgrade stops neither them nor their processes (firecracker)")
 	defaultImage := fl.String("default-image", "", "image for requests that name none (overrides the policy file)")
 	var allowedHosts, insecureRegistries listFlag
 	fl.Var(&allowedHosts, "allowed-host", "a Host name to answer besides loopback (repeatable)")

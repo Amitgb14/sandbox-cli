@@ -369,6 +369,17 @@ that fails on the code before the fix:
 
 ### Changed
 
+- **Processes keep running through a sandboxd upgrade too**
+  (`--keep-sandboxes`). Commands, terminals and agent sessions in a kept
+  sandbox carry on while sandboxd restarts. The new sandboxd re-attaches them
+  under the same process numbers, with the output the guest held: the newest
+  1 MiB, with the log noting what was dropped. A terminal attaches again.
+  Only processes sandboxd's own records name are taken back. A process that
+  finished meanwhile is listed with its exit code, and one the guest no longer
+  holds as exited with -1. Without the flag a process still ends with its
+  connection. VMs started under an older guest agent lose their processes at
+  the first upgrade to this version; after that they keep them.
+
 - **sandboxd can be upgraded or restarted without stopping its sandboxes**
   (`--keep-sandboxes`, Firecracker). On exit it leaves the VMs running, and on
   start it takes back the ones an earlier sandboxd on the same state directory
