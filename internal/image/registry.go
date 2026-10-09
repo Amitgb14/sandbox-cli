@@ -450,7 +450,16 @@ func (p *Puller) authenticate(ctx context.Context, r Ref, challenge string) erro
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		// Pulls are anonymous, so a registry that will not hand out a pull
+		// token is saying the repository is not public. ghcr.io answers 403
+		// both for a private one and for a name that does not exist, a typo
+		// included, before any tag is looked at; "token request: 403" alone
+		// sent people looking at credentials sandboxd never uses.
+		return fmt.Errorf("%s/%s: the registry refused an anonymous pull (token request: %s): no such image, or it is private; check the name, or make it public (sandboxd pulls without credentials)", r.Registry, r.Repo, resp.Status)
+	default:
 		return fmt.Errorf("token request: %s", resp.Status)
 	}
 	var tok struct {
