@@ -10,16 +10,41 @@ hosted cloud; clients cannot tell which they are talking to beyond
 
 - Linux with KVM (`/dev/kvm`); x86_64 or arm64.
 - `firecracker` and `jailer` from the project's releases
-  (<https://github.com/firecracker-microvm/firecracker/releases>).
-- A guest kernel (`vmlinux`) with `CONFIG_IP_PNP`, `CONFIG_VIRTIO_VSOCKETS` and
-  overlayfs. The CI kernels from Firecracker's getting-started guide have all
-  three.
+  (<https://github.com/firecracker-microvm/firecracker/releases>), 1.17.0
+  (below).
+- A guest kernel (`vmlinux`) built with `CONFIG_IP_PNP`,
+  `CONFIG_VIRTIO_VSOCKETS`, `CONFIG_OVERLAY_FS`, `CONFIG_EXT4_FS`,
+  `CONFIG_VIRTIO_BLK` and `CONFIG_VIRTIO_NET`. Firecracker's CI kernel 6.1.155
+  has them all, for x86_64 and arm64; Install fetches it.
 - `mkfs.ext4` (e2fsprogs 1.43+), `ip` (iproute2), `nft` (nftables).
 - Room for `/var/lib/sandboxd`, where images, sandboxes' disks, snapshots and
   volumes are kept ([Where it keeps things](#where-it-keeps-things)). It must be
   **one filesystem**: image disks are hard-linked into each sandbox's jail. xfs
   or btrfs make snapshot and fork copies reflinks. To give it a disk of its own,
   mount that disk there before installing.
+
+### Versions checked
+
+What sandboxd has been run with on a real host, and what has not. A version
+not listed may well work; it has not been checked.
+
+| | Checked | Not yet checked |
+|---|---|---|
+| Firecracker and jailer | 1.17.0 | other releases. Install pins 1.17.0 for that reason |
+| Guest kernel | Firecracker CI kernel 6.1.155 (x86_64) | other kernels; the arm64 build of the same kernel |
+| Host CPU | x86_64 | arm64: built and released for, never run |
+| Host OS and kernel | an EL10 distribution, kernel 6.12, xfs, firewalld active | Debian, Ubuntu and others; kernels before 6.12; btrfs, ext4 |
+| Privilege | root under systemd, with the jailer and the egress firewall; and as a user, with no network | — |
+| Base image | `ghcr.io/amitgb14/sandbox-base:edge` | other images (the guest agent is put into each, so any Linux image may run) |
+
+The guest kernel is independent of the host's: each sandbox boots the
+`vmlinux` sandboxd was given, whatever the host runs. The host needs KVM,
+`tun` (a tap device per sandbox, as root) and nftables; any distribution kernel
+from recent years has them. Each real-host check, and the version it ran on,
+is in [testing/end-to-end.md](testing/end-to-end.md).
+
+macOS is a different backend with its own requirements (macOS 26 on Apple
+silicon, the `container` runtime): [local-macos.md](local-macos.md).
 
 ## Install
 
@@ -53,16 +78,16 @@ curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.s
 put into every image's root disk, so the guest agent always matches the server.
 
 **2. Firecracker, its jailer and a guest kernel.** These come from
-Firecracker's own releases, not this repository. The kernel is Firecracker's
-CI kernel 6.1.155, which has the three options [What the machine
-needs](#what-the-machine-needs) lists; it is pinned, since the newest
-Firecracker release does not always have CI kernels published yet. Any kernel
-with those options does instead.
+Firecracker's own releases, not this repository, at the versions in [Versions
+checked](#versions-checked): Firecracker 1.17.0 and its CI kernel 6.1.155,
+which has every option [What the machine needs](#what-the-machine-needs)
+lists. Both are pinned; the newest Firecracker release does not always have
+CI kernels published yet. Any kernel with those options does instead.
 
 ```sh
 ARCH=$(uname -m)
 release_url=https://github.com/firecracker-microvm/firecracker/releases
-latest=$(basename $(curl -fsSLI -o /dev/null -w '%{url_effective}' $release_url/latest))
+latest=v1.17.0      # the version checked; see Versions checked
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
 sudo install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
 sudo install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
