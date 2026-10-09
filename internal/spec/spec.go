@@ -253,6 +253,19 @@ func ValidID(s string) bool { return idRE.MatchString(s) }
 // ValidName reports whether s is a legal sandbox name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
+// CheckImage is the rule an image a request names is held to, whether a
+// sandbox is created from it or it is installed ahead of one: a reference,
+// and one the policy's images list permits where it has one.
+func CheckImage(img string, pol Policy) error {
+	if !imageRE.MatchString(img) {
+		return invalid("image %q is not an image reference", img)
+	}
+	if len(pol.Images) > 0 && !contains(pol.Images, img) {
+		return refused("image %q is not one this server permits", img)
+	}
+	return nil
+}
+
 // CheckName is ValidName as the error a request gets; "" (no name) passes.
 func CheckName(name string) error {
 	if name != "" && !ValidName(name) {
@@ -356,11 +369,8 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 	if img == "" {
 		img = pol.DefaultImage
 	}
-	if !imageRE.MatchString(img) {
-		return backend.Spec{}, invalid("image %q is not an image reference", img)
-	}
-	if len(pol.Images) > 0 && !contains(pol.Images, img) {
-		return backend.Spec{}, refused("image %q is not one this server permits", img)
+	if err := CheckImage(img, pol); err != nil {
+		return backend.Spec{}, err
 	}
 
 	s := backend.Spec{ID: id, Image: img, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,

@@ -88,6 +88,7 @@ type Server struct {
 	cordoned      bool // under mu; see node.go
 	metricsOnce   sync.Once
 	nm            *nodeMetrics // metrics.go
+	images        imageJobs    // images.go
 
 	// RecordDir, when set, is where each sandbox's record is kept on disk, so
 	// a later sandboxd can take back the sandboxes this one leaves running
@@ -150,6 +151,9 @@ func (s *Server) Handler() http.Handler {
 	})
 	route("GET /v1/capabilities", false, s.capabilities)
 	route("GET /v1/node", false, s.node)
+	route("GET /v1/images", false, s.listImages)
+	route("POST /v1/images", false, s.installImage)
+	route("DELETE /v1/images", false, s.removeImage)
 	route("POST /v1/node/cordon", false, s.cordon)
 	route("POST /v1/sandboxes", false, s.timedCreate)
 	route("GET /v1/sandboxes", false, s.listSandboxes)
@@ -241,6 +245,7 @@ func (s *Server) caps() api.Capabilities {
 	}
 	caps[api.CapAudit] = s.Audit != nil
 	_, caps[api.CapMetrics] = s.usageReader()
+	_, caps[api.CapImages] = s.imageStore()
 	return api.Capabilities{
 		APIVersion:   api.Version,
 		Backend:      s.Backend.Name(),

@@ -413,6 +413,16 @@ the admin screens for a dashboard hosted for many tenants. See
   refused, and a local forward goes only to the sandbox's own loopback. A
   session accepts only `TERM`, `LANG` and `LC_*` from the client's environment.
 
+## Images
+
+A node's images — `GET`, `POST` and `DELETE /v1/images`, `sandbox-cli image`,
+Studio's Images screen — are its operator's, managed on the node itself
+([self-hosting.md](self-hosting.md#images)). The gateway answers them `501
+unsupported` and does not report the `images` capability: an install fills a
+node's disk for every tenant on it. A gateway catalog of images run by admin
+keys, which keeps nodes filled, is not done yet. Sandboxes still prefer a node
+that has their image (below).
+
 ## Scheduling and failure
 
 - **Placement.** Among nodes that are answering, not cordoned, able to run the

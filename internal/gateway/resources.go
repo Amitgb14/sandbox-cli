@@ -87,6 +87,9 @@ func CombineCapabilities(sts []api.NodeStatus) api.Capabilities {
 			}
 		}
 	}
+	// Every node may manage its own images, but the gateway does not route
+	// that (http.go), so the fleet does not offer it.
+	out.Capabilities[api.CapImages] = false
 	if api.NetworkRank(out.Network.Default.Mode) > api.NetworkRank(out.Network.Ceiling) {
 		out.Network.Default = api.NetworkPolicy{Mode: out.Network.Ceiling, Allow: []string{}}
 	}

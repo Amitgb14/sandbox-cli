@@ -92,6 +92,40 @@ type VolumeInfo struct {
 	CreatedAt time.Time
 }
 
+// ImageStore lets an operator manage the images a backend starts sandboxes
+// from, rather than only pulling one when a sandbox first asks for it: list
+// those ready, install one ahead of use (pull it, and build its root disk
+// where the backend has one), and remove one. What is installed survives a
+// restart of sandboxd; the backend's own storage is the record.
+type ImageStore interface {
+	Images(ctx context.Context) ([]ImageInfo, error)
+	// InstallImage makes ref ready to start sandboxes from, reporting how far
+	// it has got to progress, which may be nil. Installing one already
+	// installed checks it against the registry and is otherwise quick.
+	InstallImage(ctx context.Context, ref string, progress func(ImageProgress)) error
+	// RemoveImage removes ref and what only it needed, returning the bytes
+	// freed: ErrNotFound if it is not installed, ErrBusy if a sandbox
+	// running or suspended here starts from it.
+	RemoveImage(ctx context.Context, ref string) (int64, error)
+}
+
+// ImageInfo is one installed image.
+type ImageInfo struct {
+	Ref    string
+	Digest string // "" where the backend does not say
+	// Bytes is what it takes on the host — its root disk, on Linux — or 0
+	// where the backend does not say. Layers shared with other images are
+	// not counted.
+	Bytes       int64
+	InstalledAt time.Time // zero where the backend does not say
+}
+
+// ImageProgress is how far an install has got.
+type ImageProgress struct {
+	Phase       string // "pulling", then "building" where there is a disk to build
+	Done, Total int64  // bytes pulled of the image's total; 0 where unknown
+}
+
 // Suspender can stop a sandbox and bring it back later with its memory,
 // processes and disk exactly as they were, costing no CPU or memory meanwhile.
 type Suspender interface {

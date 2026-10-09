@@ -68,8 +68,10 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 		// A disk from before disks were labelled gets its label here: its
 		// key proves which agent it holds.
 		labelAgent(filepath.Dir(out), agentSum)
+		recordRef(filepath.Dir(out), ref, pulled)
 		return res, nil
 	}
+	progressOf(ctx).report("building")
 
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return nil, err
@@ -116,6 +118,7 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 		return nil, err
 	}
 	labelAgent(filepath.Dir(out), agentSum)
+	recordRef(filepath.Dir(out), ref, pulled)
 	return res, nil
 }
 
@@ -224,7 +227,40 @@ func copyFile(src, dst string, mode fs.FileMode) error {
 	return os.Chmod(dst, mode)
 }
 
+// fileSHA is p's content hash, remembered while its size and modification
+// time stay the same: the guest agent, a few megabytes, is hashed on every
+// build and every listing of the installed images, which a gateway asks for
+// on every poll of a node.
 func fileSHA(p string) (string, error) {
+	fi, err := os.Stat(p)
+	if err != nil {
+		return "", err
+	}
+	stamp := fmt.Sprintf("%d:%d", fi.Size(), fi.ModTime().UnixNano())
+	shaMu.Lock()
+	if c, ok := shaCache[p]; ok && c.stamp == stamp {
+		shaMu.Unlock()
+		return c.sum, nil
+	}
+	shaMu.Unlock()
+	sum, err := hashFile(p)
+	if err != nil {
+		return "", err
+	}
+	shaMu.Lock()
+	shaCache[p] = shaEntry{stamp, sum}
+	shaMu.Unlock()
+	return sum, nil
+}
+
+type shaEntry struct{ stamp, sum string }
+
+var (
+	shaMu    sync.Mutex
+	shaCache = map[string]shaEntry{}
+)
+
+func hashFile(p string) (string, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return "", err

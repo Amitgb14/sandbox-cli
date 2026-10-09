@@ -61,7 +61,7 @@ things elsewhere.
 |---|---|---|
 | `vmlinux` | the guest kernel (Install, above) | tens of MiB |
 | `images/` | image layers and manifests pulled from registries, shared between images | the images, compressed |
-| `rootfs/<key>/rootfs.ext4` | each image's root disk, built once per image and guest agent; read-only to every sandbox | a few GiB each; an upgrade's first sandbox of an image builds a new one, and the old are removed at the next start |
+| `rootfs/<key>/` | each image's root disk (`rootfs.ext4`), built once per image and guest agent and read-only to every sandbox, beside `image.json`: the image names it serves, its digest and its layers, which is how the installed images are listed after a restart | a few GiB each; an upgrade's first sandbox of an image builds a new one, and the old are removed at the next start |
 | `sandboxes/<id>/` | a sandbox's own files: its writable disk (`scratch.ext4`, its `disk_mb`, sparse) and sockets | what each sandbox writes, up to its `disk_mb` |
 | `jail/` | with `--jailer`: each VM's chroot, holding hard links to the kernel and root disk, and its writable disk | as `sandboxes/`; the links take no space |
 | `snapshots/<id>/` | a snapshot: the sandbox's disk, VM state and memory (`snap.mem`) | the sandbox's memory plus its written disk |
@@ -391,6 +391,27 @@ disk taking gigabytes each, are under `<state-dir>/snapshots/`. With
 Files no record names are deleted, since nothing could use or remove them.
 Without the flag, a restart deletes every snapshot an earlier run left, for
 the same reason, and the log says how many.
+
+## Images
+
+A sandbox's image is pulled, and on Linux built into a root disk, the first
+time a sandbox asks for it; that first sandbox waits for both, a minute or
+more. The operator can do it ahead of time, and see and clear what is there:
+
+```sh
+sandbox-cli image pull ghcr.io/amitgb14/sandbox-desktop:edge   # waits; --no-wait returns at once
+sandbox-cli image ls                                            # state, size, sandboxes using each
+sandbox-cli image rm python:3.13-slim                           # refused while a sandbox uses it
+```
+
+Studio's Images screen does the same, with each install's progress. The
+policy's `images:` list, where there is one, limits what may be installed as it
+limits what may run. The default image and pooled ones are not removed. A
+removal frees the image's root disk once no other tag of it needs it, and the
+cached layers no installed image still uses, leaving any written in the last
+ten minutes, which a create may be about to use. These are the operator's:
+whoever holds this sandboxd's token. Behind a gateway they stay on each node
+([fleet.md](fleet.md)).
 
 ## Root disks and upgrades
 

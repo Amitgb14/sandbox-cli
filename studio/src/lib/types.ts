@@ -72,6 +72,22 @@ export interface Capabilities {
 
 export type Limits = Capabilities["limits"];
 
+/** An image the endpoint has, or is installing (GET /v1/images; capability images). */
+export interface SandboxImage {
+  image: string;
+  state: "installed" | "installing" | "failed";
+  digest?: string;
+  bytes?: number;
+  installed_at?: string;
+  /** Sandboxes running or suspended here that start from it. */
+  in_use: number;
+  /** The server's default image, or one it keeps a pool of: neither is removed. */
+  default?: boolean;
+  pooled?: boolean;
+  progress?: { phase: "pulling" | "building"; done?: number; total?: number };
+  error?: string;
+}
+
 export interface Process {
   pid: number;
   tty?: boolean;

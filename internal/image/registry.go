@@ -126,6 +126,9 @@ type Pulled struct {
 	Digest string   // the platform manifest's digest: the image's identity
 	Layers []string // cached layer files, base first
 	Config Config
+	// Blobs are the digests of the image's config and layers: what of the
+	// blob cache it needs, so removing it knows what is still shared.
+	Blobs []string
 }
 
 // Puller fetches images into a content-addressed cache.
@@ -220,6 +223,15 @@ func (p *Puller) Pull(ctx context.Context, ref string) (*Pulled, error) {
 	}
 
 	out := &Pulled{Ref: r, Digest: digest}
+	if ps := progressOf(ctx); ps != nil {
+		total := m.Config.Size
+		for _, l := range m.Layers {
+			total += l.Size
+		}
+		ps.total.Store(total)
+		ps.report("pulling")
+	}
+	out.Blobs = append(out.Blobs, m.Config.Digest)
 	cfgPath, err := p.blob(ctx, r, m.Config)
 	if err != nil {
 		return nil, fmt.Errorf("%s: config: %w", ref, err)
@@ -240,6 +252,7 @@ func (p *Puller) Pull(ctx context.Context, ref string) (*Pulled, error) {
 			return nil, fmt.Errorf("%s: layer %s: %w", ref, l.Digest, err)
 		}
 		out.Layers = append(out.Layers, lp)
+		out.Blobs = append(out.Blobs, l.Digest)
 	}
 	return out, nil
 }
@@ -336,6 +349,10 @@ func (p *Puller) blob(ctx context.Context, r Ref, d descriptor) (string, error) 
 	dir := filepath.Join(p.Cache, "blobs", "sha256")
 	final := filepath.Join(dir, strings.TrimPrefix(d.Digest, "sha256:"))
 	if fi, err := os.Stat(final); err == nil && fi.Size() == d.Size {
+		if ps := progressOf(ctx); ps != nil {
+			ps.done.Add(d.Size)
+			ps.report("pulling")
+		}
 		return final, nil // written only after verification, so its name is its proof
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -352,7 +369,7 @@ func (p *Puller) blob(ctx context.Context, r Ref, d descriptor) (string, error) 
 	}
 	defer os.Remove(tmp.Name())
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, d.Size+1))
+	n, err := io.Copy(progressWriter(ctx, io.MultiWriter(tmp, h)), io.LimitReader(resp.Body, d.Size+1))
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
