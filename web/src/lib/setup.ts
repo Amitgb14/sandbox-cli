@@ -46,8 +46,12 @@ export const INSTALL_STEP: SetupStep = RELEASED
     }
   : {
       title: "Build and install",
-      code: `${SOURCE_BUILD}\ninstall -d ~/.local/bin\ninstall -m 0755 bin/sandbox-cli bin/sandboxd bin/sandbox-guestd ~/.local/bin/`,
-      body: `${NOT_RELEASED_YET} sandbox-cli, sandboxd and the guest agent go side by side into ~/.local/bin; sandboxd is installed, not started.`,
+      code: `${SOURCE_BUILD}
+install -d ~/.local/bin
+install -m 0755 bin/sandbox-cli bin/sandboxd bin/sandbox-guestd ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"   # this shell; put the same line in ~/.zshrc or ~/.bashrc
+command -v sandboxd sandbox-cli        # both must print a path under ~/.local/bin`,
+      body: `${NOT_RELEASED_YET} sandbox-cli, sandboxd and the guest agent go side by side into ~/.local/bin; sandboxd is installed, not started. Run this as yourself, not root. If command -v prints nothing, ~/.local/bin is not on your PATH: the export line puts it there, and the same line in your shell's startup file keeps it there.`,
     };
 
 /** Installing on a server, where the unit runs everything from /usr/local/bin. */
@@ -71,7 +75,10 @@ ${FIRECRACKER_SERVER_FETCH}`;
 /** Installing the client alone. */
 export const CLIENT_INSTALL_CODE = RELEASED
   ? "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --client-only"
-  : `${SOURCE_BUILD}\ninstall -d ~/.local/bin && install -m 0755 bin/sandbox-cli ~/.local/bin/`;
+  : `${SOURCE_BUILD}
+install -d ~/.local/bin && install -m 0755 bin/sandbox-cli ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"   # this shell; put the same line in ~/.zshrc or ~/.bashrc
+command -v sandbox-cli                 # must print a path under ~/.local/bin`;
 
 /**
  * The launch agent, fetched and pointed at the installed sandboxd. The plist in

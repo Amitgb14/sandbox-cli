@@ -117,8 +117,9 @@ const MAC_STEPS: Step[] = [
           </>
         )}{" "}
         The guest agent is the Linux arm64 build: it runs inside the sandbox, mounted read-only
-        from beside sandboxd, so any image works and the agent always matches the server. Make sure{" "}
-        <code>~/.local/bin</code> is on your PATH.
+        from beside sandboxd, so any image works and the agent always matches the server. <code>~/.local/bin</code> must be on
+        your PATH, or the next steps answer <code>sandboxd: command not found</code>: put{" "}
+        <code>export PATH=&quot;$HOME/.local/bin:$PATH&quot;</code> in <code>~/.zshrc</code>.
       </>
     ),
   },
