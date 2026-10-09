@@ -27,7 +27,7 @@ On a server, give sandboxes a disk of their own first ([An extra disk for
 sandboxes](#an-extra-disk-for-sandboxes), below): images, sandboxes' disks,
 snapshots and volumes then never fill the root filesystem. Mount it before
 these steps, which put the guest kernel in that directory; a disk mounted
-over it afterwards hides it. Every step runs as root.
+over it afterwards hides it. A command that needs root says `sudo`.
 
 **1. The binaries: built from a checkout, for now.** No published release has
 `sandboxd` yet: 0.0.1 is the last release of the container design, and
@@ -38,7 +38,7 @@ same architecture, and copy `bin/` across:
 ```sh
 git clone https://github.com/Amitgb14/sandbox-cli && cd sandbox-cli
 make build        # -> bin/sandbox-cli, bin/sandboxd, bin/sandbox-gateway, bin/sandbox-guestd
-install -m 0755 bin/sandboxd bin/sandbox-guestd bin/sandbox-cli /usr/local/bin/
+sudo install -m 0755 bin/sandboxd bin/sandbox-guestd bin/sandbox-cli /usr/local/bin/
 ```
 
 Once a release has them, `install.sh` does this step instead, with no checkout,
@@ -46,7 +46,7 @@ each archive checked against the release's checksums:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \
-  | sh -s -- --dest /usr/local/bin --no-config
+  | sudo sh -s -- --dest /usr/local/bin --no-config
 ```
 
 `sandbox-guestd` must sit beside `sandboxd` (or be named with `--agent`): it is
@@ -62,11 +62,11 @@ ARCH=$(uname -m)
 release_url=https://github.com/firecracker-microvm/firecracker/releases
 latest=$(basename $(curl -fsSLI -o /dev/null -w '%{url_effective}' $release_url/latest))
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
-install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
-install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
+sudo install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
+sudo install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
 
-install -d -m 0700 /var/lib/sandboxd
-install -m 0644 vmlinux /var/lib/sandboxd/vmlinux
+sudo install -d -m 0700 /var/lib/sandboxd
+sudo install -m 0644 vmlinux /var/lib/sandboxd/vmlinux
 ```
 
 **3. The token, TLS, the policy and the unit.** The policy and the unit are
@@ -75,22 +75,23 @@ fetched from the repository, so this step needs no checkout either. From one,
 packaging/systemd/sandboxd.service` do the same.
 
 ```sh
-install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls
+sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls
 
 # a token clients present; at least 16 characters, readable by root only
-head -c 32 /dev/urandom | base64 > /etc/sandboxd/token && chmod 600 /etc/sandboxd/token
+# (umask 077: the file is never readable by others, not even for a moment)
+sudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'
 
 # TLS: your CA's certificate for the name clients use
-install -m 0600 cert.pem key.pem /etc/sandboxd/tls/
+sudo install -m 0600 cert.pem key.pem /etc/sandboxd/tls/
 
 RAW=https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd
-curl -fsSL $RAW/policy.example.yaml -o /etc/sandboxd/policy.yaml     # then edit
-curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service
+sudo curl -fsSL $RAW/policy.example.yaml -o /etc/sandboxd/policy.yaml     # then edit
+sudo curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service
 # --allowed-host: the name clients use
-sed -i 's/sandbox.example.internal/box.example.internal/' /etc/systemd/system/sandboxd.service
+sudo sed -i 's/sandbox.example.internal/box.example.internal/' /etc/systemd/system/sandboxd.service
 
-systemctl daemon-reload && systemctl enable --now sandboxd
-journalctl -u sandboxd -f
+sudo systemctl daemon-reload && sudo systemctl enable --now sandboxd
+sudo journalctl -u sandboxd -f
 ```
 
 ## Where it keeps things
@@ -122,16 +123,17 @@ sandboxes were given; `du -sh /var/lib/sandboxd/*` shows what is used.
 What a Linux server running sandboxes for others should have: a disk, or a
 logical volume, mounted at the state directory, so a sandbox that fills its
 disk, a pile of snapshots or a large volume fills that and not `/`. Before
-Install, as root:
+Install:
 
 ```sh
 lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS       # find the new disk: no FSTYPE, no mount point (say nvme1n1)
-mkfs.xfs /dev/nvme1n1                            # erases it; xfs or btrfs, so snapshot and fork copies are reflinks
-mkdir -p /var/lib/sandboxd
-echo "UUID=$(blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2" >> /etc/fstab
-systemctl daemon-reload && mount /var/lib/sandboxd
-chmod 0700 /var/lib/sandboxd
-restorecon -R /var/lib/sandboxd                  # SELinux hosts (RHEL, Fedora, their rebuilds): /var/lib's label
+sudo mkfs.xfs /dev/nvme1n1                       # erases it; xfs or btrfs, so snapshot and fork copies are reflinks
+sudo mkdir -p /var/lib/sandboxd
+echo "UUID=$(sudo blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2" \
+  | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
+sudo chmod 0700 /var/lib/sandboxd
+sudo restorecon -R /var/lib/sandboxd             # SELinux hosts (RHEL, Fedora, their rebuilds): /var/lib's label
 findmnt /var/lib/sandboxd && df -h /var/lib/sandboxd
 ```
 
@@ -200,10 +202,10 @@ not a consistent one.
 ```sh
 sandbox-cli list                              # what is running; finish what matters first
 sandbox-cli kill SANDBOX...                   # every live one; snapshots and volumes are files, and move with the rest
-systemctl stop sandboxd
-mount /dev/nvme1n1 /mnt/new && rsync -aHAX --sparse /var/lib/sandboxd/ /mnt/new/   # -H keeps the hard links
-umount /mnt/new && mount /dev/nvme1n1 /var/lib/sandboxd                            # and add it to /etc/fstab
-systemctl start sandboxd
+sudo systemctl stop sandboxd
+sudo mount /dev/nvme1n1 /mnt/new && sudo rsync -aHAX --sparse /var/lib/sandboxd/ /mnt/new/   # -H keeps the hard links
+sudo umount /mnt/new && sudo mount /dev/nvme1n1 /var/lib/sandboxd                            # and add it to /etc/fstab
+sudo systemctl start sandboxd
 ```
 
 ## The network default
@@ -272,9 +274,10 @@ state directory. So installing a new sandboxd, or restarting it, interrupts
 no VM:
 
 ```sh
-install -m 0755 sandboxd sandbox-guestd /usr/local/bin/
-systemctl restart sandboxd
-journalctl -u sandboxd -n 5      # "keeping sandboxes across restarts; took back N from an earlier run"
+git pull && make build                       # in the checkout, until a release has sandboxd
+sudo install -m 0755 bin/sandboxd bin/sandbox-guestd /usr/local/bin/
+sudo systemctl restart sandboxd
+sudo journalctl -u sandboxd -n 5      # "keeping sandboxes across restarts; took back N from an earlier run"
 ```
 
 **What carries on:** each VM, with its memory, its disk and every file in
@@ -399,7 +402,7 @@ admin key:
 sandbox-cli gateway drain n17               # cordon; prints how many sandboxes still run there
 sandbox-cli gateway drain n17               # again, until it says 0 — or end them now:
 sandbox-cli gateway drain n17 --terminate
-systemctl stop sandboxd && <install the new sandboxd> && systemctl start sandboxd
+sudo systemctl stop sandboxd && <install the new sandboxd> && sudo systemctl start sandboxd
 sandbox-cli gateway nodes                   # n17 healthy, cordoned, on the new version
 sandbox-cli gateway uncordon n17
 ```

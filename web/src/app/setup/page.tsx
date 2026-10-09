@@ -231,7 +231,7 @@ const SERVER_STEPS: Step[] = [
   },
   {
     title: "Make its directories, kernel and token",
-    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nsudo install -m 0644 vmlinux /var/lib/sandboxd/vmlinux\nhead -c 32 /dev/urandom | base64 | sudo tee /etc/sandboxd/token >/dev/null\nsudo chmod 600 /etc/sandboxd/token",
+    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nsudo install -m 0644 vmlinux /var/lib/sandboxd/vmlinux\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'",
     body: (
       <>
         Image disks are hard-linked into each sandbox&apos;s jail, so <code>/var/lib/sandboxd</code> must be one

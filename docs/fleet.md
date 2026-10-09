@@ -176,16 +176,16 @@ replaces the first two lines below. The gateway needs no KVM and no root.
 
 ```sh
 git clone https://github.com/Amitgb14/sandbox-cli && cd sandbox-cli && make build
-install -m 0755 bin/sandbox-gateway bin/sandbox-cli /usr/local/bin/
+sudo install -m 0755 bin/sandbox-gateway bin/sandbox-cli /usr/local/bin/
 
-useradd --system --home-dir /var/lib/sandbox-gateway --shell /usr/sbin/nologin sandbox-gateway
-install -d -o sandbox-gateway -g sandbox-gateway -m 0700 \
+sudo useradd --system --home-dir /var/lib/sandbox-gateway --shell /usr/sbin/nologin sandbox-gateway
+sudo install -d -o sandbox-gateway -g sandbox-gateway -m 0700 \
   /etc/sandbox-gateway /etc/sandbox-gateway/tls /var/lib/sandbox-gateway
 
-install -o sandbox-gateway -g sandbox-gateway -m 0600 \
+sudo install -o sandbox-gateway -g sandbox-gateway -m 0600 \
   fleet-certs/ca.pem fleet-certs/gateway-client.pem fleet-certs/gateway-client-key.pem \
   fleet-certs/gateway.pem fleet-certs/gateway-key.pem /etc/sandbox-gateway/tls/
-install -o sandbox-gateway -g sandbox-gateway -m 0600 n17.token n18.token /etc/sandbox-gateway/
+sudo install -o sandbox-gateway -g sandbox-gateway -m 0600 n17.token n18.token /etc/sandbox-gateway/
 ```
 
 Every file the gateway reads must belong to its user: it refuses a token, a
@@ -262,11 +262,11 @@ runs this as the `sandbox-gateway` user with no capabilities, a read-only
 system and only its state directory writable.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd/sandbox-gateway.service \
+sudo curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd/sandbox-gateway.service \
   -o /etc/systemd/system/sandbox-gateway.service      # or cp it from a checkout
 # set --ssh-public-host to the name users ssh to, as above
-sed -i 's/gateway.example.internal/gw.example.internal/' /etc/systemd/system/sandbox-gateway.service
-systemctl daemon-reload && systemctl enable --now sandbox-gateway
+sudo sed -i 's/gateway.example.internal/gw.example.internal/' /etc/systemd/system/sandbox-gateway.service
+sudo systemctl daemon-reload && sudo systemctl enable --now sandbox-gateway
 ```
 
 | Flag | Default | |
