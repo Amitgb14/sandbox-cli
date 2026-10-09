@@ -45,31 +45,45 @@ test("a template is made in Templates, and the Playground launches at its size",
   await expect(page.locator("main").getByText("ci-box", { exact: true })).toHaveCount(0);
 });
 
-test("an egress rule saved in Settings reaches the Playground's launch", async ({ page, request }) => {
+test("allowlist groups are made in Settings and picked in the Playground", async ({ page, request }) => {
   await page.goto("/settings/");
-  await page.getByRole("textbox", { name: "Host" }).fill("https://bad");
-  await expect(page.getByText("A host name, or *.name")).toBeVisible();
-  await page.getByRole("textbox", { name: "Host" }).fill("Evil.Example.com");
-  await page.getByRole("combobox", { name: "Action" }).click();
-  await page.getByRole("option", { name: "deny" }).click();
-  await page.getByRole("button", { name: "Add rule" }).click();
-  const rules = page.getByRole("list", { name: "Egress rules" });
-  await expect(rules.getByText("evil.example.com")).toBeVisible();
+  await page.getByRole("button", { name: "New group" }).click();
+  await page.getByRole("textbox", { name: "Group name" }).fill("go");
+  await page.getByRole("button", { name: "Create group" }).click();
+  const go = page.getByRole("group", { name: "Group go" });
+  await go.getByRole("textbox", { name: "Add a host to go" }).fill("https://bad");
+  await expect(go.getByText("A host name, or *.name")).toBeVisible();
+  await go.getByRole("textbox", { name: "Add a host to go" }).fill("Proxy.Golang.org, sum.golang.org");
+  await go.getByRole("button", { name: "Add" }).click();
+  await expect(go.getByRole("list", { name: "go hosts" }).getByText("sum.golang.org")).toBeVisible();
+  await expect(go.getByText("2 hosts")).toBeVisible();
+
+  // A deny rule, for every launch.
+  await page.getByRole("textbox", { name: "Host to deny" }).fill("evil.example.com");
+  await page.getByRole("button", { name: "Deny", exact: true }).click();
+  await expect(page.getByRole("list", { name: "Deny rules" }).getByText("evil.example.com")).toBeVisible();
 
   await page.goto("/launch/");
   await page.getByText("Command", { exact: true }).first().click();
   await page.getByRole("textbox", { name: "Command" }).fill("true");
-  await expect(page.locator("pre").last()).toContainText("--deny evil.example.com");
-  await expect(page.getByText("1 denied")).toBeVisible();
+  await page.getByRole("radio", { name: /Allowlist/ }).click();
+  await page.getByRole("checkbox", { name: "Group go" }).click();
+  await page.getByRole("checkbox", { name: "Include the built-in hosts" }).click();
+  const code = page.locator("pre").last();
+  await expect(code).toContainText("--network allowlist --allow proxy.golang.org --allow sum.golang.org --deny evil.example.com --no-baseline");
+  await page.getByText(/^Reaches 2 hosts/).click();
+  await page.locator("form").getByRole("button", { name: "Launch" }).click();
+  await expect(page).toHaveURL(/\/sandbox\/?\?id=sbx_/);
+  const id = new URL(page.url()).searchParams.get("id");
+  const sb = await (await api(request, `/v1/sandboxes/${id}`)).json();
+  expect(sb.network.mode).toBe("allowlist");
+  expect([...sb.network.allow].sort()).toEqual(["proxy.golang.org", "sum.golang.org"]);
+  expect(sb.network.deny).toEqual(["evil.example.com"]);
+  await api(request, `/v1/sandboxes/${id}`, "DELETE");
 
-  // Off, it no longer applies.
-  await page.goto("/settings/");
-  await page.getByRole("switch", { name: "Disable evil.example.com" }).click();
-  await expect(page.getByRole("switch", { name: "Enable evil.example.com" })).toBeVisible();
-  const saved = await (await api(request, "/egress")).json();
-  expect(saved.rules).toEqual([{ host: "evil.example.com", action: "deny", enabled: false }]);
-  await page.getByRole("button", { name: "Remove evil.example.com" }).click();
-  await expect(page.getByText("No rules.")).toBeVisible();
+  // Clean up for the other tests.
+  await api(request, "/egress", "PUT", { rules: [] });
+  await api(request, "/egress/groups/go", "DELETE");
 });
 
 test("an agent's API key is saved from Agents, and never shown back", async ({ page, request }) => {

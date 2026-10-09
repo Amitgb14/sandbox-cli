@@ -13,6 +13,7 @@ import { SandboxOverview } from "@/components/sandbox/overview";
 import { SnapshotProgressBar } from "@/components/sandbox/snapshot-progress";
 import { AgentActivity, StateDot } from "@/components/sandbox/state-dot";
 import { SandboxTerminal } from "@/components/sandbox/terminal";
+import { TerminateDialog } from "@/components/sandbox/terminate-dialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -94,6 +95,7 @@ export function SandboxDetails({
   const [ttyPid, setTtyPid] = useState<number | null>(null);
   const [pid, setPid] = useState<number | null>(null);
   const [tab, setTab] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const wideScreen = useMinWidth(variant === "page" ? 1024 : 900);
   const twoPane = wideScreen && (variant === "page" || expanded);
 
@@ -147,11 +149,18 @@ export function SandboxDetails({
   const tty = ttys.find((p) => p.pid === ttyPid) ?? ttys.find((p) => !isShell(p)) ?? ttys[0];
   const selected = processes.find((p) => p.pid === pid) ?? processes[processes.length - 1];
   const act = (p: Promise<unknown>, done: string) => p.then(() => toast.success(done)).catch((e: Error) => toast.error(e.message));
-  const terminate = () => {
-    if (confirm(`Terminate ${sb.name || sb.id}? Everything in it goes with it.`)) {
-      act(kill.mutateAsync(id), "Terminated").then(() => onGone?.());
-    }
-  };
+  const terminate = () => setConfirming(true);
+  // The panel closes only on success: a refused terminate leaves the
+  // sandbox there, and the dialog says why rather than vanishing.
+  const confirmed = () =>
+    kill
+      .mutateAsync(id)
+      .then(() => {
+        toast.success(`Terminated ${sb.name || sb.id}`);
+        setConfirming(false);
+        onGone?.();
+      })
+      .catch((e: Error) => toast.error(e.message));
 
   const fallback = tty ? "terminal" : processes.length ? "output" : "events";
   const current = tab ?? (twoPane ? fallback : tty ? "terminal" : "overview");
@@ -274,6 +283,7 @@ export function SandboxDetails({
                 Terminate
               </Button>
             )}
+            <TerminateDialog sandboxes={confirming ? [sb] : null} pending={kill.isPending} onClose={() => !kill.isPending && setConfirming(false)} onConfirm={confirmed} />
           </div>
         ) : null}
       </div>

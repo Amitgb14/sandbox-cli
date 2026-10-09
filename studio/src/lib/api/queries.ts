@@ -13,7 +13,9 @@ import type {
   AgentState,
   AuditEvent,
   DirEntry,
+  EgressGroup,
   EgressRule,
+  EgressSettings,
   Info,
   LaunchRequest,
   LaunchResult,
@@ -184,9 +186,9 @@ export function useTemplates() {
   return useQuery({ queryKey: keys.templates, queryFn: async () => (await apiFetch<{ templates: VmTemplate[] }>("/templates")).templates });
 }
 
-/** The egress rules every Studio launch carries. */
-export function useEgressRules() {
-  return useQuery({ queryKey: keys.egress, queryFn: async () => (await apiFetch<{ rules: EgressRule[] }>("/egress")).rules });
+/** Allowlist groups and the deny rules every Studio launch carries. */
+export function useEgress() {
+  return useQuery({ queryKey: keys.egress, queryFn: () => apiFetch<EgressSettings>("/egress") });
 }
 
 // --- writes ------------------------------------------------------------------------
@@ -331,7 +333,25 @@ export function useDeleteTemplate() {
   );
 }
 
-/** Replaces the rules whole, as the server stores them. */
+export function useSaveEgressGroup() {
+  return useInvalidating(
+    (g: EgressGroup) =>
+      apiFetch<EgressGroup>(`/egress/groups/${encodeURIComponent(g.name)}`, {
+        method: "PUT",
+        json: { description: g.description ?? "", hosts: g.hosts, default: !!g.default },
+      }),
+    () => [[...keys.egress]],
+  );
+}
+
+export function useDeleteEgressGroup() {
+  return useInvalidating(
+    (name: string) => apiFetch<void>(`/egress/groups/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    () => [[...keys.egress]],
+  );
+}
+
+/** Replaces the deny rules whole, as the server stores them. */
 export function useSaveEgressRules() {
   return useInvalidating(
     (rules: EgressRule[]) => apiFetch<{ rules: EgressRule[] }>("/egress", { method: "PUT", json: { rules } }),

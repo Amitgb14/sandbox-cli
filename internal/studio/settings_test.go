@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -74,80 +75,128 @@ func TestTemplates(t *testing.T) {
 	}
 }
 
-func TestEgressRulesAreValidated(t *testing.T) {
+func TestEgressRulesAndGroupsAreValidated(t *testing.T) {
 	_, st, _ := studioUnderTest(t)
 	for name, rules := range map[string][]EgressRule{
-		"a URL":          {{Host: "https://example.com/x", Action: "allow"}},
-		"a port":         {{Host: "example.com:443", Action: "allow"}},
-		"an odd action":  {{Host: "example.com", Action: "permit"}},
-		"a host twice":   {{Host: "example.com", Action: "allow"}, {Host: "EXAMPLE.com.", Action: "deny"}},
-		"a bad wildcard": {{Host: "a.*.example.com", Action: "allow"}},
+		"a URL":          {{Host: "https://example.com/x", Action: "deny"}},
+		"a port":         {{Host: "example.com:443", Action: "deny"}},
+		"an allow rule":  {{Host: "example.com", Action: "allow"}},
+		"a host twice":   {{Host: "example.com", Action: "deny"}, {Host: "EXAMPLE.com.", Action: "deny"}},
+		"a bad wildcard": {{Host: "a.*.example.com", Action: "deny"}},
 	} {
 		if r, body := call(t, st.URL, "PUT", "/api/egress", testToken, "", map[string]any{"rules": rules}); r.StatusCode != http.StatusBadRequest {
-			t.Errorf("%s: %d %v", name, r.StatusCode, body)
+			t.Errorf("rules, %s: %d %v", name, r.StatusCode, body)
 		}
 	}
-	r, body := call(t, st.URL, "PUT", "/api/egress", testToken, "", map[string]any{"rules": []EgressRule{
-		{Host: " Proxy.Golang.org. ", Action: "allow", Enabled: true},
-		{Host: "*.example.com", Action: "deny", Enabled: true, Note: "no"},
-	}})
-	if r.StatusCode != http.StatusOK {
-		t.Fatalf("save: %d %v", r.StatusCode, body)
+	for name, tc := range map[string]struct {
+		path string
+		g    EgressGroup
+	}{
+		"a bad name": {"/api/egress/groups/Go_Mods", EgressGroup{Hosts: []string{"proxy.golang.org"}}},
+		"a URL":      {"/api/egress/groups/go", EgressGroup{Hosts: []string{"https://proxy.golang.org"}}},
+	} {
+		if r, body := call(t, st.URL, "PUT", tc.path, testToken, "", tc.g); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("group, %s: %d %v", name, r.StatusCode, body)
+		}
 	}
-	_, body = call(t, st.URL, "GET", "/api/egress", testToken, "", nil)
-	rules := body["rules"].([]any)
-	if len(rules) != 2 || rules[0].(map[string]any)["host"] != "proxy.golang.org" {
-		t.Errorf("saved %v", rules)
+	if r, body := call(t, st.URL, "PUT", "/api/egress/groups/go", testToken, "", EgressGroup{Hosts: []string{" Proxy.Golang.org. ", "proxy.golang.org", "sum.golang.org"}}); r.StatusCode != http.StatusOK {
+		t.Fatalf("save a group: %d %v", r.StatusCode, body)
+	}
+	_, body := call(t, st.URL, "GET", "/api/egress", testToken, "", nil)
+	groups := body["groups"].([]any)
+	if len(groups) != 1 || fmt.Sprint(groups[0].(map[string]any)["hosts"]) != "[proxy.golang.org sum.golang.org]" {
+		t.Errorf("saved %v", groups)
+	}
+	if r, _ := call(t, st.URL, "DELETE", "/api/egress/groups/go", testToken, "", nil); r.StatusCode != http.StatusNoContent {
+		t.Errorf("delete: %d", r.StatusCode)
+	}
+	if r, _ := call(t, st.URL, "DELETE", "/api/egress/groups/go", testToken, "", nil); r.StatusCode != http.StatusNotFound {
+		t.Errorf("deleting what is gone: %d", r.StatusCode)
 	}
 }
 
-// The enabled rules reach a launch: a deny always, an allow only into a run
-// that is an allowlist, never turning an open run into one.
-func TestEgressRulesApplyToLaunches(t *testing.T) {
+// An allow rule saved before there were groups is not lost: it is read into
+// a default group, and a switched-off one, which allowed nothing, is dropped.
+func TestAllowRulesBecomeADefaultGroup(t *testing.T) {
+	_, st, _ := studioUnderTest(t)
+	old := `{"egress":[{"host":"a.example.com","action":"allow","enabled":true},` +
+		`{"host":"off.example.com","action":"allow","enabled":false},` +
+		`{"host":"evil.example.com","action":"deny","enabled":true}]}`
+	if err := os.MkdirAll(agenthome.ConfigDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agenthome.ConfigDir(), "studio.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, body := call(t, st.URL, "GET", "/api/egress", testToken, "", nil)
+	if got := fmt.Sprint(body["groups"]); got != "[map[default:true description:Hosts allowed before there were groups hosts:[a.example.com] name:default]]" {
+		t.Errorf("groups %s", got)
+	}
+	if got := fmt.Sprint(body["rules"]); !strings.Contains(got, "evil.example.com") || strings.Contains(got, "a.example.com") {
+		t.Errorf("rules %s", got)
+	}
+}
+
+// A launch gets the groups it picks, or the default ones when it picks none
+// and is an allowlist; the deny rules always; and never an open run turned
+// into an allowlist.
+func TestEgressGroupsApplyToLaunches(t *testing.T) {
 	s, st, c := studioUnderTest(t)
 	var last LaunchRequest
 	s.Launch = func(_ context.Context, req LaunchRequest) (LaunchResult, error) {
 		last = req
 		return LaunchResult{Sandbox: "sbx_x"}, nil
 	}
+	call(t, st.URL, "PUT", "/api/egress/groups/go", testToken, "", EgressGroup{Hosts: []string{"proxy.golang.org"}, Default: true})
+	call(t, st.URL, "PUT", "/api/egress/groups/npm", testToken, "", EgressGroup{Hosts: []string{"registry.npmjs.org"}})
 	call(t, st.URL, "PUT", "/api/egress", testToken, "", map[string]any{"rules": []EgressRule{
-		{Host: "proxy.golang.org", Action: "allow", Enabled: true},
-		{Host: "off.example.com", Action: "allow", Enabled: false},
 		{Host: "evil.example.com", Action: "deny", Enabled: true},
+		{Host: "off.example.com", Action: "deny", Enabled: false},
 	}})
 	caps, err := c.Capabilities(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defaultIsAllowlist := caps.Network.Default.Mode == api.NetworkAllowlist
+	cmd := []string{"true"}
 
 	for name, tc := range map[string]struct {
-		req       LaunchRequest
-		wantAllow []string
+		req         LaunchRequest
+		wantNetwork string
+		wantAllow   []string
+		wantDeny    []string
 	}{
-		"an allowlist":                     {LaunchRequest{Command: []string{"true"}, Network: "allowlist"}, []string{"proxy.golang.org"}},
-		"an allowlist of its own":          {LaunchRequest{Command: []string{"true"}, Allow: []string{"a.example.com"}}, []string{"a.example.com", "proxy.golang.org"}},
-		"open":                             {LaunchRequest{Command: []string{"true"}, Network: "open"}, nil},
-		"none":                             {LaunchRequest{Command: []string{"true"}, Network: "none"}, nil},
-		"the server's default, either way": {LaunchRequest{Command: []string{"true"}}, map[bool][]string{true: {"proxy.golang.org"}}[defaultIsAllowlist]},
+		"an allowlist, picking none":    {LaunchRequest{Command: cmd, Network: "allowlist"}, "allowlist", []string{"proxy.golang.org"}, []string{"evil.example.com"}},
+		"an allowlist, picking npm":     {LaunchRequest{Command: cmd, Network: "allowlist", EgressGroups: []string{"npm"}}, "allowlist", []string{"registry.npmjs.org"}, []string{"evil.example.com"}},
+		"groups imply an allowlist":     {LaunchRequest{Command: cmd, EgressGroups: []string{"go", "npm"}}, "allowlist", []string{"proxy.golang.org", "registry.npmjs.org"}, []string{"evil.example.com"}},
+		"an allowlist, picking nothing": {LaunchRequest{Command: cmd, Network: "allowlist", EgressGroups: []string{}}, "allowlist", nil, []string{"evil.example.com"}},
+		"open":                          {LaunchRequest{Command: cmd, Network: "open"}, "open", nil, []string{"evil.example.com"}},
+		"the server's default":          {LaunchRequest{Command: cmd}, "", map[bool][]string{true: {"proxy.golang.org"}}[defaultIsAllowlist], []string{"evil.example.com"}},
 	} {
 		if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", tc.req); r.StatusCode != http.StatusCreated {
 			t.Fatalf("%s: %d %v", name, r.StatusCode, body)
 		}
-		if !slices.Equal(last.Allow, tc.wantAllow) {
-			t.Errorf("%s: allow %v, want %v", name, last.Allow, tc.wantAllow)
-		}
-		if !slices.Equal(last.Deny, []string{"evil.example.com"}) {
-			t.Errorf("%s: deny %v", name, last.Deny)
+		if last.Network != tc.wantNetwork || !slices.Equal(last.Allow, tc.wantAllow) || !slices.Equal(last.Deny, tc.wantDeny) {
+			t.Errorf("%s: network %q allow %v deny %v; want %q %v %v", name, last.Network, last.Allow, last.Deny, tc.wantNetwork, tc.wantAllow, tc.wantDeny)
 		}
 	}
 
-	// A template's size reaches the launcher as asked; sandboxd bounds it.
-	call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Command: []string{"true"}, CPUs: 4, MemoryMB: 8192, DiskMB: 2048})
-	if last.CPUs != 4 || last.MemoryMB != 8192 || last.DiskMB != 2048 {
-		t.Errorf("size: %+v", last)
+	for name, req := range map[string]LaunchRequest{
+		"an unknown group":   {Command: cmd, EgressGroups: []string{"nope"}},
+		"groups beside open": {Command: cmd, Network: "open", EgressGroups: []string{"go"}},
+		"groups beside none": {Command: cmd, Network: "none", EgressGroups: []string{"go"}},
+	} {
+		if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", req); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d %v", name, r.StatusCode, body)
+		}
 	}
-	if r, _ := call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Command: []string{"true"}, MemoryMB: -1}); r.StatusCode != http.StatusBadRequest {
+
+	// --no-baseline and a template's size reach the launcher as asked.
+	call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Command: cmd, EgressGroups: []string{"go"}, NoBaseline: true, CPUs: 4, MemoryMB: 8192, DiskMB: 2048})
+	if !last.NoBaseline || last.CPUs != 4 || last.MemoryMB != 8192 || last.DiskMB != 2048 {
+		t.Errorf("launched %+v", last)
+	}
+	if r, _ := call(t, st.URL, "POST", "/api/runs", testToken, "", LaunchRequest{Command: cmd, MemoryMB: -1}); r.StatusCode != http.StatusBadRequest {
 		t.Errorf("a negative size: %d", r.StatusCode)
 	}
 }

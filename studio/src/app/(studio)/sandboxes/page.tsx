@@ -44,6 +44,7 @@ import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TerminateDialog } from "@/components/sandbox/terminate-dialog";
 import { useAgentStates, useInfo, useKill, useSandboxes, useSnapshots, useSuspend } from "@/lib/api/queries";
 import { useCan } from "@/lib/caller";
 import { formatDateTime, formatRelative } from "@/lib/format";
@@ -111,15 +112,21 @@ export default function SandboxesPage() {
     return m;
   }, [snapshots]);
 
+  // What the terminate dialog is confirming; null when it is closed.
+  const [confirming, setConfirming] = useState<Sandbox[] | null>(null);
+  const [terminating, setTerminating] = useState(false);
   const terminate = (list: Sandbox[]) => {
     const live = list.filter((s) => s.state !== "terminated");
-    if (!live.length) return;
-    const what = live.length === 1 ? live[0].name || live[0].id : `${live.length} sandboxes`;
-    if (!confirm(`Terminate ${what}? Everything in ${live.length === 1 ? "it" : "them"} goes with ${live.length === 1 ? "it" : "them"}.`)) return;
+    if (live.length) setConfirming(live);
+  };
+  const confirmed = (live: Sandbox[]) => {
+    setTerminating(true);
     Promise.allSettled(live.map((s) => kill.mutateAsync(s.id))).then((rs) => {
+      setTerminating(false);
+      setConfirming(null);
       const failed = rs.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
       if (failed.length) toast.error(`${failed.length} not terminated: ${(failed[0].reason as Error).message}`);
-      else toast.success(live.length === 1 ? "Terminated" : `Terminated ${live.length}`);
+      else toast.success(live.length === 1 ? `Terminated ${live[0].name || live[0].id}` : `Terminated ${live.length}`);
       setSelection({});
       if (open && live.some((s) => s.id === open.id)) setOpen(null);
     });
@@ -458,6 +465,7 @@ export default function SandboxesPage() {
         const sb = metricsOf ? all.find((s) => s.id === metricsOf) : undefined;
         return sb ? <MetricsDialog sb={sb} open onOpenChange={(o) => !o && setMetricsOf(null)} /> : null;
       })()}
+      <TerminateDialog sandboxes={confirming} pending={terminating} onClose={() => !terminating && setConfirming(null)} onConfirm={confirmed} />
       <Sheet open={!!open} onOpenChange={(o) => !o && setOpen(null)}>
         <SheetContent
           side="right"

@@ -4,13 +4,13 @@ import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Bot, ChevronRight, SquareTerminal, TerminalSquare, type LucideIcon } from "lucide-react";
+import { Bot, Check, ChevronRight, Globe, ListChecks, Server, SquareTerminal, TerminalSquare, WifiOff, type LucideIcon } from "lucide-react";
 import { CodeTabs } from "@/components/common/code-tabs";
 import { PageHeader } from "@/components/common/page-header";
 import { AgentList } from "@/components/launch/agent-list";
 import { every, scheduleIntervals } from "@/components/sandbox/snapshots";
 import { ImagePicker } from "@/components/launch/image-picker";
-import { applyRules } from "@/components/settings/egress-rules";
+import { computeEgress } from "@/components/settings/egress-rules";
 import { Gate } from "@/components/shell/gate";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -20,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useAgents, useEgressRules, useInfo, useLaunch, useNode, useSandboxes, useSnapshots, useTemplates } from "@/lib/api/queries";
+import { useAgents, useEgress, useInfo, useLaunch, useNode, useSandboxes, useSnapshots, useTemplates } from "@/lib/api/queries";
 import { useCaller } from "@/lib/caller";
 import { cliAgent, snippets } from "@/lib/codegen";
 import { formatMiB, formatRelative, splitArgs } from "@/lib/format";
@@ -45,6 +45,13 @@ const KINDS: [Kind, string, string, LucideIcon][] = [
   ["command", "Command", "Anything the image can run", SquareTerminal],
 ];
 
+const NETWORKS: ["default" | NetworkMode, string, string, LucideIcon][] = [
+  ["default", "Server default", "", Server],
+  ["none", "None", "No network at all", WifiOff],
+  ["allowlist", "Allowlist", "Only the hosts of the groups you pick", ListChecks],
+  ["open", "Open", "Anywhere, minus the deny rules", Globe],
+];
+
 function Section({ step, title, children }: { step: number; title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
@@ -63,7 +70,7 @@ function LaunchForm() {
   const router = useRouter();
   const params = useSearchParams();
   const { data: templates } = useTemplates();
-  const { data: egressRules } = useEgressRules();
+  const { data: egressSettings } = useEgress();
   // "" is the server's default size; a link from Templates names one.
   const [templateName, setTemplateName] = useState(params.get("template") ?? "");
   const { data: agents } = useAgents();
@@ -76,6 +83,9 @@ function LaunchForm() {
   const [name, setName] = useState("");
   const [network, setNetwork] = useState<"" | NetworkMode>("");
   const [allow, setAllow] = useState("");
+  // The allowlist groups picked; null until touched, which is the default groups.
+  const [picked, setPicked] = useState<string[] | null>(null);
+  const [baseline, setBaseline] = useState(true);
   const [labels, setLabels] = useState("");
   const [volumes, setVolumes] = useState("");
   const [from, setFrom] = useState<"image" | "snapshot">("image");
@@ -116,19 +126,32 @@ function LaunchForm() {
       const [n, p, ro] = v.split(":");
       return { name: n, path: p, read_only: ro === "ro" || undefined };
     });
-  // The egress rules Studio's server adds to the launch, so the code says
-  // what the launch will do.
-  const egress = applyRules(egressRules, network, allowList, info?.capabilities?.network.default.mode);
-  const ruled = { allow: egress.allow.length - allowList.length, deny: egress.deny.length };
+  // The groups and deny rules Studio's server adds to the launch, so the code
+  // says what the launch will do.
+  const defaultMode = info?.capabilities?.network.default.mode;
+  const groups = egressSettings?.groups ?? [];
+  const pickedNow = picked ?? groups.filter((g) => g.default).map((g) => g.name);
+  const isAllowlist = network === "allowlist";
+  const egress = computeEgress(egressSettings, {
+    network,
+    picked: isAllowlist && picked !== null ? picked : undefined,
+    allow: isAllowlist ? allowList : [],
+    defaultMode,
+  });
+  const noBaseline = isAllowlist && !baseline;
+  const baselineHosts = defaultMode === "allowlist" ? (info?.capabilities?.network.default.allow ?? []) : (info?.baseline_egress ?? []);
+  const reach = [...new Set([...(noBaseline || !(isAllowlist || (network === "" && defaultMode === "allowlist")) ? [] : baselineHosts), ...egress.allow])];
+  const emptyAllowlist = isAllowlist && reach.length === 0 && kind === "command";
   // What the code panel shows: the same choices, for each client.
   const sandboxOpts = {
     ...start,
     ...schedule,
     ...size,
     name: name || undefined,
-    network,
+    network: egress.network,
     allow: egress.allow,
     deny: egress.deny,
+    noBaseline,
     labels: labelMap,
     volumes: vols,
   };
@@ -172,8 +195,17 @@ function LaunchForm() {
       if (template.disk_mb) req.disk_mb = template.disk_mb;
     }
     if (network) req.network = network;
-    // The user's own names only: the server adds the egress rules itself.
-    if (allowList.length) req.allow = allowList;
+    // The user's own names and the groups picked: the server adds the groups'
+    // hosts and the deny rules itself.
+    if (isAllowlist) {
+      if (allowList.length) req.allow = allowList;
+      if (picked !== null) req.egress_groups = picked;
+      if (noBaseline) req.no_baseline = true;
+    }
+    if (emptyAllowlist) {
+      toast.error("The allowlist is empty: pick a group, name a host, or keep the built-in hosts");
+      return;
+    }
     if (Object.keys(labelMap).length) req.labels = labelMap;
     if (vols.length) req.volumes = vols;
     launch.mutate(req, {
@@ -344,34 +376,111 @@ function LaunchForm() {
           </p>
         </Section>
 
+        <Section step={5} title="Network">
+          <RadioGroup value={network || "default"} onValueChange={(v) => setNetwork(v === "default" ? "" : (v as NetworkMode))} aria-label="Network" className="grid gap-2 sm:grid-cols-4">
+            {NETWORKS.map(([v, title, hint, Icon]) => {
+              const off = v === "open" && ceiling !== "open";
+              return (
+                <Label
+                  key={v}
+                  htmlFor={`net-${v}`}
+                  className={cn(
+                    "flex cursor-pointer flex-col items-start gap-1.5 rounded-lg border bg-card p-3 transition-colors hover:border-foreground/20 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5",
+                    off && "cursor-not-allowed opacity-50",
+                  )}
+                  title={off ? `This endpoint's ceiling is ${ceiling}` : undefined}
+                >
+                  <span className="flex w-full items-center justify-between">
+                    <Icon className="size-4 text-muted-foreground" aria-hidden />
+                    <RadioGroupItem id={`net-${v}`} value={v} disabled={off} />
+                  </span>
+                  <span className="text-sm font-medium">{title}</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {v === "default" ? `${defaultMode ?? "…"}${defaultMode === "allowlist" ? ", with the default groups" : ""}` : hint}
+                  </span>
+                </Label>
+              );
+            })}
+          </RadioGroup>
+          {isAllowlist ? (
+            <div className="flex flex-col gap-3 rounded-lg border bg-card p-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium">Groups</span>
+                <Link href="/settings" className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+                  Manage groups
+                </Link>
+              </div>
+              {groups.length ? (
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Allowlist groups">
+                  {groups.map((g) => {
+                    const on = pickedNow.includes(g.name);
+                    return (
+                      <button
+                        key={g.name}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={on}
+                        aria-label={`Group ${g.name}`}
+                        title={g.hosts.join("\n") || "no hosts"}
+                        onClick={() => setPicked(on ? pickedNow.filter((n) => n !== g.name) : [...pickedNow, g.name])}
+                        className={cn(
+                          "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors",
+                          on ? "border-primary bg-primary/10" : "hover:border-foreground/30",
+                        )}
+                      >
+                        <span className={cn("flex size-3.5 items-center justify-center rounded-sm border", on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40")}>
+                          {on ? <Check className="size-2.5" /> : null}
+                        </span>
+                        <span className="font-mono text-xs">{g.name}</span>
+                        <span className="text-[11px] text-muted-foreground">{g.hosts.length}</span>
+                        {g.default ? <span className="rounded border px-1 text-[9px] text-muted-foreground uppercase">default</span> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No groups yet.{" "}
+                  <Link href="/settings" className="underline underline-offset-2">
+                    Make some in Settings
+                  </Link>{" "}
+                  to pick hosts by purpose.
+                </p>
+              )}
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="allow" className="text-xs">
+                  Also allow
+                </Label>
+                <Input id="allow" className="h-8 font-mono text-xs" placeholder="one-off hosts: example.com, …" value={allow} onChange={(e) => setAllow(e.target.value)} />
+              </div>
+              <Label className="flex items-center gap-2 text-xs font-normal">
+                <Checkbox checked={baseline} onCheckedChange={(v) => setBaseline(!!v)} aria-label="Include the built-in hosts" />
+                Include the built-in hosts
+                <span className="text-muted-foreground">({baselineHosts.length}: agents&apos; APIs, package registries, github.com)</span>
+              </Label>
+              <details className="text-xs">
+                <summary className="cursor-pointer text-muted-foreground">
+                  Reaches {reach.length} host{reach.length === 1 ? "" : "s"}
+                  {kind !== "command" && chosen?.provider_host ? `, and ${chosen.provider_host}` : ""}
+                  {egress.deny.length ? `; ${egress.deny.length} denied` : ""}
+                </summary>
+                <p className="mt-1.5 font-mono text-[11px] leading-relaxed break-all text-muted-foreground">{reach.join(" · ") || "nothing"}</p>
+              </details>
+              {emptyAllowlist ? <p className="text-xs text-caution">Nothing to reach: pick a group, name a host, or keep the built-in hosts.</p> : null}
+            </div>
+          ) : null}
+        </Section>
+
         <details className="group rounded-lg border bg-card">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium">
             <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden />
             Sandbox options
-            <span className="ml-auto text-xs font-normal text-muted-foreground">name, network, labels, volumes</span>
+            <span className="ml-auto text-xs font-normal text-muted-foreground">name, labels, volumes</span>
           </summary>
           <div className="grid gap-4 border-t p-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
               <Label htmlFor="name">Name</Label>
               <Input id="name" placeholder="optional" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label>Network</Label>
-              <Select value={network || "default"} onValueChange={(v) => setNetwork(v === "default" ? "" : (v as NetworkMode))}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="default">the server&apos;s default</SelectItem>
-                  <SelectItem value="none">none</SelectItem>
-                  <SelectItem value="allowlist">allowlist</SelectItem>
-                  {ceiling === "open" ? <SelectItem value="open">open</SelectItem> : null}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="allow">Also allow</Label>
-              <Input id="allow" className="font-mono" placeholder="proxy.golang.org, …" value={allow} onChange={(e) => setAllow(e.target.value)} />
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="labels">Labels</Label>
@@ -421,13 +530,22 @@ function LaunchForm() {
                 {kind === "command" ? command || "—" : `${agent}${kind === "console" ? " (console)" : ""}`}
               </dd>
               <dt className="text-muted-foreground">Network</dt>
-              <dd className="font-mono text-[13px]">{network || info?.capabilities?.network.default.mode || "default"}</dd>
-              {ruled.allow > 0 || ruled.deny > 0 ? (
+              <dd className="font-mono text-[13px]">
+                {network || defaultMode || "default"}
+                {isAllowlist ? <span className="text-muted-foreground"> · {reach.length} hosts</span> : null}
+              </dd>
+              {isAllowlist ? (
                 <>
-                  <dt className="text-muted-foreground">Rules</dt>
+                  <dt className="text-muted-foreground">Groups</dt>
+                  <dd className="truncate font-mono text-[13px]">{pickedNow.join(", ") || "none"}</dd>
+                </>
+              ) : null}
+              {egress.deny.length ? (
+                <>
+                  <dt className="text-muted-foreground">Denied</dt>
                   <dd className="truncate text-[13px]">
                     <Link href="/settings" className="hover:underline">
-                      {[ruled.allow ? `+${ruled.allow} allowed` : "", ruled.deny ? `${ruled.deny} denied` : ""].filter(Boolean).join(", ")}
+                      {egress.deny.length} host{egress.deny.length === 1 ? "" : "s"}
                     </Link>
                   </dd>
                 </>

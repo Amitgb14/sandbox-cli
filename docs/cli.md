@@ -888,6 +888,7 @@ Flags:
 | `--memory int` |  | memory in MiB |
 | `--name string` |  | name the sandbox |
 | `--network string` |  | none, allowlist or open (default: the server's) |
+| `--no-baseline` |  | an allowlist of only the hosts named with --allow (and an agent's API), without the built-in agents' APIs and registries |
 | `--no-persist-auth` |  | do not restore or save the agent's login |
 | `--profile string` |  | dev or prod (prod: no persisted logins) |
 | `--snapshot-every duration` |  | snapshot the sandbox this often while it runs, e.g. 30m (the server sets the shortest allowed) |

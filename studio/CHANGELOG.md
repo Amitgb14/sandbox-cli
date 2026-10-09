@@ -14,13 +14,21 @@ of its own: entries land under `Unreleased` and move under the version of
   login, keys, the API reached — and a row opens to add, edit or remove a
   saved key for each variable the agent reads (see
   [CHANGELOG.md](../CHANGELOG.md), "Saved agent API keys, VM templates and
-  egress rules").
+  allowlist groups").
 - **Templates.** A new screen under Build: sizes to launch at, micro to
   xlarge built in and your own, with a Size step in the Playground and a
   Launch link from each.
-- **Egress rules in Settings.** Hosts every launch allows or denies, each
-  with a switch; the Playground's summary counts them and its code includes
-  them.
+- **Allowlist groups and deny rules in Settings.** Hosts grouped by purpose
+  (go, npm, an internal registry), each group a card whose hosts are added and
+  removed in place, some marked default; and hosts no launch reaches, each
+  with a switch.
+- **A Network step in the Playground.** Server default, none, allowlist or
+  open as cards; an allowlist picks its groups, adds one-off hosts, can leave
+  out the built-in hosts, and shows every host it will reach.
+- **Terminating asks for the name.** The sandbox panel's Terminate and the
+  list's (one or a selection) open a dialog listing what goes, and Terminate
+  stays off until the sandbox's name — or "terminate N" for several — is
+  typed, in place of the browser's own confirm box.
 - **Metrics.** A sandbox's resources, in the list and its overview, open the
   last hour of its CPU and memory as charts, with its current network and disk
   rates, where the endpoint measures them (see

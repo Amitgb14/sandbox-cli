@@ -2,6 +2,8 @@ package studio
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -58,7 +60,12 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.applyEgressRules(r, &req); err != nil {
-		writeErr(w, http.StatusInternalServerError, "egress rules: "+err.Error())
+		status := http.StatusInternalServerError
+		var bad badLaunch
+		if errors.As(err, &bad) {
+			status = http.StatusBadRequest
+		}
+		writeErr(w, status, "egress: "+err.Error())
 		return
 	}
 	// Not the request's context: a run outlives the request that started it.
@@ -124,20 +131,31 @@ func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"agents": out})
 }
 
-// applyEgressRules adds the enabled egress rules to a launch, after what the
-// request named itself.
+// applyEgressRules adds the launch's allowlist groups and the enabled deny
+// rules, after what the request named itself.
 //
-// A deny rule applies to every run that has a network. An allow rule applies
-// to a run that will be an allowlist — one that asks for it, or asks for
-// nothing on a server whose default is one — and to no other: a run on open
-// egress reaches the host already, and turning it into an allowlist because a
-// rule named one host would cut it off from every other.
+// A deny applies to every run that has a network. Groups the request names
+// make it an allowlist of their hosts; refused beside none or open, which
+// would ignore them. With no groups named, the default groups go into a run
+// that will be an allowlist — one that asks for it, or asks for nothing on a
+// server whose default is one — and into no other: a run on open egress
+// reaches those hosts already, and turning it into an allowlist because a
+// group listed some would cut it off from every other.
 func (s *Server) applyEgressRules(r *http.Request, req *LaunchRequest) error {
-	allow, deny, err := egressFor()
-	if err != nil || (len(allow) == 0 && len(deny) == 0) {
+	if len(req.EgressGroups) > 0 && (req.Network == api.NetworkNone || req.Network == api.NetworkOpen) {
+		return badLaunch(fmt.Sprintf("allowlist groups apply to an allowlist, not to network %s", req.Network))
+	}
+	allow, deny, err := egressFor(req.EgressGroups)
+	if errors.Is(err, errUnknownGroup) {
+		return badLaunch(err.Error())
+	}
+	if err != nil {
 		return err
 	}
 	req.Deny = append(req.Deny, deny...)
+	if len(req.EgressGroups) > 0 {
+		req.Network = api.NetworkAllowlist
+	}
 	switch req.Network {
 	case api.NetworkAllowlist:
 		req.Allow = append(req.Allow, allow...)
@@ -162,3 +180,8 @@ func (s *Server) applyEgressRules(r *http.Request, req *LaunchRequest) error {
 	}
 	return nil
 }
+
+// badLaunch is an egress mistake that is the request's, answered 400.
+type badLaunch string
+
+func (e badLaunch) Error() string { return string(e) }

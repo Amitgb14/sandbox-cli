@@ -39,6 +39,7 @@ type runFlags struct {
 	snapKeep      int
 	network       string
 	allow, deny   []string
+	noBaseline    bool
 	env           []string
 	detach, keep  bool
 	name          string
@@ -76,6 +77,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.network, "network", "", "none, allowlist or open (default: the server's)")
 	f.StringArrayVar(&rf.allow, "allow", nil, "also allow egress to this host (repeatable; implies allowlist)")
 	f.StringArrayVar(&rf.deny, "deny", nil, "refuse egress to this host even if allowed (repeatable)")
+	f.BoolVar(&rf.noBaseline, "no-baseline", false, "an allowlist of only the hosts named with --allow (and an agent's API), without the built-in agents' APIs and registries")
 	f.StringArrayVarP(&rf.env, "env", "e", nil, "KEY=VALUE, or KEY to forward the host's value (repeatable)")
 	f.BoolVarP(&rf.detach, "detach", "d", false, "start, print how to attach, and return")
 	f.BoolVar(&rf.keep, "keep", false, "keep the sandbox when the command ends")

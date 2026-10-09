@@ -18,8 +18,9 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 )
 
-// Studio's own settings: VM templates (a size to launch at, by name) and
-// egress rules (hosts every Studio launch allows or denies). They are this
+// Studio's own settings: VM templates (a size to launch at, by name),
+// allowlist groups (named sets of hosts a launch can allow) and deny rules
+// (hosts every Studio launch is refused). They are this
 // machine's user's, kept in ~/.config/sandbox/studio.json, so they are the
 // same in every Studio this user starts, on whichever port.
 //
@@ -53,17 +54,20 @@ var builtinTemplates = []Template{
 	{Name: "xlarge", Description: "The biggest jobs this machine takes", CPUs: 8, MemoryMB: 16384, Builtin: true},
 }
 
-// EgressRule is a host every Studio launch allows or denies.
+// EgressRule is a host every Studio launch is refused. Action is "deny";
+// "allow", from before there were groups, is moved into one when read
+// (migrateEgress).
 type EgressRule struct {
 	Host    string `json:"host"`
-	Action  string `json:"action"` // allow | deny
+	Action  string `json:"action"`
 	Enabled bool   `json:"enabled"`
 	Note    string `json:"note,omitempty"`
 }
 
 type settings struct {
-	Templates []Template   `json:"templates,omitempty"`
-	Egress    []EgressRule `json:"egress,omitempty"`
+	Templates []Template    `json:"templates,omitempty"`
+	Egress    []EgressRule  `json:"egress,omitempty"`
+	Groups    []EgressGroup `json:"egress_groups,omitempty"`
 }
 
 // settingsMu serialises read-modify-write of the file within this Studio.
@@ -91,6 +95,7 @@ func loadSettings() (settings, error) {
 	if err := json.Unmarshal(data, &st); err != nil {
 		return st, fmt.Errorf("%s: %w", p, err)
 	}
+	migrateEgress(&st)
 	return st, nil
 }
 
@@ -237,13 +242,40 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- egress rules -----------------------------------------------------------------
+// --- egress: allowlist groups and deny rules --------------------------------------
+
+// An allowlist is managed as named groups — "go" holding proxy.golang.org and
+// sum.golang.org, "internal" holding a company's registry — and a launch on
+// an allowlist picks the groups it wants, rather than every host anybody ever
+// allowed sitting in one list that applies to everything. Groups marked
+// Default are the ones a launch gets when it picks none, which is also what
+// a run on a server whose own default is an allowlist gets.
+//
+// Deny rules stay one list, each with a switch: a deny is a host no launch
+// should reach, which is not a choice made per run.
+
+// EgressGroup is a named set of hosts an allowlist launch can include.
+type EgressGroup struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Hosts       []string `json:"hosts"`
+	// Default groups are included in an allowlist launch that names none.
+	Default bool `json:"default,omitempty"`
+}
 
 // hostPattern is a DNS name, optionally behind one leading "*." wildcard: the
 // names sandboxd's allow and deny lists take (spec.hostRE). Checked here too
-// so a rule that can never apply is refused when it is saved, not at every
+// so a host that can never apply is refused when it is saved, not at every
 // launch after.
 var hostPattern = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func normalizeHost(h string) (string, error) {
+	h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
+	if len(h) > 253 || !hostPattern.MatchString(h) {
+		return "", fmt.Errorf("%q: a host name, optionally *.name; no scheme, port or path", h)
+	}
+	return h, nil
+}
 
 func normalizeRules(in []EgressRule) ([]EgressRule, error) {
 	if len(in) > 200 {
@@ -252,13 +284,16 @@ func normalizeRules(in []EgressRule) ([]EgressRule, error) {
 	seen := map[string]bool{}
 	out := make([]EgressRule, 0, len(in))
 	for _, r := range in {
-		r.Host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(r.Host)), ".")
-		r.Note = strings.TrimSpace(r.Note)
-		if len(r.Host) > 253 || !hostPattern.MatchString(r.Host) {
-			return nil, fmt.Errorf("%q: a host name, optionally *.name; no scheme, port or path", r.Host)
+		h, err := normalizeHost(r.Host)
+		if err != nil {
+			return nil, err
 		}
-		if r.Action != "allow" && r.Action != "deny" {
-			return nil, fmt.Errorf("%s: action allow or deny", r.Host)
+		r.Host, r.Note = h, strings.TrimSpace(r.Note)
+		if r.Action == "" {
+			r.Action = "deny"
+		}
+		if r.Action != "deny" {
+			return nil, fmt.Errorf("%s: a rule denies; a host to allow goes in an allowlist group", r.Host)
 		}
 		if len(r.Note) > 200 {
 			return nil, fmt.Errorf("%s: a note of up to 200 characters", r.Host)
@@ -272,21 +307,79 @@ func normalizeRules(in []EgressRule) ([]EgressRule, error) {
 	return out, nil
 }
 
+func normalizeGroup(g EgressGroup) (EgressGroup, error) {
+	g.Description = strings.TrimSpace(g.Description)
+	switch {
+	case !templateName.MatchString(g.Name):
+		return g, errors.New("name: lowercase letters, digits and dashes, up to 32")
+	case len(g.Description) > 200:
+		return g, errors.New("description: up to 200 characters")
+	case len(g.Hosts) > 500:
+		return g, errors.New("500 hosts is the most a group holds")
+	}
+	seen := map[string]bool{}
+	hosts := make([]string, 0, len(g.Hosts))
+	for _, h := range g.Hosts {
+		n, err := normalizeHost(h)
+		if err != nil {
+			return g, err
+		}
+		if !seen[n] {
+			seen[n] = true
+			hosts = append(hosts, n)
+		}
+	}
+	g.Hosts = hosts
+	return g, nil
+}
+
+// migrateEgress moves allow rules, from before there were groups, into a
+// default group, so a host someone allowed is still allowed and is now
+// somewhere they can manage it. Only enabled ones: a switched-off allow rule
+// allowed nothing.
+func migrateEgress(st *settings) {
+	var hosts []string
+	rules := st.Egress[:0]
+	for _, r := range st.Egress {
+		if r.Action == "allow" {
+			if r.Enabled {
+				hosts = append(hosts, r.Host)
+			}
+			continue
+		}
+		rules = append(rules, r)
+	}
+	st.Egress = rules
+	if len(hosts) == 0 {
+		return
+	}
+	for i, g := range st.Groups {
+		if g.Name == "default" {
+			st.Groups[i].Hosts = append(g.Hosts, hosts...)
+			return
+		}
+	}
+	st.Groups = append(st.Groups, EgressGroup{Name: "default", Description: "Hosts allowed before there were groups", Hosts: hosts, Default: true})
+}
+
 func (s *Server) egress(w http.ResponseWriter, _ *http.Request) {
 	st, err := loadSettings()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	rules := st.Egress
+	rules, groups := st.Egress, st.Groups
 	if rules == nil {
 		rules = []EgressRule{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
+	if groups == nil {
+		groups = []EgressGroup{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rules": rules, "groups": groups})
 }
 
-// putEgress replaces the rules whole: the screen edits a list, and a list
-// saved as one write cannot be left half changed by two tabs.
+// putEgress replaces the deny rules whole: the screen edits a list, and a
+// list saved as one write cannot be left half changed by two tabs.
 func (s *Server) putEgress(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Rules []EgressRule `json:"rules"`
@@ -306,21 +399,80 @@ func (s *Server) putEgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
 }
 
-// egressFor is the hosts the enabled rules add to a launch's --allow and
-// --deny.
-func egressFor() (allow, deny []string, err error) {
+// putEgressGroup creates or replaces one group.
+func (s *Server) putEgressGroup(w http.ResponseWriter, r *http.Request) {
+	var g EgressGroup
+	if !decode(w, r, &g) {
+		return
+	}
+	g.Name = r.PathValue("name")
+	g, err := normalizeGroup(g)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	_, err = updateSettings(func(st *settings) error {
+		if i := slices.IndexFunc(st.Groups, func(x EgressGroup) bool { return x.Name == g.Name }); i >= 0 {
+			st.Groups[i] = g
+			return nil
+		}
+		if len(st.Groups) >= 50 {
+			return errors.New("50 groups is the most Studio keeps")
+		}
+		st.Groups = append(st.Groups, g)
+		return nil
+	})
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
+}
+
+func (s *Server) deleteEgressGroup(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	found := false
+	_, err := updateSettings(func(st *settings) error {
+		st.Groups = slices.DeleteFunc(st.Groups, func(x EgressGroup) bool {
+			found = found || x.Name == name
+			return x.Name == name
+		})
+		return nil
+	})
+	switch {
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err.Error())
+	case !found:
+		writeErr(w, http.StatusNotFound, "no group "+name)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// errUnknownGroup is a launch naming a group there is none of: the caller's
+// mistake, said as one rather than as a server fault.
+var errUnknownGroup = errors.New("no such allowlist group")
+
+// egressFor is what a launch's groups and the enabled deny rules add to its
+// --allow and --deny. chosen nil is "none picked": the default groups.
+func egressFor(chosen []string) (allow, deny []string, err error) {
 	st, err := loadSettings()
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, r := range st.Egress {
-		if !r.Enabled {
-			continue
-		}
-		if r.Action == "allow" {
-			allow = append(allow, r.Host)
-		} else {
+		if r.Enabled && r.Action == "deny" {
 			deny = append(deny, r.Host)
+		}
+	}
+	for _, name := range chosen {
+		if !slices.ContainsFunc(st.Groups, func(g EgressGroup) bool { return g.Name == name }) {
+			return nil, nil, fmt.Errorf("%w: %s", errUnknownGroup, name)
+		}
+	}
+	for _, g := range st.Groups {
+		if (chosen == nil && g.Default) || slices.Contains(chosen, g.Name) {
+			allow = append(allow, g.Hosts...)
 		}
 	}
 	return allow, deny, nil

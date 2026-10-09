@@ -63,8 +63,20 @@ test("a sandbox started elsewhere is listed, labelled, and has events", async ({
   // Wide, the overview is beside the tabs rather than one of them.
   await expect(page.getByRole("tab", { name: "Overview" })).toHaveCount(0);
   await expect(page.getByText("echo hi").first()).toBeVisible();
-  page.once("dialog", (d) => d.accept());
+  // Terminating asks for the sandbox's name (its id, with none), not a click.
   await page.getByRole("button", { name: "Terminate" }).click();
+  const confirmTerminate = page.getByRole("dialog", { name: "Terminate sandbox" });
+  await expect(confirmTerminate.getByRole("list", { name: "Sandboxes to terminate" })).toContainText(created.id);
+  const go = confirmTerminate.getByRole("button", { name: "Terminate sandbox" });
+  await expect(go).toBeDisabled();
+  await confirmTerminate.getByRole("textbox", { name: "Type to confirm" }).fill("not-it");
+  await expect(go).toBeDisabled();
+  await confirmTerminate.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmTerminate).toHaveCount(0);
+  expect((await (await request.fetch(`/api/v1/sandboxes/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })).json()).state).not.toBe("terminated");
+  await page.getByRole("button", { name: "Terminate" }).click();
+  await confirmTerminate.getByRole("textbox", { name: "Type to confirm" }).fill(created.id);
+  await confirmTerminate.getByRole("button", { name: "Terminate sandbox" }).click();
   await expect(page).toHaveURL(/\/sandboxes\//);
 });
 
@@ -109,8 +121,12 @@ test("the list sums what sandboxes were given, walks them in its panel, and term
 
   await page.getByRole("checkbox", { name: "Select all on this page" }).click();
   await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
-  page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Terminate 2" }).click();
+  const confirmTerminate = page.getByRole("dialog", { name: "Terminate 2 sandboxes" });
+  await expect(confirmTerminate.getByText("walk-a")).toBeVisible();
+  await expect(confirmTerminate.getByText("walk-b")).toBeVisible();
+  await confirmTerminate.getByRole("textbox", { name: "Type to confirm" }).fill("terminate 2");
+  await confirmTerminate.getByRole("button", { name: "Terminate 2" }).click();
   await expect(page.getByText("Terminated 2")).toBeVisible();
   for (const s of [a, b]) {
     expect((await (await api(`/v1/sandboxes/${s.id}`)).json()).state).toBe("terminated");

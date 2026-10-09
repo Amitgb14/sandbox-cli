@@ -44,13 +44,19 @@ type LaunchRequest struct {
 	Console bool     `json:"console,omitempty"`
 	Command []string `json:"command,omitempty"`
 
-	Name    string            `json:"name,omitempty"`
-	Network string            `json:"network,omitempty"` // "", none, allowlist, open
-	Allow   []string          `json:"allow,omitempty"`
-	Deny    []string          `json:"deny,omitempty"`
-	Labels  map[string]string `json:"labels,omitempty"`
-	Volumes []api.VolumeMount `json:"volumes,omitempty"`
-	Profile string            `json:"profile,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Network string   `json:"network,omitempty"` // "", none, allowlist, open
+	Allow   []string `json:"allow,omitempty"`
+	Deny    []string `json:"deny,omitempty"`
+	// EgressGroups are the allowlist groups (Settings) whose hosts the run
+	// may reach: absent, the default groups; [] none. Naming any asks for an
+	// allowlist. NoBaseline leaves out the built-in hosts (--no-baseline), so
+	// the groups, Allow and an agent's API are the whole list.
+	EgressGroups []string          `json:"egress_groups"`
+	NoBaseline   bool              `json:"no_baseline,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Volumes      []api.VolumeMount `json:"volumes,omitempty"`
+	Profile      string            `json:"profile,omitempty"`
 	// Image runs that image instead of the server's default, and Snapshot
 	// starts from a snapshot instead of an image: the CLI's --image and
 	// --from-snapshot. Either is only asked for; sandboxd decides, under its
@@ -115,6 +121,8 @@ func (s *Server) Handler() http.Handler {
 	api("DELETE /api/templates/{name}", s.deleteTemplate)
 	api("GET /api/egress", s.egress)
 	api("PUT /api/egress", s.putEgress)
+	api("PUT /api/egress/groups/{name}", s.putEgressGroup)
+	api("DELETE /api/egress/groups/{name}", s.deleteEgressGroup)
 	mux.Handle("/api/", s.guard(func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
 	}))

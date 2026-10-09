@@ -198,16 +198,22 @@ in `_old/` as reference, to be ported where this design still wants it.
   a failed run changed nothing took a repository to compare, and a run that may
   have done work must not be done twice. A `--detach` run with `--fallback` is
   refused, because nothing watches a detached run's exit.
-- **Saved agent API keys, VM templates and egress rules, from Studio.**
+- **Saved agent API keys, VM templates and allowlist groups, from Studio.**
   Studio's Agents screen saves an API key for any variable an agent reads, in
   `~/.config/sandbox/agent-keys.json` (0600, write-only: no call returns it);
   every agent run, `sandbox-cli agent` included, forwards it when the
   environment does not set that variable, and the environment wins. Studio's
-  launches take a size (`cpus`, `memory_mb`, `disk_mb`) and a `deny` list; a
-  new Templates screen keeps sizes by name, micro to xlarge built in, and
-  Settings keeps egress rules every Studio launch carries: a deny always, an
-  allow only into a run that is an allowlist. Both are kept in
+  launches take a size (`cpus`, `memory_mb`, `disk_mb`), a `deny` list,
+  `egress_groups` and `no_baseline`; a new Templates screen keeps sizes by
+  name, micro to xlarge built in. Settings keeps allowlist groups — named sets
+  of hosts, picked per launch in the Playground's new Network step (none, an
+  allowlist of the groups chosen, or open), the default ones picked when none
+  are — and deny rules every Studio launch carries. Both are kept in
   `~/.config/sandbox/studio.json`. See [docs/studio.md](docs/studio.md).
+  `run` and the agent commands take `--no-baseline`: an allowlist of only the
+  hosts named with `--allow` (and an agent's API), without the built-in
+  agents' APIs and registries. It only turns the baseline off; a config that
+  turned it off keeps it off.
   `run` and the agent commands take `--template NAME` for the same sizes,
   built in or saved in Studio; `--cpus`, `--memory` and `--disk` given beside
   it win for their own field. `sandbox-cli template ls` lists them.
