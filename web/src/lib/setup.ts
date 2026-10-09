@@ -10,6 +10,8 @@
  * Mirrors docs/local-macos.md, docs/self-hosting.md and docs/fleet.md.
  */
 
+import { NOT_RELEASED_YET, RELEASED, SOURCE_BUILD } from "@/lib/site";
+
 export type SetupStep = {
   title: string;
   /** Shell to run, when the step is a command. */
@@ -31,12 +33,32 @@ export type SetupPath = {
   steps: SetupStep[];
 };
 
-/** The one-liner, kept here so the setup paths and the install card agree. */
-export const INSTALL_STEP: SetupStep = {
-  title: "Install",
-  code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh",
-  body: "Installs sandbox-cli, sandboxd and the guest agent beside it into ~/.local/bin, each archive verified against the release checksums, and — on a machine that has none — writes ~/.config/sandbox/config.yaml with the client settings spelled out. It installs sandboxd; it does not start it.",
-};
+/**
+ * The install step, kept here so the setup paths and the install card agree:
+ * the one-liner once a release has sandboxd (RELEASED in site.ts), a build
+ * from a checkout until then.
+ */
+export const INSTALL_STEP: SetupStep = RELEASED
+  ? {
+      title: "Install",
+      code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh",
+      body: "Installs sandbox-cli, sandboxd and the guest agent beside it into ~/.local/bin, each archive verified against the release checksums, and — on a machine that has none — writes ~/.config/sandbox/config.yaml with the client settings spelled out. It installs sandboxd; it does not start it.",
+    }
+  : {
+      title: "Build and install",
+      code: `${SOURCE_BUILD}\ninstall -d ~/.local/bin\ninstall -m 0755 bin/sandbox-cli bin/sandboxd bin/sandbox-guestd ~/.local/bin/`,
+      body: `${NOT_RELEASED_YET} sandbox-cli, sandboxd and the guest agent go side by side into ~/.local/bin; sandboxd is installed, not started.`,
+    };
+
+/** Installing on a server, where the unit runs everything from /usr/local/bin. */
+export const SERVER_INSTALL_CODE = RELEASED
+  ? "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\\n  | sudo sh -s -- --dest /usr/local/bin --no-config\nsudo install -m 0755 firecracker jailer /usr/local/bin/"
+  : `${SOURCE_BUILD}\nsudo install -m 0755 bin/sandboxd bin/sandbox-guestd bin/sandbox-cli /usr/local/bin/\nsudo install -m 0755 firecracker jailer /usr/local/bin/`;
+
+/** Installing the client alone. */
+export const CLIENT_INSTALL_CODE = RELEASED
+  ? "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --client-only"
+  : `${SOURCE_BUILD}\ninstall -d ~/.local/bin && install -m 0755 bin/sandbox-cli ~/.local/bin/`;
 
 /**
  * The launch agent, fetched and pointed at the installed sandboxd. The plist in
@@ -121,8 +143,8 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       {
         title: "Install, as root, where the unit expects it",
-        code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\\n  | sudo sh -s -- --dest /usr/local/bin --no-config\nsudo install -m 0755 firecracker jailer /usr/local/bin/",
-        body: "sandboxd, the guest agent beside it, Firecracker and its jailer go in /usr/local/bin, where packaging/systemd/sandboxd.service runs them from. --no-config: the server reads its policy file, not a client config.",
+        code: SERVER_INSTALL_CODE,
+        body: `${RELEASED ? "" : NOT_RELEASED_YET + " "}sandboxd, the guest agent beside it, Firecracker and its jailer go in /usr/local/bin, where packaging/systemd/sandboxd.service runs them from. The server reads its policy file, not a client config.`,
       },
       {
         title: "Run it as a service",
@@ -164,8 +186,10 @@ export const SETUP_PATHS: SetupPath[] = [
     steps: [
       {
         title: "Install the client",
-        code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --client-only",
-        body: "For Windows (download the .zip from the releases page), an Intel Mac, or any machine that should not run VMs itself.",
+        code: CLIENT_INSTALL_CODE,
+        body: RELEASED
+          ? "For Windows (download the .zip from the releases page), an Intel Mac, or any machine that should not run VMs itself."
+          : "For an Intel Mac, or any machine that should not run VMs itself; on Windows, go build -o sandbox-cli.exe ./cmd/sandbox-cli. Until the first microVM release, build it: the published 0.0.1 client is the container design's and cannot talk to a sandboxd.",
       },
       {
         title: "Add the endpoint",
@@ -185,7 +209,8 @@ export const SETUP_PATHS: SetupPath[] = [
  * not one of SETUP_PATHS. Every flag here is one sandbox-gateway or sandboxd
  * defines; the file paths are the packaged unit's.
  */
-export const FLEET_CERTS_CODE = `sh packaging/fleet/make-certs.sh -o fleet-certs \\
+export const FLEET_CERTS_CODE = `curl -fsSLO https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/fleet/make-certs.sh
+sh make-certs.sh -o fleet-certs \\
   -g gateway.example.internal 10.0.0.17 10.0.0.18`;
 
 export const FLEET_NODE_CODE = `sandboxd --backend firecracker ... \\
@@ -195,14 +220,20 @@ export const FLEET_NODE_CODE = `sandboxd --backend firecracker ... \\
   --tls-key /etc/sandboxd/tls/node-10.0.0.17-key.pem \\
   --client-ca /etc/sandboxd/tls/ca.pem --node-id n17`;
 
-export const FLEET_GATEWAY_CODE = `curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\
-  | sudo sh -s -- --dest /usr/local/bin --no-config --client-only --with-gateway
+export const FLEET_GATEWAY_CODE = `${
+  RELEASED
+    ? `curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\
+  | sudo sh -s -- --dest /usr/local/bin --no-config --client-only --with-gateway`
+    : `make build   # in the checkout; then
+sudo install -m 0755 bin/sandbox-gateway bin/sandbox-cli /usr/local/bin/`
+}
 sudo useradd --system --home-dir /var/lib/sandbox-gateway --shell /usr/sbin/nologin sandbox-gateway
 sudo install -d -o sandbox-gateway -g sandbox-gateway -m 0700 /etc/sandbox-gateway /var/lib/sandbox-gateway
 # certificates, node tokens and nodes.yaml into /etc/sandbox-gateway, owned by it, 0600
 sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.json \\
   keys create --user ops --scope admin
-sudo cp packaging/systemd/sandbox-gateway.service /etc/systemd/system/
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd/sandbox-gateway.service \\
+  | sudo tee /etc/systemd/system/sandbox-gateway.service >/dev/null
 sudo systemctl enable --now sandbox-gateway`;
 
 export const FLEET_USER_CODE = `sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.json keys create \\
