@@ -62,6 +62,9 @@ test("allowlist groups are made in Settings and picked in the Playground", async
   await page.getByRole("textbox", { name: "Host to deny" }).fill("evil.example.com");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
   await expect(page.getByRole("list", { name: "Deny rules" }).getByText("evil.example.com")).toBeVisible();
+  // The list shows a rule as soon as it is added, before the save answers;
+  // the Playground reads the saved rules, so wait for the save.
+  await expect(page.getByText("Deny rules saved")).toBeVisible();
 
   await page.goto("/launch/");
   await page.getByText("Command", { exact: true }).first().click();
