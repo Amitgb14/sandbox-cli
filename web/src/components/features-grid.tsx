@@ -87,7 +87,7 @@ export function FeaturesGrid({ className }: { className?: string }) {
               <p className="text-[0.82rem] leading-relaxed text-muted-foreground">{f.body}</p>
 
               {f.code ? (
-                <pre className="mt-auto rounded-lg bg-[#0b0b0d] px-2.5 py-2 font-mono text-[0.68rem] leading-relaxed break-words whitespace-pre-wrap text-[#d4d4d8]">
+                <pre className="mt-auto rounded-lg bg-terminal px-2.5 py-2 font-mono text-[0.68rem] leading-relaxed break-words whitespace-pre-wrap text-[#d4d4d8]">
                   {f.code}
                 </pre>
               ) : null}

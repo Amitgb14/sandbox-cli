@@ -2,6 +2,10 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* `dark:` follows the class on <html> (src/lib/theme.ts), not the media query,
+   so the header toggle can override the system setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /*
  * Design system — "quiet paper, loud signal".
  *
@@ -16,6 +20,9 @@
  * Every graphic on the page — the boundary canvas, the blast-radius map, the
  * egress visualiser, the comparison table — restates the product's thesis with
  * that same pair, so the palette is doing argument, not decoration.
+ *
+ * Dark mode (`.dark`, below) is the same system inverted: near-black paper,
+ * light ink, and the trio lifted a step so it still reads on a dark ground.
  */
 
 @theme inline {
@@ -37,6 +44,7 @@
 
   /* Surfaces */
   --color-surface: var(--surface);
+  --color-terminal: var(--terminal);
   --color-grid-line: var(--grid-line);
 
   --color-card: var(--card);
@@ -112,6 +120,8 @@
 
   --surface: #fbfbfc;
   --grid-line: #ededf0;
+  /* Terminal blocks are dark in both themes. */
+  --terminal: #0b0b0d;
 
   --chart-1: #121215;
   --chart-2: #059669;
@@ -127,6 +137,56 @@
   --sidebar-accent-foreground: #121215;
   --sidebar-border: #e7e7ea;
   --sidebar-ring: #a8a8b0;
+}
+
+.dark {
+  --background: #0b0b0d;
+  --foreground: #ededf0;
+  --card: #111114;
+  --card-foreground: #ededf0;
+  --popover: #141417;
+  --popover-foreground: #ededf0;
+  --primary: #f4f4f5;
+  --primary-foreground: #121215;
+  --secondary: #1b1b1f;
+  --secondary-foreground: #ededf0;
+  --muted: #1b1b1f;
+  --muted-foreground: #9c9ca6;
+  --accent: #202025;
+  --accent-foreground: #ededf0;
+  --destructive: #fb7185;
+  --border: #26262c;
+  --input: #2e2e35;
+  --ring: #5c5c66;
+
+  --contained: #34d399;
+  --contained-soft: #0c241c;
+  --contained-line: #11553f;
+  --exposed: #fb7185;
+  --exposed-soft: #2a0f16;
+  --exposed-line: #6b1d30;
+  --caution: #fbbf24;
+  --caution-soft: #261d08;
+
+  --surface: #0f0f12;
+  --grid-line: #1c1c21;
+  /* A step above the page, so a block still has an edge on dark paper. */
+  --terminal: #16161a;
+
+  --chart-1: #ededf0;
+  --chart-2: #34d399;
+  --chart-3: #71717a;
+  --chart-4: #fb7185;
+  --chart-5: #3f3f46;
+
+  --sidebar: #0f0f12;
+  --sidebar-foreground: #ededf0;
+  --sidebar-primary: #f4f4f5;
+  --sidebar-primary-foreground: #121215;
+  --sidebar-accent: #202025;
+  --sidebar-accent-foreground: #ededf0;
+  --sidebar-border: #26262c;
+  --sidebar-ring: #5c5c66;
 }
 
 @layer base {
@@ -359,7 +419,7 @@
 }
 /* The site's terminal block (components/code-block.tsx), without colour. */
 .doc-prose pre {
-  background: #0b0b0d;
+  background: var(--terminal);
   color: #e7e7ea;
   border-radius: var(--radius-xl);
   padding: 1rem 1.1rem;
