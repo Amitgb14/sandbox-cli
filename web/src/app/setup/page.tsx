@@ -48,6 +48,7 @@ export const metadata: Metadata = {
 };
 
 const NAV: NavEntry[] = [
+  { kind: "link", href: "#before", label: "Before you start" },
   { kind: "link", href: "#mac", label: "Mac" },
   { kind: "link", href: "#linux", label: "Linux" },
   { kind: "link", href: "#server", label: "Linux server" },
@@ -64,7 +65,7 @@ const DOCTOR: Step = {
   body: (
     <>
       It prints the context, the backend, the API version, the network policy&apos;s default and ceiling, what it{" "}
-      <em>can</em> do (egress allowlist, suspend, snapshots, volumes, audit) and its limits. A request for anything
+      <em>can</em>{" "}do (egress allowlist, suspend, snapshots, volumes, audit) and its limits. A request for anything
       missing from that list is refused, never served weaker, so this is where you find out, not halfway through
       an agent&apos;s run.
     </>
@@ -180,7 +181,7 @@ const CHECK_MACHINE_BODY = (
     to 10 GiB by default), each snapshot its memory plus its disk, and the build a few GiB of caches in your home;
     20 GiB free is enough to try it. If <code>/</code> is the full one, put the state on a larger filesystem; see{" "}
     <Link href={docPath("self-hosting", "what-the-machine-needs")}>What the machine needs</Link>. The host kernel
-    only needs KVM, <code>tun</code> and nftables. A distribution&apos;s
+    only needs KVM, <code>tun</code>{" "}and nftables. A distribution&apos;s
     Go is often older than 1.25; <a href="https://go.dev/dl/">go.dev/dl</a> has the current one. Every version
     checked is in <Link href={docPath("self-hosting", "versions-checked")}>Versions checked</Link>.
   </>
@@ -364,7 +365,7 @@ const SERVER_STEPS: Step[] = [
       <>
         Otherwise an image is pulled and built into a root disk when a sandbox first asks for it, and that sandbox
         waits a minute or more. <code>image rm</code> frees one nothing uses. The policy&apos;s{" "}
-        <code>images:</code> list limits installs as it limits runs; Studio&apos;s Images screen does the same.
+        <code>images:</code>{" "}list limits installs as it limits runs; Studio&apos;s Images screen does the same.
       </>
     ),
   },
@@ -395,7 +396,7 @@ const FLEET_STEPS: Step[] = [
     body: (
       <>
         A private CA, the gateway&apos;s client certificate, and a server certificate per node for the address the
-        gateway dials (<code>-g</code> adds one for the gateway&apos;s own API). Nodes accept a connection only with
+        gateway dials (<code>-g</code>{" "}adds one for the gateway&apos;s own API). Nodes accept a connection only with
         the gateway&apos;s certificate, and still check their token on every request. Keep <code>ca-key.pem</code>{" "}
         offline.
       </>
@@ -431,7 +432,7 @@ const FLEET_STEPS: Step[] = [
     body: (
       <>
         Each user gets an API key with the scopes they need, and sees only the sandboxes they made. Users never
-        hold a node&apos;s token. <code>sandbox-cli ssh</code> registers their public key and pins the
+        hold a node&apos;s token. <code>sandbox-cli ssh</code>{" "}registers their public key and pins the
         gateway&apos;s host key, after which plain <code>ssh demo@gateway -p 2222</code> works too.
       </>
     ),
@@ -596,6 +597,54 @@ function Caveat({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * What a reader needs before any path, storage first: it is the one that
+ * fails late. Sizes measured on a real host (docs/self-hosting.md, "What the
+ * machine needs"); where each path keeps its state is from sandboxd's
+ * defaultStateDir and docs/local-macos.md.
+ */
+const STORAGE_SIZES: [string, string][] = [
+  ["The base image, installed", "2.5 GiB"],
+  ["A small image, e.g. python:3.13-slim", "about 120 MiB"],
+  ["Each sandbox", "what it writes, up to its disk size (10 GiB by default); the disk is sparse"],
+  ["Each snapshot", "its memory plus its written disk: 1 GiB for an idle 1 GiB sandbox"],
+  ["Building from a checkout", "a few GiB of Go caches in your home, and about 0.8 GiB for Studio's UI"],
+];
+
+const STORAGE_WHERE: { path: string; where: React.ReactNode }[] = [
+  {
+    path: "Linux server (root)",
+    where: (
+      <>
+        <code>/var/lib/sandboxd</code>. Give it a drive of its own, or bind-mount a directory of a larger filesystem
+        there, <em>before</em>{" "}installing: the server path&apos;s first steps do it.
+      </>
+    ),
+  },
+  {
+    path: "Linux, quick try",
+    where: (
+      <>
+        <code>~/.local/share/sandboxd</code>, on the filesystem that holds your home.
+      </>
+    ),
+  },
+  {
+    path: "Mac",
+    where: (
+      <>
+        Images and sandboxes&apos; disks in the <code>container</code> runtime&apos;s own store, on the startup disk;{" "}
+        <code>~/.local/share/sandboxd</code> holds only records and the audit log.
+      </>
+    ),
+  },
+  { path: "Client only", where: "Nothing but the binary and its config: sandboxes live on the server." },
+];
+
+const BEFORE_CHECK = `df -h /var/lib ~      # free space where the state will go: 20 GiB to try it
+ls -l /dev/kvm        # Linux: must exist (a cloud VM needs nested virtualisation)
+go version            # 1.25 or later, to build until the first microVM release`;
+
 const PATHS = [
   { href: "#mac", icon: Laptop, title: "A Mac", what: "macOS 26+, Apple silicon. Sandboxes run on your Mac, through the native container runtime." },
   { href: "#linux", icon: Terminal, title: "Linux, quick try", what: "Any Linux with KVM, no root. Everything works except the network." },
@@ -637,6 +686,58 @@ export default function SetupPage() {
                 <p className="text-sm leading-relaxed text-muted-foreground">{p.what}</p>
               </a>
             ))}
+          </div>
+
+          <div id="before" className="mt-14 scroll-mt-24">
+            <h2 className="text-xl font-semibold tracking-tight">Before you start</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+              Storage first: it is the requirement that fails late, when an image or a snapshot fills a disk halfway
+              through a run.
+            </p>
+            <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div className="rounded-xl border bg-card p-5">
+                <h3 className="mb-3 text-[0.95rem] font-semibold tracking-tight">Storage: 20 GiB free to try it</h3>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {STORAGE_SIZES.map(([what, takes]) => (
+                      <tr key={what} className="border-t first:border-t-0">
+                        <td className="py-2 pr-4 align-top text-foreground">{what}</td>
+                        <td className="py-2 align-top text-muted-foreground">{takes}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                  A server others depend on needs a drive of its own for sandboxes, so a full one never fills{" "}
+                  <code className="font-mono text-[0.82em] text-foreground">/</code>. Measured on a real host;{" "}
+                  <Link className="underline" href={docPath("self-hosting", "what-the-machine-needs")}>
+                    What the machine needs
+                  </Link>{" "}
+                  has the rest.
+                </p>
+              </div>
+              <div className="rounded-xl border bg-card p-5">
+                <h3 className="mb-3 text-[0.95rem] font-semibold tracking-tight">Where each path keeps it</h3>
+                <dl className="flex flex-col gap-3 text-sm [&_code]:font-mono [&_code]:text-[0.82em] [&_code]:text-foreground">
+                  {STORAGE_WHERE.map((w) => (
+                    <div key={w.path}>
+                      <dt className="font-medium text-foreground">{w.path}</dt>
+                      <dd className="leading-relaxed text-muted-foreground">{w.where}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            </div>
+            <div className="mt-6 max-w-3xl">
+              <h3 className="mb-3 text-[0.95rem] font-semibold tracking-tight">
+                And the machine: KVM on Linux, macOS 26 on Apple silicon, Go to build
+              </h3>
+              <CodeBlock code={BEFORE_CHECK} />
+              <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                Each path&apos;s first step checks the rest: the tools, the versions checked, and whether the drive is
+                mounted.
+              </p>
+            </div>
           </div>
         </Section>
 
