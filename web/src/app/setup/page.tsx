@@ -168,12 +168,17 @@ uname -r                     # host kernel; checked: 6.12
 # nft (nftables; checked 1.1.5), and git, make, curl, file to build
 sudo dnf install -y e2fsprogs iproute nftables git make curl file      # Fedora, RHEL and rebuilds
 sudo apt-get install -y e2fsprogs iproute2 nftables git make curl file # Debian, Ubuntu (not yet checked)
-go version                   # 1.25 or later builds the binaries`;
+go version                   # 1.25 or later builds the binaries
+df -h /var/lib ~             # 20 GiB free where the state goes: /var/lib/sandboxd as root, ~/.local/share as you`;
 
 const CHECK_MACHINE_BODY = (
   <>
     Checked on x86_64, an EL10 distribution with host kernel 6.12, xfs and firewalld; arm64 and other distributions
-    are built for but not yet run. The host kernel only needs KVM, <code>tun</code> and nftables. A distribution&apos;s
+    are built for but not yet run. Disk: the base image takes 2.5 GiB installed, each sandbox what it writes (up
+    to 10 GiB by default), each snapshot its memory plus its disk, and the build a few GiB of caches in your home;
+    20 GiB free is enough to try it. If <code>/</code> is the full one, put the state on a larger filesystem; see{" "}
+    <Link href={docPath("self-hosting", "what-the-machine-needs")}>What the machine needs</Link>. The host kernel
+    only needs KVM, <code>tun</code> and nftables. A distribution&apos;s
     Go is often older than 1.25; <a href="https://go.dev/dl/">go.dev/dl</a> has the current one. Every version
     checked is in <Link href={docPath("self-hosting", "versions-checked")}>Versions checked</Link>.
   </>

@@ -17,11 +17,29 @@ hosted cloud; clients cannot tell which they are talking to beyond
   `CONFIG_VIRTIO_BLK` and `CONFIG_VIRTIO_NET`. Firecracker's CI kernel 6.1.155
   has them all, for x86_64 and arm64; Install fetches it.
 - `mkfs.ext4` (e2fsprogs 1.43+), `ip` (iproute2), `nft` (nftables).
-- Room for `/var/lib/sandboxd`, where images, sandboxes' disks, snapshots and
-  volumes are kept ([Where it keeps things](#where-it-keeps-things)). It must be
-  **one filesystem**: image disks are hard-linked into each sandbox's jail. xfs
-  or btrfs make snapshot and fork copies reflinks. To give it a disk of its own,
-  mount that disk there before installing.
+- **Disk space** where sandboxd keeps its state: `/var/lib/sandboxd` as root,
+  `~/.local/share/sandboxd` as a user (the quick try). Images, sandboxes'
+  disks, snapshots and volumes are all kept there ([Where it keeps
+  things](#where-it-keeps-things)). Measured on a real host:
+
+  | What | Takes |
+  |---|---|
+  | the base image, installed (layers and its root disk) | 2.5 GiB |
+  | a small image, e.g. `python:3.13-slim` | about 120 MiB |
+  | each sandbox | what it writes, up to its `disk_mb` (10 GiB unless the policy says otherwise); the disk is sparse |
+  | each snapshot | the sandbox's memory plus its written disk: 1 GiB for an idle 1 GiB sandbox |
+  | each volume | what was written to it |
+  | an upgrade | a second root disk per image until the next start removes the old one |
+
+  **20 GiB free** is enough to try it with the base image and a few
+  sandboxes; a server needs a disk of its own ([In production](#in-production)).
+  Building from a checkout also takes a few GiB in your home: Go's caches
+  (`~/.cache/go-build`, `~/go/pkg/mod`) and about 0.8 GiB of `node_modules`
+  for Studio's UI.
+- That state directory must be **one filesystem**: image disks are hard-linked
+  into each sandbox's jail. xfs or btrfs make snapshot and fork copies
+  reflinks. To give it a disk of its own, mount that disk there before
+  installing.
 
 ### Versions checked
 
@@ -68,10 +86,17 @@ uname -r                     # checked: 6.12
 # ip (iproute2; checked 6.17.0), nft (nftables; checked 1.1.5); and git, make, curl, file to build
 sudo dnf install -y e2fsprogs iproute nftables git make curl file      # Fedora, RHEL and rebuilds
 sudo apt-get install -y e2fsprogs iproute2 nftables git make curl file # Debian, Ubuntu (not yet checked)
+
+# disk space where the state will be: 20 GiB free to try it, a disk of its own for a server
+df -h /var/lib 2>/dev/null; df -h ~     # /var/lib/sandboxd as root, ~/.local/share/sandboxd as a user
 ```
 
 Go 1.25 or later builds the binaries (`go version`). A distribution's Go is
-often older; <https://go.dev/dl/> has the current one.
+often older; <https://go.dev/dl/> has the current one. If the root
+filesystem is the one nearly full, as is common with a small `/` and a large
+`/home`, put the state directory on the larger one: mount a disk at
+`/var/lib/sandboxd`, or bind-mount a directory of the larger filesystem
+there (step 2), or run sandboxd with `--state-dir` naming it.
 
 **2. A disk for sandboxes (on a server).** Images, sandboxes' disks,
 snapshots and volumes live under `/var/lib/sandboxd`. On a server, mount a
@@ -79,10 +104,22 @@ disk of their own there now, as [An extra disk for
 sandboxes](#an-extra-disk-for-sandboxes) shows, so they never fill the root
 filesystem: by UUID, xfs (checked) or btrfs, and the whole directory. Mount it
 before the next steps, which put the guest kernel in it; a disk mounted over
-it afterwards hides it. On a machine just for trying, skip this step.
+it afterwards hides it. On a machine just for trying, skip this step, unless
+`/` is short of the space above.
+
+With no spare disk but a larger filesystem elsewhere, `/home` say, bind-mount
+a directory of it at `/var/lib/sandboxd` instead. It is one filesystem, as the
+jail needs, and the unit waits for it as for a disk:
 
 ```sh
-findmnt /var/lib/sandboxd    # the disk, once mounted; nothing on a machine just for trying
+sudo install -d -m 0700 /home/sandboxd /var/lib/sandboxd
+echo "/home/sandboxd /var/lib/sandboxd none bind 0 0" | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
+```
+
+```sh
+findmnt /var/lib/sandboxd    # the disk or the bind mount; nothing on a machine just for trying
+df -h /var/lib/sandboxd      # the free space is the larger filesystem's
 ```
 
 **3. sandboxd and the guest agent: built from a checkout, for now.** No
