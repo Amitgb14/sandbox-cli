@@ -14,11 +14,13 @@ import {
   FLEET_USE_CODE,
   FLEET_ORGS_CODE,
   FLEET_REVOKE_CODE,
+  CLIENT_INSTALL_CODE,
   INSTALL_STEP,
   LAUNCH_AGENT_CODE,
+  SERVER_INSTALL_CODE,
   UNINSTALL_STEPS,
 } from "@/lib/setup";
-import { DOC_URL, STUDIO_PATH, docPath } from "@/lib/site";
+import { DOC_URL, NOT_RELEASED_YET, RELEASED, STUDIO_PATH, docPath } from "@/lib/site";
 
 /**
  * The setup guide: a Mac, a Linux machine for a quick try, a Linux server, and
@@ -103,10 +105,20 @@ const MAC_STEPS: Step[] = [
     code: INSTALL_STEP.code,
     body: (
       <>
-        sandbox-cli, sandboxd and the guest agent go into <code>~/.local/bin</code>, each checked against the
-        release checksums. The guest agent is the Linux arm64 build: it runs inside the sandbox, mounted read-only
-        from beside sandboxd, so any image works and the agent always matches the server. If the script says{" "}
-        <code>~/.local/bin</code> is not on your PATH, add it as it shows.
+        {RELEASED ? (
+          <>
+            sandbox-cli, sandboxd and the guest agent go into <code>~/.local/bin</code>, each checked against the
+            release checksums.
+          </>
+        ) : (
+          <>
+            {NOT_RELEASED_YET} sandbox-cli, sandboxd and the guest agent go side by side into{" "}
+            <code>~/.local/bin</code>.
+          </>
+        )}{" "}
+        The guest agent is the Linux arm64 build: it runs inside the sandbox, mounted read-only
+        from beside sandboxd, so any image works and the agent always matches the server. Make sure{" "}
+        <code>~/.local/bin</code> is on your PATH.
       </>
     ),
   },
@@ -200,14 +212,20 @@ const SERVER_STEPS: Step[] = [
     ),
   },
   {
-    title: "Install as root, where the unit expects it",
-    code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\\n  | sudo sh -s -- --dest /usr/local/bin --no-config\nsudo install -m 0755 firecracker jailer /usr/local/bin/",
+    title: RELEASED ? "Install as root, where the unit expects it" : "Build, and install as root where the unit expects it",
+    code: SERVER_INSTALL_CODE,
     body: (
       <>
+        {RELEASED ? null : <>{NOT_RELEASED_YET} </>}
         sandboxd and the guest agent land side by side in <code>/usr/local/bin</code>, where the systemd unit runs
-        them from; the guest agent is put into every image&apos;s root disk, so it must sit beside sandboxd.{" "}
-        <code>--no-config</code> because the server reads a policy file, not a client config. Fetch Firecracker as
-        in the quick try above.
+        them from; the guest agent is put into every image&apos;s root disk, so it must sit beside sandboxd.
+        {RELEASED ? (
+          <>
+            {" "}
+            <code>--no-config</code> because the server reads a policy file, not a client config.
+          </>
+        ) : null}{" "}
+        Fetch Firecracker as in the quick try above.
       </>
     ),
   },
@@ -263,9 +281,11 @@ const SERVER_STEPS: Step[] = [
 
 const CLIENT_STEPS: Step[] = [
   {
-    title: "Install the client",
-    code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --client-only",
-    body: "For a laptop that should not run VMs, an Intel Mac, or any machine talking to a server. On Windows, download the .zip from the releases page.",
+    title: RELEASED ? "Install the client" : "Build and install the client",
+    code: CLIENT_INSTALL_CODE,
+    body: RELEASED
+      ? "For a laptop that should not run VMs, an Intel Mac, or any machine talking to a server. On Windows, download the .zip from the releases page."
+      : `For a laptop that should not run VMs, an Intel Mac, or any machine talking to a server; on Windows, go build -o sandbox-cli.exe ./cmd/sandbox-cli. ${NOT_RELEASED_YET} The published 0.0.1 client is the container design's and cannot talk to a sandboxd.`,
   },
   {
     title: "Add the server as a context",
