@@ -19,6 +19,24 @@ export const RAW_INSTALL_URL =
   "https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh";
 
 /**
+ * Whether a published release has sandboxd. The latest, 0.0.1, is the
+ * container design's and ships the client alone: install.sh refuses it for a
+ * server, and with --client-only installs that old client, which cannot talk
+ * to a sandboxd. Until the rewrite's first release every install step on the
+ * site builds from a checkout instead. Set this to true when it is tagged, and
+ * the install.sh routes come back.
+ */
+export const RELEASED = false;
+
+/** The build from a checkout every install step uses until RELEASED. */
+export const SOURCE_BUILD = `git clone https://github.com/Amitgb14/sandbox-cli && cd sandbox-cli
+make studio build   # Studio's UI (Node 20+), then bin/sandbox-cli, bin/sandboxd, bin/sandbox-guestd`;
+
+/** Said wherever a step builds from source because of RELEASED. */
+export const NOT_RELEASED_YET =
+  "No published release has sandboxd yet (0.0.1 is the container design's, client only), so this builds from a checkout: Go 1.25+, and Node 20+ for Studio's UI.";
+
+/**
  * The sub-routes. Constants because several files link to them, and with a
  * trailing slash because `trailingSlash: true` in next.config.ts makes the
  * export emit `studio/index.html` — linking without it costs a redirect on the
@@ -68,7 +86,7 @@ export type InstallRoute = {
   note?: string;
 };
 
-export const INSTALL_ROUTES: InstallRoute[] = [
+const RELEASE_ROUTES: InstallRoute[] = [
   {
     id: "script",
     label: "Install script",
@@ -105,6 +123,50 @@ export const INSTALL_ROUTES: InstallRoute[] = [
     note: "Windows does not run sandboxes. The client talks to a sandboxd on a Mac, a Linux machine or the cloud.",
   },
 ];
+
+/**
+ * Before the first release: building from a checkout first and chosen by
+ * default, the script routes left out (they would install the old client),
+ * and Windows built rather than downloaded.
+ */
+const PRE_RELEASE_ROUTES: InstallRoute[] = [
+  {
+    id: "source",
+    label: "From source",
+    hint: "Go 1.25+",
+    lines: [
+      "git clone https://github.com/Amitgb14/sandbox-cli",
+      "cd sandbox-cli && make studio build",
+      "install -d ~/.local/bin",
+      "install -m 0755 bin/sandbox-cli bin/sandboxd bin/sandbox-guestd ~/.local/bin/",
+    ],
+    note: "The first microVM release is not out yet: 0.0.1 is the container design's, so the install script would refuse it. This builds sandbox-cli (with Studio's UI; Node 20+), sandboxd and the guest agent, and installs them side by side; starting sandboxd is one step in the setup guide below.",
+  },
+  {
+    id: "client",
+    label: "Client only",
+    hint: "any machine",
+    lines: [
+      "git clone https://github.com/Amitgb14/sandbox-cli",
+      "cd sandbox-cli && make studio build",
+      "install -d ~/.local/bin && install -m 0755 bin/sandbox-cli ~/.local/bin/",
+    ],
+    note: "Just sandbox-cli, for a machine that talks to a sandboxd somewhere else: sandbox-cli context add box https://box:7443 --token-file box.token --ca box-ca.pem",
+  },
+  {
+    id: "windows",
+    label: "Windows",
+    hint: "client only",
+    lines: [
+      "git clone https://github.com/Amitgb14/sandbox-cli",
+      "cd sandbox-cli",
+      "go build -o sandbox-cli.exe ./cmd/sandbox-cli",
+    ],
+    note: "Windows does not run sandboxes. The client talks to a sandboxd on a Mac, a Linux machine or the cloud.",
+  },
+];
+
+export const INSTALL_ROUTES: InstallRoute[] = RELEASED ? RELEASE_ROUTES : PRE_RELEASE_ROUTES;
 
 /** First commands after install — the “now what” block in the hero. */
 export const FIRST_RUN = [

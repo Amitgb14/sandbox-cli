@@ -21,7 +21,7 @@ import { CodeBlock } from "@/components/code-block";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { AGENTS } from "@/lib/agents";
-import { DOC_URL, REPO_URL, SETUP_PATH, docPath } from "@/lib/site";
+import { DOC_URL, RELEASED, REPO_URL, SETUP_PATH, docPath } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const EXPOSED = [
@@ -291,8 +291,12 @@ export default function Home() {
               <SectionHead
                 className="mb-6"
                 eyebrow="get started"
-                title="One script: client, server, guest agent."
-                lead="On Linux and Apple-silicon Macs it installs all three; elsewhere, the client, which talks to a sandboxd somewhere else. Go 1.25+ only if you build from source."
+                title={RELEASED ? "One script: client, server, guest agent." : "One build: client, server, guest agent."}
+                lead={
+                  RELEASED
+                    ? "On Linux and Apple-silicon Macs it installs all three; elsewhere, the client, which talks to a sandboxd somewhere else. Go 1.25+ only if you build from source."
+                    : "The first microVM release is not out yet, so for now you build from a checkout: Go 1.25+, and Node 20+ for Studio's UI. On Linux and Apple-silicon Macs, install all three; elsewhere, the client, which talks to a sandboxd somewhere else."
+                }
               />
               <div className="flex flex-wrap items-center gap-2.5">
                 <a

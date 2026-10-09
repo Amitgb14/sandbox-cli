@@ -27,13 +27,55 @@ On a server, give sandboxes a disk of their own first ([An extra disk for
 sandboxes](#an-extra-disk-for-sandboxes), below): images, sandboxes' disks,
 snapshots and volumes then never fill the root filesystem. Mount it before
 these steps, which put the guest kernel in that directory; a disk mounted
-over it afterwards hides it.
+over it afterwards hides it. Every step runs as root.
+
+**1. The binaries: built from a checkout, for now.** No published release has
+`sandboxd` yet: 0.0.1 is the last release of the container design, and
+`install.sh` refuses it rather than install half of it. Until the rewrite's
+first release, build on the server (Go 1.25+) or on any Linux machine of the
+same architecture, and copy `bin/` across:
 
 ```sh
-install -m 0755 sandboxd sandbox-guestd /usr/local/bin/
-install -m 0755 firecracker jailer /usr/local/bin/
-install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd
+git clone https://github.com/Amitgb14/sandbox-cli && cd sandbox-cli
+make build        # -> bin/sandbox-cli, bin/sandboxd, bin/sandbox-gateway, bin/sandbox-guestd
+install -m 0755 bin/sandboxd bin/sandbox-guestd bin/sandbox-cli /usr/local/bin/
+```
+
+Once a release has them, `install.sh` does this step instead, with no checkout,
+each archive checked against the release's checksums:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \
+  | sh -s -- --dest /usr/local/bin --no-config
+```
+
+`sandbox-guestd` must sit beside `sandboxd` (or be named with `--agent`): it is
+put into every image's root disk, so the guest agent always matches the server.
+
+**2. Firecracker, its jailer and a guest kernel.** These come from
+Firecracker's own releases, not this repository. The kernel is the one
+[What the machine needs](#what-the-machine-needs) describes, such as a CI
+kernel from Firecracker's getting-started guide:
+
+```sh
+ARCH=$(uname -m)
+release_url=https://github.com/firecracker-microvm/firecracker/releases
+latest=$(basename $(curl -fsSLI -o /dev/null -w '%{url_effective}' $release_url/latest))
+curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
+install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
+install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
+
+install -d -m 0700 /var/lib/sandboxd
 install -m 0644 vmlinux /var/lib/sandboxd/vmlinux
+```
+
+**3. The token, TLS, the policy and the unit.** The policy and the unit are
+fetched from the repository, so this step needs no checkout either. From one,
+`cp packaging/systemd/policy.example.yaml` and `cp
+packaging/systemd/sandboxd.service` do the same.
+
+```sh
+install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls
 
 # a token clients present; at least 16 characters, readable by root only
 head -c 32 /dev/urandom | base64 > /etc/sandboxd/token && chmod 600 /etc/sandboxd/token
@@ -41,14 +83,15 @@ head -c 32 /dev/urandom | base64 > /etc/sandboxd/token && chmod 600 /etc/sandbox
 # TLS: your CA's certificate for the name clients use
 install -m 0600 cert.pem key.pem /etc/sandboxd/tls/
 
-cp packaging/systemd/policy.example.yaml /etc/sandboxd/policy.yaml   # then edit
-cp packaging/systemd/sandboxd.service /etc/systemd/system/           # set --allowed-host
+RAW=https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd
+curl -fsSL $RAW/policy.example.yaml -o /etc/sandboxd/policy.yaml     # then edit
+curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service
+# --allowed-host: the name clients use
+sed -i 's/sandbox.example.internal/box.example.internal/' /etc/systemd/system/sandboxd.service
+
 systemctl daemon-reload && systemctl enable --now sandboxd
 journalctl -u sandboxd -f
 ```
-
-`sandbox-guestd` must sit beside `sandboxd` (or be named with `--agent`): it is
-put into every image's root disk, so the guest agent always matches the server.
 
 ## Where it keeps things
 
