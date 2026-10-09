@@ -108,6 +108,13 @@ type Snapshotter interface {
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
 }
 
+// SnapshotLister can say which snapshots it holds on disk, by id. A server
+// that keeps its records across a restart pairs them with its own and deletes
+// the rest: a snapshot no record names is one nobody can use or remove.
+type SnapshotLister interface {
+	StoredSnapshots() []string
+}
+
 // SnapshotInfo describes a capture.
 type SnapshotInfo struct {
 	ID string

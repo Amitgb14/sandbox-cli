@@ -210,6 +210,7 @@ func (s *Server) takeSnapshot(ctx context.Context, rec *record, scheduled bool) 
 	st.mu.Lock()
 	st.m[id] = &snapshotRecord{info: out, spec: info}
 	st.mu.Unlock()
+	s.persistSnapshot(out, info)
 	s.event(api.Event{Type: api.EventSnapshotCreated, Sandbox: sb.ID, Snapshot: id, Bytes: info.Bytes})
 	return out, nil
 }
@@ -237,6 +238,7 @@ func (s *Server) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such snapshot")
 		return
 	}
+	s.forgetSnapshot(id)
 	if sn, ok := s.Backend.(backend.Snapshotter); ok {
 		_ = sn.DeleteSnapshot(r.Context(), id)
 	}

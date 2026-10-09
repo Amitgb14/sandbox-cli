@@ -656,6 +656,14 @@ that fails on the code before the fix:
 
 ### Fixed
 
+- **Snapshots no longer fill the disk after a restart, and with
+  `--keep-sandboxes` they survive one.** The list of snapshots lived only in
+  sandboxd's memory, so after a restart a snapshot's files (a guest's memory
+  and disk, gigabytes each) could neither be used nor deleted, and stayed on
+  disk for good. With `--keep-sandboxes`, snapshots are now kept like their
+  sandboxes: listed again after a restart and usable to start sandboxes from.
+  Without it, a restart deletes the snapshots an earlier run left.
+
 - **Upgrading sandboxd no longer fills its disk with old root disks.** Each
   image's root disk is cached per guest agent, and every sandboxd build has its
   own agent, so each upgrade built a new set (about 3.7 GB for the base image)

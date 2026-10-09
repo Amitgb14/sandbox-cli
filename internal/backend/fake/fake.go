@@ -244,6 +244,17 @@ func (b *Backend) Resume(_ context.Context, id string) error {
 	return err
 }
 
+// StoredSnapshots is backend.SnapshotLister.
+func (b *Backend) StoredSnapshots() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, 0, len(b.snapshots))
+	for id := range b.snapshots {
+		out = append(out, id)
+	}
+	return out
+}
+
 // Kept is backend.Keeper: the fake outlives a server in a test the way a VM
 // outlives sandboxd, so every sandbox it holds is one a new server can take
 // back.

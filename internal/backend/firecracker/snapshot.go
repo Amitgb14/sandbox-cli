@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -219,6 +220,9 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 }
 
 func (b *Backend) DeleteSnapshot(_ context.Context, snapshotID string) error {
+	if !snapshotIDOK(snapshotID) {
+		return backend.ErrNotFound // never a path outside the snapshots directory
+	}
 	return os.RemoveAll(b.snapshotDir(snapshotID))
 }
 
@@ -302,4 +306,50 @@ func diskUsage(dir string) int64 {
 		return nil
 	})
 	return total
+}
+
+// snapshotIDOK is the form the server gives snapshot ids (snp_ and 16 hex
+// digits); anything else names no snapshot of ours.
+func snapshotIDOK(id string) bool {
+	rest, ok := strings.CutPrefix(id, "snp_")
+	if !ok || len(rest) != 16 {
+		return false
+	}
+	for _, r := range rest {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// StoredSnapshots is backend.SnapshotLister: the snapshots on disk, by id.
+func (b *Backend) StoredSnapshots() []string {
+	des, _ := os.ReadDir(filepath.Join(b.cfg.StateDir, "snapshots"))
+	var out []string
+	for _, de := range des {
+		if de.IsDir() && snapshotIDOK(de.Name()) {
+			out = append(out, de.Name())
+		}
+	}
+	return out
+}
+
+// reapSnapshots removes every snapshot an earlier sandboxd left. The list of
+// snapshots is the server's, in memory: after a restart without kept records
+// none of them can be named again, so their files — a guest's memory and disk,
+// gigabytes each — would stay on disk for good. Kept records take them back
+// instead (the server pairs StoredSnapshots with its own and deletes the rest).
+func (b *Backend) reapSnapshots() {
+	dir := filepath.Join(b.cfg.StateDir, "snapshots")
+	des, _ := os.ReadDir(dir)
+	n := 0
+	for _, de := range des {
+		if err := os.RemoveAll(filepath.Join(dir, de.Name())); err == nil {
+			n++
+		}
+	}
+	if n > 0 {
+		b.cfg.Logf("removed %d snapshot(s) an earlier run left: their list did not survive the restart", n)
+	}
 }
