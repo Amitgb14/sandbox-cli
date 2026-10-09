@@ -131,7 +131,8 @@ const MAC_STEPS: Step[] = [
         The launch agent in the repository runs <code>/usr/local/bin/sandboxd</code>; the <code>sed</code> points
         it at the copy in <code>~/.local/bin</code>, so nothing needs root. It starts at login, restarts if it
         exits, logs to <code>/tmp/sandboxd.log</code>, and listens on a unix socket only you can open, which is the
-        CLI&apos;s default context.
+        CLI&apos;s context named <code>local</code>. If you have added other contexts,{" "}
+        <code>sandbox-cli context use local</code> switches back to it.
       </>
     ),
   },
@@ -221,8 +222,11 @@ const LINUX_STEPS: Step[] = [
     code: "sandboxd --backend firecracker \\\n  --kernel ~/.local/share/sandboxd/vmlinux \\\n  --firecracker ~/.local/bin/firecracker",
     body: (
       <>
-        It listens on <code>$XDG_RUNTIME_DIR/sandboxd.sock</code>, the CLI&apos;s default local context, and its
-        first line says what it will serve. Leave it running and use a second terminal for the rest.
+        It listens on <code>$XDG_RUNTIME_DIR/sandboxd.sock</code>, the CLI&apos;s context named{" "}
+        <code>local</code>, and its last line names its version and what it will serve. Leave it running and use a
+        second terminal for the rest. If you have added other contexts, switch back with{" "}
+        <code>sandbox-cli context use local</code>; otherwise the CLI asks the one you added, and says{" "}
+        <code>sandboxd did not answer</code>.
       </>
     ),
   },
