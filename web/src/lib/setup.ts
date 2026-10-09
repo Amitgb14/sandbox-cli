@@ -57,7 +57,8 @@ release_url=https://github.com/firecracker-microvm/firecracker/releases
 latest=v1.17.0   # the version checked on a real host
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
 sudo install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
-sudo install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer`;
+sudo install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
+firecracker --version   # Firecracker v1.17.0`;
 
 export const SERVER_INSTALL_CODE = RELEASED
   ? `curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\
@@ -144,9 +145,9 @@ export const SETUP_PATHS: SetupPath[] = [
     engine: "Firecracker",
     steps: [
       {
-        title: "Have KVM, Firecracker and a guest kernel",
-        code: "ls -l /dev/kvm\n# firecracker and jailer: github.com/firecracker-microvm/firecracker/releases\n# a vmlinux with IP_PNP, VIRTIO_VSOCKETS and overlayfs: Firecracker's CI kernel, fetched below",
-        body: "x86_64 or arm64, plus mkfs.ext4, ip and nft. The machine needs KVM: a cloud VM without nested virtualisation will not do.",
+        title: "Have KVM and the tools",
+        code: "ls -l /dev/kvm   # a cloud VM needs nested virtualisation\nsudo dnf install -y e2fsprogs iproute nftables git make curl file   # or apt-get: iproute2\ngo version       # 1.25 or later",
+        body: "Checked on x86_64, an EL10 distribution with host kernel 6.12, e2fsprogs 1.47.1, iproute2 6.17.0 and nftables 1.1.5; arm64 and other distributions are built for but not yet run. Firecracker 1.17.0 and the guest kernel 6.1.155 come in the steps below, both pinned to the versions checked.",
       },
       {
         title: "Give sandboxes a disk of their own",
@@ -160,7 +161,7 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       {
         title: "Run it as a service",
-        code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls\nARCH=$(uname -m)\nsudo curl -fsSL -o /var/lib/sandboxd/vmlinux https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'\nsudo install -m 0600 cert.pem key.pem /etc/sandboxd/tls/\nRAW=https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd\nsudo curl -fsSL $RAW/policy.example.yaml -o /etc/sandboxd/policy.yaml\nsudo curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service   # set --allowed-host\nsudo systemctl daemon-reload && sudo systemctl enable --now sandboxd",
+        code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls\nARCH=$(uname -m)\nsudo curl -fsSL -o /var/lib/sandboxd/vmlinux https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155\nfile /var/lib/sandboxd/vmlinux   # the guest kernel, 6.1.155: must say ELF 64-bit\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'\nsudo install -m 0600 cert.pem key.pem /etc/sandboxd/tls/\nRAW=https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd\nsudo curl -fsSL $RAW/policy.example.yaml -o /etc/sandboxd/policy.yaml\nsudo curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service   # set --allowed-host\nsudo systemctl daemon-reload && sudo systemctl enable --now sandboxd",
         body: "As root it enforces the egress allowlist on the host and runs every VM under the jailer with a uid of its own. It refuses to listen on a network address without a token and TLS. The policy file is where the ceiling, the image list, pools and limits are set; a request can only ask for less. With --keep-sandboxes, an upgrade leaves running sandboxes running.",
       },
       {

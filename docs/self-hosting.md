@@ -34,6 +34,7 @@ not listed may well work; it has not been checked.
 | Guest kernel | Firecracker CI kernel 6.1.155 (x86_64) | other kernels; the arm64 build of the same kernel |
 | Host CPU | x86_64 | arm64: built and released for, never run |
 | Host OS and kernel | an EL10 distribution, kernel 6.12, xfs, firewalld active | Debian, Ubuntu and others; kernels before 6.12; btrfs, ext4 |
+| Host tools | e2fsprogs 1.47.1, iproute2 6.17.0, nftables 1.1.5; Go 1.25 to build | older versions (e2fsprogs must be 1.43+) |
 | Privilege | root under systemd, with the jailer and the egress firewall; and as a user, with no network | — |
 | Base image | `ghcr.io/amitgb14/sandbox-base:edge` | other images (the guest agent is put into each, so any Linux image may run) |
 
@@ -48,24 +49,57 @@ silicon, the `container` runtime): [local-macos.md](local-macos.md).
 
 ## Install
 
-On a server, give sandboxes a disk of their own first ([An extra disk for
-sandboxes](#an-extra-disk-for-sandboxes), below): images, sandboxes' disks,
-snapshots and volumes then never fill the root filesystem. Mount it before
-these steps, which put the guest kernel in that directory; a disk mounted
-over it afterwards hides it. A command that needs root says `sudo`.
+Seven steps, from a bare machine to a sandbox that ran. Each says what it
+needs and which version was checked on a real host ([Versions
+checked](#versions-checked) has them together), and ends with a command that
+shows the step worked. A command that needs root says `sudo`.
 
-**1. The binaries: built from a checkout, for now.** No published release has
-`sandboxd` yet: 0.0.1 is the last release of the container design, and
-`install.sh` refuses it rather than install half of it. Until the rewrite's
-first release, build on the server (Go 1.25+) or on any Linux machine of the
-same architecture, and copy `bin/` across:
+**1. Check the machine.** Linux with KVM on x86_64 (checked) or arm64 (built,
+not yet run). Checked on an EL10 distribution with host kernel 6.12; the host
+kernel only needs KVM, `tun` and nftables, which any recent distribution
+kernel has.
+
+```sh
+uname -m                     # x86_64 (checked) or aarch64
+ls -l /dev/kvm               # must exist; on a cloud VM, nested virtualisation must be on
+uname -r                     # checked: 6.12
+
+# the tools sandboxd runs: mkfs.ext4 (e2fsprogs 1.43+; checked 1.47.1),
+# ip (iproute2; checked 6.17.0), nft (nftables; checked 1.1.5); and git, make, curl, file to build
+sudo dnf install -y e2fsprogs iproute nftables git make curl file      # Fedora, RHEL and rebuilds
+sudo apt-get install -y e2fsprogs iproute2 nftables git make curl file # Debian, Ubuntu (not yet checked)
+```
+
+Go 1.25 or later builds the binaries (`go version`). A distribution's Go is
+often older; <https://go.dev/dl/> has the current one.
+
+**2. A disk for sandboxes (on a server).** Images, sandboxes' disks,
+snapshots and volumes live under `/var/lib/sandboxd`. On a server, mount a
+disk of their own there now, as [An extra disk for
+sandboxes](#an-extra-disk-for-sandboxes) shows, so they never fill the root
+filesystem: by UUID, xfs (checked) or btrfs, and the whole directory. Mount it
+before the next steps, which put the guest kernel in it; a disk mounted over
+it afterwards hides it. On a machine just for trying, skip this step.
+
+```sh
+findmnt /var/lib/sandboxd    # the disk, once mounted; nothing on a machine just for trying
+```
+
+**3. sandboxd and the guest agent: built from a checkout, for now.** No
+published release has `sandboxd` yet: 0.0.1 is the last release of the
+container design, and `install.sh` refuses it rather than install half of it.
+Until the rewrite's first release, build on the server (Go 1.25+) or on any
+Linux machine of the same architecture, and copy `bin/` across:
 
 ```sh
 git clone https://github.com/Amitgb14/sandbox-cli && cd sandbox-cli
 make build        # -> bin/sandbox-cli, bin/sandboxd, bin/sandbox-gateway, bin/sandbox-guestd
 sudo install -m 0755 bin/sandboxd bin/sandbox-guestd bin/sandbox-cli /usr/local/bin/
+sandboxd --version           # sandboxd 0.0.1-<commits>-g<commit>: the commit you built
 ```
 
+`sandbox-guestd` must sit beside `sandboxd` (or be named with `--agent`): it is
+put into every image's root disk, so the guest agent always matches the server.
 Once a release has them, `install.sh` does this step instead, with no checkout,
 each archive checked against the release's checksums:
 
@@ -74,24 +108,30 @@ curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.s
   | sudo sh -s -- --dest /usr/local/bin --no-config
 ```
 
-`sandbox-guestd` must sit beside `sandboxd` (or be named with `--agent`): it is
-put into every image's root disk, so the guest agent always matches the server.
-
-**2. Firecracker, its jailer and a guest kernel.** These come from
-Firecracker's own releases, not this repository, at the versions in [Versions
-checked](#versions-checked): Firecracker 1.17.0 and its CI kernel 6.1.155,
-which has every option [What the machine needs](#what-the-machine-needs)
-lists. Both are pinned; the newest Firecracker release does not always have
-CI kernels published yet. Any kernel with those options does instead.
+**4. Firecracker and its jailer, 1.17.0.** From Firecracker's own releases, not
+this repository. 1.17.0 is the version checked, and it is pinned: a newer one
+may work, but has not been run.
 
 ```sh
 ARCH=$(uname -m)
 release_url=https://github.com/firecracker-microvm/firecracker/releases
-latest=v1.17.0      # the version checked; see Versions checked
+latest=v1.17.0      # the version checked
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
 sudo install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
 sudo install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
+firecracker --version        # Firecracker v1.17.0
+```
 
+**5. The guest kernel, 6.1.155.** Every sandbox boots this kernel, whatever
+the host runs. It must be built with `CONFIG_IP_PNP`,
+`CONFIG_VIRTIO_VSOCKETS`, `CONFIG_OVERLAY_FS`, `CONFIG_EXT4_FS`,
+`CONFIG_VIRTIO_BLK` and `CONFIG_VIRTIO_NET`. Firecracker's CI kernel 6.1.155
+has them all, for x86_64 (checked) and arm64. It is pinned: the CI kernels are
+published per Firecracker release, and the newest release does not always
+have them yet. Any kernel with those options does instead.
+
+```sh
+ARCH=$(uname -m)
 sudo install -d -m 0700 /var/lib/sandboxd
 sudo curl -fsSL -o /var/lib/sandboxd/vmlinux \
   https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155
@@ -99,10 +139,12 @@ sudo chmod 0644 /var/lib/sandboxd/vmlinux
 file /var/lib/sandboxd/vmlinux      # must say ELF 64-bit; anything else is an error page
 ```
 
-**3. The token, TLS, the policy and the unit.** The policy and the unit are
-fetched from the repository, so this step needs no checkout either. From one,
-`cp packaging/systemd/policy.example.yaml` and `cp
-packaging/systemd/sandboxd.service` do the same.
+**6. The token, TLS, the policy and the unit.** The policy and the unit are
+fetched from the repository, so this step needs no checkout. From one, `cp
+packaging/systemd/policy.example.yaml` and `cp
+packaging/systemd/sandboxd.service` do the same. The unit runs sandboxd as
+root, which the tap devices, nftables and the jailer need; each VM runs under
+the jailer with a uid of its own.
 
 ```sh
 sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls
@@ -121,8 +163,22 @@ sudo curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service
 sudo sed -i 's/sandbox.example.internal/box.example.internal/' /etc/systemd/system/sandboxd.service
 
 sudo systemctl daemon-reload && sudo systemctl enable --now sandboxd
-sudo journalctl -u sandboxd -f
+sudo journalctl -u sandboxd -n 20   # "sandboxd: <version> serving API v1 on …; backend firecracker; …"
 ```
+
+**7. Check it from a client.** On your laptop, or on the server itself, with
+the token and the CA's certificate copied across:
+
+```sh
+sandbox-cli context add box https://box.example.internal:7443 --token-file box.token --ca box-ca.pem
+sandbox-cli context use box
+sandbox-cli doctor           # backend firecracker, the network ceiling, the capabilities
+sandbox-cli run -- uname -r  # 6.1.155+: the guest kernel, not the host's
+```
+
+The first run pulls the base image and builds its root disk, a minute or more;
+`sandbox-cli image pull` does that ahead ([Images](#images)). [Checking it
+works](#checking-it-works) runs the conformance suite against the server.
 
 ## Where it keeps things
 

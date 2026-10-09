@@ -150,42 +150,65 @@ release_url=https://github.com/firecracker-microvm/firecracker/releases
 latest=v1.17.0   # the version checked on a real host
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
 install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH ~/.local/bin/firecracker
-install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH ~/.local/bin/jailer`;
+install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH ~/.local/bin/jailer
+~/.local/bin/firecracker --version   # Firecracker v1.17.0`;
+
+/**
+ * What the machine needs, with the versions checked on a real host
+ * (docs/self-hosting.md, "Versions checked"). Both Linux paths start here.
+ */
+const CHECK_MACHINE_CODE = `uname -m                     # x86_64 (checked) or aarch64 (built, not yet run)
+ls -l /dev/kvm               # must exist; a cloud VM needs nested virtualisation
+uname -r                     # host kernel; checked: 6.12
+
+# mkfs.ext4 (e2fsprogs 1.43+; checked 1.47.1), ip (iproute2; checked 6.17.0),
+# nft (nftables; checked 1.1.5), and git, make, curl, file to build
+sudo dnf install -y e2fsprogs iproute nftables git make curl file      # Fedora, RHEL and rebuilds
+sudo apt-get install -y e2fsprogs iproute2 nftables git make curl file # Debian, Ubuntu (not yet checked)
+go version                   # 1.25 or later builds the binaries`;
+
+const CHECK_MACHINE_BODY = (
+  <>
+    Checked on x86_64, an EL10 distribution with host kernel 6.12, xfs and firewalld; arm64 and other distributions
+    are built for but not yet run. The host kernel only needs KVM, <code>tun</code> and nftables. A distribution&apos;s
+    Go is often older than 1.25; <a href="https://go.dev/dl/">go.dev/dl</a> has the current one. Every version
+    checked is in <Link href={docPath("self-hosting", "versions-checked")}>Versions checked</Link>.
+  </>
+);
 
 const LINUX_STEPS: Step[] = [
   {
-    title: "Check for KVM and the tools",
-    code: "ls -l /dev/kvm\nsudo usermod -aG kvm $USER     # then log out and back in\ncommand -v mkfs.ext4 ip nft",
+    title: "Check the machine: KVM, the tools, Go",
+    code: `${CHECK_MACHINE_CODE}\nsudo usermod -aG kvm $USER   # then log out and back in: your user must open /dev/kvm`,
     body: (
       <>
-        x86_64 or arm64 Linux with <code>/dev/kvm</code>, which your user must be able to read and write. A cloud
-        VM needs nested virtualisation for that. You also need <code>mkfs.ext4</code> (e2fsprogs 1.43 or later);{" "}
-        <code>ip</code> and <code>nft</code> are only used when sandboxd runs as root.
+        {CHECK_MACHINE_BODY} Without root, <code>ip</code> and <code>nft</code> go unused.
       </>
     ),
   },
   INSTALL_STEP,
   {
-    title: "Get Firecracker",
+    title: "Get Firecracker 1.17.0",
     code: FIRECRACKER_FETCH,
     body: (
       <>
         Firecracker and its jailer come from the project&apos;s own releases. This takes 1.17.0, the version
-        sandboxd has been checked with, for your architecture, and puts both beside sandbox-cli. What else has
-        and has not been checked is in{" "}
-        <Link href={docPath("self-hosting", "versions-checked")}>Versions checked</Link>.
+        sandboxd has been checked with, for your architecture, and puts both beside sandbox-cli. It is pinned: a
+        newer one may work, but has not been run.
       </>
     ),
   },
   {
-    title: "Get a guest kernel",
-    code: "mkdir -p ~/.local/share/sandboxd\ncurl -fsSL -o ~/.local/share/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$(uname -m)/vmlinux-6.1.155",
+    title: "Get the guest kernel, 6.1.155",
+    code: "mkdir -p ~/.local/share/sandboxd\ncurl -fsSL -o ~/.local/share/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$(uname -m)/vmlinux-6.1.155\nfile ~/.local/share/sandboxd/vmlinux   # must say ELF 64-bit; anything else is an error page",
     body: (
       <>
-        Each sandbox boots this kernel. It needs <code>CONFIG_IP_PNP</code>, <code>CONFIG_VIRTIO_VSOCKETS</code>{" "}
-        and overlayfs; this is Firecracker&apos;s CI kernel 6.1.155, which has all three. It is pinned, since the
-        newest Firecracker release does not always have CI kernels published yet. Keep it anywhere you like and
-        name it with <code>--kernel</code>.
+        Each sandbox boots this kernel, whatever the host runs. It must be built with{" "}
+        <code>CONFIG_IP_PNP</code>, <code>CONFIG_VIRTIO_VSOCKETS</code>, <code>CONFIG_OVERLAY_FS</code>,{" "}
+        <code>CONFIG_EXT4_FS</code>, <code>CONFIG_VIRTIO_BLK</code> and <code>CONFIG_VIRTIO_NET</code>;
+        Firecracker&apos;s CI kernel 6.1.155 has them all, for x86_64 (checked) and arm64. It is pinned: the newest
+        Firecracker release does not always have CI kernels published yet. Keep it anywhere you like and name it
+        with <code>--kernel</code>.
       </>
     ),
   },
@@ -206,6 +229,11 @@ const LINUX_STEPS: Step[] = [
 
 const SERVER_STEPS: Step[] = [
   {
+    title: "Check the machine: KVM, the tools, Go",
+    code: CHECK_MACHINE_CODE,
+    body: CHECK_MACHINE_BODY,
+  },
+  {
     title: "Give sandboxes a disk of their own",
     code: "lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS   # the new disk: no FSTYPE, no mount point (say nvme1n1)\nsudo mkfs.xfs /dev/nvme1n1                    # erases it\nsudo mkdir -p /var/lib/sandboxd\necho \"UUID=$(sudo blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2\" \\\n  | sudo tee -a /etc/fstab\nsudo systemctl daemon-reload && sudo mount /var/lib/sandboxd && sudo chmod 0700 /var/lib/sandboxd\nfindmnt /var/lib/sandboxd && df -h /var/lib/sandboxd",
     body: (
@@ -220,7 +248,9 @@ const SERVER_STEPS: Step[] = [
     ),
   },
   {
-    title: RELEASED ? "Install as root, where the unit expects it" : "Build, and install as root where the unit expects it",
+    title: RELEASED
+      ? "Install as root, with Firecracker 1.17.0"
+      : "Build sandboxd, and install it as root with Firecracker 1.17.0",
     code: SERVER_INSTALL_CODE,
     body: (
       <>
@@ -239,11 +269,12 @@ const SERVER_STEPS: Step[] = [
     ),
   },
   {
-    title: "Make its directories, kernel and token",
-    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nsudo curl -fsSL -o /var/lib/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$(uname -m)/vmlinux-6.1.155\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'",
+    title: "Make its directories, the guest kernel (6.1.155) and the token",
+    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nsudo curl -fsSL -o /var/lib/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$(uname -m)/vmlinux-6.1.155\nfile /var/lib/sandboxd/vmlinux   # must say ELF 64-bit\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'",
     body: (
       <>
-        Image disks are hard-linked into each sandbox&apos;s jail, so <code>/var/lib/sandboxd</code> must be one
+        The guest kernel is Firecracker&apos;s CI kernel 6.1.155, with every option sandboxd needs (as in the quick
+        try above). Image disks are hard-linked into each sandbox&apos;s jail, so <code>/var/lib/sandboxd</code> must be one
         filesystem; on xfs or btrfs snapshot and fork copies are reflinks. The token is what clients present: at
         least 16 characters, readable by root only. sandboxd refuses a token file other users can read.
       </>
