@@ -53,9 +53,11 @@ curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.s
 put into every image's root disk, so the guest agent always matches the server.
 
 **2. Firecracker, its jailer and a guest kernel.** These come from
-Firecracker's own releases, not this repository. The kernel is the one
-[What the machine needs](#what-the-machine-needs) describes, such as a CI
-kernel from Firecracker's getting-started guide:
+Firecracker's own releases, not this repository. The kernel is Firecracker's
+CI kernel 6.1.155, which has the three options [What the machine
+needs](#what-the-machine-needs) lists; it is pinned, since the newest
+Firecracker release does not always have CI kernels published yet. Any kernel
+with those options does instead.
 
 ```sh
 ARCH=$(uname -m)
@@ -66,7 +68,10 @@ sudo install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/
 sudo install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
 
 sudo install -d -m 0700 /var/lib/sandboxd
-sudo install -m 0644 vmlinux /var/lib/sandboxd/vmlinux
+sudo curl -fsSL -o /var/lib/sandboxd/vmlinux \
+  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155
+sudo chmod 0644 /var/lib/sandboxd/vmlinux
+file /var/lib/sandboxd/vmlinux      # must say ELF 64-bit; anything else is an error page
 ```
 
 **3. The token, TLS, the policy and the unit.** The policy and the unit are

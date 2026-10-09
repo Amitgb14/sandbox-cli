@@ -172,12 +172,13 @@ const LINUX_STEPS: Step[] = [
   },
   {
     title: "Get a guest kernel",
-    code: "# a vmlinux built with CONFIG_IP_PNP, CONFIG_VIRTIO_VSOCKETS and overlayfs,\n# for example a CI kernel from Firecracker's getting-started guide\ninstall -D -m 0644 vmlinux ~/.local/share/sandboxd/vmlinux",
+    code: "mkdir -p ~/.local/share/sandboxd\ncurl -fsSL -o ~/.local/share/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$(uname -m)/vmlinux-6.1.155",
     body: (
       <>
         Each sandbox boots this kernel. It needs <code>CONFIG_IP_PNP</code>, <code>CONFIG_VIRTIO_VSOCKETS</code>{" "}
-        and overlayfs; the CI kernels from Firecracker&apos;s getting-started guide have all three. Keep it anywhere
-        you like and name it with <code>--kernel</code>.
+        and overlayfs; this is Firecracker&apos;s CI kernel 6.1.155, which has all three. It is pinned, since the
+        newest Firecracker release does not always have CI kernels published yet. Keep it anywhere you like and
+        name it with <code>--kernel</code>.
       </>
     ),
   },
@@ -225,13 +226,13 @@ const SERVER_STEPS: Step[] = [
             <code>--no-config</code> because the server reads a policy file, not a client config.
           </>
         ) : null}{" "}
-        Fetch Firecracker as in the quick try above.
+        Firecracker and its jailer come from Firecracker&apos;s own releases, the latest for your architecture.
       </>
     ),
   },
   {
     title: "Make its directories, kernel and token",
-    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nsudo install -m 0644 vmlinux /var/lib/sandboxd/vmlinux\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'",
+    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nsudo curl -fsSL -o /var/lib/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$(uname -m)/vmlinux-6.1.155\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'",
     body: (
       <>
         Image disks are hard-linked into each sandbox&apos;s jail, so <code>/var/lib/sandboxd</code> must be one
