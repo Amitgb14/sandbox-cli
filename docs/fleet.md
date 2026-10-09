@@ -91,9 +91,13 @@ working set with openssl: a private CA, the gateway's client certificate, a
 server certificate for each node, and optionally one for the gateway's own API.
 
 ```sh
-sh packaging/fleet/make-certs.sh -o fleet-certs \
+curl -fsSLO https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/fleet/make-certs.sh
+sh make-certs.sh -o fleet-certs \
   -g gateway.example.internal 10.0.0.17 10.0.0.18
 ```
+
+The script is all it needs, so it is fetched on its own; from a checkout,
+`sh packaging/fleet/make-certs.sh` is the same.
 
 Each node argument is the host part of that node's endpoint **exactly as the
 gateway dials it**: an IP address becomes an IP SAN, a name a DNS SAN. Run it
@@ -162,10 +166,17 @@ the gateway offers what **every** answering node can do (see
 
 ### Install
 
+**The binary: built from a checkout, for now.** No published release has
+`sandbox-gateway` yet: 0.0.1 is the last release of the container design.
+Until the rewrite's first release, build it as the nodes' binaries are built
+([self-hosting.md](self-hosting.md#install)); once a release has it,
+`install.sh --with-gateway` (with `--client-only` on a machine that runs no
+sandboxes) or the release's `sandbox-gateway_<version>_linux_<arch>.tar.gz`
+replaces the first two lines below. The gateway needs no KVM and no root.
+
 ```sh
-# the binary: the release's sandbox-gateway_<version>_linux_<arch>.tar.gz,
-# or install.sh --with-gateway, or `make build` from a checkout
-install -m 0755 sandbox-gateway /usr/local/bin/
+git clone https://github.com/Amitgb14/sandbox-cli && cd sandbox-cli && make build
+install -m 0755 bin/sandbox-gateway bin/sandbox-cli /usr/local/bin/
 
 useradd --system --home-dir /var/lib/sandbox-gateway --shell /usr/sbin/nologin sandbox-gateway
 install -d -o sandbox-gateway -g sandbox-gateway -m 0700 \
@@ -249,6 +260,14 @@ sandbox-gateway serve --state /var/lib/sandbox-gateway/state.json \
 [`packaging/systemd/sandbox-gateway.service`](../packaging/systemd/sandbox-gateway.service)
 runs this as the `sandbox-gateway` user with no capabilities, a read-only
 system and only its state directory writable.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd/sandbox-gateway.service \
+  -o /etc/systemd/system/sandbox-gateway.service      # or cp it from a checkout
+# set --ssh-public-host to the name users ssh to, as above
+sed -i 's/gateway.example.internal/gw.example.internal/' /etc/systemd/system/sandbox-gateway.service
+systemctl daemon-reload && systemctl enable --now sandbox-gateway
+```
 
 | Flag | Default | |
 |---|---|---|
