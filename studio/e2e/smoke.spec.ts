@@ -310,3 +310,19 @@ test("the Playground writes the same sandbox as code, and the list filters by st
   await expect(page.getByText("filter-gone")).toBeVisible();
   await api(`/v1/sandboxes/${keep.id}`, "DELETE");
 });
+
+test("the theme switch shows the theme in force after a reload", async ({ page }) => {
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  const theme = page.getByRole("radiogroup", { name: "Theme" });
+  await theme.getByRole("radio", { name: "Light" }).click();
+  await expect(page.locator("html")).toHaveClass(/light/);
+  // A fresh load hydrates the pre-rendered switch, which cannot know the
+  // stored choice; it used to keep showing Dark on a light page.
+  await page.goto("/sandboxes/");
+  await expect(page.locator("html")).toHaveClass(/light/);
+  await expect(theme.getByRole("radio", { name: "Light" })).toHaveAttribute("aria-checked", "true");
+  await expect(theme.getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "false");
+  await theme.getByRole("radio", { name: "Dark" }).click();
+  await expect(theme.getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
+});
