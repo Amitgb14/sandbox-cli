@@ -14,7 +14,7 @@ renders them from here.
 | Page | What it answers |
 |---|---|
 | [Local on a Mac](local-macos.md) | sandboxd with the native `container` runtime, and the points still to be measured |
-| [Self-hosting on Linux](self-hosting.md) | sandboxd on a Linux machine: install, TLS and tokens, the network default, pools, volumes, the audit log, how egress is enforced |
+| [Self-hosting on Linux](self-hosting.md) | sandboxd on a Linux machine: install, TLS and tokens, where it keeps things and a disk for sandboxes, a production checklist, the network default, pools, upgrading without stopping sandboxes, images, volumes, the audit log, how egress is enforced |
 
 ## Components
 

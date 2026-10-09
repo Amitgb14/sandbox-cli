@@ -36,6 +36,14 @@ API always on it.
 beyond what `sandbox-cli doctor` reports. `sandbox-gateway` serves the same API in front of many machines, with a key per
 user, sandboxes only their owner can see, and SSH on one port ([docs/fleet.md](docs/fleet.md)).
 
+On a Linux server, give sandboxes a disk of their own before installing: images,
+sandboxes' disks, snapshots and volumes all live under `/var/lib/sandboxd`, and
+mounted there they fill that disk and not `/`. With `--keep-sandboxes`, sandboxd
+restarts and upgrades without stopping the sandboxes it runs. The install, the
+disk, the [production checklist](docs/self-hosting.md#in-production) and
+upgrades are in [docs/self-hosting.md](docs/self-hosting.md); the `/setup` page
+of the website walks through each path step by step.
+
 ## Use it
 
 ```sh
@@ -54,6 +62,9 @@ sandbox-cli snapshot · suspend · resume · tunnel
 sandbox-cli events ID                # what the sandbox was asked to do, and how it ended
 sandbox-cli volume create cache; sandbox-cli run --volume cache:/sandbox/home/.cache -- npm ci
 sandbox-cli run --label team=infra -- make; sandbox-cli list --label team=infra
+sandbox-cli run --template large -- make            # a size by name; template ls lists them
+sandbox-cli update dev --name api --idle 2h         # rename, relabel, retime or re-network a live sandbox
+sandbox-cli image pull IMAGE · image ls · image rm IMAGE   # install an image before its first sandbox waits for it
 ```
 
 Work done in a sandbox stays there. To keep it, push it from inside (a commit
@@ -194,7 +205,8 @@ The microVM tests need `/dev/kvm`; see [AGENTS.md](AGENTS.md) and
 ## Documents
 
 - [docs/api/v1.md](docs/api/v1.md): the API every mode serves.
-- [docs/self-hosting.md](docs/self-hosting.md), [docs/local-macos.md](docs/local-macos.md): running sandboxd.
+- [docs/self-hosting.md](docs/self-hosting.md), [docs/local-macos.md](docs/local-macos.md): running sandboxd —
+  install, where it keeps things and the disk to give it, upgrading without stopping sandboxes, images, volumes.
 - [docs/fleet.md](docs/fleet.md): many sandboxd nodes behind one `sandbox-gateway`, for one machine or many;
   with [SSH](docs/ssh.md), [organizations](docs/organizations.md), [jobs and secrets](docs/jobs.md),
   [services](docs/services.md) and [operations](docs/operations.md) on pages of their own.

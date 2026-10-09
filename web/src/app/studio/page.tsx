@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
@@ -21,6 +22,7 @@ export const metadata: Metadata = {
 
 const NAV: NavEntry[] = [
   { kind: "link", href: "#what", label: "What it is" },
+  { kind: "link", href: "#look", label: "A look" },
   { kind: "link", href: "#screens", label: "Screens" },
   { kind: "link", href: "#guards", label: "Who may use it" },
 ];
@@ -59,6 +61,69 @@ const SCREENS = [
     what: "Built with NEXT_PUBLIC_STUDIO_ADMIN=off, Studio leaves the admin screens out of the bundle entirely, for a dashboard served to many tenants. The gateway's refusal stays the control; the build only means they are not shipped.",
   },
 ];
+
+/**
+ * Screenshots of Studio against a real sandboxd: Firecracker on a Linux host,
+ * run without root, so every sandbox's network reads "none". Each is taken in
+ * both themes (public/studio/<name>-light.png and -dark.png) and the one
+ * matching the site's theme is shown, through the `dark:` variant.
+ */
+const SHOTS = [
+  {
+    name: "sandboxes",
+    title: "Sandboxes",
+    caption: "Every sandbox on the server, wherever it was started, with what it was given and what the machine has left.",
+  },
+  {
+    name: "sandbox",
+    title: "One sandbox",
+    caption: "Its details, editable while it runs, beside a terminal, its desktop, its processes' output from the first byte, its files and its events.",
+  },
+  {
+    name: "playground",
+    title: "Playground",
+    caption: "An agent unattended, an agent's console, or a command, with the same run as CLI, curl, Python and TypeScript beside it.",
+  },
+  {
+    name: "images",
+    title: "Images",
+    caption: "What sandboxes start from: installed ahead of the first one, with size and use, and removed when nothing needs it.",
+  },
+  {
+    name: "templates",
+    title: "Templates",
+    caption: "Sizes by name, built in or saved, measured against what this endpoint allows.",
+  },
+  {
+    name: "snapshots",
+    title: "Snapshots",
+    caption: "A running sandbox captured whole, memory and disk, to start new ones from.",
+  },
+];
+
+function Shot({ name, title, priority }: { name: string; title: string; priority?: boolean }) {
+  const frame = "overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md";
+  return (
+    <>
+      {(["light", "dark"] as const).map((theme) => (
+        <a
+          key={theme}
+          href={`/studio/${name}-${theme}.png`}
+          className={`${frame} ${theme === "light" ? "block dark:hidden" : "hidden dark:block"}`}
+        >
+          <Image
+            src={`/studio/${name}-${theme}.png`}
+            width={2160}
+            height={1350}
+            alt={`Sandbox Studio, the ${title} screen`}
+            priority={priority}
+            className="h-auto w-full"
+          />
+        </a>
+      ))}
+    </>
+  );
+}
 
 const GUARDS = [
   {
@@ -106,7 +171,31 @@ export default function StudioPage() {
           </p>
         </Section>
 
-        <Section id="screens" tinted>
+        <Section id="look" tinted>
+          <SectionHead
+            eyebrow="a look"
+            title="The same sandboxes, on a page"
+            lead="Taken from a real sandboxd: Firecracker microVMs on a Linux machine, run without root, which is why each network says none. Select one for full size."
+          />
+          <figure className="flex flex-col gap-3">
+            <Shot name={SHOTS[0].name} title={SHOTS[0].title} priority />
+            <figcaption className="text-sm leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">{SHOTS[0].title}.</span> {SHOTS[0].caption}
+            </figcaption>
+          </figure>
+          <div className="mt-8 grid grid-cols-1 gap-x-6 gap-y-8 md:grid-cols-2">
+            {SHOTS.slice(1).map((s) => (
+              <figure key={s.name} className="flex flex-col gap-3">
+                <Shot name={s.name} title={s.title} />
+                <figcaption className="text-sm leading-relaxed text-muted-foreground">
+                  <span className="font-medium text-foreground">{s.title}.</span> {s.caption}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </Section>
+
+        <Section id="screens">
           <SectionHead
             eyebrow="screens"
             title="Launch, watch, answer, inspect"
@@ -122,7 +211,7 @@ export default function StudioPage() {
           </div>
         </Section>
 
-        <Section id="guards">
+        <Section id="guards" tinted>
           <SectionHead
             eyebrow="who may use it"
             title="A local tool that can start sandboxes still needs a lock"

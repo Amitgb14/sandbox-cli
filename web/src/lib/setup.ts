@@ -61,6 +61,12 @@ const FIRST_RUN_STEP: SetupStep = {
   body: "The first run builds the image's root disk, which takes a while; later ones start in about 80 ms on Firecracker. A sandbox starts in /sandbox/home, its own home directory, with nothing of your machine mounted in: ask the agent to clone what it needs.",
 };
 
+const STUDIO_STEP: SetupStep = {
+  title: "Open Studio",
+  code: "sandbox-cli studio",
+  body: "The same sandboxes in a browser: launch a command or an agent, use its terminal, watch its output, files and events. Served by sandbox-cli on a loopback port for the current context; open the address it prints, token and all.",
+};
+
 export const UNINSTALL_STEPS: SetupStep[] = [
   {
     title: "Remove the binaries",
@@ -95,6 +101,7 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       DOCTOR_STEP,
       FIRST_RUN_STEP,
+      STUDIO_STEP,
     ],
   },
   {
@@ -108,14 +115,19 @@ export const SETUP_PATHS: SetupPath[] = [
         body: "x86_64 or arm64, plus mkfs.ext4, ip and nft. The machine needs KVM: a cloud VM without nested virtualisation will not do.",
       },
       {
+        title: "Give sandboxes a disk of their own",
+        code: "mkfs.xfs /dev/nvme1n1   # erases it\necho \"UUID=$(blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2\" >> /etc/fstab\nmkdir -p /var/lib/sandboxd && mount /var/lib/sandboxd",
+        body: "Images, sandboxes' disks, snapshots and volumes live under /var/lib/sandboxd, so a full sandbox fills that disk and not /. Mount it first, the whole directory, by UUID; the unit will not start sandboxd without it.",
+      },
+      {
         title: "Install, as root, where the unit expects it",
-        code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\\n  | sudo sh -s -- --dest /usr/local/bin --no-config",
-        body: "sandboxd and the guest agent land side by side in /usr/local/bin, where packaging/systemd/sandboxd.service runs them from. --no-config: the server reads its policy file, not a client config.",
+        code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\\n  | sudo sh -s -- --dest /usr/local/bin --no-config\nsudo install -m 0755 firecracker jailer /usr/local/bin/",
+        body: "sandboxd, the guest agent beside it, Firecracker and its jailer go in /usr/local/bin, where packaging/systemd/sandboxd.service runs them from. --no-config: the server reads its policy file, not a client config.",
       },
       {
         title: "Run it as a service",
-        code: "install -m 0600 token /etc/sandboxd/token\ninstall -m 0600 cert.pem key.pem /etc/sandboxd/tls/\ncp packaging/systemd/policy.example.yaml /etc/sandboxd/policy.yaml\ncp packaging/systemd/sandboxd.service /etc/systemd/system/\nsystemctl enable --now sandboxd",
-        body: "As root it enforces the egress allowlist on the host and runs every VM under the jailer with a uid of its own. It refuses to listen on a network address without a token and TLS. The policy file is where the ceiling, the image list, pools and limits are set; a request can only ask for less.",
+        code: "install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls\ninstall -m 0644 vmlinux /var/lib/sandboxd/vmlinux\nhead -c 32 /dev/urandom | base64 > /etc/sandboxd/token && chmod 600 /etc/sandboxd/token\ninstall -m 0600 cert.pem key.pem /etc/sandboxd/tls/\ncp packaging/systemd/policy.example.yaml /etc/sandboxd/policy.yaml\ncp packaging/systemd/sandboxd.service /etc/systemd/system/   # set --allowed-host\nsystemctl daemon-reload && systemctl enable --now sandboxd",
+        body: "As root it enforces the egress allowlist on the host and runs every VM under the jailer with a uid of its own. It refuses to listen on a network address without a token and TLS. The policy file is where the ceiling, the image list, pools and limits are set; a request can only ask for less. With --keep-sandboxes, an upgrade leaves running sandboxes running.",
       },
       {
         title: "Point your client at it",
@@ -124,6 +136,7 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       DOCTOR_STEP,
       FIRST_RUN_STEP,
+      STUDIO_STEP,
     ],
   },
   {
@@ -141,6 +154,7 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       DOCTOR_STEP,
       FIRST_RUN_STEP,
+      STUDIO_STEP,
     ],
   },
   {
@@ -160,6 +174,7 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       DOCTOR_STEP,
       FIRST_RUN_STEP,
+      STUDIO_STEP,
     ],
   },
 ];

@@ -79,6 +79,19 @@ const FIRST_RUN: Step = {
   ),
 };
 
+const STUDIO: Step = {
+  title: "Open Studio",
+  code: "sandbox-cli studio\n# Studio: http://127.0.0.1:7080/#token=…",
+  body: (
+    <>
+      The browser view of the same sandboxes: launch a command or an agent, use its terminal, watch its output,
+      files and events. sandbox-cli serves it on a loopback port for whichever sandboxd your context points at, and
+      holds that sandboxd&apos;s token itself; open the address it prints, token and all.{" "}
+      <Link href={STUDIO_PATH}>More about Studio</Link>.
+    </>
+  ),
+};
+
 const MAC_STEPS: Step[] = [
   {
     title: "Start the container runtime",
@@ -111,6 +124,7 @@ const MAC_STEPS: Step[] = [
   },
   DOCTOR,
   FIRST_RUN,
+  STUDIO,
 ];
 
 const MAC_DIFFERENCES: [string, string, string][] = [
@@ -167,9 +181,24 @@ const LINUX_STEPS: Step[] = [
   },
   DOCTOR,
   FIRST_RUN,
+  STUDIO,
 ];
 
 const SERVER_STEPS: Step[] = [
+  {
+    title: "Give sandboxes a disk of their own",
+    code: "lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS   # the new disk: no FSTYPE, no mount point (say nvme1n1)\nsudo mkfs.xfs /dev/nvme1n1                    # erases it\nsudo mkdir -p /var/lib/sandboxd\necho \"UUID=$(sudo blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2\" \\\n  | sudo tee -a /etc/fstab\nsudo systemctl daemon-reload && sudo mount /var/lib/sandboxd && sudo chmod 0700 /var/lib/sandboxd\nfindmnt /var/lib/sandboxd && df -h /var/lib/sandboxd",
+    body: (
+      <>
+        Images, every sandbox&apos;s disk, snapshots and volumes live under <code>/var/lib/sandboxd</code>; on a
+        disk of their own, a sandbox that fills its disk fills that and not <code>/</code>. Mount it before the
+        next steps, which put the kernel there. By UUID, since device names can swap between boots, and without{" "}
+        <code>nofail</code>: the unit has <code>RequiresMountsFor=/var/lib/sandboxd</code>, so sandboxd does not
+        start on the empty directory underneath. Keep the whole directory on it: its parts are hard-linked into
+        each jail. On a machine just for trying, skip this step.
+      </>
+    ),
+  },
   {
     title: "Install as root, where the unit expects it",
     code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\\n  | sudo sh -s -- --dest /usr/local/bin --no-config\nsudo install -m 0755 firecracker jailer /usr/local/bin/",
@@ -188,7 +217,7 @@ const SERVER_STEPS: Step[] = [
     body: (
       <>
         Image disks are hard-linked into each sandbox&apos;s jail, so <code>/var/lib/sandboxd</code> must be one
-        filesystem; on xfs or btrfs each sandbox&apos;s disk is a reflink. The token is what clients present: at
+        filesystem; on xfs or btrfs snapshot and fork copies are reflinks. The token is what clients present: at
         least 16 characters, readable by root only. sandboxd refuses a token file other users can read.
       </>
     ),
@@ -212,11 +241,24 @@ const SERVER_STEPS: Step[] = [
       <>
         Set <code>--allowed-host</code> to the name clients use (the <code>sed</code> line). As root, sandboxd
         enforces the egress allowlist on the host and runs every VM under the jailer with a uid of its own. It
-        serves <code>0.0.0.0:7443</code>, and refuses a network address without both a token and TLS.
+        serves <code>0.0.0.0:7443</code>, and refuses a network address without both a token and TLS. Add{" "}
+        <code>--keep-sandboxes</code> to <code>ExecStart</code> and a restart or an upgrade leaves running
+        sandboxes, and their processes, running.
       </>
     ),
   },
   DOCTOR,
+  {
+    title: "Install images ahead of their first sandbox",
+    code: "sandbox-cli image pull ghcr.io/amitgb14/sandbox-desktop:edge   # waits; --no-wait returns at once\nsandbox-cli image ls                                            # state, size, sandboxes using each",
+    body: (
+      <>
+        Otherwise an image is pulled and built into a root disk when a sandbox first asks for it, and that sandbox
+        waits a minute or more. <code>image rm</code> frees one nothing uses. The policy&apos;s{" "}
+        <code>images:</code> list limits installs as it limits runs; Studio&apos;s Images screen does the same.
+      </>
+    ),
+  },
 ];
 
 const CLIENT_STEPS: Step[] = [
@@ -232,16 +274,7 @@ const CLIENT_STEPS: Step[] = [
   },
   DOCTOR,
   FIRST_RUN,
-  {
-    title: "Open Studio",
-    code: "cd ~/your-project\nsandbox-cli studio",
-    body: (
-      <>
-        The browser view of the same sandboxes, served by sandbox-cli on a loopback port, for whichever sandboxd
-        your context points at. Open the address it prints. <Link href={STUDIO_PATH}>More about Studio</Link>.
-      </>
-    ),
-  },
+  STUDIO,
 ];
 
 const FLEET_STEPS: Step[] = [
@@ -365,6 +398,37 @@ const TROUBLE: { symptom: React.ReactNode; fix: React.ReactNode }[] = [
       </>
     ),
     fix: "A TCP address, loopback included, is reachable by other users. Serve on the default unix socket, or pass --token-file (and TLS for anything beyond loopback).",
+  },
+  {
+    symptom: (
+      <>
+        Every sandbox fails to start: <code>linking … into the jail (the jail must be on the same filesystem as the
+        image cache)</code>
+      </>
+    ),
+    fix: (
+      <>
+        Part of <code>/var/lib/sandboxd</code> (<code>jail/</code>, <code>rootfs/</code> or <code>volumes/</code>) is
+        on a mount of its own. Its parts are hard-linked into each jail, so they must share one filesystem: mount
+        the disk at the whole state directory instead. Only the audit log can go elsewhere, with{" "}
+        <code>--audit-log</code>.
+      </>
+    ),
+  },
+  {
+    symptom: (
+      <>
+        sandboxd does not start after a reboot: <code>Dependency failed for sandboxd</code>
+      </>
+    ),
+    fix: (
+      <>
+        The disk for <code>/var/lib/sandboxd</code> did not mount, and the unit&apos;s{" "}
+        <code>RequiresMountsFor</code> keeps sandboxd from filling <code>/</code> instead. Check{" "}
+        <code>findmnt /var/lib/sandboxd</code> and the UUID in <code>/etc/fstab</code> against{" "}
+        <code>blkid</code>.
+      </>
+    ),
   },
   {
     symptom: "sandbox-cli cannot connect to sandboxd",
@@ -528,7 +592,13 @@ export default function SetupPage() {
           />
           <Steps steps={SERVER_STEPS} />
           <p className="mt-8 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            Pools, volumes, the audit log, how the allowlist is enforced and living with a host firewall are in{" "}
+            Before others depend on it, go through the{" "}
+            <Link className="underline" href={docPath("self-hosting", "in-production")}>production checklist</Link>: room
+            kept back with <code className="font-mono text-[0.82em] text-foreground">--capacity-disk-mb</code>, an alert on
+            the disk&apos;s real free space, the audit log rotated, volumes backed up.{" "}
+            <Link className="underline" href={docPath("self-hosting", "where-it-keeps-things")}>Where it keeps things</Link>,{" "}
+            <Link className="underline" href={docPath("self-hosting", "upgrading-without-stopping-sandboxes")}>upgrading without stopping sandboxes</Link>,
+            pools, volumes, the audit log, how the allowlist is enforced and living with a host firewall are in{" "}
             <Link className="underline" href={docPath("self-hosting")}>Self-hosting on Linux</Link>. To check the whole API
             against your server, run the conformance suite from a checkout:
           </p>
