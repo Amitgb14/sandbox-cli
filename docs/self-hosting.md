@@ -180,6 +180,93 @@ The first run pulls the base image and builds its root disk, a minute or more;
 `sandbox-cli image pull` does that ahead ([Images](#images)). [Checking it
 works](#checking-it-works) runs the conformance suite against the server.
 
+## On an IP address instead of a socket
+
+sandboxd listens where `--listen` says. Started with no `--listen`, as in the
+quick try, it serves a unix socket only its owner can open,
+`$XDG_RUNTIME_DIR/sandboxd.sock`, which is the CLI's `local` context. Given
+`HOST:PORT`, it serves TCP, and what it requires depends on who can reach that
+address:
+
+| `--listen` | Reachable by | sandboxd requires | The client uses |
+|---|---|---|---|
+| none (a unix socket) | you alone | nothing more | the `local` context |
+| `127.0.0.1:PORT` | every user on this machine | `--token-file` | `http://127.0.0.1:PORT` and the token |
+| any other address, `0.0.0.0` included | other machines | `--token-file`, `--tls-cert` and `--tls-key`, and `--allowed-host` for each name or IP clients use | `https://ADDRESS:PORT`, the token and the CA's certificate |
+
+Without them it does not start, and says which is missing:
+
+```text
+sandboxd: --listen 10.0.0.17:7443 is reachable from other machines; refusing to serve it without --token-file
+sandboxd: --listen 10.0.0.17:7443 is reachable from other machines; refusing to serve it without --tls-cert and --tls-key
+```
+
+**On loopback**, for other programs or users on the same machine. As yourself,
+with the kernel and Firecracker from the quick try:
+
+```sh
+sh -c 'umask 077; head -c 32 /dev/urandom | base64 > ~/sandboxd.token'
+sandboxd --backend firecracker \
+  --kernel ~/.local/share/sandboxd/vmlinux --firecracker ~/.local/bin/firecracker \
+  --listen 127.0.0.1:7443 --token-file ~/sandboxd.token
+# its last line: "serving API v1 on tcp://127.0.0.1:7443; … token required"
+
+sandbox-cli context add lo http://127.0.0.1:7443 --token-file ~/sandboxd.token
+sandbox-cli context use lo && sandbox-cli doctor
+```
+
+**On an IP address**, for other machines. The certificate must name the IP
+clients dial (an IP SAN). [`packaging/fleet/make-certs.sh`](../packaging/fleet/make-certs.sh)
+makes one, with a private CA to sign it; a certificate from a CA your clients
+already trust works as well. Here the server's address is `10.0.0.17`:
+
+```sh
+IP=10.0.0.17
+curl -fsSLO https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/fleet/make-certs.sh
+sh make-certs.sh -o certs $IP     # certs/ca.pem, certs/node-$IP.pem and its key
+                                  # (and a gateway client certificate, unused here)
+sh -c 'umask 077; head -c 32 /dev/urandom | base64 > ~/sandboxd.token'
+
+sandboxd --backend firecracker \
+  --kernel ~/.local/share/sandboxd/vmlinux --firecracker ~/.local/bin/firecracker \
+  --listen $IP:7443 --token-file ~/sandboxd.token \
+  --tls-cert certs/node-$IP.pem --tls-key certs/node-$IP-key.pem \
+  --allowed-host $IP
+# its last line: "serving API v1 on https://10.0.0.17:7443; … token required"
+
+# if a firewall is on, open the port (not part of the check below)
+sudo firewall-cmd --add-port=7443/tcp --permanent && sudo firewall-cmd --reload   # firewalld
+sudo ufw allow 7443/tcp                                                            # ufw
+```
+
+On each client, with `~/sandboxd.token` and `certs/ca.pem` copied across
+privately (the token is the whole credential):
+
+```sh
+sandbox-cli context add box https://10.0.0.17:7443 --token-file sandboxd.token --ca ca.pem
+sandbox-cli context use box && sandbox-cli doctor
+sandbox-cli run -- uname -r       # 6.1.155+
+```
+
+- **`--allowed-host`** lists every name or IP clients put in the URL. A request
+  naming anything else is refused, which stops DNS rebinding. With
+  `--listen 0.0.0.0:7443`, which serves every address of the machine, give one
+  `--allowed-host` for each address clients use, and a certificate naming each.
+- **Keep `certs/ca-key.pem` off the server** once the certificate is made: it
+  can sign a certificate for any address, which every client given `ca.pem`
+  would trust.
+- **Run as yourself, sandboxes get no network**, as in the quick try. Serving
+  on an IP changes who reaches the API, not what a sandbox reaches. For an
+  enforced egress allowlist, run it as root under systemd, as in Install,
+  where step 6 sets the same flags in the unit: `--listen 0.0.0.0:7443` and
+  `--allowed-host`, which `sed` sets to the name or IP clients use.
+
+Checked on a real host (x86_64 EL10, Firecracker 1.17.0, sandboxd as a user):
+both refusals above; loopback with a token; the LAN address with a token, a
+`make-certs.sh` certificate and `--allowed-host`, from `context add` through
+`doctor` and a sandbox's `uname -r`, and 401 without the token. Not checked:
+the firewall lines, and a client on another machine.
+
 ## Where it keeps things
 
 Everything sandboxd keeps is under its state directory: `--state-dir`, by

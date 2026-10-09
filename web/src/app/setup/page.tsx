@@ -230,6 +230,30 @@ const LINUX_STEPS: Step[] = [
       </>
     ),
   },
+  {
+    title: "Or serve it on an IP address",
+    code: `IP=10.0.0.17   # this machine's address, as clients dial it
+curl -fsSLO https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/fleet/make-certs.sh
+sh make-certs.sh -o certs $IP
+sh -c 'umask 077; head -c 32 /dev/urandom | base64 > ~/sandboxd.token'
+sandboxd --backend firecracker \\
+  --kernel ~/.local/share/sandboxd/vmlinux --firecracker ~/.local/bin/firecracker \\
+  --listen $IP:7443 --token-file ~/sandboxd.token \\
+  --tls-cert certs/node-$IP.pem --tls-key certs/node-$IP-key.pem --allowed-host $IP
+
+# on a client, with the token and certs/ca.pem copied across
+sandbox-cli context add box https://10.0.0.17:7443 --token-file sandboxd.token --ca ca.pem
+sandbox-cli context use box`,
+    body: (
+      <>
+        Instead of the socket, for other machines. An address other machines can reach needs a token, TLS with a
+        certificate naming that IP, and <code>--allowed-host</code>; sandboxd refuses to start without them and
+        says which is missing. On <code>127.0.0.1</code> a token is enough. Loopback, the firewall and what each
+        flag guards are in{" "}
+        <Link href={docPath("self-hosting", "on-an-ip-address-instead-of-a-socket")}>On an IP address</Link>.
+      </>
+    ),
+  },
   DOCTOR,
   FIRST_RUN,
   STUDIO,
