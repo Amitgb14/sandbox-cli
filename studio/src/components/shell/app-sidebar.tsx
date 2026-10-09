@@ -1,5 +1,6 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Moon, PlugZap, Search, Sun } from "lucide-react";
@@ -134,11 +135,21 @@ function Connection() {
   );
 }
 
+// False while hydrating the static export, true after: the server render
+// cannot know the stored theme, and React keeps the server's attributes on a
+// mismatch, so a switch that rendered the stored choice at once stayed on the
+// pre-rendered "dark" for a light page.
+const noSubscribe = () => () => {};
+function useHydrated() {
+  return useSyncExternalStore(noSubscribe, () => true, () => false);
+}
+
 function ThemeSwitch() {
   const { resolvedTheme, theme, setTheme } = useTheme();
+  const hydrated = useHydrated();
   // Dark is the provider's default; until a choice is stored it may report
   // neither, and the switch should still show which one is in force.
-  const current = resolvedTheme ?? theme ?? "dark";
+  const current = hydrated ? (resolvedTheme ?? theme ?? "dark") : "dark";
   const opts = [
     { id: "light", label: "Light", icon: Sun },
     { id: "dark", label: "Dark", icon: Moon },

@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **The theme switch shows the theme in force.** After a reload on the light
+  theme, the sidebar's switch still had Dark selected: the pre-rendered page
+  says dark, and the switch kept that until a choice changed it. It now
+  follows the stored theme once the page has loaded.
+
 - **The metrics dialog refreshes every 5 s**, whatever the server's sampling
   interval, and says only that under its charts. Where the last hour is kept
   is in docs/api/v1.md.

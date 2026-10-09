@@ -51,7 +51,7 @@ export const DOC_SEGMENTS: DocSegment[] = [
         slug: "self-hosting",
         source: "docs/self-hosting.md",
         title: "Self-hosting on Linux",
-        description: "sandboxd on a Linux machine with KVM: install, TLS and tokens, the network default, pools, volumes, the audit log and egress.",
+        description: "sandboxd on a Linux machine with KVM: install, TLS and tokens, a disk for sandboxes, a production checklist, upgrades that keep sandboxes running, images, pools, volumes, the audit log and egress.",
       },
     ],
   },
