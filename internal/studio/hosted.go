@@ -186,6 +186,12 @@ func (s *Server) hostedHandler() http.Handler {
 	api("GET /api/agents/state", s.agentStates)
 	api("POST /api/runs", s.launch)
 	api("GET /api/agents", s.agents)
+	api("POST /api/sandboxes/{id}/resize", s.resize)
+	// Studio's settings (templates, egress rules and groups, agents' saved
+	// keys) are this machine's user's, kept in their ~/.config: hosted users
+	// get the built-in sizes and nothing else, and no route that writes.
+	api("GET /api/templates", s.hostedTemplates)
+	api("GET /api/egress", s.hostedEgress)
 	mux.Handle("/api/", s.hostedGuard(func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
 	}))
@@ -248,6 +254,18 @@ func (s *Server) hostedGuard(next http.HandlerFunc) http.Handler {
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), sessionKey{}, sess)))
 	}))
+}
+
+// hostedTemplates is the built-in sizes only: saved ones are the host
+// user's, in studio.json, which hosted Studio neither reads nor writes.
+func (s *Server) hostedTemplates(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"templates": append([]Template{}, builtinTemplates...)})
+}
+
+// hostedEgress is no rules and no groups: the server's policy is what bounds
+// a hosted user's egress, and the host user's own rules are not theirs.
+func (s *Server) hostedEgress(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"rules": []EgressRule{}, "groups": []EgressGroup{}})
 }
 
 // writeNoSession is the answer to a request whose session is missing or has

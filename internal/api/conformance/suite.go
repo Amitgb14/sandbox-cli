@@ -81,6 +81,8 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"NetworkDenyIsKeptAndNormalized", testNetworkDeny},
 		{"NetworkAllowOutsideMayAllowIsRefused", testNetworkMayAllow},
 		{"NetworkUpdateFollowsTheSameRules", testNetworkUpdate},
+		{"ALiveSandboxCanBeRenamedRelabelledAndRetimed", testUpdateRecords},
+		{"ImagesAreListedInstalledAndPinned", testImages},
 		{"IdleSandboxIsTerminated", testIdleTimeout},
 		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
 		{"AttachStreamsInputAndOutput", testAttach},
@@ -621,6 +623,150 @@ func testNetworkUpdate(t *testing.T, e *env) {
 			t.Errorf("a refused update changed the policy to %q", after.Network.Mode)
 		}
 	}
+}
+
+// The images an endpoint manages (capability images): the default image is
+// listed once a sandbox starts from it, as in use and pinned; installing it
+// again runs to installed; and what is not an image, or not installed, is
+// refused. Nothing else is installed or removed, so the test is safe against
+// a real server's registry and disk. Without the capability every call is
+// unsupported.
+func testImages(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	if !e.caps.Has(api.CapImages) {
+		_, err := e.c.Images(ctx)
+		wantCode(t, err, api.CodeUnsupported)
+		_, err = e.c.InstallImage(ctx, "example.com/a:1")
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	e.newSandbox(t, api.CreateSandboxRequest{})
+	find := func() (api.Image, bool) {
+		list, err := e.c.Images(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, img := range list {
+			if img.Default {
+				return img, true
+			}
+		}
+		return api.Image{}, false
+	}
+	def, ok := find()
+	if !ok || def.InUse < 1 {
+		t.Fatalf("the default image is not listed as in use by the sandbox started from it: %+v, %v", def, ok)
+	}
+	_, err := e.c.RemoveImage(ctx, def.Image)
+	wantCode(t, err, api.CodeConflict)
+
+	got, err := e.c.InstallImage(ctx, def.Image)
+	if err != nil || got.Image != def.Image {
+		t.Fatalf("installing the default image again: %+v, %v", got, err)
+	}
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		img, _ := find()
+		if img.State == api.ImageInstalled {
+			break
+		}
+		if img.State == api.ImageFailed || time.Now().After(deadline) {
+			t.Fatalf("the default image did not install again: %+v", img)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	_, err = e.c.InstallImage(ctx, "Not An Image!")
+	wantCode(t, err, api.CodeInvalidRequest)
+	_, err = e.c.RemoveImage(ctx, "registry.invalid/never/installed:"+uniqueName("tag"))
+	wantCode(t, err, api.CodeNotFound)
+}
+
+// clientLabels is a sandbox's labels without those a gateway keeps for
+// itself (gateway.*), which an update neither shows nor touches.
+func clientLabels(l map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range l {
+		if !strings.HasPrefix(k, "gateway.") {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// A live sandbox's name, labels and idle timeout change in place, under the
+// rules they were set by at create: a name stays unique among live
+// sandboxes and resolves at once, labels are replaced whole and filter the
+// listing, and the idle timeout stays within the limit. A request with one
+// bad field changes nothing.
+func testUpdateRecords(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	sb := e.newSandbox(t, api.CreateSandboxRequest{Name: uniqueName("before"), Labels: map[string]string{"suite.keep": "no", "team": "a"}})
+	str := func(s string) *string { return &s }
+	labels := func(m map[string]string) *map[string]string { return &m }
+	num := func(n int) *int { return &n }
+
+	name := uniqueName("after")
+	mark := uniqueName("mark")
+	got, err := e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{Name: &name, Labels: labels(map[string]string{"suite.mark": mark})})
+	if err != nil {
+		t.Fatalf("rename and relabel: %v", err)
+	}
+	if got.Name != name || len(clientLabels(got.Labels)) != 1 || got.Labels["suite.mark"] != mark {
+		t.Fatalf("after the update: name %q labels %v", got.Name, got.Labels)
+	}
+	if byName, err := e.c.Sandbox(ctx, name); err != nil || byName.ID != sb.ID {
+		t.Errorf("the new name resolves to %+v, %v", byName, err)
+	}
+	if list, err := e.c.Sandboxes(ctx, "suite.mark="+mark); err != nil || len(list) != 1 || list[0].ID != sb.ID {
+		t.Errorf("listing by the new label: %d, %v", len(list), err)
+	}
+
+	// The name is unique among live sandboxes, as at create.
+	other := e.newSandbox(t, api.CreateSandboxRequest{Name: uniqueName("other")})
+	_, err = e.c.UpdateSandbox(ctx, other.ID, api.UpdateSandboxRequest{Name: &name})
+	wantCode(t, err, api.CodeConflict)
+
+	// One bad field and nothing changes, the good ones included.
+	limit := e.caps.Limits.MaxIdleTimeoutSecs
+	for what, req := range map[string]api.UpdateSandboxRequest{
+		"an invalid name":  {Name: str("Upper Case"), Labels: labels(map[string]string{"x": "y"})},
+		"an invalid label": {Name: str(uniqueName("ok")), Labels: labels(map[string]string{"k": "esc\x1b[2J"})},
+		"a negative idle":  {Name: str(uniqueName("ok")), IdleTimeoutSecs: num(-1)},
+		"nothing at all":   {},
+	} {
+		_, err := e.c.UpdateSandbox(ctx, sb.ID, req)
+		wantCode(t, err, api.CodeInvalidRequest)
+		after, _ := e.c.Sandbox(ctx, sb.ID)
+		if after.Name != name || after.Labels["suite.mark"] != mark {
+			t.Errorf("%s changed the sandbox: name %q labels %v", what, after.Name, after.Labels)
+		}
+	}
+
+	// The idle timeout, within the limit; "never" only without one.
+	got, err = e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{IdleTimeoutSecs: num(120)})
+	if err != nil || got.IdleTimeoutSecs != 120 {
+		t.Fatalf("idle timeout: %d, %v", got.IdleTimeoutSecs, err)
+	}
+	if limit > 0 {
+		_, err = e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{IdleTimeoutSecs: num(limit + 1)})
+		wantCode(t, err, api.CodeInvalidRequest)
+		_, err = e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{IdleTimeoutSecs: num(0)})
+		wantCode(t, err, api.CodeInvalidRequest)
+	}
+
+	// {} removes every label a client set; "" removes the name.
+	got, err = e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{Name: str(""), Labels: labels(map[string]string{})})
+	if err != nil || got.Name != "" || len(clientLabels(got.Labels)) != 0 {
+		t.Fatalf("clearing: name %q labels %v, %v", got.Name, got.Labels, err)
+	}
+
+	// A terminated sandbox is past changing.
+	if err := e.c.TerminateSandbox(ctx, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.c.UpdateSandbox(ctx, other.ID, api.UpdateSandboxRequest{Labels: labels(map[string]string{"late": "x"})})
+	wantCode(t, err, api.CodeConflict)
 }
 
 func testIdleTimeout(t *testing.T, e *env) {

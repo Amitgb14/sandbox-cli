@@ -253,6 +253,27 @@ func ValidID(s string) bool { return idRE.MatchString(s) }
 // ValidName reports whether s is a legal sandbox name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
+// CheckImage is the rule an image a request names is held to, whether a
+// sandbox is created from it or it is installed ahead of one: a reference,
+// and one the policy's images list permits where it has one.
+func CheckImage(img string, pol Policy) error {
+	if !imageRE.MatchString(img) {
+		return invalid("image %q is not an image reference", img)
+	}
+	if len(pol.Images) > 0 && !contains(pol.Images, img) {
+		return refused("image %q is not one this server permits", img)
+	}
+	return nil
+}
+
+// CheckName is ValidName as the error a request gets; "" (no name) passes.
+func CheckName(name string) error {
+	if name != "" && !ValidName(name) {
+		return invalid("name %q: lowercase letters, digits and dashes, starting with a letter or digit, at most 63", name)
+	}
+	return nil
+}
+
 // MaxVolumeMounts bounds one sandbox's volumes.
 const MaxVolumeMounts = 8
 
@@ -334,8 +355,8 @@ func ValidateLabels(labels map[string]string) error {
 
 // Resolve turns a create request into a backend.Spec with the given id.
 func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec, error) {
-	if req.Name != "" && !ValidName(req.Name) {
-		return backend.Spec{}, invalid("name %q: lowercase letters, digits and dashes, starting with a letter or digit, at most 63", req.Name)
+	if err := CheckName(req.Name); err != nil {
+		return backend.Spec{}, err
 	}
 	if err := ValidateLabels(req.Labels); err != nil {
 		return backend.Spec{}, err
@@ -348,11 +369,8 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 	if img == "" {
 		img = pol.DefaultImage
 	}
-	if !imageRE.MatchString(img) {
-		return backend.Spec{}, invalid("image %q is not an image reference", img)
-	}
-	if len(pol.Images) > 0 && !contains(pol.Images, img) {
-		return backend.Spec{}, refused("image %q is not one this server permits", img)
+	if err := CheckImage(img, pol); err != nil {
+		return backend.Spec{}, err
 	}
 
 	s := backend.Spec{ID: id, Image: img, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,
@@ -428,6 +446,22 @@ func ResolveEnv(in map[string]string) (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// ResolveIdleUpdate checks a live sandbox's new idle timeout. Unlike at
+// create, 0 is not "the server's default" — a sandbox already has one — but
+// "never", which only a server without a bound allows.
+func ResolveIdleUpdate(idle int, pol Policy) (int, error) {
+	max := pol.Limits.MaxIdleTimeoutSecs
+	switch {
+	case idle < 0:
+		return 0, invalid("idle_timeout_secs must not be negative")
+	case idle == 0 && max > 0:
+		return 0, invalid("idle_timeout_secs 0 (never) is not allowed here; at most %d", max)
+	case max > 0 && idle > max:
+		return 0, invalid("idle_timeout_secs %d: at most %d", idle, max)
+	}
+	return idle, nil
 }
 
 // ResolveNetworkUpdate validates a policy change on a running sandbox. It is the

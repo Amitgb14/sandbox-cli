@@ -70,6 +70,10 @@ func TestHostedLauncherTakesNothingFromTheHost(t *testing.T) {
 	}
 	// A saved login that, restored, would be written into the sandbox.
 	d, _ := agents.LookupInteractive("claude")
+	// And a key saved from Studio's Agents screen, which buildEnv reads.
+	if err := agenthome.SaveKey(d, "ANTHROPIC_AUTH_TOKEN", leak+"-saved"); err != nil {
+		t.Fatal(err)
+	}
 	for _, rel := range d.AuthPaths {
 		p := filepath.Join(agenthome.LoginDir(d), filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -117,6 +121,9 @@ func TestHostedLauncherTakesNothingFromTheHost(t *testing.T) {
 	if _, ok := create.Env["ANTHROPIC_API_KEY"]; ok {
 		t.Error("the agent's API key name was forwarded from the host")
 	}
+	if _, ok := create.Env["ANTHROPIC_AUTH_TOKEN"]; ok {
+		t.Error("a key saved in this machine's Studio was forwarded")
+	}
 	if _, ok := create.Env["FROM_HOST_CONFIG"]; ok || create.Image != "" {
 		t.Errorf("the host's config was applied: env %v image %q", create.Env, create.Image)
 	}
@@ -140,7 +147,8 @@ func TestHostedLauncherNetworkAndRefusals(t *testing.T) {
 	launch := hostedLauncher()
 	ctx := context.Background()
 
-	res, err := launch(ctx, c, studio.LaunchRequest{Command: []string{"true"}, Network: api.NetworkAllowlist, Allow: []string{"example.org"}})
+	res, err := launch(ctx, c, studio.LaunchRequest{Command: []string{"true"}, Network: api.NetworkAllowlist, Allow: []string{"example.org"},
+		Deny: []string{"evil.example"}, CPUs: 2, MemoryMB: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +156,19 @@ func TestHostedLauncherNetworkAndRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sb.Network.Mode != api.NetworkAllowlist || !slices.Contains(sb.Network.Allow, "example.org") {
+	if sb.Network.Mode != api.NetworkAllowlist || !slices.Contains(sb.Network.Allow, "example.org") || !slices.Contains(sb.Network.Deny, "evil.example") {
 		t.Errorf("network: %+v", sb.Network)
+	}
+	if sb.CPUs != 2 || sb.MemoryMB != 1024 {
+		t.Errorf("size: %v vCPU %d MiB, want what was asked", sb.CPUs, sb.MemoryMB)
+	}
+	// --no-baseline: only the hosts named.
+	res, err = launch(ctx, c, studio.LaunchRequest{Command: []string{"true"}, Network: api.NetworkAllowlist, Allow: []string{"example.org"}, NoBaseline: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sb, _ = c.Sandbox(ctx, res.Sandbox); !slices.Equal(sb.Network.Allow, []string{"example.org"}) {
+		t.Errorf("no baseline: allow %v", sb.Network.Allow)
 	}
 	for _, tc := range []struct {
 		req  studio.LaunchRequest

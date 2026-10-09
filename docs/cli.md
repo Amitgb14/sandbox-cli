@@ -53,6 +53,10 @@ Global flags:
 | [`sandbox-cli gateway lost`](#sandbox-cli-gateway-lost) | List sandboxes on nodes that have not answered for longer than the gateway's grace period |
 | [`sandbox-cli gateway nodes`](#sandbox-cli-gateway-nodes) | List the gateway's nodes: health, cordon, sandboxes running, sandboxd version |
 | [`sandbox-cli gateway uncordon`](#sandbox-cli-gateway-uncordon) | Place new sandboxes on a node again |
+| [`sandbox-cli image`](#sandbox-cli-image) | Images a sandboxd starts sandboxes from: list, download ahead of use, remove |
+| [`sandbox-cli image ls`](#sandbox-cli-image-ls) | List installed images, those installing, and those that failed |
+| [`sandbox-cli image pull`](#sandbox-cli-image-pull) | Download and install an image ahead of the first sandbox that wants it |
+| [`sandbox-cli image rm`](#sandbox-cli-image-rm) | Remove installed images nothing uses, and the layers no other image needs |
 | [`sandbox-cli job`](#sandbox-cli-job) | Run commands and agents on a gateway's fleet, after you have gone: one run or a batch |
 | [`sandbox-cli job cancel`](#sandbox-cli-job-cancel) | Cancel a job: runs not started never are, and running ones' sandboxes are terminated |
 | [`sandbox-cli job get`](#sandbox-cli-job-get) | Show a job and each of its runs |
@@ -93,7 +97,10 @@ Global flags:
 | [`sandbox-cli studio`](#sandbox-cli-studio) | Open Studio: the browser view of your sandboxes |
 | [`sandbox-cli studio host`](#sandbox-cli-studio-host) | Serve Studio to many users, each signed in with their own gateway key |
 | [`sandbox-cli suspend`](#sandbox-cli-suspend) | Stop a sandbox, keeping its memory, processes and disk |
+| [`sandbox-cli template`](#sandbox-cli-template) | Sizes a sandbox can be launched at, by name (run --template) |
+| [`sandbox-cli template ls`](#sandbox-cli-template-ls) | List the templates: built in, then those saved in Studio |
 | [`sandbox-cli tunnel`](#sandbox-cli-tunnel) | Forward a local port to a port inside a sandbox |
+| [`sandbox-cli update`](#sandbox-cli-update) | Rename, relabel, retime or change the network of a live sandbox |
 | [`sandbox-cli version`](#sandbox-cli-version) | Print the sandbox-cli version |
 | [`sandbox-cli volume`](#sandbox-cli-volume) | Named volumes: filesystems that outlive the sandboxes they are mounted in |
 | [`sandbox-cli volume create`](#sandbox-cli-volume-create) | Create an empty volume |
@@ -113,7 +120,9 @@ sandbox-cli agent [command]
 Runs a coding agent in a new sandbox, in the sandbox user's home, like `run`.
 On top of `run`, the agent's login is restored into the sandbox and saved again
 when the run ends, and the agent's own environment variables are forwarded when
-set. The sandbox needs no repository: ask the agent to clone one.
+set — or, where one is not, the API key saved for it in Studio's Agents screen
+(~/.config/sandbox/agent-keys.json). The sandbox needs no repository: ask the
+agent to clone one.
 
 Leading sandbox flags are consumed; everything after them, or after --, goes
 to the agent.
@@ -545,6 +554,68 @@ Place new sandboxes on a node again.
 sandbox-cli gateway uncordon NODE
 ```
 
+## sandbox-cli image
+
+Images a sandboxd starts sandboxes from: list, download ahead of use, remove.
+
+```text
+sandbox-cli image [command]
+```
+
+```text
+A sandboxd pulls an image the first time a sandbox asks for it. These let its
+operator do that ahead of time, see what is installed and what uses it, and
+remove what nothing does. On Linux an install also builds the image's root
+disk, which is most of the first sandbox's wait. The policy's images list, where
+there is one, limits what may be installed. Through a gateway they are not
+offered: a node's images are its operator's.
+```
+
+Subcommands: [`ls`](#sandbox-cli-image-ls), [`pull`](#sandbox-cli-image-pull), [`rm`](#sandbox-cli-image-rm).
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which sandboxd to use |
+
+### sandbox-cli image ls
+
+List installed images, those installing, and those that failed.
+
+```text
+sandbox-cli image ls
+```
+
+### sandbox-cli image pull
+
+Download and install an image ahead of the first sandbox that wants it.
+
+```text
+sandbox-cli image pull IMAGE [flags]
+```
+
+Examples:
+
+```sh
+sandbox-cli image pull ghcr.io/amitgb14/sandbox-desktop:edge
+sandbox-cli image pull --no-wait python:3.13-slim
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--no-wait` |  | start the install and return; image ls follows it |
+
+### sandbox-cli image rm
+
+Remove installed images nothing uses, and the layers no other image needs.
+
+```text
+sandbox-cli image rm IMAGE...
+```
+
 ## sandbox-cli job
 
 Run commands and agents on a gateway's fleet, after you have gone: one run or a batch.
@@ -885,10 +956,12 @@ Flags:
 | `--memory int` |  | memory in MiB |
 | `--name string` |  | name the sandbox |
 | `--network string` |  | none, allowlist or open (default: the server's) |
+| `--no-baseline` |  | an allowlist of only the hosts named with --allow (and an agent's API), without the built-in agents' APIs and registries |
 | `--no-persist-auth` |  | do not restore or save the agent's login |
 | `--profile string` |  | dev or prod (prod: no persisted logins) |
 | `--snapshot-every duration` |  | snapshot the sandbox this often while it runs, e.g. 30m (the server sets the shortest allowed) |
 | `--snapshot-keep int` |  | how many scheduled snapshots to keep, newest first (default 1) |
+| `--template string` |  | size the sandbox from a template: micro, small, medium, large, xlarge or one saved in Studio (--cpus, --memory, --disk override it) |
 | `--volume stringArray` |  | mount a named volume, NAME:/path or NAME:/path:ro (repeatable; sandbox-cli volume) |
 
 ## sandbox-cli secret
@@ -1309,6 +1382,32 @@ Flags:
 |---|---|---|
 | `--context string` |  | which sandboxd to use |
 
+## sandbox-cli template
+
+Sizes a sandbox can be launched at, by name (run --template).
+
+```text
+sandbox-cli template [command]
+```
+
+```text
+A template is a size — vCPUs, memory and disk — by name: micro, small, medium,
+large and xlarge are built in, and Studio's Templates screen saves more, in
+~/.config/sandbox/studio.json. Launch at one with `sandbox-cli run --template
+NAME` or `sandbox-cli agent <name> --template NAME`; --cpus, --memory and --disk
+given beside it win for their own field. sandboxd's limits still apply.
+```
+
+Subcommands: [`ls`](#sandbox-cli-template-ls).
+
+### sandbox-cli template ls
+
+List the templates: built in, then those saved in Studio.
+
+```text
+sandbox-cli template ls
+```
+
 ## sandbox-cli tunnel
 
 Forward a local port to a port inside a sandbox.
@@ -1329,6 +1428,50 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--context string` |  | which sandboxd to use |
+
+## sandbox-cli update
+
+Rename, relabel, retime or change the network of a live sandbox.
+
+```text
+sandbox-cli update SANDBOX [flags]
+```
+
+```text
+Changes a live sandbox in place; only what a flag names changes.
+
+--label adds or changes a label and --label KEY- (or --unlabel KEY) removes one;
+the others are kept. --idle sets how long it may sit idle before it is
+terminated (0: never, where the server allows that). --network changes the
+network of a running sandbox, as run's flags would set it: --allow adds to the
+built-in hosts unless --no-baseline, and an agent's sandbox keeps its agent's
+API. Not every endpoint can change a running sandbox's network.
+
+vCPUs and memory are fixed while a VM runs.
+```
+
+Examples:
+
+```sh
+sandbox-cli update web --name api
+sandbox-cli update api --label team=infra --label ticket-
+sandbox-cli update api --idle 2h
+sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--allow stringArray` |  | with --network allowlist: a host it may reach (repeatable) |
+| `--context string` |  | which sandboxd to use |
+| `--deny stringArray` |  | with --network: a host it may not reach (repeatable) |
+| `--idle duration` |  | terminate it after this long idle, e.g. 2h (0: never, where allowed) |
+| `--label stringArray` |  | set a label, key=value, or remove one, key- (repeatable) |
+| `--name string` |  | rename it ("" removes the name) |
+| `--network string` |  | none, allowlist or open, applied to the running sandbox |
+| `--no-baseline` |  | with --network allowlist: only the hosts named, without the built-in ones |
+| `--unlabel stringArray` |  | remove a label by key (repeatable) |
 
 ## sandbox-cli version
 

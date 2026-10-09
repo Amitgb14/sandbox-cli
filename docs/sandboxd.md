@@ -45,7 +45,9 @@ sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
 | `--firecracker FILE` | `firecracker` | firecracker: the VMM binary. |
 | `--jailer FILE` | | firecracker: the jailer binary; enables it (root only). |
 | `--agent FILE` | `sandbox-guestd` beside `sandboxd` | firecracker: the guest agent put into every image's root disk, so it always matches the server. |
+| `--keep-sandboxes` | off | firecracker: on exit, leave sandboxes running, and on start take back the ones an earlier sandboxd on this state directory left, so an upgrade interrupts no VM and no process in one (processes are re-attached under the same numbers). Writes each sandbox's environment values to `<state-dir>/records/` (0600). Needs `KillMode=process` under systemd ([self-hosting.md](self-hosting.md#upgrading-without-stopping-sandboxes)). |
 | `--network` | on as root | firecracker: host-enforced egress (root only). Without it every sandbox has no network ([self-hosting.md](self-hosting.md#how-egress-is-enforced)). |
+| `--egress-proxy-port`, `--egress-dns-port` | 3128, 7353 | firecracker: the host ports the egress proxy (TCP) and resolver (UDP) listen on. Move one only if another program on the host holds it; the guest never sees them ([self-hosting.md](self-hosting.md#how-egress-is-enforced)). |
 | `--container FILE` | `container` | macos: the `container` CLI. |
 
 ### As a node behind a gateway
@@ -98,7 +100,9 @@ pools:                                     # sandboxes booted ahead of time
 
 Where a backend cannot deliver what the policy asks — no root, so no network
 devices — the ceiling becomes `none` and the startup line says so, and a
-request for an allowlist is refused, never served open. How the network
+request for an allowlist is refused, never served open. Where it can filter
+by name but not offer open — Firecracker, always — an `open` default and
+ceiling become the allowlist, with the built-in list as the default. How the network
 default and the profiles interact is in
 [self-hosting.md](self-hosting.md#the-network-default) and
 [security/README.md](security/README.md#security-profiles).
@@ -112,6 +116,8 @@ default and the profiles interact is in
   pool for an image the policy does not permit.
 - **`--client-ca` without `--tls-cert` and `--tls-key`.**
 - **A `--metrics-listen` address that is not loopback.**
+- **`--keep-sandboxes` with a backend that cannot keep sandboxes,** and a
+  records directory other users can read.
 
 ## Node endpoints
 
@@ -139,6 +145,8 @@ listed in [operations.md](operations.md#metrics).
 |---|---|
 | `<state-dir>/audit/events.jsonl` | the audit log, 0600, rotated at 8 MiB with five old generations |
 | `<state-dir>/volumes/` | volumes, as sparse ext4 files; never mounted on the host |
+| `<state-dir>/records/` | with `--keep-sandboxes` only: one record per sandbox, with its environment values; 0600 in a 0700 directory, deleted when the sandbox ends or the flag is off |
+| `<state-dir>/sandboxes/<id>/` | each VM's host-side files: console log, pid, and with `--keep-sandboxes` its `keep.json` (the spec without environment values) |
 | `/etc/sandboxd/token`, `/etc/sandboxd/tls/` | the token and TLS files of the packaged unit |
 | [`packaging/systemd/sandboxd.service`](../packaging/systemd/sandboxd.service) | the systemd unit |
 | [`packaging/launchd/dev.sandbox.sandboxd.plist`](../packaging/launchd/dev.sandbox.sandboxd.plist) | the macOS launch agent |

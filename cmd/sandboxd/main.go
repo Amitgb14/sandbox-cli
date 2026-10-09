@@ -79,6 +79,9 @@ func run(args []string) error {
 	jailer := fl.String("jailer", "", "firecracker: the jailer binary; enables it (root only)")
 	agent := fl.String("agent", "", "firecracker: sandbox-guestd for the guest (default: beside this binary)")
 	network := fl.Bool("network", os.Geteuid() == 0, "firecracker: host-enforced egress (root only)")
+	proxyPort := fl.Int("egress-proxy-port", 0, "firecracker: host TCP port the egress proxy listens on (default 3128)")
+	dnsPort := fl.Int("egress-dns-port", 0, "firecracker: host UDP port the egress resolver listens on (default 7353)")
+	keep := fl.Bool("keep-sandboxes", false, "on exit, leave sandboxes running for the next sandboxd on this state directory to take back, so an upgrade stops neither them nor their processes (firecracker)")
 	defaultImage := fl.String("default-image", "", "image for requests that name none (overrides the policy file)")
 	var allowedHosts, insecureRegistries listFlag
 	fl.Var(&allowedHosts, "allowed-host", "a Host name to answer besides loopback (repeatable)")
@@ -111,6 +114,11 @@ func run(args []string) error {
 			return err
 		}
 	}
+	for name, port := range map[string]int{"--egress-proxy-port": *proxyPort, "--egress-dns-port": *dnsPort} {
+		if port < 0 || port > 65535 {
+			return fmt.Errorf("%s %d: not a port", name, port)
+		}
+	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "sandboxd: "+format+"\n", a...) }
 
 	pol := spec.DefaultPolicy()
@@ -127,11 +135,18 @@ func run(args []string) error {
 
 	be, err := newBackend(*backendName, backendOptions{
 		stateDir: *stateDir, kernel: *kernel, firecracker: *firecracker, jailer: *jailer,
-		agent: *agent, network: *network, logf: logf, insecureRegistries: insecureRegistries,
+		agent: *agent, network: *network, proxyPort: *proxyPort, dnsPort: *dnsPort, keep: *keep,
+		logf: logf, insecureRegistries: insecureRegistries,
 		container: *containerBin,
 	})
 	if err != nil {
 		return err
+	}
+	keeper, canKeep := be.(backend.Keeper)
+	if *keep && !canKeep {
+		// Asked for and not deliverable: refused, so an upgrade that was
+		// meant to leave sandboxes running cannot quietly stop them.
+		return fmt.Errorf("--keep-sandboxes: the %s backend cannot keep sandboxes across a restart", be.Name())
 	}
 	pol, notes := pol.FitTo(be.Capabilities())
 	for _, n := range notes {
@@ -171,6 +186,21 @@ func run(args []string) error {
 	apiSrv := &server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts,
 		Audit: audit.NewLog(logPath), Logf: logf,
 		NodeID: node.id, NodeLabels: labels, Capacity: nodeCap}
+	// The records hold sandboxes' environment values, so they exist only
+	// while --keep-sandboxes is on; turning it off deletes them.
+	recordDir := filepath.Join(*stateDir, "records")
+	if *keep {
+		apiSrv.RecordDir = recordDir
+		n, err := apiSrv.Restore(context.Background())
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		logf("keeping sandboxes across restarts; took back %d from an earlier run", n)
+	} else if _, err := os.Stat(recordDir); err == nil {
+		_ = os.RemoveAll(recordDir)
+		logf("removed the sandbox records an earlier run kept: --keep-sandboxes is off")
+	}
 	srv := &http.Server{
 		Handler: apiSrv.Handler(),
 		// Output streams are long-lived, so there is no WriteTimeout; a client that
@@ -223,6 +253,11 @@ func run(args []string) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	err = srv.Shutdown(shutdown)
+	if *keep {
+		keeper.Detach()
+		logf("left the sandboxes running for the next sandboxd")
+		return err
+	}
 	if c, ok := be.(interface{ Close() }); ok {
 		c.Close()
 	}
@@ -232,6 +267,8 @@ func run(args []string) error {
 type backendOptions struct {
 	stateDir, kernel, firecracker, jailer, agent string
 	network                                      bool
+	proxyPort, dnsPort                           int // 0: the backend's defaults
+	keep                                         bool
 	logf                                         func(string, ...any)
 	insecureRegistries                           []string
 	container                                    string

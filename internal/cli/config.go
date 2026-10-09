@@ -109,7 +109,7 @@ func applyConfig(rf *runFlags, project string, req *api.CreateSandboxRequest, ca
 // "open" where the config file says "default": one spelling for the API's
 // mode, one for beta.15's key, and the same thing.
 func (rf *runFlags) overrides() (policy.Overrides, error) {
-	ov := policy.Overrides{Allow: rf.allow}
+	ov := policy.Overrides{Allow: rf.allow, NoBaseline: rf.noBaseline}
 	switch rf.network {
 	case "":
 	case api.NetworkNone, api.NetworkAllowlist:

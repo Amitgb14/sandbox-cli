@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 
 const { token } = JSON.parse(readFileSync(join(__dirname, ".state.json"), "utf8")) as { token: string };
-const ROUTES = ["/", "/sandboxes/", "/launch/", "/snapshots/", "/agents/", "/volumes/", "/settings/"];
+const ROUTES = ["/", "/sandboxes/", "/launch/", "/snapshots/", "/agents/", "/templates/", "/volumes/", "/images/", "/settings/"];
 
 test("every screen renders with no console errors", async ({ page }) => {
   const errors: string[] = [];
@@ -63,8 +63,20 @@ test("a sandbox started elsewhere is listed, labelled, and has events", async ({
   // Wide, the overview is beside the tabs rather than one of them.
   await expect(page.getByRole("tab", { name: "Overview" })).toHaveCount(0);
   await expect(page.getByText("echo hi").first()).toBeVisible();
-  page.once("dialog", (d) => d.accept());
+  // Terminating asks for the sandbox's name (its id, with none), not a click.
   await page.getByRole("button", { name: "Terminate" }).click();
+  const confirmTerminate = page.getByRole("dialog", { name: "Terminate sandbox" });
+  await expect(confirmTerminate.getByRole("list", { name: "Sandboxes to terminate" })).toContainText(created.id);
+  const go = confirmTerminate.getByRole("button", { name: "Terminate sandbox" });
+  await expect(go).toBeDisabled();
+  await confirmTerminate.getByRole("textbox", { name: "Type to confirm" }).fill("not-it");
+  await expect(go).toBeDisabled();
+  await confirmTerminate.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmTerminate).toHaveCount(0);
+  expect((await (await request.fetch(`/api/v1/sandboxes/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })).json()).state).not.toBe("terminated");
+  await page.getByRole("button", { name: "Terminate" }).click();
+  await confirmTerminate.getByRole("textbox", { name: "Type to confirm" }).fill(created.id);
+  await confirmTerminate.getByRole("button", { name: "Terminate sandbox" }).click();
   await expect(page).toHaveURL(/\/sandboxes\//);
 });
 
@@ -84,12 +96,18 @@ test("the list sums what sandboxes were given, walks them in its panel, and term
   await page.getByRole("button", { name: "Metrics of walk-a" }).click();
   const metrics = page.getByRole("dialog");
   await expect(metrics.getByRole("heading", { name: "Metrics of walk-a" })).toBeVisible();
-  // Its charts, or, before the first sample is taken (every 10 s), how often one is.
-  await expect(metrics.getByText(/^(CPU, % of 2 vCPU|No samples yet: one is taken every 10 seconds)/)).toBeVisible();
+  // Its charts, or, before the first sample is taken (every 5 s), how often one is.
+  await expect(metrics.getByText(/^(CPU, % of 2 vCPU|No samples yet: one is taken every 5 seconds)/)).toBeVisible();
   // It stays open while the list polls (every 5 s) under it.
   await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
   await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
   await expect(metrics.getByRole("heading", { name: "Metrics of walk-a" })).toBeVisible();
+  // Once there are samples, memory reads as sizes — "1 GiB", not 1,024.
+  if (await metrics.getByText(/^Memory, of /).count()) {
+    const ticks = metrics.locator("svg text");
+    await expect(ticks.filter({ hasText: /^\d+(\.\d)? (MiB|GiB)$/ }).first()).toBeVisible();
+    expect(await ticks.allTextContents()).not.toContainEqual(expect.stringMatching(/^\d{4}$/));
+  }
   // A click inside it stays there, and does not open the row's panel too.
   await metrics.getByText("The last hour", { exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(1);
@@ -109,8 +127,12 @@ test("the list sums what sandboxes were given, walks them in its panel, and term
 
   await page.getByRole("checkbox", { name: "Select all on this page" }).click();
   await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
-  page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Terminate 2" }).click();
+  const confirmTerminate = page.getByRole("dialog", { name: "Terminate 2 sandboxes" });
+  await expect(confirmTerminate.getByText("walk-a")).toBeVisible();
+  await expect(confirmTerminate.getByText("walk-b")).toBeVisible();
+  await confirmTerminate.getByRole("textbox", { name: "Type to confirm" }).fill("terminate 2");
+  await confirmTerminate.getByRole("button", { name: "Terminate 2" }).click();
   await expect(page.getByText("Terminated 2")).toBeVisible();
   for (const s of [a, b]) {
     expect((await (await api(`/v1/sandboxes/${s.id}`)).json()).state).toBe("terminated");

@@ -48,7 +48,7 @@ export function SessionCommands({ className }: { className?: string }) {
       <div className="flex flex-col gap-2">
         {cmd.frames.map((f) => (
           <div key={f.prompt} className="overflow-hidden rounded-xl border bg-card">
-            <div className="no-scrollbar overflow-x-auto bg-[#0b0b0d] px-3 py-2.5 font-mono text-[0.72rem] leading-relaxed whitespace-pre">
+            <div className="no-scrollbar overflow-x-auto bg-terminal px-3 py-2.5 font-mono text-[0.72rem] leading-relaxed whitespace-pre">
               <div className="text-[#e7e7ea]">
                 <span className="text-[#6ee7b7]">$ </span>
                 {f.prompt}

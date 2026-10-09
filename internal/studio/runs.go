@@ -2,6 +2,8 @@ package studio
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
+	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
 
 func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +34,9 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 		// A snapshot carries its own disk; an image beside it would be ignored
 		// by one reading and obeyed by another.
 		writeErr(w, http.StatusBadRequest, "start from an image or a snapshot, not both")
+		return
+	case req.CPUs < 0 || req.MemoryMB < 0 || req.DiskMB < 0:
+		writeErr(w, http.StatusBadRequest, "cpus, memory_mb and disk_mb: zero for the server's default, or more")
 		return
 	}
 	// Studio offers only the agents with a verified headless mode, console
@@ -58,6 +64,23 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Launch == nil {
 		writeErr(w, http.StatusNotImplemented, "this Studio cannot launch runs")
+		return
+	}
+	// Hosted, there are no egress rules or groups to apply: they are this
+	// machine's user's (studio.json), and no visitor's to use or to be bound
+	// by. The server's policy is what bounds a hosted run.
+	if s.hosted == nil {
+		if err := s.applyEgressRules(r, &req); err != nil {
+			status := http.StatusInternalServerError
+			var bad badLaunch
+			if errors.As(err, &bad) {
+				status = http.StatusBadRequest
+			}
+			writeErr(w, status, "egress: "+err.Error())
+			return
+		}
+	} else if len(req.EgressGroups) > 0 {
+		writeErr(w, http.StatusBadRequest, "allowlist groups are local Studio's; name the hosts to allow instead")
 		return
 	}
 	// Not the request's cancellation: a run outlives the request that started
@@ -92,7 +115,11 @@ type Agent struct {
 // AgentEnv is one variable an agent reads, by name.
 type AgentEnv struct {
 	Name string `json:"name"`
-	Set  bool   `json:"set"`
+	// Set is whether the environment Studio runs in sets it, and Saved
+	// whether a key is saved for it (agenthome.SaveKey). A run forwards the
+	// environment's value, else the saved one.
+	Set   bool `json:"set"`
+	Saved bool `json:"saved"`
 }
 
 func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
@@ -117,11 +144,68 @@ func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 		a := Agent{Name: name, Login: login, ProviderHost: d.ProviderHost, LoginFiles: d.AuthPaths}
+		saved := agenthome.SavedKeys(d)
 		for _, e := range d.EnvAllow {
 			_, set := os.LookupEnv(e)
-			a.Env = append(a.Env, AgentEnv{Name: e, Set: set})
+			_, kept := saved[e]
+			a.Env = append(a.Env, AgentEnv{Name: e, Set: set, Saved: kept})
 		}
 		out = append(out, a)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": out})
 }
+
+// applyEgressRules adds the launch's allowlist groups and the enabled deny
+// rules, after what the request named itself.
+//
+// A deny applies to every run that has a network. Groups the request names
+// make it an allowlist of their hosts; refused beside none or open, which
+// would ignore them. With no groups named, the default groups go into a run
+// that will be an allowlist — one that asks for it, or asks for nothing on a
+// server whose default is one — and into no other: a run on open egress
+// reaches those hosts already, and turning it into an allowlist because a
+// group listed some would cut it off from every other.
+func (s *Server) applyEgressRules(r *http.Request, req *LaunchRequest) error {
+	if len(req.EgressGroups) > 0 && (req.Network == api.NetworkNone || req.Network == api.NetworkOpen) {
+		return badLaunch(fmt.Sprintf("allowlist groups apply to an allowlist, not to network %s", req.Network))
+	}
+	allow, deny, err := egressFor(req.EgressGroups)
+	if errors.Is(err, errUnknownGroup) {
+		return badLaunch(err.Error())
+	}
+	if err != nil {
+		return err
+	}
+	req.Deny = append(req.Deny, deny...)
+	if len(req.EgressGroups) > 0 {
+		req.Network = api.NetworkAllowlist
+	}
+	switch req.Network {
+	case api.NetworkAllowlist:
+		req.Allow = append(req.Allow, allow...)
+	case "":
+		if len(req.Allow) > 0 {
+			// An allowlist already, by its own --allow.
+			req.Allow = append(req.Allow, allow...)
+			return nil
+		}
+		if len(allow) == 0 {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		caps, err := s.clientFor(r).Capabilities(ctx)
+		if err != nil {
+			return err
+		}
+		if caps.Network.Default.Mode == api.NetworkAllowlist {
+			req.Allow = append(req.Allow, allow...)
+		}
+	}
+	return nil
+}
+
+// badLaunch is an egress mistake that is the request's, answered 400.
+type badLaunch string
+
+func (e badLaunch) Error() string { return string(e) }

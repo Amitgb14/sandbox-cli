@@ -13,11 +13,19 @@ import (
 // reads on the host — the runtime's own counters on macOS, the VMM's process
 // and tap device on Linux — so nothing in it is the guest's account of
 // itself. One reading per interval for every running sandbox; an hour of
-// samples kept with each, in memory, gone with it.
+// samples kept with each, in this process's memory and nowhere else — not in
+// the state directory, not in a record kept across a restart (keep.go). They
+// stay with a terminated sandbox's record, readable, until that record is
+// dropped among the newest keepTerminated, and are gone when sandboxd
+// restarts. A sample is 88 bytes: an hour, about 63 KB a sandbox.
 
 // defaultMetricsInterval is how often usage is sampled when the server's
-// MetricsInterval is unset: an hour is 360 samples.
-const defaultMetricsInterval = 10 * time.Second
+// MetricsInterval is unset: an hour is 720 samples.
+// Five seconds, so a chart opened on a sandbox just started has something in
+// it, and a spike shorter than ten seconds is not averaged away. A reading is
+// cheap on both backends: /proc and the tap's counters on Linux, one `container
+// stats` for every sandbox on macOS.
+const defaultMetricsInterval = 5 * time.Second
 
 const metricsWindow = time.Hour
 

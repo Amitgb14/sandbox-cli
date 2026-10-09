@@ -1031,6 +1031,20 @@ later reads the 403 as protection.
 
 ---
 
+## A rename through a gateway can tell that a name is used on its node — known
+
+A sandboxd keeps names unique among every sandbox on it, whoever owns them;
+a gateway keeps them unique per user. A create that a node refuses for a name
+another user holds there is placed on another node, so the caller never
+hears of it. A rename cannot move: the sandbox stays where it is, so a
+rename to a name another user's sandbox holds on that node is refused with
+`409`. The gateway says only "that name cannot be used for this sandbox"
+(`internal/gateway/update.go`, pinned by `TestARenameIsUniquePerUserAcrossNodes`),
+but the refusal itself tells the caller that some sandbox on its node has
+that name. It names no owner, no id and nothing else, and the caller cannot
+choose the node. The fix is a node that scopes names by owner, which means
+sandboxd knowing owners it today leaves to the gateway.
+
 ## Not on this list
 
 Things an audit raised that were judged correct as they are, so nobody

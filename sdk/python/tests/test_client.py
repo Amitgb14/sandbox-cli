@@ -65,6 +65,15 @@ class ClientTest(unittest.TestCase):
         self.assertNotIn("py-secret-value", json.dumps(events))
         self.assertIn("process.started", [e["type"] for e in events])
 
+    def test_update_sandbox(self):
+        sb = self.new(name="py-before", labels={"team": "a"})
+        got = self.c.update_sandbox(sb["id"], name="py-after", labels={"team": "b"}, idle_timeout_secs=120)
+        self.assertEqual((got["name"], got["labels"], got["idle_timeout_secs"]), ("py-after", {"team": "b"}, 120))
+        self.assertEqual(self.c.sandbox("py-after")["id"], sb["id"])
+        # Only what is passed changes.
+        got = self.c.update_sandbox(sb["id"], labels={})
+        self.assertEqual((got["name"], got.get("labels")), ("py-after", None))
+
     def test_volumes(self):
         self.c.create_volume("pyvol", size_mb=8)
         self.addCleanup(lambda: self.c.delete_volume("pyvol"))

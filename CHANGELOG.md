@@ -198,6 +198,54 @@ in `_old/` as reference, to be ported where this design still wants it.
   a failed run changed nothing took a repository to compare, and a run that may
   have done work must not be done twice. A `--detach` run with `--fallback` is
   refused, because nothing watches a detached run's exit.
+- **Images, managed ahead of use** (capability `images`). An image was
+  pulled, and on Linux built into a root disk, only when a sandbox first asked
+  for it, a minute or more for that sandbox. `GET /v1/images` lists what is
+  installed with each one's state, size and the sandboxes using it; `POST
+  /v1/images` installs one in the background, with its progress; `DELETE
+  /v1/images?image=REF` removes one nothing uses, and on Linux the cached layers
+  no other image needs. The policy's `images` list limits installs as it limits
+  creates; the default and pooled images are not removed. `sandbox-cli image ls`,
+  `image pull` and `image rm`, and Studio's new Images screen, do the same. They
+  are the node's operator's: a gateway answers them `501` until its own catalog
+  exists. On Linux each root disk now records the images it serves, so the list,
+  and a gateway's placement hint, survive a sandboxd restart, where before they
+  were forgotten.
+- **A live sandbox can be renamed, relabelled and retimed.** `PATCH
+  /v1/sandboxes/{ref}` takes `name`, `labels` (replaced whole) and
+  `idle_timeout_secs` beside `network`, on a running or suspended sandbox,
+  under the rules they have at create; one bad field and nothing changes. A new
+  audit event, `sandbox.updated`, records what changed. Through a gateway a
+  name is unique among the caller's sandboxes on every node, and its own
+  `gateway.*` labels cannot be set, changed or removed. `sandbox-cli update
+  SANDBOX` does it from the CLI (`--name`, `--label k=v` / `k-`, `--unlabel`,
+  `--idle`, and `--network` with `--allow`, `--deny`, `--no-baseline` for a
+  running one); the SDKs gain `update_sandbox` / `updateSandbox`. In Studio, a
+  sandbox's Overview edits its name, labels and idle timeout, changes its
+  network (with the allowlist groups), and, where the backend takes disk
+  snapshots (macOS), resizes it: a copy at the new size in its place, with its
+  files, name, labels and network. A VM's vCPUs and memory are fixed while it
+  runs, so a Firecracker sandbox, whose snapshots are memory ones, is not
+  resized; its environment would not carry over either, and a resize says so.
+- **Saved agent API keys, VM templates and allowlist groups, from Studio.**
+  Studio's Agents screen saves an API key for any variable an agent reads, in
+  `~/.config/sandbox/agent-keys.json` (0600, write-only: no call returns it);
+  every agent run, `sandbox-cli agent` included, forwards it when the
+  environment does not set that variable, and the environment wins. Studio's
+  launches take a size (`cpus`, `memory_mb`, `disk_mb`), a `deny` list,
+  `egress_groups` and `no_baseline`; a new Templates screen keeps sizes by
+  name, micro to xlarge built in. Settings keeps allowlist groups — named sets
+  of hosts, picked per launch in the Playground's new Network step (none, an
+  allowlist of the groups chosen, or open), the default ones picked when none
+  are — and deny rules every Studio launch carries. Both are kept in
+  `~/.config/sandbox/studio.json`. See [docs/studio.md](docs/studio.md).
+  `run` and the agent commands take `--no-baseline`: an allowlist of only the
+  hosts named with `--allow` (and an agent's API), without the built-in
+  agents' APIs and registries. It only turns the baseline off; a config that
+  turned it off keeps it off.
+  `run` and the agent commands take `--template NAME` for the same sizes,
+  built in or saved in Studio; `--cpus`, `--memory` and `--disk` given beside
+  it win for their own field. `sandbox-cli template ls` lists them.
 - **A desktop image, used from Studio** ([docs/desktop.md](docs/desktop.md)).
   `ghcr.io/<owner>/sandbox-desktop` is the base image plus a screen: a window
   manager, a terminal and Chromium, started by `sandbox-desktop` and served
@@ -237,9 +285,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   /v1/sandboxes/{id}/metrics`, where the endpoint has the new `metrics`
   capability (macOS, Firecracker and the fake backend all do): CPU as a share
   of the vCPUs given, memory against its limit, network and disk byte counts,
-  sampled every 10 seconds by sandboxd from what the host measures — the
+  sampled every 5 seconds by sandboxd from what the host measures — the
   runtime's counters on macOS, the VMM's process on Linux — and never from the
-  guest. An hour is kept per sandbox, in memory. Reading it does not count as
+  guest. An hour is kept per sandbox, about 63 KB, in sandboxd's memory only:
+  nothing is written to disk, so it is gone when sandboxd restarts, and after
+  a sandbox ends once sandboxd forgets it (it keeps the 100 newest ended). Reading it does not count as
   activity for the idle timeout. Behind a gateway it is the owner's. Studio
   opens it from a sandbox's resources.
 - **A snapshot's progress.** While a snapshot is taken, the sandbox carries
@@ -260,7 +310,10 @@ in `_old/` as reference, to be ported where this design still wants it.
   what each person sees. It holds no credential of its own and reads nothing
   from the machine it runs on: no context, no agent logins, no environment,
   no config. Interactive agents log in inside their sandbox; unattended ones
-  run as jobs, with the API key stored as a secret. Admin keys are refused.
+  run as jobs, with the API key stored as a secret. Studio's own settings
+  (saved agent keys, templates, egress rules and groups) are the host user's
+  and play no part: hosted users get the built-in sizes and name the hosts
+  they allow. Admin keys are refused.
   Sessions are in memory, so a restart signs everyone out; a revoked key ends
   its sessions at their next call. `npm run build:hosted` (`make
   studio-hosted`) builds its UI, and `npm run check:hosted` fails if that
@@ -296,6 +349,11 @@ the previous release.
 
 In the rewrite:
 
+- **A saved login, or saved API key, is written to a fresh temporary file.**
+  The write went through `path.tmp` with `os.WriteFile`, which keeps the mode
+  of a file already there and follows a link there: a leftover 0644 one left
+  the result readable by every user on the machine. The temporary file is now
+  removed and created anew, owner-only, refusing a link.
 - **A saved login carries the login and nothing else.** Claude Code's
   `~/.claude.json` and Gemini CLI's `settings.json` are saved with the login
   because they hold part of it, but they also hold MCP servers: commands the
@@ -382,6 +440,42 @@ that fails on the code before the fix:
   `api.revoked`. Requests made with the user's other keys stay open.
 
 ### Changed
+
+- **sandboxd's systemd unit waits for its state directory's disk.**
+  `packaging/systemd/sandboxd.service` has
+  `RequiresMountsFor=/var/lib/sandboxd`: where that is a disk of its own and
+  it does not mount, sandboxd does not start, rather than starting on the empty
+  directory underneath and filling the root filesystem. Harmless where it is a
+  plain directory. docs/self-hosting.md says what is kept there and how to give
+  it an extra disk ("Where it keeps things").
+- **Processes keep running through a sandboxd upgrade too**
+  (`--keep-sandboxes`). Commands, terminals and agent sessions in a kept
+  sandbox carry on while sandboxd restarts. The new sandboxd re-attaches them
+  under the same process numbers, with the output the guest held: the newest
+  1 MiB, with the log noting what was dropped. A terminal attaches again.
+  Only processes sandboxd's own records name are taken back. A process that
+  finished meanwhile is listed with its exit code, and one the guest no longer
+  holds as exited with -1. Without the flag a process still ends with its
+  connection. VMs started under an older guest agent lose their processes at
+  the first upgrade to this version; after that they keep them.
+
+- **sandboxd can be upgraded or restarted without stopping its sandboxes**
+  (`--keep-sandboxes`, Firecracker). On exit it leaves the VMs running, and on
+  start it takes back the ones an earlier sandboxd on the same state directory
+  left: same VM, memory, files, network policy, name, labels and environment,
+  and a suspended one stays suspended. Running processes still end at a
+  restart (commands, terminals, agent sessions), and a sandbox's network is
+  off for about a second. A VM is taken back only if it is provably the same
+  one: its record intact, its VMM the same process, its guest answering, and
+  its network policy still allowed by the current policy file. Anything else
+  is ended, as before. With the flag on, each sandbox's environment values
+  are written to `<state-dir>/records/` (0600; deleted when it ends, or when
+  sandboxd starts without the flag). The packaged systemd unit now sets
+  `KillMode=process`, so a stop no longer kills VMs behind sandboxd's back.
+  Each VMM now runs in a session of its own, so a Ctrl-C to a sandboxd run by
+  hand no longer reaches its VMs. At every start, kept or not, sandboxd ends
+  any VMM in its state directory that no sandbox accounts for, deletes network
+  devices and jails nothing owns, and logs how many it took back and ended.
 
 - **An example: browser automation across many sandboxes**
   (`sdk/python/examples/browser-fleet`). `fleet.py` makes N sandboxes from the
@@ -600,6 +694,44 @@ that fails on the code before the fix:
   `.sandbox.yaml` cannot do it, and what it costs.
 
 ### Fixed
+
+- **Snapshots no longer fill the disk after a restart, and with
+  `--keep-sandboxes` they survive one.** The list of snapshots lived only in
+  sandboxd's memory, so after a restart a snapshot's files (a guest's memory
+  and disk, gigabytes each) could neither be used nor deleted, and stayed on
+  disk for good. With `--keep-sandboxes`, snapshots are now kept like their
+  sandboxes: listed again after a restart and usable to start sandboxes from.
+  Without it, a restart deletes the snapshots an earlier run left.
+
+- **Upgrading sandboxd no longer fills its disk with old root disks.** Each
+  image's root disk is cached per guest agent, and every sandboxd build has its
+  own agent, so each upgrade built a new set (about 3.7 GB for the base image)
+  and nothing removed the last. A machine filled its root filesystem after a
+  few upgrades, and creating a sandbox failed with "the backend failed" (mkfs:
+  no space left on device). sandboxd now removes, at start, the root disks
+  built for another guest agent. It keeps the ones a sandbox it took back is
+  still running or suspended from. Disks from before this version are treated
+  as stale and rebuilt once, on first use.
+
+- **sandboxd with networking now starts on a Linux machine that runs
+  avahi-daemon.** Its egress resolver listened on UDP 5353, the mDNS port,
+  which avahi-daemon holds on most Linux desktops and on EL-family servers
+  by default, so `sandboxd --network` exited with "address already in use"
+  and systemd restarted it forever. The resolver now listens on 7353. New
+  flags `--egress-dns-port` and `--egress-proxy-port` move it, or the proxy
+  (TCP 3128, also Squid's port), when another program holds one, and the
+  startup error says so.
+
+- **A name a Firecracker sandbox may not reach is now logged when its DNS
+  lookup is refused,** not only when a connection is: a site not on the
+  allowlist is refused at the lookup and never reaches the proxy, so it left
+  no trace. Each `egress denied` line quotes the name, which is the guest's
+  and may hold any byte.
+
+- **The docs no longer say a Linux sandbox gets open egress by default.** On
+  Firecracker egress is always an allowlist checked by name, and sandboxd
+  turns an `open` default or ceiling into the allowlist. `docs/self-hosting.md`
+  and the example policy now say so, and how a run adds the names it needs.
 
 - **A gateway no longer refuses a burst of short-lived sandboxes on a node
   with room.** A sandbox the gateway terminated kept counting against its node

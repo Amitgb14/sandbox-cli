@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -617,4 +618,70 @@ func (e *hostedEnv) dialWS(t *testing.T, path, origin, cookie string) *http.Resp
 		t.Fatal(err)
 	}
 	return resp
+}
+
+// Studio's settings — saved templates, egress rules and groups, agents'
+// saved keys — are this machine's user's. A hosted user sees none of them,
+// is bound by none of them, and has no route that writes them.
+func TestHostedLeavesTheHostsSettingsAlone(t *testing.T) {
+	e := hostedUnderTest(t)
+	if _, err := updateSettings(func(st *settings) error {
+		st.Templates = append(st.Templates, Template{Name: "host-only", CPUs: 1, MemoryMB: 256})
+		st.Egress = []EgressRule{{Host: "host-rule.example", Action: "deny", Enabled: true}}
+		st.Groups = []EgressGroup{{Name: "host-group", Hosts: []string{"host-group.example"}, Default: true}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cookie := e.signIn(t, aliceKey)
+
+	r, body := e.do(t, hreq{method: "GET", path: "/api/templates", cookie: cookie})
+	list, _ := body["templates"].([]any)
+	if r.StatusCode != http.StatusOK || len(list) != len(builtinTemplates) {
+		t.Errorf("templates: %d, %d of them; want the %d built in", r.StatusCode, len(list), len(builtinTemplates))
+	}
+	for _, x := range list {
+		if x.(map[string]any)["name"] == "host-only" {
+			t.Error("a template saved on the host was listed")
+		}
+	}
+	r, body = e.do(t, hreq{method: "GET", path: "/api/egress", cookie: cookie})
+	if r.StatusCode != http.StatusOK || len(body["rules"].([]any)) != 0 || len(body["groups"].([]any)) != 0 {
+		t.Errorf("egress: %d %v; want no rules and no groups", r.StatusCode, body)
+	}
+
+	for _, q := range []hreq{
+		{method: "PUT", path: "/api/agents/claude/keys/ANTHROPIC_API_KEY", body: map[string]string{"value": "sk-x"}},
+		{method: "DELETE", path: "/api/agents/claude/keys/ANTHROPIC_API_KEY"},
+		{method: "PUT", path: "/api/templates/mine", body: map[string]any{"name": "mine", "cpus": 1, "memory_mb": 512}},
+		{method: "DELETE", path: "/api/templates/host-only"},
+		{method: "PUT", path: "/api/egress", body: map[string]any{"rules": []any{}}},
+		{method: "PUT", path: "/api/egress/groups/g", body: map[string]any{"name": "g", "hosts": []string{"x.example"}}},
+		{method: "DELETE", path: "/api/egress/groups/host-group"},
+	} {
+		q.cookie, q.origin = cookie, e.origin
+		if r, body := e.do(t, q); r.StatusCode != http.StatusNotFound {
+			t.Errorf("%s %s: %d %v; want 404, no such route when hosted", q.method, q.path, r.StatusCode, body)
+		}
+	}
+	if st, err := loadSettings(); err != nil || len(st.Templates) != 1 || len(st.Groups) != 1 || len(st.Egress) != 1 {
+		t.Errorf("the host's settings changed: %+v %v", st, err)
+	}
+
+	var got LaunchRequest
+	e.s.Launch = func(_ context.Context, _ *api.Client, req LaunchRequest) (LaunchResult, error) {
+		got = req
+		return LaunchResult{Sandbox: "sbx_1", PID: 1}, nil
+	}
+	if r, body := e.do(t, hreq{method: "POST", path: "/api/runs", cookie: cookie, origin: e.origin,
+		body: map[string]any{"command": []string{"true"}, "egress_groups": []string{"host-group"}}}); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("a launch naming the host's group: %d %v", r.StatusCode, body)
+	}
+	if r, body := e.do(t, hreq{method: "POST", path: "/api/runs", cookie: cookie, origin: e.origin,
+		body: map[string]any{"command": []string{"true"}, "network": "allowlist", "allow": []string{"a.example"}}}); r.StatusCode != http.StatusCreated {
+		t.Fatalf("launch: %d %v", r.StatusCode, body)
+	}
+	if slices.Contains(got.Deny, "host-rule.example") || slices.Contains(got.Allow, "host-group.example") {
+		t.Errorf("the host's egress rules were applied to a hosted launch: allow %v deny %v", got.Allow, got.Deny)
+	}
 }

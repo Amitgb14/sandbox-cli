@@ -45,12 +45,19 @@ type LaunchRequest struct {
 	Console bool     `json:"console,omitempty"`
 	Command []string `json:"command,omitempty"`
 
-	Name    string            `json:"name,omitempty"`
-	Network string            `json:"network,omitempty"` // "", none, allowlist, open
-	Allow   []string          `json:"allow,omitempty"`
-	Labels  map[string]string `json:"labels,omitempty"`
-	Volumes []api.VolumeMount `json:"volumes,omitempty"`
-	Profile string            `json:"profile,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Network string   `json:"network,omitempty"` // "", none, allowlist, open
+	Allow   []string `json:"allow,omitempty"`
+	Deny    []string `json:"deny,omitempty"`
+	// EgressGroups are the allowlist groups (Settings) whose hosts the run
+	// may reach: absent, the default groups; [] none. Naming any asks for an
+	// allowlist. NoBaseline leaves out the built-in hosts (--no-baseline), so
+	// the groups, Allow and an agent's API are the whole list.
+	EgressGroups []string          `json:"egress_groups"`
+	NoBaseline   bool              `json:"no_baseline,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Volumes      []api.VolumeMount `json:"volumes,omitempty"`
+	Profile      string            `json:"profile,omitempty"`
 	// Image runs that image instead of the server's default, and Snapshot
 	// starts from a snapshot instead of an image: the CLI's --image and
 	// --from-snapshot. Either is only asked for; sandboxd decides, under its
@@ -62,6 +69,12 @@ type LaunchRequest struct {
 	// sandboxd as any client's.
 	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`
 	SnapshotKeep      int `json:"snapshot_keep,omitempty"`
+	// CPUs, MemoryMB and DiskMB size the sandbox — a template's, in the
+	// Playground: the CLI's --cpus, --memory and --disk. Zero is the server's
+	// default; the server's limits bound the rest.
+	CPUs     float64 `json:"cpus,omitempty"`
+	MemoryMB int     `json:"memory_mb,omitempty"`
+	DiskMB   int     `json:"disk_mb,omitempty"`
 	// Rows and Cols size a console run's terminal before anyone attaches.
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`
@@ -112,6 +125,16 @@ func (s *Server) Handler() http.Handler {
 	api("GET /api/agents/state", s.agentStates)
 	api("POST /api/runs", s.launch)
 	api("GET /api/agents", s.agents)
+	api("PUT /api/agents/{agent}/keys/{var}", s.putAgentKey)
+	api("DELETE /api/agents/{agent}/keys/{var}", s.deleteAgentKey)
+	api("GET /api/templates", s.templates)
+	api("PUT /api/templates/{name}", s.putTemplate)
+	api("DELETE /api/templates/{name}", s.deleteTemplate)
+	api("POST /api/sandboxes/{id}/resize", s.resize)
+	api("GET /api/egress", s.egress)
+	api("PUT /api/egress", s.putEgress)
+	api("PUT /api/egress/groups/{name}", s.putEgressGroup)
+	api("DELETE /api/egress/groups/{name}", s.deleteEgressGroup)
 	mux.Handle("/api/", s.guard(func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
 	}))

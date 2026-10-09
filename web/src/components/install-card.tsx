@@ -54,7 +54,7 @@ export function InstallCard({ className }: { className?: string }) {
 
         {INSTALL_ROUTES.map((r) => (
           <TabsContent key={r.id} value={r.id} className="p-0">
-            <div className="group relative flex items-start gap-3 bg-[#0b0b0d] px-4 py-4">
+            <div className="group relative flex items-start gap-3 bg-terminal px-4 py-4">
               <pre className="no-scrollbar min-w-0 flex-1 overflow-x-auto font-mono text-[0.78rem] leading-relaxed text-[#e7e7ea]">
                 {r.lines.map((line, i) => (
                   <div key={i} className="whitespace-pre">

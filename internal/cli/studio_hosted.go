@@ -202,13 +202,16 @@ func hostedLauncher() studio.Launcher {
 		if err != nil {
 			return studio.LaunchResult{}, err
 		}
+		// A size is only asked for: sandboxd's limits bound it as any request's.
 		cr := api.CreateSandboxRequest{
 			Name: req.Name, Image: req.Image, SnapshotID: req.Snapshot,
 			SnapshotEverySecs: req.SnapshotEverySecs, SnapshotKeep: req.SnapshotKeep,
+			CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,
 			Env: map[string]string{},
 		}
 		// The agent's constant settings only. Its EnvAllow names are values
-		// this process would read from its own environment: never here.
+		// this process would read from its own environment, or from the keys
+		// saved in Studio here (buildEnv reads both): never here.
 		if agent != nil {
 			for _, kv := range agent.Env {
 				if k, v, ok := strings.Cut(kv, "="); ok {
@@ -255,10 +258,12 @@ func hostedLauncher() studio.Launcher {
 // with the request's mode and names on top, resolved the way every other run
 // is (resolveNetwork), and never a config file of this machine's.
 func hostedNetwork(req studio.LaunchRequest, caps api.Capabilities, agent *agents.Descriptor) (*api.NetworkPolicy, error) {
-	ov, err := (&runFlags{network: req.Network, allow: req.Allow}).overrides()
+	ov, err := (&runFlags{network: req.Network, allow: req.Allow, noBaseline: req.NoBaseline}).overrides()
 	if err != nil {
 		return nil, err
 	}
+	// The same flag rules LoadProfileWith applies, over the built-in
+	// defaults instead of this machine's files.
 	cfg := policy.Default()
 	if len(req.Allow) > 0 && cfg.Network.Mode != "none" {
 		cfg.Network.Mode = "allowlist"
@@ -266,11 +271,15 @@ func hostedNetwork(req studio.LaunchRequest, caps api.Capabilities, agent *agent
 	if ov.NetworkMode != "" {
 		cfg.Network.Mode = ov.NetworkMode
 	}
+	if ov.NoBaseline {
+		off := false
+		cfg.Network.Baseline = &off
+	}
 	host := ""
 	if agent != nil {
 		host = agent.ProviderHost
 	}
-	n, err := resolveNetwork(cfg, req.Allow, nil, caps, host)
+	n, err := resolveNetwork(cfg, req.Allow, req.Deny, caps, host)
 	if err != nil {
 		return nil, err
 	}

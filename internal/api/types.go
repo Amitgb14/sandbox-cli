@@ -94,6 +94,10 @@ const (
 	// CapAudit: the server keeps an event log, served per sandbox at
 	// GET /v1/sandboxes/{ref}/events. A property of the server, not the backend.
 	CapAudit = "audit"
+	// CapImages: the operator manages the images sandboxes start from —
+	// GET, POST and DELETE /v1/images — rather than each being pulled only
+	// when a sandbox first asks for it.
+	CapImages = "images"
 )
 
 // Limits are the largest resources a sandbox may ask for.
@@ -187,9 +191,21 @@ type VolumeList struct {
 	Volumes []Volume `json:"volumes"`
 }
 
-// UpdateSandboxRequest changes a running sandbox.
+// UpdateSandboxRequest changes a live sandbox. Each field left out is left
+// as it is. Network needs a running sandbox and the network_policy_update
+// capability; the rest are this server's records of the sandbox, changed on
+// a running or suspended one with nothing asked of its VM.
 type UpdateSandboxRequest struct {
 	Network *NetworkPolicy `json:"network,omitempty"`
+	// Name renames it; "" removes the name. Unique among live sandboxes, as
+	// at create.
+	Name *string `json:"name,omitempty"`
+	// Labels replace its labels whole; {} removes them all.
+	Labels *map[string]string `json:"labels,omitempty"`
+	// IdleTimeoutSecs is how long it may sit idle before it is terminated,
+	// counted from its last activity. Between 1 and limits.max_idle_timeout_secs;
+	// 0, never, only where that limit is 0.
+	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
 }
 
 // Sandbox is a sandbox as the API reports it. Environment values are never
@@ -241,6 +257,7 @@ const (
 	EventSandboxCreated    = "sandbox.created"
 	EventSandboxTerminated = "sandbox.terminated" // Reason: "request" or "idle"
 	EventNetworkUpdated    = "sandbox.network_updated"
+	EventSandboxUpdated    = "sandbox.updated" // name, labels or idle timeout changed; the event carries them after
 	EventSandboxSuspended  = "sandbox.suspended"
 	EventSandboxResumed    = "sandbox.resumed"
 	EventSnapshotCreated   = "snapshot.created"
@@ -269,6 +286,8 @@ type Event struct {
 	EnvNames []string       `json:"env_names,omitempty"`
 	Snapshot string         `json:"snapshot,omitempty"`
 	Volumes  []VolumeMount  `json:"volumes,omitempty"`
+	// IdleTimeoutSecs is the idle timeout after an update that changed it.
+	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
 
 	PID int `json:"pid,omitempty"`
 	// A process is recorded by its program, its argument count and a hash
@@ -731,6 +750,56 @@ type MetricSample struct {
 	DiskReadBytes  int64 `json:"disk_read_bytes"`
 	DiskWriteBytes int64 `json:"disk_write_bytes"`
 	Processes      int   `json:"processes,omitempty"`
+}
+
+// Image is one image a server has, or is installing: GET /v1/images.
+type Image struct {
+	Image string `json:"image"`
+	// State is installed, installing, or failed (Error says why); a failed
+	// one is listed until it is installed or removed, or the server restarts.
+	State       string     `json:"state"`
+	Digest      string     `json:"digest,omitempty"`
+	Bytes       int64      `json:"bytes,omitempty"`
+	InstalledAt *time.Time `json:"installed_at,omitempty"`
+	// InUse is how many sandboxes running or suspended here start from it.
+	InUse int `json:"in_use"`
+	// Default is the server's default image, and Pooled one it keeps a
+	// pool of: neither is removed.
+	Default  bool           `json:"default,omitempty"`
+	Pooled   bool           `json:"pooled,omitempty"`
+	Progress *ImageProgress `json:"progress,omitempty"`
+	Error    string         `json:"error,omitempty"`
+}
+
+// Image states.
+const (
+	ImageInstalled  = "installed"
+	ImageInstalling = "installing"
+	ImageFailed     = "failed"
+)
+
+// ImageProgress is how far an install has got: pulling the image's blobs,
+// Done of Total bytes, then building its root disk where the backend has one.
+type ImageProgress struct {
+	Phase string `json:"phase"`
+	Done  int64  `json:"done,omitempty"`
+	Total int64  `json:"total,omitempty"`
+}
+
+// ImageList is the body of GET /v1/images.
+type ImageList struct {
+	Images []Image `json:"images"`
+}
+
+// InstallImageRequest is the body of POST /v1/images.
+type InstallImageRequest struct {
+	Image string `json:"image"`
+}
+
+// RemovedImage is the answer to DELETE /v1/images?image=REF.
+type RemovedImage struct {
+	Image      string `json:"image"`
+	FreedBytes int64  `json:"freed_bytes"`
 }
 
 // MetricsList is the body of GET /v1/sandboxes/{ref}/metrics: the samples of

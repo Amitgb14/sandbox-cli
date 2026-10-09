@@ -51,8 +51,21 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/orgs/{name}/members", false, g.setOrgMember)
 	route("DELETE /v1/orgs/{name}/members/{user}", false, g.removeOrgMember)
 
+	// A node's images are its operator's: an install fills that node's disk
+	// for every tenant on it. The gateway's own catalog, run by admin keys,
+	// is not done yet, so the fleet has no images capability and these are
+	// refused as on any endpoint without it, rather than forwarded.
+	for _, p := range []string{"GET /v1/images", "POST /v1/images", "DELETE /v1/images"} {
+		route(p, false, func(w http.ResponseWriter, _ *http.Request, _ Principal) {
+			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "images are managed on each node by its operator; this gateway does not manage them")
+		})
+	}
+
 	route("POST /v1/sandboxes", false, g.createSandbox)
 	route("GET /v1/sandboxes", false, g.listHandler)
+	// Read, not forwarded: labels and names are the gateway's business too
+	// (update.go).
+	route("PATCH /v1/sandboxes/{ref}", false, g.updateHandler)
 	// Every route on one sandbox is forwarded to its node once the router
 	// has said the caller may; each names the scope it needs. Attach and a
 	// tunnel are GETs that write — stdin, signals, bytes to a guest port —
@@ -64,7 +77,6 @@ func (g *Gateway) Handler() http.Handler {
 		after   afterFunc
 	}{
 		{"GET /v1/sandboxes/{ref}", false, ScopeRead, nil},
-		{"PATCH /v1/sandboxes/{ref}", false, ScopeCreate, nil},
 		{"DELETE /v1/sandboxes/{ref}", false, ScopeDelete, g.afterDelete},
 		{"POST /v1/sandboxes/{ref}/run", false, ScopeCreate, nil},
 		{"POST /v1/sandboxes/{ref}/processes", false, ScopeCreate, nil},

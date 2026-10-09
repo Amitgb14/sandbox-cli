@@ -1,0 +1,273 @@
+//go:build vm && linux
+
+package firecracker
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/backend"
+	"github.com/Amitgb14/sandbox-cli/internal/image"
+	"github.com/Amitgb14/sandbox-cli/internal/spec"
+)
+
+// TestVMKeep is a restart of sandboxd with Keep on, in one process: a backend
+// detaches from its VMs and a second one on the same state directory takes
+// them back. A running VM must come back as the same VM — the same boot, the
+// same files — a suspended one suspended and resumable, and one whose VMM died
+// meanwhile must be removed, not served.
+//
+// SANDBOX_TEST_NETWORK=1 and SANDBOX_TEST_JAILER as for the other VM tests
+// (root): then the taken-back VM's tap and jail uid are checked too.
+func TestVMKeep(t *testing.T) {
+	kernel := os.Getenv("SANDBOX_TEST_KERNEL")
+	fc := os.Getenv("SANDBOX_TEST_FIRECRACKER")
+	if kernel == "" || fc == "" {
+		t.Skip("set SANDBOX_TEST_KERNEL and SANDBOX_TEST_FIRECRACKER")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	state, err := os.MkdirTemp("", "fckeep") // short: the vsock socket path is limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(state) })
+	agent := filepath.Join(state, "sandbox-guestd")
+	build := exec.Command("go", "build", "-trimpath", "-o", agent, "../../../cmd/sandbox-guestd")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building the guest agent: %v\n%s", err, out)
+	}
+	ref := "alpine:3.20"
+	if r := os.Getenv("SANDBOX_TEST_IMAGE"); r != "" {
+		ref = r
+	}
+	puller := &image.Puller{Cache: filepath.Join(os.TempDir(), "sandbox-test-images")}
+	network := os.Getenv("SANDBOX_TEST_NETWORK") == "1"
+	jailer := os.Getenv("SANDBOX_TEST_JAILER")
+	config := func() Config { // fresh Network and Jailer each time: they hold a process's state
+		cfg := Config{
+			Firecracker: fc, Kernel: kernel, Agent: agent, StateDir: state, Puller: puller,
+			ImageDir: filepath.Join(os.TempDir(), "sandbox-test-images"),
+			Logf:     func(f string, a ...any) { t.Logf(f, a...) },
+			Keep:     true,
+		}
+		if network {
+			cfg.Network = &Network{Logf: cfg.Logf}
+		}
+		if jailer != "" {
+			cfg.Jailer = &Jailer{Path: jailer, ChrootBase: filepath.Join(state, "jail"), UIDBase: 900000}
+		}
+		return cfg
+	}
+	var current *Backend
+	t.Cleanup(func() {
+		if current == nil {
+			return
+		}
+		for id := range current.Kept() {
+			_ = current.Terminate(context.Background(), id)
+		}
+		current.mu.Lock()
+		ids := make([]string, 0, len(current.vms))
+		for id := range current.vms {
+			ids = append(ids, id)
+		}
+		current.mu.Unlock()
+		for _, id := range ids {
+			_ = current.Terminate(context.Background(), id)
+		}
+		if current.cfg.Network != nil {
+			current.cfg.Network.Close()
+		}
+	})
+
+	be1, err := New(config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = be1
+	mk := func(netMode string) backend.Spec {
+		s := backend.Spec{ID: spec.NewIDFor(""), Image: ref, CPUs: 1, MemoryMB: 256, DiskMB: 512,
+			Network: api.NetworkPolicy{Mode: api.NetworkNone}}
+		if network && netMode == api.NetworkAllowlist {
+			s.Network = api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"example.com"}}
+		}
+		if err := be1.Create(ctx, s); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		return s
+	}
+	running, suspended, dies := mk(api.NetworkAllowlist), mk(api.NetworkNone), mk(api.NetworkNone)
+	// A VM whose record names the wrong process, as after a crash between a
+	// resume's new VMM starting and its record being written: the record is
+	// unusable, and the VMM must not be left running unmanaged.
+	stray := mk(api.NetworkNone)
+	strayPID, strayStart := be1.vms[stray.ID].pid, be1.vms[stray.ID].start
+	if err := be1.WriteFile(ctx, running.ID, "/tmp/kept", []byte("still here")); err != nil {
+		t.Fatal(err)
+	}
+	bootID, err := be1.ReadFile(ctx, running.ID, "/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A process started kept, mid-run when sandboxd goes: its connection is
+	// dropped (pctx), and it must run on and be taken back with its output.
+	pctx, dropConn := context.WithCancel(ctx)
+	var before syncBuf
+	keptProc, err := be1.Start(pctx, running.ID, backend.ProcSpec{
+		Argv: []string{"sh", "-c", "echo before; sleep 2; echo after; exit 5"}, Keep: true, Session: "pkeepvmtest"}, &before, io.Discard)
+	if err != nil {
+		t.Fatalf("starting a kept process: %v", err)
+	}
+	for i := 0; i < 100 && !strings.Contains(before.String(), "before"); i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	dropConn()
+	keptProc.Wait()
+	if err := be1.Suspend(ctx, suspended.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadPID := be1.vms[dies.ID].pid
+	be1.Detach() // sandboxd exits
+	current = nil
+
+	ks := keepState{}
+	data, _ := os.ReadFile(filepath.Join(state, "sandboxes", stray.ID, keepFile))
+	_ = json.Unmarshal(data, &ks)
+	ks.Start++
+	data, _ = json.Marshal(ks)
+	_ = os.WriteFile(filepath.Join(state, "sandboxes", stray.ID, keepFile), data, 0o600)
+
+	// While no sandboxd runs, one VMM dies.
+	if err := syscall.Kill(-deadPID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	// The kept VMs' disk is labelled as an older guest agent's, as after an
+	// upgrade: pruning must not take a disk a kept VM was booted from — the
+	// suspended one is resumed from it below.
+	var labels []string
+	if jailer == "" {
+		var vc VMConfig
+		data, _ := os.ReadFile(filepath.Join(state, "sandboxes", running.ID, "vm.json"))
+		_ = json.Unmarshal(data, &vc)
+		for _, d := range vc.Drives {
+			if d.IsRootDevice {
+				l := filepath.Join(filepath.Dir(d.PathOnHost), "agent")
+				labels = append(labels, l)
+				_ = os.WriteFile(l, []byte("1:an-older-agent\n"), 0o644)
+			}
+		}
+		if len(labels) == 0 {
+			t.Fatal("precondition: the running VM's root disk was not found")
+		}
+	}
+	defer func() {
+		for _, l := range labels {
+			_ = os.Remove(l) // relabelled by the next build that uses it
+		}
+	}()
+
+	be2, err := New(config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = be2
+	kept := be2.Kept()
+	if k, ok := kept[running.ID]; !ok || k.Suspended {
+		t.Fatalf("running VM not taken back as running: %+v", kept)
+	}
+	if k, ok := kept[suspended.ID]; !ok || !k.Suspended {
+		t.Fatalf("suspended VM not taken back as suspended: %+v", kept)
+	}
+	if _, ok := kept[dies.ID]; ok {
+		t.Fatal("a VM whose VMM died was taken back")
+	}
+	if _, err := os.Stat(filepath.Join(state, "sandboxes", dies.ID)); !os.IsNotExist(err) {
+		t.Fatalf("the dead VM's files were left: %v", err)
+	}
+	if _, ok := kept[stray.ID]; ok {
+		t.Fatal("a VM whose record names another process was taken back")
+	}
+	for i := 0; i < 50 && sameProcess(strayPID, strayStart); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if sameProcess(strayPID, strayStart) {
+		t.Fatal("a VMM no record accounts for was left running")
+	}
+
+	// The same VM: same boot, same files.
+	got, err := be2.ReadFile(ctx, running.ID, "/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		t.Fatalf("the taken-back VM does not answer: %v", err)
+	}
+	if string(got) != string(bootID) {
+		t.Fatalf("the VM was rebooted: boot id %q, was %q", got, bootID)
+	}
+	if data, err := be2.ReadFile(ctx, running.ID, "/tmp/kept"); err != nil || string(data) != "still here" {
+		t.Fatalf("file after the restart: %q, %v", data, err)
+	}
+	if network {
+		v := be2.vms[running.ID]
+		if v.net == nil || v.net.policy.Load().Mode != api.NetworkAllowlist {
+			t.Fatalf("the taken-back VM's network: %+v", v.net)
+		}
+		out, err := exec.Command("nft", "list", "set", "inet", "sandboxd", "egress_on").CombinedOutput()
+		if err != nil || !strings.Contains(string(out), v.net.guest.String()) {
+			t.Fatalf("the taken-back VM is not in the egress set: %v\n%s", err, out)
+		}
+	}
+	var after syncBuf
+	back, err := be2.Reattach(ctx, running.ID, "pkeepvmtest", &after, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("taking back the kept process: %v", err)
+	}
+	if code := back.Wait(); code != 5 || after.String() != "before\nafter\n" {
+		t.Fatalf("the kept process after the restart: exit %d, output %q", code, after.String())
+	}
+	if _, err := be2.Reattach(ctx, running.ID, "pnosuchsession", io.Discard, io.Discard, nil); err != backend.ErrNotFound {
+		t.Fatalf("an unknown session: %v", err)
+	}
+	for _, l := range labels {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(l), "rootfs.ext4")); err != nil {
+			t.Fatalf("a root disk kept VMs were booted from was pruned: %v", err)
+		}
+	}
+	if err := be2.Resume(ctx, suspended.ID); err != nil {
+		t.Fatalf("resuming a VM taken back suspended: %v", err)
+	}
+	if _, err := be2.ReadFile(ctx, suspended.ID, "/proc/uptime"); err != nil {
+		t.Fatalf("the resumed VM does not answer: %v", err)
+	}
+
+	// Ending a taken-back VM ends its VMM, which this process did not start.
+	v := be2.vms[running.ID]
+	pid, start := v.pid, v.start
+	if err := be2.Terminate(ctx, running.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sameProcess(pid, start) {
+		t.Fatal("the VMM of a terminated taken-back VM is still running")
+	}
+}
+
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }

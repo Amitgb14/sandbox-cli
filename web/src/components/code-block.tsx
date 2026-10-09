@@ -36,7 +36,7 @@ export function CodeBlock({
   return (
     <div
       className={cn(
-        "group relative flex items-start gap-3 overflow-hidden rounded-xl bg-[#0b0b0d] px-4 py-4",
+        "group relative flex items-start gap-3 overflow-hidden rounded-xl bg-terminal px-4 py-4",
         className,
       )}
     >

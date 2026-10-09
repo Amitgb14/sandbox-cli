@@ -35,7 +35,9 @@ type Backend struct {
 	caps      map[string]bool
 	snapshots map[string]fakeSnapshot
 	volumes   map[string]*fakeVolume
-	images    map[string]bool // every image a sandbox was created from
+	images    map[string]bool // every image a sandbox was created from, or installed
+	// installedAt is when an image was installed; created-from ones have none.
+	installedAt map[string]time.Time
 }
 
 // fakeVolume holds a volume's files by path relative to its mount point. A
@@ -64,12 +66,14 @@ type sandbox struct {
 	files   map[string]*node // absolute, cleaned path -> node
 	procs   []*proc
 	stopped bool
+	// suspended is only what Kept reports; the fake runs nothing either way.
+	suspended bool
 }
 
 // New returns an empty fake with the capabilities given (api.Cap* names).
 func New(caps ...string) *Backend {
 	b := &Backend{sandboxes: map[string]*sandbox{}, caps: map[string]bool{}, snapshots: map[string]fakeSnapshot{},
-		volumes: map[string]*fakeVolume{}, images: map[string]bool{}}
+		volumes: map[string]*fakeVolume{}, images: map[string]bool{}, installedAt: map[string]time.Time{}}
 	for _, c := range caps {
 		b.caps[c] = true
 	}
@@ -182,6 +186,64 @@ func (b *Backend) CachedImages() []string {
 	return out
 }
 
+// MissingImage is a reference the fake's "registry" does not have: installing
+// it fails, as a typo in a tag does against a real one.
+const MissingImage = "does-not-exist"
+
+// Images is backend.ImageStore: every image installed, or created from.
+func (b *Backend) Images(context.Context) ([]backend.ImageInfo, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]backend.ImageInfo, 0, len(b.images))
+	for img := range b.images {
+		out = append(out, backend.ImageInfo{Ref: img, Digest: "sha256:" + strings.Repeat("0", 64), Bytes: 64 << 20, InstalledAt: b.installedAt[img]})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ref < out[j].Ref })
+	return out, nil
+}
+
+// InstallImage is backend.ImageStore: a pull of 64 MiB in four steps, then a
+// build, unless the image is MissingImage.
+func (b *Backend) InstallImage(ctx context.Context, ref string, progress func(backend.ImageProgress)) error {
+	if strings.Contains(ref, MissingImage) {
+		return fmt.Errorf("%s: manifest unknown", ref)
+	}
+	const total = 64 << 20
+	for done := int64(0); done <= total; done += total / 4 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if progress != nil {
+			progress(backend.ImageProgress{Phase: "pulling", Done: done, Total: total})
+		}
+	}
+	if progress != nil {
+		progress(backend.ImageProgress{Phase: "building", Done: total, Total: total})
+	}
+	b.mu.Lock()
+	b.images[ref] = true
+	b.installedAt[ref] = time.Now().UTC()
+	b.mu.Unlock()
+	return nil
+}
+
+// RemoveImage is backend.ImageStore.
+func (b *Backend) RemoveImage(_ context.Context, ref string) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.images[ref] {
+		return 0, backend.ErrNotFound
+	}
+	for _, sb := range b.sandboxes {
+		if sb.spec.Image == ref && sb.spec.FromSnapshot == "" {
+			return 0, fmt.Errorf("%w: a sandbox starts from %s", backend.ErrBusy, ref)
+		}
+	}
+	delete(b.images, ref)
+	delete(b.installedAt, ref)
+	return 64 << 20, nil
+}
+
 func (b *Backend) CreateVolume(_ context.Context, name string, sizeMB int) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -223,13 +285,113 @@ func copyFiles(in map[string]*node) map[string]*node {
 // Suspend and Resume record nothing the fake could lose: its sandboxes have no
 // memory to keep. They exist so the server's handling of the states is tested.
 func (b *Backend) Suspend(_ context.Context, id string) error {
-	_, err := b.get(id)
+	s, err := b.get(id)
+	if err == nil {
+		s.mu.Lock()
+		s.suspended = true
+		s.mu.Unlock()
+	}
 	return err
 }
 
 func (b *Backend) Resume(_ context.Context, id string) error {
-	_, err := b.get(id)
+	s, err := b.get(id)
+	if err == nil {
+		s.mu.Lock()
+		s.suspended = false
+		s.mu.Unlock()
+	}
 	return err
+}
+
+// StoredSnapshots is backend.SnapshotLister.
+func (b *Backend) StoredSnapshots() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, 0, len(b.snapshots))
+	for id := range b.snapshots {
+		out = append(out, id)
+	}
+	return out
+}
+
+// Kept is backend.Keeper: the fake outlives a server in a test the way a VM
+// outlives sandboxd, so every sandbox it holds is one a new server can take
+// back.
+func (b *Backend) Kept() map[string]backend.Kept {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := map[string]backend.Kept{}
+	for id, s := range b.sandboxes {
+		s.mu.Lock()
+		out[id] = backend.Kept{Suspended: s.suspended}
+		s.mu.Unlock()
+	}
+	return out
+}
+
+// Detach is backend.Keeper. The sandboxes stay; their processes end, as a
+// guest agent ends a process whose host connection is gone — except the kept
+// ones, which run on, their output going nowhere until they are reattached.
+func (b *Backend) Detach() {
+	b.mu.Lock()
+	var procs []*proc
+	for _, s := range b.sandboxes {
+		s.mu.Lock()
+		var kept []*proc
+		for _, p := range s.procs {
+			if p.session != "" {
+				p.out.swap(io.Discard)
+				p.err.swap(io.Discard)
+				kept = append(kept, p)
+			} else {
+				procs = append(procs, p)
+			}
+		}
+		s.procs = kept
+		s.mu.Unlock()
+	}
+	b.mu.Unlock()
+	for _, p := range procs {
+		_ = p.Signal("KILL")
+	}
+}
+
+// Reattach is backend.Reattacher.
+func (b *Backend) Reattach(_ context.Context, id, session string, stdout, stderr io.Writer, _ func(int64)) (backend.Proc, error) {
+	s, err := b.get(id)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.procs {
+		if p.session != "" && p.session == session {
+			p.out.swap(stdout)
+			p.err.swap(stderr)
+			return p, nil
+		}
+	}
+	return nil, backend.ErrNotFound
+}
+
+// swapWriter is a writer whose destination can change: a kept process's
+// output goes to whoever has attached.
+type swapWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *swapWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+func (s *swapWriter) swap(w io.Writer) {
+	s.mu.Lock()
+	s.w = w
+	s.mu.Unlock()
 }
 
 // Snapshot captures the files; a sandbox started from it gets its own copy, so
@@ -431,11 +593,13 @@ func (s *sandbox) children(dir string) []string {
 // --- processes -------------------------------------------------------------
 
 type proc struct {
-	stdinR  *io.PipeReader
-	stdinW  *io.PipeWriter
-	signals chan int
-	done    chan struct{}
-	code    int
+	session  string // set when kept (ProcSpec.Keep)
+	out, err *swapWriter
+	stdinR   *io.PipeReader
+	stdinW   *io.PipeWriter
+	signals  chan int
+	done     chan struct{}
+	code     int
 }
 
 var signalNumbers = map[string]int{"HUP": 1, "INT": 2, "KILL": 9, "TERM": 15}
@@ -473,7 +637,11 @@ func (b *Backend) Start(_ context.Context, id string, ps backend.ProcSpec, stdou
 		return nil, backend.ErrNoSuchCmd
 	}
 	r, w := io.Pipe()
-	p := &proc{stdinR: r, stdinW: w, signals: make(chan int, 1), done: make(chan struct{})}
+	p := &proc{stdinR: r, stdinW: w, signals: make(chan int, 1), done: make(chan struct{}),
+		out: &swapWriter{w: stdout}, err: &swapWriter{w: stderr}}
+	if ps.Keep {
+		p.session = ps.Session
+	}
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
@@ -489,7 +657,7 @@ func (b *Backend) Start(_ context.Context, id string, ps backend.ProcSpec, stdou
 	s.mu.Unlock()
 
 	go func() {
-		p.code = s.exec(p, ps, stdout, stderr)
+		p.code = s.exec(p, ps, p.out, p.err)
 		_ = r.Close()
 		close(p.done)
 	}()

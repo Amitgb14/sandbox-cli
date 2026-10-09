@@ -60,6 +60,7 @@ func (s *Server) setSnapshotSchedule(w http.ResponseWriter, r *http.Request) {
 	rec.lastScheduled = s.now()
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.persist(rec)
 	s.pruneScheduled(r.Context(), out.ID, sched.Keep)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -134,6 +135,7 @@ func (s *Server) pruneScheduled(ctx context.Context, sandbox string, keep int) {
 	st.mu.Unlock()
 	sn, _ := s.Backend.(backend.Snapshotter)
 	for _, id := range drop {
+		s.forgetSnapshot(id)
 		if sn != nil {
 			_ = sn.DeleteSnapshot(ctx, id)
 		}

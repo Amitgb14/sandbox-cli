@@ -13,15 +13,20 @@ import type {
   AgentState,
   AuditEvent,
   DirEntry,
+  EgressGroup,
+  EgressRule,
+  EgressSettings,
   Info,
   LaunchRequest,
   LaunchResult,
   MetricsList,
   NetworkPolicy,
   NodeStatus,
+  SandboxImage,
   Process,
   Sandbox,
   Snapshot,
+  VmTemplate,
   Volume,
 } from "@/lib/types";
 
@@ -40,6 +45,9 @@ export const keys = {
   snapshots: ["snapshots"] as const,
   agents: ["agents"] as const,
   agentStates: ["agent-states"] as const,
+  templates: ["templates"] as const,
+  images: ["images"] as const,
+  egress: ["egress"] as const,
 };
 
 // --- reads -------------------------------------------------------------------------
@@ -110,13 +118,20 @@ export function noAnswer(e: unknown): Error {
     : (e as Error);
 }
 
+/**
+ * How often an open metrics chart is read again: fixed, so a chart on a
+ * server that samples every 10 s still shows a new sample within 5 s of it.
+ * Where the hour is kept is in docs/api/v1.md, not on the screen.
+ */
+export const METRICS_REFRESH_MS = 5_000;
+
 /** The last hour of a sandbox's usage, read while something shows it. */
 export function useMetrics(id: string, enabled = true) {
   return useQuery({
     queryKey: keys.metrics(id),
     queryFn: () => apiFetch<MetricsList>(`${sbx(id)}/metrics`),
     enabled: !!id && enabled,
-    refetchInterval: 10_000,
+    refetchInterval: METRICS_REFRESH_MS,
     retry: false,
   });
 }
@@ -175,6 +190,27 @@ export function useAgents() {
   return useQuery({ queryKey: keys.agents, queryFn: async () => (await apiFetch<{ agents: Agent[] }>("/agents")).agents });
 }
 
+/** The endpoint's images; read every second while one installs, for its progress. */
+export function useImages(enabled = true) {
+  return useQuery({
+    queryKey: keys.images,
+    queryFn: async () => (await apiFetch<{ images: SandboxImage[] }>("/v1/images")).images,
+    enabled,
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.some((i) => i.state === "installing") ? 1_000 : 10_000),
+  });
+}
+
+/** Sizes to launch at: the built-in ones, then this user's (~/.config/sandbox/studio.json). */
+export function useTemplates() {
+  return useQuery({ queryKey: keys.templates, queryFn: async () => (await apiFetch<{ templates: VmTemplate[] }>("/templates")).templates });
+}
+
+/** Allowlist groups and the deny rules every Studio launch carries. */
+export function useEgress() {
+  return useQuery({ queryKey: keys.egress, queryFn: () => apiFetch<EgressSettings>("/egress") });
+}
+
 // --- writes ------------------------------------------------------------------------
 
 function useInvalidating<V, R>(fn: (v: V) => Promise<R>, invalidate: (v: V) => readonly unknown[][]) {
@@ -220,6 +256,24 @@ export function useDeleteSnapshot() {
   return useInvalidating(
     (id: string) => apiFetch<void>(`/v1/snapshots/${encodeURIComponent(id)}`, { method: "DELETE" }),
     () => [[...keys.snapshots]],
+  );
+}
+
+/** Renames, relabels or retimes a live sandbox; only what is given changes. */
+export function useUpdateSandbox() {
+  return useInvalidating(
+    ({ id, ...req }: { id: string; name?: string; labels?: Record<string, string>; idle_timeout_secs?: number }) =>
+      apiFetch<Sandbox>(sbx(id), { method: "PATCH", json: req }),
+    ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes]],
+  );
+}
+
+/** A copy at a new size in the sandbox's place (Studio's server: internal/studio/resize.go). */
+export function useResize() {
+  return useInvalidating(
+    ({ id, ...req }: { id: string; cpus: number; memory_mb: number; disk_mb?: number; drop_env?: boolean; keep_snapshot?: boolean }) =>
+      apiFetch<{ sandbox: Sandbox; replaced: string; snapshot?: string }>(`/sandboxes/${encodeURIComponent(id)}/resize`, { method: "POST", json: req }),
+    ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes], [...keys.snapshots]],
   );
 }
 
@@ -298,3 +352,79 @@ export function useDeleteVolume() {
   );
 }
 
+
+export function useSaveTemplate() {
+  return useInvalidating(
+    (t: VmTemplate) =>
+      apiFetch<VmTemplate>(`/templates/${encodeURIComponent(t.name)}`, {
+        method: "PUT",
+        json: { description: t.description ?? "", cpus: t.cpus, memory_mb: t.memory_mb, disk_mb: t.disk_mb ?? 0 },
+      }),
+    () => [[...keys.templates]],
+  );
+}
+
+export function useDeleteTemplate() {
+  return useInvalidating(
+    (name: string) => apiFetch<void>(`/templates/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    () => [[...keys.templates]],
+  );
+}
+
+export function useSaveEgressGroup() {
+  return useInvalidating(
+    (g: EgressGroup) =>
+      apiFetch<EgressGroup>(`/egress/groups/${encodeURIComponent(g.name)}`, {
+        method: "PUT",
+        json: { description: g.description ?? "", hosts: g.hosts, default: !!g.default },
+      }),
+    () => [[...keys.egress]],
+  );
+}
+
+export function useDeleteEgressGroup() {
+  return useInvalidating(
+    (name: string) => apiFetch<void>(`/egress/groups/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    () => [[...keys.egress]],
+  );
+}
+
+/** Replaces the deny rules whole, as the server stores them. */
+export function useSaveEgressRules() {
+  return useInvalidating(
+    (rules: EgressRule[]) => apiFetch<{ rules: EgressRule[] }>("/egress", { method: "PUT", json: { rules } }),
+    () => [[...keys.egress]],
+  );
+}
+
+/** Saves an agent's key. Write-only: no call returns it. */
+export function useSaveAgentKey() {
+  return useInvalidating(
+    ({ agent, name, value }: { agent: string; name: string; value: string }) =>
+      apiFetch<void>(`/agents/${encodeURIComponent(agent)}/keys/${encodeURIComponent(name)}`, { method: "PUT", json: { value } }),
+    () => [[...keys.agents]],
+  );
+}
+
+export function useDeleteAgentKey() {
+  return useInvalidating(
+    ({ agent, name }: { agent: string; name: string }) =>
+      apiFetch<void>(`/agents/${encodeURIComponent(agent)}/keys/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    () => [[...keys.agents]],
+  );
+}
+
+/** Starts installing an image; useImages follows it. */
+export function useInstallImage() {
+  return useInvalidating(
+    (image: string) => apiFetch<SandboxImage>("/v1/images", { method: "POST", json: { image } }),
+    () => [[...keys.images]],
+  );
+}
+
+export function useRemoveImage() {
+  return useInvalidating(
+    (image: string) => apiFetch<{ image: string; freed_bytes: number }>(`/v1/images?image=${encodeURIComponent(image)}`, { method: "DELETE" }),
+    () => [[...keys.images], [...keys.node]],
+  );
+}

@@ -1,7 +1,8 @@
 // Checks the hosted build (out-hosted/, from `npm run build:hosted`), which
 // `sandbox-cli studio host` serves to many users. It must carry none of the
-// operator's admin screens and none of local Studio's token handling — a
-// hosted page has no Studio token to read, store or ask for — and it must
+// operator's admin screens, none of local Studio's token handling — a
+// hosted page has no Studio token to read, store or ask for — and none of the
+// editors of the host user's own settings; and it must
 // carry the invite-link sign-in. The check reads the built files, not the
 // source, because what matters is what is served.
 //
@@ -17,8 +18,17 @@ import { join, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 // Strings only the admin screens carry (the same as check-admin-off.mjs).
 const ADMIN = ["/v1/admin/", "/v1/admin/orgs", "/admin/orgs", "page.admin", "Users & keys", "Lost sandboxes", "Drain and terminate", "All organizations"];
-// Strings only local Studio's token handling carries.
-const LOCAL = ["sandbox-studio-token", "Studio needs its token", "#token="];
+// Strings only local Studio carries: its token handling, and the editors of
+// this machine's user's settings (agents' saved keys, templates, egress rules).
+const LOCAL = [
+  "sandbox-studio-token",
+  "Studio needs its token",
+  "#token=",
+  "This agent reads no API key from the environment.",
+  "New template",
+  "Deny rules saved",
+  "Create group",
+];
 // Strings only the hosted sign-in carries.
 const HOSTED = ["Your session has ended", "This invite link did not sign you in", "Sign out"];
 
@@ -63,5 +73,5 @@ for (const p of [...ADMIN, ...LOCAL]) if (inHosted.has(p)) fail(`"${p}" is in ${
 for (const p of HOSTED) if (!inHosted.has(p)) fail(`the hosted build lacks "${p}"`);
 
 if (!process.exitCode) {
-  console.log(`check-hosted: the hosted build has none of ${ADMIN.length + LOCAL.length} admin and token strings, and its ${HOSTED.length} sign-in strings`);
+  console.log(`check-hosted: the hosted build has none of ${ADMIN.length + LOCAL.length} admin, token and settings strings, and its ${HOSTED.length} sign-in strings`);
 }

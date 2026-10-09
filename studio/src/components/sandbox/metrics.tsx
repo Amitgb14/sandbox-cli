@@ -6,7 +6,7 @@ import { Activity } from "lucide-react";
 import { ResourceChips } from "@/components/sandbox/resource-chips";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useInfo, useMetrics } from "@/lib/api/queries";
+import { METRICS_REFRESH_MS, useInfo, useMetrics } from "@/lib/api/queries";
 import { formatBytes, formatMiB } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { MetricSample, Sandbox } from "@/lib/types";
@@ -16,8 +16,8 @@ const chartConfig = {
   memory: { label: "Memory", color: "var(--caution)" },
 } satisfies ChartConfig;
 
-function clock(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function clock(iso: string, seconds = false): string {
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}) });
 }
 
 /** A counter's rate between the last two samples, per second. */
@@ -40,6 +40,17 @@ function Tile({ label, value, sub }: { label: string; value: string; sub?: strin
 }
 
 /**
+ * Marks for a memory axis that read as sizes: quarters of the limit, which
+ * for the sizes a sandbox is given (512 MiB, 1, 2, 4, 8 GiB) are round
+ * numbers — 512 MiB, 1 GiB, 1.5 GiB, 2 GiB — where the chart's own picks
+ * were 550 and 1100.
+ */
+export function memoryTicks(limitMiB: number): number[] {
+  const top = Math.ceil(limitMiB);
+  return [0, top / 4, top / 2, (3 * top) / 4, top];
+}
+
+/**
  * The last hour of a sandbox's CPU and memory, as the host measures it: the
  * runtime's counters on macOS, the VMM's process on Linux, never the guest's
  * own account. A sample every interval while it runs; CPU is the share of the
@@ -51,6 +62,10 @@ function MetricsBody({ sb }: { sb: Sandbox }) {
   const last = samples[samples.length - 1];
   const rows = samples.map((s) => ({ time: s.time, cpu: +s.cpu_percent.toFixed(2), memory: +(s.memory_bytes / (1 << 20)).toFixed(1) }));
   const limitMiB = last ? last.memory_limit_bytes / (1 << 20) : sb.memory_mb;
+  // A sample every few seconds: under ten minutes of them, a minute's marks would
+  // all say the same minute.
+  const short = samples.length > 1 && Date.parse(last.time) - Date.parse(samples[0].time) < 10 * 60_000;
+  const tick = (iso: string) => clock(iso, short);
   const rx = rate(samples, (s) => s.net_rx_bytes);
   const tx = rate(samples, (s) => s.net_tx_bytes);
   const rd = rate(samples, (s) => s.disk_read_bytes);
@@ -62,7 +77,7 @@ function MetricsBody({ sb }: { sb: Sandbox }) {
   if (!samples.length) {
     return (
       <p className="py-10 text-center text-sm text-muted-foreground">
-        No samples yet: one is taken every {data?.interval_secs ?? 10} seconds while the sandbox runs.
+        No samples yet: one is taken every {data?.interval_secs ?? 5} seconds while the sandbox runs.
       </p>
     );
   }
@@ -79,29 +94,43 @@ function MetricsBody({ sb }: { sb: Sandbox }) {
         <ChartContainer config={chartConfig} className="aspect-auto h-40 w-full">
           <AreaChart data={rows} margin={{ left: 0, right: 8, top: 6, bottom: 0 }}>
             <CartesianGrid vertical={false} />
-            <XAxis dataKey="time" tickFormatter={clock} minTickGap={48} tickLine={false} axisLine={false} />
-            <YAxis domain={[0, 100]} width={44} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}%`} />
-            <ChartTooltip content={<ChartTooltipContent labelFormatter={(_, p) => clock(p?.[0]?.payload?.time ?? "")} />} />
+            <XAxis dataKey="time" tickFormatter={tick} minTickGap={48} tickLine={false} axisLine={false} />
+            <YAxis domain={[0, 100]} width={64} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}%`} />
+            <ChartTooltip
+              content={<ChartTooltipContent labelFormatter={(_, p) => clock(p?.[0]?.payload?.time ?? "", true)} valueFormatter={(v) => `${v.toFixed(1)}%`} />}
+            />
             <Area dataKey="cpu" type="monotone" stroke="var(--color-cpu)" fill="var(--color-cpu)" fillOpacity={0.15} isAnimationActive={false} />
           </AreaChart>
         </ChartContainer>
       </figure>
       <figure className="flex flex-col gap-1">
-        <figcaption className="text-xs text-muted-foreground">Memory, MiB of {formatMiB(Math.round(limitMiB))}</figcaption>
+        <figcaption className="text-xs text-muted-foreground">Memory, of {formatMiB(Math.round(limitMiB))}</figcaption>
         <ChartContainer config={chartConfig} className="aspect-auto h-40 w-full">
           <AreaChart data={rows} margin={{ left: 0, right: 8, top: 6, bottom: 0 }}>
             <CartesianGrid vertical={false} />
-            <XAxis dataKey="time" tickFormatter={clock} minTickGap={48} tickLine={false} axisLine={false} />
-            <YAxis domain={[0, Math.ceil(limitMiB)]} width={44} tickLine={false} axisLine={false} />
+            <XAxis dataKey="time" tickFormatter={tick} minTickGap={48} tickLine={false} axisLine={false} />
+            <YAxis
+              domain={[0, Math.ceil(limitMiB)]}
+              ticks={memoryTicks(limitMiB)}
+              width={64}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v: number) => (v === 0 ? "0" : formatMiB(Math.round(v)))}
+            />
             <ReferenceLine y={limitMiB} stroke="var(--color-memory)" strokeDasharray="4 4" />
-            <ChartTooltip content={<ChartTooltipContent labelFormatter={(_, p) => clock(p?.[0]?.payload?.time ?? "")} />} />
+            <ChartTooltip
+              content={
+                <ChartTooltipContent
+                  labelFormatter={(_, p) => clock(p?.[0]?.payload?.time ?? "", true)}
+                  valueFormatter={(v) => formatMiB(Math.round(v))}
+                />
+              }
+            />
             <Area dataKey="memory" type="monotone" stroke="var(--color-memory)" fill="var(--color-memory)" fillOpacity={0.15} isAnimationActive={false} />
           </AreaChart>
         </ChartContainer>
       </figure>
-      <p className="text-[11px] text-muted-foreground">
-        Measured on the host, every {data?.interval_secs} s; the last hour is kept while the sandbox lives.
-      </p>
+      <p className="text-[11px] text-muted-foreground">Refreshes every {METRICS_REFRESH_MS / 1000} s.</p>
     </div>
   );
 }
