@@ -122,7 +122,8 @@ export function useMetrics(id: string, enabled = true) {
     queryKey: keys.metrics(id),
     queryFn: () => apiFetch<MetricsList>(`${sbx(id)}/metrics`),
     enabled: !!id && enabled,
-    refetchInterval: 10_000,
+    // As often as the server samples, which it says.
+    refetchInterval: (q) => (q.state.data?.interval_secs ?? 5) * 1000,
     retry: false,
   });
 }

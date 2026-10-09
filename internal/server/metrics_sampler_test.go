@@ -113,3 +113,13 @@ func TestMetricsNeedABackendThatReadsUsage(t *testing.T) {
 		t.Fatalf("err %v; want unsupported", err)
 	}
 }
+
+// Unset, usage is sampled every five seconds: an hour is 720 samples.
+func TestMetricsIntervalDefaultsToFiveSeconds(t *testing.T) {
+	if got := (&Server{}).metricsInterval(); got != 5*time.Second {
+		t.Fatalf("default interval %v; want 5s", got)
+	}
+	if got := (&Server{MetricsInterval: time.Minute}).metricsInterval(); got != time.Minute {
+		t.Fatalf("a set interval is %v; want it kept", got)
+	}
+}

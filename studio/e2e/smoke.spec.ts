@@ -96,16 +96,17 @@ test("the list sums what sandboxes were given, walks them in its panel, and term
   await page.getByRole("button", { name: "Metrics of walk-a" }).click();
   const metrics = page.getByRole("dialog");
   await expect(metrics.getByRole("heading", { name: "Metrics of walk-a" })).toBeVisible();
-  // Its charts, or, before the first sample is taken (every 10 s), how often one is.
-  await expect(metrics.getByText(/^(CPU, % of 2 vCPU|No samples yet: one is taken every 10 seconds)/)).toBeVisible();
+  // Its charts, or, before the first sample is taken (every 5 s), how often one is.
+  await expect(metrics.getByText(/^(CPU, % of 2 vCPU|No samples yet: one is taken every 5 seconds)/)).toBeVisible();
   // It stays open while the list polls (every 5 s) under it.
   await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
   await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
   await expect(metrics.getByRole("heading", { name: "Metrics of walk-a" })).toBeVisible();
   // Once there are samples, memory reads as sizes — "1 GiB", not 1,024.
   if (await metrics.getByText(/^Memory, of /).count()) {
-    await expect(metrics.locator(".recharts-yAxis").nth(1)).toContainText(/\d (MiB|GiB)/);
-    await expect(metrics.locator(".recharts-yAxis").nth(1)).not.toContainText(/\d{4}/);
+    const ticks = metrics.locator("svg text");
+    await expect(ticks.filter({ hasText: /^\d+(\.\d)? (MiB|GiB)$/ }).first()).toBeVisible();
+    expect(await ticks.allTextContents()).not.toContainEqual(expect.stringMatching(/^\d{4}$/));
   }
   // A click inside it stays there, and does not open the row's panel too.
   await metrics.getByText("The last hour", { exact: true }).click();
