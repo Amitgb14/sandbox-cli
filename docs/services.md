@@ -114,7 +114,7 @@ runs stays until an admin deletes it (`DELETE /v1/services/{name}?tenant=T`).
 
 
 ```sh
-sandbox-gateway serve … \
+sudo -u sandbox-gateway sandbox-gateway serve … \
   --router-listen 0.0.0.0:443 --router-domain apps.example.com \
   --router-tls-cert /etc/sandbox-gateway/tls/apps.pem \
   --router-tls-key /etc/sandbox-gateway/tls/apps-key.pem

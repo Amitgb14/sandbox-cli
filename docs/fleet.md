@@ -125,7 +125,7 @@ sandboxes](self-hosting.md#an-extra-disk-for-sandboxes)), with these
 differences:
 
 ```sh
-sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
+sudo sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
   --firecracker /usr/local/bin/firecracker --jailer /usr/local/bin/jailer \
   --policy /etc/sandboxd/policy.yaml \
   --listen 10.0.0.17:7443 \
@@ -165,6 +165,10 @@ the gateway offers what **every** answering node can do (see
 ## The gateway
 
 ### Install
+
+A command that needs root says `sudo`. One that reads the gateway's own files,
+its state, keys and certificates, runs as its user, `sudo -u sandbox-gateway`,
+as its unit does; the gateway refuses files other users can read.
 
 **The binary: built from a checkout, for now.** No published release has
 `sandbox-gateway` yet: 0.0.1 is the last release of the container design.
@@ -222,8 +226,8 @@ sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.j
     --ca-file /etc/sandbox-gateway/tls/ca.pem \
     --cert-file /etc/sandbox-gateway/tls/gateway-client.pem \
     --key-file /etc/sandbox-gateway/tls/gateway-client-key.pem
-sandbox-gateway --state … nodes list
-sandbox-gateway --state … nodes remove n17
+sudo -u sandbox-gateway sandbox-gateway --state … nodes list
+sudo -u sandbox-gateway sandbox-gateway --state … nodes remove n17
 ```
 
 `nodes add` reads every file it is given and refuses a node it could not reach
@@ -249,7 +253,7 @@ a serving gateway through the [admin API](operations.md#changing-a-serving-gatew
 ### Serve
 
 ```sh
-sandbox-gateway serve --state /var/lib/sandbox-gateway/state.json \
+sudo -u sandbox-gateway sandbox-gateway serve --state /var/lib/sandbox-gateway/state.json \
   --listen 0.0.0.0:8443 \
   --tls-cert /etc/sandbox-gateway/tls/gateway.pem \
   --tls-key /etc/sandbox-gateway/tls/gateway-key.pem \

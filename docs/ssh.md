@@ -15,7 +15,7 @@ itself is [fleet.md](fleet.md); the endpoints are in
 SSH is off until the gateway is given an address for it:
 
 ```sh
-sandbox-gateway serve --state /var/lib/sandbox-gateway/state.json \
+sudo -u sandbox-gateway sandbox-gateway serve --state /var/lib/sandbox-gateway/state.json \
   --listen 0.0.0.0:8443 \
   --tls-cert /etc/sandbox-gateway/tls/gateway.pem \
   --tls-key /etc/sandbox-gateway/tls/gateway-key.pem \

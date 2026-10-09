@@ -16,8 +16,8 @@ Both the gateway and each node serve Prometheus metrics, in the text format,
 on a loopback address:
 
 ```sh
-sandbox-gateway serve … --metrics-listen 127.0.0.1:9101
-sandboxd … --metrics-listen 127.0.0.1:9100
+sudo -u sandbox-gateway sandbox-gateway serve … --metrics-listen 127.0.0.1:9101
+sudo sandboxd … --metrics-listen 127.0.0.1:9100
 curl -s 127.0.0.1:9101/metrics
 ```
 

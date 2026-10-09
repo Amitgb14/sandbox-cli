@@ -184,7 +184,7 @@ export const SETUP_PATHS: SetupPath[] = [
       INSTALL_STEP,
       {
         title: "Start sandboxd in a terminal",
-        code: "sandboxd --backend firecracker \\\n  --kernel ~/vmlinux --firecracker ~/bin/firecracker",
+        code: "sandboxd --backend firecracker \\\n  --kernel ~/.local/share/sandboxd/vmlinux \\\n  --firecracker ~/.local/bin/firecracker   # as yourself, not root",
         body: "It listens on a unix socket under $XDG_RUNTIME_DIR, the CLI's default local context. Your user needs read-write access to /dev/kvm.",
       },
       DOCTOR_STEP,
@@ -226,7 +226,7 @@ export const FLEET_CERTS_CODE = `curl -fsSLO https://raw.githubusercontent.com/A
 sh make-certs.sh -o fleet-certs \\
   -g gateway.example.internal 10.0.0.17 10.0.0.18`;
 
-export const FLEET_NODE_CODE = `sandboxd --backend firecracker ... \\
+export const FLEET_NODE_CODE = `sudo sandboxd --backend firecracker ... \\
   --listen 10.0.0.17:7443 --allowed-host 10.0.0.17 \\
   --token-file /etc/sandboxd/token \\
   --tls-cert /etc/sandboxd/tls/node-10.0.0.17.pem \\

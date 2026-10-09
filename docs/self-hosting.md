@@ -442,7 +442,7 @@ private network** the gateway shares with it, never on an address users can
 reach, and accept only the gateway:
 
 ```sh
-sandboxd --backend firecracker --listen 10.0.0.17:7443 \
+sudo sandboxd --backend firecracker --listen 10.0.0.17:7443 \
   --token-file /etc/sandboxd/token \
   --tls-cert /etc/sandboxd/tls/cert.pem --tls-key /etc/sandboxd/tls/key.pem \
   --client-ca /etc/sandboxd/tls/gateway-ca.pem \

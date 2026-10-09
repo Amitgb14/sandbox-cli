@@ -10,7 +10,7 @@ and [local-macos.md](local-macos.md) on a Mac; the API it serves is
 [api/v1.md](api/v1.md).
 
 ```sh
-sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
+sudo sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
   --firecracker /usr/local/bin/firecracker --jailer /usr/local/bin/jailer \
   --policy /etc/sandboxd/policy.yaml \
   --listen 0.0.0.0:7443 --token-file /etc/sandboxd/token \

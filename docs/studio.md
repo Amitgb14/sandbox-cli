@@ -141,7 +141,7 @@ a public address itself.
 the link that signs them in:
 
 ```sh
-sandbox-gateway --state … keys create --user alice --tenant alice \
+sudo -u sandbox-gateway sandbox-gateway --state … keys create --user alice --tenant alice \
   --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
   --invite-url https://studio.example.com
 # …
