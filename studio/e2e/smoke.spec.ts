@@ -102,6 +102,11 @@ test("the list sums what sandboxes were given, walks them in its panel, and term
   await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
   await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
   await expect(metrics.getByRole("heading", { name: "Metrics of walk-a" })).toBeVisible();
+  // Once there are samples, memory reads as sizes — "1 GiB", not 1,024.
+  if (await metrics.getByText(/^Memory, of /).count()) {
+    await expect(metrics.locator(".recharts-yAxis").nth(1)).toContainText(/\d (MiB|GiB)/);
+    await expect(metrics.locator(".recharts-yAxis").nth(1)).not.toContainText(/\d{4}/);
+  }
   // A click inside it stays there, and does not open the row's panel too.
   await metrics.getByText("The last hour", { exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(1);

@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Memory reads as a size in the metrics charts.** The memory chart's axis
+  is marked in quarters of the limit (512 MiB, 1 GiB, 1.5 GiB, 2 GiB) and its
+  tooltip says "1.1 GiB", where both showed raw MiB (2048, 1100, "1,109.8")
+  with no unit. The CPU tooltip says "%", and while a chart spans under ten
+  minutes its time marks carry seconds, since a minute's marks all read alike.
 - **Agents as rows, with their API keys.** The Agents screen is a table —
   login, keys, the API reached — and a row opens to add, edit or remove a
   saved key for each variable the agent reads (see
