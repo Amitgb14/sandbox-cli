@@ -25,7 +25,9 @@ func newAgentGroupCmd() *cobra.Command {
 		Long: "Runs a coding agent in a new sandbox, in the sandbox user's home, like `run`.\n" +
 			"On top of `run`, the agent's login is restored into the sandbox and saved again\n" +
 			"when the run ends, and the agent's own environment variables are forwarded when\n" +
-			"set. The sandbox needs no repository: ask the agent to clone one.\n\n" +
+			"set — or, where one is not, the API key saved for it in Studio's Agents screen\n" +
+			"(~/.config/sandbox/agent-keys.json). The sandbox needs no repository: ask the\n" +
+			"agent to clone one.\n\n" +
 			"Leading sandbox flags are consumed; everything after them, or after --, goes\n" +
 			"to the agent.",
 		Example: "  sandbox-cli agent claude\n" +

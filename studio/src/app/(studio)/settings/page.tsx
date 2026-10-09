@@ -1,11 +1,13 @@
 "use client";
 
 import { PageHeader, SectionHeader } from "@/components/common/page-header";
+import { EgressRules } from "@/components/settings/egress-rules";
 import { Badge } from "@/components/ui/badge";
 import { useInfo } from "@/lib/api/queries";
 
 /**
- * The context Studio talks to and what that sandboxd can deliver. Switching
+ * The context Studio talks to, what that sandboxd can deliver, and the egress
+ * rules Studio adds to every launch. Switching
  * context is `sandbox-cli studio
  * --context …`: a Studio is one context's, which is what keeps its token one
  * sandboxd's.
@@ -46,6 +48,7 @@ export default function SettingsPage() {
         ) : null}
       </section>
 
+      <EgressRules defaultMode={caps?.network.default.mode} ceiling={caps?.network.ceiling} />
     </div>
   );
 }

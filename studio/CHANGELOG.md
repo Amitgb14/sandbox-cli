@@ -10,6 +10,17 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Agents as rows, with their API keys.** The Agents screen is a table —
+  login, keys, the API reached — and a row opens to add, edit or remove a
+  saved key for each variable the agent reads (see
+  [CHANGELOG.md](../CHANGELOG.md), "Saved agent API keys, VM templates and
+  egress rules").
+- **Templates.** A new screen under Build: sizes to launch at, micro to
+  xlarge built in and your own, with a Size step in the Playground and a
+  Launch link from each.
+- **Egress rules in Settings.** Hosts every launch allows or denies, each
+  with a switch; the Playground's summary counts them and its code includes
+  them.
 - **Metrics.** A sandbox's resources, in the list and its overview, open the
   last hour of its CPU and memory as charts, with its current network and disk
   rates, where the endpoint measures them (see

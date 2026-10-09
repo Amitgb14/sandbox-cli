@@ -408,7 +408,9 @@ var guestGitIdentity = map[string]string{
 var errDetached = errors.New("detached; the process is still running")
 
 // buildEnv is the agent's constant settings, the host values of its allowlist
-// that are set, and --env.
+// that are set — or, for one that is not, the key saved for it (Studio's
+// Agents screen) — and --env. The environment wins over a saved key: it is
+// the more specific choice, made for this shell.
 func buildEnv(flags []string, agent *agents.Descriptor) (map[string]string, error) {
 	env := map[string]string{}
 	if agent != nil {
@@ -417,8 +419,11 @@ func buildEnv(flags []string, agent *agents.Descriptor) (map[string]string, erro
 				env[k] = v
 			}
 		}
+		saved := agenthome.SavedKeys(*agent)
 		for _, name := range agent.EnvAllow {
 			if v, ok := os.LookupEnv(name); ok {
+				env[name] = v
+			} else if v, ok := saved[name]; ok {
 				env[name] = v
 			}
 		}

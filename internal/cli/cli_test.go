@@ -159,6 +159,7 @@ func TestWritePrivateRefusesSymlinks(t *testing.T) {
 }
 
 func TestBuildEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_API_KEY", "k")
 	t.Setenv("FORWARD_ME", "v")
 	d, _ := agents.LookupInteractive("claude")
@@ -174,6 +175,50 @@ func TestBuildEnv(t *testing.T) {
 	}
 	if _, err := buildEnv([]string{"LD_PRELOAD=/x"}, nil); err == nil {
 		t.Error("a reserved name was accepted")
+	}
+}
+
+// A saved key fills a variable the environment leaves unset, and only that:
+// the environment wins, and a name the agent does not read is never saved.
+func TestBuildEnvSavedKeys(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	d, _ := agents.Lookup("claude")
+	if len(d.EnvAllow) == 0 {
+		t.Skip("claude reads no variables")
+	}
+	name := d.EnvAllow[0]
+	t.Setenv(name, "")
+	os.Unsetenv(name)
+	if err := agenthome.SaveKey(d, name, "  saved-value\n"); err != nil {
+		t.Fatal(err)
+	}
+	env, err := buildEnv(nil, &d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env[name] != "saved-value" {
+		t.Errorf("%s = %q, want the saved key, trimmed", name, env[name])
+	}
+	t.Setenv(name, "from-env")
+	env, _ = buildEnv(nil, &d)
+	if env[name] != "from-env" {
+		t.Errorf("%s = %q, want the environment's value over the saved one", name, env[name])
+	}
+	if err := agenthome.SaveKey(d, "LD_PRELOAD", "/x"); err == nil {
+		t.Error("saved a variable the agent does not read")
+	}
+	if err := agenthome.SaveKey(d, name, "a\x00b"); err == nil {
+		t.Error("saved a key with a control character")
+	}
+	fi, err := os.Stat(filepath.Join(agenthome.ConfigDir(), "agent-keys.json"))
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("keys file: %v %v, want 0600", fi, err)
+	}
+	if err := agenthome.DeleteKey(d, name); err != nil {
+		t.Fatal(err)
+	}
+	if len(agenthome.SavedKeys(d)) != 0 {
+		t.Error("a deleted key is still saved")
 	}
 }
 

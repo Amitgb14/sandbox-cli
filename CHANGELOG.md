@@ -198,6 +198,16 @@ in `_old/` as reference, to be ported where this design still wants it.
   a failed run changed nothing took a repository to compare, and a run that may
   have done work must not be done twice. A `--detach` run with `--fallback` is
   refused, because nothing watches a detached run's exit.
+- **Saved agent API keys, VM templates and egress rules, from Studio.**
+  Studio's Agents screen saves an API key for any variable an agent reads, in
+  `~/.config/sandbox/agent-keys.json` (0600, write-only: no call returns it);
+  every agent run, `sandbox-cli agent` included, forwards it when the
+  environment does not set that variable, and the environment wins. Studio's
+  launches take a size (`cpus`, `memory_mb`, `disk_mb`) and a `deny` list; a
+  new Templates screen keeps sizes by name, micro to xlarge built in, and
+  Settings keeps egress rules every Studio launch carries: a deny always, an
+  allow only into a run that is an allowlist. Both are kept in
+  `~/.config/sandbox/studio.json`. See [docs/studio.md](docs/studio.md).
 - **A desktop image, used from Studio** ([docs/desktop.md](docs/desktop.md)).
   `ghcr.io/<owner>/sandbox-desktop` is the base image plus a screen: a window
   manager, a terminal and Chromium, started by `sandbox-desktop` and served
@@ -282,6 +292,11 @@ the previous release.
 
 In the rewrite:
 
+- **A saved login, or saved API key, is written to a fresh temporary file.**
+  The write went through `path.tmp` with `os.WriteFile`, which keeps the mode
+  of a file already there and follows a link there: a leftover 0644 one left
+  the result readable by every user on the machine. The temporary file is now
+  removed and created anew, owner-only, refusing a link.
 - **A saved login carries the login and nothing else.** Claude Code's
   `~/.claude.json` and Gemini CLI's `settings.json` are saved with the login
   because they hold part of it, but they also hold MCP servers: commands the

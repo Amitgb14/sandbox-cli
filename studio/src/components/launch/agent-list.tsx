@@ -14,18 +14,20 @@ type Status = { label: string; tone: "good" | "warn" | "muted"; hint: string };
  */
 export function agentStatus(a: Agent): Status {
   const keys = (a.env ?? []).filter((e) => e.set).map((e) => e.name);
+  const saved = (a.env ?? []).filter((e) => e.saved && !e.set).map((e) => e.name);
   if (a.login === "saved") return { label: "Logged in", tone: "good", hint: "Its saved login is copied in when a run starts." };
   if (keys.length) return { label: "API key set", tone: "good", hint: `${keys.join(", ")} is set where Studio runs, and is forwarded to the run.` };
+  if (saved.length) return { label: "API key saved", tone: "good", hint: `${saved.join(", ")} is saved on the Agents screen, and is forwarded to the run.` };
   if (a.login === "not kept")
     return {
       label: "Needs an API key",
       tone: "warn",
-      hint: "This agent logs in with an API key only. Set one of its variables where you start Studio, then restart Studio.",
+      hint: "This agent logs in with an API key only. Add one on the Agents screen, or set one of its variables where you start Studio.",
     };
   return {
     label: "Not logged in",
     tone: "muted",
-    hint: "Start it interactive and log in in its terminal; the login is kept for the next run. Or set an API key where you start Studio.",
+    hint: "Start it interactive and log in in its terminal; the login is kept for the next run. Or add an API key on the Agents screen.",
   };
 }
 
@@ -67,7 +69,7 @@ export function AgentList({ agents, value, onChange }: { agents: Agent[]; value:
           const on = a.name === value;
           const expanded = open === a.name;
           const st = agentStatus(a);
-          const set = (a.env ?? []).filter((e) => e.set);
+          const set = (a.env ?? []).filter((e) => e.set || e.saved);
           return (
             <div key={a.name} className={cn("transition-colors", on && "bg-primary/5")}>
               <div className={cn(GRID, "px-3.5 py-2.5")}>
@@ -99,7 +101,7 @@ export function AgentList({ agents, value, onChange }: { agents: Agent[]; value:
                     {st.label}
                   </span>
                 </span>
-                <span className="truncate text-xs" title={(a.env ?? []).map((e) => `${e.name}${e.set ? " (set)" : ""}`).join("\n")}>
+                <span className="truncate text-xs" title={(a.env ?? []).map((e) => `${e.name}${e.set ? " (set)" : e.saved ? " (saved)" : ""}`).join("\n")}>
                   {set.length ? (
                     <span className="font-mono text-status-good">{set.map((e) => e.name).join(", ")}</span>
                   ) : (
@@ -141,15 +143,15 @@ export function AgentList({ agents, value, onChange }: { agents: Agent[]; value:
                             key={e.name}
                             className={cn(
                               "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px]",
-                              e.set ? "border-status-good/30 text-status-good" : "text-muted-foreground",
+                              e.set || e.saved ? "border-status-good/30 text-status-good" : "text-muted-foreground",
                             )}
                           >
-                            {e.set ? <Check className="size-3" /> : null}
+                            {e.set || e.saved ? <Check className="size-3" /> : null}
                             {e.name}
                           </span>
                         ))}
                       </div>
-                      <p className="mt-1 text-[11px] text-muted-foreground">Those set where Studio runs are forwarded to the run; values are never shown.</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">Those set where Studio runs, or saved on the Agents screen, are forwarded to the run; values are never shown.</p>
                     </Detail>
                   ) : null}
                   {a.provider_host ? (
