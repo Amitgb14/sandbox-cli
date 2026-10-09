@@ -149,6 +149,7 @@ const FIRECRACKER_FETCH = `ARCH=$(uname -m)
 release_url=https://github.com/firecracker-microvm/firecracker/releases
 latest=v1.17.0   # the version checked on a real host
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
+install -d ~/.local/bin      # as yourself, not root: this path runs sandboxd as you
 install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH ~/.local/bin/firecracker
 install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH ~/.local/bin/jailer
 ~/.local/bin/firecracker --version   # Firecracker v1.17.0`;
@@ -194,7 +195,9 @@ const LINUX_STEPS: Step[] = [
       <>
         Firecracker and its jailer come from the project&apos;s own releases. This takes 1.17.0, the version
         sandboxd has been checked with, for your architecture, and puts both beside sandbox-cli. It is pinned: a
-        newer one may work, but has not been run.
+        newer one may work, but has not been run. Run this path as yourself, not in a root shell: as root,{" "}
+        <code>~</code> is <code>/root</code>, and a sandboxd for others belongs under systemd (the Linux server
+        path below).
       </>
     ),
   },
@@ -638,7 +641,8 @@ export default function SetupPage() {
           />
           <Caveat>
             without root there are no tap devices, so sandboxes get <strong>no network at all</strong> and a request for
-            an allowlist is refused, never served open. Boot, run, files, snapshots and volumes all work. For
+            an allowlist is refused, never served open. Boot, run, files, snapshots and volumes all work. Run these
+            steps as yourself, not in a root shell (<code>sudo su</code>): they install into your home. For
             networking, use the Linux server path.
           </Caveat>
           <Steps steps={LINUX_STEPS} />
