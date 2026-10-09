@@ -140,6 +140,16 @@ func isBuiltin(name string) bool {
 	return slices.ContainsFunc(builtinTemplates, func(t Template) bool { return t.Name == name })
 }
 
+// Templates is every template, built in first, then those saved in Studio:
+// what `sandbox-cli template ls` prints.
+func Templates() ([]Template, error) {
+	st, err := loadSettings()
+	if err != nil {
+		return nil, err
+	}
+	return allTemplates(st), nil
+}
+
 // LookupTemplate is the template called name, built in or saved: what the
 // CLI's --template reads, so a size made in Studio is the same size there.
 // A settings file that cannot be read is an error here, and only here: a

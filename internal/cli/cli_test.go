@@ -371,3 +371,45 @@ func TestTemplateFlag(t *testing.T) {
 		t.Error("--template is not a sandbox flag that takes a value")
 	}
 }
+
+// template ls lists the built-in templates, then those saved in Studio, and
+// prints a saved description as text: it was typed into a browser.
+func TestTemplateLs(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	if err := os.MkdirAll(filepath.Join(cfg, "sandbox"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	saved := `{"templates":[{"name":"ci-box","description":"CI \u001b[31mred","cpus":6,"memory_mb":1536,"disk_mb":20480}]}`
+	if err := os.WriteFile(filepath.Join(cfg, "sandbox", "studio.json"), []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := NewRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"template", "ls"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 7 || !strings.HasPrefix(lines[0], "NAME") {
+		t.Fatalf("listed:\n%s", out.String())
+	}
+	for i, name := range []string{"micro", "small", "medium", "large", "xlarge", "ci-box"} {
+		if f := strings.Fields(lines[i+1]); f[0] != name {
+			t.Errorf("row %d is %q, want %s", i+1, lines[i+1], name)
+		}
+	}
+	last := lines[6]
+	for _, want := range []string{"1.5 GiB", "20 GiB", "saved"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("ci-box row %q lacks %q", last, want)
+		}
+	}
+	if strings.Contains(out.String(), "\x1b") {
+		t.Error("a saved description's escape reached the terminal")
+	}
+	if !strings.Contains(lines[3], "built in") || !strings.Contains(lines[3], "2 GiB") {
+		t.Errorf("medium row %q", lines[3])
+	}
+}

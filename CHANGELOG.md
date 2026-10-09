@@ -210,7 +210,7 @@ in `_old/` as reference, to be ported where this design still wants it.
   `~/.config/sandbox/studio.json`. See [docs/studio.md](docs/studio.md).
   `run` and the agent commands take `--template NAME` for the same sizes,
   built in or saved in Studio; `--cpus`, `--memory` and `--disk` given beside
-  it win for their own field.
+  it win for their own field. `sandbox-cli template ls` lists them.
 - **A desktop image, used from Studio** ([docs/desktop.md](docs/desktop.md)).
   `ghcr.io/<owner>/sandbox-desktop` is the base image plus a screen: a window
   manager, a terminal and Chromium, started by `sandbox-desktop` and served

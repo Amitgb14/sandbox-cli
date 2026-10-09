@@ -92,6 +92,8 @@ Global flags:
 | [`sandbox-cli ssh-key rm`](#sandbox-cli-ssh-key-rm) | Remove a registered key |
 | [`sandbox-cli studio`](#sandbox-cli-studio) | Open Studio: the browser view of your sandboxes |
 | [`sandbox-cli suspend`](#sandbox-cli-suspend) | Stop a sandbox, keeping its memory, processes and disk |
+| [`sandbox-cli template`](#sandbox-cli-template) | Sizes a sandbox can be launched at, by name (run --template) |
+| [`sandbox-cli template ls`](#sandbox-cli-template-ls) | List the templates: built in, then those saved in Studio |
 | [`sandbox-cli tunnel`](#sandbox-cli-tunnel) | Forward a local port to a port inside a sandbox |
 | [`sandbox-cli version`](#sandbox-cli-version) | Print the sandbox-cli version |
 | [`sandbox-cli volume`](#sandbox-cli-volume) | Named volumes: filesystems that outlive the sandboxes they are mounted in |
@@ -1269,6 +1271,32 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--context string` |  | which sandboxd to use |
+
+## sandbox-cli template
+
+Sizes a sandbox can be launched at, by name (run --template).
+
+```text
+sandbox-cli template [command]
+```
+
+```text
+A template is a size — vCPUs, memory and disk — by name: micro, small, medium,
+large and xlarge are built in, and Studio's Templates screen saves more, in
+~/.config/sandbox/studio.json. Launch at one with `sandbox-cli run --template
+NAME` or `sandbox-cli agent <name> --template NAME`; --cpus, --memory and --disk
+given beside it win for their own field. sandboxd's limits still apply.
+```
+
+Subcommands: [`ls`](#sandbox-cli-template-ls).
+
+### sandbox-cli template ls
+
+List the templates: built in, then those saved in Studio.
+
+```text
+sandbox-cli template ls
+```
 
 ## sandbox-cli tunnel
 
