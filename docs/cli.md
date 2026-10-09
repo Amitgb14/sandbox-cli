@@ -95,6 +95,7 @@ Global flags:
 | [`sandbox-cli template`](#sandbox-cli-template) | Sizes a sandbox can be launched at, by name (run --template) |
 | [`sandbox-cli template ls`](#sandbox-cli-template-ls) | List the templates: built in, then those saved in Studio |
 | [`sandbox-cli tunnel`](#sandbox-cli-tunnel) | Forward a local port to a port inside a sandbox |
+| [`sandbox-cli update`](#sandbox-cli-update) | Rename, relabel, retime or change the network of a live sandbox |
 | [`sandbox-cli version`](#sandbox-cli-version) | Print the sandbox-cli version |
 | [`sandbox-cli volume`](#sandbox-cli-volume) | Named volumes: filesystems that outlive the sandboxes they are mounted in |
 | [`sandbox-cli volume create`](#sandbox-cli-volume-create) | Create an empty volume |
@@ -1319,6 +1320,50 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--context string` |  | which sandboxd to use |
+
+## sandbox-cli update
+
+Rename, relabel, retime or change the network of a live sandbox.
+
+```text
+sandbox-cli update SANDBOX [flags]
+```
+
+```text
+Changes a live sandbox in place; only what a flag names changes.
+
+--label adds or changes a label and --label KEY- (or --unlabel KEY) removes one;
+the others are kept. --idle sets how long it may sit idle before it is
+terminated (0: never, where the server allows that). --network changes the
+network of a running sandbox, as run's flags would set it: --allow adds to the
+built-in hosts unless --no-baseline, and an agent's sandbox keeps its agent's
+API. Not every endpoint can change a running sandbox's network.
+
+vCPUs and memory are fixed while a VM runs.
+```
+
+Examples:
+
+```sh
+sandbox-cli update web --name api
+sandbox-cli update api --label team=infra --label ticket-
+sandbox-cli update api --idle 2h
+sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--allow stringArray` |  | with --network allowlist: a host it may reach (repeatable) |
+| `--context string` |  | which sandboxd to use |
+| `--deny stringArray` |  | with --network: a host it may not reach (repeatable) |
+| `--idle duration` |  | terminate it after this long idle, e.g. 2h (0: never, where allowed) |
+| `--label stringArray` |  | set a label, key=value, or remove one, key- (repeatable) |
+| `--name string` |  | rename it ("" removes the name) |
+| `--network string` |  | none, allowlist or open, applied to the running sandbox |
+| `--no-baseline` |  | with --network allowlist: only the hosts named, without the built-in ones |
+| `--unlabel stringArray` |  | remove a label by key (repeatable) |
 
 ## sandbox-cli version
 

@@ -193,6 +193,22 @@ class Client:
     def update_network(self, ref: str, network: Dict[str, Any]) -> Dict[str, Any]:
         return self._json("PATCH", self._sbx(ref), {"network": network})
 
+    def update_sandbox(self, ref: str, *, name: Optional[str] = None,
+                       labels: Optional[Dict[str, str]] = None,
+                       idle_timeout_secs: Optional[int] = None,
+                       network: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Change a live sandbox; only what is passed changes. ``name=""``
+        removes the name; ``labels`` replaces them whole (``{}`` removes them);
+        ``idle_timeout_secs`` is within ``limits.max_idle_timeout_secs``, 0
+        (never) only where that is 0. ``network`` needs a running sandbox and
+        capability ``network_policy_update``. A request with one bad field
+        changes nothing."""
+        req: Dict[str, Any] = {}
+        for k, v in (("name", name), ("labels", labels), ("idle_timeout_secs", idle_timeout_secs), ("network", network)):
+            if v is not None:
+                req[k] = v
+        return self._json("PATCH", self._sbx(ref), req)
+
     def terminate_sandbox(self, ref: str) -> None:
         self._json("DELETE", self._sbx(ref))
 

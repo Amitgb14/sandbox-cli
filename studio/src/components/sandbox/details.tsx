@@ -66,6 +66,7 @@ export function SandboxDetails({
   onNext,
   onToggleExpand,
   onGone,
+  onReplaced,
 }: {
   id: string;
   variant: "panel" | "page";
@@ -79,6 +80,8 @@ export function SandboxDetails({
   onToggleExpand?: () => void;
   /** After a terminate from here. */
   onGone?: () => void;
+  /** After a resize from here: the copy that took this sandbox's place. */
+  onReplaced?: (id: string) => void;
 }) {
   const { data: sb, error, refetch: refetchSandbox } = useSandbox(id);
   const live = !!sb && sb.state !== "terminated";
@@ -294,6 +297,7 @@ export function SandboxDetails({
     <SandboxOverview
       sb={sb}
       processes={processes}
+      onReplaced={onReplaced}
       onOpen={(p) => {
         // A process with a terminal is a screen to use, not lines to read.
         if (ttys.some((t) => t.pid === p)) {

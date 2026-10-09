@@ -239,6 +239,24 @@ export function useDeleteSnapshot() {
   );
 }
 
+/** Renames, relabels or retimes a live sandbox; only what is given changes. */
+export function useUpdateSandbox() {
+  return useInvalidating(
+    ({ id, ...req }: { id: string; name?: string; labels?: Record<string, string>; idle_timeout_secs?: number }) =>
+      apiFetch<Sandbox>(sbx(id), { method: "PATCH", json: req }),
+    ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes]],
+  );
+}
+
+/** A copy at a new size in the sandbox's place (Studio's server: internal/studio/resize.go). */
+export function useResize() {
+  return useInvalidating(
+    ({ id, ...req }: { id: string; cpus: number; memory_mb: number; disk_mb?: number; drop_env?: boolean; keep_snapshot?: boolean }) =>
+      apiFetch<{ sandbox: Sandbox; replaced: string; snapshot?: string }>(`/sandboxes/${encodeURIComponent(id)}/resize`, { method: "POST", json: req }),
+    ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes], [...keys.snapshots]],
+  );
+}
+
 export function useUpdateNetwork() {
   return useInvalidating(
     ({ id, network }: { id: string; network: NetworkPolicy }) =>

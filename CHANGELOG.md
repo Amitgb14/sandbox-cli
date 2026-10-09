@@ -198,6 +198,22 @@ in `_old/` as reference, to be ported where this design still wants it.
   a failed run changed nothing took a repository to compare, and a run that may
   have done work must not be done twice. A `--detach` run with `--fallback` is
   refused, because nothing watches a detached run's exit.
+- **A live sandbox can be renamed, relabelled and retimed.** `PATCH
+  /v1/sandboxes/{ref}` takes `name`, `labels` (replaced whole) and
+  `idle_timeout_secs` beside `network`, on a running or suspended sandbox,
+  under the rules they have at create; one bad field and nothing changes. A new
+  audit event, `sandbox.updated`, records what changed. Through a gateway a
+  name is unique among the caller's sandboxes on every node, and its own
+  `gateway.*` labels cannot be set, changed or removed. `sandbox-cli update
+  SANDBOX` does it from the CLI (`--name`, `--label k=v` / `k-`, `--unlabel`,
+  `--idle`, and `--network` with `--allow`, `--deny`, `--no-baseline` for a
+  running one); the SDKs gain `update_sandbox` / `updateSandbox`. In Studio, a
+  sandbox's Overview edits its name, labels and idle timeout, changes its
+  network (with the allowlist groups), and, where the backend takes disk
+  snapshots (macOS), resizes it: a copy at the new size in its place, with its
+  files, name, labels and network. A VM's vCPUs and memory are fixed while it
+  runs, so a Firecracker sandbox, whose snapshots are memory ones, is not
+  resized; its environment would not carry over either, and a resize says so.
 - **Saved agent API keys, VM templates and allowlist groups, from Studio.**
   Studio's Agents screen saves an API key for any variable an agent reads, in
   `~/.config/sandbox/agent-keys.json` (0600, write-only: no call returns it);

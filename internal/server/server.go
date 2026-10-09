@@ -531,43 +531,139 @@ func (s *Server) getSandbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rec.snapshot())
 }
 
+// updateSandbox changes a live sandbox: its network (on its VM, where the
+// backend can), and its name, labels and idle timeout (this server's records
+// of it, which no backend sees). Everything asked is checked before anything
+// is changed, so a request with one bad field changes nothing; then the
+// network, the one part that can fail on the backend; then the records.
 func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 	var req api.UpdateSandboxRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	rec, ok := s.live(w, r)
-	if !ok {
-		return
-	}
-	if req.Network == nil {
+	if req.Network == nil && req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "nothing to update")
 		return
 	}
-	if !s.Backend.Capabilities()[api.CapNetworkPolicyUpdate] {
-		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot change a running sandbox's network policy")
+	rec, ok := s.lookup(r.PathValue("ref"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
 		return
 	}
-	pol, err := spec.ResolveNetworkUpdate(req.Network, s.Policy)
-	if err != nil {
-		writeSpecErr(w, err)
+	switch st := rec.snapshot().State; {
+	case st == api.StateTerminated:
+		writeErr(w, http.StatusConflict, api.CodeConflict, "sandbox is terminated")
+		return
+	case req.Network != nil && st != api.StateRunning:
+		writeErr(w, http.StatusConflict, api.CodeConflict, "sandbox is not running")
 		return
 	}
-	if !s.canEnforce(w, pol) {
-		return
+	if req.Name != nil {
+		if err := spec.CheckName(*req.Name); err != nil {
+			writeSpecErr(w, err)
+			return
+		}
+	}
+	if req.Labels != nil {
+		if err := spec.ValidateLabels(*req.Labels); err != nil {
+			writeSpecErr(w, err)
+			return
+		}
+	}
+	var idle int
+	if req.IdleTimeoutSecs != nil {
+		var err error
+		if idle, err = spec.ResolveIdleUpdate(*req.IdleTimeoutSecs, s.Policy); err != nil {
+			writeSpecErr(w, err)
+			return
+		}
 	}
 	id := rec.snapshot().ID
-	if err := s.Backend.UpdateNetwork(r.Context(), id, pol); err != nil {
-		writeBackendErr(w, err)
+	if req.Name != nil && s.nameTaken(*req.Name, id) {
+		writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+*req.Name+" already exists")
 		return
 	}
-	rec.mu.Lock()
-	rec.sbx.Network = pol
-	out := rec.sbx
-	rec.mu.Unlock()
-	s.persist(rec)
-	s.event(api.Event{Type: api.EventNetworkUpdated, Sandbox: id, Network: &pol})
-	writeJSON(w, http.StatusOK, out)
+
+	if req.Network != nil {
+		if !s.Backend.Capabilities()[api.CapNetworkPolicyUpdate] {
+			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot change a running sandbox's network policy")
+			return
+		}
+		pol, err := spec.ResolveNetworkUpdate(req.Network, s.Policy)
+		if err != nil {
+			writeSpecErr(w, err)
+			return
+		}
+		if !s.canEnforce(w, pol) {
+			return
+		}
+		if err := s.Backend.UpdateNetwork(r.Context(), id, pol); err != nil {
+			writeBackendErr(w, err)
+			return
+		}
+		rec.mu.Lock()
+		rec.sbx.Network = pol
+		rec.mu.Unlock()
+		s.persist(rec)
+		s.event(api.Event{Type: api.EventNetworkUpdated, Sandbox: id, Network: &pol})
+	}
+
+	if req.Name != nil || req.Labels != nil || req.IdleTimeoutSecs != nil {
+		// The name is checked again and set under the lock create registers
+		// names under, so two renames, or a rename and a create, cannot both
+		// take one name.
+		s.mu.Lock()
+		if req.Name != nil && s.nameTakenLocked(*req.Name, id) {
+			s.mu.Unlock()
+			writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+*req.Name+" already exists")
+			return
+		}
+		rec.mu.Lock()
+		if req.Name != nil {
+			rec.sbx.Name = *req.Name
+		}
+		if req.Labels != nil {
+			rec.sbx.Labels = copyLabels(*req.Labels)
+		}
+		if req.IdleTimeoutSecs != nil {
+			rec.sbx.IdleTimeoutSecs = idle
+		}
+		after := rec.sbx
+		rec.mu.Unlock()
+		s.mu.Unlock()
+		s.persist(rec)
+		ev := api.Event{Type: api.EventSandboxUpdated, Sandbox: id}
+		if req.Name != nil {
+			ev.Name = after.Name
+		}
+		if req.Labels != nil {
+			ev.Labels = copyLabels(after.Labels)
+		}
+		if req.IdleTimeoutSecs != nil {
+			ev.IdleTimeoutSecs = &after.IdleTimeoutSecs
+		}
+		s.event(ev)
+	}
+	writeJSON(w, http.StatusOK, rec.snapshot())
+}
+
+// nameTaken reports whether a live sandbox other than id has name.
+func (s *Server) nameTaken(name, id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nameTakenLocked(name, id)
+}
+
+func (s *Server) nameTakenLocked(name, id string) bool {
+	if name == "" {
+		return false
+	}
+	for oid, o := range s.sandboxes {
+		if sb := o.snapshot(); oid != id && sb.Name == name && sb.State != api.StateTerminated {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) terminateSandbox(w http.ResponseWriter, r *http.Request) {

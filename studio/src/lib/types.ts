@@ -89,6 +89,8 @@ export interface AuditEvent {
   image?: string;
   labels?: Record<string, string>;
   network?: NetworkPolicy;
+  /** After a sandbox.updated that changed it. */
+  idle_timeout_secs?: number;
   env_names?: string[];
   snapshot?: string;
   volumes?: VolumeMount[];

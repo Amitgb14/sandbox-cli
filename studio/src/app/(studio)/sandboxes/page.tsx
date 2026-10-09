@@ -485,6 +485,7 @@ export default function SandboxesPage() {
               onNext={step(1)}
               onToggleExpand={() => setWide(!wide)}
               onGone={() => setOpen(null)}
+              onReplaced={(id) => setOpen({ id, shell: false })}
             />
           ) : null}
         </SheetContent>

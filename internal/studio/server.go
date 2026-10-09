@@ -119,6 +119,7 @@ func (s *Server) Handler() http.Handler {
 	api("GET /api/templates", s.templates)
 	api("PUT /api/templates/{name}", s.putTemplate)
 	api("DELETE /api/templates/{name}", s.deleteTemplate)
+	api("POST /api/sandboxes/{id}/resize", s.resize)
 	api("GET /api/egress", s.egress)
 	api("PUT /api/egress", s.putEgress)
 	api("PUT /api/egress/groups/{name}", s.putEgressGroup)

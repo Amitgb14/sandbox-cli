@@ -187,9 +187,21 @@ type VolumeList struct {
 	Volumes []Volume `json:"volumes"`
 }
 
-// UpdateSandboxRequest changes a running sandbox.
+// UpdateSandboxRequest changes a live sandbox. Each field left out is left
+// as it is. Network needs a running sandbox and the network_policy_update
+// capability; the rest are this server's records of the sandbox, changed on
+// a running or suspended one with nothing asked of its VM.
 type UpdateSandboxRequest struct {
 	Network *NetworkPolicy `json:"network,omitempty"`
+	// Name renames it; "" removes the name. Unique among live sandboxes, as
+	// at create.
+	Name *string `json:"name,omitempty"`
+	// Labels replace its labels whole; {} removes them all.
+	Labels *map[string]string `json:"labels,omitempty"`
+	// IdleTimeoutSecs is how long it may sit idle before it is terminated,
+	// counted from its last activity. Between 1 and limits.max_idle_timeout_secs;
+	// 0, never, only where that limit is 0.
+	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
 }
 
 // Sandbox is a sandbox as the API reports it. Environment values are never
@@ -241,6 +253,7 @@ const (
 	EventSandboxCreated    = "sandbox.created"
 	EventSandboxTerminated = "sandbox.terminated" // Reason: "request" or "idle"
 	EventNetworkUpdated    = "sandbox.network_updated"
+	EventSandboxUpdated    = "sandbox.updated" // name, labels or idle timeout changed; the event carries them after
 	EventSandboxSuspended  = "sandbox.suspended"
 	EventSandboxResumed    = "sandbox.resumed"
 	EventSnapshotCreated   = "snapshot.created"
@@ -269,6 +282,8 @@ type Event struct {
 	EnvNames []string       `json:"env_names,omitempty"`
 	Snapshot string         `json:"snapshot,omitempty"`
 	Volumes  []VolumeMount  `json:"volumes,omitempty"`
+	// IdleTimeoutSecs is the idle timeout after an update that changed it.
+	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
 
 	PID int `json:"pid,omitempty"`
 	// A process is recorded by its program, its argument count and a hash

@@ -25,6 +25,15 @@ of its own: entries land under `Unreleased` and move under the version of
 - **A Network step in the Playground.** Server default, none, allowlist or
   open as cards; an allowlist picks its groups, adds one-off hosts, can leave
   out the built-in hosts, and shows every host it will reach.
+- **A sandbox is edited where it is shown.** Its Overview has a Name row and
+  Edit beside it, Lifecycle and Labels: a dialog for its name, labels (rows of
+  key and value; a gateway's own shown locked) and idle auto-stop. Change
+  beside Network applies none, an allowlist from the groups and hosts, or open
+  to the running sandbox, keeping an agent's API. Resize picks a template
+  and replaces the sandbox with a copy at that size, where the endpoint takes
+  disk snapshots, and says why not where it does not. See
+  [CHANGELOG.md](../CHANGELOG.md), "A live sandbox can be renamed,
+  relabelled and retimed".
 - **Terminating asks for the name.** The sandbox panel's Terminate and the
   list's (one or a selection) open a dialog listing what goes, and Terminate
   stays off until the sandbox's name — or "terminate N" for several — is
