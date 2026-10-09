@@ -21,6 +21,7 @@ import {
   navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu";
 import { GithubMark, Wordmark } from "@/components/logo";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { NAV, type NavEntry } from "@/lib/nav";
 import { CHANNEL, DOCS_PATH, REPO_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
@@ -187,6 +188,7 @@ export function SiteHeader({
         </NavigationMenu>
 
         <div className="ml-auto flex items-center gap-2 lg:ml-3">
+          <ThemeToggle />
           <a
             href={REPO_URL}
             target="_blank"
