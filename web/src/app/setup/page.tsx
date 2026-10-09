@@ -203,7 +203,7 @@ const LINUX_STEPS: Step[] = [
   },
   {
     title: "Get the guest kernel, 6.1.155",
-    code: "mkdir -p ~/.local/share/sandboxd\ncurl -fsSL -o ~/.local/share/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$(uname -m)/vmlinux-6.1.155\nfile ~/.local/share/sandboxd/vmlinux   # must say ELF 64-bit; anything else is an error page",
+    code: "ARCH=$(uname -m)   # on its own line: zsh escapes ( ) pasted inside a URL\nmkdir -p ~/.local/share/sandboxd\ncurl -fsSL -o ~/.local/share/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155\nfile ~/.local/share/sandboxd/vmlinux   # must say ELF 64-bit; anything else is an error page",
     body: (
       <>
         Each sandbox boots this kernel, whatever the host runs. It must be built with{" "}
@@ -273,7 +273,7 @@ const SERVER_STEPS: Step[] = [
   },
   {
     title: "Make its directories, the guest kernel (6.1.155) and the token",
-    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nsudo curl -fsSL -o /var/lib/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$(uname -m)/vmlinux-6.1.155\nfile /var/lib/sandboxd/vmlinux   # must say ELF 64-bit\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'",
+    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nARCH=$(uname -m)\nsudo curl -fsSL -o /var/lib/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155\nfile /var/lib/sandboxd/vmlinux   # must say ELF 64-bit\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'",
     body: (
       <>
         The guest kernel is Firecracker&apos;s CI kernel 6.1.155, with every option sandboxd needs (as in the quick
