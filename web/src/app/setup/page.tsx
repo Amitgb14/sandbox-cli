@@ -147,7 +147,7 @@ const MAC_DIFFERENCES: [string, string, string][] = [
 
 const FIRECRACKER_FETCH = `ARCH=$(uname -m)
 release_url=https://github.com/firecracker-microvm/firecracker/releases
-latest=$(basename $(curl -fsSLI -o /dev/null -w '%{url_effective}' $release_url/latest))
+latest=v1.17.0   # the version checked on a real host
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
 install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH ~/.local/bin/firecracker
 install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH ~/.local/bin/jailer`;
@@ -168,7 +168,14 @@ const LINUX_STEPS: Step[] = [
   {
     title: "Get Firecracker",
     code: FIRECRACKER_FETCH,
-    body: "Firecracker and its jailer come from the project's own releases. This takes the latest for your architecture and puts both beside sandbox-cli.",
+    body: (
+      <>
+        Firecracker and its jailer come from the project&apos;s own releases. This takes 1.17.0, the version
+        sandboxd has been checked with, for your architecture, and puts both beside sandbox-cli. What else has
+        and has not been checked is in{" "}
+        <Link href={docPath("self-hosting", "versions-checked")}>Versions checked</Link>.
+      </>
+    ),
   },
   {
     title: "Get a guest kernel",
@@ -226,7 +233,8 @@ const SERVER_STEPS: Step[] = [
             <code>--no-config</code> because the server reads a policy file, not a client config.
           </>
         ) : null}{" "}
-        Firecracker and its jailer come from Firecracker&apos;s own releases, the latest for your architecture.
+        Firecracker and its jailer come from Firecracker&apos;s own releases: 1.17.0, the version checked; see{" "}
+        <Link href={docPath("self-hosting", "versions-checked")}>Versions checked</Link>.
       </>
     ),
   },

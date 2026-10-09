@@ -54,7 +54,7 @@ export const INSTALL_STEP: SetupStep = RELEASED
 /** Firecracker and its jailer from Firecracker's releases, into /usr/local/bin. */
 const FIRECRACKER_SERVER_FETCH = `ARCH=$(uname -m)
 release_url=https://github.com/firecracker-microvm/firecracker/releases
-latest=$(basename $(curl -fsSLI -o /dev/null -w '%{url_effective}' $release_url/latest))
+latest=v1.17.0   # the version checked on a real host
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
 sudo install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
 sudo install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer`;
