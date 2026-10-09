@@ -104,6 +104,45 @@ findmnt /var/lib/sandboxd && df -h /var/lib/sandboxd
 - **Nodes behind a gateway** each get their own, the same way: a node's state
   is its own and is never shared ([fleet.md](fleet.md#nodes)).
 
+### In production
+
+The extra disk is not optional on a server others depend on, and these come
+with it:
+
+- [ ] **A local disk of its own at the state directory**, mounted by UUID
+  before sandboxd first starts, the whole directory on it
+  ([above](#an-extra-disk-for-sandboxes)). Local, not a network filesystem:
+  every sandbox's disk reads and writes go to it.
+- [ ] **The unit waits for it**: `RequiresMountsFor=` naming the state
+  directory, as `packaging/systemd/sandboxd.service` has, and no `nofail`.
+- [ ] **Room kept back for what sandboxes are not given.** sandboxd offers the
+  whole filesystem by default, and counts against it only the `disk_mb` each
+  sandbox was given. Images and their root disks (a few GiB each, twice over
+  during an upgrade), snapshots (each one's memory plus disk) and volumes come
+  out of the same disk without being counted. Offer less with
+  `--capacity-disk-mb`: on a 1 TiB disk with a handful of images and scheduled
+  snapshots, `--capacity-disk-mb 700000` is a starting point.
+- [ ] **An alert on the disk's real free space**, not on sandboxd's metrics.
+  `sandboxd_free_disk_mb` is disk not yet given to a sandbox, not space left
+  on the filesystem. Watch the filesystem itself, e.g. node_exporter's
+  `node_filesystem_avail_bytes{mountpoint="/var/lib/sandboxd"}`, and alert
+  well before it runs out (15% left, say): a full disk fails new sandboxes,
+  snapshots and every write inside running ones.
+- [ ] **Growing it needs a restart.** sandboxd measures the filesystem once,
+  at start. Grow the volume (LVM, or the cloud disk), `xfs_growfs
+  /var/lib/sandboxd`, raise `--capacity-disk-mb` if it is set, then
+  `systemctl restart sandboxd`. With [`--keep-sandboxes`](#upgrading-without-stopping-sandboxes)
+  running sandboxes carry on.
+- [ ] **The audit log rotated**, or kept on another disk with `--audit-log`
+  ([The audit log](#the-audit-log)); it grows with every request.
+- [ ] **Backups of what cannot be rebuilt.** Images and root disks are
+  pulled and built again; volumes and snapshots are not. Copy a volume's
+  `.ext4` while no sandbox has it mounted ([Volumes](#volumes)). `records/`
+  holds environment values: back it up only where the backup is as private as
+  `/etc/sandboxd`.
+- [ ] **One disk per node.** Behind a gateway, each node's state directory is
+  its own and is never shared between nodes.
+
 **Keep it one filesystem.** Root disks, the kernel and volumes are hard-linked
 into each jail, so mounting `jail/`, `rootfs/` or `volumes/` separately breaks
 every start (`linking … into the jail (the jail must be on the same filesystem
