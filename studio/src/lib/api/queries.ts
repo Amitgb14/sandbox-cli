@@ -118,14 +118,20 @@ export function noAnswer(e: unknown): Error {
     : (e as Error);
 }
 
+/**
+ * How often an open metrics chart is read again: fixed, so a chart on a
+ * server that samples every 10 s still shows a new sample within 5 s of it.
+ * Where the hour is kept is in docs/api/v1.md, not on the screen.
+ */
+export const METRICS_REFRESH_MS = 5_000;
+
 /** The last hour of a sandbox's usage, read while something shows it. */
 export function useMetrics(id: string, enabled = true) {
   return useQuery({
     queryKey: keys.metrics(id),
     queryFn: () => apiFetch<MetricsList>(`${sbx(id)}/metrics`),
     enabled: !!id && enabled,
-    // As often as the server samples, which it says.
-    refetchInterval: (q) => (q.state.data?.interval_secs ?? 5) * 1000,
+    refetchInterval: METRICS_REFRESH_MS,
     retry: false,
   });
 }

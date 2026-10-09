@@ -10,6 +10,9 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **The metrics dialog refreshes every 5 s**, whatever the server's sampling
+  interval, and says only that under its charts. Where the last hour is kept
+  is in docs/api/v1.md.
 - **Images.** A new screen under Sandboxes, on a plain sandboxd: the images
   sandboxes start from, with state, size, use and when installed; Download
   image installs one with its progress; Start opens the Playground with it;

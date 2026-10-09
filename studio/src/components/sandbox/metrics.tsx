@@ -6,7 +6,7 @@ import { Activity } from "lucide-react";
 import { ResourceChips } from "@/components/sandbox/resource-chips";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useInfo, useMetrics } from "@/lib/api/queries";
+import { METRICS_REFRESH_MS, useInfo, useMetrics } from "@/lib/api/queries";
 import { formatBytes, formatMiB } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { MetricSample, Sandbox } from "@/lib/types";
@@ -130,10 +130,7 @@ function MetricsBody({ sb }: { sb: Sandbox }) {
           </AreaChart>
         </ChartContainer>
       </figure>
-      <p className="text-[11px] text-muted-foreground">
-        Measured on the host every {data?.interval_secs} s. The last hour is kept in sandboxd&apos;s memory on that host, and nowhere else:
-        not on disk, so it is gone when sandboxd restarts, or once the sandbox has ended and 100 newer ones have too.
-      </p>
+      <p className="text-[11px] text-muted-foreground">Refreshes every {METRICS_REFRESH_MS / 1000} s.</p>
     </div>
   );
 }
