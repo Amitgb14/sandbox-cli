@@ -29,8 +29,8 @@ func TestImageCommands(t *testing.T) {
 		return out.String(), err
 	}
 	const ref = "registry.example/team/tool:1.0"
-	if out, err := run("pull", ref); err != nil || !strings.Contains(out, "installed "+ref) {
-		t.Fatalf("pull: %q, %v", out, err)
+	if out, err := run("pull", ref); err != nil || !strings.Contains(out, "installed "+ref) || strings.Contains(out, "\x1b") {
+		t.Fatalf("pull, not to a terminal: %q, %v; want no escapes", out, err)
 	}
 	out, err := run("ls")
 	if err != nil || !strings.Contains(out, ref) || !strings.Contains(out, "installed") || !strings.Contains(out, "64 MiB") {

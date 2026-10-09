@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -79,6 +80,11 @@ func newImageCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "installing %s; sandbox-cli image ls shows how far it has got\n", ref)
 				return nil
 			}
+			// Progress redraws one line on a terminal, and is a line a change
+			// anywhere else: a log is not a screen.
+			errOut := cmd.ErrOrStderr()
+			f, ok := errOut.(*os.File)
+			tty := ok && isTerminal(f)
 			last := ""
 			for {
 				list, err := c.Images(cmd.Context())
@@ -95,14 +101,20 @@ func newImageCmd() *cobra.Command {
 				case img == nil:
 					return fmt.Errorf("%s is no longer listed", ref)
 				case img.State == api.ImageInstalled:
-					fmt.Fprintf(cmd.ErrOrStderr(), "\r\033[K")
+					if tty && last != "" {
+						fmt.Fprint(errOut, "\r\033[K")
+					}
 					fmt.Fprintf(cmd.OutOrStdout(), "installed %s\n", ref)
 					return nil
 				case img.State == api.ImageFailed:
 					return errors.New(termsafe.Clean(img.Error))
 				}
 				if s := imageState(*img); s != last {
-					fmt.Fprintf(cmd.ErrOrStderr(), "\r\033[K%s: %s", ref, s)
+					if tty {
+						fmt.Fprintf(errOut, "\r\033[K%s: %s", ref, s)
+					} else {
+						fmt.Fprintf(errOut, "%s: %s\n", ref, s)
+					}
 					last = s
 				}
 				select {
