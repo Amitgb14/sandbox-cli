@@ -140,6 +140,26 @@ func isBuiltin(name string) bool {
 	return slices.ContainsFunc(builtinTemplates, func(t Template) bool { return t.Name == name })
 }
 
+// LookupTemplate is the template called name, built in or saved: what the
+// CLI's --template reads, so a size made in Studio is the same size there.
+// A settings file that cannot be read is an error here, and only here: a
+// run that names no template never opens it.
+func LookupTemplate(name string) (Template, error) {
+	st, err := loadSettings()
+	if err != nil {
+		return Template{}, err
+	}
+	all := allTemplates(st)
+	names := make([]string, 0, len(all))
+	for _, t := range all {
+		if t.Name == name {
+			return t, nil
+		}
+		names = append(names, t.Name)
+	}
+	return Template{}, fmt.Errorf("no template %q (have: %s; Studio's Templates screen adds more)", name, strings.Join(names, ", "))
+}
+
 func (s *Server) templates(w http.ResponseWriter, _ *http.Request) {
 	st, err := loadSettings()
 	if err != nil {

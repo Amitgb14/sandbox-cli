@@ -890,6 +890,7 @@ Flags:
 | `--profile string` |  | dev or prod (prod: no persisted logins) |
 | `--snapshot-every duration` |  | snapshot the sandbox this often while it runs, e.g. 30m (the server sets the shortest allowed) |
 | `--snapshot-keep int` |  | how many scheduled snapshots to keep, newest first (default 1) |
+| `--template string` |  | size the sandbox from a template: micro, small, medium, large, xlarge or one saved in Studio (--cpus, --memory, --disk override it) |
 | `--volume stringArray` |  | mount a named volume, NAME:/path or NAME:/path:ro (repeatable; sandbox-cli volume) |
 
 ## sandbox-cli secret
