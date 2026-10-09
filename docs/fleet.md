@@ -370,6 +370,10 @@ admin key nodes, lost sandboxes, keys and the audit log — and a build without
 the admin screens for a dashboard hosted for many tenants. See
 [studio.md](studio.md).
 
+To give users Studio without installing anything, serve it with
+`sandbox-cli studio host` and send each one an invite link from
+`keys create --invite-url` ([studio.md](studio.md#hosted-studio)).
+
 ## The security model
 
 - **Users never hold node tokens.** The gateway strips the caller's

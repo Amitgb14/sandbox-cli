@@ -143,7 +143,7 @@ func TestAllowRulesBecomeADefaultGroup(t *testing.T) {
 func TestEgressGroupsApplyToLaunches(t *testing.T) {
 	s, st, c := studioUnderTest(t)
 	var last LaunchRequest
-	s.Launch = func(_ context.Context, req LaunchRequest) (LaunchResult, error) {
+	s.Launch = func(_ context.Context, _ *api.Client, req LaunchRequest) (LaunchResult, error) {
 		last = req
 		return LaunchResult{Sandbox: "sbx_x"}, nil
 	}

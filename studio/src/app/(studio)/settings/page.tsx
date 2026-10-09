@@ -48,7 +48,9 @@ export default function SettingsPage() {
         ) : null}
       </section>
 
-      <EgressRules defaultMode={caps?.network.default.mode} ceiling={caps?.network.ceiling} />
+      {/* Egress rules are this machine's user's, applied to every launch from
+          it: hosted users run under the server's policy instead. */}
+      {process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" && <EgressRules defaultMode={caps?.network.default.mode} ceiling={caps?.network.ceiling} />}
     </div>
   );
 }

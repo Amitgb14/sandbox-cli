@@ -41,9 +41,13 @@ export default function TemplatesPage() {
         title="Templates"
         description="Sizes to launch a sandbox at: vCPUs, memory and disk, by name. Pick one in the Playground. This endpoint's limits still apply; a template above them is refused at launch."
         actions={
-          <Button onClick={() => setEditing("new")} className="gap-1.5">
-            <Plus className="size-4" /> New template
-          </Button>
+          // Saved templates are this machine's user's (studio.json): a hosted
+          // Studio offers the built-in sizes and nothing to edit.
+          process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" && (
+            <Button onClick={() => setEditing("new")} className="gap-1.5">
+              <Plus className="size-4" /> New template
+            </Button>
+          )
         }
       />
       {limits ? (
@@ -108,6 +112,7 @@ export default function TemplatesPage() {
                         </Link>
                       </Button>
                     )}
+                    {process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" && (
                     <Button
                       size="icon"
                       variant="ghost"
@@ -118,7 +123,8 @@ export default function TemplatesPage() {
                     >
                       {t.builtin ? <Plus className="size-3.5" /> : <Pencil className="size-3.5" />}
                     </Button>
-                    {!t.builtin && (
+                    )}
+                    {!t.builtin && process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" && (
                       <Button
                         size="icon"
                         variant="ghost"
@@ -140,12 +146,14 @@ export default function TemplatesPage() {
           </ul>
         </div>
       )}
-      <TemplateDialog
-        value={editing}
-        existing={(data ?? []).map((t) => t.name)}
-        limits={limits}
-        onClose={() => setEditing(null)}
-      />
+      {process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" && (
+        <TemplateDialog
+          value={editing}
+          existing={(data ?? []).map((t) => t.name)}
+          limits={limits}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </div>
   );
 }

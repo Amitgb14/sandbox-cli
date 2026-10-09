@@ -4,6 +4,7 @@ import { TokenGate } from "@/components/shell/token-gate";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { GlobalShortcuts } from "@/components/shell/global-shortcuts";
 import { OrgScope, OrgSync } from "@/components/shell/org-switcher";
+import { HostedSignIn } from "@/components/shell/hosted-session";
 
 /**
  * The sidebar is the only chrome. On a phone, where it is a drawer, a slim
@@ -12,6 +13,7 @@ import { OrgScope, OrgSync } from "@/components/shell/org-switcher";
  */
 export default function StudioLayout({ children }: { children: React.ReactNode }) {
   return (
+    <HostedSignIn>
     <SidebarProvider>
       <OrgSync />
       {/* Everything below is remounted when the organisation changes, so
@@ -33,5 +35,6 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
       <GlobalShortcuts />
       </OrgScope>
     </SidebarProvider>
+    </HostedSignIn>
   );
 }

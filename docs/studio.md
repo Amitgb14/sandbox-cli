@@ -116,6 +116,68 @@ build and fails if any admin route, admin API path or admin screen title is
 in it. The gateway's refusal stays the control; the build only means the
 screens are not shipped.
 
+## Hosted Studio
+
+`sandbox-cli studio host` serves Studio on a public address to a gateway's
+users. Nobody installs anything: each user opens an invite link, and from then
+on acts as themselves, seeing only what their key may see.
+
+```sh
+# the UI for it: invite-link sign-in, no Studio token, no admin screens
+make studio-hosted                      # writes studio/out-hosted
+
+sandbox-cli studio host \
+  --gateway http://127.0.0.1:8443 \
+  --public-url https://studio.example.com \
+  --listen 127.0.0.1:7080 \
+  --ui-dir studio/out-hosted
+```
+
+Put a TLS proxy in front of the loopback port (a reverse proxy, or a tunnel
+that terminates HTTPS), or give it `--tls-cert` and `--tls-key` and listen on
+a public address itself.
+
+**Inviting a user** is issuing them a key with `--invite-url`, which prints
+the link that signs them in:
+
+```sh
+sandbox-gateway --state … keys create --user alice --tenant alice \
+  --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
+  --invite-url https://studio.example.com
+# …
+# invite: https://studio.example.com/#key=sgk_…
+```
+
+Give each user their **own tenant**: users without one share one quota and
+one set of secrets. The link is the key — send it as you would a password.
+
+**How a user signs in.** The key rides in the link's fragment, which a browser
+never sends to a server. The page posts it once to `POST /api/session`;
+Studio asks the gateway who the key is (`GET /v1/whoami`), keeps the key in
+memory and answers with an HttpOnly, `SameSite=Strict` session cookie
+(`__Host-sbx_studio` over https). The key is then gone from the address bar
+and from the page. Opening the link again, in any browser, signs in again.
+
+| | |
+|---|---|
+| Every call | made with the signed-in user's key, so the gateway's ownership, tenants, quotas and scopes apply exactly as to their own CLI. Studio adds no isolation of its own and needs none. |
+| What it holds | no credential of its own: no context, no key file. It reads nothing of the machine it runs on: no agent logins, no environment, no config. |
+| Agents | an interactive agent logs in inside its sandbox; an unattended one runs as a [job](jobs.md), with its API key stored under Secrets. The Playground offers commands and interactive agents. |
+| Studio's settings | the host user's own — saved agent keys, saved templates, egress rules and allowlist groups — are not shown, not applied to hosted launches and cannot be changed: their routes do not exist when hosted. Users get the built-in sizes (micro to xlarge), name hosts to allow themselves, and keep agent keys under Secrets. |
+| Admin keys | refused. An operator uses `sandbox-cli studio` on their own machine. |
+| Sessions | end after `--session-idle` unused (12h) or `--session-max-age` (7 days), on Sign out, and at the next call after the key is revoked at the gateway. They are kept in memory: a restart signs everyone out. |
+| Refused | any `Host` but `--public-url`'s (and `--allowed-host`, for a proxy that rewrites it); any request that changes something, and every WebSocket, from another `Origin`; every `/api` call without a session — local Studio's token and a gateway key presented directly included; more than 5 failed sign-ins a minute. |
+
+`sandbox-cli studio host` refuses plain `http://` for the gateway or the public
+URL anywhere but loopback, and a non-loopback `--listen` without a
+certificate. `npm run check:hosted` in `studio/` fails if the hosted build
+carries the admin screens or local Studio's token handling.
+
+**Not yet:** a sign-in form or single sign-on (the invite link is the
+sign-in), sessions that survive a restart, an agent's login kept between
+console runs, and counting failed sign-ins per client (behind a proxy every
+request comes from the proxy, so there is one count for everyone).
+
 ## How it is served, and who may use it
 
 Studio is a static export embedded in `sandbox-cli`. `sandbox-cli studio`

@@ -23,6 +23,7 @@ import { useInfo, useSandboxes } from "@/lib/api/queries";
 import { useUi } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { OrgSwitcher } from "@/components/shell/org-switcher";
+import { SignOutButton } from "@/components/shell/hosted-session";
 
 /**
  * The sidebar, and the only chrome: a wordmark, search, the screens the
@@ -90,6 +91,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="gap-3 px-3 pb-4">
+        <SignOutButton />
         <Connection />
         <ThemeSwitch />
         <Version />

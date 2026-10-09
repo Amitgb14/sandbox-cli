@@ -178,12 +178,16 @@ export interface Info {
   org?: string;
   capabilities?: Capabilities;
   error?: string;
+  /** Served by `sandbox-cli studio host`: the signed-in user's, and nothing of the host's. */
+  hosted?: boolean;
+  user?: string;
+  tenant?: string;
 }
 
 /** An agent Studio can run: only those with a verified headless mode are listed. */
 export interface Agent {
   name: string;
-  login: "saved" | "-" | "not kept";
+  login: "saved" | "-" | "not kept" | "in sandbox";
   /** The agent's API, which its runs may always reach. */
   provider_host?: string;
   /** What is kept of its login between runs, relative to the sandbox user's home. */

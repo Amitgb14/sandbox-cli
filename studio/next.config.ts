@@ -18,7 +18,20 @@ import type { NextConfig } from "next";
  */
 const admin = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off";
 
+// NEXT_PUBLIC_STUDIO_HOSTED=on builds the Studio `sandbox-cli studio host`
+// serves to many users: sign-in by invite link and a session cookie, no
+// Studio token, nothing of the host. Its users are never operators, so it
+// never carries the admin screens (`npm run build:hosted`, checked by
+// scripts/check-hosted.mjs).
+if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" && admin) {
+  throw new Error("a hosted build (NEXT_PUBLIC_STUDIO_HOSTED=on) needs NEXT_PUBLIC_STUDIO_ADMIN=off");
+}
+
 const nextConfig: NextConfig = {
+  // Always defined, so the minifier sees a literal on both sides of every
+  // hosted comparison and drops the other build's code from each bundle; an
+  // unset NEXT_PUBLIC_ variable is left as a run-time lookup instead.
+  env: { NEXT_PUBLIC_STUDIO_HOSTED: process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" ? "on" : "off" },
   output: "export",
   trailingSlash: true,
   images: { unoptimized: true },

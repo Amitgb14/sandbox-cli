@@ -33,7 +33,11 @@ export default function AgentsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Agents"
-        description="The agents with a verified headless mode. A login is copied into each sandbox an agent runs in, and back out when it ends: log in once with sandbox-cli agent <name>, start a console from the Playground, or save an API key here."
+        description={
+          process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on"
+            ? "The agents with a verified headless mode. Start one interactive from the Playground and log in inside its sandbox; to run one unattended as a job, store its API key under Secrets."
+            : "The agents with a verified headless mode. A login is copied into each sandbox an agent runs in, and back out when it ends: log in once with sandbox-cli agent <name>, start a console from the Playground, or save an API key here."
+        }
       />
       {isLoading ? (
         <div className="flex flex-col gap-2">
@@ -159,7 +163,9 @@ function AgentRow({ agent: a, open, onToggle }: { agent: Agent; open: boolean; o
               <dd className="text-muted-foreground">{st.hint}</dd>
             </div>
           </dl>
-          <AgentKeys agent={a} />
+          {/* Saved keys live in this machine's user's config: hosted users
+              keep theirs under Secrets, and the hosted build has no editor. */}
+          {process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" && <AgentKeys agent={a} />}
         </div>
       ) : null}
     </li>

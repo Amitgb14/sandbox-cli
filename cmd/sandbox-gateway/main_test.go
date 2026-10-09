@@ -91,6 +91,31 @@ func TestKeysCommands(t *testing.T) {
 	}
 }
 
+// --invite-url prints the link hosted Studio signs a user in with, and is
+// checked before a key is minted, so a mistake there leaves no key behind.
+func TestKeysCreateInviteURL(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	for _, bad := range []string{"studio.example.com", "https://studio.example.com/app", "https://studio.example.com/?x=1", "ftp://studio.example.com"} {
+		if _, err := run(t, "--state", state, "keys", "create", "--user", "alice", "--scope", "sandbox:read", "--invite-url", bad); err == nil {
+			t.Errorf("--invite-url %q was accepted", bad)
+		}
+	}
+	if _, err := run(t, "--state", state, "keys", "create", "--user", "ops", "--scope", "admin", "--invite-url", "https://studio.example.com"); err == nil {
+		t.Error("an invite for an admin key was made")
+	}
+	if out, _ := run(t, "--state", state, "keys", "list"); strings.Contains(out, "key_") {
+		t.Fatalf("a refused create minted a key: %q", out)
+	}
+	out, err := run(t, "--state", state, "keys", "create", "--user", "alice", "--tenant", "alice", "--scope", "sandbox:read", "--invite-url", "https://studio.example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := regexp.MustCompile(`secret: (sgk_\S+)`).FindStringSubmatch(out)
+	if secret == nil || !strings.Contains(out, "invite: https://studio.example.com/#key="+secret[1]+"\n") {
+		t.Fatalf("output %q", out)
+	}
+}
+
 func TestNodesCommands(t *testing.T) {
 	dir := t.TempDir()
 	state := filepath.Join(dir, "state.json")
