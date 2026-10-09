@@ -138,7 +138,7 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       {
         title: "Give sandboxes a disk of their own",
-        code: "mkfs.xfs /dev/nvme1n1   # erases it\necho \"UUID=$(blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2\" >> /etc/fstab\nmkdir -p /var/lib/sandboxd && mount /var/lib/sandboxd",
+        code: "sudo mkfs.xfs /dev/nvme1n1   # erases it\necho \"UUID=$(sudo blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2\" \\\n  | sudo tee -a /etc/fstab\nsudo mkdir -p /var/lib/sandboxd && sudo mount /var/lib/sandboxd",
         body: "Images, sandboxes' disks, snapshots and volumes live under /var/lib/sandboxd, so a full sandbox fills that disk and not /. Mount it first, the whole directory, by UUID; the unit will not start sandboxd without it.",
       },
       {
@@ -148,7 +148,7 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       {
         title: "Run it as a service",
-        code: "install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls\ninstall -m 0644 vmlinux /var/lib/sandboxd/vmlinux\nhead -c 32 /dev/urandom | base64 > /etc/sandboxd/token && chmod 600 /etc/sandboxd/token\ninstall -m 0600 cert.pem key.pem /etc/sandboxd/tls/\ncp packaging/systemd/policy.example.yaml /etc/sandboxd/policy.yaml\ncp packaging/systemd/sandboxd.service /etc/systemd/system/   # set --allowed-host\nsystemctl daemon-reload && systemctl enable --now sandboxd",
+        code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls\nsudo install -m 0644 vmlinux /var/lib/sandboxd/vmlinux\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'\nsudo install -m 0600 cert.pem key.pem /etc/sandboxd/tls/\nRAW=https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd\nsudo curl -fsSL $RAW/policy.example.yaml -o /etc/sandboxd/policy.yaml\nsudo curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service   # set --allowed-host\nsudo systemctl daemon-reload && sudo systemctl enable --now sandboxd",
         body: "As root it enforces the egress allowlist on the host and runs every VM under the jailer with a uid of its own. It refuses to listen on a network address without a token and TLS. The policy file is where the ceiling, the image list, pools and limits are set; a request can only ask for less. With --keep-sandboxes, an upgrade leaves running sandboxes running.",
       },
       {
