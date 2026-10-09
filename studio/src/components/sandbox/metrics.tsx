@@ -132,7 +132,7 @@ function MetricsBody({ sb }: { sb: Sandbox }) {
       </figure>
       <p className="text-[11px] text-muted-foreground">
         Measured on the host every {data?.interval_secs} s. The last hour is kept in sandboxd&apos;s memory on that host, and nowhere else:
-        not on disk, so it is gone when the sandbox ends or sandboxd restarts.
+        not on disk, so it is gone when sandboxd restarts, or once the sandbox has ended and 100 newer ones have too.
       </p>
     </div>
   );

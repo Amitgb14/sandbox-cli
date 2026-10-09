@@ -123,3 +123,26 @@ func TestMetricsIntervalDefaultsToFiveSeconds(t *testing.T) {
 		t.Fatalf("a set interval is %v; want it kept", got)
 	}
 }
+
+// An ended sandbox keeps its last hour, readable, as its docs say; nothing
+// samples it any more.
+func TestAnEndedSandboxKeepsItsMetrics(t *testing.T) {
+	c, s, advance := metricsServer(t, fake.New(api.CapEgressAllowlist))
+	ctx := context.Background()
+	sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.sampleMetrics(ctx)
+	advance(5 * time.Second)
+	s.sampleMetrics(ctx)
+	if err := c.TerminateSandbox(ctx, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	advance(5 * time.Second)
+	s.sampleMetrics(ctx)
+	m, err := c.Metrics(ctx, sb.ID)
+	if err != nil || len(m.Samples) != 2 {
+		t.Fatalf("after it ended: %d samples, %v; want the 2 it had", len(m.Samples), err)
+	}
+}
