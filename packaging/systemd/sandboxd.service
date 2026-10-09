@@ -7,6 +7,11 @@
 Description=sandboxd — microVM sandboxes for agents
 After=network-online.target
 Wants=network-online.target
+# The state directory, which should be a disk of its own: without it mounted,
+# sandboxd would start on the empty directory underneath and fill the root
+# filesystem. Harmless where it is a plain directory. Name --state-dir here if
+# it is elsewhere.
+RequiresMountsFor=/var/lib/sandboxd
 
 [Service]
 Type=simple

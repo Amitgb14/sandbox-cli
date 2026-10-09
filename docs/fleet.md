@@ -115,8 +115,10 @@ trust is better than `-g`: then `sandbox-cli context add` needs no `--ca`. Use
 
 ## Nodes
 
-Each node is a `sandboxd` set up as in [self-hosting.md](self-hosting.md), with
-these differences:
+Each node is a `sandboxd` set up as in [self-hosting.md](self-hosting.md),
+including a disk of its own for its state directory ([An extra disk for
+sandboxes](self-hosting.md#an-extra-disk-for-sandboxes)), with these
+differences:
 
 ```sh
 sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
