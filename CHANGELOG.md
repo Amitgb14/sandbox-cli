@@ -198,6 +198,19 @@ in `_old/` as reference, to be ported where this design still wants it.
   a failed run changed nothing took a repository to compare, and a run that may
   have done work must not be done twice. A `--detach` run with `--fallback` is
   refused, because nothing watches a detached run's exit.
+- **Images, managed ahead of use** (capability `images`). An image was
+  pulled, and on Linux built into a root disk, only when a sandbox first asked
+  for it, a minute or more for that sandbox. `GET /v1/images` lists what is
+  installed with each one's state, size and the sandboxes using it; `POST
+  /v1/images` installs one in the background, with its progress; `DELETE
+  /v1/images?image=REF` removes one nothing uses, and on Linux the cached layers
+  no other image needs. The policy's `images` list limits installs as it limits
+  creates; the default and pooled images are not removed. `sandbox-cli image ls`,
+  `image pull` and `image rm`, and Studio's new Images screen, do the same. They
+  are the node's operator's: a gateway answers them `501` until its own catalog
+  exists. On Linux each root disk now records the images it serves, so the list,
+  and a gateway's placement hint, survive a sandboxd restart, where before they
+  were forgotten.
 - **A live sandbox can be renamed, relabelled and retimed.** `PATCH
   /v1/sandboxes/{ref}` takes `name`, `labels` (replaced whole) and
   `idle_timeout_secs` beside `network`, on a running or suspended sandbox,

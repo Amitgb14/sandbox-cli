@@ -22,6 +22,7 @@ import type {
   MetricsList,
   NetworkPolicy,
   NodeStatus,
+  SandboxImage,
   Process,
   Sandbox,
   Snapshot,
@@ -45,6 +46,7 @@ export const keys = {
   agents: ["agents"] as const,
   agentStates: ["agent-states"] as const,
   templates: ["templates"] as const,
+  images: ["images"] as const,
   egress: ["egress"] as const,
 };
 
@@ -186,6 +188,17 @@ export function useAgentStates() {
 
 export function useAgents() {
   return useQuery({ queryKey: keys.agents, queryFn: async () => (await apiFetch<{ agents: Agent[] }>("/agents")).agents });
+}
+
+/** The endpoint's images; read every second while one installs, for its progress. */
+export function useImages(enabled = true) {
+  return useQuery({
+    queryKey: keys.images,
+    queryFn: async () => (await apiFetch<{ images: SandboxImage[] }>("/v1/images")).images,
+    enabled,
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.some((i) => i.state === "installing") ? 1_000 : 10_000),
+  });
 }
 
 /** Sizes to launch at: the built-in ones, then this user's (~/.config/sandbox/studio.json). */
@@ -398,5 +411,20 @@ export function useDeleteAgentKey() {
     ({ agent, name }: { agent: string; name: string }) =>
       apiFetch<void>(`/agents/${encodeURIComponent(agent)}/keys/${encodeURIComponent(name)}`, { method: "DELETE" }),
     () => [[...keys.agents]],
+  );
+}
+
+/** Starts installing an image; useImages follows it. */
+export function useInstallImage() {
+  return useInvalidating(
+    (image: string) => apiFetch<SandboxImage>("/v1/images", { method: "POST", json: { image } }),
+    () => [[...keys.images]],
+  );
+}
+
+export function useRemoveImage() {
+  return useInvalidating(
+    (image: string) => apiFetch<{ image: string; freed_bytes: number }>(`/v1/images?image=${encodeURIComponent(image)}`, { method: "DELETE" }),
+    () => [[...keys.images], [...keys.node]],
   );
 }

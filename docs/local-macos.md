@@ -80,7 +80,9 @@ tail -f /tmp/sandboxd.log                   # sandboxd's log, if either fails
 
 **Where it keeps things.** On a Mac, images and sandboxes' disks are the
 runtime's: `container` keeps them in its own store, which `container system`
-manages, not in sandboxd's directory. sandboxd's `--state-dir` (by default
+manages, not in sandboxd's directory. `sandbox-cli image pull` and Studio's
+Images screen pull into it (`container image pull`); there is no disk to build
+after, and the runtime reports no progress or size, so neither is shown. sandboxd's `--state-dir` (by default
 `~/.local/share/sandboxd`) holds only its records, the audit log and, briefly,
 a snapshot's export (`snapshot-tmp/`), so it is the runtime's store that needs
 the disk space.

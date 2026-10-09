@@ -89,7 +89,7 @@ function LaunchForm() {
   const [labels, setLabels] = useState("");
   const [volumes, setVolumes] = useState("");
   const [from, setFrom] = useState<"image" | "snapshot">("image");
-  const [image, setImage] = useState("");
+  const [image, setImage] = useState(params.get("image") ?? "");
   const [snapshot, setSnapshot] = useState("");
   const canSnapshot = !!(info?.capabilities?.capabilities?.memory_snapshot || info?.capabilities?.capabilities?.disk_snapshot);
   const { data: snapshots } = useSnapshots(canSnapshot);

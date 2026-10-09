@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 
 const { token } = JSON.parse(readFileSync(join(__dirname, ".state.json"), "utf8")) as { token: string };
-const ROUTES = ["/", "/sandboxes/", "/launch/", "/snapshots/", "/agents/", "/templates/", "/volumes/", "/settings/"];
+const ROUTES = ["/", "/sandboxes/", "/launch/", "/snapshots/", "/agents/", "/templates/", "/volumes/", "/images/", "/settings/"];
 
 test("every screen renders with no console errors", async ({ page }) => {
   const errors: string[] = [];

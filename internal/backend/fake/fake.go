@@ -35,7 +35,9 @@ type Backend struct {
 	caps      map[string]bool
 	snapshots map[string]fakeSnapshot
 	volumes   map[string]*fakeVolume
-	images    map[string]bool // every image a sandbox was created from
+	images    map[string]bool // every image a sandbox was created from, or installed
+	// installedAt is when an image was installed; created-from ones have none.
+	installedAt map[string]time.Time
 }
 
 // fakeVolume holds a volume's files by path relative to its mount point. A
@@ -71,7 +73,7 @@ type sandbox struct {
 // New returns an empty fake with the capabilities given (api.Cap* names).
 func New(caps ...string) *Backend {
 	b := &Backend{sandboxes: map[string]*sandbox{}, caps: map[string]bool{}, snapshots: map[string]fakeSnapshot{},
-		volumes: map[string]*fakeVolume{}, images: map[string]bool{}}
+		volumes: map[string]*fakeVolume{}, images: map[string]bool{}, installedAt: map[string]time.Time{}}
 	for _, c := range caps {
 		b.caps[c] = true
 	}
@@ -182,6 +184,64 @@ func (b *Backend) CachedImages() []string {
 		out = append(out, img)
 	}
 	return out
+}
+
+// MissingImage is a reference the fake's "registry" does not have: installing
+// it fails, as a typo in a tag does against a real one.
+const MissingImage = "does-not-exist"
+
+// Images is backend.ImageStore: every image installed, or created from.
+func (b *Backend) Images(context.Context) ([]backend.ImageInfo, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]backend.ImageInfo, 0, len(b.images))
+	for img := range b.images {
+		out = append(out, backend.ImageInfo{Ref: img, Digest: "sha256:" + strings.Repeat("0", 64), Bytes: 64 << 20, InstalledAt: b.installedAt[img]})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ref < out[j].Ref })
+	return out, nil
+}
+
+// InstallImage is backend.ImageStore: a pull of 64 MiB in four steps, then a
+// build, unless the image is MissingImage.
+func (b *Backend) InstallImage(ctx context.Context, ref string, progress func(backend.ImageProgress)) error {
+	if strings.Contains(ref, MissingImage) {
+		return fmt.Errorf("%s: manifest unknown", ref)
+	}
+	const total = 64 << 20
+	for done := int64(0); done <= total; done += total / 4 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if progress != nil {
+			progress(backend.ImageProgress{Phase: "pulling", Done: done, Total: total})
+		}
+	}
+	if progress != nil {
+		progress(backend.ImageProgress{Phase: "building", Done: total, Total: total})
+	}
+	b.mu.Lock()
+	b.images[ref] = true
+	b.installedAt[ref] = time.Now().UTC()
+	b.mu.Unlock()
+	return nil
+}
+
+// RemoveImage is backend.ImageStore.
+func (b *Backend) RemoveImage(_ context.Context, ref string) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.images[ref] {
+		return 0, backend.ErrNotFound
+	}
+	for _, sb := range b.sandboxes {
+		if sb.spec.Image == ref && sb.spec.FromSnapshot == "" {
+			return 0, fmt.Errorf("%w: a sandbox starts from %s", backend.ErrBusy, ref)
+		}
+	}
+	delete(b.images, ref)
+	delete(b.installedAt, ref)
+	return 64 << 20, nil
 }
 
 func (b *Backend) CreateVolume(_ context.Context, name string, sizeMB int) error {

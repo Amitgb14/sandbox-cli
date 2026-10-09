@@ -82,6 +82,7 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"NetworkAllowOutsideMayAllowIsRefused", testNetworkMayAllow},
 		{"NetworkUpdateFollowsTheSameRules", testNetworkUpdate},
 		{"ALiveSandboxCanBeRenamedRelabelledAndRetimed", testUpdateRecords},
+		{"ImagesAreListedInstalledAndPinned", testImages},
 		{"IdleSandboxIsTerminated", testIdleTimeout},
 		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
 		{"AttachStreamsInputAndOutput", testAttach},
@@ -622,6 +623,63 @@ func testNetworkUpdate(t *testing.T, e *env) {
 			t.Errorf("a refused update changed the policy to %q", after.Network.Mode)
 		}
 	}
+}
+
+// The images an endpoint manages (capability images): the default image is
+// listed once a sandbox starts from it, as in use and pinned; installing it
+// again runs to installed; and what is not an image, or not installed, is
+// refused. Nothing else is installed or removed, so the test is safe against
+// a real server's registry and disk. Without the capability every call is
+// unsupported.
+func testImages(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	if !e.caps.Has(api.CapImages) {
+		_, err := e.c.Images(ctx)
+		wantCode(t, err, api.CodeUnsupported)
+		_, err = e.c.InstallImage(ctx, "example.com/a:1")
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	e.newSandbox(t, api.CreateSandboxRequest{})
+	find := func() (api.Image, bool) {
+		list, err := e.c.Images(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, img := range list {
+			if img.Default {
+				return img, true
+			}
+		}
+		return api.Image{}, false
+	}
+	def, ok := find()
+	if !ok || def.InUse < 1 {
+		t.Fatalf("the default image is not listed as in use by the sandbox started from it: %+v, %v", def, ok)
+	}
+	_, err := e.c.RemoveImage(ctx, def.Image)
+	wantCode(t, err, api.CodeConflict)
+
+	got, err := e.c.InstallImage(ctx, def.Image)
+	if err != nil || got.Image != def.Image {
+		t.Fatalf("installing the default image again: %+v, %v", got, err)
+	}
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		img, _ := find()
+		if img.State == api.ImageInstalled {
+			break
+		}
+		if img.State == api.ImageFailed || time.Now().After(deadline) {
+			t.Fatalf("the default image did not install again: %+v", img)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	_, err = e.c.InstallImage(ctx, "Not An Image!")
+	wantCode(t, err, api.CodeInvalidRequest)
+	_, err = e.c.RemoveImage(ctx, "registry.invalid/never/installed:"+uniqueName("tag"))
+	wantCode(t, err, api.CodeNotFound)
 }
 
 // clientLabels is a sandbox's labels without those a gateway keeps for

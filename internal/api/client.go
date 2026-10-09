@@ -229,6 +229,29 @@ func (c *Client) DeleteVolume(ctx context.Context, name string) error {
 	return c.json(ctx, http.MethodDelete, "/v1/volumes/"+url.PathEscape(name), nil, nil)
 }
 
+// Images lists the images the server has or is installing (capability images).
+func (c *Client) Images(ctx context.Context) ([]Image, error) {
+	var out ImageList
+	err := c.json(ctx, http.MethodGet, "/v1/images", nil, &out)
+	return out.Images, err
+}
+
+// InstallImage starts installing ref; the answer is its state then, and
+// Images follows it to installed or failed.
+func (c *Client) InstallImage(ctx context.Context, ref string) (Image, error) {
+	var out Image
+	err := c.json(ctx, http.MethodPost, "/v1/images", InstallImageRequest{Image: ref}, &out)
+	return out, err
+}
+
+// RemoveImage removes an installed image. Refused while a sandbox starts from
+// it, and for the server's default and pooled images.
+func (c *Client) RemoveImage(ctx context.Context, ref string) (RemovedImage, error) {
+	var out RemovedImage
+	err := c.json(ctx, http.MethodDelete, "/v1/images?image="+url.QueryEscape(ref), nil, &out)
+	return out, err
+}
+
 // Events returns a sandbox's audit events, oldest first (capability audit).
 func (c *Client) Events(ctx context.Context, ref string) (EventList, error) {
 	var out EventList
