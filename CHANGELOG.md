@@ -272,9 +272,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   /v1/sandboxes/{id}/metrics`, where the endpoint has the new `metrics`
   capability (macOS, Firecracker and the fake backend all do): CPU as a share
   of the vCPUs given, memory against its limit, network and disk byte counts,
-  sampled every 10 seconds by sandboxd from what the host measures — the
+  sampled every 5 seconds by sandboxd from what the host measures — the
   runtime's counters on macOS, the VMM's process on Linux — and never from the
-  guest. An hour is kept per sandbox, in memory. Reading it does not count as
+  guest. An hour is kept per sandbox, about 63 KB, in sandboxd's memory only:
+  nothing is written to disk, so it is gone when sandboxd restarts, and after
+  a sandbox ends once sandboxd forgets it (it keeps the 100 newest ended). Reading it does not count as
   activity for the idle timeout. Behind a gateway it is the owner's. Studio
   opens it from a sandbox's resources.
 - **A snapshot's progress.** While a snapshot is taken, the sandbox carries

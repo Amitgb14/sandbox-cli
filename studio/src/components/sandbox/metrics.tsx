@@ -62,7 +62,7 @@ function MetricsBody({ sb }: { sb: Sandbox }) {
   const last = samples[samples.length - 1];
   const rows = samples.map((s) => ({ time: s.time, cpu: +s.cpu_percent.toFixed(2), memory: +(s.memory_bytes / (1 << 20)).toFixed(1) }));
   const limitMiB = last ? last.memory_limit_bytes / (1 << 20) : sb.memory_mb;
-  // A sample every 10 s: under ten minutes of them, a minute's marks would
+  // A sample every few seconds: under ten minutes of them, a minute's marks would
   // all say the same minute.
   const short = samples.length > 1 && Date.parse(last.time) - Date.parse(samples[0].time) < 10 * 60_000;
   const tick = (iso: string) => clock(iso, short);
@@ -77,7 +77,7 @@ function MetricsBody({ sb }: { sb: Sandbox }) {
   if (!samples.length) {
     return (
       <p className="py-10 text-center text-sm text-muted-foreground">
-        No samples yet: one is taken every {data?.interval_secs ?? 10} seconds while the sandbox runs.
+        No samples yet: one is taken every {data?.interval_secs ?? 5} seconds while the sandbox runs.
       </p>
     );
   }
@@ -131,7 +131,8 @@ function MetricsBody({ sb }: { sb: Sandbox }) {
         </ChartContainer>
       </figure>
       <p className="text-[11px] text-muted-foreground">
-        Measured on the host, every {data?.interval_secs} s; the last hour is kept while the sandbox lives.
+        Measured on the host every {data?.interval_secs} s. The last hour is kept in sandboxd&apos;s memory on that host, and nowhere else:
+        not on disk, so it is gone when sandboxd restarts, or once the sandbox has ended and 100 newer ones have too.
       </p>
     </div>
   );
