@@ -15,13 +15,26 @@ hosted cloud; clients cannot tell which they are talking to beyond
   overlayfs. The CI kernels from Firecracker's getting-started guide have all
   three.
 - `mkfs.ext4` (e2fsprogs 1.43+), `ip` (iproute2), `nft` (nftables).
-- The `/var/lib/sandboxd` filesystem: image disks are hard-linked into each
-  sandbox's jail, so the jail and the image cache must share it. xfs or btrfs
-  make per-sandbox disks reflinks.
+- Room for `/var/lib/sandboxd`, where images, sandboxes' disks, snapshots and
+  volumes are kept ([Where it keeps things](#where-it-keeps-things)). It must be
+  **one filesystem**: image disks are hard-linked into each sandbox's jail. xfs
+  or btrfs make snapshot and fork copies reflinks. To give it a disk of its own,
+  mount that disk there before installing.
 
 ## Install
 
+To keep sandboxes off the root filesystem, first mount a disk of their own
+at `/var/lib/sandboxd` (or at another path, given to sandboxd as
+`--state-dir`). Mount it before the steps below, which put the guest kernel
+there; a disk mounted over the directory afterwards hides it.
+
 ```sh
+# optional: a dedicated disk for images, sandboxes, snapshots and volumes
+mkfs.xfs /dev/nvme1n1                       # an empty disk: this erases it. xfs or btrfs: copies become reflinks
+mkdir -p /var/lib/sandboxd
+echo '/dev/nvme1n1 /var/lib/sandboxd xfs defaults,noatime 0 2' >> /etc/fstab
+mount /var/lib/sandboxd
+
 install -m 0755 sandboxd sandbox-guestd /usr/local/bin/
 install -m 0755 firecracker jailer /usr/local/bin/
 install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd
@@ -41,6 +54,50 @@ journalctl -u sandboxd -f
 
 `sandbox-guestd` must sit beside `sandboxd` (or be named with `--agent`): it is
 put into every image's root disk, so the guest agent always matches the server.
+
+## Where it keeps things
+
+Everything sandboxd keeps is under its state directory: `--state-dir`, by
+default `/var/lib/sandboxd` as root (`~/.local/share/sandboxd` otherwise). The
+binaries, `/etc/sandboxd` (token, TLS, policy) and the unit file are the only
+things elsewhere.
+
+| Path under the state directory | What | Size |
+|---|---|---|
+| `vmlinux` | the guest kernel (Install, above) | tens of MiB |
+| `images/` | image layers and manifests pulled from registries, shared between images | the images, compressed |
+| `rootfs/<key>/rootfs.ext4` | each image's root disk, built once per image and guest agent; read-only to every sandbox | a few GiB each; an upgrade's first sandbox of an image builds a new one, and the old are removed at the next start |
+| `sandboxes/<id>/` | a sandbox's own files: its writable disk (`scratch.ext4`, its `disk_mb`, sparse) and sockets | what each sandbox writes, up to its `disk_mb` |
+| `jail/` | with `--jailer`: each VM's chroot, holding hard links to the kernel and root disk, and its writable disk | as `sandboxes/`; the links take no space |
+| `snapshots/<id>/` | a snapshot: the sandbox's disk, VM state and memory (`snap.mem`) | the sandbox's memory plus its written disk |
+| `volumes/<name>.ext4` | named volumes, sparse | what was written to each, up to its size |
+| `records/` | with `--keep-sandboxes`: each sandbox's record, environment values included, so they survive a restart | small; **sensitive**, readable by root only |
+| `audit/events.jsonl` | the audit log, unless `--audit-log` puts it elsewhere | grows with use; [rotate it](#the-audit-log) |
+
+What it takes to plan a disk: a few GiB per image you run, plus each running
+sandbox's written disk, plus each snapshot's memory and disk, plus volumes.
+The fleet's `Disk given` in Studio, and `sandbox-cli list`, show what
+sandboxes were given; `du -sh /var/lib/sandboxd/*` shows what is used.
+
+**Keep it one filesystem.** Root disks, the kernel and volumes are hard-linked
+into each jail, so mounting `jail/`, `rootfs/` or `volumes/` separately breaks
+every start (`linking … into the jail (the jail must be on the same filesystem
+as the image cache)`). Put the whole state directory on the disk instead. The
+audit log alone can go elsewhere, with `--audit-log`.
+
+**Moving an existing install** to a new disk: the VMs run from files in the
+state directory, so end them first. With `--keep-sandboxes`, stopping
+sandboxd leaves them running from the old disk, and a copy taken under them is
+not a consistent one.
+
+```sh
+sandbox-cli list                              # what is running; finish what matters first
+sandbox-cli kill SANDBOX...                   # every live one; snapshots and volumes are files, and move with the rest
+systemctl stop sandboxd
+mount /dev/nvme1n1 /mnt/new && rsync -aHAX --sparse /var/lib/sandboxd/ /mnt/new/   # -H keeps the hard links
+umount /mnt/new && mount /dev/nvme1n1 /var/lib/sandboxd                            # and add it to /etc/fstab
+systemctl start sandboxd
+```
 
 ## The network default
 
