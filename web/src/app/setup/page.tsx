@@ -14,7 +14,9 @@ import {
   FLEET_USE_CODE,
   FLEET_ORGS_CODE,
   FLEET_REVOKE_CODE,
+  BIND_MOUNT_CODE,
   CLIENT_INSTALL_CODE,
+  DISK_MOUNT_CODE,
   INSTALL_STEP,
   LAUNCH_AGENT_CODE,
   SERVER_INSTALL_CODE,
@@ -271,16 +273,28 @@ const SERVER_STEPS: Step[] = [
     body: CHECK_MACHINE_BODY,
   },
   {
-    title: "Give sandboxes a disk of their own",
-    code: "lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS   # the new disk: no FSTYPE, no mount point (say nvme1n1)\nsudo mkfs.xfs /dev/nvme1n1                    # erases it\nsudo mkdir -p /var/lib/sandboxd\necho \"UUID=$(sudo blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2\" \\\n  | sudo tee -a /etc/fstab\nsudo systemctl daemon-reload && sudo mount /var/lib/sandboxd && sudo chmod 0700 /var/lib/sandboxd\nfindmnt /var/lib/sandboxd && df -h /var/lib/sandboxd",
+    title: "Give sandboxes a drive of their own",
+    code: DISK_MOUNT_CODE,
     body: (
       <>
         Images, every sandbox&apos;s disk, snapshots and volumes live under <code>/var/lib/sandboxd</code>; on a
-        disk of their own, a sandbox that fills its disk fills that and not <code>/</code>. Mount it before the
-        next steps, which put the kernel there. By UUID, since device names can swap between boots, and without{" "}
-        <code>nofail</code>: the unit has <code>RequiresMountsFor=/var/lib/sandboxd</code>, so sandboxd does not
-        start on the empty directory underneath. Keep the whole directory on it: its parts are hard-linked into
-        each jail. On a machine just for trying, skip this step.
+        drive of their own, a sandbox that fills its disk fills that and not <code>/</code>. Mount it before the
+        next steps, which put the kernel there. Check the drive is the empty one before <code>mkfs</code>, which
+        erases it. By UUID, since device names can swap between boots, and without <code>nofail</code>: the unit
+        has <code>RequiresMountsFor=/var/lib/sandboxd</code>, so sandboxd does not start on the empty directory
+        underneath. Keep the whole directory on it: its parts are hard-linked into each jail. On a machine just
+        for trying, with 20 GiB free on <code>/</code>, skip this step and the next.
+      </>
+    ),
+  },
+  {
+    title: "Or, with no spare drive: a directory of a larger filesystem",
+    code: BIND_MOUNT_CODE,
+    body: (
+      <>
+        Instead of the step above, when <code>/</code> is small and another filesystem, <code>/home</code> say, has
+        the room: a bind mount puts a directory of it at <code>/var/lib/sandboxd</code>. It is one filesystem, as
+        the jail needs, and the unit waits for it as for a drive.
       </>
     ),
   },

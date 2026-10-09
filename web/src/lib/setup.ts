@@ -55,6 +55,30 @@ command -v sandboxd sandbox-cli        # both must print a path under ~/.local/b
     };
 
 /** Installing on a server, where the unit runs everything from /usr/local/bin. */
+/**
+ * A drive of its own for sandboxd's state, as docs/self-hosting.md's Install,
+ * step 2, gives it: named once, checked empty before it is erased, mounted by
+ * UUID and without nofail (the unit has RequiresMountsFor).
+ */
+export const DISK_MOUNT_CODE = `lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS   # the spare one has no FSTYPE and no MOUNTPOINTS
+DISK=/dev/nvme1n1                             # yours, from the list above
+lsblk -f $DISK                               # must show no filesystem and no mount point
+sudo wipefs -n $DISK                         # must print nothing: no signature on it
+sudo mkfs.xfs $DISK                          # ERASES IT
+sudo install -d -m 0700 /var/lib/sandboxd
+echo "UUID=$(sudo blkid -s UUID -o value $DISK) /var/lib/sandboxd xfs defaults,noatime 0 2" \\
+  | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
+sudo chmod 0700 /var/lib/sandboxd
+command -v restorecon >/dev/null && sudo restorecon -R /var/lib/sandboxd   # SELinux hosts only
+findmnt /var/lib/sandboxd && df -h /var/lib/sandboxd`;
+
+/** With no spare drive: a directory of a larger filesystem, bind-mounted there. */
+export const BIND_MOUNT_CODE = `sudo install -d -m 0700 /home/sandboxd /var/lib/sandboxd
+echo "/home/sandboxd /var/lib/sandboxd none bind 0 0" | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
+findmnt /var/lib/sandboxd && df -h /var/lib/sandboxd`;
+
 /** Firecracker and its jailer from Firecracker's releases, into /usr/local/bin. */
 const FIRECRACKER_SERVER_FETCH = `ARCH=$(uname -m)
 release_url=https://github.com/firecracker-microvm/firecracker/releases
@@ -157,9 +181,9 @@ export const SETUP_PATHS: SetupPath[] = [
         body: "Checked on x86_64, an EL10 distribution with host kernel 6.12, e2fsprogs 1.47.1, iproute2 6.17.0 and nftables 1.1.5; arm64 and other distributions are built for but not yet run. Firecracker 1.17.0 and the guest kernel 6.1.155 come in the steps below, both pinned to the versions checked.",
       },
       {
-        title: "Give sandboxes a disk of their own",
-        code: "sudo mkfs.xfs /dev/nvme1n1   # erases it\necho \"UUID=$(sudo blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2\" \\\n  | sudo tee -a /etc/fstab\nsudo mkdir -p /var/lib/sandboxd && sudo mount /var/lib/sandboxd",
-        body: "Images, sandboxes' disks, snapshots and volumes live under /var/lib/sandboxd, so a full sandbox fills that disk and not /. Mount it first, the whole directory, by UUID; the unit will not start sandboxd without it.",
+        title: "Give sandboxes a drive of their own",
+        code: DISK_MOUNT_CODE,
+        body: "Images, sandboxes' disks, snapshots and volumes live under /var/lib/sandboxd, so a full sandbox fills that drive and not /. Mount it first, the whole directory, by UUID; the unit will not start sandboxd without it. With no spare drive, bind-mount a directory of a larger filesystem there instead (the setup guide shows it); on a machine just for trying with 20 GiB free on /, skip this.",
       },
       {
         title: "Install, as root, where the unit expects it",

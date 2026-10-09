@@ -98,18 +98,33 @@ filesystem is the one nearly full, as is common with a small `/` and a large
 `/var/lib/sandboxd`, or bind-mount a directory of the larger filesystem
 there (step 2), or run sandboxd with `--state-dir` naming it.
 
-**2. A disk for sandboxes (on a server).** Images, sandboxes' disks,
-snapshots and volumes live under `/var/lib/sandboxd`. On a server, mount a
-disk of their own there now, as [An extra disk for
-sandboxes](#an-extra-disk-for-sandboxes) shows, so they never fill the root
-filesystem: by UUID, xfs (checked) or btrfs, and the whole directory. Mount it
-before the next steps, which put the guest kernel in it; a disk mounted over
-it afterwards hides it. On a machine just for trying, skip this step, unless
-`/` is short of the space above.
+**2. Where the state goes: a drive of its own.** Images, sandboxes' disks,
+snapshots and volumes live under `/var/lib/sandboxd`. On a server, give them a
+drive of their own, so they never fill the root filesystem
+([why](#an-extra-disk-for-sandboxes)). Do it now: the next steps put the guest
+kernel in that directory, and a drive mounted over it afterwards hides it.
+Choose one:
 
-With no spare disk but a larger filesystem elsewhere, `/home` say, bind-mount
-a directory of it at `/var/lib/sandboxd` instead. It is one filesystem, as the
-jail needs, and the unit waits for it as for a disk:
+*A. A spare drive, or a partition or logical volume, for the state alone.*
+Name it once, check it holds nothing, then format and mount it:
+
+```sh
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS   # the spare one has no FSTYPE and no MOUNTPOINTS
+DISK=/dev/nvme1n1                             # yours, from the list above
+lsblk -f $DISK                               # must show no filesystem and no mount point
+sudo wipefs -n $DISK                         # must print nothing: no signature on it
+sudo mkfs.xfs $DISK                          # ERASES IT; xfs (checked) or btrfs, for reflink copies
+sudo install -d -m 0700 /var/lib/sandboxd
+echo "UUID=$(sudo blkid -s UUID -o value $DISK) /var/lib/sandboxd xfs defaults,noatime 0 2" \
+  | sudo tee -a /etc/fstab                   # by UUID, and without nofail
+sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
+sudo chmod 0700 /var/lib/sandboxd
+command -v restorecon >/dev/null && sudo restorecon -R /var/lib/sandboxd   # SELinux hosts only
+```
+
+*B. No spare drive, but a larger filesystem*, `/home` say. Bind-mount a
+directory of it at `/var/lib/sandboxd`. It is one filesystem, as the jail
+needs, and the unit waits for it as for a drive:
 
 ```sh
 sudo install -d -m 0700 /home/sandboxd /var/lib/sandboxd
@@ -117,10 +132,19 @@ echo "/home/sandboxd /var/lib/sandboxd none bind 0 0" | sudo tee -a /etc/fstab
 sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
 ```
 
+*C. A machine just for trying, with room on `/`* (20 GiB free, [What the
+machine needs](#what-the-machine-needs)): skip this step.
+
+Then, for A or B:
+
 ```sh
-findmnt /var/lib/sandboxd    # the disk or the bind mount; nothing on a machine just for trying
-df -h /var/lib/sandboxd      # the free space is the larger filesystem's
+findmnt /var/lib/sandboxd    # the drive (A) or /home[/sandboxd] (B)
+df -h /var/lib/sandboxd      # the free space is that filesystem's, not /'s
 ```
+
+If `findmnt` prints nothing after a reboot, the drive did not mount, and
+sandboxd will not start until it does (`Dependency failed for sandboxd`):
+check the UUID in `/etc/fstab` against `sudo blkid`.
 
 **3. sandboxd and the guest agent: built from a checkout, for now.** No
 published release has `sandboxd` yet: 0.0.1 is the last release of the
@@ -332,20 +356,10 @@ sandboxes were given; `du -sh /var/lib/sandboxd/*` shows what is used.
 
 What a Linux server running sandboxes for others should have: a disk, or a
 logical volume, mounted at the state directory, so a sandbox that fills its
-disk, a pile of snapshots or a large volume fills that and not `/`. Before
-Install:
-
-```sh
-lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS       # find the new disk: no FSTYPE, no mount point (say nvme1n1)
-sudo mkfs.xfs /dev/nvme1n1                       # erases it; xfs or btrfs, so snapshot and fork copies are reflinks
-sudo mkdir -p /var/lib/sandboxd
-echo "UUID=$(sudo blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2" \
-  | sudo tee -a /etc/fstab
-sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
-sudo chmod 0700 /var/lib/sandboxd
-sudo restorecon -R /var/lib/sandboxd             # SELinux hosts (RHEL, Fedora, their rebuilds): /var/lib's label
-findmnt /var/lib/sandboxd && df -h /var/lib/sandboxd
-```
+disk, a pile of snapshots or a large volume fills that and not `/`. The
+commands, for a spare drive or a bind mount of a larger filesystem, are
+[Install, step 2](#install); mount it before the rest of Install. Why they
+are written as they are:
 
 - **By UUID, not by name.** `nvme1n1` and `sdb` can swap between boots; a
   UUID names the filesystem.
