@@ -20,6 +20,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
+	"github.com/Amitgb14/sandbox-cli/internal/studio"
 	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
@@ -30,6 +31,7 @@ type runFlags struct {
 	// launches, which act in the one the browser selected.
 	org           string
 	image         string
+	template      string
 	cpus          float64
 	memory, disk  int
 	idle          int
@@ -37,6 +39,7 @@ type runFlags struct {
 	snapKeep      int
 	network       string
 	allow, deny   []string
+	noBaseline    bool
 	env           []string
 	detach, keep  bool
 	name          string
@@ -64,6 +67,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	rf.flags = f
 	f.StringVar(&rf.context, "context", "", "which sandboxd to use (sandbox-cli context ls)")
 	f.StringVar(&rf.image, "image", "", "image to run (default: the server's)")
+	f.StringVar(&rf.template, "template", "", "size the sandbox from a template: micro, small, medium, large, xlarge or one saved in Studio (--cpus, --memory, --disk override it)")
 	f.Float64Var(&rf.cpus, "cpus", 0, "vCPUs")
 	f.IntVar(&rf.memory, "memory", 0, "memory in MiB")
 	f.IntVar(&rf.disk, "disk", 0, "writable disk in MiB")
@@ -73,6 +77,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.network, "network", "", "none, allowlist or open (default: the server's)")
 	f.StringArrayVar(&rf.allow, "allow", nil, "also allow egress to this host (repeatable; implies allowlist)")
 	f.StringArrayVar(&rf.deny, "deny", nil, "refuse egress to this host even if allowed (repeatable)")
+	f.BoolVar(&rf.noBaseline, "no-baseline", false, "an allowlist of only the hosts named with --allow (and an agent's API), without the built-in agents' APIs and registries")
 	f.StringArrayVarP(&rf.env, "env", "e", nil, "KEY=VALUE, or KEY to forward the host's value (repeatable)")
 	f.BoolVarP(&rf.detach, "detach", "d", false, "start, print how to attach, and return")
 	f.BoolVar(&rf.keep, "keep", false, "keep the sandbox when the command ends")
@@ -84,6 +89,31 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringArrayVar(&rf.volumes, "volume", nil, "mount a named volume, NAME:/path or NAME:/path:ro (repeatable; sandbox-cli volume)")
 	f.StringArrayVar(&rf.labels, "label", nil, "label the sandbox, key=value (repeatable); shown by list and recorded in its audit events")
 	f.StringArrayVar(&rf.fallback, "fallback", nil, "an agent to try next if this one's provider is down (repeatable; agent wrappers only)")
+}
+
+// applyTemplate fills the size from --template: each of cpus, memory and disk
+// the template sets and no flag of its own was given for. A template's
+// "server default" disk leaves --disk as it is. sandboxd's limits bound the
+// result as they bound --cpus.
+func (rf *runFlags) applyTemplate() error {
+	if rf.template == "" {
+		return nil
+	}
+	t, err := studio.LookupTemplate(rf.template)
+	if err != nil {
+		return fmt.Errorf("--template: %w", err)
+	}
+	given := func(name string) bool { return rf.flags != nil && rf.flags.Changed(name) }
+	if !given("cpus") {
+		rf.cpus = t.CPUs
+	}
+	if !given("memory") {
+		rf.memory = t.MemoryMB
+	}
+	if !given("disk") && t.DiskMB > 0 {
+		rf.disk = t.DiskMB
+	}
+	return nil
 }
 
 // sandboxFlagNames lists the long flags a wrapper consumes before handing the
@@ -144,6 +174,9 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	}
 	// The configuration first: a mistake in your own files is yours to fix
 	// whether or not a sandboxd is answering, and should not wait behind one.
+	if err := rf.applyTemplate(); err != nil {
+		return 1, err
+	}
 	ov, err := rf.overrides()
 	if err != nil {
 		return 1, err

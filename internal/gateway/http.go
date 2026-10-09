@@ -53,6 +53,9 @@ func (g *Gateway) Handler() http.Handler {
 
 	route("POST /v1/sandboxes", false, g.createSandbox)
 	route("GET /v1/sandboxes", false, g.listHandler)
+	// Read, not forwarded: labels and names are the gateway's business too
+	// (update.go).
+	route("PATCH /v1/sandboxes/{ref}", false, g.updateHandler)
 	// Every route on one sandbox is forwarded to its node once the router
 	// has said the caller may; each names the scope it needs. Attach and a
 	// tunnel are GETs that write — stdin, signals, bytes to a guest port —
@@ -64,7 +67,6 @@ func (g *Gateway) Handler() http.Handler {
 		after   afterFunc
 	}{
 		{"GET /v1/sandboxes/{ref}", false, ScopeRead, nil},
-		{"PATCH /v1/sandboxes/{ref}", false, ScopeCreate, nil},
 		{"DELETE /v1/sandboxes/{ref}", false, ScopeDelete, g.afterDelete},
 		{"POST /v1/sandboxes/{ref}/run", false, ScopeCreate, nil},
 		{"POST /v1/sandboxes/{ref}/processes", false, ScopeCreate, nil},

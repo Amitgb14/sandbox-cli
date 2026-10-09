@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
@@ -315,5 +317,99 @@ func TestProdTurnsPersistedLoginsOff(t *testing.T) {
 func TestKillNeedsANamedTarget(t *testing.T) {
 	if err := newKillCmd().Args(newKillCmd(), nil); err == nil {
 		t.Error("kill with no sandbox named was accepted")
+	}
+}
+
+// --template sizes a run from a built-in template or one saved in Studio,
+// and a size flag given beside it wins for that one field.
+func TestTemplateFlag(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	if err := os.MkdirAll(filepath.Join(cfg, "sandbox"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	saved := `{"templates":[{"name":"ci-box","cpus":6,"memory_mb":12288,"disk_mb":20480}]}`
+	if err := os.WriteFile(filepath.Join(cfg, "sandbox", "studio.json"), []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parse := func(args ...string) *runFlags {
+		t.Helper()
+		rf := &runFlags{}
+		cmd := &cobra.Command{}
+		rf.register(cmd)
+		if err := cmd.ParseFlags(args); err != nil {
+			t.Fatal(err)
+		}
+		return rf
+	}
+	for name, tc := range map[string]struct {
+		args             []string
+		cpus             float64
+		memory, diskSize int
+	}{
+		"a built-in one":              {[]string{"--template", "large"}, 4, 8192, 0},
+		"one saved in Studio":         {[]string{"--template", "ci-box"}, 6, 12288, 20480},
+		"--memory beside it":          {[]string{"--template", "large", "--memory", "4096"}, 4, 4096, 0},
+		"--cpus and --disk beside it": {[]string{"--cpus", "2", "--template", "ci-box", "--disk", "1024"}, 2, 12288, 1024},
+		"none":                        {[]string{"--cpus", "3"}, 3, 0, 0},
+	} {
+		rf := parse(tc.args...)
+		if err := rf.applyTemplate(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if rf.cpus != tc.cpus || rf.memory != tc.memory || rf.disk != tc.diskSize {
+			t.Errorf("%s: cpus %v memory %d disk %d, want %v %d %d", name, rf.cpus, rf.memory, rf.disk, tc.cpus, tc.memory, tc.diskSize)
+		}
+	}
+	err := parse("--template", "huge").applyTemplate()
+	if err == nil || !strings.Contains(err.Error(), "micro") || !strings.Contains(err.Error(), "ci-box") {
+		t.Errorf("an unknown template: %v; want it refused, naming the ones there are", err)
+	}
+	// A wrapper consumes it as a sandbox flag, with its value, rather than
+	// handing it to the agent.
+	if takesValue, ok := sandboxFlagNames()["template"]; !ok || !takesValue {
+		t.Error("--template is not a sandbox flag that takes a value")
+	}
+}
+
+// template ls lists the built-in templates, then those saved in Studio, and
+// prints a saved description as text: it was typed into a browser.
+func TestTemplateLs(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	if err := os.MkdirAll(filepath.Join(cfg, "sandbox"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	saved := `{"templates":[{"name":"ci-box","description":"CI \u001b[31mred","cpus":6,"memory_mb":1536,"disk_mb":20480}]}`
+	if err := os.WriteFile(filepath.Join(cfg, "sandbox", "studio.json"), []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := NewRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"template", "ls"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 7 || !strings.HasPrefix(lines[0], "NAME") {
+		t.Fatalf("listed:\n%s", out.String())
+	}
+	for i, name := range []string{"micro", "small", "medium", "large", "xlarge", "ci-box"} {
+		if f := strings.Fields(lines[i+1]); f[0] != name {
+			t.Errorf("row %d is %q, want %s", i+1, lines[i+1], name)
+		}
+	}
+	last := lines[6]
+	for _, want := range []string{"1.5 GiB", "20 GiB", "saved"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("ci-box row %q lacks %q", last, want)
+		}
+	}
+	if strings.Contains(out.String(), "\x1b") {
+		t.Error("a saved description's escape reached the terminal")
+	}
+	if !strings.Contains(lines[3], "built in") || !strings.Contains(lines[3], "2 GiB") {
+		t.Errorf("medium row %q", lines[3])
 	}
 }

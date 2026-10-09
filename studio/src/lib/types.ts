@@ -89,6 +89,8 @@ export interface AuditEvent {
   image?: string;
   labels?: Record<string, string>;
   network?: NetworkPolicy;
+  /** After a sandbox.updated that changed it. */
+  idle_timeout_secs?: number;
   env_names?: string[];
   snapshot?: string;
   volumes?: VolumeMount[];
@@ -189,12 +191,26 @@ export interface VmTemplate {
   builtin?: boolean;
 }
 
-/** A host every Studio launch allows or denies (Settings, Egress rules). */
+/** A host every Studio launch is refused (Settings, Deny rules). */
 export interface EgressRule {
   host: string;
-  action: "allow" | "deny";
+  action: "deny";
   enabled: boolean;
   note?: string;
+}
+
+/** A named set of hosts an allowlist launch can include (Settings, Allowlist groups). */
+export interface EgressGroup {
+  name: string;
+  description?: string;
+  hosts: string[];
+  /** Included in an allowlist launch that picks no groups. */
+  default?: boolean;
+}
+
+export interface EgressSettings {
+  rules: EgressRule[];
+  groups: EgressGroup[];
 }
 
 export interface LaunchRequest {
@@ -206,6 +222,10 @@ export interface LaunchRequest {
   network?: "" | NetworkMode;
   allow?: string[];
   deny?: string[];
+  /** Allowlist groups: absent, the default ones; [] none. Naming any asks for an allowlist. */
+  egress_groups?: string[];
+  /** Leave out the built-in hosts: the groups, allow and an agent's API are the whole list. */
+  no_baseline?: boolean;
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
   /** A template's size; absent is the server's default. */

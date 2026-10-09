@@ -50,6 +50,12 @@ type Overrides struct {
 	// flag and not this one would have left the identical unreachable escape
 	// hatch for the sibling flag root.go's own comment names beside it.
 	Allow []string
+
+	// NoBaseline is --no-baseline: the allowlist is the hosts named and the
+	// agent's API, without the built-in set. It can only turn the baseline
+	// off — a run asking for less than its config — never back on, so a
+	// config (or the prod profile) that turned it off stays off.
+	NoBaseline bool
 }
 
 // LoadProfile is Load with an explicit --profile override.
@@ -128,6 +134,10 @@ func LoadProfileWith(startDir, explicitPath, flagProfile string, ov Overrides) (
 	}
 	if ov.NetworkMode != "" {
 		cfg.Network.Mode = ov.NetworkMode
+	}
+	if ov.NoBaseline {
+		off := false
+		cfg.Network.Baseline = &off
 	}
 
 	if err := ValidateProfile(name, cfg); err != nil {

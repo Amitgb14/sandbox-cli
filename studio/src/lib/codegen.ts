@@ -31,6 +31,8 @@ export interface RunConfig {
   allow?: string[];
   /** Hosts refused even where allowed (--deny; network "deny"). */
   deny?: string[];
+  /** An allowlist of the named hosts only, without the built-in ones (--no-baseline). */
+  noBaseline?: boolean;
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
   /**
@@ -68,6 +70,7 @@ function cliFlags(c: Omit<RunConfig, "command" | "defaultAllow">): string[] {
   if (c.network) f.push("--network", c.network);
   for (const a of c.allow ?? []) f.push("--allow", a);
   for (const d of c.deny ?? []) f.push("--deny", d);
+  if (c.noBaseline) f.push("--no-baseline");
   for (const [k, v] of Object.entries(c.labels ?? {})) f.push("--label", `${k}=${v}`);
   for (const v of c.volumes ?? []) f.push("--volume", `${v.name}:${v.path}${v.read_only ? ":ro" : ""}`);
   return f;
@@ -97,7 +100,9 @@ function createBody(c: Omit<RunConfig, "command">): Record<string, unknown> {
   if (c.memoryMb) body.memory_mb = c.memoryMb;
   if (c.diskMb) body.disk_mb = c.diskMb;
   if (c.name) body.name = c.name;
-  const allow = c.allow?.length ? [...new Set([...(c.defaultAllow ?? []), ...c.allow])] : undefined;
+  // The API's allow is the whole list: the baseline is spelled out unless the
+  // run leaves it out.
+  const allow = c.allow?.length ? [...new Set([...(c.noBaseline ? [] : (c.defaultAllow ?? [])), ...c.allow])] : undefined;
   // A deny list means nothing to a run that reaches nothing.
   const deny = c.network !== "none" && c.deny?.length ? { deny: c.deny } : {};
   if (c.network === "allowlist" || (!c.network && allow)) body.network = { mode: "allowlist", ...(allow ? { allow } : {}), ...deny };

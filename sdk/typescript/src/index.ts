@@ -491,6 +491,20 @@ export class Client {
     return this.json("PATCH", this.sbx(ref), { network });
   }
 
+  /**
+   * Changes a live sandbox; only what is given changes. `name: ""` removes
+   * the name; `labels` replaces them whole (`{}` removes them);
+   * `idle_timeout_secs` is within `limits.max_idle_timeout_secs`, 0 (never)
+   * only where that is 0. `network` needs a running sandbox and capability
+   * `network_policy_update`. A request with one bad field changes nothing.
+   */
+  updateSandbox(
+    ref: string,
+    req: { name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; network?: NetworkPolicy },
+  ): Promise<Sandbox> {
+    return this.json("PATCH", this.sbx(ref), req);
+  }
+
   async terminateSandbox(ref: string): Promise<void> {
     await this.json("DELETE", this.sbx(ref));
   }

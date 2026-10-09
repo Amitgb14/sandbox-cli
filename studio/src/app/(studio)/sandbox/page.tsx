@@ -21,7 +21,7 @@ function SandboxDetail() {
         Sandboxes
       </Link>
       <div className="overflow-hidden rounded-xl border bg-card lg:h-[calc(100svh-9rem)]">
-        <SandboxDetails id={id} variant="page" onGone={() => router.push("/sandboxes")} />
+        <SandboxDetails id={id} variant="page" onGone={() => router.push("/sandboxes")} onReplaced={(n) => router.replace(`/sandbox?id=${n}`)} />
       </div>
     </div>
   );

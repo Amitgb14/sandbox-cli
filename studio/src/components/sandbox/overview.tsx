@@ -1,12 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { SquareTerminal } from "lucide-react";
+import { Pencil, Scaling, SquareTerminal } from "lucide-react";
 import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Labels } from "@/components/sandbox/labels";
 import { ResourcesWithMetrics } from "@/components/sandbox/metrics";
 import { SandboxSnapshots } from "@/components/sandbox/snapshots";
+import { EditDetails } from "@/components/sandbox/edit-details";
+import { EditNetwork } from "@/components/sandbox/edit-network";
+import { ResizeDialog, resizeBlocked } from "@/components/sandbox/resize";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useInfo } from "@/lib/api/queries";
+import { useCan } from "@/lib/caller";
+import { cn } from "@/lib/utils";
 import { StateDot } from "@/components/sandbox/state-dot";
 import { formatArgv, formatDateTime, formatRelative } from "@/lib/format";
 import type { Process, Sandbox } from "@/lib/types";
@@ -44,7 +51,33 @@ function Row({ k, copy, children }: { k: string; copy?: string; children: React.
   );
 }
 
-function Network({ sb }: { sb: Sandbox }) {
+/** A small action beside a value: an edit a live sandbox takes, or why it does not. */
+function Action({ label, icon: Icon, onClick, blocked }: { label: string; icon: typeof Pencil; onClick: () => void; blocked?: string }) {
+  const button = (
+    <button
+      type="button"
+      onClick={blocked ? undefined : onClick}
+      aria-disabled={!!blocked}
+      aria-label={label}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground",
+        blocked ? "cursor-not-allowed opacity-50" : "hover:bg-muted hover:text-foreground",
+      )}
+    >
+      <Icon className="size-3" aria-hidden />
+      {label.split(" ")[0]}
+    </button>
+  );
+  if (!blocked) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent className="max-w-72">{blocked}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function Network({ sb, editable, onEdit }: { sb: Sandbox; editable: string | null; onEdit: () => void }) {
   const [open, setOpen] = useState(false);
   const allow = sb.network.allow ?? [];
   return (
@@ -56,6 +89,7 @@ function Network({ sb }: { sb: Sandbox }) {
             {allow.length} {allow.length === 1 ? "name" : "names"}
           </button>
         ) : null}
+        {editable !== null ? <Action label="Change network" icon={Pencil} onClick={onEdit} blocked={editable} /> : null}
       </Row>
       {open && allow.length ? (
         <p className="rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px] leading-relaxed break-all text-muted-foreground">{allow.join(", ")}</p>
@@ -76,17 +110,41 @@ export function SandboxOverview({
   sb,
   processes,
   onOpen,
+  onReplaced,
 }: {
   sb: Sandbox;
   processes: Process[];
   /** A process clicked: its terminal if it has one running, else its logs. */
   onOpen: (pid: number) => void;
+  /** A resize replaced it with a copy at the new size. */
+  onReplaced?: (id: string) => void;
 }) {
   const labels = Object.keys(sb.labels ?? {}).length;
+  const { data: info } = useInfo();
+  const can = useCan();
+  const [editing, setEditing] = useState<"details" | "network" | "resize" | null>(null);
+  // What a live sandbox can have changed, for a key that may change it;
+  // null hides the control, a string disables it and says why.
+  const live = sb.state === "running" || sb.state === "suspended";
+  const mayEdit = can("sandbox:create") && live;
+  const caps = info?.capabilities?.capabilities;
+  const netBlocked = !mayEdit
+    ? null
+    : sb.state !== "running"
+      ? "Only a running sandbox's network changes."
+      : !caps?.network_policy_update
+        ? `${info?.capabilities?.backend ?? "This endpoint"} cannot change a running sandbox's network.`
+        : "";
+  const resize = mayEdit ? resizeBlocked(sb, caps, info?.capabilities?.backend) : null;
+  const edit = mayEdit ? <Action label="Edit name, labels and idle timeout" icon={Pencil} onClick={() => setEditing("details")} /> : null;
   return (
     <div className="flex flex-col">
       <Section>
         <dl className="flex flex-col gap-1.5">
+          <Row k="Name">
+            <span className={cn("font-mono text-[13px]", !sb.name && "text-muted-foreground")}>{sb.name || "—"}</span>
+            {edit}
+          </Row>
           <Row k="ID" copy={sb.id}>
             <span className="font-mono text-[13px]">{sb.id}</span>
           </Row>
@@ -95,18 +153,18 @@ export function SandboxOverview({
               {sb.image}
             </span>
           </Row>
-          <Network sb={sb} />
+          <Network sb={sb} editable={netBlocked} onEdit={() => setEditing("network")} />
           <Row k="Starts in">
             <span className="font-mono text-[13px]">/sandbox/home</span>
           </Row>
         </dl>
       </Section>
 
-      <Section title="Resources">
+      <Section title="Resources" aside={resize !== null ? <Action label="Resize" icon={Scaling} onClick={() => setEditing("resize")} blocked={resize} /> : null}>
         <ResourcesWithMetrics sb={sb} />
       </Section>
 
-      <Section title="Lifecycle">
+      <Section title="Lifecycle" aside={edit}>
         <dl className="flex flex-col gap-1.5">
           <Row k="State">
             <StateDot state={sb.state} />
@@ -122,11 +180,20 @@ export function SandboxOverview({
         <SandboxSnapshots sb={sb} />
       </Section>
 
-      {labels ? (
-        <Section title="Labels">
+      {labels || mayEdit ? (
+        <Section title="Labels" aside={edit}>
           <Labels labels={sb.labels} />
         </Section>
       ) : null}
+
+      <EditDetails sb={sb} open={editing === "details"} onOpenChange={(o) => setEditing(o ? "details" : null)} />
+      <EditNetwork sb={sb} open={editing === "network"} onOpenChange={(o) => setEditing(o ? "network" : null)} />
+      <ResizeDialog
+        sb={sb}
+        open={editing === "resize"}
+        onOpenChange={(o) => setEditing(o ? "resize" : null)}
+        onReplaced={onReplaced}
+      />
 
       {sb.env_names?.length ? (
         <Section title="Environment">

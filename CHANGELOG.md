@@ -198,16 +198,41 @@ in `_old/` as reference, to be ported where this design still wants it.
   a failed run changed nothing took a repository to compare, and a run that may
   have done work must not be done twice. A `--detach` run with `--fallback` is
   refused, because nothing watches a detached run's exit.
-- **Saved agent API keys, VM templates and egress rules, from Studio.**
+- **A live sandbox can be renamed, relabelled and retimed.** `PATCH
+  /v1/sandboxes/{ref}` takes `name`, `labels` (replaced whole) and
+  `idle_timeout_secs` beside `network`, on a running or suspended sandbox,
+  under the rules they have at create; one bad field and nothing changes. A new
+  audit event, `sandbox.updated`, records what changed. Through a gateway a
+  name is unique among the caller's sandboxes on every node, and its own
+  `gateway.*` labels cannot be set, changed or removed. `sandbox-cli update
+  SANDBOX` does it from the CLI (`--name`, `--label k=v` / `k-`, `--unlabel`,
+  `--idle`, and `--network` with `--allow`, `--deny`, `--no-baseline` for a
+  running one); the SDKs gain `update_sandbox` / `updateSandbox`. In Studio, a
+  sandbox's Overview edits its name, labels and idle timeout, changes its
+  network (with the allowlist groups), and, where the backend takes disk
+  snapshots (macOS), resizes it: a copy at the new size in its place, with its
+  files, name, labels and network. A VM's vCPUs and memory are fixed while it
+  runs, so a Firecracker sandbox, whose snapshots are memory ones, is not
+  resized; its environment would not carry over either, and a resize says so.
+- **Saved agent API keys, VM templates and allowlist groups, from Studio.**
   Studio's Agents screen saves an API key for any variable an agent reads, in
   `~/.config/sandbox/agent-keys.json` (0600, write-only: no call returns it);
   every agent run, `sandbox-cli agent` included, forwards it when the
   environment does not set that variable, and the environment wins. Studio's
-  launches take a size (`cpus`, `memory_mb`, `disk_mb`) and a `deny` list; a
-  new Templates screen keeps sizes by name, micro to xlarge built in, and
-  Settings keeps egress rules every Studio launch carries: a deny always, an
-  allow only into a run that is an allowlist. Both are kept in
+  launches take a size (`cpus`, `memory_mb`, `disk_mb`), a `deny` list,
+  `egress_groups` and `no_baseline`; a new Templates screen keeps sizes by
+  name, micro to xlarge built in. Settings keeps allowlist groups — named sets
+  of hosts, picked per launch in the Playground's new Network step (none, an
+  allowlist of the groups chosen, or open), the default ones picked when none
+  are — and deny rules every Studio launch carries. Both are kept in
   `~/.config/sandbox/studio.json`. See [docs/studio.md](docs/studio.md).
+  `run` and the agent commands take `--no-baseline`: an allowlist of only the
+  hosts named with `--allow` (and an agent's API), without the built-in
+  agents' APIs and registries. It only turns the baseline off; a config that
+  turned it off keeps it off.
+  `run` and the agent commands take `--template NAME` for the same sizes,
+  built in or saved in Studio; `--cpus`, `--memory` and `--disk` given beside
+  it win for their own field. `sandbox-cli template ls` lists them.
 - **A desktop image, used from Studio** ([docs/desktop.md](docs/desktop.md)).
   `ghcr.io/<owner>/sandbox-desktop` is the base image plus a screen: a window
   manager, a terminal and Chromium, started by `sandbox-desktop` and served

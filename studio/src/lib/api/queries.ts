@@ -13,7 +13,9 @@ import type {
   AgentState,
   AuditEvent,
   DirEntry,
+  EgressGroup,
   EgressRule,
+  EgressSettings,
   Info,
   LaunchRequest,
   LaunchResult,
@@ -184,9 +186,9 @@ export function useTemplates() {
   return useQuery({ queryKey: keys.templates, queryFn: async () => (await apiFetch<{ templates: VmTemplate[] }>("/templates")).templates });
 }
 
-/** The egress rules every Studio launch carries. */
-export function useEgressRules() {
-  return useQuery({ queryKey: keys.egress, queryFn: async () => (await apiFetch<{ rules: EgressRule[] }>("/egress")).rules });
+/** Allowlist groups and the deny rules every Studio launch carries. */
+export function useEgress() {
+  return useQuery({ queryKey: keys.egress, queryFn: () => apiFetch<EgressSettings>("/egress") });
 }
 
 // --- writes ------------------------------------------------------------------------
@@ -234,6 +236,24 @@ export function useDeleteSnapshot() {
   return useInvalidating(
     (id: string) => apiFetch<void>(`/v1/snapshots/${encodeURIComponent(id)}`, { method: "DELETE" }),
     () => [[...keys.snapshots]],
+  );
+}
+
+/** Renames, relabels or retimes a live sandbox; only what is given changes. */
+export function useUpdateSandbox() {
+  return useInvalidating(
+    ({ id, ...req }: { id: string; name?: string; labels?: Record<string, string>; idle_timeout_secs?: number }) =>
+      apiFetch<Sandbox>(sbx(id), { method: "PATCH", json: req }),
+    ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes]],
+  );
+}
+
+/** A copy at a new size in the sandbox's place (Studio's server: internal/studio/resize.go). */
+export function useResize() {
+  return useInvalidating(
+    ({ id, ...req }: { id: string; cpus: number; memory_mb: number; disk_mb?: number; drop_env?: boolean; keep_snapshot?: boolean }) =>
+      apiFetch<{ sandbox: Sandbox; replaced: string; snapshot?: string }>(`/sandboxes/${encodeURIComponent(id)}/resize`, { method: "POST", json: req }),
+    ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes], [...keys.snapshots]],
   );
 }
 
@@ -331,7 +351,25 @@ export function useDeleteTemplate() {
   );
 }
 
-/** Replaces the rules whole, as the server stores them. */
+export function useSaveEgressGroup() {
+  return useInvalidating(
+    (g: EgressGroup) =>
+      apiFetch<EgressGroup>(`/egress/groups/${encodeURIComponent(g.name)}`, {
+        method: "PUT",
+        json: { description: g.description ?? "", hosts: g.hosts, default: !!g.default },
+      }),
+    () => [[...keys.egress]],
+  );
+}
+
+export function useDeleteEgressGroup() {
+  return useInvalidating(
+    (name: string) => apiFetch<void>(`/egress/groups/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    () => [[...keys.egress]],
+  );
+}
+
+/** Replaces the deny rules whole, as the server stores them. */
 export function useSaveEgressRules() {
   return useInvalidating(
     (rules: EgressRule[]) => apiFetch<{ rules: EgressRule[] }>("/egress", { method: "PUT", json: { rules } }),
