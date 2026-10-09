@@ -51,6 +51,16 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/orgs/{name}/members", false, g.setOrgMember)
 	route("DELETE /v1/orgs/{name}/members/{user}", false, g.removeOrgMember)
 
+	// A node's images are its operator's: an install fills that node's disk
+	// for every tenant on it. The gateway's own catalog, run by admin keys,
+	// is not done yet, so the fleet has no images capability and these are
+	// refused as on any endpoint without it, rather than forwarded.
+	for _, p := range []string{"GET /v1/images", "POST /v1/images", "DELETE /v1/images"} {
+		route(p, false, func(w http.ResponseWriter, _ *http.Request, _ Principal) {
+			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "images are managed on each node by its operator; this gateway does not manage them")
+		})
+	}
+
 	route("POST /v1/sandboxes", false, g.createSandbox)
 	route("GET /v1/sandboxes", false, g.listHandler)
 	// Read, not forwarded: labels and names are the gateway's business too

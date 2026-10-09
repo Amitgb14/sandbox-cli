@@ -75,6 +75,11 @@ test("a tenant key sees the tenant screens and not the admin ones, by sidebar or
     await expect(page.getByRole("heading", { name: "Not available" })).toBeVisible();
   }
   expect(seen.filter((p) => p.startsWith("/api/v1/admin"))).toEqual([]);
+  // A node's images are its operator's: no gateway key is offered them yet.
+  await expect(nav(page).getByRole("link", { name: "Images", exact: true })).toHaveCount(0);
+  await page.goto(`${base}/images/`);
+  await expect(page.getByText("a gateway does not offer it")).toBeVisible();
+  expect(seen.filter((p) => p.startsWith("/api/v1/images"))).toEqual([]);
 
   await page.goto(`${base}/account/`);
   await expect(page.locator("main").getByText("alice", { exact: true })).toBeVisible();

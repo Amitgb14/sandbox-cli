@@ -53,6 +53,10 @@ Global flags:
 | [`sandbox-cli gateway lost`](#sandbox-cli-gateway-lost) | List sandboxes on nodes that have not answered for longer than the gateway's grace period |
 | [`sandbox-cli gateway nodes`](#sandbox-cli-gateway-nodes) | List the gateway's nodes: health, cordon, sandboxes running, sandboxd version |
 | [`sandbox-cli gateway uncordon`](#sandbox-cli-gateway-uncordon) | Place new sandboxes on a node again |
+| [`sandbox-cli image`](#sandbox-cli-image) | Images a sandboxd starts sandboxes from: list, download ahead of use, remove |
+| [`sandbox-cli image ls`](#sandbox-cli-image-ls) | List installed images, those installing, and those that failed |
+| [`sandbox-cli image pull`](#sandbox-cli-image-pull) | Download and install an image ahead of the first sandbox that wants it |
+| [`sandbox-cli image rm`](#sandbox-cli-image-rm) | Remove installed images nothing uses, and the layers no other image needs |
 | [`sandbox-cli job`](#sandbox-cli-job) | Run commands and agents on a gateway's fleet, after you have gone: one run or a batch |
 | [`sandbox-cli job cancel`](#sandbox-cli-job-cancel) | Cancel a job: runs not started never are, and running ones' sandboxes are terminated |
 | [`sandbox-cli job get`](#sandbox-cli-job-get) | Show a job and each of its runs |
@@ -547,6 +551,68 @@ Place new sandboxes on a node again.
 
 ```text
 sandbox-cli gateway uncordon NODE
+```
+
+## sandbox-cli image
+
+Images a sandboxd starts sandboxes from: list, download ahead of use, remove.
+
+```text
+sandbox-cli image [command]
+```
+
+```text
+A sandboxd pulls an image the first time a sandbox asks for it. These let its
+operator do that ahead of time, see what is installed and what uses it, and
+remove what nothing does. On Linux an install also builds the image's root
+disk, which is most of the first sandbox's wait. The policy's images list, where
+there is one, limits what may be installed. Through a gateway they are not
+offered: a node's images are its operator's.
+```
+
+Subcommands: [`ls`](#sandbox-cli-image-ls), [`pull`](#sandbox-cli-image-pull), [`rm`](#sandbox-cli-image-rm).
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which sandboxd to use |
+
+### sandbox-cli image ls
+
+List installed images, those installing, and those that failed.
+
+```text
+sandbox-cli image ls
+```
+
+### sandbox-cli image pull
+
+Download and install an image ahead of the first sandbox that wants it.
+
+```text
+sandbox-cli image pull IMAGE [flags]
+```
+
+Examples:
+
+```sh
+sandbox-cli image pull ghcr.io/amitgb14/sandbox-desktop:edge
+sandbox-cli image pull --no-wait python:3.13-slim
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--no-wait` |  | start the install and return; image ls follows it |
+
+### sandbox-cli image rm
+
+Remove installed images nothing uses, and the layers no other image needs.
+
+```text
+sandbox-cli image rm IMAGE...
 ```
 
 ## sandbox-cli job

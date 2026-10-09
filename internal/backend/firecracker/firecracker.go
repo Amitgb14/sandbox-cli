@@ -84,12 +84,25 @@ type Backend struct {
 	built map[string]bool
 }
 
-// CachedImages is backend.ImageLister.
+// CachedImages is backend.ImageLister: those built since this process
+// started and those installed before it, from the disks' own records, so a
+// restart no longer costs a gateway its hint.
 func (b *Backend) CachedImages() []string {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]string, 0, len(b.built))
+	seen := make(map[string]bool, len(b.built))
 	for ref := range b.built {
+		seen[ref] = true
+	}
+	b.mu.Unlock()
+	if list, err := image.ListInstalled(b.cfg.ImageDir, b.cfg.Agent); err == nil {
+		for _, in := range list {
+			for _, ref := range in.Refs {
+				seen[ref] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for ref := range seen {
 		out = append(out, ref)
 	}
 	return out

@@ -98,6 +98,21 @@ exec)
 rm)
   shift # --force
   rm -rf "$FAKE_ROOT/$1" ;;
+image)
+  # The runtime's image store, one name a line: run adds what it runs, pull
+  # adds, delete removes and fails on a name it does not have.
+  sub=$1; shift; db="$FAKE_ROOT/.images"; touch "$db"
+  case "$sub" in
+  ls)
+    printf '['; sep=''
+    while read -r n; do printf '%s{"configuration":{"name":"%s"}}' "$sep" "$n"; sep=','; done < "$db"
+    printf ']\n' ;;
+  pull) grep -qxF "$1" "$db" || echo "$1" >> "$db" ;;
+  delete)
+    [ "$1" = --force ] && shift
+    grep -qxF "$1" "$db" || { echo "image $1 not found" >&2; exit 1; }
+    grep -vxF "$1" "$db" > "$db.new" || true; mv "$db.new" "$db" ;;
+  esac ;;
 esac
 `
 

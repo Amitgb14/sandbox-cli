@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Images.** A new screen under Sandboxes, on a plain sandboxd: the images
+  sandboxes start from, with state, size, use and when installed; Download
+  image installs one with its progress; Start opens the Playground with it;
+  Remove frees one nothing uses; a failed download says why, with Retry and
+  Clear (see [CHANGELOG.md](../CHANGELOG.md), "Images, managed ahead of use").
 - **Memory reads as a size in the metrics charts.** The memory chart's axis
   is marked in quarters of the limit (512 MiB, 1 GiB, 1.5 GiB, 2 GiB) and its
   tooltip says "1.1 GiB", where both showed raw MiB (2048, 1100, "1,109.8")
