@@ -23,18 +23,13 @@ hosted cloud; clients cannot tell which they are talking to beyond
 
 ## Install
 
-To keep sandboxes off the root filesystem, first mount a disk of their own
-at `/var/lib/sandboxd` (or at another path, given to sandboxd as
-`--state-dir`). Mount it before the steps below, which put the guest kernel
-there; a disk mounted over the directory afterwards hides it.
+On a server, give sandboxes a disk of their own first ([An extra disk for
+sandboxes](#an-extra-disk-for-sandboxes), below): images, sandboxes' disks,
+snapshots and volumes then never fill the root filesystem. Mount it before
+these steps, which put the guest kernel in that directory; a disk mounted
+over it afterwards hides it.
 
 ```sh
-# optional: a dedicated disk for images, sandboxes, snapshots and volumes
-mkfs.xfs /dev/nvme1n1                       # an empty disk: this erases it. xfs or btrfs: copies become reflinks
-mkdir -p /var/lib/sandboxd
-echo '/dev/nvme1n1 /var/lib/sandboxd xfs defaults,noatime 0 2' >> /etc/fstab
-mount /var/lib/sandboxd
-
 install -m 0755 sandboxd sandbox-guestd /usr/local/bin/
 install -m 0755 firecracker jailer /usr/local/bin/
 install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd
@@ -78,6 +73,36 @@ What it takes to plan a disk: a few GiB per image you run, plus each running
 sandbox's written disk, plus each snapshot's memory and disk, plus volumes.
 The fleet's `Disk given` in Studio, and `sandbox-cli list`, show what
 sandboxes were given; `du -sh /var/lib/sandboxd/*` shows what is used.
+
+### An extra disk for sandboxes
+
+What a Linux server running sandboxes for others should have: a disk, or a
+logical volume, mounted at the state directory, so a sandbox that fills its
+disk, a pile of snapshots or a large volume fills that and not `/`. Before
+Install, as root:
+
+```sh
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS       # find the new disk: no FSTYPE, no mount point (say nvme1n1)
+mkfs.xfs /dev/nvme1n1                            # erases it; xfs or btrfs, so snapshot and fork copies are reflinks
+mkdir -p /var/lib/sandboxd
+echo "UUID=$(blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2" >> /etc/fstab
+systemctl daemon-reload && mount /var/lib/sandboxd
+chmod 0700 /var/lib/sandboxd
+restorecon -R /var/lib/sandboxd                  # SELinux hosts (RHEL, Fedora, their rebuilds): /var/lib's label
+findmnt /var/lib/sandboxd && df -h /var/lib/sandboxd
+```
+
+- **By UUID, not by name.** `nvme1n1` and `sdb` can swap between boots; a
+  UUID names the filesystem.
+- **Not `nofail`.** The unit (`packaging/systemd/sandboxd.service`) has
+  `RequiresMountsFor=/var/lib/sandboxd`, so if the disk does not mount,
+  sandboxd does not start. With `nofail` and without that line, it would start
+  on the empty directory underneath and fill `/` instead, and the sandboxes it
+  kept across a restart would be missing. A state directory elsewhere
+  (`--state-dir`) needs the same line naming it.
+- **The whole directory**, never one of its subdirectories (below).
+- **Nodes behind a gateway** each get their own, the same way: a node's state
+  is its own and is never shared ([fleet.md](fleet.md#nodes)).
 
 **Keep it one filesystem.** Root disks, the kernel and volumes are hard-linked
 into each jail, so mounting `jail/`, `rootfs/` or `volumes/` separately breaks

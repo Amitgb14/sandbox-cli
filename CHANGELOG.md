@@ -409,6 +409,13 @@ that fails on the code before the fix:
 
 ### Changed
 
+- **sandboxd's systemd unit waits for its state directory's disk.**
+  `packaging/systemd/sandboxd.service` has
+  `RequiresMountsFor=/var/lib/sandboxd`: where that is a disk of its own and
+  it does not mount, sandboxd does not start, rather than starting on the empty
+  directory underneath and filling the root filesystem. Harmless where it is a
+  plain directory. docs/self-hosting.md says what is kept there and how to give
+  it an extra disk ("Where it keeps things").
 - **Processes keep running through a sandboxd upgrade too**
   (`--keep-sandboxes`). Commands, terminals and agent sessions in a kept
   sandbox carry on while sandboxd restarts. The new sandboxd re-attaches them
