@@ -13,6 +13,9 @@ type Status = { label: string; tone: "good" | "warn" | "muted"; hint: string };
  * a saved login file may still have expired, which only the agent can tell.
  */
 export function agentStatus(a: Agent): Status {
+  // Hosted: nothing is copied in or forwarded from where Studio runs.
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" || a.login === "in sandbox")
+    return { label: "Log in inside", tone: "muted", hint: "Start it interactive and log in in its terminal. For jobs, store its API key under Secrets." };
   const keys = (a.env ?? []).filter((e) => e.set).map((e) => e.name);
   if (a.login === "saved") return { label: "Logged in", tone: "good", hint: "Its saved login is copied in when a run starts." };
   if (keys.length) return { label: "API key set", tone: "good", hint: `${keys.join(", ")} is set where Studio runs, and is forwarded to the run.` };
@@ -61,7 +64,11 @@ export function AgentList({ agents, value, onChange }: { agents: Agent[]; value:
         <span>Reaches</span>
         <span />
       </div>
-      <p className="border-b px-3.5 py-1.5 text-[11px] text-muted-foreground">Handed to the sandbox at launch: the login is copied in, set keys are forwarded, the API is let through.</p>
+      <p className="border-b px-3.5 py-1.5 text-[11px] text-muted-foreground">
+        {process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on"
+          ? "Handed to the sandbox at launch: the API is let through. You log in inside the sandbox."
+          : "Handed to the sandbox at launch: the login is copied in, set keys are forwarded, the API is let through."}
+      </p>
       <div role="radiogroup" aria-label="Agent" className="divide-y">
         {agents.map((a) => {
           const on = a.name === value;

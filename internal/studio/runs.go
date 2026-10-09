@@ -49,14 +49,23 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Hosted, an unattended agent is a job: the gateway runs it with the
+	// tenant's own secrets, where its API key belongs. Studio has no key of
+	// the user's to give it, and must not give it the host's.
+	if s.hosted != nil && req.Agent != "" && !req.Console {
+		writeErr(w, http.StatusBadRequest, "run an agent unattended as a job (Jobs), with its API key stored as a secret")
+		return
+	}
 	if s.Launch == nil {
 		writeErr(w, http.StatusNotImplemented, "this Studio cannot launch runs")
 		return
 	}
-	// Not the request's context: a run outlives the request that started it.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// Not the request's cancellation: a run outlives the request that started
+	// it. Its values stay, so a hosted session the gateway stops accepting
+	// mid-launch is still ended.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
 	defer cancel()
-	res, err := s.Launch(ctx, req)
+	res, err := s.Launch(ctx, s.clientFor(r), req)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -90,6 +99,13 @@ func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
 	out := []Agent{}
 	for _, name := range agents.Names() {
 		d, _ := agents.Lookup(name)
+		if s.hosted != nil {
+			// Hosted: the machine Studio runs on is nobody's here. Whether it
+			// holds a login or an API key in its environment is not the
+			// user's business, and neither would be used for them.
+			out = append(out, Agent{Name: name, Login: "in sandbox", ProviderHost: d.ProviderHost, LoginFiles: d.AuthPaths})
+			continue
+		}
 		login := "-"
 		if len(d.AuthPaths) == 0 {
 			login = "not kept"

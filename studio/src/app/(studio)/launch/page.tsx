@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Bot, ChevronRight, SquareTerminal, TerminalSquare, type LucideIcon } from "lucide-react";
@@ -40,7 +41,11 @@ const KINDS: [Kind, string, string, LucideIcon][] = [
   ["headless", "Agent, unattended", "Runs the prompt to completion and exits", Bot],
   ["console", "Agent, interactive", "A terminal you attach to here", TerminalSquare],
   ["command", "Command", "Anything the image can run", SquareTerminal],
-];
+].filter(
+  // Hosted, an unattended agent is a job: the gateway runs it with the API
+  // key the user stored as a secret, which a Playground run has no way to use.
+  ([k]) => k !== "headless" || process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on",
+) as [Kind, string, string, LucideIcon][];
 
 function Section({ step, title, children }: { step: number; title: string; children: React.ReactNode }) {
   return (
@@ -61,7 +66,7 @@ function LaunchForm() {
   const { data: agents } = useAgents();
   const { data: info } = useInfo();
   const launch = useLaunch();
-  const [kind, setKind] = useState<Kind>("headless");
+  const [kind, setKind] = useState<Kind>(process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" ? "console" : "headless");
   const [agent, setAgent] = useState("claude");
   const [prompt, setPrompt] = useState("");
   const [command, setCommand] = useState("");
@@ -169,6 +174,15 @@ function LaunchForm() {
               </Label>
             ))}
           </RadioGroup>
+          {process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" && (
+            <p className="text-xs text-muted-foreground">
+              To run an agent unattended, submit it as a job on{" "}
+              <Link href="/jobs" className="underline underline-offset-2 hover:text-foreground">
+                Jobs
+              </Link>
+              , with its API key stored under Secrets. An interactive agent asks you to log in inside its sandbox.
+            </p>
+          )}
         </Section>
 
         {kind === "command" ? (

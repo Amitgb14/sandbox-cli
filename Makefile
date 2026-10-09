@@ -3,7 +3,7 @@ PKG := github.com/Amitgb14/sandbox-cli
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build studio install test docs-cli test-sdk test-integration e2e lint fmt clean snapshot release docker-build image
+.PHONY: build studio studio-hosted install test docs-cli test-sdk test-integration e2e lint fmt clean snapshot release docker-build image
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
@@ -19,6 +19,11 @@ studio:
 	cd studio && npm ci --no-audit --no-fund && npm run build
 	find internal/studio/ui -mindepth 1 ! -name .keep -delete
 	cp -R studio/out/. internal/studio/ui/
+
+# The UI `sandbox-cli studio host --ui-dir studio/out-hosted` serves to a
+# gateway's users: invite-link sign-in, no Studio token, no admin screens.
+studio-hosted:
+	cd studio && npm ci --no-audit --no-fund && npm run build:hosted
 
 # --- release engineering (GoReleaser) ----------------------------------------
 # Install once: go install github.com/goreleaser/goreleaser/v2@latest

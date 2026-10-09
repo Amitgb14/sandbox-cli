@@ -2,6 +2,7 @@
 /.next/
 /.next-admin-off/
 /out/
+/out-hosted/
 /build
 *.tsbuildinfo
 next-env.d.ts

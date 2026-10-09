@@ -91,6 +91,7 @@ Global flags:
 | [`sandbox-cli ssh-key list`](#sandbox-cli-ssh-key-list) | List your registered keys |
 | [`sandbox-cli ssh-key rm`](#sandbox-cli-ssh-key-rm) | Remove a registered key |
 | [`sandbox-cli studio`](#sandbox-cli-studio) | Open Studio: the browser view of your sandboxes |
+| [`sandbox-cli studio host`](#sandbox-cli-studio-host) | Serve Studio to many users, each signed in with their own gateway key |
 | [`sandbox-cli suspend`](#sandbox-cli-suspend) | Stop a sandbox, keeping its memory, processes and disk |
 | [`sandbox-cli tunnel`](#sandbox-cli-tunnel) | Forward a local port to a port inside a sandbox |
 | [`sandbox-cli version`](#sandbox-cli-version) | Print the sandbox-cli version |
@@ -1245,6 +1246,8 @@ context (or --context) and holds its token itself; the browser never sees it.
 Ctrl-C stops Studio; sandboxes it started keep running.
 ```
 
+Subcommands: [`host`](#sandbox-cli-studio-host).
+
 Flags:
 
 | Flag | Default | |
@@ -1252,6 +1255,45 @@ Flags:
 | `--context string` |  | which sandboxd Studio talks to |
 | `--port int` | `7080` | loopback port to serve on (0: any free one) |
 | `--ui-dir string` |  | serve the UI from this directory instead of the one built in (studio/out, when working on it) |
+
+### sandbox-cli studio host
+
+Serve Studio to many users, each signed in with their own gateway key.
+
+```text
+sandbox-cli studio host [flags]
+```
+
+```text
+Serves Studio on a public address for the users of a gateway. Each user signs in
+once with their own API key, usually by opening an invite link
+(https://studio.example.com/#key=sgk_…, printed by sandbox-gateway keys create
+--invite-url), and from then on acts as themselves: the gateway decides what
+they see, exactly as for their own CLI.
+
+It holds no credential of its own and reads nothing from this machine: no
+context, no agent logins, no environment, no config. Unattended agent runs go
+through jobs, with the user's API key stored as a secret. Admin keys are refused;
+use sandbox-cli studio on your own machine for those.
+
+Sessions are kept in memory: a restart signs everyone out, and they open their
+invite link again.
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--allowed-host stringArray` |  | a further Host header to answer, for a proxy that rewrites it (repeatable) |
+| `--ca string` |  | CA (PEM) the gateway's certificate is signed by, for a private CA |
+| `--gateway string` |  | the gateway's URL (http:// on loopback only) |
+| `--listen string` | `127.0.0.1:7080` | host:port to serve on; a non-loopback address needs --tls-cert and --tls-key |
+| `--public-url string` |  | the address users open, https://host[:port] (http:// on loopback only) |
+| `--session-idle duration` | `12h0m0s` | end a session not used for this long |
+| `--session-max-age duration` | `168h0m0s` | end a session this long after sign-in |
+| `--tls-cert string` |  | TLS certificate (PEM) |
+| `--tls-key string` |  | TLS private key (PEM) |
+| `--ui-dir string` |  | serve the UI from this directory (studio/out-hosted, from make studio-hosted) |
 
 ## sandbox-cli suspend
 

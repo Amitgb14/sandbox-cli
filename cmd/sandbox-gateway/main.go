@@ -25,9 +25,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -465,15 +467,35 @@ func loadNodeConfig(path string) ([]gateway.NodeConfig, error) {
 
 // --- keys -----------------------------------------------------------------------
 
+// inviteBase is a hosted Studio's address as an invite link's base: an
+// origin, nothing after it, for a key hosted Studio will take.
+func inviteBase(raw string, scopes []string) (string, error) {
+	u, err := url.Parse(strings.TrimSuffix(raw, "/"))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("--invite-url %q: want Studio's address, https://host[:port]", raw)
+	}
+	if slices.Contains(scopes, "admin") {
+		return "", errors.New("--invite-url: hosted Studio refuses admin keys; an admin uses sandbox-cli studio on their own machine")
+	}
+	return u.Scheme + "://" + u.Host, nil
+}
+
 func newKeys(state *string) *cobra.Command {
 	cmd := &cobra.Command{Use: "keys", Short: "Issue, list and revoke API keys in the state file"}
-	var user, tenant string
+	var user, tenant, invite string
 	var scopes []string
 	create := &cobra.Command{
 		Use:   "create",
 		Short: "Issue an API key; its secret is printed once",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Checked before the key exists, so a mistake here mints nothing.
+			if invite != "" {
+				var err error
+				if invite, err = inviteBase(invite, scopes); err != nil {
+					return err
+				}
+			}
 			st, err := openState(*state)
 			if err != nil {
 				return err
@@ -485,10 +507,20 @@ func newKeys(state *string) *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "id:     %s\nuser:   %s\ntenant: %s\nscopes: %s\nsecret: %s\n", k.ID, k.User, k.Tenant, strings.Join(k.Scopes, ","), secret)
+			if invite != "" {
+				// The key rides in the fragment, which a browser never sends
+				// to a server: hosted Studio's page reads it and exchanges it
+				// for a session (docs/studio.md#hosted-studio).
+				fmt.Fprintf(out, "invite: %s/#key=%s\n", invite, secret)
+			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "The secret is shown once and stored only as a hash; keep it now.")
+			if invite != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), "The invite link is the key: send it as you would a password.")
+			}
 			return nil
 		},
 	}
+	create.Flags().StringVar(&invite, "invite-url", "", "a hosted Studio's address (https://studio.example.com): also print the invite link that signs the user in")
 	create.Flags().StringVar(&user, "user", "", "the user the key acts as; required")
 	create.Flags().StringVar(&tenant, "tenant", "", "the user's tenant (quotas are per tenant)")
 	create.Flags().StringArrayVar(&scopes, "scope", nil, "a scope: "+strings.Join(gateway.AllScopes, ", ")+" (repeatable)")

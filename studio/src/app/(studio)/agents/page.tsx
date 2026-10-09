@@ -22,7 +22,11 @@ export default function AgentsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Agents"
-        description="The agents with a verified headless mode. A login is copied into each sandbox an agent runs in, and back out when it ends: log in once with sandbox-cli agent <name>, or start a console here."
+        description={
+          process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on"
+            ? "The agents with a verified headless mode. Start one interactive from the Playground and log in inside its sandbox; to run one unattended as a job, store its API key under Secrets."
+            : "The agents with a verified headless mode. A login is copied into each sandbox an agent runs in, and back out when it ends: log in once with sandbox-cli agent <name>, or start a console here."
+        }
       />
       {isLoading ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -64,7 +68,7 @@ function AgentCard({ agent: a }: { agent: Agent }) {
         <div className="flex items-center justify-between">
           <span className={cn("flex items-center gap-1.5 text-xs", saved ? "text-contained" : "text-muted-foreground")}>
             <KeyRound className="size-3.5" aria-hidden />
-            {saved ? "login saved" : a.login === "not kept" ? "not kept between runs" : "not logged in yet"}
+            {a.login === "in sandbox" ? "log in inside its sandbox" : saved ? "login saved" : a.login === "not kept" ? "not kept between runs" : "not logged in yet"}
           </span>
           {can("sandbox:create") && (
             <Link href="/launch" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">

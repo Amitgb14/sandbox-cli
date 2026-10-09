@@ -1,9 +1,9 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { GATEWAY_STUDIOS, type E2EState } from "./state";
+import { GATEWAY_STUDIOS, HOSTED_PORT, HOSTED_USERS, type E2EState } from "./state";
 
 const bin = (name: string) => resolve(__dirname, "../../bin", name);
 
@@ -68,6 +68,18 @@ export default async function globalSetup() {
   const secretsKey = join(dir, "secrets.key");
   writeFileSync(secretsKey, randomBytes(32), { mode: 0o600 });
 
+  // The hosted Studio's users, with invite links, before the gateway serves.
+  const hostedUI = resolve(__dirname, "../out-hosted");
+  const hostedBase = `http://127.0.0.1:${HOSTED_PORT}`;
+  let hosted: E2EState["hosted"];
+  if (existsSync(join(hostedUI, "index.html"))) {
+    hosted = {} as NonNullable<E2EState["hosted"]>;
+    for (const user of HOSTED_USERS) {
+      const out = gw("keys", "create", "--user", user, "--tenant", user, "--scope", "sandbox:read", "--scope", "sandbox:create", "--scope", "sandbox:delete", "--invite-url", hostedBase);
+      hosted[user] = { invite: out.match(/^invite: (\S+)$/m)![1], key: out.match(/^secret: (\S+)$/m)![1], id: out.match(/^id: +(\S+)$/m)![1] };
+    }
+  }
+
   const keys: Record<string, string> = {};
   for (const s of GATEWAY_STUDIOS) {
     const out = gw("keys", "create", "--user", s.user, ...(s.tenant ? ["--tenant", s.tenant] : []), ...s.scopes.flatMap((x) => ["--scope", x]));
@@ -85,7 +97,14 @@ export default async function globalSetup() {
     gateway[s.name] = await startStudio({ ...env, SANDBOX_CONTEXT: s.name }, dir, s.port, pids);
   }
 
-  const st: E2EState = { token, gateway, pids, dir };
+  if (hosted) {
+    const h = spawn(bin("sandbox-cli"), ["studio", "host", "--gateway", `http://${api}`, "--public-url", hostedBase, "--listen", `127.0.0.1:${HOSTED_PORT}`, "--ui-dir", hostedUI], { env, stdio: "ignore" });
+    pids.push(h.pid!);
+    await waitFor(async () => (await fetch(`${hostedBase}/`)).ok, "the hosted Studio");
+  }
+
+  const adminKey = readFileSync(keys["gw-admin"], "utf8").trim();
+  const st: E2EState = { token, gateway, pids, dir, hosted, gatewayURL: `http://${api}`, adminKey };
   writeFileSync(join(__dirname, ".state.json"), JSON.stringify(st));
   process.env.STUDIO_TOKEN = token;
 }

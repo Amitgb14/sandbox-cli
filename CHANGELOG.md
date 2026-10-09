@@ -251,6 +251,20 @@ in `_old/` as reference, to be ported where this design still wants it.
   before, closing the browser tab threw a minute of work away. Deleting the
   sandbox part way does not stop it either: the sandbox goes at once, and the
   snapshot is listed when it finishes, or is not there at all if it cannot.
+- **Hosted Studio: `sandbox-cli studio host`.** One Studio on a public
+  address for a gateway's users ([docs/studio.md](docs/studio.md#hosted-studio)).
+  Each user opens an invite link, `https://studio.example.com/#key=sgk_…`,
+  printed by `sandbox-gateway keys create … --invite-url URL`. The page trades
+  the key for an HttpOnly session cookie, and from then on every call is made
+  with that user's key, so the gateway's ownership, tenants and quotas decide
+  what each person sees. It holds no credential of its own and reads nothing
+  from the machine it runs on: no context, no agent logins, no environment,
+  no config. Interactive agents log in inside their sandbox; unattended ones
+  run as jobs, with the API key stored as a secret. Admin keys are refused.
+  Sessions are in memory, so a restart signs everyone out; a revoked key ends
+  its sessions at their next call. `npm run build:hosted` (`make
+  studio-hosted`) builds its UI, and `npm run check:hosted` fails if that
+  build carries the admin screens or local Studio's token handling.
 
 ### Security
 

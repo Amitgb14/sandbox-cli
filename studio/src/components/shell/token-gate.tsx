@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ApiError, setToken } from "@/lib/api/client";
+import { ApiError, SESSION_ENDED, setToken } from "@/lib/api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useInfo } from "@/lib/api/queries";
+import { SessionEnded } from "@/components/shell/hosted-session";
 
 /**
  * Shown when Studio refuses this page's token — usually because the page was
@@ -16,9 +17,29 @@ import { useInfo } from "@/lib/api/queries";
  */
 export function TokenGate() {
   const { error } = useInfo();
+  const ended = useSessionEnded();
+  // Hosted, there is no token to paste: the session is the invite link's.
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" && ended) return <SessionEnded />;
+  if (!(error instanceof ApiError) || error.status !== 401) return null;
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on") return <SessionEnded />;
+  return <PasteToken />;
+}
+
+/** Whether any request has been told this hosted session is over. */
+function useSessionEnded(): boolean {
+  const [ended, setEnded] = useState(false);
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on") return;
+    const on = () => setEnded(true);
+    window.addEventListener(SESSION_ENDED, on);
+    return () => window.removeEventListener(SESSION_ENDED, on);
+  }, []);
+  return ended;
+}
+
+function PasteToken() {
   const qc = useQueryClient();
   const [value, setValue] = useState("");
-  if (!(error instanceof ApiError) || error.status !== 401) return null;
   return (
     <div className="mx-4 mt-4 flex flex-col gap-3 rounded-lg border border-caution/40 bg-caution/10 p-4 md:mx-8">
       <div className="flex items-center gap-2 text-sm font-medium">

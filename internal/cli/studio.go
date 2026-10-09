@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
+	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/studio"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
 )
@@ -81,6 +82,7 @@ func newStudioCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd Studio talks to")
 	cmd.Flags().IntVar(&port, "port", 7080, "loopback port to serve on (0: any free one)")
 	cmd.Flags().StringVar(&uiDir, "ui-dir", "", "serve the UI from this directory instead of the one built in (studio/out, when working on it)")
+	cmd.AddCommand(newStudioHostCmd())
 	return cmd
 }
 
@@ -89,7 +91,7 @@ func newStudioCmd() *cobra.Command {
 // comes with it — the user's config and its trust layering, the profile, the
 // agent's environment and login.
 func studioLauncher(ctxName string) studio.Launcher {
-	return func(ctx context.Context, req studio.LaunchRequest) (studio.LaunchResult, error) {
+	return func(ctx context.Context, _ *api.Client, req studio.LaunchRequest) (studio.LaunchResult, error) {
 		// The project directory is where .sandbox.yaml is looked for, and left
 		// empty runSandbox would use the directory Studio was started in and
 		// pick up whatever sits there: config nobody chose for this run. A

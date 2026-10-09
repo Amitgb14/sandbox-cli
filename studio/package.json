@@ -5,11 +5,13 @@
   "description": "Sandbox Studio — the browser view of sandbox-cli, served by `sandbox-cli studio`",
   "scripts": {
     "build": "next build",
+    "build:hosted": "NEXT_PUBLIC_STUDIO_HOSTED=on NEXT_PUBLIC_STUDIO_ADMIN=off STUDIO_DIST_DIR=out-hosted next build",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
     "check:admin-off": "node scripts/check-admin-off.mjs",
-    "check": "npm run typecheck && npm run lint && npm run build && npm run check:admin-off && npm run test:e2e"
+    "check:hosted": "node scripts/check-hosted.mjs",
+    "check": "npm run typecheck && npm run lint && npm run build && npm run check:admin-off && npm run build:hosted && npm run check:hosted && npm run test:e2e"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

@@ -133,7 +133,7 @@ func TestLaunchValidates(t *testing.T) {
 	s, st, _ := studioUnderTest(t)
 	launched := 0
 	var last LaunchRequest
-	s.Launch = func(_ context.Context, req LaunchRequest) (LaunchResult, error) {
+	s.Launch = func(_ context.Context, _ *api.Client, req LaunchRequest) (LaunchResult, error) {
 		launched++
 		last = req
 		return LaunchResult{Sandbox: "sbx_x"}, nil
