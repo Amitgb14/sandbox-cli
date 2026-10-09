@@ -613,6 +613,69 @@ the same reason, and the log says how many.
 
 ## Images
 
+### Choosing the image a sandbox starts from
+
+Every sandbox starts from an image. Name one with `--image` when it is
+created; without it, the sandbox gets the server's default
+(`ghcr.io/amitgb14/sandbox-base:edge` unless the operator set another):
+
+```sh
+sandbox-cli run --image python:3.13-slim -- python3 -V            # a public image from Docker Hub
+sandbox-cli run --image ghcr.io/amitgb14/sandbox-desktop:edge --memory 2048 -- true
+sandbox-cli run --keep --name dev --image node:22 -- sleep infinity
+sandbox-cli agent claude --image ghcr.io/you/agent-image:1         # an agent needs its tools in the image
+sandbox-cli list                                                   # the IMAGE column says what each started from
+```
+
+The same choice elsewhere: the Playground's **Start from → An image** in
+Studio; `"image"` in `POST /v1/sandboxes` ([api/v1.md](api/v1.md));
+`create_sandbox(image=…)` in the Python SDK and `createSandbox({image})` in
+the TypeScript one; `image:` in a job or a service's spec
+([jobs.md](jobs.md), [services.md](services.md)).
+
+**Which names work.** Any public Linux image, for the server's architecture,
+from any registry that serves anonymous pulls:
+
+| You write | It pulls |
+|---|---|
+| `alpine`, `alpine:3.20`, `python:3.13-slim` | Docker Hub's official image; the tag is `latest` when none is given |
+| `team/app:1` | Docker Hub, `team/app` |
+| `ghcr.io/owner/name:tag` | that registry, that repository |
+| `name@sha256:…` | exactly that build, whatever its tags point at now |
+
+Lowercase only, as registries require. sandboxd pulls **without
+credentials**, so a private image cannot be used: the registry refuses it,
+as it does a name that does not exist (`token request: 403 Forbidden` on
+ghcr.io). Check the spelling, or make the image public.
+
+**What the image needs.** Nothing of ours: the guest agent is put into every
+image's root disk. Processes run as the sandbox user (uid 1001) and start in
+`/sandbox/home`, whichever image it is. The image's `ENV` applies, so a `PATH`
+of its own keeps working, except `HOME` and `USER`; its `USER`, `WORKDIR` and
+entrypoint are not used: a sandbox runs the command you give it. That command,
+or the agent, must be in the image or installable from it (an agent that is
+not in it is installed once per endpoint, [README](../README.md#coding-agents)).
+The base image is `node:22` with Python 3, git, curl, build tools, ripgrep,
+jq and rsync, and four agents ready to run: claude, codex, gemini and
+opencode.
+
+**The first sandbox of an image waits.** It is pulled, and on Linux built
+into a root disk, the first time a sandbox asks for it: seconds for a small
+image, a minute or more for a large one. Later sandboxes start at once.
+`sandbox-cli image pull IMAGE` does it ahead (below).
+
+**What the server allows.** Where the operator set an `images:` list in the
+policy, only those may be named, written exactly as listed; any other is
+refused (`image "…" is not one this server permits`). `sandbox-cli doctor`
+shows the server's limits; the operator's settings are in
+[sandboxd.md](sandboxd.md).
+
+Checked on a real host (Firecracker 1.17.0, as a user): `python:3.13-slim`
+from Docker Hub pulled in 3 s and ran `python3` as uid 1001 in
+`/sandbox/home`; a misspelt ghcr.io name was refused at the token request.
+
+### Installing and removing images
+
 A sandbox's image is pulled, and on Linux built into a root disk, the first
 time a sandbox asks for it; that first sandbox waits for both, a minute or
 more. The operator can do it ahead of time, and see and clear what is there:
