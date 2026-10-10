@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { Section, SectionHead } from "@/components/section-head";
 import { CodeBlock } from "@/components/code-block";
+import { StudioShot } from "@/components/studio-shot";
 import { type NavEntry } from "@/lib/nav";
 import { docPath } from "@/lib/site";
 
@@ -101,30 +101,6 @@ const SHOTS = [
   },
 ];
 
-function Shot({ name, title, priority }: { name: string; title: string; priority?: boolean }) {
-  const frame = "overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md";
-  return (
-    <>
-      {(["light", "dark"] as const).map((theme) => (
-        <a
-          key={theme}
-          href={`/studio/${name}-${theme}.png`}
-          className={`${frame} ${theme === "light" ? "block dark:hidden" : "hidden dark:block"}`}
-        >
-          <Image
-            src={`/studio/${name}-${theme}.png`}
-            width={2160}
-            height={1350}
-            alt={`Sandbox Studio, the ${title} screen`}
-            priority={priority}
-            className="h-auto w-full"
-          />
-        </a>
-      ))}
-    </>
-  );
-}
-
 const GUARDS = [
   {
     name: "Loopback only, and a loopback Host",
@@ -178,7 +154,7 @@ export default function StudioPage() {
             lead="Taken from a real sandboxd: Firecracker microVMs on a Linux machine, run without root, which is why each network says none. Select one for full size."
           />
           <figure className="flex flex-col gap-3">
-            <Shot name={SHOTS[0].name} title={SHOTS[0].title} priority />
+            <StudioShot name={SHOTS[0].name} title={SHOTS[0].title} priority />
             <figcaption className="text-sm leading-relaxed text-muted-foreground">
               <span className="font-medium text-foreground">{SHOTS[0].title}.</span> {SHOTS[0].caption}
             </figcaption>
@@ -186,7 +162,7 @@ export default function StudioPage() {
           <div className="mt-8 grid grid-cols-1 gap-x-6 gap-y-8 md:grid-cols-2">
             {SHOTS.slice(1).map((s) => (
               <figure key={s.name} className="flex flex-col gap-3">
-                <Shot name={s.name} title={s.title} />
+                <StudioShot name={s.name} title={s.title} />
                 <figcaption className="text-sm leading-relaxed text-muted-foreground">
                   <span className="font-medium text-foreground">{s.title}.</span> {s.caption}
                 </figcaption>
