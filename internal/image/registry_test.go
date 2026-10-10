@@ -60,6 +60,12 @@ func newRegistry(t *testing.T, arch string) (*registry, string, string) {
 func (r *registry) handler(host *string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/token" {
+			// As ghcr.io does: no anonymous token for a repository that is
+			// not served here, whether private or misspelt.
+			if req.URL.Query().Get("scope") != "repository:team/app:pull" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 			r.tokens.Add(1)
 			json.NewEncoder(w).Encode(map[string]string{"token": "t0k"})
 			return
@@ -194,6 +200,20 @@ func TestPullByDigestMustMatch(t *testing.T) {
 	r.manifests[wrong], r.types[wrong] = r.manifests["1.0"], mtOCIIndex
 	if _, err := p.Pull(context.Background(), host+"/team/app@"+wrong); err == nil {
 		t.Fatal("content served under a digest it does not hash to was accepted")
+	}
+}
+
+func TestPullNamesAnImageTheRegistryWillNotServe(t *testing.T) {
+	r, _, _ := newRegistry(t, "amd64")
+	p, host := puller(t, r)
+	_, err := p.Pull(context.Background(), host+"/team/ap:1.0")
+	if err == nil {
+		t.Fatal("pulled a repository the registry does not serve")
+	}
+	for _, want := range []string{host + "/team/ap", "403", "no such image, or it is private"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to say %q", err, want)
+		}
 	}
 }
 

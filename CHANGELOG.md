@@ -695,6 +695,13 @@ that fails on the code before the fix:
 
 ### Fixed
 
+- **An image the registry will not serve is named, with the likely reason.**
+  Pulling an image that does not exist or is private, a misspelt name
+  included, failed with only `token request: 403 Forbidden`, which read like
+  a credentials problem; sandboxd pulls anonymously and has none. It now
+  says `ghcr.io/owner/name: the registry refused an anonymous pull (token
+  request: 403 Forbidden): no such image, or it is private`, in
+  `sandbox-cli image pull` and Studio's Images screen.
 - **Snapshots no longer fill the disk after a restart, and with
   `--keep-sandboxes` they survive one.** The list of snapshots lived only in
   sandboxd's memory, so after a restart a snapshot's files (a guest's memory
