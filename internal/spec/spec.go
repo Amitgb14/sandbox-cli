@@ -131,6 +131,9 @@ func (p Policy) Validate() error {
 	if api.NetworkRank(p.Network.Ceiling) < 0 {
 		return fmt.Errorf("policy: network ceiling %q is not a mode", p.Network.Ceiling)
 	}
+	if p.Limits.MaxLifetimeSecs < 0 {
+		return fmt.Errorf("policy: max_lifetime_secs must not be negative")
+	}
 	// The default must itself be a request the policy would grant, or a client
 	// that sends nothing would get more than one that asked politely.
 	ceilingOnly := p
@@ -402,6 +405,20 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 		return backend.Spec{}, invalid("idle_timeout_secs %d: at most %d", idle, pol.Limits.MaxIdleTimeoutSecs)
 	default:
 		s.IdleTimeoutSecs = idle
+	}
+
+	// A lifetime may only be shortened by a request: where the operator set
+	// one, a request without one gets it, and one asking for longer is
+	// refused rather than clamped.
+	switch life, max := req.LifetimeSecs, pol.Limits.MaxLifetimeSecs; {
+	case life < 0:
+		return backend.Spec{}, invalid("lifetime_secs must not be negative")
+	case life == 0:
+		s.LifetimeSecs = max
+	case max > 0 && life > max:
+		return backend.Spec{}, invalid("lifetime_secs %d: at most %d", life, max)
+	default:
+		s.LifetimeSecs = life
 	}
 
 	sched, err := ResolveSchedule(api.SnapshotSchedule{EverySecs: req.SnapshotEverySecs, Keep: req.SnapshotKeep}, pol.Limits)

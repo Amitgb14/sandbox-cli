@@ -107,6 +107,10 @@ type Limits struct {
 	MaxDiskMB   int     `json:"max_disk_mb"`
 	// MaxIdleTimeoutSecs bounds idle_timeout_secs; 0 means no bound.
 	MaxIdleTimeoutSecs int `json:"max_idle_timeout_secs"`
+	// MaxLifetimeSecs is how long any sandbox may exist, busy or not,
+	// counted from its creation; 0 means no bound. Where it is set, every
+	// sandbox has a lifetime: this one, or a shorter one it asked for.
+	MaxLifetimeSecs int `json:"max_lifetime_secs,omitempty"`
 	// MinSnapshotEverySecs is the shortest interval a snapshot schedule may
 	// ask for, and MaxSnapshotKeep the most scheduled snapshots of one
 	// sandbox it may keep: each is a copy of the sandbox, on the host's disk.
@@ -141,6 +145,10 @@ type CreateSandboxRequest struct {
 	// IdleTimeoutSecs terminates the sandbox after this long with no request
 	// touching it and no process running. 0 takes the server's default.
 	IdleTimeoutSecs int `json:"idle_timeout_secs,omitempty"`
+	// LifetimeSecs terminates the sandbox this long after it is created,
+	// whatever it is doing. 0 takes limits.max_lifetime_secs (none where that
+	// is 0); more than that limit is refused.
+	LifetimeSecs int `json:"lifetime_secs,omitempty"`
 	// SnapshotID starts the sandbox from a snapshot. A memory snapshot
 	// (capability memory_snapshot) brings back memory, processes and disk as
 	// they were, so its image and resources are the snapshot's. A disk
@@ -224,6 +232,10 @@ type Sandbox struct {
 	CreatedAt time.Time     `json:"created_at"`
 	// IdleTimeoutSecs is in force for this sandbox; 0 means it never idles out.
 	IdleTimeoutSecs int `json:"idle_timeout_secs"`
+	// LifetimeSecs is how long it may exist, and ExpiresAt when it is
+	// terminated for it, busy or not; both absent when it has no lifetime.
+	LifetimeSecs int        `json:"lifetime_secs,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 	// SnapshotEverySecs and SnapshotKeep are the sandbox's snapshot
 	// schedule; 0 is none.
 	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`

@@ -326,3 +326,19 @@ test("the theme switch shows the theme in force after a reload", async ({ page }
   await theme.getByRole("radio", { name: "Dark" }).click();
   await expect(theme.getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
 });
+
+test("a sandbox with a lifetime says when it ends", async ({ page, request }) => {
+  const created = await (
+    await request.fetch("/api/v1/sandboxes", {
+      method: "POST",
+      data: { name: "short-lived", lifetime_secs: 1800 },
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json();
+  expect(created.expires_at).toBeTruthy();
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto(`/sandbox/?id=${created.id}`);
+  await expect(page.getByText("Ends", { exact: true })).toBeVisible();
+  await expect(page.getByText(/^in 29m \d+s$|^in 30m 0s$/)).toBeVisible();
+});
