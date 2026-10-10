@@ -25,7 +25,7 @@
  * the menu tell you something you did not already know from the label.
  */
 
-import { SETUP_PATH, STUDIO_PATH } from "@/lib/site";
+import { SETUP_PATH } from "@/lib/site";
 
 export type NavLink = {
   href: string;
@@ -86,9 +86,9 @@ export const NAV: NavEntry[] = [
         hint: "twelve of them, under one prefix, logins kept between runs",
       },
       {
-        href: STUDIO_PATH,
+        href: "#studio",
         label: "Studio",
-        hint: "the browser view of the same sandboxes",
+        hint: "the browser view of the same sandboxes, as it looks",
       },
     ],
   },
