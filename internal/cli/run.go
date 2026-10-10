@@ -35,6 +35,7 @@ type runFlags struct {
 	cpus          float64
 	memory, disk  int
 	idle          int
+	lifetime      time.Duration
 	snapEvery     time.Duration
 	snapKeep      int
 	network       string
@@ -72,6 +73,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.IntVar(&rf.memory, "memory", 0, "memory in MiB")
 	f.IntVar(&rf.disk, "disk", 0, "writable disk in MiB")
 	f.IntVar(&rf.idle, "idle", 0, "terminate after this many idle seconds (default: the server's)")
+	f.DurationVar(&rf.lifetime, "lifetime", 0, "terminate this long after it starts, busy or not, e.g. 30m (default: the server's limit, if it sets one; never longer)")
 	f.DurationVar(&rf.snapEvery, "snapshot-every", 0, "snapshot the sandbox this often while it runs, e.g. 30m (the server sets the shortest allowed)")
 	f.IntVar(&rf.snapKeep, "snapshot-keep", 0, "how many scheduled snapshots to keep, newest first (default 1)")
 	f.StringVar(&rf.network, "network", "", "none, allowlist or open (default: the server's)")
@@ -198,7 +200,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 
 	req := api.CreateSandboxRequest{
 		Name: rf.name, Image: rf.image, CPUs: rf.cpus, MemoryMB: rf.memory, DiskMB: rf.disk,
-		IdleTimeoutSecs: rf.idle, SnapshotID: rf.fromSnapshot,
+		IdleTimeoutSecs: rf.idle, LifetimeSecs: int(rf.lifetime.Round(time.Second) / time.Second), SnapshotID: rf.fromSnapshot,
 		SnapshotEverySecs: int(rf.snapEvery / time.Second), SnapshotKeep: rf.snapKeep,
 	}
 	if req.Env, err = buildEnv(rf.env, rs.agent); err != nil {

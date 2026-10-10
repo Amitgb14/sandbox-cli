@@ -75,6 +75,9 @@ func CombineCapabilities(sts []api.NodeStatus) api.Capabilities {
 		if l.MaxIdleTimeoutSecs == 0 || (c.Limits.MaxIdleTimeoutSecs > 0 && c.Limits.MaxIdleTimeoutSecs < l.MaxIdleTimeoutSecs) {
 			l.MaxIdleTimeoutSecs = c.Limits.MaxIdleTimeoutSecs
 		}
+		if l.MaxLifetimeSecs == 0 || (c.Limits.MaxLifetimeSecs > 0 && c.Limits.MaxLifetimeSecs < l.MaxLifetimeSecs) {
+			l.MaxLifetimeSecs = c.Limits.MaxLifetimeSecs
+		}
 		if api.NetworkRank(c.Network.Ceiling) < api.NetworkRank(out.Network.Ceiling) {
 			out.Network.Ceiling = c.Network.Ceiling
 		}

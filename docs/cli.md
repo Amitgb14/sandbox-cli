@@ -953,6 +953,7 @@ Flags:
 | `--image string` |  | image to run (default: the server's) |
 | `--keep` |  | keep the sandbox when the command ends |
 | `--label stringArray` |  | label the sandbox, key=value (repeatable); shown by list and recorded in its audit events |
+| `--lifetime duration` |  | terminate this long after it starts, busy or not, e.g. 30m (default: the server's limit, if it sets one; never longer) |
 | `--memory int` |  | memory in MiB |
 | `--name string` |  | name the sandbox |
 | `--network string` |  | none, allowlist or open (default: the server's) |

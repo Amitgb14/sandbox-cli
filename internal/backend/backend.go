@@ -36,6 +36,8 @@ type Spec struct {
 	// IdleTimeoutSecs is enforced by the server, not the backend; carried here
 	// so the resolved spec is the whole decision.
 	IdleTimeoutSecs int
+	// LifetimeSecs, like IdleTimeoutSecs, is the server's to enforce.
+	LifetimeSecs int
 	// SnapshotEverySecs and SnapshotKeep are the snapshot schedule, kept by
 	// the server like the idle timeout; carried for the same reason.
 	SnapshotEverySecs int

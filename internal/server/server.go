@@ -302,12 +302,20 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 
 	// The name is claimed before the backend is asked, under the lock, so two
 	// concurrent creates with one name cannot both pass a check-then-create.
+	created := s.now().UTC()
+	var expires *time.Time
+	if bs.LifetimeSecs > 0 {
+		at := created.Add(time.Duration(bs.LifetimeSecs) * time.Second)
+		expires = &at
+	}
 	rec := &record{
 		sbx: api.Sandbox{
 			ID: id, Name: req.Name, State: api.StatePending, Image: bs.Image,
 			CPUs: bs.CPUs, MemoryMB: bs.MemoryMB, DiskMB: bs.DiskMB,
-			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: s.now().UTC(),
+			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: created,
 			IdleTimeoutSecs:   bs.IdleTimeoutSecs,
+			LifetimeSecs:      bs.LifetimeSecs,
+			ExpiresAt:         expires,
 			SnapshotEverySecs: bs.SnapshotEverySecs,
 			SnapshotKeep:      bs.SnapshotKeep,
 			Labels:            copyLabels(req.Labels),
@@ -732,44 +740,61 @@ func (s *Server) canEnforce(w http.ResponseWriter, p api.NetworkPolicy) bool {
 // reapIdle terminates sandboxes that have been idle past their timeout: no
 // request has named them and no process is running in them. A running process
 // is activity even with nobody watching — a build left to finish is not idle.
+//
+// It also ends a sandbox at its lifetime, busy or not, running or suspended:
+// a lifetime is a promise about when the machine gets it back, and a
+// sandbox that kept a process going, or was suspended, would otherwise outlive
+// it. The clock is the wall clock from creation, so time sandboxd was down
+// counts: a sandbox kept across a restart (keep.go) is ended at the next tick
+// if its time ran out meanwhile.
 func (s *Server) reapIdle() {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for range t.C {
-		now := s.now()
-		s.mu.Lock()
-		var due []*record
-		for _, rec := range s.sandboxes {
-			rec.mu.Lock()
-			idle := rec.sbx.IdleTimeoutSecs
-			live := rec.sbx.State == api.StateRunning
-			busy := false
-			for _, pr := range rec.procs {
-				busy = busy || pr.info.State == api.ProcessRunning
-			}
-			if busy {
-				rec.lastActive = now
-			}
-			if live && idle > 0 && now.Sub(rec.lastActive) >= time.Duration(idle)*time.Second {
-				due = append(due, rec)
-			}
-			rec.mu.Unlock()
+		s.reapOnce(s.now())
+	}
+}
+
+// reapOnce is one pass of reapIdle.
+func (s *Server) reapOnce(now time.Time) {
+	s.mu.Lock()
+	var due []*record
+	reason := map[*record]string{}
+	for _, rec := range s.sandboxes {
+		rec.mu.Lock()
+		idle := rec.sbx.IdleTimeoutSecs
+		live := rec.sbx.State == api.StateRunning
+		busy := false
+		for _, pr := range rec.procs {
+			busy = busy || pr.info.State == api.ProcessRunning
 		}
-		s.mu.Unlock()
-		for _, rec := range due {
-			id := rec.snapshot().ID
-			if err := s.Backend.Terminate(context.Background(), id); err != nil {
-				continue
-			}
-			rec.mu.Lock()
-			rec.sbx.State = api.StateTerminated
-			rec.mu.Unlock()
-			s.forget(id)
-			s.event(api.Event{Type: api.EventSandboxTerminated, Sandbox: id, Reason: "idle"})
+		if busy {
+			rec.lastActive = now
 		}
-		if len(due) > 0 {
-			s.forgetOldTerminated()
+		expired := rec.sbx.ExpiresAt != nil && !now.Before(*rec.sbx.ExpiresAt) &&
+			(rec.sbx.State == api.StateRunning || rec.sbx.State == api.StateSuspended)
+		switch {
+		case expired:
+			due, reason[rec] = append(due, rec), "lifetime"
+		case live && idle > 0 && now.Sub(rec.lastActive) >= time.Duration(idle)*time.Second:
+			due, reason[rec] = append(due, rec), "idle"
 		}
+		rec.mu.Unlock()
+	}
+	s.mu.Unlock()
+	for _, rec := range due {
+		id := rec.snapshot().ID
+		if err := s.Backend.Terminate(context.Background(), id); err != nil {
+			continue
+		}
+		rec.mu.Lock()
+		rec.sbx.State = api.StateTerminated
+		rec.mu.Unlock()
+		s.forget(id)
+		s.event(api.Event{Type: api.EventSandboxTerminated, Sandbox: id, Reason: reason[rec]})
+	}
+	if len(due) > 0 {
+		s.forgetOldTerminated()
 	}
 }
 

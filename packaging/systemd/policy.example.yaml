@@ -14,6 +14,7 @@ limits:
   max_memory_mb: 16384
   max_disk_mb: 102400
   max_idle_timeout_secs: 604800
+  # max_lifetime_secs: 1800   # end every sandbox 30 minutes after it starts, busy or not
 
 # On Firecracker egress is always an allowlist, checked by name on the host:
 # open is not offered, and asking for it gets the allowlist. This sets the

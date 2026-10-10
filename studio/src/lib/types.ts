@@ -36,6 +36,9 @@ export interface Sandbox {
   network: NetworkPolicy;
   created_at: string;
   idle_timeout_secs: number;
+  /** How long it may exist, busy or not, and when it ends for it; absent when it has no lifetime. */
+  lifetime_secs?: number;
+  expires_at?: string;
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
   /** The snapshot schedule: one every so many seconds while it runs, the newest kept. */
@@ -63,6 +66,8 @@ export interface Capabilities {
     max_memory_mb: number;
     max_disk_mb: number;
     max_idle_timeout_secs: number;
+    /** How long any sandbox may exist; absent or 0 is no bound. */
+    max_lifetime_secs?: number;
     /** The shortest snapshot schedule allowed, and the most scheduled snapshots kept. */
     min_snapshot_every_secs?: number;
     max_snapshot_keep?: number;
