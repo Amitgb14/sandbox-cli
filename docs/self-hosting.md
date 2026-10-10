@@ -10,88 +10,323 @@ hosted cloud; clients cannot tell which they are talking to beyond
 
 - Linux with KVM (`/dev/kvm`); x86_64 or arm64.
 - `firecracker` and `jailer` from the project's releases
-  (<https://github.com/firecracker-microvm/firecracker/releases>).
-- A guest kernel (`vmlinux`) with `CONFIG_IP_PNP`, `CONFIG_VIRTIO_VSOCKETS` and
-  overlayfs. The CI kernels from Firecracker's getting-started guide have all
-  three.
+  (<https://github.com/firecracker-microvm/firecracker/releases>), 1.17.0
+  (below).
+- A guest kernel (`vmlinux`) built with `CONFIG_IP_PNP`,
+  `CONFIG_VIRTIO_VSOCKETS`, `CONFIG_OVERLAY_FS`, `CONFIG_EXT4_FS`,
+  `CONFIG_VIRTIO_BLK` and `CONFIG_VIRTIO_NET`. Firecracker's CI kernel 6.1.155
+  has them all, for x86_64 and arm64; Install fetches it.
 - `mkfs.ext4` (e2fsprogs 1.43+), `ip` (iproute2), `nft` (nftables).
-- Room for `/var/lib/sandboxd`, where images, sandboxes' disks, snapshots and
-  volumes are kept ([Where it keeps things](#where-it-keeps-things)). It must be
-  **one filesystem**: image disks are hard-linked into each sandbox's jail. xfs
-  or btrfs make snapshot and fork copies reflinks. To give it a disk of its own,
-  mount that disk there before installing.
+- **Disk space** where sandboxd keeps its state: `/var/lib/sandboxd` as root,
+  `~/.local/share/sandboxd` as a user (the quick try). Images, sandboxes'
+  disks, snapshots and volumes are all kept there ([Where it keeps
+  things](#where-it-keeps-things)). Measured on a real host:
+
+  | What | Takes |
+  |---|---|
+  | the base image, installed (layers and its root disk) | 2.5 GiB |
+  | a small image, e.g. `python:3.13-slim` | about 120 MiB |
+  | each sandbox | what it writes, up to its `disk_mb` (10 GiB unless the policy says otherwise); the disk is sparse |
+  | each snapshot | the sandbox's memory plus its written disk: 1 GiB for an idle 1 GiB sandbox |
+  | each volume | what was written to it |
+  | an upgrade | a second root disk per image until the next start removes the old one |
+
+  **20 GiB free** is enough to try it with the base image and a few
+  sandboxes; a server needs a disk of its own ([In production](#in-production)).
+  Building from a checkout also takes a few GiB in your home: Go's caches
+  (`~/.cache/go-build`, `~/go/pkg/mod`) and about 0.8 GiB of `node_modules`
+  for Studio's UI.
+- That state directory must be **one filesystem**: image disks are hard-linked
+  into each sandbox's jail. xfs or btrfs make snapshot and fork copies
+  reflinks. To give it a disk of its own, mount that disk there before
+  installing.
+
+### Versions checked
+
+What sandboxd has been run with on a real host, and what has not. A version
+not listed may well work; it has not been checked.
+
+| | Checked | Not yet checked |
+|---|---|---|
+| Firecracker and jailer | 1.17.0 | other releases. Install pins 1.17.0 for that reason |
+| Guest kernel | Firecracker CI kernel 6.1.155 (x86_64) | other kernels; the arm64 build of the same kernel |
+| Host CPU | x86_64 | arm64: built and released for, never run |
+| Host OS and kernel | an EL10 distribution, kernel 6.12, xfs, firewalld active | Debian, Ubuntu and others; kernels before 6.12; btrfs, ext4 |
+| Host tools | e2fsprogs 1.47.1, iproute2 6.17.0, nftables 1.1.5; Go 1.25 to build | older versions (e2fsprogs must be 1.43+) |
+| Privilege | root under systemd, with the jailer and the egress firewall; and as a user, with no network | — |
+| Base image | `ghcr.io/amitgb14/sandbox-base:edge` | other images (the guest agent is put into each, so any Linux image may run) |
+
+The guest kernel is independent of the host's: each sandbox boots the
+`vmlinux` sandboxd was given, whatever the host runs. The host needs KVM,
+`tun` (a tap device per sandbox, as root) and nftables; any distribution kernel
+from recent years has them. Each real-host check, and the version it ran on,
+is in [testing/end-to-end.md](testing/end-to-end.md).
+
+macOS is a different backend with its own requirements (macOS 26 on Apple
+silicon, the `container` runtime): [local-macos.md](local-macos.md).
 
 ## Install
 
-On a server, give sandboxes a disk of their own first ([An extra disk for
-sandboxes](#an-extra-disk-for-sandboxes), below): images, sandboxes' disks,
-snapshots and volumes then never fill the root filesystem. Mount it before
-these steps, which put the guest kernel in that directory; a disk mounted
-over it afterwards hides it. Every step runs as root.
+Seven steps, from a bare machine to a sandbox that ran. Each says what it
+needs and which version was checked on a real host ([Versions
+checked](#versions-checked) has them together), and ends with a command that
+shows the step worked. A command that needs root says `sudo`.
 
-**1. The binaries: built from a checkout, for now.** No published release has
-`sandboxd` yet: 0.0.1 is the last release of the container design, and
-`install.sh` refuses it rather than install half of it. Until the rewrite's
-first release, build on the server (Go 1.25+) or on any Linux machine of the
-same architecture, and copy `bin/` across:
+**1. Check the machine.** Linux with KVM on x86_64 (checked) or arm64 (built,
+not yet run). Checked on an EL10 distribution with host kernel 6.12; the host
+kernel only needs KVM, `tun` and nftables, which any recent distribution
+kernel has.
+
+```sh
+uname -m                     # x86_64 (checked) or aarch64
+ls -l /dev/kvm               # must exist; on a cloud VM, nested virtualisation must be on
+uname -r                     # checked: 6.12
+
+# the tools sandboxd runs: mkfs.ext4 (e2fsprogs 1.43+; checked 1.47.1),
+# ip (iproute2; checked 6.17.0), nft (nftables; checked 1.1.5); and git, make, curl, file to build
+sudo dnf install -y e2fsprogs iproute nftables git make curl file      # Fedora, RHEL and rebuilds
+sudo apt-get install -y e2fsprogs iproute2 nftables git make curl file # Debian, Ubuntu (not yet checked)
+
+# disk space where the state will be: 20 GiB free to try it, a disk of its own for a server
+df -h /var/lib 2>/dev/null; df -h ~     # /var/lib/sandboxd as root, ~/.local/share/sandboxd as a user
+```
+
+Go 1.25 or later builds the binaries (`go version`). A distribution's Go is
+often older; <https://go.dev/dl/> has the current one. If the root
+filesystem is the one nearly full, as is common with a small `/` and a large
+`/home`, put the state directory on the larger one: mount a disk at
+`/var/lib/sandboxd`, or bind-mount a directory of the larger filesystem
+there (step 2), or run sandboxd with `--state-dir` naming it.
+
+**2. Where the state goes: a drive of its own.** Images, sandboxes' disks,
+snapshots and volumes live under `/var/lib/sandboxd`. On a server, give them a
+drive of their own, so they never fill the root filesystem
+([why](#an-extra-disk-for-sandboxes)). Do it now: the next steps put the guest
+kernel in that directory, and a drive mounted over it afterwards hides it.
+Choose one:
+
+*A. A spare drive, or a partition or logical volume, for the state alone.*
+Name it once, check it holds nothing, then format and mount it:
+
+```sh
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS   # the spare one has no FSTYPE and no MOUNTPOINTS
+DISK=/dev/nvme1n1                             # yours, from the list above
+lsblk -f $DISK                               # must show no filesystem and no mount point
+sudo wipefs -n $DISK                         # must print nothing: no signature on it
+sudo mkfs.xfs $DISK                          # ERASES IT; xfs (checked) or btrfs, for reflink copies
+sudo install -d -m 0700 /var/lib/sandboxd
+echo "UUID=$(sudo blkid -s UUID -o value $DISK) /var/lib/sandboxd xfs defaults,noatime 0 2" \
+  | sudo tee -a /etc/fstab                   # by UUID, and without nofail
+sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
+sudo chmod 0700 /var/lib/sandboxd
+command -v restorecon >/dev/null && sudo restorecon -R /var/lib/sandboxd   # SELinux hosts only
+```
+
+*B. No spare drive, but a larger filesystem*, `/home` say. Bind-mount a
+directory of it at `/var/lib/sandboxd`. It is one filesystem, as the jail
+needs, and the unit waits for it as for a drive:
+
+```sh
+sudo install -d -m 0700 /home/sandboxd /var/lib/sandboxd
+echo "/home/sandboxd /var/lib/sandboxd none bind 0 0" | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
+```
+
+*C. A machine just for trying, with room on `/`* (20 GiB free, [What the
+machine needs](#what-the-machine-needs)): skip this step.
+
+Then, for A or B:
+
+```sh
+findmnt /var/lib/sandboxd    # the drive (A) or /home[/sandboxd] (B)
+df -h /var/lib/sandboxd      # the free space is that filesystem's, not /'s
+```
+
+If `findmnt` prints nothing after a reboot, the drive did not mount, and
+sandboxd will not start until it does (`Dependency failed for sandboxd`):
+check the UUID in `/etc/fstab` against `sudo blkid`.
+
+**3. sandboxd and the guest agent: built from a checkout, for now.** No
+published release has `sandboxd` yet: 0.0.1 is the last release of the
+container design, and `install.sh` refuses it rather than install half of it.
+Until the rewrite's first release, build on the server (Go 1.25+) or on any
+Linux machine of the same architecture, and copy `bin/` across:
 
 ```sh
 git clone https://github.com/Amitgb14/sandbox-cli && cd sandbox-cli
 make build        # -> bin/sandbox-cli, bin/sandboxd, bin/sandbox-gateway, bin/sandbox-guestd
-install -m 0755 bin/sandboxd bin/sandbox-guestd bin/sandbox-cli /usr/local/bin/
+sudo install -m 0755 bin/sandboxd bin/sandbox-guestd bin/sandbox-cli /usr/local/bin/
+sandboxd --version           # sandboxd 0.0.1-<commits>-g<commit>: the commit you built
 ```
 
+`sandbox-guestd` must sit beside `sandboxd` (or be named with `--agent`): it is
+put into every image's root disk, so the guest agent always matches the server.
 Once a release has them, `install.sh` does this step instead, with no checkout,
 each archive checked against the release's checksums:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \
-  | sh -s -- --dest /usr/local/bin --no-config
+  | sudo sh -s -- --dest /usr/local/bin --no-config
 ```
 
-`sandbox-guestd` must sit beside `sandboxd` (or be named with `--agent`): it is
-put into every image's root disk, so the guest agent always matches the server.
-
-**2. Firecracker, its jailer and a guest kernel.** These come from
-Firecracker's own releases, not this repository. The kernel is the one
-[What the machine needs](#what-the-machine-needs) describes, such as a CI
-kernel from Firecracker's getting-started guide:
+**4. Firecracker and its jailer, 1.17.0.** From Firecracker's own releases, not
+this repository. 1.17.0 is the version checked, and it is pinned: a newer one
+may work, but has not been run.
 
 ```sh
 ARCH=$(uname -m)
 release_url=https://github.com/firecracker-microvm/firecracker/releases
-latest=$(basename $(curl -fsSLI -o /dev/null -w '%{url_effective}' $release_url/latest))
+latest=v1.17.0      # the version checked
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
-install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
-install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
-
-install -d -m 0700 /var/lib/sandboxd
-install -m 0644 vmlinux /var/lib/sandboxd/vmlinux
+sudo install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
+sudo install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
+firecracker --version        # Firecracker v1.17.0
 ```
 
-**3. The token, TLS, the policy and the unit.** The policy and the unit are
-fetched from the repository, so this step needs no checkout either. From one,
-`cp packaging/systemd/policy.example.yaml` and `cp
-packaging/systemd/sandboxd.service` do the same.
+**5. The guest kernel, 6.1.155.** Every sandbox boots this kernel, whatever
+the host runs. It must be built with `CONFIG_IP_PNP`,
+`CONFIG_VIRTIO_VSOCKETS`, `CONFIG_OVERLAY_FS`, `CONFIG_EXT4_FS`,
+`CONFIG_VIRTIO_BLK` and `CONFIG_VIRTIO_NET`. Firecracker's CI kernel 6.1.155
+has them all, for x86_64 (checked) and arm64. It is pinned: the CI kernels are
+published per Firecracker release, and the newest release does not always
+have them yet. Any kernel with those options does instead.
 
 ```sh
-install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls
+ARCH=$(uname -m)
+sudo install -d -m 0700 /var/lib/sandboxd
+sudo curl -fsSL -o /var/lib/sandboxd/vmlinux \
+  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155
+sudo chmod 0644 /var/lib/sandboxd/vmlinux
+file /var/lib/sandboxd/vmlinux      # must say ELF 64-bit; anything else is an error page
+```
+
+**6. The token, TLS, the policy and the unit.** The policy and the unit are
+fetched from the repository, so this step needs no checkout. From one, `cp
+packaging/systemd/policy.example.yaml` and `cp
+packaging/systemd/sandboxd.service` do the same. The unit runs sandboxd as
+root, which the tap devices, nftables and the jailer need; each VM runs under
+the jailer with a uid of its own.
+
+```sh
+sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls
 
 # a token clients present; at least 16 characters, readable by root only
-head -c 32 /dev/urandom | base64 > /etc/sandboxd/token && chmod 600 /etc/sandboxd/token
+# (umask 077: the file is never readable by others, not even for a moment)
+sudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'
 
 # TLS: your CA's certificate for the name clients use
-install -m 0600 cert.pem key.pem /etc/sandboxd/tls/
+sudo install -m 0600 cert.pem key.pem /etc/sandboxd/tls/
 
 RAW=https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd
-curl -fsSL $RAW/policy.example.yaml -o /etc/sandboxd/policy.yaml     # then edit
-curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service
+sudo curl -fsSL $RAW/policy.example.yaml -o /etc/sandboxd/policy.yaml     # then edit
+sudo curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service
 # --allowed-host: the name clients use
-sed -i 's/sandbox.example.internal/box.example.internal/' /etc/systemd/system/sandboxd.service
+sudo sed -i 's/sandbox.example.internal/box.example.internal/' /etc/systemd/system/sandboxd.service
 
-systemctl daemon-reload && systemctl enable --now sandboxd
-journalctl -u sandboxd -f
+sudo systemctl daemon-reload && sudo systemctl enable --now sandboxd
+sudo journalctl -u sandboxd -n 20   # "sandboxd: <version> serving API v1 on …; backend firecracker; …"
 ```
+
+**7. Check it from a client.** On your laptop, or on the server itself, with
+the token and the CA's certificate copied across:
+
+```sh
+sandbox-cli context add box https://box.example.internal:7443 --token-file box.token --ca box-ca.pem
+sandbox-cli context use box
+sandbox-cli doctor           # backend firecracker, the network ceiling, the capabilities
+sandbox-cli run -- uname -r  # 6.1.155+: the guest kernel, not the host's
+```
+
+The first run pulls the base image and builds its root disk, a minute or more;
+`sandbox-cli image pull` does that ahead ([Images](#images)). [Checking it
+works](#checking-it-works) runs the conformance suite against the server.
+
+## On an IP address instead of a socket
+
+sandboxd listens where `--listen` says. Started with no `--listen`, as in the
+quick try, it serves a unix socket only its owner can open,
+`$XDG_RUNTIME_DIR/sandboxd.sock`, which is the CLI's `local` context. Given
+`HOST:PORT`, it serves TCP, and what it requires depends on who can reach that
+address:
+
+| `--listen` | Reachable by | sandboxd requires | The client uses |
+|---|---|---|---|
+| none (a unix socket) | you alone | nothing more | the `local` context |
+| `127.0.0.1:PORT` | every user on this machine | `--token-file` | `http://127.0.0.1:PORT` and the token |
+| any other address, `0.0.0.0` included | other machines | `--token-file`, `--tls-cert` and `--tls-key`, and `--allowed-host` for each name or IP clients use | `https://ADDRESS:PORT`, the token and the CA's certificate |
+
+Without them it does not start, and says which is missing:
+
+```text
+sandboxd: --listen 10.0.0.17:7443 is reachable from other machines; refusing to serve it without --token-file
+sandboxd: --listen 10.0.0.17:7443 is reachable from other machines; refusing to serve it without --tls-cert and --tls-key
+```
+
+**On loopback**, for other programs or users on the same machine. As yourself,
+with the kernel and Firecracker from the quick try:
+
+```sh
+sh -c 'umask 077; head -c 32 /dev/urandom | base64 > ~/sandboxd.token'
+sandboxd --backend firecracker \
+  --kernel ~/.local/share/sandboxd/vmlinux --firecracker ~/.local/bin/firecracker \
+  --listen 127.0.0.1:7443 --token-file ~/sandboxd.token
+# its last line: "serving API v1 on tcp://127.0.0.1:7443; … token required"
+
+sandbox-cli context add lo http://127.0.0.1:7443 --token-file ~/sandboxd.token
+sandbox-cli context use lo && sandbox-cli doctor
+```
+
+**On an IP address**, for other machines. The certificate must name the IP
+clients dial (an IP SAN). [`packaging/fleet/make-certs.sh`](../packaging/fleet/make-certs.sh)
+makes one, with a private CA to sign it; a certificate from a CA your clients
+already trust works as well. Here the server's address is `10.0.0.17`:
+
+```sh
+IP=10.0.0.17
+curl -fsSLO https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/fleet/make-certs.sh
+sh make-certs.sh -o certs $IP     # certs/ca.pem, certs/node-$IP.pem and its key
+                                  # (and a gateway client certificate, unused here)
+sh -c 'umask 077; head -c 32 /dev/urandom | base64 > ~/sandboxd.token'
+
+sandboxd --backend firecracker \
+  --kernel ~/.local/share/sandboxd/vmlinux --firecracker ~/.local/bin/firecracker \
+  --listen $IP:7443 --token-file ~/sandboxd.token \
+  --tls-cert certs/node-$IP.pem --tls-key certs/node-$IP-key.pem \
+  --allowed-host $IP
+# its last line: "serving API v1 on https://10.0.0.17:7443; … token required"
+
+# if a firewall is on, open the port (not part of the check below)
+sudo firewall-cmd --add-port=7443/tcp --permanent && sudo firewall-cmd --reload   # firewalld
+sudo ufw allow 7443/tcp                                                            # ufw
+```
+
+On each client, with `~/sandboxd.token` and `certs/ca.pem` copied across
+privately (the token is the whole credential):
+
+```sh
+sandbox-cli context add box https://10.0.0.17:7443 --token-file sandboxd.token --ca ca.pem
+sandbox-cli context use box && sandbox-cli doctor
+sandbox-cli run -- uname -r       # 6.1.155+
+```
+
+- **`--allowed-host`** lists every name or IP clients put in the URL. A request
+  naming anything else is refused, which stops DNS rebinding. With
+  `--listen 0.0.0.0:7443`, which serves every address of the machine, give one
+  `--allowed-host` for each address clients use, and a certificate naming each.
+- **Keep `certs/ca-key.pem` off the server** once the certificate is made: it
+  can sign a certificate for any address, which every client given `ca.pem`
+  would trust.
+- **Run as yourself, sandboxes get no network**, as in the quick try. Serving
+  on an IP changes who reaches the API, not what a sandbox reaches. For an
+  enforced egress allowlist, run it as root under systemd, as in Install,
+  where step 6 sets the same flags in the unit: `--listen 0.0.0.0:7443` and
+  `--allowed-host`, which `sed` sets to the name or IP clients use.
+
+Checked on a real host (x86_64 EL10, Firecracker 1.17.0, sandboxd as a user):
+both refusals above; loopback with a token; the LAN address with a token, a
+`make-certs.sh` certificate and `--allowed-host`, from `context add` through
+`doctor` and a sandbox's `uname -r`, and 401 without the token. Not checked:
+the firewall lines, and a client on another machine.
 
 ## Where it keeps things
 
@@ -121,19 +356,10 @@ sandboxes were given; `du -sh /var/lib/sandboxd/*` shows what is used.
 
 What a Linux server running sandboxes for others should have: a disk, or a
 logical volume, mounted at the state directory, so a sandbox that fills its
-disk, a pile of snapshots or a large volume fills that and not `/`. Before
-Install, as root:
-
-```sh
-lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS       # find the new disk: no FSTYPE, no mount point (say nvme1n1)
-mkfs.xfs /dev/nvme1n1                            # erases it; xfs or btrfs, so snapshot and fork copies are reflinks
-mkdir -p /var/lib/sandboxd
-echo "UUID=$(blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2" >> /etc/fstab
-systemctl daemon-reload && mount /var/lib/sandboxd
-chmod 0700 /var/lib/sandboxd
-restorecon -R /var/lib/sandboxd                  # SELinux hosts (RHEL, Fedora, their rebuilds): /var/lib's label
-findmnt /var/lib/sandboxd && df -h /var/lib/sandboxd
-```
+disk, a pile of snapshots or a large volume fills that and not `/`. The
+commands, for a spare drive or a bind mount of a larger filesystem, are
+[Install, step 2](#install); mount it before the rest of Install. Why they
+are written as they are:
 
 - **By UUID, not by name.** `nvme1n1` and `sdb` can swap between boots; a
   UUID names the filesystem.
@@ -200,10 +426,10 @@ not a consistent one.
 ```sh
 sandbox-cli list                              # what is running; finish what matters first
 sandbox-cli kill SANDBOX...                   # every live one; snapshots and volumes are files, and move with the rest
-systemctl stop sandboxd
-mount /dev/nvme1n1 /mnt/new && rsync -aHAX --sparse /var/lib/sandboxd/ /mnt/new/   # -H keeps the hard links
-umount /mnt/new && mount /dev/nvme1n1 /var/lib/sandboxd                            # and add it to /etc/fstab
-systemctl start sandboxd
+sudo systemctl stop sandboxd
+sudo mount /dev/nvme1n1 /mnt/new && sudo rsync -aHAX --sparse /var/lib/sandboxd/ /mnt/new/   # -H keeps the hard links
+sudo umount /mnt/new && sudo mount /dev/nvme1n1 /var/lib/sandboxd                            # and add it to /etc/fstab
+sudo systemctl start sandboxd
 ```
 
 ## The network default
@@ -272,9 +498,10 @@ state directory. So installing a new sandboxd, or restarting it, interrupts
 no VM:
 
 ```sh
-install -m 0755 sandboxd sandbox-guestd /usr/local/bin/
-systemctl restart sandboxd
-journalctl -u sandboxd -n 5      # "keeping sandboxes across restarts; took back N from an earlier run"
+git pull && make build                       # in the checkout, until a release has sandboxd
+sudo install -m 0755 bin/sandboxd bin/sandbox-guestd /usr/local/bin/
+sudo systemctl restart sandboxd
+sudo journalctl -u sandboxd -n 5      # "keeping sandboxes across restarts; took back N from an earlier run"
 ```
 
 **What carries on:** each VM, with its memory, its disk and every file in
@@ -353,7 +580,7 @@ private network** the gateway shares with it, never on an address users can
 reach, and accept only the gateway:
 
 ```sh
-sandboxd --backend firecracker --listen 10.0.0.17:7443 \
+sudo sandboxd --backend firecracker --listen 10.0.0.17:7443 \
   --token-file /etc/sandboxd/token \
   --tls-cert /etc/sandboxd/tls/cert.pem --tls-key /etc/sandboxd/tls/key.pem \
   --client-ca /etc/sandboxd/tls/gateway-ca.pem \
@@ -399,7 +626,7 @@ admin key:
 sandbox-cli gateway drain n17               # cordon; prints how many sandboxes still run there
 sandbox-cli gateway drain n17               # again, until it says 0 — or end them now:
 sandbox-cli gateway drain n17 --terminate
-systemctl stop sandboxd && <install the new sandboxd> && systemctl start sandboxd
+sudo systemctl stop sandboxd && <install the new sandboxd> && sudo systemctl start sandboxd
 sandbox-cli gateway nodes                   # n17 healthy, cordoned, on the new version
 sandbox-cli gateway uncordon n17
 ```
@@ -436,6 +663,69 @@ Without the flag, a restart deletes every snapshot an earlier run left, for
 the same reason, and the log says how many.
 
 ## Images
+
+### Choosing the image a sandbox starts from
+
+Every sandbox starts from an image. Name one with `--image` when it is
+created; without it, the sandbox gets the server's default
+(`ghcr.io/amitgb14/sandbox-base:edge` unless the operator set another):
+
+```sh
+sandbox-cli run --image python:3.13-slim -- python3 -V            # a public image from Docker Hub
+sandbox-cli run --image ghcr.io/amitgb14/sandbox-desktop:edge --memory 2048 -- true
+sandbox-cli run --keep --name dev --image node:22 -- sleep infinity
+sandbox-cli agent claude --image ghcr.io/you/agent-image:1         # an agent needs its tools in the image
+sandbox-cli list                                                   # the IMAGE column says what each started from
+```
+
+The same choice elsewhere: the Playground's **Start from → An image** in
+Studio; `"image"` in `POST /v1/sandboxes` ([api/v1.md](api/v1.md));
+`create_sandbox(image=…)` in the Python SDK and `createSandbox({image})` in
+the TypeScript one; `image:` in a job or a service's spec
+([jobs.md](jobs.md), [services.md](services.md)).
+
+**Which names work.** Any public Linux image, for the server's architecture,
+from any registry that serves anonymous pulls:
+
+| You write | It pulls |
+|---|---|
+| `alpine`, `alpine:3.20`, `python:3.13-slim` | Docker Hub's official image; the tag is `latest` when none is given |
+| `team/app:1` | Docker Hub, `team/app` |
+| `ghcr.io/owner/name:tag` | that registry, that repository |
+| `name@sha256:…` | exactly that build, whatever its tags point at now |
+
+Lowercase only, as registries require. sandboxd pulls **without
+credentials**, so a private image cannot be used: the registry refuses it,
+as it does a name that does not exist (`token request: 403 Forbidden` on
+ghcr.io). Check the spelling, or make the image public.
+
+**What the image needs.** Nothing of ours: the guest agent is put into every
+image's root disk. Processes run as the sandbox user (uid 1001) and start in
+`/sandbox/home`, whichever image it is. The image's `ENV` applies, so a `PATH`
+of its own keeps working, except `HOME` and `USER`; its `USER`, `WORKDIR` and
+entrypoint are not used: a sandbox runs the command you give it. That command,
+or the agent, must be in the image or installable from it (an agent that is
+not in it is installed once per endpoint, [README](../README.md#coding-agents)).
+The base image is `node:22` with Python 3, git, curl, build tools, ripgrep,
+jq and rsync, and four agents ready to run: claude, codex, gemini and
+opencode.
+
+**The first sandbox of an image waits.** It is pulled, and on Linux built
+into a root disk, the first time a sandbox asks for it: seconds for a small
+image, a minute or more for a large one. Later sandboxes start at once.
+`sandbox-cli image pull IMAGE` does it ahead (below).
+
+**What the server allows.** Where the operator set an `images:` list in the
+policy, only those may be named, written exactly as listed; any other is
+refused (`image "…" is not one this server permits`). `sandbox-cli doctor`
+shows the server's limits; the operator's settings are in
+[sandboxd.md](sandboxd.md).
+
+Checked on a real host (Firecracker 1.17.0, as a user): `python:3.13-slim`
+from Docker Hub pulled in 3 s and ran `python3` as uid 1001 in
+`/sandbox/home`; a misspelt ghcr.io name was refused at the token request.
+
+### Installing and removing images
 
 A sandbox's image is pulled, and on Linux built into a root disk, the first
 time a sandbox asks for it; that first sandbox waits for both, a minute or

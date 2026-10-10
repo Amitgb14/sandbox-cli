@@ -67,6 +67,12 @@ sandbox-cli update dev --name api --idle 2h         # rename, relabel, retime or
 sandbox-cli image pull IMAGE · image ls · image rm IMAGE   # install an image before its first sandbox waits for it
 ```
 
+A sandbox starts from the server's default image, which has git, Node, Python
+and four agents, unless you name another: `--image python:3.13-slim`, or any
+public Linux image (`ghcr.io/owner/name:tag`, `name@sha256:…`). It is pulled
+the first time a sandbox asks for it; a private image cannot be pulled.
+Which names work and what an image needs: [docs/self-hosting.md](docs/self-hosting.md#choosing-the-image-a-sandbox-starts-from).
+
 Work done in a sandbox stays there. To keep it, push it from inside (a commit
 made in a sandbox carries a neutral `sandbox` identity), read it out through the
 files API, or write it to a volume, which outlives the VM.

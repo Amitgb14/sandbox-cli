@@ -227,7 +227,7 @@ export default function Home() {
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
                   sandbox-cli agent claude --dangerously-skip-permissions
                 </code>{" "}
-                is <code className="font-mono text-[0.85em]">run</code> with an agent&apos;s
+                is <code className="font-mono text-[0.85em]">run</code>{" "}with an agent&apos;s
                 conveniences on top: its login copied in and back out, its own environment
                 variables forwarded when set, and everything after the sandbox flags handed to the
                 agent untouched. None of it is required to use a sandbox.
@@ -324,7 +324,7 @@ export default function Home() {
               <p className="mt-6 max-w-xl text-sm leading-relaxed text-muted-foreground">
                 Uninstalling is cautious: <code className="font-mono text-[0.9em]">--uninstall</code>{" "}
                 removes the binaries and <em>reports</em> what else is on disk —{" "}
-                <code className="font-mono text-[0.9em]">~/.config/sandbox</code> holds your agent
+                <code className="font-mono text-[0.9em]">~/.config/sandbox</code>{" "}holds your agent
                 logins, and sandboxd&apos;s state directory your volumes. Add{" "}
                 <code className="font-mono text-[0.9em]">--purge</code> when you mean it.
               </p>

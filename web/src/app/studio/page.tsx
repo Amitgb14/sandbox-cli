@@ -161,7 +161,7 @@ export default function StudioPage() {
           <CodeBlock code={OPEN} />
           <p className="mt-4 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             Open the address it prints. <code className="font-mono">--context</code> picks another
-            sandboxd, <code className="font-mono">--port</code> another port. Closing Studio leaves every
+            sandboxd, <code className="font-mono">--port</code>{" "}another port. Closing Studio leaves every
             sandbox it started running; the next Studio finds them again. Every screen, which ones a
             gateway key&apos;s scopes open, organizations and the hosted build are in{" "}
             <Link href={docPath("studio")} className="underline underline-offset-4">

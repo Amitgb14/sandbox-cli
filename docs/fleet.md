@@ -125,7 +125,7 @@ sandboxes](self-hosting.md#an-extra-disk-for-sandboxes)), with these
 differences:
 
 ```sh
-sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
+sudo sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
   --firecracker /usr/local/bin/firecracker --jailer /usr/local/bin/jailer \
   --policy /etc/sandboxd/policy.yaml \
   --listen 10.0.0.17:7443 \
@@ -166,6 +166,10 @@ the gateway offers what **every** answering node can do (see
 
 ### Install
 
+A command that needs root says `sudo`. One that reads the gateway's own files,
+its state, keys and certificates, runs as its user, `sudo -u sandbox-gateway`,
+as its unit does; the gateway refuses files other users can read.
+
 **The binary: built from a checkout, for now.** No published release has
 `sandbox-gateway` yet: 0.0.1 is the last release of the container design.
 Until the rewrite's first release, build it as the nodes' binaries are built
@@ -176,16 +180,16 @@ replaces the first two lines below. The gateway needs no KVM and no root.
 
 ```sh
 git clone https://github.com/Amitgb14/sandbox-cli && cd sandbox-cli && make build
-install -m 0755 bin/sandbox-gateway bin/sandbox-cli /usr/local/bin/
+sudo install -m 0755 bin/sandbox-gateway bin/sandbox-cli /usr/local/bin/
 
-useradd --system --home-dir /var/lib/sandbox-gateway --shell /usr/sbin/nologin sandbox-gateway
-install -d -o sandbox-gateway -g sandbox-gateway -m 0700 \
+sudo useradd --system --home-dir /var/lib/sandbox-gateway --shell /usr/sbin/nologin sandbox-gateway
+sudo install -d -o sandbox-gateway -g sandbox-gateway -m 0700 \
   /etc/sandbox-gateway /etc/sandbox-gateway/tls /var/lib/sandbox-gateway
 
-install -o sandbox-gateway -g sandbox-gateway -m 0600 \
+sudo install -o sandbox-gateway -g sandbox-gateway -m 0600 \
   fleet-certs/ca.pem fleet-certs/gateway-client.pem fleet-certs/gateway-client-key.pem \
   fleet-certs/gateway.pem fleet-certs/gateway-key.pem /etc/sandbox-gateway/tls/
-install -o sandbox-gateway -g sandbox-gateway -m 0600 n17.token n18.token /etc/sandbox-gateway/
+sudo install -o sandbox-gateway -g sandbox-gateway -m 0600 n17.token n18.token /etc/sandbox-gateway/
 ```
 
 Every file the gateway reads must belong to its user: it refuses a token, a
@@ -222,8 +226,8 @@ sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.j
     --ca-file /etc/sandbox-gateway/tls/ca.pem \
     --cert-file /etc/sandbox-gateway/tls/gateway-client.pem \
     --key-file /etc/sandbox-gateway/tls/gateway-client-key.pem
-sandbox-gateway --state … nodes list
-sandbox-gateway --state … nodes remove n17
+sudo -u sandbox-gateway sandbox-gateway --state … nodes list
+sudo -u sandbox-gateway sandbox-gateway --state … nodes remove n17
 ```
 
 `nodes add` reads every file it is given and refuses a node it could not reach
@@ -249,7 +253,7 @@ a serving gateway through the [admin API](operations.md#changing-a-serving-gatew
 ### Serve
 
 ```sh
-sandbox-gateway serve --state /var/lib/sandbox-gateway/state.json \
+sudo -u sandbox-gateway sandbox-gateway serve --state /var/lib/sandbox-gateway/state.json \
   --listen 0.0.0.0:8443 \
   --tls-cert /etc/sandbox-gateway/tls/gateway.pem \
   --tls-key /etc/sandbox-gateway/tls/gateway-key.pem \
@@ -262,11 +266,11 @@ runs this as the `sandbox-gateway` user with no capabilities, a read-only
 system and only its state directory writable.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd/sandbox-gateway.service \
+sudo curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd/sandbox-gateway.service \
   -o /etc/systemd/system/sandbox-gateway.service      # or cp it from a checkout
 # set --ssh-public-host to the name users ssh to, as above
-sed -i 's/gateway.example.internal/gw.example.internal/' /etc/systemd/system/sandbox-gateway.service
-systemctl daemon-reload && systemctl enable --now sandbox-gateway
+sudo sed -i 's/gateway.example.internal/gw.example.internal/' /etc/systemd/system/sandbox-gateway.service
+sudo systemctl daemon-reload && sudo systemctl enable --now sandbox-gateway
 ```
 
 | Flag | Default | |

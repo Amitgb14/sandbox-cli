@@ -46,19 +46,63 @@ export const INSTALL_STEP: SetupStep = RELEASED
     }
   : {
       title: "Build and install",
-      code: `${SOURCE_BUILD}\ninstall -d ~/.local/bin\ninstall -m 0755 bin/sandbox-cli bin/sandboxd bin/sandbox-guestd ~/.local/bin/`,
-      body: `${NOT_RELEASED_YET} sandbox-cli, sandboxd and the guest agent go side by side into ~/.local/bin; sandboxd is installed, not started.`,
+      code: `${SOURCE_BUILD}
+install -d ~/.local/bin
+install -m 0755 bin/sandbox-cli bin/sandboxd bin/sandbox-guestd ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"   # this shell; put the same line in ~/.zshrc or ~/.bashrc
+command -v sandboxd sandbox-cli        # both must print a path under ~/.local/bin`,
+      body: `${NOT_RELEASED_YET} sandbox-cli, sandboxd and the guest agent go side by side into ~/.local/bin; sandboxd is installed, not started. Run this as yourself, not root. If command -v prints nothing, ~/.local/bin is not on your PATH: the export line puts it there, and the same line in your shell's startup file keeps it there.`,
     };
 
 /** Installing on a server, where the unit runs everything from /usr/local/bin. */
+/**
+ * A drive of its own for sandboxd's state, as docs/self-hosting.md's Install,
+ * step 2, gives it: named once, checked empty before it is erased, mounted by
+ * UUID and without nofail (the unit has RequiresMountsFor).
+ */
+export const DISK_MOUNT_CODE = `lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS   # the spare one has no FSTYPE and no MOUNTPOINTS
+DISK=/dev/nvme1n1                             # yours, from the list above
+lsblk -f $DISK                               # must show no filesystem and no mount point
+sudo wipefs -n $DISK                         # must print nothing: no signature on it
+sudo mkfs.xfs $DISK                          # ERASES IT
+sudo install -d -m 0700 /var/lib/sandboxd
+echo "UUID=$(sudo blkid -s UUID -o value $DISK) /var/lib/sandboxd xfs defaults,noatime 0 2" \\
+  | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
+sudo chmod 0700 /var/lib/sandboxd
+command -v restorecon >/dev/null && sudo restorecon -R /var/lib/sandboxd   # SELinux hosts only
+findmnt /var/lib/sandboxd && df -h /var/lib/sandboxd`;
+
+/** With no spare drive: a directory of a larger filesystem, bind-mounted there. */
+export const BIND_MOUNT_CODE = `sudo install -d -m 0700 /home/sandboxd /var/lib/sandboxd
+echo "/home/sandboxd /var/lib/sandboxd none bind 0 0" | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload && sudo mount /var/lib/sandboxd
+findmnt /var/lib/sandboxd && df -h /var/lib/sandboxd`;
+
+/** Firecracker and its jailer from Firecracker's releases, into /usr/local/bin. */
+const FIRECRACKER_SERVER_FETCH = `ARCH=$(uname -m)
+release_url=https://github.com/firecracker-microvm/firecracker/releases
+latest=v1.17.0   # the version checked on a real host
+curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
+sudo install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH /usr/local/bin/firecracker
+sudo install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH /usr/local/bin/jailer
+firecracker --version   # Firecracker v1.17.0`;
+
 export const SERVER_INSTALL_CODE = RELEASED
-  ? "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\\n  | sudo sh -s -- --dest /usr/local/bin --no-config\nsudo install -m 0755 firecracker jailer /usr/local/bin/"
-  : `${SOURCE_BUILD}\nsudo install -m 0755 bin/sandboxd bin/sandbox-guestd bin/sandbox-cli /usr/local/bin/\nsudo install -m 0755 firecracker jailer /usr/local/bin/`;
+  ? `curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\
+  | sudo sh -s -- --dest /usr/local/bin --no-config
+${FIRECRACKER_SERVER_FETCH}`
+  : `${SOURCE_BUILD}
+sudo install -m 0755 bin/sandboxd bin/sandbox-guestd bin/sandbox-cli /usr/local/bin/
+${FIRECRACKER_SERVER_FETCH}`;
 
 /** Installing the client alone. */
 export const CLIENT_INSTALL_CODE = RELEASED
   ? "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --client-only"
-  : `${SOURCE_BUILD}\ninstall -d ~/.local/bin && install -m 0755 bin/sandbox-cli ~/.local/bin/`;
+  : `${SOURCE_BUILD}
+install -d ~/.local/bin && install -m 0755 bin/sandbox-cli ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"   # this shell; put the same line in ~/.zshrc or ~/.bashrc
+command -v sandbox-cli                 # must print a path under ~/.local/bin`;
 
 /**
  * The launch agent, fetched and pointed at the installed sandboxd. The plist in
@@ -132,14 +176,14 @@ export const SETUP_PATHS: SetupPath[] = [
     engine: "Firecracker",
     steps: [
       {
-        title: "Have KVM, Firecracker and a guest kernel",
-        code: "ls -l /dev/kvm\n# firecracker and jailer: github.com/firecracker-microvm/firecracker/releases\n# a vmlinux with IP_PNP, VIRTIO_VSOCKETS and overlayfs",
-        body: "x86_64 or arm64, plus mkfs.ext4, ip and nft. The machine needs KVM: a cloud VM without nested virtualisation will not do.",
+        title: "Have KVM and the tools",
+        code: "ls -l /dev/kvm   # a cloud VM needs nested virtualisation\nsudo dnf install -y e2fsprogs iproute nftables git make curl file   # or apt-get: iproute2\ngo version       # 1.25 or later",
+        body: "Checked on x86_64, an EL10 distribution with host kernel 6.12, e2fsprogs 1.47.1, iproute2 6.17.0 and nftables 1.1.5; arm64 and other distributions are built for but not yet run. Firecracker 1.17.0 and the guest kernel 6.1.155 come in the steps below, both pinned to the versions checked.",
       },
       {
-        title: "Give sandboxes a disk of their own",
-        code: "mkfs.xfs /dev/nvme1n1   # erases it\necho \"UUID=$(blkid -s UUID -o value /dev/nvme1n1) /var/lib/sandboxd xfs defaults,noatime 0 2\" >> /etc/fstab\nmkdir -p /var/lib/sandboxd && mount /var/lib/sandboxd",
-        body: "Images, sandboxes' disks, snapshots and volumes live under /var/lib/sandboxd, so a full sandbox fills that disk and not /. Mount it first, the whole directory, by UUID; the unit will not start sandboxd without it.",
+        title: "Give sandboxes a drive of their own",
+        code: DISK_MOUNT_CODE,
+        body: "Images, sandboxes' disks, snapshots and volumes live under /var/lib/sandboxd, so a full sandbox fills that drive and not /. Mount it first, the whole directory, by UUID; the unit will not start sandboxd without it. With no spare drive, bind-mount a directory of a larger filesystem there instead (the setup guide shows it); on a machine just for trying with 20 GiB free on /, skip this.",
       },
       {
         title: "Install, as root, where the unit expects it",
@@ -148,7 +192,7 @@ export const SETUP_PATHS: SetupPath[] = [
       },
       {
         title: "Run it as a service",
-        code: "install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls\ninstall -m 0644 vmlinux /var/lib/sandboxd/vmlinux\nhead -c 32 /dev/urandom | base64 > /etc/sandboxd/token && chmod 600 /etc/sandboxd/token\ninstall -m 0600 cert.pem key.pem /etc/sandboxd/tls/\ncp packaging/systemd/policy.example.yaml /etc/sandboxd/policy.yaml\ncp packaging/systemd/sandboxd.service /etc/systemd/system/   # set --allowed-host\nsystemctl daemon-reload && systemctl enable --now sandboxd",
+        code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls\nARCH=$(uname -m)\nsudo curl -fsSL -o /var/lib/sandboxd/vmlinux https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155\nfile /var/lib/sandboxd/vmlinux   # the guest kernel, 6.1.155: must say ELF 64-bit\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'\nsudo install -m 0600 cert.pem key.pem /etc/sandboxd/tls/\nRAW=https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/systemd\nsudo curl -fsSL $RAW/policy.example.yaml -o /etc/sandboxd/policy.yaml\nsudo curl -fsSL $RAW/sandboxd.service -o /etc/systemd/system/sandboxd.service   # set --allowed-host\nsudo systemctl daemon-reload && sudo systemctl enable --now sandboxd",
         body: "As root it enforces the egress allowlist on the host and runs every VM under the jailer with a uid of its own. It refuses to listen on a network address without a token and TLS. The policy file is where the ceiling, the image list, pools and limits are set; a request can only ask for less. With --keep-sandboxes, an upgrade leaves running sandboxes running.",
       },
       {
@@ -171,7 +215,7 @@ export const SETUP_PATHS: SetupPath[] = [
       INSTALL_STEP,
       {
         title: "Start sandboxd in a terminal",
-        code: "sandboxd --backend firecracker \\\n  --kernel ~/vmlinux --firecracker ~/bin/firecracker",
+        code: "sandboxd --backend firecracker \\\n  --kernel ~/.local/share/sandboxd/vmlinux \\\n  --firecracker ~/.local/bin/firecracker   # as yourself, not root",
         body: "It listens on a unix socket under $XDG_RUNTIME_DIR, the CLI's default local context. Your user needs read-write access to /dev/kvm.",
       },
       DOCTOR_STEP,
@@ -213,7 +257,7 @@ export const FLEET_CERTS_CODE = `curl -fsSLO https://raw.githubusercontent.com/A
 sh make-certs.sh -o fleet-certs \\
   -g gateway.example.internal 10.0.0.17 10.0.0.18`;
 
-export const FLEET_NODE_CODE = `sandboxd --backend firecracker ... \\
+export const FLEET_NODE_CODE = `sudo sandboxd --backend firecracker ... \\
   --listen 10.0.0.17:7443 --allowed-host 10.0.0.17 \\
   --token-file /etc/sandboxd/token \\
   --tls-cert /etc/sandboxd/tls/node-10.0.0.17.pem \\

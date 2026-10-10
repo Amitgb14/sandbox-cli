@@ -10,7 +10,7 @@ and [local-macos.md](local-macos.md) on a Mac; the API it serves is
 [api/v1.md](api/v1.md).
 
 ```sh
-sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
+sudo sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
   --firecracker /usr/local/bin/firecracker --jailer /usr/local/bin/jailer \
   --policy /etc/sandboxd/policy.yaml \
   --listen 0.0.0.0:7443 --token-file /etc/sandboxd/token \
@@ -24,7 +24,7 @@ sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
 
 | Flag | Default | |
 |---|---|---|
-| `--listen` | a unix socket: `$XDG_RUNTIME_DIR/sandboxd.sock`, else `~/.config/sandbox/sandboxd.sock` | `unix:///path/to/socket`, or `host:port`. A unix socket is made owner-only: only its owner can open it, and that is the access control. |
+| `--listen` | a unix socket: `$XDG_RUNTIME_DIR/sandboxd.sock`, else `~/.config/sandbox/sandboxd.sock` | `unix:///path/to/socket`, or `host:port`. A unix socket is made owner-only: only its owner can open it, and that is the access control. A TCP address needs a token, and one that is not loopback TLS and `--allowed-host` too ([On an IP address](self-hosting.md#on-an-ip-address-instead-of-a-socket)). |
 | `--token-file FILE` | | the bearer token clients must present; at least 16 characters, in a file other users cannot read. Required on a network address. |
 | `--tls-cert`, `--tls-key` | | TLS certificate and key (PEM). Required for an address that is not loopback: a token over plain HTTP is a token anyone on the path can reuse. |
 | `--allowed-host NAME` | | a `Host` name to answer besides loopback (repeatable). Clients reach the server by this name; any other `Host` is refused, which stops DNS rebinding. |
