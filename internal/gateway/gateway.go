@@ -68,6 +68,8 @@ type Config struct {
 	// link-local addresses; without it the gateway posts to public ones only
 	// (jobrun.go, newNotifyClient).
 	NotifyAllowPrivate bool
+	// Mail sends invites by email (mail.go); nil sends none.
+	Mail *MailConfig
 	// AccessRecheckInterval is how often running jobs are held to their
 	// owner still holding an active API key (default 30s;
 	// revokeOrphanedJobs), and open forwarded requests to their key
@@ -120,7 +122,8 @@ type Gateway struct {
 	jobs         *jobManager
 	notifyClient *http.Client
 	services     *serviceCtl
-	live         *liveRequests // open forwarded requests, held to their keys (live.go)
+	live         *liveRequests   // open forwarded requests, held to their keys (live.go)
+	signIns      *signInThrottle // accounts.go
 
 	stop context.CancelFunc
 	wg   sync.WaitGroup
@@ -177,7 +180,7 @@ func New(cfg Config) (*Gateway, error) {
 		cfg: cfg, store: cfg.Store, logf: cfg.Logf, tombs: newTombstones(10000, time.Hour),
 		inflight: map[string]Usage{}, claimed: map[string]bool{},
 		metrics: newGatewayMetrics(), audit: cfg.Audit, services: newServiceCtl(cfg.Store),
-		live: newLiveRequests(),
+		live: newLiveRequests(), signIns: newSignInThrottle(time.Now),
 	}
 	g.nodes = newNodePool(poolConfig{interval: cfg.PollInterval, failAfter: cfg.FailAfter,
 		newClient: cfg.NewNodeClient, logf: cfg.Logf, changed: g.nodeChanged, polled: g.nodePolled})

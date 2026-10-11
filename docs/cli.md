@@ -46,12 +46,28 @@ Global flags:
 | [`sandbox-cli doctor`](#sandbox-cli-doctor) | Check the current context's sandboxd and say what it offers |
 | [`sandbox-cli events`](#sandbox-cli-events) | Show a sandbox's audit events: what it was asked to do and how it ended |
 | [`sandbox-cli exec`](#sandbox-cli-exec) | Run a command in a running sandbox |
-| [`sandbox-cli gateway`](#sandbox-cli-gateway) | Operate a running gateway's nodes: list, cordon, drain, lost sandboxes, the audit log (admin key) |
+| [`sandbox-cli gateway`](#sandbox-cli-gateway) | Operate a running gateway: its nodes, users' keys and policies, lost sandboxes, the audit log (admin key) |
 | [`sandbox-cli gateway audit`](#sandbox-cli-gateway-audit) | Show the gateway's audit log: who did what, newest last |
 | [`sandbox-cli gateway cordon`](#sandbox-cli-gateway-cordon) | Stop placing new sandboxes on a node; what runs there carries on |
 | [`sandbox-cli gateway drain`](#sandbox-cli-gateway-drain) | Cordon a node and report its sandboxes; with --terminate, end them all |
+| [`sandbox-cli gateway invites`](#sandbox-cli-gateway-invites) | Invite people by email to sign in to hosted Studio with a password (admin key) |
+| [`sandbox-cli gateway invites create`](#sandbox-cli-gateway-invites-create) | Make an invite; its link is printed once |
+| [`sandbox-cli gateway invites list`](#sandbox-cli-gateway-invites-list) | List invites not yet used |
+| [`sandbox-cli gateway invites resend`](#sandbox-cli-gateway-invites-resend) | Make a pending invite's link again, valid two days; the old link stops working |
+| [`sandbox-cli gateway invites revoke`](#sandbox-cli-gateway-invites-revoke) | Withdraw an invite; its link stops working |
+| [`sandbox-cli gateway keys`](#sandbox-cli-gateway-keys) | Issue, list and revoke the gateway's API keys (admin key) |
+| [`sandbox-cli gateway keys create`](#sandbox-cli-gateway-keys-create) | Issue an API key; its secret is printed once |
+| [`sandbox-cli gateway keys list`](#sandbox-cli-gateway-keys-list) | List API keys (never their secrets) |
+| [`sandbox-cli gateway keys renew`](#sandbox-cli-gateway-keys-renew) | Change when an API key stops working: --expires 30d, never, or now |
+| [`sandbox-cli gateway keys reset`](#sandbox-cli-gateway-keys-reset) | Make a link that sets a new password for an account |
+| [`sandbox-cli gateway keys revoke`](#sandbox-cli-gateway-keys-revoke) | Revoke an API key; what it has open is closed at once |
 | [`sandbox-cli gateway lost`](#sandbox-cli-gateway-lost) | List sandboxes on nodes that have not answered for longer than the gateway's grace period |
 | [`sandbox-cli gateway nodes`](#sandbox-cli-gateway-nodes) | List the gateway's nodes: health, cordon, sandboxes running, sandboxd version |
+| [`sandbox-cli gateway policies`](#sandbox-cli-gateway-policies) | Set, list, assign and remove user policies (admin key) |
+| [`sandbox-cli gateway policies assign`](#sandbox-cli-gateway-policies-assign) | Give a user a policy, or none with --none |
+| [`sandbox-cli gateway policies list`](#sandbox-cli-gateway-policies-list) | List policies and the users holding each |
+| [`sandbox-cli gateway policies remove`](#sandbox-cli-gateway-policies-remove) | Remove a policy no user holds |
+| [`sandbox-cli gateway policies set`](#sandbox-cli-gateway-policies-set) | Create or change a policy; a change holds for sandboxes created after it |
 | [`sandbox-cli gateway uncordon`](#sandbox-cli-gateway-uncordon) | Place new sandboxes on a node again |
 | [`sandbox-cli image`](#sandbox-cli-image) | Images a sandboxd starts sandboxes from: list, download ahead of use, remove |
 | [`sandbox-cli image ls`](#sandbox-cli-image-ls) | List installed images, those installing, and those that failed |
@@ -466,7 +482,7 @@ Flags:
 
 ## sandbox-cli gateway
 
-Operate a running gateway's nodes: list, cordon, drain, lost sandboxes, the audit log (admin key).
+Operate a running gateway: its nodes, users' keys and policies, lost sandboxes, the audit log (admin key).
 
 ```text
 sandbox-cli gateway [command]
@@ -479,7 +495,7 @@ and restart its sandboxd, uncordon NODE. The gateway keeps a node it cordoned
 cordoned across the node's restart, until it is uncordoned here.
 ```
 
-Subcommands: [`audit`](#sandbox-cli-gateway-audit), [`cordon`](#sandbox-cli-gateway-cordon), [`drain`](#sandbox-cli-gateway-drain), [`lost`](#sandbox-cli-gateway-lost), [`nodes`](#sandbox-cli-gateway-nodes), [`uncordon`](#sandbox-cli-gateway-uncordon).
+Subcommands: [`audit`](#sandbox-cli-gateway-audit), [`cordon`](#sandbox-cli-gateway-cordon), [`drain`](#sandbox-cli-gateway-drain), [`invites`](#sandbox-cli-gateway-invites), [`keys`](#sandbox-cli-gateway-keys), [`lost`](#sandbox-cli-gateway-lost), [`nodes`](#sandbox-cli-gateway-nodes), [`policies`](#sandbox-cli-gateway-policies), [`uncordon`](#sandbox-cli-gateway-uncordon).
 
 Flags:
 
@@ -530,6 +546,202 @@ Flags:
 |---|---|---|
 | `--terminate` |  | terminate every sandbox on the node now |
 
+### sandbox-cli gateway invites
+
+Invite people by email to sign in to hosted Studio with a password (admin key).
+
+```text
+sandbox-cli gateway invites [command]
+```
+
+```text
+An invite is a one-time link for an email address. Opening it in hosted Studio,
+the person chooses a password and becomes an account: a user with the tenant,
+scopes, policy and lifetime the invite names, as a key issued with them would
+have. They sign in with the address and password from then on; the account is
+listed, renewed and revoked with gateway keys.
+```
+
+Subcommands: [`create`](#sandbox-cli-gateway-invites-create), [`list`](#sandbox-cli-gateway-invites-list), [`resend`](#sandbox-cli-gateway-invites-resend), [`revoke`](#sandbox-cli-gateway-invites-revoke).
+
+### sandbox-cli gateway invites create
+
+Make an invite; its link is printed once.
+
+```text
+sandbox-cli gateway invites create [flags]
+```
+
+Examples:
+
+```sh
+# a demo user: 30-minute sandboxes, an account for a week, the link emailed
+sandbox-cli gateway invites create --email bob@example.com --user bob --tenant bob \
+  --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
+  --policy demo --expires 7d --send --invite-url https://studio.example.com
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--email string` |  | the address the invite is for; required |
+| `--expires string` | `never` | how long the account lasts once made: 7d, 12h, or never |
+| `--invite-url string` |  | the hosted Studio's address (https://studio.example.com), to print the whole link |
+| `--policy string` |  | the policy the user holds (gateway policies set) |
+| `--scope stringArray` |  | a scope, as for gateway keys create (repeatable) |
+| `--send` |  | have the gateway email the link to the address (a gateway started with --smtp-host) |
+| `--tenant string` |  | the user's tenant (quotas are per tenant) |
+| `--user string` |  | the user the account acts as; required |
+
+### sandbox-cli gateway invites list
+
+List invites not yet used.
+
+```text
+sandbox-cli gateway invites list
+```
+
+### sandbox-cli gateway invites resend
+
+Make a pending invite's link again, valid two days; the old link stops working.
+
+```text
+sandbox-cli gateway invites resend ID [flags]
+```
+
+Examples:
+
+```sh
+sandbox-cli gateway invites resend inv_0123456789abcdef --send
+sandbox-cli gateway invites resend inv_0123456789abcdef --invite-url https://studio.example.com
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--invite-url string` |  | the hosted Studio's address (https://studio.example.com), to print the whole link |
+| `--send` |  | have the gateway email the link to the address (a gateway started with --smtp-host) |
+
+### sandbox-cli gateway invites revoke
+
+Withdraw an invite; its link stops working.
+
+```text
+sandbox-cli gateway invites revoke ID
+```
+
+### sandbox-cli gateway keys
+
+Issue, list and revoke the gateway's API keys (admin key).
+
+```text
+sandbox-cli gateway keys [command]
+```
+
+Subcommands: [`create`](#sandbox-cli-gateway-keys-create), [`list`](#sandbox-cli-gateway-keys-list), [`renew`](#sandbox-cli-gateway-keys-renew), [`reset`](#sandbox-cli-gateway-keys-reset), [`revoke`](#sandbox-cli-gateway-keys-revoke).
+
+### sandbox-cli gateway keys create
+
+Issue an API key; its secret is printed once.
+
+```text
+sandbox-cli gateway keys create [flags]
+```
+
+```text
+Issues an API key: a user, in a tenant, with scopes. A demo user is one with a
+policy (gateway policies) and an expiry; a long-time user has neither. With
+--invite-url it also prints the link that signs the user in to hosted Studio.
+```
+
+Examples:
+
+```sh
+# a demo user: 30-minute sandboxes, for a week
+sandbox-cli gateway keys create --user bob --tenant bob \
+  --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
+  --policy demo --expires 7d --invite-url https://studio.example.com
+# a long-time user
+sandbox-cli gateway keys create --user carol --tenant carol \
+  --scope sandbox:read --scope sandbox:create --scope sandbox:delete --scope sandbox:ssh
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--expires string` | `never` | how long the key works: 7d, 12h, or never |
+| `--invite-url string` |  | a hosted Studio's address (https://studio.example.com): also print the invite link that signs the user in |
+| `--policy string` |  | assign the user this policy (gateway policies set) as the key is issued |
+| `--scope stringArray` |  | a scope: sandbox:read, sandbox:create, sandbox:delete, sandbox:ssh, secrets:write, org:create, admin (repeatable) |
+| `--tenant string` |  | the user's tenant (quotas are per tenant) |
+| `--user string` |  | the user the key acts as; required |
+
+### sandbox-cli gateway keys list
+
+List API keys (never their secrets).
+
+```text
+sandbox-cli gateway keys list
+```
+
+### sandbox-cli gateway keys renew
+
+Change when an API key stops working: --expires 30d, never, or now.
+
+```text
+sandbox-cli gateway keys renew ID [flags]
+```
+
+Examples:
+
+```sh
+sandbox-cli gateway keys renew key_0123456789abcdef --expires 30d
+sandbox-cli gateway keys renew key_0123456789abcdef --expires now
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--expires string` |  | how long from now: 30d, 12h, never, or now (ends what it has open) |
+
+### sandbox-cli gateway keys reset
+
+Make a link that sets a new password for an account.
+
+```text
+sandbox-cli gateway keys reset ID [flags]
+```
+
+```text
+Makes a one-time link, valid two days, with which the account's user sets a new
+password; their sign-ins end when it is used. The old password works until then.
+```
+
+Examples:
+
+```sh
+sandbox-cli gateway keys reset key_0123456789abcdef --invite-url https://studio.example.com
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--invite-url string` |  | the hosted Studio's address (https://studio.example.com), to print the whole link |
+| `--send` |  | have the gateway email the link to the account's address (a gateway started with --smtp-host) |
+
+### sandbox-cli gateway keys revoke
+
+Revoke an API key; what it has open is closed at once.
+
+```text
+sandbox-cli gateway keys revoke ID
+```
+
 ### sandbox-cli gateway lost
 
 List sandboxes on nodes that have not answered for longer than the gateway's grace period.
@@ -545,6 +757,77 @@ List the gateway's nodes: health, cordon, sandboxes running, sandboxd version.
 ```text
 sandbox-cli gateway nodes
 ```
+
+### sandbox-cli gateway policies
+
+Set, list, assign and remove user policies (admin key).
+
+```text
+sandbox-cli gateway policies [command]
+```
+
+```text
+A user policy holds a user's sandboxes to limits on top of the nodes' own; for
+now, how long each may exist. A sandbox asking for no lifetime gets the
+policy's, and one asking for more is refused. A change to a policy holds for
+sandboxes created after it; move a running one's end with
+sandbox-cli update SANDBOX --lifetime +15m. Admin keys are held to none.
+```
+
+Subcommands: [`assign`](#sandbox-cli-gateway-policies-assign), [`list`](#sandbox-cli-gateway-policies-list), [`remove`](#sandbox-cli-gateway-policies-remove), [`set`](#sandbox-cli-gateway-policies-set).
+
+Examples:
+
+```sh
+sandbox-cli gateway policies set demo --max-lifetime 30m
+sandbox-cli gateway policies assign bob demo --tenant bob
+sandbox-cli gateway policies assign bob --tenant bob --none
+```
+
+### sandbox-cli gateway policies assign
+
+Give a user a policy, or none with --none.
+
+```text
+sandbox-cli gateway policies assign USER [POLICY] [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--none` |  | clear the user's policy |
+| `--tenant string` |  | the tenant of the user's keys |
+
+### sandbox-cli gateway policies list
+
+List policies and the users holding each.
+
+```text
+sandbox-cli gateway policies list
+```
+
+### sandbox-cli gateway policies remove
+
+Remove a policy no user holds.
+
+```text
+sandbox-cli gateway policies remove NAME
+```
+
+### sandbox-cli gateway policies set
+
+Create or change a policy; a change holds for sandboxes created after it.
+
+```text
+sandbox-cli gateway policies set NAME [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--max-lifetime duration` |  | how long each of a user's sandboxes may exist, busy or not, e.g. 30m (0: no bound of the policy's own) |
 
 ### sandbox-cli gateway uncordon
 
@@ -1347,8 +1630,11 @@ they see, exactly as for their own CLI.
 
 It holds no credential of its own and reads nothing from this machine: no
 context, no agent logins, no environment, no config. Unattended agent runs go
-through jobs, with the user's API key stored as a secret. Admin keys are refused;
-use sandbox-cli studio on your own machine for those.
+through jobs, with the user's API key stored as a secret.
+
+Admin keys are refused unless --allow-admin: then an admin signs in the same way,
+gets the admin screens (users and keys, policies, nodes, audit), and their
+session ends after an hour unused or twelve hours in all.
 
 Sessions are kept in memory: a restart signs everyone out, and they open their
 invite link again.
@@ -1358,6 +1644,7 @@ Flags:
 
 | Flag | Default | |
 |---|---|---|
+| `--allow-admin` |  | let admin keys sign in and manage the gateway from here (sessions of at most 1h idle, 12h in all) |
 | `--allowed-host stringArray` |  | a further Host header to answer, for a proxy that rewrites it (repeatable) |
 | `--ca string` |  | CA (PEM) the gateway's certificate is signed by, for a private CA |
 | `--gateway string` |  | the gateway's URL (http:// on loopback only) |
@@ -1443,10 +1730,14 @@ Changes a live sandbox in place; only what a flag names changes.
 
 --label adds or changes a label and --label KEY- (or --unlabel KEY) removes one;
 the others are kept. --idle sets how long it may sit idle before it is
-terminated (0: never, where the server allows that). --network changes the
-network of a running sandbox, as run's flags would set it: --allow adds to the
-built-in hosts unless --no-baseline, and an agent's sandbox keeps its agent's
-API. Not every endpoint can change a running sandbox's network.
+terminated (0: never, where the server allows that). --lifetime sets when it
+ends, busy or not, counted from its creation: 45m sets it, +15m pushes its end
+out and -10m brings it nearer. Through a gateway only an admin can push it out.
+
+--network changes the network of a running sandbox, as run's flags would set
+it: --allow adds to the built-in hosts unless --no-baseline, and an agent's
+sandbox keeps its agent's API. Not every endpoint can change a running
+sandbox's network.
 
 vCPUs and memory are fixed while a VM runs.
 ```
@@ -1457,6 +1748,7 @@ Examples:
 sandbox-cli update web --name api
 sandbox-cli update api --label team=infra --label ticket-
 sandbox-cli update api --idle 2h
+sandbox-cli update api --lifetime +15m
 sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline
 ```
 
@@ -1469,6 +1761,7 @@ Flags:
 | `--deny stringArray` |  | with --network: a host it may not reach (repeatable) |
 | `--idle duration` |  | terminate it after this long idle, e.g. 2h (0: never, where allowed) |
 | `--label stringArray` |  | set a label, key=value, or remove one, key- (repeatable) |
+| `--lifetime string` |  | when it ends, from its creation: 45m sets it, +15m or -10m moves its end |
 | `--name string` |  | rename it ("" removes the name) |
 | `--network string` |  | none, allowlist or open, applied to the running sandbox |
 | `--no-baseline` |  | with --network allowlist: only the hosts named, without the built-in ones |

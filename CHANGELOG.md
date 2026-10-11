@@ -301,6 +301,58 @@ in `_old/` as reference, to be ported where this design still wants it.
   before, closing the browser tab threw a minute of work away. Deleting the
   sandbox part way does not stop it either: the sandbox goes at once, and the
   snapshot is listed when it finishes, or is not there at all if it cannot.
+- **Studio's sandbox list says when each ends and, to an admin, whose it
+  is.** An **Ends** column ticks down to a sandbox's lifetime ("in 29m 12s",
+  or "never"), and a gateway admin's list has an **Owner** column from the
+  gateway's owner label; a sandbox's page shows its owner too.
+- **Invite people by email; they sign in with a password.** A gateway admin
+  invites an address (`POST /v1/admin/invites`, `sandbox-cli gateway invites
+  create --email …`, or **Create invite** in Studio's Users & keys, whose
+  **Email invite** opens the admin's mail program with the message written).
+  The link, `#invite=…`, works once and for two days; opening it in hosted
+  Studio, the person chooses a password and is signed in, and from then on
+  signs in with their address and password on the form hosted Studio shows
+  to anyone without a session. The account is a key with the user, tenant,
+  scopes, policy and lifetime the invite named, listed by `keys list` with its
+  EMAIL and renewed or revoked like any key; each sign-in gets a short-lived
+  key of its own, ended by Sign out. `keys reset ID` (Reset password… in
+  Studio) makes a link for a forgotten password, and the Account page changes
+  one's own. Five wrong passwords in a row lock an address for 15 minutes.
+  With a mail relay (`sandbox-gateway serve --smtp-host … --smtp-password-file
+  … --mail-from … --studio-url …`, TLS required) the gateway emails the link
+  itself (`send_email`, `--send`, on by default in Studio when it can); a
+  failed send leaves the invite usable. Hosted Studio without a session now shows
+  a sign-in page of its own, in place of the dashboard, with email and
+  password or an API key; a hosted session's 401 reads "no session: sign in
+  again".
+- **The admin in hosted Studio, and keys that expire.** `sandbox-cli studio
+  host --allow-admin` lets an admin key sign in by invite link and use the
+  admin screens there; an admin's session ends after an hour unused or twelve
+  hours in all. Without the flag an admin key is refused, as before. Users &
+  keys adds users as a **Demo user** (a policy, a key for 7 days) or a
+  **Member** (neither), and shows each new key's invite link once. An API key
+  can now expire: `expires_in_secs` at `POST /v1/admin/keys`, `sandbox-cli
+  gateway keys create --expires 7d`, `sandbox-gateway keys create --expires`;
+  an expired key is refused everywhere a revoked one is. `PATCH
+  /v1/admin/keys/{id}`, `sandbox-cli gateway keys renew ID --expires
+  30d|never|now` and Renew in Studio change it. `--invite-url` now prints an
+  admin key's link too, with a note that it needs `--allow-admin`. The hosted
+  build (`npm run build:hosted`) now carries the admin screens' code, shown
+  only to an admin's session; `NEXT_PUBLIC_STUDIO_ADMIN=off` still leaves it out.
+- **User policies, and moving a sandbox's end.** A gateway admin can name a
+  policy (`sandbox-cli gateway policies set demo --max-lifetime 30m`) and give
+  it to users, when issuing their key (`sandbox-cli gateway keys create …
+  --policy demo`) or later (`gateway policies assign`). Each sandbox of a user
+  holding it lives at most that long, so a demo server can give its users 30
+  minutes while the admin's own sandboxes are unlimited. A change to a policy
+  holds for sandboxes created after it. A running sandbox's end moves with
+  `PATCH /v1/sandboxes/{ref}` `{"lifetime_secs": N}`, counted from creation:
+  `sandbox-cli update SANDBOX --lifetime +15m` (or `-10m`, or `45m`), or the
+  −15m / +15m buttons beside "Ends" in Studio. Only an admin key may push an
+  end out; its owner may only bring it nearer. `sandbox-cli gateway keys
+  create|list|revoke` issues keys, with an invite link, while the gateway
+  serves, which `sandbox-gateway keys` cannot; Studio's Users & keys screen
+  has the policies too. `sandbox-gateway policies` edits them offline.
 - **A sandbox lifetime.** `limits.max_lifetime_secs` in sandboxd's policy ends
   every sandbox that long after it was created, whatever it is doing — a
   running process holds off the idle timeout, not this — and a suspended one

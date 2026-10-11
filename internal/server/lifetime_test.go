@@ -186,3 +186,85 @@ func TestLifetimeSurvivesARestart(t *testing.T) {
 		t.Fatalf("thirty minutes after creation, restart included: %s", got.State)
 	}
 }
+
+// A lifetime can be changed while the sandbox lives, both ways, counted from
+// creation; the reaper keeps to the new end, and so does a restart.
+func TestLifetimeCanBeChanged(t *testing.T) {
+	s, c, clk := lifetimeServer(t, 3600)
+	ctx := context.Background()
+	start := clk.now()
+	sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{LifetimeSecs: 1800, IdleTimeoutSecs: 86400})
+	if err != nil {
+		t.Fatal(err)
+	}
+	life := func(n int) api.UpdateSandboxRequest { return api.UpdateSandboxRequest{LifetimeSecs: &n} }
+
+	// Extended to 45 minutes: alive at 40.
+	got, err := c.UpdateSandbox(ctx, sb.ID, life(2700))
+	if want := start.Add(45 * time.Minute); err != nil || got.LifetimeSecs != 2700 || got.ExpiresAt == nil || !got.ExpiresAt.Equal(want) {
+		t.Fatalf("extended: lifetime %d, expires %v, %v; want 2700 and %v", got.LifetimeSecs, got.ExpiresAt, err, want)
+	}
+	s.reapOnce(clk.advance(40 * time.Minute))
+	if got, _ := c.Sandbox(ctx, sb.ID); got.State != api.StateRunning {
+		t.Fatalf("at 40 minutes of 45: %s", got.State)
+	}
+	evs, _ := c.Events(ctx, sb.ID)
+	changed := false
+	for _, ev := range evs.Events {
+		changed = changed || (ev.Type == api.EventSandboxUpdated && ev.LifetimeSecs != nil && *ev.LifetimeSecs == 2700)
+	}
+	if !changed {
+		t.Errorf("no sandbox.updated event with the new lifetime: %+v", evs.Events)
+	}
+
+	// Over the node's limit, and not a number of seconds: refused, unchanged.
+	for _, n := range []int{3601, 0, -5} {
+		if _, err := c.UpdateSandbox(ctx, sb.ID, life(n)); !api.IsCode(err, api.CodeInvalidRequest) {
+			t.Errorf("lifetime_secs %d: %v, want invalid_request", n, err)
+		}
+	}
+
+	// Shortened to a time already past: ended on the reaper's next look.
+	if _, err := c.UpdateSandbox(ctx, sb.ID, life(60)); err != nil {
+		t.Fatal(err)
+	}
+	s.reapOnce(clk.now())
+	if got, _ := c.Sandbox(ctx, sb.ID); got.State != api.StateTerminated {
+		t.Fatalf("shortened to a past end: %s", got.State)
+	}
+	if _, err := c.UpdateSandbox(ctx, sb.ID, life(600)); !api.IsCode(err, api.CodeConflict) {
+		t.Errorf("a terminated sandbox: %v, want conflict", err)
+	}
+}
+
+// A changed lifetime is what a restart restores.
+func TestChangedLifetimeSurvivesARestart(t *testing.T) {
+	b := fake.New(api.CapEgressAllowlist)
+	dir := newKeepDir(t)
+	pol := spec.DefaultPolicyFor(b.Capabilities())
+	pol.Limits.MaxLifetimeSecs = 7200
+	clk := &testClock{t: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
+	serve := func() http.Handler {
+		s := &Server{Backend: b, Policy: pol, RecordDir: dir, now: clk.now}
+		if _, err := s.Restore(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			for id := range b.Kept() {
+				_ = b.Terminate(context.Background(), id)
+			}
+			s.watchers.Wait()
+		})
+		return s.Handler()
+	}
+	h1 := serve()
+	sb := mustCreate(t, h1, api.CreateSandboxRequest{Name: "demo"})
+	if r := call(t, h1, "PATCH", "/v1/sandboxes/demo", map[string]any{"lifetime_secs": 5400}); r.Code != http.StatusOK {
+		t.Fatalf("PATCH: %d %s", r.Code, r.Body)
+	}
+	var got api.Sandbox
+	_ = json.Unmarshal(call(t, serve(), "GET", "/v1/sandboxes/demo", nil).Body.Bytes(), &got)
+	if want := sb.CreatedAt.Add(90 * time.Minute); got.LifetimeSecs != 5400 || got.ExpiresAt == nil || !got.ExpiresAt.Equal(want) {
+		t.Fatalf("after a restart: lifetime %d, expires %v; want 5400 and %v", got.LifetimeSecs, got.ExpiresAt, want)
+	}
+}

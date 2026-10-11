@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,9 @@ var (
 type testGateway struct {
 	mu      sync.Mutex
 	keys    map[string]api.Whoami
+	ttls    []int    // ttl_secs of each sign-in asked for
+	logouts []string // the keys signed out
+	minted  int
 	auths   []string // Authorization of each request, in order
 	cookies []string
 	sd      http.Handler
@@ -53,6 +57,52 @@ func newTestGateway() *testGateway {
 		},
 		sd: (&server.Server{Backend: b, Policy: spec.DefaultPolicyFor(b.Capabilities()), Token: "sandboxd-token"}).Handler(),
 	}
+}
+
+// Accounts of the stand-in gateway: alice's password, an admin's, and one
+// invite for carol.
+const (
+	alicePassword = "alice's password"
+	opsPassword   = "the ops password"
+	carolInvite   = "sgi_carol"
+)
+
+// auth answers the gateway's routes that take no key, minting a key for
+// each sign-in as the gateway does.
+func (g *testGateway) auth(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email, Password, Token string
+		TTLSecs                int `json:"ttl_secs"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	refuse := func(status int, code, msg string) {
+		writeJSON(w, status, api.ErrorBody{Error: api.ErrorDetail{Code: code, Message: msg}})
+	}
+	var who api.Whoami
+	switch {
+	case r.URL.Path == "/v1/auth/invite" && body.Token == carolInvite:
+		writeJSON(w, http.StatusOK, api.InviteInfo{Email: "carol@example.com", User: "carol"})
+		return
+	case r.URL.Path == "/v1/auth/login" && body.Email == "alice@example.com" && body.Password == alicePassword:
+		who = api.Whoami{User: "alice", Tenant: "alice", Scopes: []string{"sandbox:read"}}
+	case r.URL.Path == "/v1/auth/login" && body.Email == "ops@example.com" && body.Password == opsPassword:
+		who = api.Whoami{User: "ops", Scopes: []string{"admin"}}
+	case r.URL.Path == "/v1/auth/register" && body.Token == carolInvite:
+		who = api.Whoami{User: "carol", Tenant: "carol", Scopes: []string{"sandbox:read"}}
+	case r.URL.Path == "/v1/auth/login":
+		refuse(http.StatusUnauthorized, api.CodeUnauthorized, "that email and password do not match an account")
+		return
+	default:
+		refuse(http.StatusNotFound, api.CodeNotFound, "this invite is not valid: used, withdrawn or expired")
+		return
+	}
+	g.mu.Lock()
+	g.minted++
+	key := fmt.Sprintf("sgk_%052d", g.minted)
+	g.keys[key] = who
+	g.ttls = append(g.ttls, body.TTLSecs)
+	g.mu.Unlock()
+	writeJSON(w, http.StatusOK, api.Login{Secret: key, User: who.User, Tenant: who.Tenant, Scopes: who.Scopes})
 }
 
 func (g *testGateway) revoke(key string) {
@@ -78,6 +128,19 @@ func (g *testGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mu.Unlock()
 	if r.URL.Path == "/v1/health" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/v1/auth/") && r.URL.Path != "/v1/auth/logout" {
+		g.auth(w, r)
+		return
+	}
+	if r.URL.Path == "/v1/auth/logout" && ok {
+		g.mu.Lock()
+		key := strings.TrimPrefix(auth, "Bearer ")
+		g.logouts = append(g.logouts, key)
+		delete(g.keys, key)
+		g.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if !ok {
@@ -683,5 +746,111 @@ func TestHostedLeavesTheHostsSettingsAlone(t *testing.T) {
 	}
 	if slices.Contains(got.Deny, "host-rule.example") || slices.Contains(got.Allow, "host-group.example") {
 		t.Errorf("the host's egress rules were applied to a hosted launch: allow %v deny %v", got.Allow, got.Deny)
+	}
+}
+
+// An admin key signs in only where the operator allowed it, and its session
+// is held to an hour idle and twelve hours in all, however long a user's
+// may last.
+func TestHostedAdminSignIn(t *testing.T) {
+	off := hostedUnderTest(t)
+	if r, body := off.do(t, hreq{method: "POST", path: "/api/session", origin: off.origin, body: map[string]string{"key": adminKey}}); r.StatusCode != http.StatusForbidden || !strings.Contains(fmt.Sprint(body), "--allow-admin") {
+		t.Fatalf("an admin without --allow-admin: %d %v", r.StatusCode, body)
+	}
+
+	e := hostedUnderTest(t, func(s *Server) {
+		s.Hosted.AllowAdmin = true
+		s.Hosted.SessionIdle, s.Hosted.SessionMaxAge = 12*time.Hour, 7*24*time.Hour
+	})
+	r, _ := e.do(t, hreq{method: "POST", path: "/api/session", origin: e.origin, body: map[string]string{"key": adminKey}})
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("an admin with --allow-admin: %d", r.StatusCode)
+	}
+	var cookie *http.Cookie
+	for _, c := range r.Cookies() {
+		cookie = c
+	}
+	if cookie == nil || cookie.MaxAge != int((12*time.Hour)/time.Second) {
+		t.Fatalf("the admin's cookie: %+v", cookie)
+	}
+	user := e.signIn(t, aliceKey)
+	e.clock.advance(61 * time.Minute)
+	if r, _ := e.do(t, hreq{method: "GET", path: "/api/session", cookie: cookie.Value}); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("an admin idle past an hour: %d", r.StatusCode)
+	}
+	if r, _ := e.do(t, hreq{method: "GET", path: "/api/session", cookie: user}); r.StatusCode != http.StatusOK {
+		t.Errorf("a user idle an hour, of twelve: %d", r.StatusCode)
+	}
+
+	busy := e.signIn(t, adminKey)
+	for range 13 { // 12h47m, never idle for an hour
+		e.clock.advance(59 * time.Minute)
+		e.do(t, hreq{method: "GET", path: "/api/session", cookie: busy})
+	}
+	if r, _ := e.do(t, hreq{method: "GET", path: "/api/session", cookie: busy}); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("an admin in use past twelve hours: %d", r.StatusCode)
+	}
+}
+
+// A password and an invite each start a session as a key does; the key the
+// gateway mints for it is asked to last as long as a session may, and
+// signing out ends it at the gateway. An admin's password is refused
+// without --allow-admin, and the key minted for it ended at once.
+func TestHostedPasswordSignIn(t *testing.T) {
+	e := hostedUnderTest(t)
+	login := func(email, pw string) (*http.Response, map[string]any) {
+		return e.do(t, hreq{method: "POST", path: "/api/login", origin: e.origin, body: map[string]string{"email": email, "password": pw}})
+	}
+	if r, body := login("alice@example.com", "wrong"); r.StatusCode != http.StatusUnauthorized || !strings.Contains(fmt.Sprint(body), "do not match") {
+		t.Errorf("a wrong password: %d %v", r.StatusCode, body)
+	}
+	if r, _ := e.do(t, hreq{method: "POST", path: "/api/login", body: map[string]string{"email": "alice@example.com", "password": alicePassword}}); r.StatusCode != http.StatusForbidden {
+		t.Errorf("a sign-in with no Origin: %d", r.StatusCode)
+	}
+	r, body := login("alice@example.com", alicePassword)
+	if r.StatusCode != http.StatusOK || body["user"] != "alice" {
+		t.Fatalf("a password: %d %v", r.StatusCode, body)
+	}
+	var cookie string
+	for _, c := range r.Cookies() {
+		cookie = c.Value
+	}
+	if r, _ := e.do(t, hreq{method: "GET", path: "/api/v1/sandboxes", cookie: cookie}); r.StatusCode != http.StatusOK {
+		t.Errorf("a call in the session: %d", r.StatusCode)
+	}
+	e.gw.mu.Lock()
+	ttls, minted := slices.Clone(e.gw.ttls), fmt.Sprintf("sgk_%052d", e.gw.minted)
+	e.gw.mu.Unlock()
+	if len(ttls) != 1 || ttls[0] != 24*3600 {
+		t.Errorf("the sign-in's key was asked to last %v; want a session's age", ttls)
+	}
+	if r, _ := e.do(t, hreq{method: "DELETE", path: "/api/session", origin: e.origin, cookie: cookie}); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("sign-out: %d", r.StatusCode)
+	}
+	e.gw.mu.Lock()
+	logouts := slices.Clone(e.gw.logouts)
+	e.gw.mu.Unlock()
+	if !slices.Equal(logouts, []string{minted}) {
+		t.Errorf("signed out at the gateway: %v; want the sign-in's key", logouts)
+	}
+
+	if r, body := e.do(t, hreq{method: "POST", path: "/api/invite", origin: e.origin, body: map[string]string{"invite": carolInvite}}); r.StatusCode != http.StatusOK || body["email"] != "carol@example.com" {
+		t.Errorf("what an invite is for: %d %v", r.StatusCode, body)
+	}
+	if r, _ := e.do(t, hreq{method: "POST", path: "/api/invite", origin: e.origin, body: map[string]string{"invite": "sgi_nope"}}); r.StatusCode != http.StatusNotFound {
+		t.Errorf("an unknown invite: %d", r.StatusCode)
+	}
+	if r, body := e.do(t, hreq{method: "POST", path: "/api/register", origin: e.origin, body: map[string]string{"invite": carolInvite, "password": "carol's password"}}); r.StatusCode != http.StatusOK || body["user"] != "carol" {
+		t.Errorf("register: %d %v", r.StatusCode, body)
+	}
+
+	if r, body := login("ops@example.com", opsPassword); r.StatusCode != http.StatusForbidden || !strings.Contains(fmt.Sprint(body), "--allow-admin") {
+		t.Errorf("an admin's password without --allow-admin: %d %v", r.StatusCode, body)
+	}
+	e.gw.mu.Lock()
+	n := len(e.gw.logouts)
+	e.gw.mu.Unlock()
+	if n != 2 {
+		t.Errorf("the refused admin's key was not ended at the gateway: %d sign-outs", n)
 	}
 }

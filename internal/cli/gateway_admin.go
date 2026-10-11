@@ -20,7 +20,7 @@ import (
 func newGatewayCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gateway",
-		Short: "Operate a running gateway's nodes: list, cordon, drain, lost sandboxes, the audit log (admin key)",
+		Short: "Operate a running gateway: its nodes, users' keys and policies, lost sandboxes, the audit log (admin key)",
 		Long: "Calls a gateway's admin API with the current context's key, which needs the\n" +
 			"admin scope. Upgrading a node is: drain NODE (or cordon it and wait), upgrade\n" +
 			"and restart its sandboxd, uncordon NODE. The gateway keeps a node it cordoned\n" +
@@ -188,7 +188,7 @@ func newGatewayCmd() *cobra.Command {
 	cmd.AddCommand(nodes,
 		cordon("cordon", "Stop placing new sandboxes on a node; what runs there carries on", true),
 		cordon("uncordon", "Place new sandboxes on a node again", false),
-		drain, lost, auditCmd)
+		drain, lost, auditCmd, newGatewayKeysCmd(&ctxFlag), newGatewayPoliciesCmd(&ctxFlag), newGatewayInvitesCmd(&ctxFlag))
 	return cmd
 }
 

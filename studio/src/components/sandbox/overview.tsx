@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Pencil, Scaling, SquareTerminal } from "lucide-react";
+import { toast } from "sonner";
 import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
+import { Countdown, ownerOf } from "@/components/sandbox/countdown";
 import { Labels } from "@/components/sandbox/labels";
 import { ResourcesWithMetrics } from "@/components/sandbox/metrics";
 import { SandboxSnapshots } from "@/components/sandbox/snapshots";
@@ -11,11 +13,11 @@ import { EditDetails } from "@/components/sandbox/edit-details";
 import { EditNetwork } from "@/components/sandbox/edit-network";
 import { ResizeDialog, resizeBlocked } from "@/components/sandbox/resize";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useInfo } from "@/lib/api/queries";
+import { useInfo, useUpdateSandbox } from "@/lib/api/queries";
 import { useCan } from "@/lib/caller";
 import { cn } from "@/lib/utils";
 import { StateDot } from "@/components/sandbox/state-dot";
-import { formatArgv, formatDateTime, formatDuration, formatRelative } from "@/lib/format";
+import { formatArgv, formatDateTime, formatRelative } from "@/lib/format";
 import type { Process, Sandbox } from "@/lib/types";
 
 function idle(secs: number): string {
@@ -39,21 +41,42 @@ function Section({ title, aside, children }: { title?: string; aside?: React.Rea
   );
 }
 
+const STEP = 15 * 60;
+
 /**
- * Time left before a sandbox's lifetime ends it, busy or not. It ticks: there
- * is one on screen, and the last minutes are what someone is watching for.
+ * Moves a sandbox's end by a quarter of an hour. Bringing it nearer only
+ * narrows what the caller holds, so any key that may change the sandbox may;
+ * pushing it out is the operator's: a sandboxd's token, or an admin key at a
+ * gateway, which refuses it to anyone else (internal/gateway/update.go).
  */
-function Countdown({ at }: { at: string }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const left = new Date(at).getTime() - now;
+function MoveEnd({ sb, mayExtend }: { sb: Sandbox; mayExtend: boolean }) {
+  const update = useUpdateSandbox();
+  const life = sb.lifetime_secs ?? 0;
+  const move = (by: number) => {
+    const next = life + by;
+    const ends = new Date(sb.created_at).getTime() + next * 1000;
+    if (ends <= Date.now() && !confirm(`That end is already past: ${sb.name || sb.id} is terminated now. Go on?`)) return;
+    update.mutate(
+      { id: sb.id, lifetime_secs: next },
+      { onSuccess: () => toast.success(by > 0 ? "Lifetime extended" : "Lifetime shortened"), onError: (e) => toast.error(e.message) },
+    );
+  };
+  const button = (label: string, by: number, disabled: boolean) => (
+    <button
+      type="button"
+      onClick={() => move(by)}
+      disabled={disabled || update.isPending}
+      aria-label={by > 0 ? "Extend lifetime by 15 minutes" : "Shorten lifetime by 15 minutes"}
+      className="rounded-md px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+    >
+      {label}
+    </button>
+  );
   return (
-    <span title={formatDateTime(at)} className={cn("tabular-nums", left < 5 * 60_000 && "text-caution")}>
-      {left > 0 ? `in ${formatDuration(left)}` : "now"}
-    </span>
+    <>
+      {button("−15m", -STEP, life <= STEP)}
+      {mayExtend ? button("+15m", STEP, false) : null}
+    </>
   );
 }
 
@@ -190,10 +213,12 @@ export function SandboxOverview({
           <Row k="Created">
             <span title={formatDateTime(sb.created_at)}>{formatRelative(sb.created_at)}</span>
           </Row>
+          {ownerOf(sb) ? <Row k="Owner"><span className="font-mono text-xs">{ownerOf(sb)}</span></Row> : null}
           <Row k="Idle auto-stop">{idle(sb.idle_timeout_secs)}</Row>
           {sb.expires_at && sb.state !== "terminated" ? (
             <Row k="Ends">
               <Countdown at={sb.expires_at} />
+              {mayEdit ? <MoveEnd sb={sb} mayExtend={can("admin")} /> : null}
             </Row>
           ) : null}
         </dl>

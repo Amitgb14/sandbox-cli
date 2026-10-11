@@ -336,6 +336,151 @@ is optional and is what quotas count. A key acts as its user: two keys for one
 user see the same sandboxes. Hand the secret over as you would a password, in
 a file. `keys list` shows ids, never secrets; `keys revoke ID` ends a key.
 
+`sandbox-gateway keys` edits the state file, which the serving gateway holds
+locked, so it works only with the gateway stopped. While it serves, the same
+is `sandbox-cli gateway keys create|list|revoke` with an admin key, or Studio's
+Users & keys screen:
+
+```sh
+# a demo user: a policy, and a key that works for a week
+sandbox-cli gateway keys create --user bob --tenant bob \
+  --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
+  --policy demo --expires 7d --invite-url https://studio.example.com
+# a long-time user: neither
+sandbox-cli gateway keys create --user carol --tenant carol \
+  --scope sandbox:read --scope sandbox:create --scope sandbox:delete --scope sandbox:ssh \
+  --invite-url https://studio.example.com
+```
+
+`--invite-url` also prints the link that signs the user in to a
+[hosted Studio](studio.md#hosted-studio); an admin's signs in only where it
+runs with `--allow-admin`, where the admin can do all of this from the Users &
+keys screen instead.
+
+### Key expiry
+
+`--expires 7d` (or `12h`, or `never`, the default) makes a key stop working
+then, exactly as if it were revoked then: its calls get `401`, a hosted
+Studio session with it ends, its open streams and SSH connections close within
+the recheck interval (30s), and its user's jobs are cancelled once they hold no
+working key. Unlike a revoked key, an expired one can be renewed:
+
+```sh
+sandbox-cli gateway keys renew KEY_ID --expires 30d     # 30 days from now
+sandbox-cli gateway keys renew KEY_ID --expires never
+sandbox-cli gateway keys renew KEY_ID --expires now     # ends its access at once
+```
+
+`keys list` shows each key's EXPIRES and whether it is active, expired or
+revoked. With the gateway stopped, `sandbox-gateway keys create --expires`
+does the same on the state file.
+
+### User policies
+
+A node's `policy.yaml` is the same for everyone who reaches it. A user policy
+is a set of limits the gateway holds a user's sandboxes to on top of it, so
+one fleet can give a trial user 30 minutes and the admin no limit. For now a
+policy holds a lifetime: how long each of the user's sandboxes may exist, busy
+or not, from its creation.
+
+```sh
+sandbox-cli gateway policies set demo --max-lifetime 30m
+sandbox-cli gateway policies assign bob demo --tenant bob     # or --policy demo at keys create
+sandbox-cli gateway policies list
+sandbox-cli update SANDBOX --lifetime +15m                    # one sandbox: +15m, -10m, or 45m from its creation
+```
+
+- A sandbox asking for no lifetime gets the policy's; one asking for more is
+  refused. A policy is assigned to a user named with the tenant of their keys,
+  and follows them into every organisation they act in, and into their jobs and
+  services.
+- A change to a policy holds for sandboxes created after it. A running one
+  keeps its end, so an edit cannot end, or prolong, sandboxes in use; move those
+  one at a time.
+- Only an admin key may push a sandbox's end out. Its owner may bring it
+  nearer, and is refused a later one: the policy is the operator's limit on the
+  user.
+- Admin keys hold no policy. A policy in use cannot be removed; assign its
+  users another, or `--none`, first.
+- The node's own `limits.max_lifetime_secs` still applies, and the strictest
+  wins. To let an admin extend sandboxes past a policy, set the nodes' limit
+  above it (or leave it unset) and let the policy carry the users' limit.
+
+With the gateway stopped, `sandbox-gateway policies set|list|assign|remove` and
+`keys create --policy` do the same on the state file.
+
+### Accounts: invite by email, sign in with a password
+
+A key is a good credential for a program and a poor one for a person: it has
+to be sent to them, and wherever it was sent it keeps working until it is
+revoked. An account lets a person sign in to hosted Studio
+([studio.md](studio.md#hosted-studio)) with an email address and a password
+instead.
+
+```sh
+# a demo user: 30-minute sandboxes, an account that lasts a week
+sandbox-cli gateway invites create --email bob@example.com --user bob --tenant bob \
+  --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
+  --policy demo --expires 7d --invite-url https://studio.example.com
+sandbox-cli gateway invites list                 # sent and not yet used
+sandbox-cli gateway invites revoke INVITE_ID
+sandbox-cli gateway keys reset KEY_ID --invite-url https://studio.example.com   # a forgotten password
+```
+
+Or in Studio, under Users & keys: type the address in **Add a user** and
+press **Create invite**; **Email invite** opens your own mail program with the
+message and link written.
+
+- **The invite** is a link, `https://studio…/#invite=sgi_…`, shown once and
+  stored only as its hash. It works once, for two days (`valid_secs` in the
+  API, at most seven), so a leaked email is worth nothing once it was used or
+  has lapsed. A second invite for the same address replaces the first.
+- **Opening it**, the person chooses a password (10 to 256 characters) and is
+  signed in. The account is a key with the user, tenant, scopes, policy and
+  lifetime the invite named, plus the email and the password's PBKDF2-SHA256
+  hash; its own secret is never shown. It is listed by `keys list` (EMAIL) and
+  renewed, expired and revoked like any key, and a job of the user's keeps
+  running while they are signed out, as it would for a key.
+- **Each sign-in** gets a key of its own, for at most as long as the session
+  (12 hours unless Studio's `--session-max-age` says otherwise) and never past
+  the account's end. Signing out ends it; revoking or expiring the account
+  ends them all within the recheck interval. Sign-ins' keys are not listed.
+- **A forgotten password** is reset with a new link (`keys reset`, or Reset
+  password… in Studio): the old password works until it is used, and every
+  sign-in ends when it is. A user changes their own password on the Account
+  page, which ends their other sign-ins.
+- **Guessing is held back.** Five failures in a row lock an address for 15
+  minutes, and failures across all addresses are rate-limited; an unknown
+  address takes as long to refuse as a wrong password, and gets the same
+  answer. Each check is a PBKDF2 hash, at most two at a time.
+- **There is no sign-up without an invite.**
+
+**Sending the email from the gateway.** Without a mail relay the admin sends
+the link (Studio's **Email invite** opens their own mail program). With one,
+the gateway sends it when asked (`--send`, or **email the invite from the
+gateway** in Studio, on by default when a relay is set), and resets too.
+Any SMTP relay works: your own mail server, or an email-sending service's
+SMTP relay, whose user name and API key go in the flags below.
+
+```sh
+umask 077; printf '%s\n' '<the relay password or API key>' > /var/lib/sandbox-gateway/smtp.key
+sandbox-gateway --state … serve … \
+  --smtp-host smtp.example.com --smtp-port 465 --smtp-user <user> \
+  --smtp-password-file /var/lib/sandbox-gateway/smtp.key \
+  --mail-from 'Sandbox Studio <invites@your-domain.example>' \
+  --studio-url https://studio.example.com
+```
+
+- `--studio-url` is hosted Studio's public address: every emailed link is it
+  followed by `/#invite=…`, so it must be what the recipient can open.
+- Port 465 is TLS from the start; any other port must offer STARTTLS, and
+  a relay that offers neither is refused unless it is on loopback.
+- The password file is refused if others can read it; the password and the
+  links appear in no log. The sender must be an address the relay lets you
+  send from (with a sending service, one on a domain you have verified).
+- A send that fails leaves the invite usable: the answer says why
+  (`email_error`), and the link is shown to the admin to send by hand.
+
 ### Revoking
 
 Revoking a key (`DELETE /v1/admin/keys/{id}`, or `keys revoke` with the
@@ -424,8 +569,12 @@ To give users Studio without installing anything, serve it with
   left with read-only keys cannot open a shell. Revoking ends open connections,
   open API streams and running jobs, not only the next login
   ([operations.md](operations.md#revoking)).
-- **Secrets travel by reference.** API keys and SSH tokens are random 256-bit
-  strings stored only as their SHA-256; logs name a key by its id. The state
+- **Passwords are only for people, and only through an invite.** The sign-in
+  routes are the only ones without a key; they are rate-limited and lock an
+  address after repeated failures, and a password is stored as a salted
+  PBKDF2 hash. An account's sign-ins end with it.
+- **Secrets travel by reference.** API keys, invites and SSH tokens are random
+  256-bit strings stored only as their SHA-256; logs name a key by its id. The state
   file holds no secret, and is still 0600 and refused if others can read it,
   because it says who owns what. The SSH host key is refused if others can
   read it or if it is a symlink.

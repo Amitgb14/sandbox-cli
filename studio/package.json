@@ -5,7 +5,7 @@
   "description": "Sandbox Studio — the browser view of sandbox-cli, served by `sandbox-cli studio`",
   "scripts": {
     "build": "next build",
-    "build:hosted": "NEXT_PUBLIC_STUDIO_HOSTED=on NEXT_PUBLIC_STUDIO_ADMIN=off STUDIO_DIST_DIR=out-hosted next build",
+    "build:hosted": "NEXT_PUBLIC_STUDIO_HOSTED=on STUDIO_DIST_DIR=out-hosted next build",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",

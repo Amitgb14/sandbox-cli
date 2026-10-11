@@ -27,6 +27,7 @@ func newStudioHostCmd() *cobra.Command {
 		gateway, publicURL, caFile, listen, tlsCert, tlsKey, uiDir string
 		allowedHosts                                               []string
 		idle, maxAge                                               time.Duration
+		allowAdmin                                                 bool
 	)
 	cmd := &cobra.Command{
 		Use:   "host",
@@ -38,8 +39,10 @@ func newStudioHostCmd() *cobra.Command {
 			"they see, exactly as for their own CLI.\n\n" +
 			"It holds no credential of its own and reads nothing from this machine: no\n" +
 			"context, no agent logins, no environment, no config. Unattended agent runs go\n" +
-			"through jobs, with the user's API key stored as a secret. Admin keys are refused;\n" +
-			"use sandbox-cli studio on your own machine for those.\n\n" +
+			"through jobs, with the user's API key stored as a secret.\n\n" +
+			"Admin keys are refused unless --allow-admin: then an admin signs in the same way,\n" +
+			"gets the admin screens (users and keys, policies, nodes, audit), and their\n" +
+			"session ends after an hour unused or twelve hours in all.\n\n" +
 			"Sessions are kept in memory: a restart signs everyone out, and they open their\n" +
 			"invite link again.",
 		Args: cobra.NoArgs,
@@ -63,7 +66,7 @@ func newStudioHostCmd() *cobra.Command {
 			h := &studio.Hosted{
 				Gateway: strings.TrimSuffix(gateway, "/"), HTTP: hc,
 				PublicOrigin: strings.TrimSuffix(publicURL, "/"), AllowedHosts: allowedHosts,
-				SessionIdle: idle, SessionMaxAge: maxAge,
+				SessionIdle: idle, SessionMaxAge: maxAge, AllowAdmin: allowAdmin,
 			}
 			if err := h.Validate(); err != nil {
 				return err
@@ -131,6 +134,7 @@ func newStudioHostCmd() *cobra.Command {
 	f.StringVar(&uiDir, "ui-dir", "", "serve the UI from this directory (studio/out-hosted, from make studio-hosted)")
 	f.DurationVar(&idle, "session-idle", 12*time.Hour, "end a session not used for this long")
 	f.DurationVar(&maxAge, "session-max-age", 7*24*time.Hour, "end a session this long after sign-in")
+	f.BoolVar(&allowAdmin, "allow-admin", false, "let admin keys sign in and manage the gateway from here (sessions of at most 1h idle, 12h in all)")
 	return cmd
 }
 

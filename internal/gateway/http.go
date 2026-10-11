@@ -43,6 +43,14 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	// The only routes without a key: the invite or the password is the
+	// credential (accounts.go).
+	open := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, g.observe(g.openGuard(h))) }
+	open("POST /v1/auth/login", g.login)
+	open("POST /v1/auth/invite", g.inviteFor)
+	open("POST /v1/auth/register", g.register)
+	route("POST /v1/auth/logout", false, g.logout)
+	route("POST /v1/auth/password", false, g.changePassword)
 	route("GET /v1/capabilities", false, g.capabilities)
 	route("GET /v1/whoami", false, g.whoami)
 	route("GET /v1/orgs", false, g.listOrgs)
@@ -125,6 +133,12 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/admin/keys", false, g.adminCreateKey)
 	route("GET /v1/admin/keys", false, g.adminListKeys)
 	route("DELETE /v1/admin/keys/{id}", false, g.adminRevokeKey)
+	route("PATCH /v1/admin/keys/{id}", false, g.adminKeyExpiry)
+	route("POST /v1/admin/keys/{id}/reset", false, g.adminResetPassword)
+	route("POST /v1/admin/invites", false, g.adminCreateInvite)
+	route("GET /v1/admin/invites", false, g.adminListInvites)
+	route("DELETE /v1/admin/invites/{id}", false, g.adminRevokeInvite)
+	route("POST /v1/admin/invites/{id}/resend", false, g.adminResendInvite)
 	route("GET /v1/admin/ssh-keys", false, g.adminListSSHKeys)
 	route("DELETE /v1/admin/ssh-keys/{id}", false, g.adminRemoveSSHKey)
 	route("GET /v1/admin/nodes", false, g.adminListNodes)
@@ -135,6 +149,10 @@ func (g *Gateway) Handler() http.Handler {
 	route("GET /v1/admin/lost", false, g.adminLost)
 	route("GET /v1/admin/audit", false, g.adminAudit)
 	route("GET /v1/admin/orgs", false, g.adminListOrgs)
+	route("GET /v1/admin/policies", false, g.adminListPolicies)
+	route("PUT /v1/admin/policies/{name}", false, g.adminPutPolicy)
+	route("DELETE /v1/admin/policies/{name}", false, g.adminDeletePolicy)
+	route("PUT /v1/admin/user-policy", false, g.adminAssignPolicy)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")

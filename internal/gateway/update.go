@@ -37,6 +37,23 @@ func (g *Gateway) updateHandler(w http.ResponseWriter, r *http.Request, p Princi
 	defer done()
 	ctx := r.Context()
 
+	// A lifetime is the operator's limit on the user, so only an admin may
+	// lengthen one; the owner may bring its end nearer, or give one to a
+	// sandbox that has none, which only narrows what they hold. Through
+	// the node alone the owner could lengthen it to the node's limit, past
+	// the policy the gateway holds them to.
+	if req.LifetimeSecs != nil && !p.Can(ScopeAdmin) {
+		cur, err := n.client.Sandbox(ctx, id)
+		if err != nil {
+			writeNodeErr(w, err)
+			return
+		}
+		if cur.LifetimeSecs > 0 && *req.LifetimeSecs > cur.LifetimeSecs {
+			writeErr(w, http.StatusForbidden, api.CodeRefused, "only an admin can extend a sandbox's lifetime")
+			return
+		}
+	}
+
 	if req.Labels != nil {
 		cur, err := n.client.Sandbox(ctx, id)
 		if err != nil {

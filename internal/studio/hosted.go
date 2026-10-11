@@ -11,17 +11,22 @@ package studio
 // calls and changes who is calling:
 //
 //   - A user signs in once with their own key (an invite link carries it in
-//     the URL fragment, which a browser never sends to a server). Studio
-//     checks it with the gateway, keeps it in memory, and gives the browser
-//     an HttpOnly session cookie. The key is not in the browser after that.
+//     the URL fragment, which a browser never sends to a server), or with
+//     an email and password, for which the gateway mints a key for that
+//     sign-in alone (gateway/accounts.go). Studio checks the key with the
+//     gateway, keeps it in memory, and gives the browser an HttpOnly session
+//     cookie. The key is not in the browser after that.
 //   - Every call is made with that session's key, so the gateway's
 //     ownership, tenants and quotas decide what each person sees: Studio
 //     adds no isolation of its own and needs none.
 //   - Nothing is read from the machine Studio runs on: no context, no agent
 //     logins, no environment, no config. The launcher is the caller's
 //     (internal/cli), and is API-only in this mode.
-//   - It holds no operator credential at all. An admin key is refused: the
-//     operator's screens stay in local Studio, on the operator's machine.
+//   - It holds no operator credential at all. An admin key is refused unless
+//     the operator allows it (AllowAdmin), and then is only ever the
+//     signed-in admin's own: the admin screens call the gateway with it, as
+//     every other screen calls with its user's key, and the gateway decides.
+//     An admin's session is held to a shorter idle time and age.
 
 import (
 	"context"
@@ -59,9 +64,20 @@ type Hosted struct {
 	// one this long after sign-in whatever its use. Zero is 12h and 7 days.
 	SessionIdle   time.Duration
 	SessionMaxAge time.Duration
+	// AllowAdmin lets a key with the admin scope sign in, and so manage the
+	// gateway's users and nodes from the public address. Off, the operator
+	// uses local Studio on their own machine.
+	AllowAdmin bool
 	// Now is the clock, for tests; nil is time.Now.
 	Now func() time.Time
 }
+
+// An admin's session ends sooner than a user's: whoever holds its cookie
+// holds every user's sandboxes, so a browser left signed in is worth less.
+const (
+	adminSessionIdle   = time.Hour
+	adminSessionMaxAge = 12 * time.Hour
+)
 
 // Validate checks what Handler would otherwise have to refuse at run time.
 func (h *Hosted) Validate() error {
@@ -177,6 +193,9 @@ func (s *Server) hostedHandler() http.Handler {
 	api := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.hostedGuard(h)) }
 
 	mux.Handle("POST /api/session", s.hostedHost(s.signInGuard(s.signIn)))
+	mux.Handle("POST /api/login", s.hostedHost(s.signInGuard(s.login)))
+	mux.Handle("POST /api/invite", s.hostedHost(s.signInGuard(s.inviteInfo)))
+	mux.Handle("POST /api/register", s.hostedHost(s.signInGuard(s.register)))
 	api("GET /api/session", s.sessionInfo)
 	api("DELETE /api/session", s.signOut)
 	api("GET /api/info", s.info)
@@ -269,10 +288,10 @@ func (s *Server) hostedEgress(w http.ResponseWriter, _ *http.Request) {
 }
 
 // writeNoSession is the answer to a request whose session is missing or has
-// just ended: the page shows "open your invite link again" on this code.
+// just ended: the page shows its sign-in form on this code.
 func writeNoSession(w http.ResponseWriter) {
 	writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{
-		"code": "session", "message": "no session: open your invite link again"}})
+		"code": "session", "message": "no session: sign in again"}})
 }
 
 // signInGuard is the guard of the one route without a session: Origin is
@@ -363,18 +382,168 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if slices.Contains(who.Scopes, "admin") {
-		writeErr(w, http.StatusForbidden, "an admin key cannot sign in to hosted Studio; use sandbox-cli studio on your own machine")
+	s.startSession(w, key, c, who, false)
+}
+
+// startSession makes the session for a key the gateway accepted, with who
+// it said the key is; signedIn marks a key minted for this sign-in alone,
+// which signing out ends at the gateway too.
+func (s *Server) startSession(w http.ResponseWriter, key string, c *api.Client, who api.Whoami, signedIn bool) {
+	hs := s.hosted
+	admin := slices.Contains(who.Scopes, "admin")
+	if admin && !hs.cfg.AllowAdmin {
+		if signedIn {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = c.Logout(ctx)
+			cancel()
+		}
+		writeErr(w, http.StatusForbidden, "an admin cannot sign in to this Studio; its operator can allow it with sandbox-cli studio host --allow-admin, or use sandbox-cli studio on their own machine")
 		return
 	}
 	id, sess := hs.sessions.create(key, c, who)
+	sess.signedIn = signedIn
 	http.SetCookie(w, &http.Cookie{
 		Name: hs.cfg.cookieName(), Value: id, Path: "/",
 		HttpOnly: true, Secure: hs.cfg.secure(), SameSite: http.SameSiteStrictMode,
-		MaxAge: int(hs.sessions.maxAge / time.Second),
+		MaxAge: int(sess.maxAge / time.Second),
 	})
-	s.logf("sign-in: %s (tenant %s)", who.User, who.Tenant)
+	how := "a key"
+	if signedIn {
+		how = "a password"
+	}
+	if admin {
+		s.logf("sign-in: %s (tenant %s) as admin, with %s", who.User, who.Tenant, how)
+	} else {
+		s.logf("sign-in: %s (tenant %s), with %s", who.User, who.Tenant, how)
+	}
 	writeJSON(w, http.StatusOK, sess.view())
+}
+
+// anonClient reaches the gateway with no key, for the routes whose
+// credential is a password or an invite.
+func (hs *hosted) anonClient() *api.Client {
+	return api.NewClientWithHTTP(hs.gateway.String(), "", &http.Client{Transport: hs.rt})
+}
+
+// gatewayRefusal answers for a sign-in the gateway refused, with its own
+// message where it is one the person can act on. failed reports whether it
+// counts against the sign-in bucket.
+func (s *Server) gatewayRefusal(w http.ResponseWriter, err error) (failed bool) {
+	var e *api.Error
+	switch {
+	case errors.As(err, &e) && e.Status == http.StatusNotFound && e.Message == "no such endpoint":
+		// A gateway from before accounts.
+		writeErr(w, http.StatusBadGateway, "this gateway does not take passwords; it needs updating")
+	case errors.As(err, &e) && e.Status < 500:
+		writeErr(w, e.Status, e.Message)
+		return e.Status == http.StatusUnauthorized || e.Status == http.StatusNotFound
+	default:
+		s.logf("sign-in: the gateway did not answer: %v", err)
+		writeErr(w, http.StatusBadGateway, "the gateway did not answer")
+	}
+	return false
+}
+
+// signInTTL is how long to ask a password's key to last: as long as a
+// session may, so the key does not end under a session still in use.
+func (hs *hosted) signInTTL() int {
+	return int(hs.sessions.maxAge / time.Second)
+}
+
+// fromLogin makes the session for a key the gateway minted at a sign-in.
+func (s *Server) fromLogin(w http.ResponseWriter, r *http.Request, l api.Login) {
+	hs := s.hosted
+	c := api.NewClientWithHTTP(hs.gateway.String(), l.Secret, &http.Client{Transport: hs.rt})
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	who, err := c.Whoami(ctx)
+	if err != nil {
+		s.gatewayRefusal(w, err)
+		return
+	}
+	s.startSession(w, l.Secret, c, who, true)
+}
+
+// login exchanges an email and password for a session.
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	hs := s.hosted
+	if !hs.logins.ready() {
+		writeErr(w, http.StatusTooManyRequests, "too many failed sign-ins; wait a minute")
+		return
+	}
+	if strings.TrimSpace(body.Email) == "" || body.Password == "" {
+		writeErr(w, http.StatusBadRequest, "an email and a password are needed")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	l, err := hs.anonClient().Login(ctx, api.LoginRequest{Email: body.Email, Password: body.Password, TTLSecs: hs.signInTTL()})
+	if err != nil {
+		if s.gatewayRefusal(w, err) {
+			hs.logins.take()
+		}
+		return
+	}
+	s.fromLogin(w, r, l)
+}
+
+// inviteInfo says what an invite is for, so the page can name the address
+// before a password is chosen.
+func (s *Server) inviteInfo(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Invite string `json:"invite"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	hs := s.hosted
+	if !hs.logins.ready() {
+		writeErr(w, http.StatusTooManyRequests, "too many failed sign-ins; wait a minute")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	iv, err := hs.anonClient().InviteFor(ctx, strings.TrimSpace(body.Invite))
+	if err != nil {
+		if s.gatewayRefusal(w, err) {
+			hs.logins.take()
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"email": iv.Email, "user": iv.User, "reset": iv.Reset, "expires": iv.Expires})
+}
+
+// register uses an invite: the password is set and the session starts.
+func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Invite   string `json:"invite"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	hs := s.hosted
+	if !hs.logins.ready() {
+		writeErr(w, http.StatusTooManyRequests, "too many failed sign-ins; wait a minute")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	l, err := hs.anonClient().Register(ctx, api.RegisterRequest{Token: strings.TrimSpace(body.Invite), Password: body.Password, TTLSecs: hs.signInTTL()})
+	if err != nil {
+		if s.gatewayRefusal(w, err) {
+			hs.logins.take()
+		}
+		return
+	}
+	s.fromLogin(w, r, l)
 }
 
 func (s *Server) sessionInfo(w http.ResponseWriter, r *http.Request) {
@@ -382,7 +551,17 @@ func (s *Server) sessionInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) signOut(w http.ResponseWriter, r *http.Request) {
-	s.hosted.sessions.drop(sessionFrom(r.Context()))
+	sess := sessionFrom(r.Context())
+	s.hosted.sessions.drop(sess)
+	// A password's key was minted for this session alone: end it at the
+	// gateway too, rather than leave it working until it expires.
+	if sess.signedIn {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		if err := sess.client.Logout(ctx); err != nil {
+			s.logf("sign-out: ending the sign-in at the gateway: %v", err)
+		}
+		cancel()
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name: s.hosted.cfg.cookieName(), Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: s.hosted.cfg.secure(), SameSite: http.SameSiteStrictMode,
@@ -417,6 +596,12 @@ type session struct {
 	who     api.Whoami
 	created time.Time
 	seen    time.Time
+	// idle and maxAge are the store's, or an admin's shorter ones.
+	idle   time.Duration
+	maxAge time.Duration
+	// signedIn marks a session started with a password: its key is the
+	// sign-in's own, and signing out ends it.
+	signedIn bool
 }
 
 func (s *session) view() map[string]any {
@@ -450,7 +635,10 @@ func (st *sessionStore) create(key string, c *api.Client, who api.Whoami) (strin
 	}
 	id := hex.EncodeToString(raw[:])
 	now := st.now()
-	sess := &session{hash: sha256.Sum256([]byte(id)), key: key, client: c, who: who, created: now, seen: now}
+	sess := &session{hash: sha256.Sum256([]byte(id)), key: key, client: c, who: who, created: now, seen: now, idle: st.idle, maxAge: st.maxAge}
+	if slices.Contains(who.Scopes, "admin") {
+		sess.idle, sess.maxAge = min(sess.idle, adminSessionIdle), min(sess.maxAge, adminSessionMaxAge)
+	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.countLocked(func(s *session) bool { return s.key == key }) >= sessionsPerKey {
@@ -477,7 +665,7 @@ func (st *sessionStore) lookup(id string) *session {
 	if !ok {
 		return nil
 	}
-	if now.Sub(sess.seen) > st.idle || now.Sub(sess.created) > st.maxAge {
+	if now.Sub(sess.seen) > sess.idle || now.Sub(sess.created) > sess.maxAge {
 		delete(st.m, h)
 		return nil
 	}

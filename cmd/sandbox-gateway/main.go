@@ -25,7 +25,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -62,7 +61,7 @@ func newRoot() *cobra.Command {
 	}
 	var state string
 	root.PersistentFlags().StringVar(&state, "state", "", "the gateway's state file (keys, owners, nodes); required")
-	root.AddCommand(newServe(&state), newKeys(&state), newNodes(&state))
+	root.AddCommand(newServe(&state), newKeys(&state), newNodes(&state), newPolicies(&state))
 	return root
 }
 
@@ -93,6 +92,9 @@ type serveOptions struct {
 	jobRetention            time.Duration
 	notifyAllowPrivate      bool
 	maxOrgsPerUser          int
+	// Sending invites by email (gateway/mail.go).
+	smtpHost, smtpUser, smtpPasswordFile, mailFrom, studioURL string
+	smtpPort                                                  int
 }
 
 func newServe(state *string) *cobra.Command {
@@ -138,6 +140,12 @@ func newServe(state *string) *cobra.Command {
 	f.StringVar(&o.jobsDir, "jobs-dir", "", "where jobs' runs keep output and files (default: jobs/ beside the state file)")
 	f.DurationVar(&o.jobRetention, "job-retention", 24*time.Hour, "how long a finished job, and what it kept, is kept")
 	f.BoolVar(&o.notifyAllowPrivate, "notify-allow-private", false, "let a job's notify URL reach loopback, private and link-local addresses (default: public addresses only)")
+	f.StringVar(&o.smtpHost, "smtp-host", "", "an SMTP relay to email invites through; off when empty")
+	f.IntVar(&o.smtpPort, "smtp-port", 587, "the relay's port: 465 is TLS from the start, any other needs STARTTLS")
+	f.StringVar(&o.smtpUser, "smtp-user", "", "the relay's user name")
+	f.StringVar(&o.smtpPasswordFile, "smtp-password-file", "", "a file (mode 0600) holding the relay's password or API key")
+	f.StringVar(&o.mailFrom, "mail-from", "", `the sender of invites: "Sandbox Studio <invites@example.com>"`)
+	f.StringVar(&o.studioURL, "studio-url", "", "hosted Studio's public address, which emailed links open: https://studio.example.com")
 	return cmd
 }
 
@@ -188,6 +196,10 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 	if err != nil {
 		return err
 	}
+	mailCfg, err := mailConfig(o)
+	if err != nil {
+		return err
+	}
 	g, err := gateway.New(gateway.Config{
 		Store: st, StaticNodes: static, PollInterval: o.pollInterval, Quota: o.quota,
 		NodeFilesDir: o.nodeFilesDir, CORSOrigins: o.corsOrigins, Logf: logf,
@@ -196,6 +208,7 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 		NotifyAllowPrivate: o.notifyAllowPrivate,
 		MaxOrgsPerUser:     o.maxOrgsPerUser,
 		Router:             rcfg,
+		Mail:               mailCfg,
 	})
 	if err != nil {
 		return err
@@ -467,22 +480,9 @@ func loadNodeConfig(path string) ([]gateway.NodeConfig, error) {
 
 // --- keys -----------------------------------------------------------------------
 
-// inviteBase is a hosted Studio's address as an invite link's base: an
-// origin, nothing after it, for a key hosted Studio will take.
-func inviteBase(raw string, scopes []string) (string, error) {
-	u, err := url.Parse(strings.TrimSuffix(raw, "/"))
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("--invite-url %q: want Studio's address, https://host[:port]", raw)
-	}
-	if slices.Contains(scopes, "admin") {
-		return "", errors.New("--invite-url: hosted Studio refuses admin keys; an admin uses sandbox-cli studio on their own machine")
-	}
-	return u.Scheme + "://" + u.Host, nil
-}
-
 func newKeys(state *string) *cobra.Command {
 	cmd := &cobra.Command{Use: "keys", Short: "Issue, list and revoke API keys in the state file"}
-	var user, tenant, invite string
+	var user, tenant, invite, policy, expires string
 	var scopes []string
 	create := &cobra.Command{
 		Use:   "create",
@@ -492,8 +492,19 @@ func newKeys(state *string) *cobra.Command {
 			// Checked before the key exists, so a mistake here mints nothing.
 			if invite != "" {
 				var err error
-				if invite, err = inviteBase(invite, scopes); err != nil {
+				if invite, err = api.InviteBase(invite); err != nil {
 					return err
+				}
+			}
+			var expiresAt *time.Time
+			if expires != "" {
+				secs, err := api.ParseKeyExpiry(expires)
+				if err != nil {
+					return fmt.Errorf("--expires %w", err)
+				}
+				if secs > 0 {
+					at := time.Now().Add(time.Duration(secs) * time.Second)
+					expiresAt = &at
 				}
 			}
 			st, err := openState(*state)
@@ -501,12 +512,28 @@ func newKeys(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			secret, k, err := st.CreateKey(user, tenant, scopes)
+			if policy != "" && !slices.ContainsFunc(st.Policies(), func(p api.UserPolicy) bool { return p.Name == policy }) {
+				return fmt.Errorf("policy %s: no such policy (sandbox-gateway policies set)", policy)
+			}
+			secret, k, err := st.CreateKeyExpiring(user, tenant, scopes, expiresAt)
 			if err != nil {
 				return err
 			}
+			if policy != "" {
+				if err := st.AssignPolicy(k.User, k.Tenant, policy); err != nil {
+					_ = st.RevokeKey(k.ID)
+					return fmt.Errorf("policy %s: %w", policy, err)
+				}
+			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "id:     %s\nuser:   %s\ntenant: %s\nscopes: %s\nsecret: %s\n", k.ID, k.User, k.Tenant, strings.Join(k.Scopes, ","), secret)
+			fmt.Fprintf(out, "id:     %s\nuser:   %s\ntenant: %s\nscopes: %s\n", k.ID, k.User, k.Tenant, strings.Join(k.Scopes, ","))
+			if policy != "" {
+				fmt.Fprintf(out, "policy: %s\n", policy)
+			}
+			if k.Expires != nil {
+				fmt.Fprintf(out, "expires: %s\n", k.Expires.Local().Format(time.RFC3339))
+			}
+			fmt.Fprintf(out, "secret: %s\n", secret)
 			if invite != "" {
 				// The key rides in the fragment, which a browser never sends
 				// to a server: hosted Studio's page reads it and exchanges it
@@ -516,12 +543,17 @@ func newKeys(state *string) *cobra.Command {
 			fmt.Fprintln(cmd.ErrOrStderr(), "The secret is shown once and stored only as a hash; keep it now.")
 			if invite != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), "The invite link is the key: send it as you would a password.")
+				if slices.Contains(k.Scopes, gateway.ScopeAdmin) {
+					fmt.Fprintln(cmd.ErrOrStderr(), api.AdminInviteNote)
+				}
 			}
 			return nil
 		},
 	}
 	create.Flags().StringVar(&invite, "invite-url", "", "a hosted Studio's address (https://studio.example.com): also print the invite link that signs the user in")
 	create.Flags().StringVar(&user, "user", "", "the user the key acts as; required")
+	create.Flags().StringVar(&expires, "expires", "", "how long the key works: 7d, 12h, or never (the default)")
+	create.Flags().StringVar(&policy, "policy", "", "assign the user this policy (sandbox-gateway policies set) as the key is issued")
 	create.Flags().StringVar(&tenant, "tenant", "", "the user's tenant (quotas are per tenant)")
 	create.Flags().StringArrayVar(&scopes, "scope", nil, "a scope: "+strings.Join(gateway.AllScopes, ", ")+" (repeatable)")
 	list := &cobra.Command{
@@ -535,14 +567,34 @@ func newKeys(state *string) *cobra.Command {
 			}
 			defer st.Close()
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tUSER\tTENANT\tSCOPES\tCREATED\tSTATE")
+			fmt.Fprintln(tw, "ID\tUSER\tTENANT\tSCOPES\tPOLICY\tCREATED\tEXPIRES\tSTATE\tEMAIL")
+			now := time.Now()
 			for _, k := range st.Keys() {
-				state := "active"
-				if k.Revoked {
-					state = "revoked"
+				// A sign-in's key is its account's, for a while (accounts.go).
+				if k.Parent != "" {
+					continue
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", k.ID, k.User, k.Tenant, strings.Join(k.Scopes, ","),
-					k.Created.Format(time.RFC3339), state)
+				state := "active"
+				switch {
+				case k.Revoked:
+					state = "revoked"
+				case !k.Active(now):
+					state = "expired"
+				}
+				exp := "never"
+				if k.Expires != nil {
+					exp = k.Expires.Format(time.RFC3339)
+				}
+				pol := "-"
+				if p, ok := st.PolicyOf(k.User, k.Tenant); ok {
+					pol = p.Name
+				}
+				email := "-"
+				if k.Email != "" {
+					email = k.Email
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", k.ID, k.User, k.Tenant, strings.Join(k.Scopes, ","),
+					pol, k.Created.Format(time.RFC3339), exp, state, email)
 			}
 			return tw.Flush()
 		},
@@ -566,6 +618,129 @@ func newKeys(state *string) *cobra.Command {
 	}
 	cmd.AddCommand(create, list, revoke)
 	return cmd
+}
+
+// --- policies -------------------------------------------------------------------
+
+// newPolicies edits the user policies in the state file, as keys does, for
+// a gateway that is not serving; a serving one is changed through its admin
+// API (sandbox-cli gateway policies).
+func newPolicies(state *string) *cobra.Command {
+	cmd := &cobra.Command{Use: "policies", Short: "Set, list, assign and remove user policies in the state file"}
+	var maxLife time.Duration
+	set := &cobra.Command{
+		Use:   "set NAME",
+		Short: "Create or change a policy; a change holds for sandboxes created after it",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if maxLife%time.Second != 0 {
+				return errors.New("--max-lifetime is in whole seconds")
+			}
+			st, err := openState(*state)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			p := api.UserPolicy{Name: args[0], MaxLifetimeSecs: int(maxLife / time.Second)}
+			if err := st.PutPolicy(p); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "policy %s: max lifetime %s\n", p.Name, lifetimeText(p.MaxLifetimeSecs))
+			return nil
+		},
+	}
+	set.Flags().DurationVar(&maxLife, "max-lifetime", 0, "how long each of a user's sandboxes may exist, busy or not (30m); 0 is no bound of the policy's own")
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List policies and the users holding each",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			st, err := openState(*state)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			holders := map[string][]string{}
+			seen := map[string]bool{}
+			for _, k := range st.Keys() {
+				id := k.User + "@" + k.Tenant
+				if p, ok := st.PolicyOf(k.User, k.Tenant); ok && !k.Revoked && !seen[id] {
+					seen[id] = true
+					holders[p.Name] = append(holders[p.Name], id)
+				}
+			}
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "NAME\tMAX LIFETIME\tUSERS")
+			for _, p := range st.Policies() {
+				users := strings.Join(holders[p.Name], ",")
+				if users == "" {
+					users = "-"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\n", p.Name, lifetimeText(p.MaxLifetimeSecs), users)
+			}
+			return tw.Flush()
+		},
+	}
+	var tenant string
+	var none bool
+	assign := &cobra.Command{
+		Use:   "assign USER [POLICY]",
+		Short: "Give a user a policy, or none with --none",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := ""
+			switch {
+			case none && len(args) == 2:
+				return errors.New("give a policy or --none, not both")
+			case !none && len(args) == 1:
+				return errors.New("give a policy, or --none to clear the user's")
+			case !none:
+				name = args[1]
+			}
+			st, err := openState(*state)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			if err := st.AssignPolicy(args[0], tenant, name); err != nil {
+				return err
+			}
+			if name == "" {
+				name = "none"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: policy %s\n", args[0], name)
+			return nil
+		},
+	}
+	assign.Flags().StringVar(&tenant, "tenant", "", "the tenant of the user's keys")
+	assign.Flags().BoolVar(&none, "none", false, "clear the user's policy")
+	remove := &cobra.Command{
+		Use:   "remove NAME",
+		Short: "Remove a policy no user holds",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := openState(*state)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			if err := st.DeletePolicy(args[0]); err != nil {
+				return fmt.Errorf("%s: %w", args[0], err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", args[0])
+			return nil
+		},
+	}
+	cmd.AddCommand(set, list, assign, remove)
+	return cmd
+}
+
+// lifetimeText is a lifetime in seconds as a person reads it.
+func lifetimeText(secs int) string {
+	if secs == 0 {
+		return "none"
+	}
+	return (time.Duration(secs) * time.Second).String()
 }
 
 // --- nodes ----------------------------------------------------------------------
@@ -655,4 +830,27 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// mailConfig is how invites are emailed, nil with no --smtp-host. The
+// password is read from a file others cannot read, never taken as a flag.
+func mailConfig(o serveOptions) (*gateway.MailConfig, error) {
+	if o.smtpHost == "" {
+		if o.smtpUser != "" || o.smtpPasswordFile != "" || o.mailFrom != "" || o.studioURL != "" {
+			return nil, errors.New("--smtp-user, --smtp-password-file, --mail-from and --studio-url go with --smtp-host")
+		}
+		return nil, nil
+	}
+	c := &gateway.MailConfig{Host: o.smtpHost, Port: o.smtpPort, User: o.smtpUser, From: o.mailFrom, StudioURL: o.studioURL}
+	if o.smtpPasswordFile != "" {
+		pw, err := gateway.ReadSecretFile(o.smtpPasswordFile)
+		if err != nil {
+			return nil, fmt.Errorf("--smtp-password-file: %w", err)
+		}
+		c.Password = pw
+	}
+	if err := c.Check(); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
