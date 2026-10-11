@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { serviceHref, useDeployService, useServices } from "@/lib/api/gateway";
+import { commandProblem } from "@/lib/service-spec";
 import { useCaller, useCan } from "@/lib/caller";
 import { formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -302,6 +303,11 @@ function Deploy({ existing, onClose }: { existing: Service[]; onClose: () => voi
       return;
     }
     if (spec.image === "") delete spec.image;
+    const bad = commandProblem(spec);
+    if (bad) {
+      setProblem(bad);
+      return;
+    }
     setProblem(null);
     // Names are unique per tenant, and PUT names one in the caller's own.
     const update = existing.some((s) => s.spec.name === spec.name && (s.tenant ?? "") === tenant);

@@ -1072,3 +1072,37 @@ func TestAnEditKeepsTheEnvItCannotSee(t *testing.T) {
 	_, err = alice.UpdateServiceKeepingEnv(ctx, edited)
 	wantCode(t, err, api.CodeInvalidRequest)
 }
+
+// Every replica is labelled type=service and name=<service>, beside the
+// gateway.* labels that say so to the gateway.
+func TestReplicasAreLabelledWithTheirService(t *testing.T) {
+	e := startServicesWith(t, nil, "n1")
+	ctx := ctxT(t)
+	alice := e.client("alice", "", ScopeRead, ScopeCreate, ScopeDelete)
+	if _, err := alice.DeployService(ctx, webSpec(2)); err != nil {
+		t.Fatal(err)
+	}
+	s := waitService(t, alice, "web", "ready", ready(2))
+	for _, r := range s.Replicas {
+		sb, err := alice.Sandbox(ctx, r.Sandbox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sb.Labels["type"] != "service" || sb.Labels["name"] != "web" || sb.Labels[api.LabelService] != "web" {
+			t.Errorf("replica %s's labels: %v", r.Sandbox, sb.Labels)
+		}
+	}
+	list, err := alice.Sandboxes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, sb := range list {
+		if sb.Labels["type"] == "service" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d sandboxes labelled type=service; want the 2 replicas", n)
+	}
+}

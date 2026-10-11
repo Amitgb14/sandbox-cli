@@ -37,6 +37,11 @@ sandbox-cli service redeploy review-bot      # every replica replaced, one at a 
 sandbox-cli service rm review-bot            # terminates the replicas
 ```
 
+**Each replica is labelled** `type=service` and `name=<service>`, so
+`GET /v1/sandboxes?label=type=service` (or Studio's sandbox list) picks them out. These are
+ordinary labels, which the owner can change; which service a replica belongs
+to, for the gateway, is the `gateway.service` label only the gateway sets.
+
 **Redeploy** is a new revision of the spec the service already has, rolled
 out as an update is. A spec sent again unchanged is no revision, so this is
 the way to have replicas pick up what changed outside the spec: a secret set

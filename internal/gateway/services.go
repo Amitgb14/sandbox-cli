@@ -198,6 +198,13 @@ func shape(sp api.ServiceSpec) api.ServiceSpec {
 	return sp
 }
 
+// The plain labels every replica is made with, type=service and
+// name=<service>, beside the gateway.* ones only the gateway sets.
+const (
+	ReplicaLabelType = "type"
+	ReplicaLabelName = "name"
+)
+
 // --- the services the gateway holds -----------------------------------------------
 
 // serviceCtl holds every service in memory: the store's record, worked on by

@@ -284,6 +284,11 @@ test("a tenant edits a service's spec and redeploys it, and its env is kept", as
   const base = await open(page, "gw-tenant", "alice@team-a");
   await page.goto(`${base}/services/`);
   await page.getByRole("button", { name: "Deploy service" }).click();
+  // A shell line as one argv item names no program; it is refused before it is sent.
+  await page.getByLabel("Service spec").fill(JSON.stringify({ name: "e2e-edit", command: ["sleep 1000"], replicas: 1 }));
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  await expect(page.getByText(/names one program, "sleep 1000".*\["sh","-c","sleep 1000"\]/)).toBeVisible();
+  await expect(page).toHaveURL(/\/services\/?$/);
   await page.getByLabel("Service spec").fill(JSON.stringify({ name: "e2e-edit", command: ["sleep", "1000"], replicas: 1, env: { KEPT: "env-value-never-shown" } }));
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
   await expect(page).toHaveURL(/\/service\/?\?name=e2e-edit/);

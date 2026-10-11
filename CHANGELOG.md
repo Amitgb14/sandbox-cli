@@ -228,6 +228,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   /v1/services/{name}?keep_env=1` keeps the service's env, for a spec read
   back from a `GET`, which holds env names only. Studio's service page has
   **Redeploy** and **Edit spec**, which uses it.
+- **A service's replicas are labelled `type=service` and `name=<service>`**,
+  so a sandbox list filters them out. They are plain labels, beside the
+  `gateway.service` one only the gateway sets. Studio's service Deploy and
+  Edit refuse a one-item command holding a space (`["sleep 40"]`, a program
+  no image has) and show the two spellings that run it.
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and
   `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)
   list the images on every node with where each is, download one to every

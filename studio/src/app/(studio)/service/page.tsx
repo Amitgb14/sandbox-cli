@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useEditService, useRedeployService, useRemoveService, useScaleService, useService } from "@/lib/api/gateway";
 import { useCan } from "@/lib/caller";
+import { commandProblem } from "@/lib/service-spec";
 import { DASH, formatArgv, formatMiB, formatRelative } from "@/lib/format";
 import type { Service, ServiceSpec } from "@/lib/types";
 
@@ -205,6 +206,11 @@ function EditSpec({ svc, tenant, onDone }: { svc: Service; tenant?: string; onDo
     }
     delete spec.env;
     if (spec.image === "") delete spec.image;
+    const bad = commandProblem(spec);
+    if (bad) {
+      setProblem(bad);
+      return;
+    }
     setProblem(null);
     edit.mutate(
       { spec, tenant },
