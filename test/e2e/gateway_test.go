@@ -413,8 +413,13 @@ func start(t *testing.T) *env {
 
 	for _, n := range []string{"n1", "n2"} {
 		sock := filepath.Join(dir, n+".sock")
+		// A fixed capacity: by default a node offers the machine's CPUs,
+		// memory and the disk its state directory is on, and at 10 GiB a
+		// sandbox a 70 GB disk holds seven — fewer than this test puts on n1
+		// once n2 is stopped. The fake backend uses none of it.
 		e.nodeCmds[n], e.nodes[n] = e.daemon(nil, "sandboxd", "--backend", "fake", "--node-id", n,
-			"--listen", "unix://"+sock, "--state-dir", filepath.Join(dir, n))
+			"--listen", "unix://"+sock, "--state-dir", filepath.Join(dir, n),
+			"--capacity-cpus", "64", "--capacity-memory-mb", "262144", "--capacity-disk-mb", "4194304")
 		waitFor(t, "sandboxd "+n, func() bool { _, err := os.Stat(sock); return err == nil })
 		e.gateway("nodes", "add", n, "unix://"+sock)
 	}
