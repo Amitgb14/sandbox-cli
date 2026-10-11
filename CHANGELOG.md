@@ -322,6 +322,20 @@ in `_old/` as reference, to be ported where this design still wants it.
   seconds when it stops or loses the database; on SQLite a second is
   refused. `--state FILE` still works and names a file in the gateway's
   directory.
+- **The gateway's database has organisations and users as tables, and every
+  record points at them.** Before, a tenant and a user were text columns
+  repeated on every row, with nothing in the database saying a row's tenant
+  or user existed. Now every tenant is a row in `orgs` (the default tenant,
+  a personal one per tenant a key or invite named, and team ones made with
+  `org create`). Every user is a row in `users`, at home in one, with an
+  account's address and password on it. Keys, memberships, sandboxes,
+  volumes, snapshots, jobs, services, secrets, SSH keys and policies point
+  at them by foreign key, and row-level security compares `org_id`. The API,
+  the CLI and the SDKs are unchanged. Upgrading moves every row in one
+  transaction, keys keeping their hashes. SQLite copies itself to
+  `gateway.db.before-0003` first. PostgreSQL refuses until you have taken a
+  `pg_dump` and pass `--store-migrate` (docs/fleet.md, "Upgrading to schema
+  3").
 - **Behind a gateway, the create form lists images before your first
   sandbox.** Studio's image picker offered only the images of your own
   sandboxes through a gateway, so a new user saw nothing until they had made

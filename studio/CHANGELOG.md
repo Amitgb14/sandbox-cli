@@ -10,6 +10,23 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **A command line using the shell runs in one.** The Jobs form and the
+  Playground split a command into words, so a loop, `;`, `&&`, a pipe or
+  `$VAR` ran its first word as a program and failed with "no such command".
+  Such a line is now sent as `sh -c '…'` (the form says so as you type);
+  plain words still run as they are.
+- **A failed run says why, plainly.** The reason a job's run failed is in a
+  red box, with what to do when the command was not found; a run that never
+  started says it has no output rather than "no output yet".
+- **The Jobs form picks an image as the create form does**, from what the
+  gateway's nodes have built and what your sandboxes run.
+- **Your policy is shown.** The create form says when a sandbox will end
+  under your policy ("ends 30 minutes after it starts"), and the Account page
+  lists the policy. A sandbox that has ended shows "ended" under Ends.
+- **Services explain themselves.** Deploy starts from a working example —
+  from a Git repository, a private one with a token from Secrets, or an image
+  with the app built in — and says what a service is and how it is reached.
+
 - **The theme switch shows the theme in force.** After a reload on the light
   theme, the sidebar's switch still had Dark selected: the pre-rendered page
   says dark, and the switch kept that until a choice changed it. It now

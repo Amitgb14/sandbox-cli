@@ -143,10 +143,17 @@ test("an admin adds a demo user by invite link, and expiring their key ends thei
   const row = page.getByRole("row").filter({ hasText: "jun" });
   await expect(row.getByText(/^in [67]d$/)).toBeVisible();
 
-  // jun opens the link in a browser of their own, and holds a policy.
+  // jun opens the link in a browser of their own, and holds a policy, which
+  // the create form and the Account page say.
   const jun = await (await browser.newContext()).newPage();
   await jun.goto(invite);
   await expect(jun.locator("[data-sidebar=sidebar]").getByText("hosted · jun@jun")).toBeVisible();
+  await jun.goto(`${base}/launch/`);
+  // The Demo preset picks "demo" where another test made one, else "trial":
+  // 30 minutes either way.
+  await expect(jun.getByTestId("policy-lifetime")).toHaveText(/policy, (demo|trial), a sandbox ends 30 minutes after it starts/);
+  await jun.goto(`${base}/account/`);
+  await expect(jun.getByTestId("account-policy")).toContainText("ends 30 min after it starts");
   await expect(jun.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Users & keys" })).toHaveCount(0);
   const made = await fetch(`${gatewayURL}/v1/sandboxes`, {
     method: "POST",

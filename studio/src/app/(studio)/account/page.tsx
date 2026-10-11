@@ -47,6 +47,17 @@ function Account() {
             <dd data-testid="account-email">{who.email}</dd>
           </>
         )}
+        {who.policy ? (
+          <>
+            <dt className="text-muted-foreground">policy</dt>
+            <dd data-testid="account-policy">
+              <span className="font-mono">{who.policy.name}</span>
+              {who.policy.max_lifetime_secs ? (
+                <span className="text-muted-foreground"> — each sandbox ends {Math.round(who.policy.max_lifetime_secs / 60)} min after it starts</span>
+              ) : null}
+            </dd>
+          </>
+        ) : null}
         <dt className="text-muted-foreground">tenant</dt>
         <dd className="font-mono">{who.tenant || <span className="text-muted-foreground">the default tenant</span>}</dd>
         <dt className="text-muted-foreground">organization</dt>

@@ -119,6 +119,43 @@ test("a tenant submits a job and reads its output", async ({ page }) => {
   await expect(page.getByRole("link", { name: /e2e-job/ })).toBeVisible();
 });
 
+/**
+ * A command line using the shell runs in one, and a run that never started
+ * says why in plain sight. The fake backend has no sh, so the run fails, as
+ * a missing program does on a real one — which is what the box is for.
+ */
+test("a shell command runs as sh -c, and a failed run says why", async ({ page }) => {
+  // The default image is built on the node once anything has started from
+  // it, and the gateway lists it after its next poll of the node. The page
+  // asks once, so wait for the list here rather than count on an earlier
+  // test having run long enough before this one.
+  const { gatewayURL, adminKey } = e2eState();
+  const admin = (method: string, path: string, body?: object) =>
+    fetch(`${gatewayURL}${path}`, { method, headers: { Authorization: `Bearer ${adminKey}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+  const sb = (await (await admin("POST", "/v1/sandboxes", {})).json()) as { id: string };
+  await admin("DELETE", `/v1/sandboxes/${sb.id}`);
+  await expect
+    .poll(async () => ((await (await admin("GET", "/v1/fleet/images")).json()) as { images: unknown[] }).images.length, { timeout: 20_000 })
+    .toBeGreaterThan(0);
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/jobs/`);
+  await page.getByRole("button", { name: "Submit job" }).click();
+  // The image picker offers what the gateway's nodes have built.
+  await page.getByRole("combobox", { name: "Image" }).click();
+  await expect(page.getByRole("group", { name: "Built on the gateway's nodes" })).toBeVisible({ timeout: 15_000 });
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Name").fill("e2e-loop");
+  await page.getByLabel("Command").fill('for i in 1 2 3; do echo "n $i"; done');
+  await expect(page.getByTestId("runs-in-shell")).toBeVisible();
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page).toHaveURL(/\/job\/?\?id=job_/);
+  await expect(page.locator("main").getByText(/^sh -c 'for i in 1 2 3; do echo "n \$i"; done'$/)).toBeVisible();
+  const why = page.getByRole("alert").filter({ hasText: "Why it failed" });
+  await expect(why).toBeVisible({ timeout: 15_000 });
+  await expect(why).toContainText("no such command");
+  await expect(page.getByText("The command never started, so there is no output.")).toBeVisible();
+});
+
 test("a tenant sets a secret it can never read back", async ({ page }) => {
   const base = await open(page, "gw-tenant", "alice@team-a");
   await page.goto(`${base}/secrets/`);
@@ -130,6 +167,23 @@ test("a tenant sets a secret it can never read back", async ({ page }) => {
   await page.reload();
   await expect(page.getByRole("cell", { name: "E2E_TOKEN" })).toBeVisible();
   expect(await page.content()).not.toContain("value-that-stays-put");
+});
+
+// The examples a deploy starts from are specs the gateway takes.
+test("the service examples, a Git repository's among them, are specs the gateway accepts", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/services/`);
+  await page.getByRole("button", { name: "Deploy service" }).click();
+  await page.getByRole("button", { name: "From a Git repository" }).click();
+  await expect(page.getByLabel("Service spec")).toHaveValue(/git clone --depth 1 https:\/\/github\.com\/OWNER\/REPO/);
+  const spec = JSON.parse(await page.getByLabel("Service spec").inputValue());
+  spec.name = "e2e-git";
+  await page.getByLabel("Service spec").fill(JSON.stringify(spec));
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  await expect(page).toHaveURL(/\/service\/?\?name=e2e-git/);
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "Remove" }).click();
+  await expect(page).toHaveURL(/\/services\/?$/);
 });
 
 test("a tenant deploys, scales and removes a service", async ({ page }) => {

@@ -18,14 +18,51 @@ import { useCaller, useCan } from "@/lib/caller";
 import { formatRelative } from "@/lib/format";
 import type { Service, ServiceSpec } from "@/lib/types";
 
-const EXAMPLE = `{
+/**
+ * Specs to start from. A service runs a command in each replica's sandbox;
+ * the code it serves comes either from the image, or from wherever the
+ * command fetches it as the replica starts — a Git repository, here, which
+ * the base image has git (and python3 and node) to clone and run.
+ */
+const EXAMPLES: { label: string; spec: string; note: string }[] = [
+  {
+    label: "From a Git repository",
+    note: "Each replica clones the repository as it starts, then serves it. Put your repository's address in place of OWNER/REPO, and your app's start command in place of the server. The network lets it reach the Git host only.",
+    spec: `{
   "name": "web",
-  "image": "",
+  "command": ["sh", "-c", "git clone --depth 1 https://github.com/OWNER/REPO /sandbox/home/app && cd /sandbox/home/app && python3 -m http.server 8080"],
+  "replicas": 1,
+  "port": 8080,
+  "health": { "http": "/" },
+  "network": { "mode": "allowlist", "allow": ["github.com", "codeload.github.com"] }
+}`,
+  },
+  {
+    label: "A private repository",
+    note: "Set a secret named GIT_TOKEN first (Secrets), a token that may read the repository; it reaches the replica as an environment variable and is never in the spec.",
+    spec: `{
+  "name": "api",
+  "command": ["sh", "-c", "git clone --depth 1 https://x-access-token:$GIT_TOKEN@github.com/OWNER/REPO /sandbox/home/app && cd /sandbox/home/app && npm ci && npm start"],
+  "secrets": ["GIT_TOKEN"],
+  "replicas": 1,
+  "port": 3000,
+  "health": { "http": "/" },
+  "network": { "mode": "allowlist", "allow": ["github.com", "codeload.github.com", "registry.npmjs.org"] }
+}`,
+  },
+  {
+    label: "An image with the app in it",
+    note: "Best for anything real: build your app into an image (FROM the base image), push it to a registry, and name it. Nothing is fetched as a replica starts.",
+    spec: `{
+  "name": "web",
+  "image": "ghcr.io/OWNER/APP:1.0",
   "command": ["./serve", "--port", "8080"],
   "replicas": 2,
   "port": 8080,
   "health": { "http": "/healthz" }
-}`;
+}`,
+  },
+];
 
 /** in_progress, done, failed — or, with no rollout, nothing to say. */
 function rolloutOf(s: Service): string {
@@ -113,7 +150,8 @@ function Deploy({ existing, onClose }: { existing: Service[]; onClose: () => voi
   const deploy = useDeployService();
   const caller = useCaller();
   const tenant = caller.kind === "gateway" ? caller.who.tenant : "";
-  const [text, setText] = useState(EXAMPLE);
+  const [example, setExample] = useState(0);
+  const [text, setText] = useState(EXAMPLES[0].spec);
   const [problem, setProblem] = useState<string | null>(null);
 
   function send(e: React.FormEvent) {
@@ -149,11 +187,27 @@ function Deploy({ existing, onClose }: { existing: Service[]; onClose: () => voi
     <Card className="surface-sheen gap-0 py-0">
       <CardContent className="p-4">
         <form onSubmit={send} className="flex flex-col gap-3">
-          <p className="text-xs text-muted-foreground">
-            A ServiceSpec as JSON (docs/services.md). One with the name of an existing service updates it. Environment values are kept by the gateway; a value
-            that must stay secret belongs in Secrets, named under <code className="font-mono">secrets</code>.
+          <p className="text-sm text-muted-foreground">
+            A service is a command the gateway keeps running in <span className="font-mono">replicas</span> sandboxes, each restarted when it exits or
+            fails its <span className="font-mono">health</span> check, and reached on <span className="font-mono">port</span>. The code comes from its image,
+            or from what the command fetches as it starts.
           </p>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Start from">
+            {EXAMPLES.map((ex, i) => (
+              <Button key={ex.label} type="button" size="sm" variant={example === i ? "secondary" : "ghost"} aria-pressed={example === i}
+                onClick={() => { setExample(i); setText(ex.spec); setProblem(null); }}>
+                {ex.label}
+              </Button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">{EXAMPLES[example].note}</p>
           <Textarea aria-label="Service spec" value={text} onChange={(e) => setText(e.target.value)} className="min-h-56 font-mono text-xs" spellCheck={false} />
+          <p className="text-xs text-muted-foreground">
+            The spec as JSON (docs/services.md). One with the name of an existing service updates it, one replica at a time. Environment values are kept
+            by the gateway; a value that must stay secret belongs in Secrets, named under <code className="font-mono">secrets</code>. A service is
+            reached from outside only where the gateway runs its router (<span className="font-mono">&quot;public&quot;: true</span>); otherwise, with{" "}
+            <span className="font-mono">sandbox-cli tunnel</span> to a replica.
+          </p>
           {problem ? <p className="text-sm text-destructive">{problem}</p> : null}
           <div className="flex gap-2">
             <Button type="submit" disabled={deploy.isPending}>Deploy</Button>

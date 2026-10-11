@@ -220,6 +220,31 @@ by a refresh from each node every minute (the node stays the authority).
 A terminated sandbox's row is kept as history. Processes, events, metrics
 and files stay on the node.
 
+**Who owns what.** Organisations and users are tables of their own, and
+every record points at them by foreign key, so the database itself holds
+whose each row is:
+
+- `orgs`: every tenant is one. The default tenant is the organisation of
+  kind `default` (its `key` is empty: `default` is a tenant name like any
+  other). A tenant named by a key or an invite is a `personal` one, made
+  with it; one made with `org create` is a `team` one, with members.
+- `users`: a user is a name in a home organisation, the tenant of their
+  keys (`org_id`). An account's address and password are on its user.
+- `api_keys` belong to a user (`user_id`), and go with it; a sign-in's key
+  also points at the account key it was made for (`parent`).
+- `org_members`: a user in a team organisation, with a role.
+- `sandboxes`, `volumes`, `snapshots`, `jobs` and `services` carry the
+  organisation and the user they belong to (`org_id`, `user_id`); `secrets`
+  and `job_runs` the organisation; `ssh_keys`, `user_policies` the user.
+
+```sql
+SELECT o.key AS org, u.name AS user, count(*) FROM sandboxes s
+  JOIN orgs o ON o.id = s.org_id JOIN users u ON u.id = s.user_id GROUP BY 1, 2;
+```
+
+The API, the CLI and the SDKs still say *tenant*: a tenant is an
+organisation's `key`.
+
 **PostgreSQL, on this machine, in Docker:**
 
 ```sh
@@ -257,10 +282,11 @@ The address is read from the file, never a flag: a password in a command
 line is every local user's. A database not on this machine must be reached
 with `sslmode=verify-full`; the gateway refuses anything less.
 
-**Isolation, twice.** Every tenant's records carry their tenant, and the
-gateway's own checks decide whose a request may touch, on either store. On
-PostgreSQL the database holds the same line: a request's statements run as
-`sandbox_gateway_tenant` with row-level security for the tenant it acts in,
+**Isolation, twice.** Every tenant's records carry their organisation, and
+the gateway's own checks decide whose a request may touch, on either store.
+On PostgreSQL the database holds the same line: a request's statements run
+as `sandbox_gateway_tenant` with row-level security for the organisation it
+acts in (`org_id = current_setting('app.org')`),
 so a query that forgot its tenant returns nothing of another's. The
 gateway's work across tenants — the scheduler, the job runner, admin calls
 — runs as the owner of the tables, which row-level security does not
@@ -285,6 +311,28 @@ controller), which two serving at once would each hold apart.
 
 The offline commands (`keys`, `policies`, `nodes`, `store`) hold nothing and
 work beside the serving gateway.
+
+**Upgrading to schema 3 (organisations and users as tables).** A database a
+gateway made before this release has tenants and user names as text
+columns. The upgrade moves every row into the new tables, in one
+transaction: if any row cannot be placed, nothing changes and the gateway
+says which table. Keys keep their ids and hashes, so every secret and
+password handed out keeps working.
+
+- **SQLite** copies the database aside first, as `gateway.db.before-0003`
+  (mode 0600), and upgrades as the gateway starts.
+- **PostgreSQL** refuses to move rows until you say you have a backup:
+
+  ```sh
+  pg_dump -Fc -f gateway-before-0003.dump "$(cat /etc/sandbox-gateway/db.dsn)"
+  sudo systemctl stop sandbox-gateway     # every gateway on the database
+  sudo -u sandbox-gateway sandbox-gateway --state-dir /var/lib/sandbox-gateway \
+    --store postgres --store-dsn-file /etc/sandbox-gateway/db.dsn --store-migrate store migrate
+  sudo systemctl start sandbox-gateway
+  ```
+
+  To go back, restore the dump with `pg_restore --clean` and start the
+  previous release.
 
 **From a state file.** A gateway from before databases kept a JSON state
 file. Every command refuses to start on an empty database beside one, and

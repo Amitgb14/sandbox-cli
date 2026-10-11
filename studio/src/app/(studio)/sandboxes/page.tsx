@@ -273,7 +273,7 @@ export default function SandboxesPage() {
           s.expires_at && s.state !== "terminated" ? (
             <Countdown at={s.expires_at} className="text-xs whitespace-nowrap" />
           ) : (
-            <span className="text-xs text-muted-foreground">{s.state === "terminated" ? "—" : "never"}</span>
+            <span className="text-xs text-muted-foreground">{s.state === "terminated" ? "ended" : "never"}</span>
           ),
         meta: { label: "Ends" },
       },

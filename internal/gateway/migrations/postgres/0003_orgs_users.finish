@@ -1,0 +1,63 @@
+-- Indexes, grants and row-level security on the organisation and user
+-- tables, made once the old tables (and their indexes and policies) are
+-- gone (sql_migrate3.go). A request's transaction sets app.org to the id of
+-- the organisation it acts in (ForTenant), and these tables show and take
+-- that organisation's rows only.
+
+-- One user holds an address, and one live account key stands for a user.
+CREATE UNIQUE INDEX users_email ON users(email) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX api_keys_account ON api_keys(user_id) WHERE account AND NOT revoked;
+CREATE INDEX api_keys_user ON api_keys(user_id);
+CREATE INDEX api_keys_parent ON api_keys(parent);
+CREATE INDEX invites_email ON invites(email);
+CREATE INDEX ssh_keys_fingerprint ON ssh_keys(fingerprint);
+CREATE INDEX ssh_keys_user ON ssh_keys(user_id);
+CREATE INDEX ssh_tokens_expires ON ssh_tokens(expires);
+CREATE INDEX org_members_user ON org_members(user_id);
+CREATE INDEX sandboxes_org ON sandboxes(org_id, user_id);
+CREATE INDEX sandboxes_node ON sandboxes(node);
+CREATE INDEX sandboxes_terminated ON sandboxes(terminated_at);
+CREATE INDEX volumes_org ON volumes(org_id, user_id);
+CREATE INDEX snapshots_node ON snapshots(node);
+CREATE INDEX jobs_org ON jobs(org_id, user_id);
+CREATE INDEX services_user ON services(user_id);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+	orgs, users, api_keys, invites, ssh_keys, ssh_tokens, org_members, user_policies,
+	sandboxes, volumes, snapshots, secrets, jobs, job_runs, services
+	TO sandbox_gateway_tenant;
+
+ALTER TABLE sandboxes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON sandboxes TO sandbox_gateway_tenant
+	USING (org_id = current_setting('app.org', true)) WITH CHECK (org_id = current_setting('app.org', true));
+ALTER TABLE volumes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON volumes TO sandbox_gateway_tenant
+	USING (org_id = current_setting('app.org', true)) WITH CHECK (org_id = current_setting('app.org', true));
+ALTER TABLE snapshots ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON snapshots TO sandbox_gateway_tenant
+	USING (org_id = current_setting('app.org', true)) WITH CHECK (org_id = current_setting('app.org', true));
+ALTER TABLE secrets ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON secrets TO sandbox_gateway_tenant
+	USING (org_id = current_setting('app.org', true)) WITH CHECK (org_id = current_setting('app.org', true));
+ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON jobs TO sandbox_gateway_tenant
+	USING (org_id = current_setting('app.org', true)) WITH CHECK (org_id = current_setting('app.org', true));
+ALTER TABLE job_runs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON job_runs TO sandbox_gateway_tenant
+	USING (org_id = current_setting('app.org', true)) WITH CHECK (org_id = current_setting('app.org', true));
+ALTER TABLE services ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON services TO sandbox_gateway_tenant
+	USING (org_id = current_setting('app.org', true)) WITH CHECK (org_id = current_setting('app.org', true));
+
+-- The tables were made as *_v3, and so were the names of their keys and
+-- constraints; they take the names a table made as itself would have.
+DO $$
+DECLARE r record;
+BEGIN
+	FOR r IN SELECT c.conrelid::regclass AS tbl, c.conname FROM pg_constraint c
+		JOIN pg_namespace n ON n.oid = c.connamespace
+		WHERE n.nspname = current_schema() AND c.conname LIKE '%\_v3\_%'
+	LOOP
+		EXECUTE format('ALTER TABLE %s RENAME CONSTRAINT %I TO %I', r.tbl, r.conname, replace(r.conname, '_v3_', '_'));
+	END LOOP;
+END $$;

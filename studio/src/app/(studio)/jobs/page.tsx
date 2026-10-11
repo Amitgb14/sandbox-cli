@@ -17,9 +17,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useCancelJob, useJobs, useSubmitJob } from "@/lib/api/gateway";
-import { useAgents } from "@/lib/api/queries";
+import { ImagePicker } from "@/components/launch/image-picker";
+import { useAgents, useFleetImages, useSandboxes } from "@/lib/api/queries";
 import { useCan } from "@/lib/caller";
-import { formatArgv, formatRelative, splitArgs } from "@/lib/format";
+import { commandArgv, formatArgv, formatRelative, needsShell } from "@/lib/format";
 import type { Job, JobSpec } from "@/lib/types";
 
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
@@ -122,11 +123,16 @@ function SubmitJob({ onClose }: { onClose: () => void }) {
   const [timeout, setTimeoutSecs] = useState("");
   const [secrets, setSecrets] = useState("");
   const [files, setFiles] = useState("");
+  // What the nodes have built, and what the user's sandboxes run: what a
+  // job can start from, as the create form offers.
+  const { data: built } = useFleetImages();
+  const { data: sandboxes } = useSandboxes();
+  const inUse = (sandboxes ?? []).map((sb) => sb.image);
 
   function send(e: React.FormEvent) {
     e.preventDefault();
     const spec: JobSpec = { name: name || undefined, image: image || undefined };
-    if (kind === "command") spec.command = splitArgs(command);
+    if (kind === "command") spec.command = commandArgv(command);
     else {
       spec.agent = agent;
       spec.prompt = prompt;
@@ -168,6 +174,11 @@ function SubmitJob({ onClose }: { onClose: () => void }) {
             <div className="flex flex-col gap-1.5 md:col-span-2">
               <Label htmlFor="job-command">Command</Label>
               <Input id="job-command" placeholder="make test" value={command} onChange={(e) => setCommand(e.target.value)} className="font-mono" required />
+              {needsShell(command) ? (
+                <p className="text-xs text-muted-foreground" data-testid="runs-in-shell">
+                  Runs in a shell: <span className="font-mono">sh -c &apos;…&apos;</span>, for the loops, pipes and variables in it.
+                </p>
+              ) : null}
             </div>
           ) : (
             <>
@@ -193,8 +204,8 @@ function SubmitJob({ onClose }: { onClose: () => void }) {
             </>
           )}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="job-image">Image</Label>
-            <Input id="job-image" placeholder="the gateway's default" value={image} onChange={(e) => setImage(e.target.value)} className="font-mono" />
+            <Label>Image</Label>
+            <ImagePicker value={image} onChange={setImage} built={built ?? []} inUse={inUse} builtWhere="Built on the gateway's nodes" />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div className="flex flex-col gap-1.5">

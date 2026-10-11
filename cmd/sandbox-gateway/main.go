@@ -66,6 +66,7 @@ func newRoot() *cobra.Command {
 	pf.StringVar(&storeFlags.kind, "store", "sqlite", "where the gateway keeps its state: sqlite (one gateway) or postgres (one or more)")
 	pf.StringVar(&storeFlags.path, "store-path", "", "the SQLite database (default: gateway.db in the gateway's directory)")
 	pf.StringVar(&storeFlags.dsnFile, "store-dsn-file", "", "with --store postgres: a file (mode 0600) holding the database's address, postgres://… with sslmode=verify-full unless it is on this machine")
+	pf.BoolVar(&storeFlags.migrate, "store-migrate", false, "with --store postgres: let a schema migration move the database's rows into a new shape; back the database up (pg_dump) first")
 	root.PersistentPreRunE = func(*cobra.Command, []string) error {
 		if stateDir != "" {
 			if state != "" {
@@ -82,7 +83,12 @@ func newRoot() *cobra.Command {
 // storeFlags are the root's flags naming the gateway's store.
 var storeFlags storeOptions
 
-type storeOptions struct{ kind, path, dsnFile string }
+type storeOptions struct {
+	kind, path, dsnFile string
+	// migrate lets a migration move a PostgreSQL database's rows (one that
+	// changes their shape), once it has been backed up.
+	migrate bool
+}
 
 func (o storeOptions) kindOrDefault() string {
 	if o.kind == "" {
@@ -139,7 +145,7 @@ func openStoreAt(statePath string) (gateway.Store, error) {
 		if err != nil {
 			return nil, fmt.Errorf("--store-dsn-file: %w", err)
 		}
-		return gateway.OpenPostgres(ctx, dsn)
+		return gateway.OpenPostgres(ctx, dsn, gateway.OpenOptions{MigrateData: storeFlags.migrate})
 	default:
 		return nil, fmt.Errorf("--store %q: sqlite or postgres", storeFlags.kind)
 	}

@@ -28,6 +28,16 @@ sandbox-cli org members rm bob           # bob's open streams and SSH sessions i
 members do not see each other's sandboxes, while secrets and services are
 the organisation's, as they are a tenant's.
 
+**Every tenant is an organisation** in the gateway's database: the default
+tenant, each tenant a key was issued into (a *personal* one, which nobody
+else joins), and the ones made with `org create` (*team*, with members). A
+member is a user, at home in the tenant of their own keys, who is also in a
+team organisation. Each sandbox, volume, snapshot, job, service and secret
+row points at its organisation, and each owned one at its user too
+([fleet.md](fleet.md#the-gateways-database)). `org ls` and `org create`
+deal in team organisations only. An organisation may still be made of a
+tenant that only an invite has named, since nothing is in it yet.
+
 ## Choosing one: the X-Sandbox-Org header
 
 Every API request may carry `X-Sandbox-Org: NAME`. Without

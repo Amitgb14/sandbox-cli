@@ -135,7 +135,7 @@ func (s *testStore) rawBytes() []byte {
 		return out
 	}
 	var out []byte
-	for _, table := range []string{"secrets", "jobs", "job_runs", "services", "api_keys"} {
+	for _, table := range []string{"secrets", "jobs", "job_runs", "services", "api_keys", "users", "invites"} {
 		rows, err := q.db.Query("SELECT t::text FROM " + table + " t")
 		if err != nil {
 			s.t.Fatal(err)

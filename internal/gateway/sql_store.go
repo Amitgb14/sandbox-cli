@@ -57,6 +57,19 @@ type sqlStore struct {
 	now    func() time.Time
 	closer func() error
 	path   string // the SQLite file; "" on PostgreSQL
+	// migrateData lets a migration that moves existing rows run on
+	// PostgreSQL (OpenOptions.MigrateData); SQLite copies its file aside
+	// instead.
+	migrateData bool
+}
+
+// OpenOptions are how a store is opened.
+type OpenOptions struct {
+	// MigrateData lets PostgreSQL run a migration that moves the rows a
+	// database already holds into a new shape. Off, such a migration is
+	// refused, with the pg_dump to take first: SQLite copies its own file
+	// aside, a PostgreSQL database is the operator's to back up.
+	MigrateData bool
 }
 
 // OpenSQLite opens (creating when missing) the SQLite database at path, mode
@@ -113,7 +126,7 @@ func OpenSQLite(ctx context.Context, path string) (Store, error) {
 // (never an argument: a password in an argv is every local user's); a
 // connection that is not encrypted and verified is refused unless it stays
 // on this machine.
-func OpenPostgres(ctx context.Context, dsn string) (Store, error) {
+func OpenPostgres(ctx context.Context, dsn string, opts ...OpenOptions) (Store, error) {
 	if err := checkPostgresDSN(dsn); err != nil {
 		return nil, err
 	}
@@ -131,6 +144,9 @@ func OpenPostgres(ctx context.Context, dsn string) (Store, error) {
 		return nil, fmt.Errorf("reaching the database: %w", err)
 	}
 	s := &sqlStore{db: db, d: postgresDialect, now: time.Now, closer: db.Close}
+	for _, o := range opts {
+		s.migrateData = s.migrateData || o.MigrateData
+	}
 	if err := s.migrate(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -179,7 +195,7 @@ func (s *sqlStore) Close() error   { return s.closer() }
 func (s *sqlStore) Now() time.Time { return s.now() }
 
 // ForTenant is the store as tenant: on PostgreSQL each statement runs as
-// sandbox_gateway_tenant with app.tenant set, so row-level security holds
+// sandbox_gateway_tenant with app.org set, so row-level security holds
 // every tenant-scoped table to tenant. SQLite has none; its queries filter.
 func (s *sqlStore) ForTenant(tenant string) Store {
 	cp := *s
@@ -237,7 +253,11 @@ func (s *sqlStore) asTenant(ctx context.Context, t *sql.Tx) error {
 	if _, err := t.ExecContext(ctx, "SET LOCAL ROLE sandbox_gateway_tenant"); err != nil {
 		return err
 	}
-	_, err := t.ExecContext(ctx, "SELECT set_config('app.tenant', $1, true)", *s.tenant)
+	// Row-level security compares org_id with app.org: the id of the
+	// tenant's organisation, or none ("") for a tenant not yet one, which
+	// matches no row. orgID sets it once it makes the organisation.
+	_, err := t.ExecContext(ctx, "SELECT set_config('app.org', COALESCE((SELECT id FROM orgs WHERE key = $1), ''), true)",
+		orgKeyOf(*s.tenant))
 	return err
 }
 
@@ -275,6 +295,15 @@ func (q *sqlTx) row(ctx context.Context, query string, args ...any) *sql.Row {
 func (s *sqlStore) forUpdate() string {
 	if s.d == postgresDialect {
 		return " FOR UPDATE"
+	}
+	return ""
+}
+
+// forUpdateOf is forUpdate for a read that joins: it locks table's rows
+// alone, not those it was joined to.
+func (s *sqlStore) forUpdateOf(table string) string {
+	if s.d == postgresDialect {
+		return " FOR UPDATE OF " + table
 	}
 	return ""
 }
@@ -420,8 +449,11 @@ func (s *sqlStore) migrate(ctx context.Context) error {
 	}
 	var migs []mig
 	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".sql") {
+			continue // a step a migration's Go part reads (0003_*.finish)
+		}
 		v, err := strconv.Atoi(strings.SplitN(e.Name(), "_", 2)[0])
-		if err != nil || !strings.HasSuffix(e.Name(), ".sql") {
+		if err != nil {
 			return fmt.Errorf("migration %s: want NNNN_name.sql", e.Name())
 		}
 		migs = append(migs, mig{v, e.Name()})
@@ -438,6 +470,11 @@ func (s *sqlStore) migrate(ctx context.Context) error {
 		body, err := fs.ReadFile(migrationFiles, dir+"/"+m.name)
 		if err != nil {
 			return err
+		}
+		if m.v == 3 {
+			if err := s.beforeMigrate3(ctx); err != nil {
+				return err
+			}
 		}
 		err = s.tx(ctx, func(q *sqlTx) error {
 			if s.d == postgresDialect {
@@ -462,12 +499,50 @@ func (s *sqlStore) migrate(ctx context.Context) error {
 			if _, err := q.on().ExecContext(ctx, string(body)); err != nil {
 				return fmt.Errorf("migration %s: %w", m.name, err)
 			}
+			if m.v == 3 {
+				if err := s.migrate3(ctx, q, dir); err != nil {
+					return fmt.Errorf("migration %s: %w", m.name, err)
+				}
+			}
 			_, err := q.exec(ctx, "INSERT INTO schema_migrations (version, applied) VALUES (?, ?)", m.v, s.t(s.now()))
 			return err
 		})
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// beforeMigrate3 makes sure there is a way back before rows move: a SQLite
+// file is copied aside (gateway.db.before-0003, consistent: VACUUM INTO),
+// and a PostgreSQL database that holds anything is migrated only when the
+// operator says it is backed up (OpenOptions.MigrateData).
+func (s *sqlStore) beforeMigrate3(ctx context.Context) error {
+	var done int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version = 3").Scan(&done); err != nil {
+		return storeErr(err)
+	}
+	if done > 0 {
+		return nil
+	}
+	has, err := s.v2HasData(ctx)
+	if err != nil || !has {
+		return err
+	}
+	if s.d == sqliteDialect {
+		backup := s.path + ".before-0003"
+		_ = os.Remove(backup)
+		if _, err := s.db.ExecContext(ctx, "VACUUM INTO ?", backup); err != nil {
+			return fmt.Errorf("copying the database aside before migrating it: %w", err)
+		}
+		_ = os.Chmod(backup, 0o600)
+		return nil
+	}
+	if !s.migrateData {
+		return errors.New("this gateway moves the database's rows into a new shape (organisations and users as tables, migration 3); back the database up first, then run it with --store-migrate:\n" +
+			"  pg_dump -Fc -f gateway-before-0003.dump <the database>\n" +
+			"  sandbox-gateway … --store postgres --store-dsn-file … --store-migrate store migrate")
 	}
 	return nil
 }
