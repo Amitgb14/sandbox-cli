@@ -1,3 +1,4 @@
+
 # Task 8 — the gateway's state in a database, so several gateways can serve one fleet
 
 **Status:** proposed 2026-10-04; phases 1–3 and 5 built 2026-10-10 (below,
@@ -42,6 +43,7 @@ once it is terminated. What is built is described for operators in
 [`../fleet.md`](../fleet.md#the-gateways-database).
 
 The proposal as written follows.
+
 
 ## Why
 
