@@ -351,7 +351,7 @@ Flags:
 | `--name string` |  | name the job |
 | `--notify string` |  | a URL POSTed the run's state when it ends (https to a public address, unless the gateway allows private ones) |
 | `--retries int` |  | attempts after a failed one |
-| `--secret stringArray` |  | a gateway secret to set in the run's environment, by name (repeatable) |
+| `--secret stringArray` |  | a gateway secret to set in the run's environment: NAME, or VAR=NAME to set it as VAR (repeatable) |
 | `--timeout duration` |  | how long the agent may run, e.g. 30m (default: the gateway's, 1h) |
 | `--wait` |  | wait, print the output, and exit with the agent's exit code |
 
@@ -1327,8 +1327,10 @@ sandbox-cli secret [command]
 
 ```text
 A secret is a value your tenant keeps on the gateway, sealed at rest, that a
-job sets in its runs' environment by name (secrets: [NAME], or agent-run
---secret NAME). The API never returns a value once it is set. Gateway only.
+job sets in its runs' environment (secrets: [NAME], or agent-run --secret NAME).
+A secret's name need not be the variable it fills: VAR=NAME sets secret NAME as
+VAR, so openai-prod and openai-staging can each be OPENAI_API_KEY. The API never
+returns a value once it is set. Gateway only.
 ```
 
 Subcommands: [`ls`](#sandbox-cli-secret-ls), [`rm`](#sandbox-cli-secret-rm), [`set`](#sandbox-cli-secret-set).
@@ -1374,6 +1376,7 @@ Examples:
 ```sh
 sandbox-cli secret set ANTHROPIC_API_KEY < key.txt
 printf %s "$TOKEN" | sandbox-cli secret set REGISTRY_TOKEN
+sandbox-cli secret set openai-prod < prod.txt   # then --secret OPENAI_API_KEY=openai-prod
 ```
 
 Flags:

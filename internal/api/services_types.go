@@ -38,7 +38,7 @@ type ServiceSpec struct {
 	// that is not public is reachable only by its owner, through a tunnel.
 	Public bool `json:"public,omitempty" yaml:"public,omitempty"`
 	// Secrets names entries in the tenant's secret store, each set in every
-	// replica's environment under its name. A name the tenant has no secret
+	// replica's environment: "VAR=NAME" as VAR, "NAME" under its own name. A name the tenant has no secret
 	// for is refused (400); a gateway without a secrets key refuses any (501).
 	Secrets []string `json:"secrets,omitempty" yaml:"secrets,omitempty"`
 }

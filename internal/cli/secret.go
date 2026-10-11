@@ -22,15 +22,18 @@ func newSecretCmd() *cobra.Command {
 		Use:   "secret",
 		Short: "Keep values on a gateway for jobs to name: an agent's API key, a registry token",
 		Long: "A secret is a value your tenant keeps on the gateway, sealed at rest, that a\n" +
-			"job sets in its runs' environment by name (secrets: [NAME], or agent-run\n" +
-			"--secret NAME). The API never returns a value once it is set. Gateway only.",
+			"job sets in its runs' environment (secrets: [NAME], or agent-run --secret NAME).\n" +
+			"A secret's name need not be the variable it fills: VAR=NAME sets secret NAME as\n" +
+			"VAR, so openai-prod and openai-staging can each be OPENAI_API_KEY. The API never\n" +
+			"returns a value once it is set. Gateway only.",
 	}
 	var ctxFlag string
 	set := &cobra.Command{
-		Use:     "set NAME",
-		Short:   "Set a secret, its value read from stdin",
-		Example: "  sandbox-cli secret set ANTHROPIC_API_KEY < key.txt\n  printf %s \"$TOKEN\" | sandbox-cli secret set REGISTRY_TOKEN",
-		Args:    cobra.ExactArgs(1),
+		Use:   "set NAME",
+		Short: "Set a secret, its value read from stdin",
+		Example: "  sandbox-cli secret set ANTHROPIC_API_KEY < key.txt\n  printf %s \"$TOKEN\" | sandbox-cli secret set REGISTRY_TOKEN\n" +
+			"  sandbox-cli secret set openai-prod < prod.txt   # then --secret OPENAI_API_KEY=openai-prod",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			value, err := readSecretValue(cmd)
 			if err != nil {

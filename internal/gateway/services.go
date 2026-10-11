@@ -135,18 +135,8 @@ func checkServiceSpec(sp *api.ServiceSpec, tenant string) *specError {
 			return badServiceSpec("tenant %q cannot be named in a DNS label (lowercase letters, digits and dashes, at most 63 with the service's name), so its services cannot be public", tenant)
 		}
 	}
-	seen := map[string]bool{}
-	for _, name := range sp.Secrets {
-		if err := checkSecretName(name); err != nil {
-			return badServiceSpec("secrets: %v", err)
-		}
-		if seen[name] {
-			return badServiceSpec("secrets: %s is named twice", name)
-		}
-		seen[name] = true
-		if _, ok := sp.Env[name]; ok {
-			return badServiceSpec("%s is both in env and in secrets", name)
-		}
+	if _, err := parseSecretRefs(sp.Secrets, sp.Env); err != nil {
+		return badServiceSpec("secrets: %v", err)
 	}
 	return nil
 }
@@ -163,11 +153,15 @@ func (g *Gateway) checkServiceSecrets(ctx context.Context, sp api.ServiceSpec, t
 	if g.sealer == nil {
 		return &specError{http.StatusNotImplemented, api.CodeUnsupported, ErrNoSecretsKey.Error()}
 	}
-	for _, name := range sp.Secrets {
-		if _, ok, err := g.store.SealedSecret(ctx, tenant, name); err != nil {
+	refs, err := parseSecretRefs(sp.Secrets, sp.Env)
+	if err != nil {
+		return badServiceSpec("secrets: %v", err)
+	}
+	for _, ref := range refs {
+		if _, ok, err := g.store.SealedSecret(ctx, tenant, ref.name); err != nil {
 			return &specError{http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error()}
 		} else if !ok {
-			return badServiceSpec("secret %s does not exist (sandbox-cli secret set %s)", name, name)
+			return badServiceSpec("secret %s does not exist (sandbox-cli secret set %s)", ref.name, ref.name)
 		}
 	}
 	return nil

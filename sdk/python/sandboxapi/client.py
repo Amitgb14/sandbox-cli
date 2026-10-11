@@ -390,7 +390,7 @@ class Client:
         """Start a job. ``spec`` holds the API's keys: ``command`` (an argv) or
         ``agent`` and ``prompt`` (or ``prompts``, one run each), and optionally
         ``name``, ``image``, ``parallelism``, ``completions``, ``retries``,
-        ``timeout_secs``, ``env``, ``secrets`` (names), ``network``,
+        ``timeout_secs``, ``env``, ``secrets`` (``"VAR=NAME"``, or ``"NAME"`` under its own name), ``network``,
         ``resources``, ``from_snapshot``, ``keep`` (``{"output": bool,
         "files": [paths]}``) and ``notify`` (a URL)."""
         return self._json("POST", "/v1/jobs", spec)

@@ -211,6 +211,14 @@ in `_old/` as reference, to be ported where this design still wants it.
   longer offers creating organizations or the Members screen: an account is
   one person in one organization for now, and organizations made with
   `sandbox-cli org` still work.
+- **A secret's name need not be the variable it fills.** A job, agent run or
+  service names a secret as `VAR=NAME` to set secret `NAME` as `VAR`
+  (`--secret OPENAI_API_KEY=openai-prod`, `secrets: [OPENAI_API_KEY=openai-prod]`),
+  so a tenant can keep `openai-prod` and `openai-staging` and give either to
+  `OPENAI_API_KEY`. A bare `NAME` still sets it under its own name. Secret
+  names may now hold `.` and `-`. The variable is checked when the spec is
+  sent, as an `env` name is: valid, not reserved, not set twice and not also
+  in `env`, else `400`. Studio's Secrets and Jobs screens say so.
 
 **Added:**
 

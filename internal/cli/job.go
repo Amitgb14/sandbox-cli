@@ -253,7 +253,7 @@ func newAgentRunCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&ctxFlag, "context", "", "which endpoint to use")
-	f.StringArrayVar(&secrets, "secret", nil, "a gateway secret to set in the run's environment, by name (repeatable)")
+	f.StringArrayVar(&secrets, "secret", nil, "a gateway secret to set in the run's environment: NAME, or VAR=NAME to set it as VAR (repeatable)")
 	f.StringArrayVarP(&env, "env", "e", nil, "KEY=VALUE, or KEY to send this machine's value (repeatable)")
 	f.StringVar(&image, "image", "", "image to run (default: the fleet's)")
 	f.StringVar(&name, "name", "", "name the job")

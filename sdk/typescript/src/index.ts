@@ -229,7 +229,7 @@ export interface JobSpec {
   retries?: number;
   timeout_secs?: number;
   env?: Record<string, string>;
-  /** Names of the tenant's secrets, each set in the run's environment under its name. */
+  /** The tenant's secrets: "VAR=NAME" sets secret NAME as VAR, "NAME" under its own name. */
   secrets?: string[];
   network?: NetworkPolicy;
   resources?: { cpus?: number; memory_mb?: number; disk_mb?: number };
@@ -304,7 +304,7 @@ export interface ServiceSpec {
   placement?: { spread?: "node" };
   /** Routed through the gateway's HTTP router. */
   public?: boolean;
-  /** Names of the tenant's secrets, each set in every replica's environment. */
+  /** The tenant's secrets, set in every replica's environment: "VAR=NAME" as VAR, "NAME" under its own name. */
   secrets?: string[];
 }
 

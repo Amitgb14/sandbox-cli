@@ -203,6 +203,33 @@ test("a tenant sets a secret it can never read back", async ({ page }) => {
   expect(await page.content()).not.toContain("value-that-stays-put");
 });
 
+test("a secret named for its purpose is set in a job as the variable the job says", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/secrets/`);
+  await page.getByLabel("Secret name").fill("e2e-openai-prod");
+  await page.getByLabel("Secret value").fill("mapped-value-stays-put");
+  await page.getByRole("button", { name: "Set secret" }).click();
+  await expect(page.getByRole("cell", { name: "e2e-openai-prod" })).toBeVisible();
+
+  await page.goto(`${base}/jobs/`);
+  await page.getByRole("button", { name: "Submit job" }).click();
+  await page.getByLabel("Name").fill("e2e-mapped");
+  await page.getByLabel("Command").fill("printenv OPENAI_API_KEY");
+  await page.getByLabel("Secrets").fill("OPENAI_API_KEY=e2e-openai-prod");
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page).toHaveURL(/\/job\/?\?id=job_/);
+  await expect(page.locator("main").getByText("OPENAI_API_KEY=e2e-openai-prod")).toBeVisible();
+  expect(await page.content()).not.toContain("mapped-value-stays-put");
+
+  // A reserved variable is refused, and the gateway says why.
+  await page.goto(`${base}/jobs/`);
+  await page.getByRole("button", { name: "Submit job" }).click();
+  await page.getByLabel("Command").fill("true");
+  await page.getByLabel("Secrets").fill("LD_PRELOAD=e2e-openai-prod");
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page.getByText(/LD_PRELOAD is reserved/)).toBeVisible();
+});
+
 // The examples a deploy starts from are specs the gateway takes.
 test("the service examples, a Git repository's among them, are specs the gateway accepts", async ({ page }) => {
   const base = await open(page, "gw-tenant", "alice@team-a");

@@ -48,7 +48,7 @@ with `?tenant=T`. A `GET` shows env names, not values, as for a sandbox; the
 values are kept in the state file, which is why it stays 0600. A value that
 must stay secret belongs in the secret store instead: `secrets: [NAME]` sets
 each of the tenant's secrets (`sandbox-cli secret set NAME`) in every
-replica's environment, opened as the replica is made and kept nowhere else.
+replica's environment, `VAR=NAME` as the variable `VAR` ([jobs.md](jobs.md#secrets)), opened as the replica is made and kept nowhere else.
 A name the tenant has no secret for is refused, a gateway started without
 `--secrets-key-file` refuses `secrets:` with `501`, and a secret removed later
 stops new replicas (the service's `error` says which) rather than starting

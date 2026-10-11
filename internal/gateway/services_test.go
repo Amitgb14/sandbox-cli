@@ -935,6 +935,13 @@ func TestServiceSecretsReachReplicasOnly(t *testing.T) {
 	reserved.Secrets = []string{"LD_PRELOAD"}
 	_, err = alice.DeployService(ctx, reserved)
 	wantCode(t, err, api.CodeInvalidRequest)
+	reserved.Secrets = []string{"LD_PRELOAD=API_TOKEN"}
+	_, err = alice.DeployService(ctx, reserved)
+	wantCode(t, err, api.CodeInvalidRequest)
+	if err := alice.SetSecret(ctx, "token-for-web", secret+"-mapped"); err != nil {
+		t.Fatal(err)
+	}
+	sp.Secrets = append(sp.Secrets, "WEB_TOKEN=token-for-web")
 
 	created, err := alice.DeployService(ctx, sp)
 	if err != nil {
@@ -944,7 +951,7 @@ func TestServiceSecretsReachReplicasOnly(t *testing.T) {
 	e.app.mu.Lock()
 	for _, r := range s.Replicas {
 		env := e.app.env[r.Sandbox]
-		if env["API_TOKEN"] != secret || env["PLAIN"] != plain {
+		if env["API_TOKEN"] != secret || env["WEB_TOKEN"] != secret+"-mapped" || env["PLAIN"] != plain {
 			t.Errorf("replica %s's environment lacks the secret or the env: %v", r.Sandbox, env)
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -30,10 +31,15 @@ import (
 //   - A value is never returned by the API, never logged, and never in an
 //     error message. GET /v1/secrets lists names and when each was set.
 //   - A value leaves the gateway only in the create request of a run that
-//     named it, as an environment variable of that name; the node keeps
-//     environment variables by name only in its audit record.
-//   - A name the node would refuse as reserved (policy.IsReservedEnv) is
-//     refused here, when it is set, rather than at a run's start.
+//     named it, as an environment variable; the node keeps environment
+//     variables by name only in its audit record.
+//   - A secret's name is the tenant's to choose (openai-prod,
+//     openai-staging), and a spec says which variable each is set in:
+//     "ENV=NAME", or "NAME" for a secret named as the variable it fills
+//     (secretRef). The variable is held to what a run's environment may
+//     set — a valid name, never a reserved one (policy.IsReservedEnv) —
+//     when the spec is sent, so a mapping cannot reach LD_PRELOAD where a
+//     name could not.
 //
 // Secrets are per tenant: every user of a tenant may name any of them in a
 // job, and one with secrets:write may replace or remove them.
@@ -120,13 +126,59 @@ func secretAD(tenant, name string) string {
 // checkSecretName refuses a name that cannot be an environment variable, or
 // is one the node refuses to set.
 func checkSecretName(name string) error {
-	if len(name) > maxSecretName || !policy.ValidEnvName(name) {
-		return fmt.Errorf("secret name %q: letters, digits and underscores, not starting with a digit, at most %d", name, maxSecretName)
+	if len(name) > maxSecretName || !secretNameRE.MatchString(name) {
+		return fmt.Errorf("secret name %q: letters, digits and . _ -, starting with a letter or an underscore, at most %d", name, maxSecretName)
 	}
+	// Refused still, though a mapping is checked where it is used: a secret
+	// named LD_PRELOAD reads as one meant to be set as it.
 	if policy.IsReservedEnv(name) {
 		return fmt.Errorf("secret name %s is reserved: a run's environment cannot set it", name)
 	}
 	return nil
+}
+
+// secretNameRE is a secret's own name. Every environment variable name is
+// one, so a secret set before names and variables were told apart still is;
+// "." and "-" are for names like openai-prod. Nothing in it is special in a
+// URL path (PUT /v1/secrets/{name}).
+var secretNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
+
+// secretRef is one entry of a spec's secrets: the environment variable a
+// secret is set in, and the secret.
+type secretRef struct{ env, name string }
+
+// parseSecretRefs reads a spec's secrets, each "ENV=NAME" or "NAME" for
+// NAME into a variable of its own name, and refuses a variable a run's
+// environment may not set, one set twice, or one env sets too. The error
+// names variables and secrets, which are names, never values.
+func parseSecretRefs(refs []string, env map[string]string) ([]secretRef, error) {
+	out := make([]secretRef, 0, len(refs))
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		v, name, mapped := strings.Cut(ref, "=")
+		if !mapped {
+			name = v
+		}
+		if err := checkSecretName(name); err != nil {
+			return nil, err
+		}
+		switch {
+		case !policy.ValidEnvName(v) && !mapped:
+			return nil, fmt.Errorf("secret %s is not an environment variable name; say which variable it is set in: VAR=%s", name, name)
+		case !policy.ValidEnvName(v) || len(v) > maxSecretName:
+			return nil, fmt.Errorf("%q: the variable is letters, digits and underscores, not starting with a digit, at most %d", ref, maxSecretName)
+		case policy.IsReservedEnv(v):
+			return nil, fmt.Errorf("%s is reserved: a run's environment cannot set it", v)
+		case seen[v]:
+			return nil, fmt.Errorf("%s is set twice", v)
+		}
+		if _, ok := env[v]; ok {
+			return nil, fmt.Errorf("%s is both in env and in secrets", v)
+		}
+		seen[v] = true
+		out = append(out, secretRef{env: v, name: name})
+	}
+	return out, nil
 }
 
 // --- the store ------------------------------------------------------------------
@@ -199,29 +251,35 @@ func (s *FileStore) DeleteSecret(tenant, name string) error {
 
 // --- the gateway ------------------------------------------------------------------
 
-// secretValues opens the named secrets of tenant, for one run. An error
-// names the secret, never its value.
-func (g *Gateway) secretValues(ctx context.Context, tenant string, names []string) (map[string]string, error) {
-	if len(names) == 0 {
+// secretValues opens the secrets a spec names (parseSecretRefs) for one
+// run, keyed by the variable each is set in. The spec was checked when it
+// was sent; it is read again here because a stored one is not trusted to
+// have been. An error names the secret, never its value.
+func (g *Gateway) secretValues(ctx context.Context, tenant string, refs []string) (map[string]string, error) {
+	if len(refs) == 0 {
 		return nil, nil
 	}
 	if g.sealer == nil {
 		return nil, ErrNoSecretsKey
 	}
-	out := make(map[string]string, len(names))
-	for _, name := range names {
-		sealed, ok, err := g.store.SealedSecret(ctx, tenant, name)
+	parsed, err := parseSecretRefs(refs, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(parsed))
+	for _, ref := range parsed {
+		sealed, ok, err := g.store.SealedSecret(ctx, tenant, ref.name)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			return nil, fmt.Errorf("secret %s does not exist", name)
+			return nil, fmt.Errorf("secret %s does not exist", ref.name)
 		}
-		v, err := g.sealer.open(sealed, secretAD(tenant, name))
+		v, err := g.sealer.open(sealed, secretAD(tenant, ref.name))
 		if err != nil {
-			return nil, fmt.Errorf("secret %s does not open with this gateway's secrets key", name)
+			return nil, fmt.Errorf("secret %s does not open with this gateway's secrets key", ref.name)
 		}
-		out[name] = string(v)
+		out[ref.env] = string(v)
 	}
 	return out, nil
 }

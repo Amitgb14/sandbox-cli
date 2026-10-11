@@ -66,8 +66,9 @@ type JobSpec struct {
 	// (default 3600).
 	TimeoutSecs int               `json:"timeout_secs,omitempty"`
 	Env         map[string]string `json:"env,omitempty"`
-	// Secrets are names of the tenant's secrets (PUT /v1/secrets/{name}),
-	// each set in the run's environment under its own name.
+	// Secrets are the tenant's secrets (PUT /v1/secrets/{name}) to set in
+	// the run's environment: "VAR=NAME" sets secret NAME as VAR, and "NAME"
+	// sets it under its own name.
 	Secrets      []string       `json:"secrets,omitempty"`
 	Network      *NetworkPolicy `json:"network,omitempty"`
 	Resources    *JobResources  `json:"resources,omitempty"`

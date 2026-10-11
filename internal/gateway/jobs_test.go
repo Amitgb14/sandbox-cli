@@ -93,7 +93,7 @@ func TestSecretsAreSealedAndNeverReturned(t *testing.T) {
 	}
 
 	// Reserved and malformed names are refused; so is a key without the scope.
-	for _, name := range []string{"SANDBOX_RUN_AS", "1BAD", "has-dash"} {
+	for _, name := range []string{"SANDBOX_RUN_AS", "1BAD", "-lead", "a+b", "a b"} {
 		if err := ana.SetSecret(ctx, name, "x"); err == nil {
 			t.Errorf("secret %s was accepted", name)
 		}
@@ -520,6 +520,72 @@ func TestJobSecretsReachTheRunOnly(t *testing.T) {
 	}
 }
 
+// A secret's name is the tenant's; the spec says which variable it is set
+// in, and the variable is held to what a run's environment may set.
+func TestJobSecretsMapToAVariable(t *testing.T) {
+	tg := startGateway(t, withKey, startNode(t, "n1", allCaps...))
+	ctx := ctxT(t)
+	ana := tg.jobUser("ana")
+	const prod, staging, token = "prod-value-5d1c", "staging-value-8a2e", "token-value-3f9b"
+	for name, v := range map[string]string{"openai-prod": prod, "openai.staging": staging, "API_TOKEN": token} {
+		if err := ana.SetSecret(ctx, name, v); err != nil {
+			t.Fatalf("setting %s: %v", name, err)
+		}
+	}
+	j, err := ana.CreateJob(ctx, api.JobSpec{Command: []string{"printenv"},
+		Secrets: []string{"OPENAI_API_KEY=openai-prod", "STAGING_KEY=openai.staging", "API_TOKEN", "AGAIN=openai-prod"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := json.Marshal(j); strings.Contains(string(raw), prod) || !strings.Contains(string(raw), "OPENAI_API_KEY=openai-prod") {
+		t.Fatalf("the job's record: %s", raw)
+	}
+	j = waitJob(t, ana, j.ID, "the job to end", finished)
+	out, err := ana.JobOutput(ctx, j.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"OPENAI_API_KEY=" + prod, "STAGING_KEY=" + staging, "API_TOKEN=" + token, "AGAIN=" + prod} {
+		if !strings.Contains(string(out.Stdout), want+"\n") {
+			t.Errorf("the run's environment lacks %s:\n%s", want, out.Stdout)
+		}
+	}
+	if strings.Contains(string(out.Stdout), "openai-prod=") {
+		t.Errorf("a mapped secret was set under its own name too:\n%s", out.Stdout)
+	}
+
+	jobs := func() int {
+		l, err := ana.Jobs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(l)
+	}
+	before := jobs()
+	for what, spec := range map[string]api.JobSpec{
+		"a name that is no variable":   {Secrets: []string{"openai-prod"}},
+		"a reserved variable":          {Secrets: []string{"LD_PRELOAD=openai-prod"}},
+		"another reserved variable":    {Secrets: []string{"SANDBOX_RUN_AS=API_TOKEN"}},
+		"a variable set twice":         {Secrets: []string{"K=openai-prod", "K=openai.staging"}},
+		"a shorthand and a mapping":    {Secrets: []string{"API_TOKEN", "API_TOKEN=openai-prod"}},
+		"a variable env sets too":      {Secrets: []string{"PLAIN=openai-prod"}, Env: map[string]string{"PLAIN": "x"}},
+		"a malformed variable":         {Secrets: []string{"1X=openai-prod"}},
+		"an empty variable":            {Secrets: []string{"=openai-prod"}},
+		"a secret that does not exist": {Secrets: []string{"K=nope"}},
+	} {
+		spec.Command = []string{"true"}
+		_, err := ana.CreateJob(ctx, spec)
+		if !api.IsCode(err, api.CodeInvalidRequest) {
+			t.Errorf("%s: %v; want invalid_request", what, err)
+		} else if strings.Contains(err.Error(), prod) || strings.Contains(err.Error(), staging) {
+			t.Errorf("%s: the error holds a value: %v", what, err)
+		}
+	}
+	if n := jobs(); n != before {
+		t.Errorf("%d jobs made by refused specs", n-before)
+	}
+}
+
 func TestNotifyPostsStatesOnly(t *testing.T) {
 	tg := startGateway(t, func(c *Config) { withKey(c); c.NotifyAllowPrivate = true }, startNode(t, "n1", allCaps...))
 	ctx := ctxT(t)
@@ -877,5 +943,25 @@ func TestNotifyFailureLogsNoURL(t *testing.T) {
 	waitFor(t, "a failed notification to be logged", func() bool { return strings.Contains(logs.String(), "notify (job.finished)") })
 	if strings.Contains(logs.String(), cred) {
 		t.Fatalf("the log holds the notify URL's credential:\n%s", logs.String())
+	}
+}
+
+func TestParseSecretRefs(t *testing.T) {
+	got, err := parseSecretRefs([]string{"API_TOKEN", "OPENAI_API_KEY=openai-prod", "B=a=b"}, nil)
+	if err == nil {
+		t.Fatalf("a secret name holding = was accepted: %+v", got)
+	}
+	got, err = parseSecretRefs([]string{"API_TOKEN", "OPENAI_API_KEY=openai-prod", "_X=_y.z"}, map[string]string{"OTHER": "v"})
+	want := []secretRef{{"API_TOKEN", "API_TOKEN"}, {"OPENAI_API_KEY", "openai-prod"}, {"_X", "_y.z"}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("refs = %+v, %v; want %+v", got, err, want)
+	}
+	for _, bad := range [][]string{
+		{"openai-prod"}, {"LD_PRELOAD=x"}, {"LD_PRELOAD"}, {"SANDBOX_RUN_AS=x"}, {"A=x", "A=y"}, {"A=x", "A"},
+		{"OTHER=x"}, {"=x"}, {"A="}, {"1A=x"}, {"A-B=x"}, {"A=-x"}, {strings.Repeat("A", 129) + "=x"},
+	} {
+		if _, err := parseSecretRefs(bad, map[string]string{"OTHER": "v"}); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
 	}
 }

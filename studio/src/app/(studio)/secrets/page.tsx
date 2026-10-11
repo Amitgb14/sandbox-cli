@@ -31,7 +31,7 @@ function Secrets() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Secrets"
-        description="Name one in a job or a service (secrets: [NAME]) and it is set in each sandbox's environment. Any key of the tenant may name them; values are write-only and never shown."
+        description="Name one in a job or a service and it is set in each sandbox's environment: VAR=name sets it as VAR (OPENAI_API_KEY=openai-prod), a bare NAME under its own name. Any key of the tenant may name them; values are write-only and never shown."
       />
       {writable && (
         <form
@@ -51,7 +51,7 @@ function Secrets() {
             );
           }}
         >
-          <Input aria-label="Secret name" placeholder="NAME" value={name} onChange={(e) => setName(e.target.value)} className="w-56 font-mono" required />
+          <Input aria-label="Secret name" placeholder="name (openai-prod, API_TOKEN)" value={name} onChange={(e) => setName(e.target.value)} className="w-56 font-mono" required />
           <Input aria-label="Secret value" type="password" autoComplete="off" placeholder="value" value={value} onChange={(e) => setValue(e.target.value)} className="w-72 font-mono" required />
           <Button type="submit" disabled={set.isPending}>Set secret</Button>
         </form>
