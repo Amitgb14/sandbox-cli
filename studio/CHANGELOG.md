@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Volumes are picked from a list in the Playground.** Sandbox options ›
+  Volumes lists the volumes that exist, with their size; each picked one
+  gets a mount path (starting as `/mnt/NAME`) and a read-only switch. One
+  attached to a live sandbox is shown but cannot be picked, and none is
+  offered twice. It replaces typing `NAME:/path[:ro]`.
 - **Allowlist groups on a gateway.** A new admin screen, Admin › Allowlist
   groups, lists the gateway's groups — named sets of hosts — and creates,
   edits (description, hosts added and removed) and deletes them; deleting

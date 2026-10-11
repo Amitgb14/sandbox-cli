@@ -165,6 +165,35 @@ test("the Playground starts a sandbox from the image chosen, and says so in its 
   expect(sb.image).toBe("e2e-image:1");
 });
 
+test("the Playground mounts a volume picked from the list", async ({ page, request }) => {
+  const auth = { Authorization: `Bearer ${token}` };
+  const made = await request.fetch("/api/v1/volumes", { method: "POST", data: { name: "e2e-pick", size_mb: 64 }, headers: auth });
+  expect(made.status(), await made.text()).toBeLessThan(300);
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/launch/");
+  await page.getByText("Command", { exact: true }).first().click();
+  await page.getByRole("textbox", { name: "Command" }).fill("echo mounted");
+  await page.getByText("Sandbox options").click();
+  await page.getByRole("button", { name: "Add a volume" }).click();
+  await page.getByRole("combobox", { name: "Volume 1" }).click();
+  await page.getByRole("option", { name: /^e2e-pick/ }).click();
+  await expect(page.getByLabel("Mount path 1")).toHaveValue("/mnt/e2e-pick");
+  await page.getByRole("checkbox", { name: "Read-only 1" }).check();
+  await page.getByRole("tab", { name: "curl" }).click();
+  await expect(page.locator("pre").last()).toContainText('"volumes":[{"name":"e2e-pick","path":"/mnt/e2e-pick","read_only":true}]');
+  await page.locator("form").getByRole("button", { name: "Launch" }).click();
+  await expect(page).toHaveURL(/\/sandbox\/?\?id=sbx_/);
+  const id = new URL(page.url()).searchParams.get("id");
+  const sb = await (await request.fetch(`/api/v1/sandboxes/${id}`, { headers: auth })).json();
+  expect(sb.volumes).toEqual([{ name: "e2e-pick", path: "/mnt/e2e-pick", read_only: true }]);
+  // Now attached, it is listed but cannot be picked again.
+  await page.goto("/launch/");
+  await page.getByText("Sandbox options").click();
+  await expect(page.getByRole("button", { name: "Every volume is picked or in use" })).toBeDisabled();
+  await request.fetch(`/api/v1/sandboxes/${id}`, { method: "DELETE", headers: auth });
+});
+
 test("the Playground lists agents with what each needs to log in", async ({ page }) => {
   await page.goto(`/#token=${token}`);
   await expect(page.getByText("e2e · fake")).toBeVisible();

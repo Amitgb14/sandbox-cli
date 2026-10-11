@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/common/page-header";
 import { AgentList } from "@/components/launch/agent-list";
 import { every, scheduleIntervals } from "@/components/sandbox/snapshots";
 import { ImagePicker } from "@/components/launch/image-picker";
+import { VolumePicker, type Mount } from "@/components/launch/volume-picker";
 import { computeEgress } from "@/components/settings/egress-rules";
 import { Gate } from "@/components/shell/gate";
 import { Card, CardContent } from "@/components/ui/card";
@@ -93,7 +94,7 @@ function LaunchForm() {
   const [picked, setPicked] = useState<string[] | null>(process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" ? [] : null);
   const [baseline, setBaseline] = useState(true);
   const [labels, setLabels] = useState("");
-  const [volumes, setVolumes] = useState("");
+  const [mounts, setMounts] = useState<Mount[]>([]);
   const [from, setFrom] = useState<"image" | "snapshot">("image");
   const [image, setImage] = useState(params.get("image") ?? "");
   const [snapshot, setSnapshot] = useState("");
@@ -133,14 +134,7 @@ function LaunchForm() {
   const chosen = agents?.find((a) => a.name === agent);
   const allowList = allow.split(",").map((a) => a.trim()).filter(Boolean);
   const labelMap = pairs(labels);
-  const vols = volumes
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .map((v) => {
-      const [n, p, ro] = v.split(":");
-      return { name: n, path: p, read_only: ro === "ro" || undefined };
-    });
+  const vols = mounts.filter((m) => m.name && m.path.trim()).map((m) => ({ name: m.name, path: m.path.trim(), read_only: m.readOnly || undefined }));
   // The groups and deny rules Studio's server adds to the launch, so the code
   // says what the launch will do.
   const defaultMode = info?.capabilities?.network.default.mode;
@@ -534,9 +528,9 @@ function LaunchForm() {
               <Label htmlFor="labels">Labels</Label>
               <Input id="labels" className="font-mono" placeholder="team=infra, ticket=123" value={labels} onChange={(e) => setLabels(e.target.value)} />
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="volumes">Volumes</Label>
-              <Input id="volumes" className="font-mono" placeholder="cache:/sandbox/home/.cache" value={volumes} onChange={(e) => setVolumes(e.target.value)} />
+            <div className="flex flex-col gap-2 sm:col-span-2">
+              <Label>Volumes</Label>
+              <VolumePicker mounts={mounts} onChange={setMounts} />
             </div>
           </div>
         </details>
