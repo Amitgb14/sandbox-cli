@@ -419,6 +419,48 @@ func (q *sqlTx) accountFree(ctx context.Context, email, user, tenant string) err
 	return q.nameTakenInOrg(ctx, tenant, user, tenant)
 }
 
+// ownTenant is the organisation a sign-up for user gets: the name
+// lowercased, each run of what an organisation name cannot hold (". _ @ +")
+// a dash, at most 30 characters, so john.smith is john-smith. What is left
+// may still be no organisation name (a digit first, "admin"), which
+// CheckOrgName says.
+func ownTenant(user string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(user) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case !strings.HasSuffix(b.String(), "-"):
+			b.WriteByte('-')
+		}
+	}
+	t := strings.Trim(b.String(), "-")
+	if len(t) > 30 {
+		t = strings.TrimRight(t[:30], "-")
+	}
+	return t
+}
+
+// tenantFree refuses tenant as a new account's own: something is stored in
+// it, it is a team organisation, or a pending invite for another address
+// names it.
+func (q *sqlTx) tenantFree(ctx context.Context, tenant, email string) error {
+	if used, err := q.tenantInUse(ctx, tenant); err != nil {
+		return err
+	} else if used {
+		return fmt.Errorf("%s: %w", tenant, ErrTenantTaken)
+	}
+	var n int
+	if err := q.row(ctx, `SELECT COUNT(*) FROM invites i JOIN orgs o ON o.id = i.org_id
+		WHERE lower(o.key) = ? AND i.account_key IS NULL AND i.email <> ?`, strings.ToLower(tenant), email).Scan(&n); err != nil {
+		return storeErr(err)
+	}
+	if n > 0 {
+		return fmt.Errorf("%s: %w", tenant, ErrTenantTaken)
+	}
+	return nil
+}
+
 func (q *sqlTx) policyExists(ctx context.Context, name string) (bool, error) {
 	var n int
 	err := q.row(ctx, "SELECT COUNT(*) FROM policies WHERE name = ?", name).Scan(&n)
@@ -430,9 +472,33 @@ func (s *sqlStore) CreateInvite(ctx context.Context, req api.CreateInviteRequest
 	if err != nil {
 		return "", inviteRecord{}, err
 	}
+	// An invite naming no tenant is a sign-up: the account gets an
+	// organisation of its own, named after its user, that nobody else is in.
+	// It is never a tenant already holding someone's work, or one another
+	// pending invite names, since the new account would share its secrets
+	// and services; putting an account in an existing tenant is said by
+	// naming it, "default" for the default tenant.
+	own := false
+	switch iv.Tenant {
+	case "":
+		iv.Tenant, own = ownTenant(iv.User), true
+		if err := CheckOrgName(iv.Tenant); err != nil {
+			return "", inviteRecord{}, fmt.Errorf("user %q cannot name an organization of its own (%v); give the invite a tenant", iv.User, err)
+		}
+	case api.DefaultOrg:
+		iv.Tenant = ""
+	}
 	token := newSecret(inviteSecretPrefix)
 	iv.Hash = hashSecret(token)
 	err = s.tx(ctx, func(q *sqlTx) error {
+		if err := q.pruneInvites(ctx, iv.Created); err != nil {
+			return err
+		}
+		if own {
+			if err := q.tenantFree(ctx, iv.Tenant, email); err != nil {
+				return err
+			}
+		}
 		if o, ok, err := q.org(ctx, iv.Tenant); err != nil {
 			return err
 		} else if ok {
@@ -447,9 +513,6 @@ func (s *sqlStore) CreateInvite(ctx context.Context, req api.CreateInviteRequest
 			} else if !ok {
 				return ErrNoSuchPolicy
 			}
-		}
-		if err := q.pruneInvites(ctx, iv.Created); err != nil {
-			return err
 		}
 		// Only the newest invite for an address works.
 		if _, err := q.exec(ctx, "DELETE FROM invites WHERE email = ? AND account_key IS NULL", email); err != nil {

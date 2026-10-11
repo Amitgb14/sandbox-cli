@@ -190,6 +190,51 @@ in `_old/` as reference, to be ported where this design still wants it.
   `. _ / -`; printable values up to 256 bytes) and refused otherwise. They
   are returned with the job, so `GET /v1/jobs` can be told apart and
   filtered; Studio's Jobs form sets them and its list filters by them.
+- **A gateway keeps allowlist groups.** An admin names a set of hosts once
+  (`sandbox-cli gateway egress-groups set go --host proxy.golang.org`, or
+  hosted Studio's admin screen) and any user adds it to an allowlist by name:
+  `--allow-group go` on `run` and `update`, `"groups": ["go"]` in a network
+  policy, or hosted Studio's Network step. The gateway turns the name into
+  hosts, so each node's policy still decides what it allows. An unknown name
+  is refused, never dropped; a change holds for sandboxes created after it;
+  a group a running job or a service names cannot be removed. There is no
+  default group: a launch reaches a group's hosts only by naming it. A
+  `sandboxd` reached directly refuses `groups`, which are a gateway's.
+- **An invite naming no tenant is a sign-up with an organization of its
+  own.** It used to put the account in the default tenant, beside everyone
+  else invited without one, sharing its secrets and services. Now the
+  account gets a tenant named after its user (`john.smith` gets
+  `john-smith`), and the invite is refused (`409`) when that name is a
+  tenant someone is in already, a team organization, or one another pending
+  invite names. `--tenant` (`"tenant"`) puts an account in an existing
+  tenant as before; `default` names the default tenant. Studio no
+  longer offers creating organizations or the Members screen: an account is
+  one person in one organization for now, and organizations made with
+  `sandbox-cli org` still work.
+- **A secret's name need not be the variable it fills.** A job, agent run or
+  service names a secret as `VAR=NAME` to set secret `NAME` as `VAR`
+  (`--secret OPENAI_API_KEY=openai-prod`, `secrets: [OPENAI_API_KEY=openai-prod]`),
+  so a tenant can keep `openai-prod` and `openai-staging` and give either to
+  `OPENAI_API_KEY`. A bare `NAME` still sets it under its own name. Secret
+  names may now hold `.` and `-`. The variable is checked when the spec is
+  sent, as an `env` name is: valid, not reserved, not set twice and not also
+  in `env`, else `400`. Studio's Secrets and Jobs screens say so.
+- **A service can be redeployed, and edited in Studio without losing its
+  env.** `sandbox-cli service redeploy NAME` (`POST
+  /v1/services/{name}/redeploy`, `redeploy_service`/`redeployService` in the
+  SDKs) rolls a new revision of the spec the service has, one replica at a
+  time, so replicas pick up a secret set again or an image tag that moved;
+  a spec sent again unchanged makes no revision. `PUT
+  /v1/services/{name}?keep_env=1` keeps the service's env, for a spec read
+  back from a `GET`, which holds env names only. Studio's service page has
+  **Redeploy** and **Edit spec**, which uses it.
+- **A gateway's admin manages the nodes' images.** `GET`, `POST` and
+  `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)
+  list the images on every node with where each is, download one to every
+  node that takes new sandboxes, each under its own policy, and remove one
+  from every node, refused while any node still needs it. Studio shows
+  Images through a gateway too: an admin downloads and removes there, any
+  other key sees what the nodes have built, read-only.
 
 **Added:**
 

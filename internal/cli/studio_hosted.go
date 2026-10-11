@@ -260,7 +260,8 @@ func hostedLauncher() studio.Launcher {
 
 // hostedNetwork is the network a hosted run asks for: the built-in defaults
 // with the request's mode and names on top, resolved the way every other run
-// is (resolveNetwork), and never a config file of this machine's.
+// is (resolveNetwork), and never a config file of this machine's. Allowlist
+// groups are the gateway's, sent by name for it to turn into hosts.
 func hostedNetwork(req studio.LaunchRequest, caps api.Capabilities, agent *agents.Descriptor) (*api.NetworkPolicy, error) {
 	ov, err := (&runFlags{network: req.Network, allow: req.Allow, noBaseline: req.NoBaseline}).overrides()
 	if err != nil {
@@ -283,7 +284,7 @@ func hostedNetwork(req studio.LaunchRequest, caps api.Capabilities, agent *agent
 	if agent != nil {
 		host = agent.ProviderHost
 	}
-	n, err := resolveNetwork(cfg, req.Allow, req.Deny, caps, host)
+	n, err := resolveNetwork(cfg, req.Allow, req.Deny, req.EgressGroups, caps, host)
 	if err != nil {
 		return nil, err
 	}

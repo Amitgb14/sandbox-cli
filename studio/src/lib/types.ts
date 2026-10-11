@@ -14,6 +14,12 @@ export interface NetworkPolicy {
   mode: NetworkMode;
   allow?: string[] | null;
   deny?: string[];
+  /**
+   * A gateway's allowlist groups, by name (mode allowlist only): the gateway
+   * adds their hosts to allow, or makes them the whole list when allow is
+   * absent.
+   */
+  groups?: string[];
 }
 
 export interface VolumeMount {
@@ -91,6 +97,8 @@ export interface SandboxImage {
   pooled?: boolean;
   progress?: { phase: "pulling" | "building"; done?: number; total?: number };
   error?: string;
+  /** Where it is, in a gateway's admin listing: each node's state, or what it answered. */
+  nodes?: { node: string; state?: string; error?: string }[];
 }
 
 export interface Process {

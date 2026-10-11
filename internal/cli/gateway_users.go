@@ -203,7 +203,11 @@ func newGatewayInvitesCmd(ctxFlag *string) *cobra.Command {
 			"the person chooses a password and becomes an account: a user with the tenant,\n" +
 			"scopes, policy and lifetime the invite names, as a key issued with them would\n" +
 			"have. They sign in with the address and password from then on; the account is\n" +
-			"listed, renewed and revoked with gateway keys.",
+			"listed, renewed and revoked with gateway keys.\n\n" +
+			"With no --tenant the invite is a sign-up: the account gets an organization of\n" +
+			"its own, named after the user (john.smith gets john-smith), and the invite is\n" +
+			"refused if that name is in use. --tenant puts it in an existing one, default\n" +
+			"for the default tenant.",
 	}
 
 	var email, user, tenant, policy, expires, inviteURL string
@@ -213,7 +217,7 @@ func newGatewayInvitesCmd(ctxFlag *string) *cobra.Command {
 		Use:   "create",
 		Short: "Make an invite; its link is printed once",
 		Example: "  # a demo user: 30-minute sandboxes, an account for a week, the link emailed\n" +
-			"  sandbox-cli gateway invites create --email bob@example.com --user bob --tenant bob \\\n" +
+			"  sandbox-cli gateway invites create --email bob@example.com --user bob \\\n" +
 			"    --scope sandbox:read --scope sandbox:create --scope sandbox:delete \\\n" +
 			"    --policy demo --expires 7d --send --invite-url https://studio.example.com",
 		Args: cobra.NoArgs,
@@ -242,7 +246,7 @@ func newGatewayInvitesCmd(ctxFlag *string) *cobra.Command {
 	f := create.Flags()
 	f.StringVar(&email, "email", "", "the address the invite is for; required")
 	f.StringVar(&user, "user", "", "the user the account acts as; required")
-	f.StringVar(&tenant, "tenant", "", "the user's tenant (quotas are per tenant)")
+	f.StringVar(&tenant, "tenant", "", "an existing tenant to put the account in (default: an organization of its own)")
 	f.StringArrayVar(&scopes, "scope", nil, "a scope, as for gateway keys create (repeatable)")
 	f.StringVar(&policy, "policy", "", "the policy the user holds (gateway policies set)")
 	f.StringVar(&expires, "expires", "never", "how long the account lasts once made: 7d, 12h, or never")
@@ -485,6 +489,85 @@ func newGatewayPoliciesCmd(ctxFlag *string) *cobra.Command {
 		},
 	}
 	cmd.AddCommand(set, list, assign, remove)
+	return cmd
+}
+
+func newGatewayEgressGroupsCmd(ctxFlag *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "egress-groups",
+		Short: "Set, list and remove allowlist groups (set and remove: admin key)",
+		Long: "An allowlist group is a named set of hosts, kept by an admin, that any user\n" +
+			"adds to a sandbox's allowlist by name (run --allow-group, update --allow-group,\n" +
+			"or Studio's Network step) instead of listing the hosts. The gateway turns the\n" +
+			"name into hosts; each node's policy still decides which hosts it allows. A\n" +
+			"change holds for sandboxes created after it; running ones keep their hosts.\n" +
+			"A group a running job or a service names cannot be removed.",
+		Example: "  sandbox-cli gateway egress-groups set go --host proxy.golang.org --host sum.golang.org\n" +
+			"  sandbox-cli gateway egress-groups list\n" +
+			"  sandbox-cli run --network allowlist --allow-group go -- go build ./...",
+	}
+
+	var hosts []string
+	var description string
+	set := &cobra.Command{
+		Use:   "set NAME",
+		Short: "Create or replace a group; a change holds for sandboxes created after it",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := requireGateway(cmd.Context(), *ctxFlag, "gateway egress-groups")
+			if err != nil {
+				return err
+			}
+			g, err := c.PutEgressGroup(cmd.Context(), api.EgressGroup{Name: args[0], Description: description, Hosts: hosts})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "group %s: %s\n", termsafe.Clean(g.Name), termsafe.Clean(strings.Join(g.Hosts, ", ")))
+			return nil
+		},
+	}
+	set.Flags().StringArrayVar(&hosts, "host", nil, "a host the group allows, such as example.com or *.example.com (repeatable; the whole list)")
+	set.Flags().StringVar(&description, "description", "", "what the group is for")
+
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List the groups any user may name",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, err := requireGateway(cmd.Context(), *ctxFlag, "gateway egress-groups")
+			if err != nil {
+				return err
+			}
+			groups, err := c.EgressGroups(cmd.Context())
+			if err != nil {
+				return err
+			}
+			t := newTable(cmd.OutOrStdout())
+			fmt.Fprintln(t, "NAME\tHOSTS\tDESCRIPTION")
+			for _, g := range groups {
+				fmt.Fprintf(t, "%s\t%s\t%s\n", termsafe.Clean(g.Name), termsafe.Clean(strings.Join(g.Hosts, ",")), orDash(g.Description))
+			}
+			return t.Flush()
+		},
+	}
+
+	remove := &cobra.Command{
+		Use:   "remove NAME",
+		Short: "Remove a group no running job or service names",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := requireGateway(cmd.Context(), *ctxFlag, "gateway egress-groups")
+			if err != nil {
+				return err
+			}
+			if err := c.DeleteEgressGroup(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", termsafe.Clean(args[0]))
+			return nil
+		},
+	}
+	cmd.AddCommand(set, list, remove)
 	return cmd
 }
 

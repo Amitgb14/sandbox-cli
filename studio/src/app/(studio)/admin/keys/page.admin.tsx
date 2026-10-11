@@ -318,7 +318,7 @@ function CreateKey({ onCreated, onInvited }: { onCreated: (k: CreatedKey) => voi
               className="w-64"
             />
             <Input aria-label="User" placeholder="user" value={user} onChange={(e) => setUser(e.target.value)} className="w-48 font-mono" required />
-            <Input aria-label="Tenant" placeholder="tenant (optional)" value={tenant} onChange={(e) => setTenant(e.target.value)} className="w-48 font-mono" />
+            <Input aria-label="Tenant" placeholder={email.trim() ? "tenant (default: its own)" : "tenant (optional)"} value={tenant} onChange={(e) => setTenant(e.target.value)} className="w-48 font-mono" />
             {scopes.includes("admin") ? null : <PolicySelect label="Policy" value={policy} onChange={setPolicy} />}
             <Select value={String(expires)} onValueChange={(v) => setExpires(Number(v))}>
               <SelectTrigger aria-label="Key expires" className="h-8 w-36 text-xs">

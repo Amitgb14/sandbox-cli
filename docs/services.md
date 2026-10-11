@@ -33,14 +33,24 @@ sandbox-cli service deploy -f service.yaml   # creates it, or updates it if it e
 sandbox-cli service ls
 sandbox-cli service get review-bot           # each replica: sandbox, node, state, last check, restarts
 sandbox-cli service scale review-bot 5
+sandbox-cli service redeploy review-bot      # every replica replaced, one at a time, with the spec as it is
 sandbox-cli service rm review-bot            # terminates the replicas
 ```
 
+**Redeploy** is a new revision of the spec the service already has, rolled
+out as an update is. A spec sent again unchanged is no revision, so this is
+the way to have replicas pick up what changed outside the spec: a secret set
+again, an image tag that now names another image. A secret or allowlist
+group the spec names and that is gone is refused then, not found by the
+rollout.
+
 The API is `POST /v1/services`, `GET /v1/services`,
-`GET|PUT|DELETE /v1/services/{name}` and `POST /v1/services/{name}/scale`
+`GET|PUT|DELETE /v1/services/{name}`, `POST /v1/services/{name}/scale` and
+`POST /v1/services/{name}/redeploy`
 (types in [`internal/api/services_types.go`](../internal/api/services_types.go));
 the Python and TypeScript SDKs have `deploy_service`/`deployService`,
-`update_service`, `services`, `service`, `scale_service` and `delete_service`.
+`update_service`, `services`, `service`, `scale_service`,
+`redeploy_service`/`redeployService` and `delete_service`.
 Creating, changing and scaling need `sandbox:create`; deleting needs
 `sandbox:delete` as well; reading needs `sandbox:read`. Another user's service
 is not found. An admin sees every service and names one in another tenant
@@ -48,15 +58,17 @@ with `?tenant=T`. A `GET` shows env names, not values, as for a sandbox; the
 values are kept in the state file, which is why it stays 0600. A value that
 must stay secret belongs in the secret store instead: `secrets: [NAME]` sets
 each of the tenant's secrets (`sandbox-cli secret set NAME`) in every
-replica's environment, opened as the replica is made and kept nowhere else.
+replica's environment, `VAR=NAME` as the variable `VAR` ([jobs.md](jobs.md#secrets)), opened as the replica is made and kept nowhere else.
 A name the tenant has no secret for is refused, a gateway started without
 `--secrets-key-file` refuses `secrets:` with `501`, and a secret removed later
 stops new replicas (the service's `error` says which) rather than starting
 one without it.
 
-In Studio, the **Services** screen lists them, deploys a JSON spec, scales
-and removes them, and shows each replica with its health and the rollout
-([studio.md](studio.md)).
+In Studio, the **Services** screen lists them, deploys a JSON spec, scales,
+redeploys, edits and removes them, and shows each replica with its health
+and the rollout ([studio.md](studio.md)). **Edit spec** shows the spec as
+JSON without its env, whose values a `GET` never returns, and saves it with
+`PUT …?keep_env=1`, which keeps the service's env as it is.
 
 
 ## Health

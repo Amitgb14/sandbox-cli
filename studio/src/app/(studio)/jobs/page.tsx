@@ -385,7 +385,7 @@ function SubmitJob({ onClose }: { onClose: () => void }) {
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="job-secrets">Secrets</Label>
-            <Input id="job-secrets" placeholder="NAME, OTHER (set in the environment)" value={secrets} onChange={(e) => setSecrets(e.target.value)} className="font-mono" />
+            <Input id="job-secrets" placeholder="NAME, VAR=name (VAR is set to secret name)" value={secrets} onChange={(e) => setSecrets(e.target.value)} className="font-mono" />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="job-files">Keep files</Label>

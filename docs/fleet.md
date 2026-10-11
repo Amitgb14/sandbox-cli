@@ -564,6 +564,37 @@ sandbox-cli update SANDBOX --lifetime +15m                    # one sandbox: +15
 With the gateway stopped, `sandbox-gateway policies set|list|assign|remove` and
 `keys create --policy` do the same on the state file.
 
+### Allowlist groups
+
+An allowlist group is a named set of hosts — Go modules, npm, an internal
+registry — that an admin keeps and any user adds to a sandbox's allowlist by
+name, instead of listing the hosts every time.
+
+```sh
+sandbox-cli gateway egress-groups set go --host proxy.golang.org --host sum.golang.org --description "Go modules"
+sandbox-cli gateway egress-groups list                     # any key
+sandbox-cli run --network allowlist --allow-group go -- go build ./...
+sandbox-cli update SANDBOX --network allowlist --allow-group go --no-baseline
+sandbox-cli gateway egress-groups remove go
+```
+
+- Only an admin key sets or removes a group; every key lists them, and hosted
+  Studio's Network step offers them. A group widens what every user naming it
+  reaches, so it is the operator's to say, as a policy is.
+- The gateway turns names into hosts before a request reaches a node. Each
+  node's `policy.yaml` still decides: a group host outside its `may_allow` is
+  refused at launch, as the same host in `--allow` would be.
+- An unknown group is refused, never dropped. Named with no other host and
+  `--no-baseline`, the groups' hosts are the whole list.
+- A change holds for sandboxes created after it. A running sandbox keeps the
+  hosts it was given; a job's or a service's next sandbox gets the group as it
+  is then. A group a running job or a service names cannot be removed.
+- There is no default group: a launch reaches a group's hosts only by naming
+  it, so editing a group never widens a launch that did not ask for it.
+
+Groups are kept in the gateway's database. A state file has none, so
+`sandbox-gateway store import` brings none.
+
 ### Accounts: invite by email, sign in with a password
 
 A key is a good credential for a program and a poor one for a person: it has
@@ -574,7 +605,7 @@ instead.
 
 ```sh
 # a demo user: 30-minute sandboxes, an account that lasts a week
-sandbox-cli gateway invites create --email bob@example.com --user bob --tenant bob \
+sandbox-cli gateway invites create --email bob@example.com --user bob \
   --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
   --policy demo --expires 7d --invite-url https://studio.example.com
 sandbox-cli gateway invites list                 # sent and not yet used
@@ -586,6 +617,13 @@ Or in Studio, under Users & keys: type the address in **Add a user** and
 press **Create invite**; **Email invite** opens your own mail program with the
 message and link written.
 
+- **Its organization.** An invite naming no tenant is a sign-up: the
+  account gets an organization of its own, named after its user (`bob`;
+  `john.smith` gets `john-smith`), with its own sandboxes, secrets, jobs,
+  services and quota. It is refused when that name is a tenant someone is
+  in already, a team organization, or one another pending invite names,
+  rather than putting a stranger beside them. `--tenant NAME` puts the
+  account in an existing tenant, `--tenant default` in the default one.
 - **The invite** is a link, `https://studio…/#invite=sgi_…`, shown once and
   stored only as its hash. It works once, for two days (`valid_secs` in the
   API, at most seven), so a leaked email is worth nothing once it was used or
@@ -746,13 +784,30 @@ To give users Studio without installing anything, serve it with
 
 ## Images
 
-A node's images — `GET`, `POST` and `DELETE /v1/images`, `sandbox-cli image`,
-Studio's Images screen — are its operator's, managed on the node itself
-([self-hosting.md](self-hosting.md#images)). The gateway answers them `501
-unsupported` and does not report the `images` capability: an install fills a
-node's disk for every tenant on it. A gateway catalog of images run by admin
-keys, which keeps nodes filled, is not done yet. Sandboxes still prefer a node
-that has their image (below).
+A node's images are its disk, shared by every tenant on it, so through a
+gateway only an admin manages them, once for the fleet:
+
+```sh
+sandbox-cli gateway images pull ghcr.io/amitgb14/sandbox-desktop:edge   # every node taking new sandboxes
+sandbox-cli gateway images ls                                           # each image, and which nodes have it
+sandbox-cli gateway images rm python:3.13-slim                          # from every node that has it
+```
+
+- **A pull** goes to every healthy node that is not cordoned, and each node's
+  own policy decides whether it may install the image. A node that refuses is
+  named in the answer; the others go ahead.
+- **A removal** is refused, removing nothing, while any node still needs the
+  image: a sandbox there starts from it, it is the node's default or pooled
+  image, or it is being installed. Then it goes to every node that has it.
+- **Studio's Images screen** is the same for an admin key, with where each
+  image is. Any other key sees what the nodes have built, read-only
+  (`GET /v1/fleet/images`). The plain `/v1/images` routes and `sandbox-cli
+  image` stay `501 unsupported` through a gateway, which does not report the
+  `images` capability.
+- A node added later has none of them until a sandbox asks or the admin
+  pulls again. Sandboxes still prefer a node that has their image (below).
+
+The routes are in [api/v1.md](api/v1.md).
 
 ## Scheduling and failure
 

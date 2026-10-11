@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
-import { e2eState, gatewayStudio, type GatewayStudio } from "./state";
+import { e2eState, gatewayStudio, HOSTED_PORT, type GatewayStudio } from "./state";
 
 /**
  * Studio in front of a real sandbox-gateway (e2e/global-setup.ts), one Studio
@@ -12,8 +12,8 @@ import { e2eState, gatewayStudio, type GatewayStudio } from "./state";
  */
 
 const TENANT = ["Jobs", "Services", "Secrets", "SSH", "Account"];
-const ADMIN = ["Nodes", "Lost sandboxes", "Users & keys", "Audit", "All organizations"];
-const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/audit/", "/admin/orgs/"];
+const ADMIN = ["Nodes", "Lost sandboxes", "Users & keys", "Allowlist groups", "Audit", "All organizations"];
+const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
 
 /** Opens a gateway Studio with its token, once whoami has answered. */
 async function open(page: Page, name: GatewayStudio, user: string) {
@@ -75,11 +75,15 @@ test("a tenant key sees the tenant screens and not the admin ones, by sidebar or
     await expect(page.getByRole("heading", { name: "Not available" })).toBeVisible();
   }
   expect(seen.filter((p) => p.startsWith("/api/v1/admin"))).toEqual([]);
-  // A node's images are its operator's: no gateway key is offered them yet.
-  await expect(nav(page).getByRole("link", { name: "Images", exact: true })).toHaveCount(0);
-  await page.goto(`${base}/images/`);
-  await expect(page.getByText("a gateway does not offer it")).toBeVisible();
-  expect(seen.filter((p) => p.startsWith("/api/v1/images"))).toEqual([]);
+  // The nodes' images are the gateway's admin's: a tenant reads what the
+  // nodes have built, and is offered no download or removal.
+  await nav(page).getByRole("link", { name: "Images", exact: true }).click();
+  await expect(page.locator("main h1")).toHaveText("Images");
+  await expect(page.getByText("The gateway's admin manages them.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download image" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Remove / })).toHaveCount(0);
+  expect(seen.filter((p) => p.startsWith("/api/v1/fleet/images")).length).toBeGreaterThan(0);
+  expect(seen.filter((p) => p.startsWith("/api/v1/images") || p.startsWith("/api/v1/admin"))).toEqual([]);
 
   await page.goto(`${base}/account/`);
   await expect(page.locator("main").getByText("alice", { exact: true })).toBeVisible();
@@ -203,6 +207,33 @@ test("a tenant sets a secret it can never read back", async ({ page }) => {
   expect(await page.content()).not.toContain("value-that-stays-put");
 });
 
+test("a secret named for its purpose is set in a job as the variable the job says", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/secrets/`);
+  await page.getByLabel("Secret name").fill("e2e-openai-prod");
+  await page.getByLabel("Secret value").fill("mapped-value-stays-put");
+  await page.getByRole("button", { name: "Set secret" }).click();
+  await expect(page.getByRole("cell", { name: "e2e-openai-prod" })).toBeVisible();
+
+  await page.goto(`${base}/jobs/`);
+  await page.getByRole("button", { name: "Submit job" }).click();
+  await page.getByLabel("Name").fill("e2e-mapped");
+  await page.getByLabel("Command").fill("printenv OPENAI_API_KEY");
+  await page.getByLabel("Secrets").fill("OPENAI_API_KEY=e2e-openai-prod");
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page).toHaveURL(/\/job\/?\?id=job_/);
+  await expect(page.locator("main").getByText("OPENAI_API_KEY=e2e-openai-prod")).toBeVisible();
+  expect(await page.content()).not.toContain("mapped-value-stays-put");
+
+  // A reserved variable is refused, and the gateway says why.
+  await page.goto(`${base}/jobs/`);
+  await page.getByRole("button", { name: "Submit job" }).click();
+  await page.getByLabel("Command").fill("true");
+  await page.getByLabel("Secrets").fill("LD_PRELOAD=e2e-openai-prod");
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page.getByText(/LD_PRELOAD is reserved/)).toBeVisible();
+});
+
 // The examples a deploy starts from are specs the gateway takes.
 test("the service examples, a Git repository's among them, are specs the gateway accepts", async ({ page }) => {
   const base = await open(page, "gw-tenant", "alice@team-a");
@@ -244,6 +275,37 @@ test("a tenant deploys, scales and removes a service", async ({ page }) => {
   await page.getByRole("button", { name: "Reset" }).click();
   await page.getByRole("link", { name: /e2e-web/ }).click();
   await expect(page).toHaveURL(/\/service\/?\?name=e2e-web/);
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "Remove" }).click();
+  await expect(page).toHaveURL(/\/services\/?$/);
+});
+
+test("a tenant edits a service's spec and redeploys it, and its env is kept", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/services/`);
+  await page.getByRole("button", { name: "Deploy service" }).click();
+  await page.getByLabel("Service spec").fill(JSON.stringify({ name: "e2e-edit", command: ["sleep", "1000"], replicas: 1, env: { KEPT: "env-value-never-shown" } }));
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  await expect(page).toHaveURL(/\/service\/?\?name=e2e-edit/);
+  await expect(page.getByText("1/1 ready")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("· revision 1")).toBeVisible();
+
+  await page.getByRole("button", { name: "Edit spec" }).click();
+  const editor = page.getByLabel("Edit service spec");
+  const spec = JSON.parse(await editor.inputValue());
+  expect(spec.env).toBeUndefined();
+  await expect(page.getByText(/The env \(KEPT\) is kept as it is/)).toBeVisible();
+  spec.command = ["sleep", "2000"];
+  await editor.fill(JSON.stringify(spec));
+  await page.getByRole("button", { name: "Save and roll out" }).click();
+  await expect(page.getByText("· revision 2")).toBeVisible();
+  await expect(page.locator("main").getByText("sleep 2000", { exact: true })).toBeVisible();
+  await expect(page.locator("main").getByText("KEPT")).toBeVisible();
+
+  await page.getByRole("button", { name: "Redeploy" }).click();
+  await expect(page.getByText("· revision 3")).toBeVisible();
+  await expect(page.getByText("1/1 ready")).toBeVisible({ timeout: 15_000 });
+  expect(await page.content()).not.toContain("env-value-never-shown");
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Remove" }).click();
   await expect(page).toHaveURL(/\/services\/?$/);
@@ -343,6 +405,25 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
   await expect(page.getByRole("cell", { name: "GET /v1/whoami" }).first()).toBeVisible();
 });
 
+test("an admin downloads an image to the gateway's nodes, and removes it from them", async ({ page }) => {
+  const base = await open(page, "gw-admin", "ops");
+  await page.goto(`${base}/images/`);
+  await expect(page.locator("main h1")).toHaveText("Images");
+  const ref = "registry.example/e2e/gw-tool:1.0";
+  await page.getByRole("button", { name: "Download image" }).click();
+  await expect(page.getByRole("dialog")).toContainText("every node that takes new sandboxes");
+  await page.getByRole("textbox", { name: "Image" }).fill(ref);
+  await page.getByRole("button", { name: "Download", exact: true }).click();
+  const row = page.getByRole("list", { name: "Images" }).getByRole("listitem").filter({ hasText: ref });
+  await expect(row.getByText("installed", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(row.getByTestId("image-nodes")).toHaveText("on n1");
+
+  await row.getByRole("button", { name: `Remove ${ref}` }).click();
+  await expect(page.getByRole("dialog")).toContainText("from every node that has it");
+  await page.getByRole("dialog").getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(row).toHaveCount(0);
+});
+
 test("an admin gives a user a policy, and moves a sandbox's end both ways", async ({ page }) => {
   const { gatewayURL } = e2eState();
   const base = await open(page, "gw-admin", "ops");
@@ -384,4 +465,67 @@ test("an admin gives a user a policy, and moves a sandbox's end both ways", asyn
   await expect.poll(async () => ((await (await as("GET", `/v1/sandboxes/${sb.id}`)).json()) as { lifetime_secs: number }).lifetime_secs).toBe(1800);
   // The one node is shared with every other test: give its room back.
   await as("DELETE", `/v1/sandboxes/${sb.id}`);
+});
+
+/**
+ * The gateway's allowlist groups: an admin makes one on its screen, and a
+ * hosted user — whose Playground reads the gateway's groups, not a local
+ * Studio's — picks it, and the sandbox gets its hosts. Only an admin is
+ * offered the screen; a user is told an admin keeps the groups.
+ */
+test("an admin makes an allowlist group, and a hosted user picks it in the Playground", async ({ page, browser }) => {
+  const base = await open(page, "gw-admin", "ops");
+  await nav(page).getByRole("link", { name: "Allowlist groups", exact: true }).click();
+  await expect(page.locator("main h1")).toHaveText("Allowlist groups");
+  await page.getByRole("button", { name: "New group" }).click();
+  await page.getByLabel("Group name").fill("e2e-go");
+  await page.getByLabel("Group description").fill("Go modules");
+  await page.getByLabel("Group hosts").fill("proxy.golang.org, sum.golang.org");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  const card = page.getByRole("group", { name: "Group e2e-go" });
+  await expect(card.getByRole("list", { name: "e2e-go hosts" })).toContainText("proxy.golang.org");
+  // No default switch: a gateway group is only ever in a launch that names it.
+  await expect(card.getByRole("switch")).toHaveCount(0);
+  await card.getByLabel("Add a host to e2e-go").fill("golang.org");
+  await card.getByRole("button", { name: "Add" }).click();
+  await expect(card.getByText("3 hosts")).toBeVisible();
+  await card.getByRole("button", { name: "Remove sum.golang.org from e2e-go" }).click();
+  await expect(card.getByText("2 hosts")).toBeVisible();
+
+  const { hosted: h, gatewayURL, adminKey } = e2eState();
+  if (!h) {
+    await fetch(`${gatewayURL}/v1/admin/egress-groups/e2e-go`, { method: "DELETE", headers: { Authorization: `Bearer ${adminKey}` } });
+    test.skip(true, "no out-hosted/: run npm run build:hosted first (npm run check does)");
+  }
+  const hostedBase = `http://127.0.0.1:${HOSTED_PORT}`;
+  const user = await browser.newPage();
+  await user.goto(h!.hana.invite);
+  await expect(user.locator("[data-sidebar=sidebar]").getByText("hosted · hana@hana")).toBeVisible();
+  await user.goto(`${hostedBase}/launch/`);
+  await user.locator("label[for=kind-command]").click();
+  await user.getByRole("textbox", { name: "Command" }).fill("echo grouped");
+  await user.locator("label[for=net-allowlist]").click();
+  await expect(user.getByText("Kept by an admin")).toBeVisible();
+  await expect(user.getByRole("link", { name: "Manage groups" })).toHaveCount(0);
+  const pick = user.getByRole("checkbox", { name: "Group e2e-go" });
+  await expect(pick).toHaveAttribute("aria-checked", "false");
+  await pick.click();
+  await expect(pick).toHaveAttribute("aria-checked", "true");
+  await user.getByText(/^Reaches \d+ hosts?/).click();
+  await expect(user.getByText(/proxy\.golang\.org/).first()).toBeVisible();
+  // The launch names the group; the gateway puts its hosts in the allowlist.
+  await user.getByRole("button", { name: "Launch", exact: true }).click();
+  await expect(user).toHaveURL(/\/sandbox\/\?id=sbx_/);
+  const id = new URL(user.url()).searchParams.get("id")!;
+  const as = (method: string, path: string) => fetch(`${gatewayURL}${path}`, { method, headers: { Authorization: `Bearer ${h!.hana.key}` } });
+  const got = (await (await as("GET", `/v1/sandboxes/${id}`)).json()) as { network: { mode: string; allow?: string[] } };
+  expect(got.network.mode).toBe("allowlist");
+  expect(got.network.allow).toEqual(expect.arrayContaining(["proxy.golang.org", "golang.org"]));
+  await as("DELETE", `/v1/sandboxes/${id}`);
+  await user.close();
+
+  await page.goto(`${base}/admin/egress-groups/`);
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "Delete group e2e-go" }).click();
+  await expect(page.getByRole("group", { name: "Group e2e-go" })).toHaveCount(0);
 });

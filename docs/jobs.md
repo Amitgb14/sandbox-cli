@@ -61,7 +61,7 @@ A job spec is YAML or JSON (`-f -` reads it from stdin):
 | `name`, `image` | a name for people (jobs are found by id); the image, else the node's default. |
 | `labels: {key: value}` | your own metadata, bounded as a sandbox's are: up to 32 keys of lowercase letters, digits and `. _ / -`, values up to 256 printable bytes. Returned with the job; Studio's **Jobs** filters by them. |
 | `env: {NAME: value}` | set in each run; a reserved name is refused. A `GET` shows names, not values. |
-| `secrets: [NAME]` | the tenant's secrets, each set in the run's environment under its own name. |
+| `secrets: [NAME, VAR=NAME]` | the tenant's secrets, each set in the run's environment: `VAR=NAME` sets secret NAME as `VAR`, and a bare `NAME` sets it under its own name. A variable is held to what `env` may set, once. |
 | `network`, `resources`, `from_snapshot` | as for a sandbox: the egress policy, `{cpus, memory_mb, disk_mb}`, a snapshot to start from. |
 | `keep: {output, files}` | what is kept once the sandbox is gone: stdout and stderr (default true, 1 MiB per stream), and the absolute guest paths in `files`, read back when the command ends (8 MiB each). |
 | `notify` | a URL told when each run ends and when the job does (below). |
@@ -93,14 +93,37 @@ the API never returns it. Secrets need the gateway started with
 `--secrets-key-file` (32 random bytes, mode 0600), which seals the tenants'
 secrets and jobs' environments at rest; without it there are no secrets, and
 a job or service that names one is refused with `501`. Setting or removing
-one needs a key with the `secrets:write` scope. The name is an environment
-variable name that is not reserved; the value is at most 64 KiB, with no NUL.
+one needs a key with the `secrets:write` scope. The name is yours to choose:
+letters, digits and `. _ -`, starting with a letter or an underscore, at
+most 128, not a reserved variable; the value is at most 64 KiB, with no NUL.
+
+**A secret and the variable it fills are told apart.** A spec says which
+variable each secret is set in, so one tenant can keep a key per purpose
+and give any of them to the variable a program reads:
+
+```sh
+sandbox-cli secret set openai-prod < prod.txt
+sandbox-cli secret set openai-staging < staging.txt
+sandbox-cli job agent-run codex "…" --secret OPENAI_API_KEY=openai-staging
+```
+
+```yaml
+secrets:
+  - OPENAI_API_KEY=openai-prod   # secret openai-prod, as OPENAI_API_KEY
+  - ANTHROPIC_API_KEY            # secret ANTHROPIC_API_KEY, under its own name
+```
+
+The variable is checked when the spec is sent, as an `env` name is: a valid
+name, not reserved (`LD_PRELOAD=…` is refused), not set twice, and not also
+in `env`. A bare name must itself be a variable name, so `openai-prod` alone
+is refused with the `VAR=openai-prod` to write instead. The job's record
+keeps the mapping, which is names only.
 
 Secrets are the tenant's: any key of the tenant may name one in a job or a
 service, and so read it from inside its sandboxes. A tenant is the unit that
 shares secrets, and users with no tenant all share the default one; an
 [organisation](organizations.md) is a tenant, with secrets of its own. A
-service names them the same way (`secrets: [NAME]`, [services.md](services.md)).
+service names them the same way (`secrets: [NAME, VAR=NAME]`, [services.md](services.md)).
 
 What a secret in a sandbox's environment is protected from, and what it is
 not, is in [security/secrets.md](security/secrets.md).

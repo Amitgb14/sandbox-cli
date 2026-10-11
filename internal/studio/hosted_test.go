@@ -736,9 +736,18 @@ func TestHostedLeavesTheHostsSettingsAlone(t *testing.T) {
 		got = req
 		return LaunchResult{Sandbox: "sbx_1", PID: 1}, nil
 	}
+	// A group named in a hosted launch is the gateway's, passed on by name:
+	// the host's group of the same name is not expanded into it.
 	if r, body := e.do(t, hreq{method: "POST", path: "/api/runs", cookie: cookie, origin: e.origin,
-		body: map[string]any{"command": []string{"true"}, "egress_groups": []string{"host-group"}}}); r.StatusCode != http.StatusBadRequest {
-		t.Errorf("a launch naming the host's group: %d %v", r.StatusCode, body)
+		body: map[string]any{"command": []string{"true"}, "egress_groups": []string{"host-group"}}}); r.StatusCode != http.StatusCreated {
+		t.Errorf("a launch naming a group: %d %v", r.StatusCode, body)
+	}
+	if !slices.Equal(got.EgressGroups, []string{"host-group"}) || slices.Contains(got.Allow, "host-group.example") || slices.Contains(got.Deny, "host-rule.example") {
+		t.Errorf("a hosted launch naming a group reached the launcher as %+v; want the name alone, none of the host's settings", got)
+	}
+	if r, body := e.do(t, hreq{method: "POST", path: "/api/runs", cookie: cookie, origin: e.origin,
+		body: map[string]any{"command": []string{"true"}, "network": "open", "egress_groups": []string{"go"}}}); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("groups beside open: %d %v", r.StatusCode, body)
 	}
 	if r, body := e.do(t, hreq{method: "POST", path: "/api/runs", cookie: cookie, origin: e.origin,
 		body: map[string]any{"command": []string{"true"}, "network": "allowlist", "allow": []string{"a.example"}}}); r.StatusCode != http.StatusCreated {

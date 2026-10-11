@@ -141,6 +141,28 @@ export function useScaleService() {
   );
 }
 
+/**
+ * Replaces the spec of a service read back from the gateway. A GET holds env
+ * names only, so the spec is sent with keep_env: the service's env values
+ * are kept, and spec.env must be empty.
+ */
+export function useEditService() {
+  return useInvalidating(
+    ({ spec, tenant }: { spec: ServiceSpec; tenant?: string }) =>
+      apiFetch<Service>(`/v1/services/${enc(spec.name)}?keep_env=1${tenant ? `&tenant=${enc(tenant)}` : ""}`, { method: "PUT", json: spec }),
+    ({ spec }) => [gkeys.services, ["service", spec.name]],
+  );
+}
+
+/** A new revision of the spec a service has, rolled out one replica at a time. */
+export function useRedeployService() {
+  return useInvalidating(
+    ({ name, tenant }: { name: string; tenant?: string }) =>
+      apiFetch<Service>(`/v1/services/${enc(name)}/redeploy${tenantQ(tenant)}`, { method: "POST" }),
+    ({ name }) => [gkeys.services, ["service", name]],
+  );
+}
+
 export function useRemoveService() {
   return useInvalidating(
     ({ name, tenant }: { name: string; tenant?: string }) =>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -135,18 +136,8 @@ func checkServiceSpec(sp *api.ServiceSpec, tenant string) *specError {
 			return badServiceSpec("tenant %q cannot be named in a DNS label (lowercase letters, digits and dashes, at most 63 with the service's name), so its services cannot be public", tenant)
 		}
 	}
-	seen := map[string]bool{}
-	for _, name := range sp.Secrets {
-		if err := checkSecretName(name); err != nil {
-			return badServiceSpec("secrets: %v", err)
-		}
-		if seen[name] {
-			return badServiceSpec("secrets: %s is named twice", name)
-		}
-		seen[name] = true
-		if _, ok := sp.Env[name]; ok {
-			return badServiceSpec("%s is both in env and in secrets", name)
-		}
+	if _, err := parseSecretRefs(sp.Secrets, sp.Env); err != nil {
+		return badServiceSpec("secrets: %v", err)
 	}
 	return nil
 }
@@ -163,12 +154,32 @@ func (g *Gateway) checkServiceSecrets(ctx context.Context, sp api.ServiceSpec, t
 	if g.sealer == nil {
 		return &specError{http.StatusNotImplemented, api.CodeUnsupported, ErrNoSecretsKey.Error()}
 	}
-	for _, name := range sp.Secrets {
-		if _, ok, err := g.store.SealedSecret(ctx, tenant, name); err != nil {
+	refs, err := parseSecretRefs(sp.Secrets, sp.Env)
+	if err != nil {
+		return badServiceSpec("secrets: %v", err)
+	}
+	for _, ref := range refs {
+		if _, ok, err := g.store.SealedSecret(ctx, tenant, ref.name); err != nil {
 			return &specError{http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error()}
 		} else if !ok {
-			return badServiceSpec("secret %s does not exist (sandbox-cli secret set %s)", name, name)
+			return badServiceSpec("secret %s does not exist (sandbox-cli secret set %s)", ref.name, ref.name)
 		}
+	}
+	return nil
+}
+
+// checkServiceGroups refuses a spec naming allowlist groups that do not
+// exist, as checkServiceSecrets refuses secrets: its replicas could not be
+// made. One removed later is refused while the service names it
+// (groupInUse).
+func (g *Gateway) checkServiceGroups(ctx context.Context, sp api.ServiceSpec) *specError {
+	err := g.checkGroups(ctx, sp.Network)
+	var ge *groupError
+	switch {
+	case errors.As(err, &ge):
+		return badServiceSpec("network: %s", ge.msg)
+	case err != nil:
+		return &specError{http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error()}
 	}
 	return nil
 }
@@ -295,6 +306,10 @@ func (g *Gateway) createService(w http.ResponseWriter, r *http.Request, p Princi
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
+	if e := g.checkServiceGroups(r.Context(), sp); e != nil {
+		writeErr(w, e.status, e.code, e.msg)
+		return
+	}
 	now := time.Now().UTC()
 	s := &service{health: map[string]*replicaHealth{}, rec: serviceRecord{
 		Name: sp.Name, User: p.User, Tenant: p.Tenant, Spec: sp, Revision: 1,
@@ -381,11 +396,25 @@ func (g *Gateway) updateService(w http.ResponseWriter, r *http.Request, p Princi
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such service")
 		return
 	}
+	// ?keep_env=1 keeps the env the service has. A GET returns env names
+	// only, so a screen that edits a spec it read cannot send the values
+	// back; without this its edit would drop them.
+	if r.URL.Query().Get("keep_env") == "1" {
+		if len(sp.Env) > 0 {
+			writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "env: keep_env keeps the service's env; send env, or keep_env, not both")
+			return
+		}
+		sp.Env = maps.Clone(s.rec.Spec.Env)
+	}
 	if e := checkServiceSpec(&sp, s.rec.Tenant); e != nil {
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
 	if e := g.checkServiceSecrets(r.Context(), sp, s.rec.Tenant); e != nil {
+		writeErr(w, e.status, e.code, e.msg)
+		return
+	}
+	if e := g.checkServiceGroups(r.Context(), sp); e != nil {
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
@@ -411,6 +440,56 @@ func (g *Gateway) updateService(w http.ResponseWriter, r *http.Request, p Princi
 	}
 	s.rec = rec
 	g.services.poke()
+	writeJSON(w, http.StatusOK, g.serviceViewLocked(s))
+}
+
+// redeployService is POST /v1/services/{name}/redeploy: a new revision of
+// the spec the service already has, rolled out as any other, one replica
+// at a time. Nothing in the spec changed, so a PUT of it is no revision;
+// this is for what changed outside it — a secret set again, an image tag
+// moved — which only a new sandbox picks up.
+func (g *Gateway) redeployService(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
+	if !need(w, p, ScopeCreate) {
+		return
+	}
+	s := g.lookupService(w, r, p)
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.gone {
+		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such service")
+		return
+	}
+	// Its secrets and groups are checked again, as for an update: a
+	// replica the new revision could not make is refused here, not
+	// discovered by the rollout.
+	if e := g.checkServiceSecrets(ctx, s.rec.Spec, s.rec.Tenant); e != nil {
+		writeErr(w, e.status, e.code, e.msg)
+		return
+	}
+	if e := g.checkServiceGroups(ctx, s.rec.Spec); e != nil {
+		writeErr(w, e.status, e.code, e.msg)
+		return
+	}
+	rec := s.rec.clone()
+	rec.Revision++
+	if rec.Target != nil {
+		rec.Older = append(rec.Older, *rec.Target) // superseded mid-rollout
+	}
+	rec.Target = &revision{Rev: rec.Revision, Spec: rec.Spec}
+	rec.Rollout = &api.ServiceRollout{State: api.RolloutInProgress, From: rec.Serving.Rev, To: rec.Revision}
+	rec.Updated = time.Now().UTC()
+	if err := g.store.PutService(ctx, rec); err != nil {
+		g.logf("recording service %s: %v", rec.Name, err)
+		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the service could not be recorded")
+		return
+	}
+	s.rec = rec
+	g.services.poke()
+	g.logf("service %s: redeployed as revision %d by key %s", rec.Name, rec.Revision, p.KeyID)
 	writeJSON(w, http.StatusOK, g.serviceViewLocked(s))
 }
 

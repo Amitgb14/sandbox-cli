@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/common/page-header";
 import { AgentList } from "@/components/launch/agent-list";
 import { every, scheduleIntervals } from "@/components/sandbox/snapshots";
 import { ImagePicker } from "@/components/launch/image-picker";
+import { VolumePicker, type Mount } from "@/components/launch/volume-picker";
 import { computeEgress } from "@/components/settings/egress-rules";
 import { Gate } from "@/components/shell/gate";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,7 +22,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgents, useEgress, useInfo, useLaunch, useNode, useSandboxes, useSnapshots, useTemplates, useFleetImages } from "@/lib/api/queries";
-import { useCaller } from "@/lib/caller";
+import { isAdmin, useCaller } from "@/lib/caller";
 import { cliAgent, snippets } from "@/lib/codegen";
 import { formatMiB, formatRelative, commandArgv } from "@/lib/format";
 import { overLimits } from "@/lib/templates";
@@ -87,11 +88,13 @@ function LaunchForm() {
   const [name, setName] = useState("");
   const [network, setNetwork] = useState<"" | NetworkMode>("");
   const [allow, setAllow] = useState("");
-  // The allowlist groups picked; null until touched, which is the default groups.
-  const [picked, setPicked] = useState<string[] | null>(null);
+  // The allowlist groups picked; null until touched, which is the default
+  // groups. Hosted, the groups are the gateway's, which has no defaults: none
+  // is picked until the user picks it.
+  const [picked, setPicked] = useState<string[] | null>(process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" ? [] : null);
   const [baseline, setBaseline] = useState(true);
   const [labels, setLabels] = useState("");
-  const [volumes, setVolumes] = useState("");
+  const [mounts, setMounts] = useState<Mount[]>([]);
   const [from, setFrom] = useState<"image" | "snapshot">("image");
   const [image, setImage] = useState(params.get("image") ?? "");
   const [snapshot, setSnapshot] = useState("");
@@ -131,14 +134,7 @@ function LaunchForm() {
   const chosen = agents?.find((a) => a.name === agent);
   const allowList = allow.split(",").map((a) => a.trim()).filter(Boolean);
   const labelMap = pairs(labels);
-  const vols = volumes
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .map((v) => {
-      const [n, p, ro] = v.split(":");
-      return { name: n, path: p, read_only: ro === "ro" || undefined };
-    });
+  const vols = mounts.filter((m) => m.name && m.path.trim()).map((m) => ({ name: m.name, path: m.path.trim(), read_only: m.readOnly || undefined }));
   // The groups and deny rules Studio's server adds to the launch, so the code
   // says what the launch will do.
   const defaultMode = info?.capabilities?.network.default.mode;
@@ -212,7 +208,8 @@ function LaunchForm() {
     // hosts and the deny rules itself.
     if (isAllowlist) {
       if (allowList.length) req.allow = allowList;
-      if (picked !== null) req.egress_groups = picked;
+      // Hosted, naming none is the same as not asking: the gateway has no defaults.
+      if (picked !== null && (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" || picked.length)) req.egress_groups = picked;
       if (noBaseline) req.no_baseline = true;
     }
     if (emptyAllowlist) {
@@ -430,7 +427,7 @@ function LaunchForm() {
                   </span>
                   <span className="text-sm font-medium">{title}</span>
                   <span className="text-xs font-normal text-muted-foreground">
-                    {v === "default" ? `${defaultMode ?? "…"}${defaultMode === "allowlist" ? ", with the default groups" : ""}` : hint}
+                    {v === "default" ? `${defaultMode ?? "…"}${defaultMode === "allowlist" && process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" ? ", with the default groups" : ""}` : hint}
                   </span>
                 </Label>
               );
@@ -440,11 +437,7 @@ function LaunchForm() {
             <div className="flex flex-col gap-3 rounded-lg border bg-card p-3.5">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-medium">Groups</span>
-                {process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" && (
-                <Link href="/settings" className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
-                  Manage groups
-                </Link>
-                )}
+                <ManageGroups admin={isAdmin(caller)} />
               </div>
               {groups.length ? (
                 <div className="flex flex-wrap gap-2" role="group" aria-label="Allowlist groups">
@@ -477,10 +470,23 @@ function LaunchForm() {
               ) : (
                 <p className="text-xs text-muted-foreground">
                   No groups yet.{" "}
-                  <Link href="/settings" className="underline underline-offset-2">
-                    Make some in Settings
-                  </Link>{" "}
-                  to pick hosts by purpose.
+                  {process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" ? (
+                    <>
+                      <Link href="/settings" className="underline underline-offset-2">
+                        Make some in Settings
+                      </Link>{" "}
+                      to pick hosts by purpose.
+                    </>
+                  ) : process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off" && isAdmin(caller) ? (
+                    <>
+                      <Link href="/admin/egress-groups" className="underline underline-offset-2">
+                        Make some
+                      </Link>{" "}
+                      for users to pick hosts by purpose.
+                    </>
+                  ) : (
+                    "An admin of this gateway keeps them."
+                  )}
                 </p>
               )}
               <div className="flex flex-col gap-1.5">
@@ -522,9 +528,9 @@ function LaunchForm() {
               <Label htmlFor="labels">Labels</Label>
               <Input id="labels" className="font-mono" placeholder="team=infra, ticket=123" value={labels} onChange={(e) => setLabels(e.target.value)} />
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="volumes">Volumes</Label>
-              <Input id="volumes" className="font-mono" placeholder="cache:/sandbox/home/.cache" value={volumes} onChange={(e) => setVolumes(e.target.value)} />
+            <div className="flex flex-col gap-2 sm:col-span-2">
+              <Label>Volumes</Label>
+              <VolumePicker mounts={mounts} onChange={setMounts} />
             </div>
           </div>
         </details>
@@ -645,6 +651,32 @@ function formatLifetime(secs: number): string {
   if (secs % 3600 === 0) return `${secs / 3600} hour${secs === 3600 ? "" : "s"}`;
   if (secs % 60 === 0) return `${secs / 60} minute${secs === 60 ? "" : "s"}`;
   return `${secs} seconds`;
+}
+
+/**
+ * Where the groups are kept. Local Studio's are this user's, in Settings;
+ * hosted, they are the gateway's, kept by its admin on a screen of their own,
+ * which only an admin is offered.
+ */
+function ManageGroups({ admin }: { admin: boolean }) {
+  const cls = "text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline";
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on") {
+    return (
+      <Link href="/settings" className={cls}>
+        Manage groups
+      </Link>
+    );
+  }
+  // Written out, not read from ADMIN_BUILD: the minifier folds a literal
+  // comparison, so a build without the admin screens has no link to one.
+  if (process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off" && admin) {
+    return (
+      <Link href="/admin/egress-groups" className={cls}>
+        Manage groups
+      </Link>
+    );
+  }
+  return <span className="text-[11px] text-muted-foreground">Kept by an admin</span>;
 }
 
 export default function LaunchPage() {

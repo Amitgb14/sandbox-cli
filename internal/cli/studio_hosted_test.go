@@ -186,3 +186,29 @@ func TestHostedLauncherNetworkAndRefusals(t *testing.T) {
 		t.Error("launched without a client")
 	}
 }
+
+// Groups a hosted launch names go to the gateway by name, on an allowlist,
+// beside the built-in hosts unless those are left out; then the groups are
+// the whole list, sent as an empty allow list rather than none, which would
+// take the server's default in their place.
+func TestHostedNetworkSendsGroupsByName(t *testing.T) {
+	caps := api.Capabilities{Network: api.NetworkCeiling{Default: api.NetworkPolicy{Mode: api.NetworkOpen}, Ceiling: api.NetworkOpen}}
+	n, err := hostedNetwork(studio.LaunchRequest{EgressGroups: []string{"go"}}, caps, nil)
+	if err != nil || n == nil || n.Mode != api.NetworkAllowlist || !slices.Equal(n.Groups, []string{"go"}) || len(n.Allow) == 0 {
+		t.Fatalf("groups with the built-in hosts: %+v, %v", n, err)
+	}
+	n, err = hostedNetwork(studio.LaunchRequest{EgressGroups: []string{"go"}, NoBaseline: true}, caps, nil)
+	if err != nil || n.Mode != api.NetworkAllowlist || n.Allow == nil || len(n.Allow) != 0 || !slices.Equal(n.Groups, []string{"go"}) {
+		t.Fatalf("groups alone: %+v, %v", n, err)
+	}
+	claude, _ := agents.Lookup("claude")
+	n, err = hostedNetwork(studio.LaunchRequest{EgressGroups: []string{"go"}, NoBaseline: true}, caps, &claude)
+	if err != nil || !slices.Equal(n.Allow, []string{claude.ProviderHost}) || !slices.Equal(n.Groups, []string{"go"}) {
+		t.Fatalf("groups alone on an agent's run: %+v, %v", n, err)
+	}
+	for _, mode := range []string{api.NetworkNone, api.NetworkOpen} {
+		if _, err := hostedNetwork(studio.LaunchRequest{Network: mode, EgressGroups: []string{"go"}}, caps, nil); err == nil {
+			t.Errorf("groups beside %s were sent", mode)
+		}
+	}
+}

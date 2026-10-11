@@ -8,17 +8,20 @@ import { PageHeader, SectionHeader } from "@/components/common/page-header";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Gate } from "@/components/shell/gate";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useRemoveService, useScaleService, useService } from "@/lib/api/gateway";
+import { useEditService, useRedeployService, useRemoveService, useScaleService, useService } from "@/lib/api/gateway";
 import { useCan } from "@/lib/caller";
 import { DASH, formatArgv, formatMiB, formatRelative } from "@/lib/format";
-import type { Service } from "@/lib/types";
+import type { Service, ServiceSpec } from "@/lib/types";
 
 /**
  * One service: its replicas and their health, its rollout, and — with the
- * scopes for it — scale and remove. The spec's environment comes back as
- * names only, as a sandbox's does.
+ * scopes for it — scale, redeploy, edit and remove. The spec's environment
+ * comes back as names only, as a sandbox's does, so an edit keeps the values
+ * the gateway holds (keep_env) rather than sending names it cannot fill.
  */
 function ServiceDetail() {
   const params = useSearchParams();
@@ -29,7 +32,9 @@ function ServiceDetail() {
   const { data: svc, error } = useService(name, tenant);
   const scale = useScaleService();
   const remove = useRemoveService();
+  const redeploy = useRedeployService();
   const [replicas, setReplicas] = useState("");
+  const [editing, setEditing] = useState(false);
 
   if (!name) return <p className="text-sm text-muted-foreground">No service named.</p>;
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
@@ -50,15 +55,34 @@ function ServiceDetail() {
           </span>
         }
         actions={
-          can("sandbox:create") && can("sandbox:delete") ? (
-            <Button variant="destructive" size="sm" disabled={remove.isPending}
-              onClick={() =>
-                confirm(`Remove ${svc.spec.name}? Its replicas are terminated.`) &&
-                remove.mutate({ name, tenant }, { onSuccess: () => { toast.success("Removed"); router.push("/services"); }, onError: (e) => toast.error(e.message) })
-              }>
-              Remove
-            </Button>
-          ) : undefined
+          <div className="flex flex-wrap gap-2">
+            {can("sandbox:create") && (
+              <>
+                <Button variant="outline" size="sm" onClick={() => setEditing((e) => !e)} aria-expanded={editing}>
+                  Edit spec
+                </Button>
+                <Button variant="outline" size="sm" disabled={redeploy.isPending}
+                  title="Replace every replica, one at a time, with the spec as it is: for a secret set again or an image tag moved"
+                  onClick={() =>
+                    redeploy.mutate(
+                      { name, tenant },
+                      { onSuccess: (s) => toast.success(`Rolling out revision ${s.revision}`), onError: (e) => toast.error(e.message) },
+                    )
+                  }>
+                  Redeploy
+                </Button>
+              </>
+            )}
+            {can("sandbox:create") && can("sandbox:delete") ? (
+              <Button variant="destructive" size="sm" disabled={remove.isPending}
+                onClick={() =>
+                  confirm(`Remove ${svc.spec.name}? Its replicas are terminated.`) &&
+                  remove.mutate({ name, tenant }, { onSuccess: () => { toast.success("Removed"); router.push("/services"); }, onError: (e) => toast.error(e.message) })
+                }>
+                Remove
+              </Button>
+            ) : null}
+          </div>
         }
       >
         <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
@@ -79,6 +103,8 @@ function ServiceDetail() {
         </div>
         {svc.error ? <p className="text-sm text-destructive">{svc.error}</p> : null}
       </PageHeader>
+
+      {editing && can("sandbox:create") && <EditSpec svc={svc} tenant={tenant} onDone={() => setEditing(false)} />}
 
       {can("sandbox:create") && (
         <form
@@ -140,6 +166,79 @@ function ServiceDetail() {
 
       <Spec svc={svc} />
     </div>
+  );
+}
+
+/**
+ * The spec as JSON, to change and send back. Its env is not in it — a GET
+ * holds names only — and is kept as it is; the name cannot change.
+ */
+function EditSpec({ svc, tenant, onDone }: { svc: Service; tenant?: string; onDone: () => void }) {
+  const edit = useEditService();
+  const [text, setText] = useState(() => {
+    const spec = { ...svc.spec };
+    delete spec.env;
+    return JSON.stringify(spec, null, 2);
+  });
+  const [problem, setProblem] = useState<string | null>(null);
+
+  function send(e: React.FormEvent) {
+    e.preventDefault();
+    let spec: ServiceSpec;
+    try {
+      spec = JSON.parse(text);
+    } catch (err) {
+      setProblem(`Not JSON: ${(err as Error).message}`);
+      return;
+    }
+    if (!spec || typeof spec !== "object") {
+      setProblem("A spec is an object.");
+      return;
+    }
+    if (spec.name !== svc.spec.name) {
+      setProblem(`The name stays ${svc.spec.name}: a service is not renamed.`);
+      return;
+    }
+    if (spec.env && Object.keys(spec.env).length) {
+      setProblem("The env is kept as it is and cannot be edited here: remove env from the spec. To change it, deploy the whole spec with its values.");
+      return;
+    }
+    delete spec.env;
+    if (spec.image === "") delete spec.image;
+    setProblem(null);
+    edit.mutate(
+      { spec, tenant },
+      {
+        onSuccess: (s) => {
+          toast.success(s.revision !== svc.revision ? `Rolling out revision ${s.revision}` : "Saved; nothing a replica runs changed");
+          onDone();
+        },
+        onError: (err) => setProblem(err.message),
+      },
+    );
+  }
+
+  return (
+    <Card className="surface-sheen gap-0 py-0">
+      <CardContent className="p-4">
+        <form onSubmit={send} className="flex flex-col gap-3">
+          <Textarea aria-label="Edit service spec" value={text} onChange={(e) => setText(e.target.value)} className="min-h-72 font-mono text-xs" spellCheck={false} />
+          <p className="text-xs text-muted-foreground">
+            A change to what a replica runs rolls out one replica at a time; replicas, placement and public change in place.
+            {svc.env_names?.length ? (
+              <>
+                {" "}The env (<span className="font-mono">{svc.env_names.join(", ")}</span>) is kept as it is: the gateway never sends its values back.
+              </>
+            ) : null}
+          </p>
+          {problem ? <p className="text-sm text-destructive">{problem}</p> : null}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={edit.isPending}>Save and roll out</Button>
+            <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 

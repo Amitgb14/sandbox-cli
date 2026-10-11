@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
@@ -96,7 +97,7 @@ func applyConfig(rf *runFlags, project string, req *api.CreateSandboxRequest, ca
 			set(v.Name, v.Value)
 		}
 	}
-	if req.Network, err = resolveNetwork(cfg, rf.allow, rf.deny, caps, agentHost); err != nil {
+	if req.Network, err = resolveNetwork(cfg, rf.allow, rf.deny, rf.groups, caps, agentHost); err != nil {
 		return err
 	}
 	if !cfg.PersistAuthEnabled() {
@@ -166,7 +167,18 @@ func withAgentAPI(n *api.NetworkPolicy, agent *agents.Descriptor, caps api.Capab
 // An allowlist that resolves to nothing is refused. That is prod's shape until
 // it names its hosts, and sending nothing instead would hand the run the
 // server's default, whose baseline prod exists to turn off.
-func resolveNetwork(cfg policy.Config, allow, deny []string, caps api.Capabilities, agentHost string) (*api.NetworkPolicy, error) {
+//
+// groups are a gateway's allowlist groups, sent by name for it to turn into
+// hosts. Naming one asks for an allowlist, as naming a host does, and with
+// them the allow list is sent even when empty: absent, it would be the
+// server's default list in the groups' place.
+func resolveNetwork(cfg policy.Config, allow, deny, groups []string, caps api.Capabilities, agentHost string) (*api.NetworkPolicy, error) {
+	switch cfg.Network.Mode {
+	case "none", "default":
+		if len(groups) > 0 {
+			return nil, fmt.Errorf("allowlist groups (%s) need an allowlist, not network %s", strings.Join(groups, ", "), cfg.NetworkArg())
+		}
+	}
 	switch cfg.Network.Mode {
 	case "none":
 		return &api.NetworkPolicy{Mode: api.NetworkNone}, nil
@@ -178,7 +190,7 @@ func resolveNetwork(cfg policy.Config, allow, deny []string, caps api.Capabiliti
 	// sandboxd with no policy file). An explicit allowlist is never this:
 	// sending nothing for it would hand the run the server's default, which
 	// may be open.
-	if cfg.Network.Mode == "" && len(named) == 0 && len(deny) == 0 {
+	if cfg.Network.Mode == "" && len(named) == 0 && len(deny) == 0 && len(groups) == 0 {
 		return nil, nil
 	}
 	var domains []string
@@ -199,6 +211,12 @@ func resolveNetwork(cfg policy.Config, allow, deny []string, caps api.Capabiliti
 		named = append(named, agentHost)
 	}
 	domains = policy.DedupeDomains(append(domains, named...))
+	if len(groups) > 0 {
+		if domains == nil {
+			domains = []string{}
+		}
+		return &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: domains, Deny: deny, Groups: slices.Clone(groups)}, nil
+	}
 	if len(domains) == 0 {
 		return nil, fmt.Errorf("the egress allowlist resolves to nothing (profile %s, baseline off, no hosts named): "+
 			"name the hosts this run needs with --allow or network.allow, or ask for --network none", cfg.Profile)

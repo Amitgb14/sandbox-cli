@@ -178,8 +178,9 @@ func TestMigration3CarriesAVersion2Database(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, err := SchemaVersion(context.Background(), st.Store); err != nil || v != 3 {
-		t.Fatalf("schema version %d, %v", v, err)
+	// Migrated through 0003, and on to every migration after it.
+	if v, err := SchemaVersion(context.Background(), st.Store); err != nil || v < 4 {
+		t.Fatalf("schema version %d, %v; want every migration applied", v, err)
 	}
 	if db.s.d == sqliteDialect {
 		if fi, err := os.Stat(db.path + ".before-0003"); err != nil || fi.Mode().Perm() != 0o600 {

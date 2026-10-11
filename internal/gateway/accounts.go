@@ -30,6 +30,10 @@ import (
 //     policy and lifetime a key would have. The invite is a link holding a
 //     one-time token that lapses in days, so an email that leaks after it
 //     was used, or after it lapsed, gives nothing away.
+//   - An invite naming no tenant is a sign-up: its account gets an
+//     organisation of its own, named after its user, and is refused when
+//     that name is a tenant someone is in already (sqlStore.CreateInvite).
+//     Joining an existing tenant is said by naming it.
 //   - Opening it, the person sets a password, and the gateway makes the
 //     account: a key, with the email and the password's hash on it, whose
 //     own secret nobody is ever shown. Everything that holds a key to
@@ -83,8 +87,11 @@ const (
 var (
 	ErrEmailTaken     = errors.New("an account with this email exists; send it a password reset instead")
 	ErrUserHasAccount = errors.New("this user already has an account")
-	ErrNoSuchInvite   = errors.New("this invite is not valid: used, withdrawn or expired")
-	ErrNotAccount     = errors.New("this key is not an account")
+	// ErrTenantTaken refuses an invite naming no tenant whose user's name is
+	// a tenant in use: the new account would join whoever is in it.
+	ErrTenantTaken  = errors.New("an organization of this user's name is in use; name it as the invite's tenant to add the account to it")
+	ErrNoSuchInvite = errors.New("this invite is not valid: used, withdrawn or expired")
+	ErrNotAccount   = errors.New("this key is not an account")
 )
 
 var emailRE = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
@@ -778,7 +785,7 @@ func (g *Gateway) adminCreateInvite(w http.ResponseWriter, r *http.Request, p Pr
 	}
 	token, iv, err := g.store.CreateInvite(ctx, req)
 	switch {
-	case errors.Is(err, ErrEmailTaken), errors.Is(err, ErrUserHasAccount), errors.Is(err, ErrMemberName):
+	case errors.Is(err, ErrEmailTaken), errors.Is(err, ErrUserHasAccount), errors.Is(err, ErrMemberName), errors.Is(err, ErrTenantTaken):
 		writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
 		return
 	case errors.Is(err, ErrNoSuchPolicy):

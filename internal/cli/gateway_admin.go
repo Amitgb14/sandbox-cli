@@ -188,7 +188,8 @@ func newGatewayCmd() *cobra.Command {
 	cmd.AddCommand(nodes,
 		cordon("cordon", "Stop placing new sandboxes on a node; what runs there carries on", true),
 		cordon("uncordon", "Place new sandboxes on a node again", false),
-		drain, lost, auditCmd, newGatewayKeysCmd(&ctxFlag), newGatewayPoliciesCmd(&ctxFlag), newGatewayInvitesCmd(&ctxFlag))
+		drain, lost, auditCmd, newGatewayKeysCmd(&ctxFlag), newGatewayPoliciesCmd(&ctxFlag), newGatewayEgressGroupsCmd(&ctxFlag), newGatewayInvitesCmd(&ctxFlag),
+		newGatewayImagesCmd(&ctxFlag))
 	return cmd
 }
 

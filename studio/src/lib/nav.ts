@@ -8,6 +8,7 @@ import {
   Layers3,
   LayoutTemplate,
   ListChecks,
+  ListPlus,
   LockKeyhole,
   Play,
   ScrollText,
@@ -21,6 +22,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { can, isAdmin, useCaller, type Caller } from "@/lib/caller";
+import { TEAMS } from "@/lib/org";
 import type { Scope } from "@/lib/types";
 
 /**
@@ -70,6 +72,7 @@ const ADMIN_GROUP: NavGroup[] = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off"
           { title: "Nodes", href: "/admin/nodes", icon: Server, need: "admin", hint: "The nodes behind the gateway: health, capacity, cordon and drain" },
           { title: "Lost sandboxes", href: "/admin/lost", icon: Unplug, need: "admin", hint: "Sandboxes on nodes that stopped answering" },
           { title: "Users & keys", href: "/admin/keys", icon: Users, need: "admin", hint: "Issue and revoke API keys; any user's SSH keys" },
+          { title: "Allowlist groups", href: "/admin/egress-groups", icon: ListPlus, need: "admin", hint: "Named sets of hosts any user may pick for a sandbox on an allowlist" },
           { title: "Audit", href: "/admin/audit", icon: ScrollText, need: "admin", hint: "Every authenticated request and SSH login the gateway recorded" },
           { title: "All organizations", href: "/admin/orgs", icon: Building2, need: "admin", hint: "Every organization on the gateway, who made it and how many members it has" },
         ],
@@ -105,8 +108,7 @@ export const NAV: NavGroup[] = [
         title: "Images",
         href: "/images",
         icon: Layers3,
-        need: "sandboxd",
-        hint: "Images sandboxes start from: what is installed and what uses it; download one ahead of use, or remove one",
+        hint: "Images sandboxes start from: what is installed and what uses it; download one ahead of use, or remove one (a gateway's admin)",
       },
     ],
   },
@@ -149,7 +151,9 @@ export const NAV: NavGroup[] = [
   {
     label: "System",
     items: [
-      { title: "Members", href: "/members", icon: UserRoundCog, need: "gateway", hint: "Who belongs to the current organization; owners add and remove members" },
+      ...(TEAMS
+        ? [{ title: "Members", href: "/members", icon: UserRoundCog, need: "gateway", hint: "Who belongs to the current organization; owners add and remove members" } satisfies NavItem]
+        : []),
       { title: "Account", href: "/account", icon: CircleUser, need: "gateway", hint: "Who this API key is: user, tenant, organization and scopes" },
       {
         title: "Settings",
@@ -165,7 +169,7 @@ export const NAV: NavGroup[] = [
 /** Whether the caller may see a nav item's screen at all. */
 export function allowed(item: Pick<NavItem, "need" | "scope">, caller: Caller): boolean {
   if (item.need === "gateway" && caller.kind !== "gateway") return false;
-  // A gateway does not route a node's images yet (its admin catalog is to come).
+  // A screen of a plain sandboxd's own, which no gateway offers.
   if (item.need === "sandboxd" && caller.kind !== "sandboxd") return false;
   if (item.need === "admin" && !isAdmin(caller)) return false;
   if (item.scope && !can(caller, item.scope)) return false;

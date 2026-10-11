@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useImages, useInfo, useInstallImage, useRemoveImage } from "@/lib/api/queries";
-import { useCan } from "@/lib/caller";
+import { isAdmin, useCaller, useCan } from "@/lib/caller";
 import { formatBytes, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { SandboxImage } from "@/lib/types";
@@ -20,22 +20,44 @@ import type { SandboxImage } from "@/lib/types";
 /** A desktop image is published beside each base one (images/desktop). */
 const desktopOf = (ref: string) => (/sandbox-base(?=:|@|$)/.test(ref) ? ref.replace(/sandbox-base(?=:|@|$)/, "sandbox-desktop") : "");
 
+// The gateway's admin listing, written out here so the minifier folds it away
+// in a build with NEXT_PUBLIC_STUDIO_ADMIN=off (scripts/check-admin-off.mjs).
+const ADMIN_IMAGES = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off" ? "/v1/admin/images" : "";
+
 /**
- * The images this sandboxd starts sandboxes from (capability images): what
- * is installed, what uses each, and its size; an image downloaded and
- * installed ahead of the first sandbox that wants it (on Linux the install
- * builds its root disk too, most of that first wait); and one removed once
- * nothing uses it. They are this machine's operator's, which on a plain
- * sandboxd is whoever holds its token; a gateway does not offer them yet.
+ * Where this caller's images are, and whether it may change them: a plain
+ * sandboxd's own, its operator's (whoever holds its token), where the
+ * backend manages images; a gateway's nodes', which its admin downloads and
+ * removes once for the fleet; and, for any other gateway key, what the nodes
+ * have built, to read. supported is undefined until it is known.
+ */
+function useImagesEndpoint(): { path: string; manage: boolean; gateway: boolean; supported: boolean | undefined } {
+  const caller = useCaller();
+  const { data: info } = useInfo();
+  if (caller.kind === "gateway") {
+    return isAdmin(caller) && ADMIN_IMAGES
+      ? { path: ADMIN_IMAGES, manage: true, gateway: true, supported: true }
+      : { path: "/v1/fleet/images", manage: false, gateway: true, supported: true };
+  }
+  const supported = caller.kind === "loading" || !info ? undefined : !!info.capabilities?.capabilities?.images;
+  return { path: "/v1/images", manage: true, gateway: false, supported };
+}
+
+/**
+ * The images sandboxes start from (capability images): what is installed,
+ * what uses each, and its size; an image downloaded and installed ahead of
+ * the first sandbox that wants it (on Linux the install builds its root disk
+ * too, most of that first wait); and one removed once nothing uses it.
+ * Through a gateway they are its nodes' (useImagesEndpoint).
  */
 function Images() {
-  const { data: info } = useInfo();
-  const supported = !!info?.capabilities?.capabilities?.images;
-  const { data, isLoading, error } = useImages(supported);
+  const ep = useImagesEndpoint();
+  const supported = !!ep.supported;
+  const { data, isLoading, error } = useImages(supported, ep.path);
   const can = useCan();
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<SandboxImage | null>(null);
-  const install = useInstallImage();
+  const install = useInstallImage(ep.path);
   const list = data ?? [];
   const total = list.reduce((n, i) => n + (i.state === "installed" ? (i.bytes ?? 0) : 0), 0);
   const installed = list.filter((i) => i.state === "installed").length;
@@ -51,27 +73,37 @@ function Images() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Images"
-        description="What sandboxes here start from. An image is pulled the first time a sandbox asks for it; download one ahead of time and that first sandbox starts without the wait. Remove what nothing uses to free its disk."
+        description={
+          !ep.gateway
+            ? "What sandboxes here start from. An image is pulled the first time a sandbox asks for it; download one ahead of time and that first sandbox starts without the wait. Remove what nothing uses to free its disk."
+            : ep.manage
+              ? "What sandboxes start from on the gateway's nodes. A download goes to every node that takes new sandboxes, as each node's policy allows; a removal takes an image from every node, once none still needs it."
+              : "What the gateway's nodes have built: a sandbox from one of these starts without a download. The gateway's admin manages them."
+        }
         actions={
-          supported ? (
+          supported && ep.manage ? (
             <Button onClick={() => setAdding(true)} className="gap-1.5">
               <Download className="size-4" /> Download image
             </Button>
           ) : null
         }
       />
-      {info && !supported ? (
+      {ep.supported === false ? (
         <EmptyState icon={Layers3} title="Not on this endpoint" description="This sandboxd does not manage its images; each is pulled when a sandbox first asks for it." />
       ) : error ? (
         <p className="text-sm text-destructive">{error.message}</p>
-      ) : isLoading || !info ? (
+      ) : isLoading || ep.supported === undefined ? (
         <div className="flex flex-col gap-2">
           {Array.from({ length: 3 }, (_, i) => (
             <Skeleton key={i} className="h-14 rounded-lg" />
           ))}
         </div>
       ) : list.length === 0 ? (
-        <EmptyState icon={Layers3} title="No images yet" description="Download one, or start a sandbox: its image is installed then." />
+        <EmptyState
+          icon={Layers3}
+          title="No images yet"
+          description={ep.manage ? "Download one, or start a sandbox: its image is installed then." : "Start a sandbox: its image is installed then."}
+        />
       ) : (
         <>
           <p className="-mt-3 text-xs text-muted-foreground">
@@ -91,6 +123,8 @@ function Images() {
                 <ImageRow
                   key={img.image}
                   img={img}
+                  manage={ep.manage}
+                  gateway={ep.gateway}
                   mayStart={can("sandbox:create")}
                   onRetry={() => start(img.image)}
                   onRemove={() => setRemoving(img)}
@@ -100,15 +134,39 @@ function Images() {
           </div>
         </>
       )}
-      <DownloadDialog open={adding} onOpenChange={setAdding} suggest={[def, def ? desktopOf(def) : ""].filter((s): s is string => !!s && !list.some((i) => i.image === s && i.state === "installed"))} onStart={start} />
-      <RemoveDialog img={removing} onClose={() => setRemoving(null)} />
+      {ep.manage ? (
+        <>
+          <DownloadDialog
+            open={adding}
+            onOpenChange={setAdding}
+            gateway={ep.gateway}
+            suggest={[def, def ? desktopOf(def) : ""].filter((s): s is string => !!s && !list.some((i) => i.image === s && i.state === "installed"))}
+            onStart={start}
+          />
+          <RemoveDialog img={removing} path={ep.path} gateway={ep.gateway} onClose={() => setRemoving(null)} />
+        </>
+      ) : null}
     </div>
   );
 }
 
 const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 md:grid-cols-[minmax(14rem,2fr)_minmax(9rem,1fr)_6rem_5rem_7rem_11rem]";
 
-function ImageRow({ img, mayStart, onRetry, onRemove }: { img: SandboxImage; mayStart: boolean; onRetry: () => void; onRemove: () => void }) {
+function ImageRow({
+  img,
+  manage,
+  gateway,
+  mayStart,
+  onRetry,
+  onRemove,
+}: {
+  img: SandboxImage;
+  manage: boolean;
+  gateway: boolean;
+  mayStart: boolean;
+  onRetry: () => void;
+  onRemove: () => void;
+}) {
   const pinned = img.default || img.pooled;
   const p = img.progress;
   const pct = p?.phase === "pulling" && p.total ? Math.round(((p.done ?? 0) * 100) / p.total) : null;
@@ -127,6 +185,7 @@ function ImageRow({ img, mayStart, onRetry, onRemove }: { img: SandboxImage; may
               {img.default ? <Tag>default</Tag> : null}
               {img.pooled ? <Tag>pooled</Tag> : null}
               {img.digest ? <span className="truncate font-mono" title={img.digest}>{img.digest.slice(0, 19)}</span> : null}
+              {img.nodes?.length ? <span data-testid="image-nodes">on {img.nodes.map(nodeOf).join(", ")}</span> : null}
             </span>
           </span>
         </div>
@@ -163,18 +222,24 @@ function ImageRow({ img, mayStart, onRetry, onRemove }: { img: SandboxImage; may
               </Link>
             </Button>
           ) : null}
-          {img.state === "failed" ? (
+          {img.state === "failed" && manage ? (
             <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs" onClick={onRetry} aria-label={`Retry ${img.image}`}>
               <RotateCw className="size-3.5" /> Retry
             </Button>
           ) : null}
-          {img.state !== "installing" ? (
+          {img.state !== "installing" && manage ? (
             <Button
               size="sm"
               variant="ghost"
               className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
               disabled={pinned || img.in_use > 0}
-              title={pinned ? "The server's default or pooled image; change its policy to remove it" : img.in_use ? "A sandbox here starts from it" : undefined}
+              title={
+                pinned
+                  ? `${gateway ? "A node's" : "The server's"} default or pooled image; change its policy to remove it`
+                  : img.in_use
+                    ? `A sandbox ${gateway ? "on a node" : "here"} starts from it`
+                    : undefined
+              }
               onClick={onRemove}
               aria-label={`${img.state === "failed" ? "Clear" : "Remove"} ${img.image}`}
             >
@@ -194,6 +259,12 @@ function ImageRow({ img, mayStart, onRetry, onRemove }: { img: SandboxImage; may
   );
 }
 
+/** One node's part of an image, as the row's hint reads it: its name, and its state where it is not installed. */
+function nodeOf(n: NonNullable<SandboxImage["nodes"]>[number]): string {
+  if (n.error) return `${n.node} (${n.error})`;
+  return n.state && n.state !== "installed" ? `${n.node} (${n.state})` : n.node;
+}
+
 function Tag({ children }: { children: React.ReactNode }) {
   return <span className="rounded border px-1 text-[10px] uppercase">{children}</span>;
 }
@@ -201,7 +272,19 @@ function Tag({ children }: { children: React.ReactNode }) {
 /** Image references as sandboxd takes them: a name, maybe a registry and a tag or digest. */
 const REF = /^[a-z0-9][a-z0-9._\-/:@]*$/i;
 
-function DownloadDialog({ open, onOpenChange, suggest, onStart }: { open: boolean; onOpenChange: (o: boolean) => void; suggest: string[]; onStart: (image: string) => void }) {
+function DownloadDialog({
+  open,
+  onOpenChange,
+  gateway,
+  suggest,
+  onStart,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  gateway: boolean;
+  suggest: string[];
+  onStart: (image: string) => void;
+}) {
   const [ref, setRef] = useState("");
   const v = ref.trim();
   const bad = v !== "" && !REF.test(v);
@@ -227,8 +310,17 @@ function DownloadDialog({ open, onOpenChange, suggest, onStart }: { open: boolea
           <DialogHeader>
             <DialogTitle>Download image</DialogTitle>
             <DialogDescription>
-              Pulled from its registry and installed on this machine, so the first sandbox from it starts without the wait. It runs in the background; this
-              list shows how far it has got. The server&apos;s policy may limit which images are allowed.
+              {gateway ? (
+                <>
+                  Pulled from its registry and installed on every node that takes new sandboxes, so the first sandbox from it starts without the wait. It runs
+                  in the background; this list shows how far it has got. Each node&apos;s policy may limit which images are allowed.
+                </>
+              ) : (
+                <>
+                  Pulled from its registry and installed on this machine, so the first sandbox from it starts without the wait. It runs in the background; this
+                  list shows how far it has got. The server&apos;s policy may limit which images are allowed.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <Input autoFocus aria-label="Image" className="font-mono" placeholder="ghcr.io/owner/image:tag" value={ref} onChange={(e) => setRef(e.target.value)} />
@@ -259,8 +351,8 @@ function DownloadDialog({ open, onOpenChange, suggest, onStart }: { open: boolea
   );
 }
 
-function RemoveDialog({ img, onClose }: { img: SandboxImage | null; onClose: () => void }) {
-  const remove = useRemoveImage();
+function RemoveDialog({ img, path, gateway, onClose }: { img: SandboxImage | null; path: string; gateway: boolean; onClose: () => void }) {
+  const remove = useRemoveImage(path);
   const failed = img?.state === "failed";
   return (
     <Dialog open={!!img} onOpenChange={(o) => !o && !remove.isPending && onClose()}>
@@ -275,8 +367,9 @@ function RemoveDialog({ img, onClose }: { img: SandboxImage | null; onClose: () 
                 ) : (
                   <>
                     Removes <span className="font-mono break-all">{img.image}</span>
-                    {img.bytes ? `, freeing about ${formatBytes(img.bytes)} and any layers no other image uses` : ""}. The next sandbox from it downloads it
-                    again.
+                    {gateway ? " from every node that has it" : ""}
+                    {img.bytes ? `, freeing about ${formatBytes(img.bytes)}${gateway ? " on each" : ""} and any layers no other image uses` : ""}. The next
+                    sandbox from it downloads it again.
                   </>
                 )}
               </DialogDescription>
@@ -310,7 +403,7 @@ function RemoveDialog({ img, onClose }: { img: SandboxImage | null; onClose: () 
 
 export default function ImagesPage() {
   return (
-    <Gate need="sandboxd">
+    <Gate>
       <Images />
     </Gate>
   );

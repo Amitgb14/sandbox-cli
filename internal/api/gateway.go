@@ -117,6 +117,27 @@ func (c *Client) AssignPolicy(ctx context.Context, req AssignPolicyRequest) erro
 	return c.json(ctx, http.MethodPut, "/v1/admin/user-policy", req, nil)
 }
 
+// EgressGroups lists the gateway's allowlist groups, which any key may
+// name in a network policy's Groups.
+func (c *Client) EgressGroups(ctx context.Context) ([]EgressGroup, error) {
+	var out EgressGroupList
+	err := c.json(ctx, http.MethodGet, "/v1/egress-groups", nil, &out)
+	return out.Groups, err
+}
+
+// PutEgressGroup creates or replaces an allowlist group (admin). A change
+// holds for sandboxes created after it; running ones keep their hosts.
+func (c *Client) PutEgressGroup(ctx context.Context, g EgressGroup) (EgressGroup, error) {
+	var out EgressGroup
+	return out, c.json(ctx, http.MethodPut, "/v1/admin/egress-groups/"+url.PathEscape(g.Name), g, &out)
+}
+
+// DeleteEgressGroup removes an allowlist group no job or service names
+// (admin).
+func (c *Client) DeleteEgressGroup(ctx context.Context, name string) error {
+	return c.json(ctx, http.MethodDelete, "/v1/admin/egress-groups/"+url.PathEscape(name), nil, nil)
+}
+
 // GatewayNodes lists the nodes behind the gateway (admin).
 func (c *Client) GatewayNodes(ctx context.Context) ([]NodeInfo, error) {
 	var out NodeList
@@ -149,6 +170,28 @@ func (c *Client) FleetImages(ctx context.Context) ([]Image, error) {
 	var out ImageList
 	err := c.json(ctx, http.MethodGet, "/v1/fleet/images", nil, &out)
 	return out.Images, err
+}
+
+// AdminImages lists the images on a gateway's nodes, each with where it is
+// (Image.Nodes) and its state there (admin).
+func (c *Client) AdminImages(ctx context.Context) ([]Image, error) {
+	var out ImageList
+	err := c.json(ctx, http.MethodGet, "/v1/admin/images", nil, &out)
+	return out.Images, err
+}
+
+// AdminInstallImage has every node that takes new sandboxes download and
+// install ref, each as its own policy allows (admin).
+func (c *Client) AdminInstallImage(ctx context.Context, ref string) (Image, error) {
+	var out Image
+	return out, c.json(ctx, http.MethodPost, "/v1/admin/images", InstallImageRequest{Image: ref}, &out)
+}
+
+// AdminRemoveImage removes ref from every node that has it, or from none
+// when one still needs it (admin).
+func (c *Client) AdminRemoveImage(ctx context.Context, ref string) (RemovedImage, error) {
+	var out RemovedImage
+	return out, c.json(ctx, http.MethodDelete, "/v1/admin/images?image="+url.QueryEscape(ref), nil, &out)
 }
 
 // CreateInvite makes a sign-up link for an email address (admin). The token

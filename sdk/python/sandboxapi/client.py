@@ -142,6 +142,8 @@ class Client:
         """Create a sandbox. ``network`` is ``{"mode": "none"|"allowlist"|"open",
         "allow": [...], "deny": [...]}``; ``"allow": None`` (or absent) means the
         server's default list, ``[]`` means nothing — which is refused.
+        Through a gateway, ``"groups": [...]`` names its allowlist groups (mode
+        allowlist), whose hosts it adds; with no allow list, they are the list.
         ``labels`` are your own metadata: returned with the sandbox, usable to
         filter ``sandboxes()``, and recorded in its audit events. ``volumes`` is
         ``[{"name": ..., "path": ..., "read_only": bool}]`` (capability
@@ -388,7 +390,7 @@ class Client:
         """Start a job. ``spec`` holds the API's keys: ``command`` (an argv) or
         ``agent`` and ``prompt`` (or ``prompts``, one run each), and optionally
         ``name``, ``image``, ``parallelism``, ``completions``, ``retries``,
-        ``timeout_secs``, ``env``, ``secrets`` (names), ``network``,
+        ``timeout_secs``, ``env``, ``secrets`` (``"VAR=NAME"``, or ``"NAME"`` under its own name), ``network``,
         ``resources``, ``from_snapshot``, ``keep`` (``{"output": bool,
         "files": [paths]}``) and ``notify`` (a URL)."""
         return self._json("POST", "/v1/jobs", spec)
@@ -470,6 +472,11 @@ class Client:
 
     def scale_service(self, name: str, replicas: int) -> Dict[str, Any]:
         return self._json("POST", self._svc(name) + "/scale", {"replicas": replicas})
+
+    def redeploy_service(self, name: str) -> Dict[str, Any]:
+        """Replace every replica, one at a time, with the spec as it is: for
+        a secret set again or an image tag moved."""
+        return self._json("POST", self._svc(name) + "/redeploy")
 
     def delete_service(self, name: str) -> None:
         """Delete a service and terminate its replicas."""

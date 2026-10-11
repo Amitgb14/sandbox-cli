@@ -16,6 +16,12 @@ export interface NetworkPolicy {
   /** Absent or null: the server's default list. [] means nothing, and is refused. */
   allow?: string[] | null;
   deny?: string[];
+  /**
+   * A gateway's allowlist groups, by name (mode allowlist only). The gateway
+   * adds their hosts to `allow`; with `allow` absent, they are the whole list.
+   * A server that is not a gateway refuses them.
+   */
+  groups?: string[];
 }
 
 export interface Sandbox {
@@ -223,7 +229,7 @@ export interface JobSpec {
   retries?: number;
   timeout_secs?: number;
   env?: Record<string, string>;
-  /** Names of the tenant's secrets, each set in the run's environment under its name. */
+  /** The tenant's secrets: "VAR=NAME" sets secret NAME as VAR, "NAME" under its own name. */
   secrets?: string[];
   network?: NetworkPolicy;
   resources?: { cpus?: number; memory_mb?: number; disk_mb?: number };
@@ -298,7 +304,7 @@ export interface ServiceSpec {
   placement?: { spread?: "node" };
   /** Routed through the gateway's HTTP router. */
   public?: boolean;
-  /** Names of the tenant's secrets, each set in every replica's environment. */
+  /** The tenant's secrets, set in every replica's environment: "VAR=NAME" as VAR, "NAME" under its own name. */
   secrets?: string[];
 }
 
@@ -762,6 +768,11 @@ export class Client {
 
   scaleService(name: string, replicas: number): Promise<Service> {
     return this.json("POST", this.svc(name) + "/scale", { replicas });
+  }
+
+  /** Replace every replica, one at a time, with the spec as it is: for a secret set again or an image tag moved. */
+  redeployService(name: string): Promise<Service> {
+    return this.json("POST", this.svc(name) + "/redeploy");
   }
 
   /** Delete a service and terminate its replicas. */

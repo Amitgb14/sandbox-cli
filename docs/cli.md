@@ -50,6 +50,14 @@ Global flags:
 | [`sandbox-cli gateway audit`](#sandbox-cli-gateway-audit) | Show the gateway's audit log: who did what, newest last |
 | [`sandbox-cli gateway cordon`](#sandbox-cli-gateway-cordon) | Stop placing new sandboxes on a node; what runs there carries on |
 | [`sandbox-cli gateway drain`](#sandbox-cli-gateway-drain) | Cordon a node and report its sandboxes; with --terminate, end them all |
+| [`sandbox-cli gateway egress-groups`](#sandbox-cli-gateway-egress-groups) | Set, list and remove allowlist groups (set and remove: admin key) |
+| [`sandbox-cli gateway egress-groups list`](#sandbox-cli-gateway-egress-groups-list) | List the groups any user may name |
+| [`sandbox-cli gateway egress-groups remove`](#sandbox-cli-gateway-egress-groups-remove) | Remove a group no running job or service names |
+| [`sandbox-cli gateway egress-groups set`](#sandbox-cli-gateway-egress-groups-set) | Create or replace a group; a change holds for sandboxes created after it |
+| [`sandbox-cli gateway images`](#sandbox-cli-gateway-images) | Images on the gateway's nodes: list, download ahead of use, remove (admin key) |
+| [`sandbox-cli gateway images ls`](#sandbox-cli-gateway-images-ls) | List the nodes' images, and which nodes have each |
+| [`sandbox-cli gateway images pull`](#sandbox-cli-gateway-images-pull) | Have every node that takes new sandboxes download and install an image |
+| [`sandbox-cli gateway images rm`](#sandbox-cli-gateway-images-rm) | Remove images from every node, where no node still needs them |
 | [`sandbox-cli gateway invites`](#sandbox-cli-gateway-invites) | Invite people by email to sign in to hosted Studio with a password (admin key) |
 | [`sandbox-cli gateway invites create`](#sandbox-cli-gateway-invites-create) | Make an invite; its link is printed once |
 | [`sandbox-cli gateway invites list`](#sandbox-cli-gateway-invites-list) | List invites not yet used |
@@ -99,6 +107,7 @@ Global flags:
 | [`sandbox-cli service deploy`](#sandbox-cli-service-deploy) | Create a service, or update it (a rolling update) if it exists |
 | [`sandbox-cli service get`](#sandbox-cli-service-get) | Show a service: its spec, its rollout, and each replica's health |
 | [`sandbox-cli service ls`](#sandbox-cli-service-ls) | List services |
+| [`sandbox-cli service redeploy`](#sandbox-cli-service-redeploy) | Replace a service's replicas, one at a time, with its spec as it is |
 | [`sandbox-cli service rm`](#sandbox-cli-service-rm) | Delete services and terminate their replicas |
 | [`sandbox-cli service scale`](#sandbox-cli-service-scale) | Set how many replicas a service keeps |
 | [`sandbox-cli shell`](#sandbox-cli-shell) | Open an interactive shell in a running sandbox |
@@ -347,7 +356,7 @@ Flags:
 | `--name string` |  | name the job |
 | `--notify string` |  | a URL POSTed the run's state when it ends (https to a public address, unless the gateway allows private ones) |
 | `--retries int` |  | attempts after a failed one |
-| `--secret stringArray` |  | a gateway secret to set in the run's environment, by name (repeatable) |
+| `--secret stringArray` |  | a gateway secret to set in the run's environment: NAME, or VAR=NAME to set it as VAR (repeatable) |
 | `--timeout duration` |  | how long the agent may run, e.g. 30m (default: the gateway's, 1h) |
 | `--wait` |  | wait, print the output, and exit with the agent's exit code |
 
@@ -495,7 +504,7 @@ and restart its sandboxd, uncordon NODE. The gateway keeps a node it cordoned
 cordoned across the node's restart, until it is uncordoned here.
 ```
 
-Subcommands: [`audit`](#sandbox-cli-gateway-audit), [`cordon`](#sandbox-cli-gateway-cordon), [`drain`](#sandbox-cli-gateway-drain), [`invites`](#sandbox-cli-gateway-invites), [`keys`](#sandbox-cli-gateway-keys), [`lost`](#sandbox-cli-gateway-lost), [`nodes`](#sandbox-cli-gateway-nodes), [`policies`](#sandbox-cli-gateway-policies), [`uncordon`](#sandbox-cli-gateway-uncordon).
+Subcommands: [`audit`](#sandbox-cli-gateway-audit), [`cordon`](#sandbox-cli-gateway-cordon), [`drain`](#sandbox-cli-gateway-drain), [`egress-groups`](#sandbox-cli-gateway-egress-groups), [`images`](#sandbox-cli-gateway-images), [`invites`](#sandbox-cli-gateway-invites), [`keys`](#sandbox-cli-gateway-keys), [`lost`](#sandbox-cli-gateway-lost), [`nodes`](#sandbox-cli-gateway-nodes), [`policies`](#sandbox-cli-gateway-policies), [`uncordon`](#sandbox-cli-gateway-uncordon).
 
 Flags:
 
@@ -546,6 +555,114 @@ Flags:
 |---|---|---|
 | `--terminate` |  | terminate every sandbox on the node now |
 
+### sandbox-cli gateway egress-groups
+
+Set, list and remove allowlist groups (set and remove: admin key).
+
+```text
+sandbox-cli gateway egress-groups [command]
+```
+
+```text
+An allowlist group is a named set of hosts, kept by an admin, that any user
+adds to a sandbox's allowlist by name (run --allow-group, update --allow-group,
+or Studio's Network step) instead of listing the hosts. The gateway turns the
+name into hosts; each node's policy still decides which hosts it allows. A
+change holds for sandboxes created after it; running ones keep their hosts.
+A group a running job or a service names cannot be removed.
+```
+
+Subcommands: [`list`](#sandbox-cli-gateway-egress-groups-list), [`remove`](#sandbox-cli-gateway-egress-groups-remove), [`set`](#sandbox-cli-gateway-egress-groups-set).
+
+Examples:
+
+```sh
+sandbox-cli gateway egress-groups set go --host proxy.golang.org --host sum.golang.org
+sandbox-cli gateway egress-groups list
+sandbox-cli run --network allowlist --allow-group go -- go build ./...
+```
+
+### sandbox-cli gateway egress-groups list
+
+List the groups any user may name.
+
+```text
+sandbox-cli gateway egress-groups list
+```
+
+### sandbox-cli gateway egress-groups remove
+
+Remove a group no running job or service names.
+
+```text
+sandbox-cli gateway egress-groups remove NAME
+```
+
+### sandbox-cli gateway egress-groups set
+
+Create or replace a group; a change holds for sandboxes created after it.
+
+```text
+sandbox-cli gateway egress-groups set NAME [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--description string` |  | what the group is for |
+| `--host stringArray` |  | a host the group allows, such as example.com or *.example.com (repeatable; the whole list) |
+
+### sandbox-cli gateway images
+
+Images on the gateway's nodes: list, download ahead of use, remove (admin key).
+
+```text
+sandbox-cli gateway images [command]
+```
+
+```text
+The images the gateway's nodes start sandboxes from, once for the fleet. A pull
+goes to every node that takes new sandboxes (healthy, not cordoned), each as
+its own policy allows. A removal is refused, removing nothing, while any node
+still needs the image (a sandbox starts from it, or it is the node's default
+or pooled image), and then takes it from every node that has it.
+```
+
+Subcommands: [`ls`](#sandbox-cli-gateway-images-ls), [`pull`](#sandbox-cli-gateway-images-pull), [`rm`](#sandbox-cli-gateway-images-rm).
+
+Examples:
+
+```sh
+sandbox-cli gateway images pull ghcr.io/amitgb14/sandbox-desktop:edge
+sandbox-cli gateway images ls
+sandbox-cli gateway images rm python:3.13-slim
+```
+
+### sandbox-cli gateway images ls
+
+List the nodes' images, and which nodes have each.
+
+```text
+sandbox-cli gateway images ls
+```
+
+### sandbox-cli gateway images pull
+
+Have every node that takes new sandboxes download and install an image.
+
+```text
+sandbox-cli gateway images pull IMAGE
+```
+
+### sandbox-cli gateway images rm
+
+Remove images from every node, where no node still needs them.
+
+```text
+sandbox-cli gateway images rm IMAGE...
+```
+
 ### sandbox-cli gateway invites
 
 Invite people by email to sign in to hosted Studio with a password (admin key).
@@ -560,6 +677,11 @@ the person chooses a password and becomes an account: a user with the tenant,
 scopes, policy and lifetime the invite names, as a key issued with them would
 have. They sign in with the address and password from then on; the account is
 listed, renewed and revoked with gateway keys.
+
+With no --tenant the invite is a sign-up: the account gets an organization of
+its own, named after the user (john.smith gets john-smith), and the invite is
+refused if that name is in use. --tenant puts it in an existing one, default
+for the default tenant.
 ```
 
 Subcommands: [`create`](#sandbox-cli-gateway-invites-create), [`list`](#sandbox-cli-gateway-invites-list), [`resend`](#sandbox-cli-gateway-invites-resend), [`revoke`](#sandbox-cli-gateway-invites-revoke).
@@ -576,7 +698,7 @@ Examples:
 
 ```sh
 # a demo user: 30-minute sandboxes, an account for a week, the link emailed
-sandbox-cli gateway invites create --email bob@example.com --user bob --tenant bob \
+sandbox-cli gateway invites create --email bob@example.com --user bob \
   --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
   --policy demo --expires 7d --send --invite-url https://studio.example.com
 ```
@@ -591,7 +713,7 @@ Flags:
 | `--policy string` |  | the policy the user holds (gateway policies set) |
 | `--scope stringArray` |  | a scope, as for gateway keys create (repeatable) |
 | `--send` |  | have the gateway email the link to the address (a gateway started with --smtp-host) |
-| `--tenant string` |  | the user's tenant (quotas are per tenant) |
+| `--tenant string` |  | an existing tenant to put the account in (default: an organization of its own) |
 | `--user string` |  | the user the account acts as; required |
 
 ### sandbox-cli gateway invites list
@@ -850,8 +972,8 @@ A sandboxd pulls an image the first time a sandbox asks for it. These let its
 operator do that ahead of time, see what is installed and what uses it, and
 remove what nothing does. On Linux an install also builds the image's root
 disk, which is most of the first sandbox's wait. The policy's images list, where
-there is one, limits what may be installed. Through a gateway they are not
-offered: a node's images are its operator's.
+there is one, limits what may be installed. Through a gateway these are not
+offered; its admin manages the nodes' images with sandbox-cli gateway images.
 ```
 
 Subcommands: [`ls`](#sandbox-cli-image-ls), [`pull`](#sandbox-cli-image-pull), [`rm`](#sandbox-cli-image-rm).
@@ -1224,6 +1346,7 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--allow stringArray` |  | also allow egress to this host (repeatable; implies allowlist) |
+| `--allow-group stringArray` |  | also allow the hosts of this gateway allowlist group (repeatable; implies allowlist; sandbox-cli gateway egress-groups list) |
 | `--config string` |  | an explicit config file, trusted like your own |
 | `--context string` |  | which sandboxd to use (sandbox-cli context ls) |
 | `--cpus float64` |  | vCPUs |
@@ -1259,8 +1382,10 @@ sandbox-cli secret [command]
 
 ```text
 A secret is a value your tenant keeps on the gateway, sealed at rest, that a
-job sets in its runs' environment by name (secrets: [NAME], or agent-run
---secret NAME). The API never returns a value once it is set. Gateway only.
+job sets in its runs' environment (secrets: [NAME], or agent-run --secret NAME).
+A secret's name need not be the variable it fills: VAR=NAME sets secret NAME as
+VAR, so openai-prod and openai-staging can each be OPENAI_API_KEY. The API never
+returns a value once it is set. Gateway only.
 ```
 
 Subcommands: [`ls`](#sandbox-cli-secret-ls), [`rm`](#sandbox-cli-secret-rm), [`set`](#sandbox-cli-secret-set).
@@ -1306,6 +1431,7 @@ Examples:
 ```sh
 sandbox-cli secret set ANTHROPIC_API_KEY < key.txt
 printf %s "$TOKEN" | sandbox-cli secret set REGISTRY_TOKEN
+sandbox-cli secret set openai-prod < prod.txt   # then --secret OPENAI_API_KEY=openai-prod
 ```
 
 Flags:
@@ -1330,7 +1456,7 @@ time, and routes HTTP to the healthy ones when the service is public.
 Services need a gateway; a single sandboxd has none. See docs/services.md.
 ```
 
-Subcommands: [`deploy`](#sandbox-cli-service-deploy), [`get`](#sandbox-cli-service-get), [`ls`](#sandbox-cli-service-ls), [`rm`](#sandbox-cli-service-rm), [`scale`](#sandbox-cli-service-scale).
+Subcommands: [`deploy`](#sandbox-cli-service-deploy), [`get`](#sandbox-cli-service-get), [`ls`](#sandbox-cli-service-ls), [`redeploy`](#sandbox-cli-service-redeploy), [`rm`](#sandbox-cli-service-rm), [`scale`](#sandbox-cli-service-scale).
 
 Flags:
 
@@ -1366,6 +1492,20 @@ List services.
 
 ```text
 sandbox-cli service ls
+```
+
+### sandbox-cli service redeploy
+
+Replace a service's replicas, one at a time, with its spec as it is.
+
+```text
+sandbox-cli service redeploy NAME
+```
+
+```text
+A new revision of the spec the service has, rolled out one replica at a time as an
+update is. For what changed outside the spec, which only a new sandbox picks up:
+a secret set again, an image tag that now names another image.
 ```
 
 ### sandbox-cli service rm
@@ -1736,9 +1876,9 @@ ends, busy or not, counted from its creation: 45m sets it, +15m pushes its end
 out and -10m brings it nearer. Through a gateway only an admin can push it out.
 
 --network changes the network of a running sandbox, as run's flags would set
-it: --allow adds to the built-in hosts unless --no-baseline, and an agent's
-sandbox keeps its agent's API. Not every endpoint can change a running
-sandbox's network.
+it: --allow and --allow-group add to the built-in hosts unless --no-baseline,
+and an agent's sandbox keeps its agent's API. Not every endpoint can change a
+running sandbox's network.
 
 vCPUs and memory are fixed while a VM runs.
 ```
@@ -1751,6 +1891,7 @@ sandbox-cli update api --label team=infra --label ticket-
 sandbox-cli update api --idle 2h
 sandbox-cli update api --lifetime +15m
 sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline
+sandbox-cli update api --network allowlist --allow-group go   # through a gateway
 ```
 
 Flags:
@@ -1758,6 +1899,7 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--allow stringArray` |  | with --network allowlist: a host it may reach (repeatable) |
+| `--allow-group stringArray` |  | with --network allowlist: a gateway allowlist group whose hosts it may reach (repeatable) |
 | `--context string` |  | which sandboxd to use |
 | `--deny stringArray` |  | with --network: a host it may not reach (repeatable) |
 | `--idle duration` |  | terminate it after this long idle, e.g. 2h (0: never, where allowed) |

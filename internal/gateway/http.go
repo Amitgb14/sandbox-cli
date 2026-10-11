@@ -125,6 +125,7 @@ func (g *Gateway) Handler() http.Handler {
 	route("GET /v1/services/{name}", false, g.getService)
 	route("PUT /v1/services/{name}", false, g.updateService)
 	route("POST /v1/services/{name}/scale", false, g.scaleService)
+	route("POST /v1/services/{name}/redeploy", false, g.redeployService)
 	route("DELETE /v1/services/{name}", false, g.deleteService)
 
 	route("GET /v1/ssh", false, g.sshEndpoint)
@@ -150,6 +151,9 @@ func (g *Gateway) Handler() http.Handler {
 	route("DELETE /v1/admin/nodes/{name}", false, g.adminRemoveNode)
 	route("POST /v1/admin/nodes/{name}/cordon", false, g.adminCordon)
 	route("POST /v1/admin/nodes/{name}/drain", false, g.adminDrain)
+	route("GET /v1/admin/images", false, g.adminListImages)
+	route("POST /v1/admin/images", false, g.adminInstallImage)
+	route("DELETE /v1/admin/images", false, g.adminRemoveImage)
 	route("GET /v1/admin/lost", false, g.adminLost)
 	route("GET /v1/admin/audit", false, g.adminAudit)
 	route("GET /v1/admin/orgs", false, g.adminListOrgs)
@@ -157,6 +161,10 @@ func (g *Gateway) Handler() http.Handler {
 	route("PUT /v1/admin/policies/{name}", false, g.adminPutPolicy)
 	route("DELETE /v1/admin/policies/{name}", false, g.adminDeletePolicy)
 	route("PUT /v1/admin/user-policy", false, g.adminAssignPolicy)
+	route("GET /v1/admin/egress-groups", false, g.adminListEgressGroups)
+	route("PUT /v1/admin/egress-groups/{name}", false, g.adminPutEgressGroup)
+	route("DELETE /v1/admin/egress-groups/{name}", false, g.adminDeleteEgressGroup)
+	route("GET /v1/egress-groups", false, g.listEgressGroups)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")

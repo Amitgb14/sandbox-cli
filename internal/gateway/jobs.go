@@ -325,28 +325,19 @@ func (g *Gateway) checkJobSpec(ctx context.Context, p Principal, s *api.JobSpec)
 			return badSpec("env: %s contains a NUL byte", k)
 		}
 	}
-	seen := map[string]bool{}
-	for _, name := range s.Secrets {
-		if err := checkSecretName(name); err != nil {
-			return badSpec("secrets: %v", err)
-		}
-		if seen[name] {
-			return badSpec("secrets: %s is named twice", name)
-		}
-		seen[name] = true
-		if _, ok := s.Env[name]; ok {
-			return badSpec("%s is both in env and in secrets", name)
-		}
+	refs, err := parseSecretRefs(s.Secrets, s.Env)
+	if err != nil {
+		return badSpec("secrets: %v", err)
 	}
-	if len(s.Secrets) > 0 {
+	if len(refs) > 0 {
 		if g.sealer == nil {
 			return &errSpec{status: http.StatusNotImplemented, code: api.CodeUnsupported, msg: ErrNoSecretsKey.Error()}
 		}
-		for _, name := range s.Secrets {
-			if _, ok, err := g.storeFor(p).SealedSecret(ctx, p.Tenant, name); err != nil {
+		for _, ref := range refs {
+			if _, ok, err := g.storeFor(p).SealedSecret(ctx, p.Tenant, ref.name); err != nil {
 				return err
 			} else if !ok {
-				return badSpec("secret %s does not exist (sandbox-cli secret set %s)", name, name)
+				return badSpec("secret %s does not exist (sandbox-cli secret set %s)", ref.name, ref.name)
 			}
 		}
 	}
@@ -365,6 +356,15 @@ func (g *Gateway) checkJobSpec(ctx context.Context, p Principal, s *api.JobSpec)
 		if err := checkNotifyURL(s.Notify, g.cfg.NotifyAllowPrivate); err != nil {
 			return badSpec("notify: %v", err)
 		}
+	}
+	// Groups are checked now, not at the first run's sandbox: a job naming
+	// one that does not exist would fail every run.
+	if err := g.checkGroups(ctx, s.Network); err != nil {
+		var ge *groupError
+		if errors.As(err, &ge) {
+			return badSpec("network: %s", ge.msg)
+		}
+		return err
 	}
 	return nil
 }

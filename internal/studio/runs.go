@@ -66,9 +66,11 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "this Studio cannot launch runs")
 		return
 	}
-	// Hosted, there are no egress rules or groups to apply: they are this
-	// machine's user's (studio.json), and no visitor's to use or to be bound
-	// by. The server's policy is what bounds a hosted run.
+	// Hosted, this machine's user's egress rules and groups (studio.json)
+	// are no visitor's to use or to be bound by. Groups a hosted launch names
+	// are the gateway's (GET /v1/egress-groups): they go to it by name, and it
+	// turns them into hosts or refuses a name it does not keep. The server's
+	// policy is what bounds a hosted run.
 	if s.hosted == nil {
 		if err := s.applyEgressRules(r, &req); err != nil {
 			status := http.StatusInternalServerError
@@ -79,8 +81,8 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, status, "egress: "+err.Error())
 			return
 		}
-	} else if len(req.EgressGroups) > 0 {
-		writeErr(w, http.StatusBadRequest, "allowlist groups are local Studio's; name the hosts to allow instead")
+	} else if len(req.EgressGroups) > 0 && (req.Network == api.NetworkNone || req.Network == api.NetworkOpen) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("egress: allowlist groups apply to an allowlist, not to network %s", req.Network))
 		return
 	}
 	// Not the request's cancellation: a run outlives the request that started
