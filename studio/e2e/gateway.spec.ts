@@ -125,6 +125,18 @@ test("a tenant submits a job and reads its output", async ({ page }) => {
  * a missing program does on a real one — which is what the box is for.
  */
 test("a shell command runs as sh -c, and a failed run says why", async ({ page }) => {
+  // The default image is built on the node once anything has started from
+  // it, and the gateway lists it after its next poll of the node. The page
+  // asks once, so wait for the list here rather than count on an earlier
+  // test having run long enough before this one.
+  const { gatewayURL, adminKey } = e2eState();
+  const admin = (method: string, path: string, body?: object) =>
+    fetch(`${gatewayURL}${path}`, { method, headers: { Authorization: `Bearer ${adminKey}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+  const sb = (await (await admin("POST", "/v1/sandboxes", {})).json()) as { id: string };
+  await admin("DELETE", `/v1/sandboxes/${sb.id}`);
+  await expect
+    .poll(async () => ((await (await admin("GET", "/v1/fleet/images")).json()) as { images: unknown[] }).images.length, { timeout: 20_000 })
+    .toBeGreaterThan(0);
   const base = await open(page, "gw-tenant", "alice@team-a");
   await page.goto(`${base}/jobs/`);
   await page.getByRole("button", { name: "Submit job" }).click();
