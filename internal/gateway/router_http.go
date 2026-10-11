@@ -174,7 +174,9 @@ func (g *Gateway) routeHost(host, domain string) (*service, bool) {
 func (g *Gateway) pickReplica(s *service) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !userActive(g.store, s.rec.User, s.rec.Tenant) {
+	// Every request to a public service asks this: cached for a few
+	// seconds, and dropped at once when access changes on this gateway.
+	if ok, err := g.userActiveCached(s.rec.User, s.rec.Tenant); err != nil || !ok {
 		return "", false
 	}
 	var up []replicaRecord
@@ -203,7 +205,10 @@ func (g *Gateway) routerDial(ctx context.Context, _, addr string) (net.Conn, err
 	if err != nil || !spec.ValidID(id) {
 		return nil, ErrNotFound
 	}
-	o, ok := g.store.OwnerOf(id)
+	o, ok, err := g.store.OwnerOf(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, ErrNotFound
 	}

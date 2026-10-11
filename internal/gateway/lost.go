@@ -32,22 +32,34 @@ import (
 // A sandbox recorded on a node the gateway no longer has configured is lost
 // the same way, since nothing will ever answer for it.
 
-// lostSandboxes is every recorded sandbox on a node past the grace period.
-func (g *Gateway) lostSandboxes() []api.LostSandbox {
-	lost := g.lostNodes()
+// lostSandboxes is every recorded sandbox on a node past the grace period,
+// with the details the store last had for it: its node cannot be asked.
+func (g *Gateway) lostSandboxes(ctx context.Context) ([]api.LostSandbox, error) {
+	rows, err := g.store.LiveSandboxes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return g.lostAmong(rows), nil
+}
+
+// lostAmong is lostSandboxes over rows already read.
+func (g *Gateway) lostAmong(rows []SandboxRow) []api.LostSandbox {
+	lost := g.lostNodes(rows)
 	if len(lost) == 0 {
 		return nil
 	}
-	g.store.mu.RLock()
-	defer g.store.mu.RUnlock()
 	var out []api.LostSandbox
-	for id, rec := range g.store.st.Sandboxes {
-		since, ok := lost[rec.Node]
+	for _, rec := range rows {
+		since, ok := lost[rec.Owner.Node]
 		if !ok {
 			continue
 		}
-		out = append(out, api.LostSandbox{ID: id, User: rec.User, Tenant: rec.Tenant, Node: rec.Node,
-			CPUs: rec.CPUs, MemoryMB: rec.MemoryMB, NodeDownSince: since})
+		ls := api.LostSandbox{ID: rec.ID, User: rec.Owner.User, Tenant: rec.Owner.Tenant, Node: rec.Owner.Node,
+			CPUs: rec.CPUs, MemoryMB: rec.MemoryMB, NodeDownSince: since}
+		if d := rec.Details; d != nil {
+			ls.Name, ls.Image, ls.State = d.Name, d.Image, d.State
+		}
+		out = append(out, ls)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Node != out[j].Node {
@@ -61,7 +73,7 @@ func (g *Gateway) lostSandboxes() []api.LostSandbox {
 // lostNodes maps each node whose sandboxes are lost to when it went down:
 // those unhealthy past the grace period, and every node a sandbox is
 // recorded on that is not configured at all (with a zero time).
-func (g *Gateway) lostNodes() map[string]time.Time {
+func (g *Gateway) lostNodes(rows []SandboxRow) map[string]time.Time {
 	now := time.Now()
 	out := map[string]time.Time{}
 	for _, n := range g.nodes.list() {
@@ -69,41 +81,31 @@ func (g *Gateway) lostNodes() map[string]time.Time {
 			out[n.cfg.Name] = since.UTC()
 		}
 	}
-	g.store.mu.RLock()
-	for _, rec := range g.store.st.Sandboxes {
-		if _, ok := out[rec.Node]; !ok && g.nodes.get(rec.Node) == nil {
-			out[rec.Node] = time.Time{}
+	for _, rec := range rows {
+		if _, ok := out[rec.Owner.Node]; !ok && g.nodes.get(rec.Owner.Node) == nil {
+			out[rec.Owner.Node] = time.Time{}
 		}
 	}
-	g.store.mu.RUnlock()
 	return out
 }
 
 // usageOf is a tenant's recorded usage less what is on lost nodes: the
 // figure its quota is checked against.
-func (g *Gateway) usageOf(tenant string) Usage {
-	lost := g.lostNodes()
-	if len(lost) == 0 {
-		return g.store.UsageOf(tenant)
+func (g *Gateway) usageOf(ctx context.Context, tenant string) (Usage, error) {
+	rows, err := g.store.SandboxHistory(ctx, SandboxFilter{Tenant: tenant, Live: true})
+	if err != nil {
+		return Usage{}, err
 	}
-	g.store.mu.RLock()
-	defer g.store.mu.RUnlock()
+	lost := g.lostNodes(rows)
 	var u Usage
-	for _, r := range g.store.st.Sandboxes {
-		if _, isLost := lost[r.Node]; r.Tenant == tenant && !isLost {
+	for _, r := range rows {
+		if _, isLost := lost[r.Owner.Node]; !isLost {
 			u.Sandboxes++
 			u.CPUs += r.CPUs
 			u.MemoryMB += r.MemoryMB
 		}
 	}
-	return u
-}
-
-// sandboxCount is how many sandboxes the store records.
-func (s *FileStore) sandboxCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.st.Sandboxes)
+	return u, nil
 }
 
 // downFor reports whether the node is unhealthy and since when.
@@ -118,7 +120,11 @@ func (g *Gateway) adminLost(w http.ResponseWriter, r *http.Request, p Principal)
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
-	out := g.lostSandboxes()
+	out, err := g.lostSandboxes(r.Context())
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
 	if out == nil {
 		out = []api.LostSandbox{}
 	}

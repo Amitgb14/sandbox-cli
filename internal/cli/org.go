@@ -105,9 +105,10 @@ func newOrgCmd() *cobra.Command {
 	create := &cobra.Command{
 		Use:   "create NAME",
 		Short: "Create an organization, with you as its owner (needs the org:create scope)",
-		Long: "NAME is 1 to 30 lowercase letters, digits and dashes, starting with a letter,\n" +
-			"with no \"--\"; \"default\" and \"admin\" are reserved, and a name already used by\n" +
-			"a tenant is taken.",
+		Long: "NAME is 1 to 30 letters, digits and dashes, starting with a letter, with no\n" +
+			"\"--\"; \"default\" and \"admin\" are reserved, and a name already used by a tenant is\n" +
+			"taken. The case is kept as typed and ignored when matching: Acme-Labs and\n" +
+			"acme-labs are one organization, whose tenant is acme-labs.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, _, _, err := gatewayOrgs(cmd.Context(), ctxFlag)

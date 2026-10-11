@@ -5,14 +5,16 @@
 # capabilities, a read-only system and only its state directory writable.
 #
 # Files it reads, all owned by sandbox-gateway and mode 0600 (it refuses a
-# token, a client key or its state file other users can read):
+# token, a client key or its database other users can read):
 #   /etc/sandbox-gateway/nodes.yaml          packaging/fleet/nodes.yaml
 #   /etc/sandbox-gateway/*.token             each node's bearer token
 #   /etc/sandbox-gateway/tls/                packaging/fleet/make-certs.sh
-#   /var/lib/sandbox-gateway/state.json      keys, owners; made on first use
+#   /var/lib/sandbox-gateway/gateway.db      its SQLite database; made on first use
+#   /etc/sandbox-gateway/db.dsn              with --store postgres instead: the
+#                                            database's address (docs/fleet.md)
 #
 # Make the first admin key before starting it, as its user:
-#   sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.json \
+#   sudo -u sandbox-gateway sandbox-gateway --state-dir /var/lib/sandbox-gateway \
 #     keys create --user ops --scope admin
 [Unit]
 Description=sandbox-gateway — one sandbox API in front of many sandboxd nodes
@@ -24,7 +26,7 @@ Type=simple
 User=sandbox-gateway
 Group=sandbox-gateway
 ExecStart=/usr/local/bin/sandbox-gateway serve \
-  --state /var/lib/sandbox-gateway/state.json \
+  --state-dir /var/lib/sandbox-gateway \
   --listen 0.0.0.0:8443 \
   --tls-cert /etc/sandbox-gateway/tls/gateway.pem \
   --tls-key /etc/sandbox-gateway/tls/gateway-key.pem \
@@ -35,8 +37,8 @@ Restart=on-failure
 RestartSec=2s
 LimitNOFILE=65536
 
-# /var/lib/sandbox-gateway, owned by the service user: the state file, its
-# lock, the SSH host key and nodes/ (the only place nodes added through the
+# /var/lib/sandbox-gateway, owned by the service user: the database (with
+# its -wal and -shm files), the SSH host key and nodes/ (the only place nodes added through the
 # admin API may name files from). Everything else is read-only.
 StateDirectory=sandbox-gateway
 StateDirectoryMode=0700

@@ -128,13 +128,21 @@ func (g *Gateway) recheckLive() int {
 	if len(open) == 0 {
 		return 0
 	}
+	ctx := g.baseCtx()
+	all, err := g.store.Keys(ctx)
+	if err != nil {
+		// Nothing is ended on a check that could not be made; the next
+		// recheck tries again.
+		g.logf("recheck: %v", err)
+		return 0
+	}
 	keys := map[string]Key{}
-	for _, k := range g.store.Keys() {
+	for _, k := range all {
 		keys[k.ID] = k
 	}
 	n := 0
 	for _, lr := range open {
-		if why := liveLostAccess(g.store, lr, keys); why != "" {
+		if why := liveLostAccess(ctx, g.store, lr, keys); why != "" {
 			if g.endLive(lr, why) {
 				n++
 			}
@@ -144,7 +152,7 @@ func (g *Gateway) recheckLive() int {
 }
 
 // liveLostAccess says why lr may no longer stay open, or "".
-func liveLostAccess(st Store, lr *liveReq, keys map[string]Key) string {
+func liveLostAccess(ctx context.Context, st Store, lr *liveReq, keys map[string]Key) string {
 	k, ok := keys[lr.p.KeyID]
 	switch {
 	case !ok:
@@ -157,12 +165,19 @@ func liveLostAccess(st Store, lr *liveReq, keys map[string]Key) string {
 		return "its API key no longer names the same user"
 	case lr.scope != "" && !(Principal{Scopes: k.Scopes}).Can(lr.scope):
 		return "its API key no longer holds " + lr.scope
-	case !stillInTenant(st, lr.p, k):
+	case !inTenant(ctx, st, lr.p, k):
 		// Made in an organisation (X-Sandbox-Org) its user has since
 		// been removed from.
 		return "its user is no longer a member of organization " + wireOrg(lr.p.Tenant)
 	}
 	return ""
+}
+
+// inTenant is stillInTenant where a check that failed keeps the request:
+// an open stream is not cut for a database that did not answer.
+func inTenant(ctx context.Context, st Store, p Principal, k Key) bool {
+	ok, err := stillInTenant(ctx, st, p, k)
+	return ok || err != nil
 }
 
 // endLive ends lr, once, and records it by key id: never the secret, which

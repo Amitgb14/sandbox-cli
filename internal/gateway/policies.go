@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"sort"
 
@@ -48,11 +50,15 @@ var (
 	ErrPolicyInUse  = errors.New("a user still holds this policy; assign them another first")
 )
 
+// policyNameRE is a policy's name: lowercase, as organisation names were
+// before they kept their case.
+var policyNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,29}$`)
+
 // checkPolicy says what is wrong with a policy, or nil. Its name is a label
 // like an organisation's.
 func checkPolicy(p api.UserPolicy) error {
 	switch {
-	case !orgNameRE.MatchString(p.Name):
+	case !policyNameRE.MatchString(p.Name):
 		return errors.New("a policy name is 1 to 30 lowercase letters, digits and dashes, starting with a letter")
 	case p.MaxLifetimeSecs < 0:
 		return errors.New("max_lifetime_secs must not be negative")
@@ -169,21 +175,24 @@ func (s *FileStore) PolicyActingIn(user, tenant string) (api.UserPolicy, bool) {
 }
 
 // policyFor is the policy p's sandboxes are held to; none for an admin.
-func (g *Gateway) policyFor(p Principal) (api.UserPolicy, bool) {
+func (g *Gateway) policyFor(ctx context.Context, p Principal) (api.UserPolicy, bool, error) {
 	if p.Can(ScopeAdmin) {
-		return api.UserPolicy{}, false
+		return api.UserPolicy{}, false, nil
 	}
 	if p.KeyTenant != "" || p.KeyID != "" {
-		return g.store.PolicyOf(p.User, p.KeyTenant)
+		return g.store.PolicyOf(ctx, p.User, p.KeyTenant)
 	}
-	return g.store.PolicyActingIn(p.User, p.Tenant)
+	return g.store.PolicyActingIn(ctx, p.User, p.Tenant)
 }
 
 // applyPolicyLifetime holds a create's lifetime to the caller's policy:
 // none asked for is the policy's, unless a node's own limit is stricter, in
 // which case the node gives its own; more than the policy's is refused.
-func (g *Gateway) applyPolicyLifetime(p Principal, req *api.CreateSandboxRequest) error {
-	pol, ok := g.policyFor(p)
+func (g *Gateway) applyPolicyLifetime(ctx context.Context, p Principal, req *api.CreateSandboxRequest) error {
+	pol, ok, err := g.policyFor(ctx, p)
+	if err != nil {
+		return err
+	}
 	if !ok || pol.MaxLifetimeSecs == 0 {
 		return nil
 	}
@@ -202,10 +211,16 @@ func (g *Gateway) applyPolicyLifetime(p Principal, req *api.CreateSandboxRequest
 // --- admin --------------------------------------------------------------------
 
 func (g *Gateway) adminListPolicies(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
-	out := api.UserPolicyList{Policies: g.store.Policies()}
+	pols, err := g.store.Policies(ctx)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
+	out := api.UserPolicyList{Policies: pols}
 	if out.Policies == nil {
 		out.Policies = []api.UserPolicy{}
 	}
@@ -213,6 +228,7 @@ func (g *Gateway) adminListPolicies(w http.ResponseWriter, r *http.Request, p Pr
 }
 
 func (g *Gateway) adminPutPolicy(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
@@ -227,7 +243,7 @@ func (g *Gateway) adminPutPolicy(w http.ResponseWriter, r *http.Request, p Princ
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "the name in the body is not the one in the path")
 		return
 	}
-	if err := g.store.PutPolicy(req); err != nil {
+	if err := g.store.PutPolicy(ctx, req); err != nil {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 		return
 	}
@@ -236,11 +252,12 @@ func (g *Gateway) adminPutPolicy(w http.ResponseWriter, r *http.Request, p Princ
 }
 
 func (g *Gateway) adminDeletePolicy(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
 	name := r.PathValue("name")
-	switch err := g.store.DeletePolicy(name); {
+	switch err := g.store.DeletePolicy(ctx, name); {
 	case errors.Is(err, ErrNoSuchPolicy):
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such policy")
 	case errors.Is(err, ErrPolicyInUse):
@@ -254,6 +271,7 @@ func (g *Gateway) adminDeletePolicy(w http.ResponseWriter, r *http.Request, p Pr
 }
 
 func (g *Gateway) adminAssignPolicy(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
@@ -261,7 +279,7 @@ func (g *Gateway) adminAssignPolicy(w http.ResponseWriter, r *http.Request, p Pr
 	if !decode(w, r, &req) {
 		return
 	}
-	if err := g.store.AssignPolicy(req.User, req.Tenant, req.Policy); err != nil {
+	if err := g.store.AssignPolicy(ctx, req.User, req.Tenant, req.Policy); err != nil {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 		return
 	}

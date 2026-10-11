@@ -142,6 +142,15 @@ func (c *Client) CordonNode(ctx context.Context, name string, cordoned bool) (No
 	return out, c.json(ctx, http.MethodPost, "/v1/admin/nodes/"+url.PathEscape(name)+"/cordon", CordonRequest{Cordoned: cordoned}, &out)
 }
 
+// FleetImages lists the images built on a gateway's nodes that take new
+// sandboxes: what a sandbox can start from without a pull. Any key that may
+// list sandboxes.
+func (c *Client) FleetImages(ctx context.Context) ([]Image, error) {
+	var out ImageList
+	err := c.json(ctx, http.MethodGet, "/v1/fleet/images", nil, &out)
+	return out.Images, err
+}
+
 // CreateInvite makes a sign-up link for an email address (admin). The token
 // is returned once.
 func (c *Client) CreateInvite(ctx context.Context, req CreateInviteRequest) (CreatedInvite, error) {

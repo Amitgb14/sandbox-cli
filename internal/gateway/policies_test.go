@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -178,15 +179,16 @@ func TestPoliciesAreAdminOnly(t *testing.T) {
 }
 
 // Policies and who holds them are kept across a restart, and a state file
-// from before them loads.
+// from before them imports.
 func TestPoliciesSurviveAReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	if err := os.WriteFile(path, []byte(`{"version": 1, "keys": [], "nodes": []}`), 0o600); err != nil {
+	old := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(old, []byte(`{"version": 1, "keys": [], "nodes": []}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	st, err := OpenFileStore(path)
-	if err != nil {
-		t.Fatalf("a state file from before policies: %v", err)
+	path := filepath.Join(t.TempDir(), "gateway.db")
+	st := reopenTestStore(t, path)
+	if _, err := ImportState(context.Background(), old, st.Store); err != nil {
+		t.Fatal(err)
 	}
 	if err := st.PutPolicy(api.UserPolicy{Name: "demo", MaxLifetimeSecs: 1800}); err != nil {
 		t.Fatal(err)
@@ -195,10 +197,7 @@ func TestPoliciesSurviveAReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Close()
-	st, err = OpenFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st = reopenTestStore(t, path)
 	defer st.Close()
 	if pol, ok := st.PolicyOf("dana", "dana"); !ok || pol.MaxLifetimeSecs != 1800 {
 		t.Errorf("after a reopen: %+v %v", pol, ok)

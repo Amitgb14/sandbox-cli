@@ -14,15 +14,25 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/gateway"
 )
 
+var bg = context.Background()
+
+// must is v, the test's store having answered.
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
 // useGateway points the CLI at a real gateway, with no nodes, as an admin.
-func useGateway(t *testing.T) *gateway.FileStore {
+func useGateway(t *testing.T) gateway.Store {
 	t.Helper()
-	st, err := gateway.OpenFileStore(filepath.Join(t.TempDir(), "state.json"))
+	st, err := gateway.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "gateway.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	g, err := gateway.New(gateway.Config{Store: st, Logf: t.Logf})
+	g, err := gateway.New(gateway.Config{Store: st, JobsDir: filepath.Join(t.TempDir(), "jobs"), Logf: t.Logf})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +40,7 @@ func useGateway(t *testing.T) *gateway.FileStore {
 	t.Cleanup(g.Close)
 	ts := httptest.NewServer(g.Handler())
 	t.Cleanup(ts.Close)
-	secret, _, err := st.CreateKey("root", "", []string{gateway.ScopeAdmin})
+	secret, _, err := st.CreateKey(context.Background(), "root", "", []string{gateway.ScopeAdmin})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +78,7 @@ func TestGatewayKeysAndPolicies(t *testing.T) {
 	if !strings.Contains(out, "policy: demo") || !regexp.MustCompile(`invite: https://studio\.example\.com/#key=sgk_\S+`).MatchString(out) {
 		t.Errorf("create: %q", out)
 	}
-	if pol, ok := st.PolicyOf("bob", "bob"); !ok || pol.MaxLifetimeSecs != 1800 {
+	if pol, ok, _ := st.PolicyOf(bg, "bob", "bob"); !ok || pol.MaxLifetimeSecs != 1800 {
 		t.Errorf("bob's policy in the store: %+v %v", pol, ok)
 	}
 	if out := run("keys", "list"); !regexp.MustCompile(`bob\s+bob\s+\S+\s+demo`).MatchString(out) {
@@ -87,7 +97,7 @@ func TestGatewayKeysAndPolicies(t *testing.T) {
 		t.Errorf("an admin's invite: %q %v", out, err)
 	}
 	var eve gateway.Key
-	for _, k := range st.Keys() {
+	for _, k := range must(st.Keys(bg)) {
 		if k.User == "eve" {
 			eve = k
 		}
@@ -112,12 +122,12 @@ func TestGatewayKeysAndPolicies(t *testing.T) {
 	}
 	run("policies", "assign", "bob", "--tenant", "bob", "--none")
 	run("policies", "remove", "demo")
-	if pols := st.Policies(); len(pols) != 0 {
+	if pols := must(st.Policies(bg)); len(pols) != 0 {
 		t.Errorf("left: %+v", pols)
 	}
 
 	var bobs []api.KeyInfo
-	for _, k := range st.Keys() {
+	for _, k := range must(st.Keys(bg)) {
 		if k.User == "bob" {
 			bobs = append(bobs, api.KeyInfo{ID: k.ID})
 		}
@@ -149,7 +159,7 @@ func TestGatewayInvites(t *testing.T) {
 		t.Errorf("invites list: %q", out)
 	}
 	var pending string
-	for _, iv := range st.Invites() {
+	for _, iv := range must(st.Invites(bg)) {
 		pending = iv.ID
 	}
 	out = run("invites", "resend", pending, "--invite-url", "https://studio.example.com")
@@ -157,11 +167,11 @@ func TestGatewayInvites(t *testing.T) {
 	if m2 == nil || m2[1] == m[1] {
 		t.Fatalf("resend: %q", out)
 	}
-	if _, ok := st.InviteByToken(m[1]); ok {
+	if _, ok, _ := st.InviteByToken(bg, m[1]); ok {
 		t.Error("the old link still works after a resend")
 	}
 	m = m2
-	acct, err := st.RedeemInvite(m[1], "pbkdf2-sha256$1$AAAA$AAAA")
+	acct, err := st.RedeemInvite(bg, m[1], "pbkdf2-sha256$1$AAAA$AAAA")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,11 +186,11 @@ func TestGatewayInvites(t *testing.T) {
 		t.Errorf("reset: %q", out)
 	}
 	var id string
-	for _, iv := range st.Invites() {
+	for _, iv := range must(st.Invites(bg)) {
 		id = iv.ID
 	}
 	run("invites", "revoke", id)
-	if len(st.Invites()) != 0 {
+	if len(must(st.Invites(bg))) != 0 {
 		t.Error("the reset was not withdrawn")
 	}
 	if _, err := runCLI(t, "gateway", "invites", "create", "--user", "x", "--scope", "sandbox:read"); err == nil {

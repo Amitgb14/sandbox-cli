@@ -42,15 +42,29 @@ type memStore struct {
 }
 
 // MemberRole: the SSH fakes hold no organisations.
-func (m *memStore) MemberRole(string, string, string) (string, bool) { return "", false }
+func (m *memStore) MemberRole(context.Context, string, string, string) (string, bool, error) {
+	return "", false, nil
+}
 
 // OwnerOf: the fake router, not the store, knows the sandboxes.
-func (m *memStore) OwnerOf(string) (Owner, bool) { return Owner{}, false }
+func (m *memStore) OwnerOf(context.Context, string) (Owner, bool, error) { return Owner{}, false, nil }
 
 // Keys reports one API key per user the store knows, revoked for the users in
 // revoked: what SSH login checks to see that a user is still active and may
 // use SSH.
-func (m *memStore) Keys() []Key {
+// KeysOfUser is Keys narrowed to one user.
+func (m *memStore) KeysOfUser(ctx context.Context, user string) ([]Key, error) {
+	all, _ := m.Keys(ctx)
+	var out []Key
+	for _, k := range all {
+		if k.User == user {
+			out = append(out, k)
+		}
+	}
+	return out, nil
+}
+
+func (m *memStore) Keys(context.Context) ([]Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	seen := map[string]bool{}
@@ -71,10 +85,10 @@ func (m *memStore) Keys() []Key {
 	for _, t := range m.tokens {
 		add(t.User)
 	}
-	return append(out, m.extra...)
+	return append(out, m.extra...), nil
 }
 
-func (m *memStore) SSHKeysByFingerprint(fp string) []SSHKey {
+func (m *memStore) SSHKeysByFingerprint(_ context.Context, fp string) ([]SSHKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []SSHKey
@@ -83,10 +97,10 @@ func (m *memStore) SSHKeysByFingerprint(fp string) []SSHKey {
 			out = append(out, k)
 		}
 	}
-	return out
+	return out, nil
 }
 
-func (m *memStore) SSHKeysFor(user string) []SSHKey {
+func (m *memStore) SSHKeysFor(_ context.Context, user string) ([]SSHKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []SSHKey
@@ -95,7 +109,7 @@ func (m *memStore) SSHKeysFor(user string) []SSHKey {
 			out = append(out, k)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (m *memStore) removeKey(id string) {
@@ -116,11 +130,11 @@ func (m *memStore) set(f func(m *memStore)) {
 	f(m)
 }
 
-func (m *memStore) RedeemSSHToken(tok string) (SSHToken, bool) {
+func (m *memStore) RedeemSSHToken(_ context.Context, tok string) (SSHToken, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t, ok := m.tokens[tok]
-	return t, ok
+	return t, ok, nil
 }
 
 func (m *memStore) addKey(t *testing.T, id, user, sandbox string, pub ssh.PublicKey) {
@@ -963,7 +977,7 @@ func TestSSHRevokedUserIsNotKeptActiveByAnotherTenantsNamesake(t *testing.T) {
 	h.store.revoked = map[string]bool{"alice": true}
 	h.store.extra = []Key{{ID: "k-other", User: "alice", Tenant: "elsewhere"}}
 	h.store.mu.Unlock()
-	if !userActive(h.store, "alice", "elsewhere") {
+	if !active(t, h.store, "alice", "elsewhere") {
 		t.Fatal("precondition: the other tenant's alice is not active")
 	}
 	if c, err := h.dial(h.a, nil, ssh.PublicKeys(k)); err == nil {

@@ -301,6 +301,37 @@ in `_old/` as reference, to be ported where this design still wants it.
   before, closing the browser tab threw a minute of work away. Deleting the
   sandbox part way does not stop it either: the sandbox goes at once, and the
   snapshot is listed when it finishes, or is not there at all if it cannot.
+- **The gateway keeps its state in SQLite or PostgreSQL, not a file.**
+  `sandbox-gateway --store sqlite` (the default: `gateway.db` in
+  `--state-dir`) or `--store postgres --store-dsn-file FILE` (the address
+  read from a 0600 file; `sslmode=verify-full` required unless the database
+  is on the same machine). The schema migrates itself as the gateway starts;
+  `store status` and `store migrate` look after it. A gateway from before
+  refuses to start beside its old `state.json` until `sandbox-gateway store
+  import --from state.json` copies it in, keys keeping their ids and hashes.
+  On PostgreSQL every organisation's records are also held apart by
+  row-level security; `scripts/postgres-local.sh up` (`make db-up`) runs one
+  in Docker on loopback with a least-privilege role. Each sandbox's row now
+  keeps its name, image, state, labels, network, lifetime, end and idle
+  timeout, kept in step with its node and kept as history once terminated;
+  `GET /v1/admin/lost` includes the last known name, image and state. The
+  offline `keys`, `policies` and `nodes` commands now work while the gateway
+  serves. A database that does not answer is a `503`, never a `401` or a
+  `404`. One gateway serves a database at a time: on PostgreSQL further
+  gateways wait as standbys (listening on nothing) and take over within
+  seconds when it stops or loses the database; on SQLite a second is
+  refused. `--state FILE` still works and names a file in the gateway's
+  directory.
+- **Behind a gateway, the create form lists images before your first
+  sandbox.** Studio's image picker offered only the images of your own
+  sandboxes through a gateway, so a new user saw nothing until they had made
+  one. The gateway now lists what its nodes have built (`GET
+  /v1/fleet/images`, any key that may list sandboxes), and Studio shows it
+  as "Built on the gateway's nodes".
+- **Organisation names keep their case and are matched without it.**
+  `Acme-Labs` is created and shown as typed, and is the same organisation as
+  `acme-labs` everywhere, including `X-Sandbox-Org` and service hosts; its
+  tenant is the name lowercased. Policy names stay lowercase.
 - **Studio's sandbox list says when each ends and, to an admin, whose it
   is.** An **Ends** column ticks down to a sandbox's lifetime ("in 29m 12s",
   or "never"), and a gateway admin's list has an **Owner** column from the

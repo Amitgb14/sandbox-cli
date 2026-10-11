@@ -59,17 +59,134 @@ func newRoot() *cobra.Command {
 		SilenceErrors: true,
 		Version:       version.Version,
 	}
-	var state string
-	root.PersistentFlags().StringVar(&state, "state", "", "the gateway's state file (keys, owners, nodes); required")
-	root.AddCommand(newServe(&state), newKeys(&state), newNodes(&state), newPolicies(&state))
+	var state, stateDir string
+	pf := root.PersistentFlags()
+	pf.StringVar(&stateDir, "state-dir", "", "the gateway's directory: its SQLite database (gateway.db), SSH host key, audit log, jobs and node files")
+	pf.StringVar(&state, "state", "", "a file in the gateway's directory, as --state-dir is its directory (the state file of a gateway before databases)")
+	pf.StringVar(&storeFlags.kind, "store", "sqlite", "where the gateway keeps its state: sqlite (one gateway) or postgres (one or more)")
+	pf.StringVar(&storeFlags.path, "store-path", "", "the SQLite database (default: gateway.db in the gateway's directory)")
+	pf.StringVar(&storeFlags.dsnFile, "store-dsn-file", "", "with --store postgres: a file (mode 0600) holding the database's address, postgres://… with sslmode=verify-full unless it is on this machine")
+	root.PersistentPreRunE = func(*cobra.Command, []string) error {
+		if stateDir != "" {
+			if state != "" {
+				return errors.New("--state and --state-dir: give one")
+			}
+			state = filepath.Join(stateDir, "state.json")
+		}
+		return nil
+	}
+	root.AddCommand(newServe(&state), newKeys(&state), newNodes(&state), newPolicies(&state), newStore(&state))
 	return root
 }
 
-func openState(path string) (*gateway.FileStore, error) {
-	if path == "" {
-		return nil, errors.New("--state is required")
+// storeFlags are the root's flags naming the gateway's store.
+var storeFlags storeOptions
+
+type storeOptions struct{ kind, path, dsnFile string }
+
+func (o storeOptions) kindOrDefault() string {
+	if o.kind == "" {
+		return "sqlite"
 	}
-	return gateway.OpenFileStore(path)
+	return o.kind
+}
+
+// openState opens the gateway's store: the SQLite database in the
+// directory statePath is in, or the PostgreSQL database --store-dsn-file
+// names. A state file left by a gateway from before databases, beside a
+// database that holds nothing, is refused with the command that imports it
+// — the gateway never starts empty next to its own old state.
+func openState(statePath string) (gateway.Store, error) {
+	if statePath == "" {
+		return nil, errors.New("--state-dir is required")
+	}
+	st, err := openStoreAt(statePath)
+	if err != nil {
+		return nil, err
+	}
+	if legacy := legacyState(statePath); legacy != "" {
+		empty, err := storeIsEmpty(st)
+		if err != nil {
+			st.Close()
+			return nil, err
+		}
+		if empty {
+			st.Close()
+			return nil, fmt.Errorf("%s holds this gateway's state from before databases, and the database is empty: import it first with\n  sandbox-gateway --state-dir %s %s store import --from %s",
+				legacy, filepath.Dir(statePath), storeArgs(), legacy)
+		}
+	}
+	return st, nil
+}
+
+// openStoreAt opens the store without the check for an old state file:
+// what store import itself uses.
+func openStoreAt(statePath string) (gateway.Store, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	switch storeFlags.kind {
+	case "", "sqlite":
+		path := storeFlags.path
+		if path == "" {
+			path = filepath.Join(filepath.Dir(statePath), "gateway.db")
+		}
+		return gateway.OpenSQLite(ctx, path)
+	case "postgres":
+		if storeFlags.dsnFile == "" {
+			return nil, errors.New("--store postgres needs --store-dsn-file")
+		}
+		dsn, err := gateway.ReadSecretFile(storeFlags.dsnFile)
+		if err != nil {
+			return nil, fmt.Errorf("--store-dsn-file: %w", err)
+		}
+		return gateway.OpenPostgres(ctx, dsn)
+	default:
+		return nil, fmt.Errorf("--store %q: sqlite or postgres", storeFlags.kind)
+	}
+}
+
+// legacyState is the state file a gateway from before databases left in
+// statePath's directory, "" for none.
+func legacyState(statePath string) string {
+	for _, p := range []string{statePath, filepath.Join(filepath.Dir(statePath), "state.json")} {
+		if strings.HasSuffix(p, ".json") {
+			if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Size() > 0 {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// storeIsEmpty reports whether st holds no key and no node: a gateway that
+// has never run on it.
+func storeIsEmpty(st gateway.Store) (bool, error) {
+	ctx := context.Background()
+	keys, err := st.Keys(ctx)
+	if err != nil {
+		return false, err
+	}
+	nodes, err := st.Nodes(ctx)
+	return len(keys) == 0 && len(nodes) == 0, err
+}
+
+// keyCount is how many keys the store holds, for the start-up line.
+func keyCount(st gateway.Store) int {
+	keys, _ := st.Keys(context.Background())
+	return len(keys)
+}
+
+// storeArgs are the flags naming the store, to repeat in a command shown.
+func storeArgs() string {
+	switch storeFlags.kind {
+	case "postgres":
+		return "--store postgres --store-dsn-file " + storeFlags.dsnFile
+	default:
+		if storeFlags.path != "" {
+			return "--store-path " + storeFlags.path
+		}
+		return ""
+	}
 }
 
 // --- serve ----------------------------------------------------------------------
@@ -90,6 +207,7 @@ type serveOptions struct {
 	metricsReady            func(string)
 	secretsKeyFile, jobsDir string
 	jobRetention            time.Duration
+	sandboxHistory          time.Duration
 	notifyAllowPrivate      bool
 	maxOrgsPerUser          int
 	// Sending invites by email (gateway/mail.go).
@@ -139,6 +257,7 @@ func newServe(state *string) *cobra.Command {
 	f.StringVar(&o.secretsKeyFile, "secrets-key-file", "", "32 random bytes (mode 0600) sealing secrets and jobs' environments; without it there are no secrets")
 	f.StringVar(&o.jobsDir, "jobs-dir", "", "where jobs' runs keep output and files (default: jobs/ beside the state file)")
 	f.DurationVar(&o.jobRetention, "job-retention", 24*time.Hour, "how long a finished job, and what it kept, is kept")
+	f.DurationVar(&o.sandboxHistory, "sandbox-history", 30*24*time.Hour, "how long a terminated sandbox's details are kept in the database; 0 keeps them")
 	f.BoolVar(&o.notifyAllowPrivate, "notify-allow-private", false, "let a job's notify URL reach loopback, private and link-local addresses (default: public addresses only)")
 	f.StringVar(&o.smtpHost, "smtp-host", "", "an SMTP relay to email invites through; off when empty")
 	f.IntVar(&o.smtpPort, "smtp-port", 587, "the relay's port: 465 is TLS from the start, any other needs STARTTLS")
@@ -170,8 +289,24 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 		return err
 	}
 	defer st.Close()
+	// One gateway serves a database at a time: a second one on the same
+	// PostgreSQL waits here, listening on nothing, until the first stops
+	// (gateway.HoldServing).
+	serving, err := gateway.HoldServing(ctx, st, func() {
+		logf("standby: another gateway serves this database; waiting to take over")
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	defer serving.Release()
 	if o.nodeFilesDir == "" {
 		o.nodeFilesDir = filepath.Join(filepath.Dir(statePath), "nodes")
+	}
+	if o.jobsDir == "" {
+		o.jobsDir = filepath.Join(filepath.Dir(statePath), "jobs")
 	}
 	if err := os.MkdirAll(o.nodeFilesDir, 0o700); err != nil {
 		return err
@@ -204,7 +339,7 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 		Store: st, StaticNodes: static, PollInterval: o.pollInterval, Quota: o.quota,
 		NodeFilesDir: o.nodeFilesDir, CORSOrigins: o.corsOrigins, Logf: logf,
 		NodeLostAfter: o.nodeLostAfter, Audit: auditLog,
-		SecretsKey: secretsKey, JobsDir: o.jobsDir, JobRetention: o.jobRetention,
+		SecretsKey: secretsKey, JobsDir: o.jobsDir, JobRetention: o.jobRetention, SandboxHistory: o.sandboxHistory,
 		NotifyAllowPrivate: o.notifyAllowPrivate,
 		MaxOrgsPerUser:     o.maxOrgsPerUser,
 		Router:             rcfg,
@@ -313,13 +448,18 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 		}
 	}
 	logf("%s serving API %s on %s; %d nodes, %d answering; %d keys", version.Version, api.Version, where,
-		len(g.Nodes()), healthy, len(st.Keys()))
+		len(g.Nodes()), healthy, keyCount(st))
 	if ready != nil {
 		ready(where)
 	}
 	select {
 	case err = <-errc:
 	case <-ctx.Done():
+	case err = <-serving.Lost:
+		// Another gateway may be serving already: stop taking requests
+		// now, not after the graceful wait.
+		logf("%v; stopping", err)
+		srv.Close()
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -512,16 +652,21 @@ func newKeys(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			if policy != "" && !slices.ContainsFunc(st.Policies(), func(p api.UserPolicy) bool { return p.Name == policy }) {
+			ctx := cmd.Context()
+			pols, err := st.Policies(ctx)
+			if err != nil {
+				return err
+			}
+			if policy != "" && !slices.ContainsFunc(pols, func(p api.UserPolicy) bool { return p.Name == policy }) {
 				return fmt.Errorf("policy %s: no such policy (sandbox-gateway policies set)", policy)
 			}
-			secret, k, err := st.CreateKeyExpiring(user, tenant, scopes, expiresAt)
+			secret, k, err := st.CreateKeyExpiring(ctx, user, tenant, scopes, expiresAt)
 			if err != nil {
 				return err
 			}
 			if policy != "" {
-				if err := st.AssignPolicy(k.User, k.Tenant, policy); err != nil {
-					_ = st.RevokeKey(k.ID)
+				if err := st.AssignPolicy(ctx, k.User, k.Tenant, policy); err != nil {
+					_ = st.RevokeKey(ctx, k.ID)
 					return fmt.Errorf("policy %s: %w", policy, err)
 				}
 			}
@@ -566,10 +711,15 @@ func newKeys(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
+			ctx := cmd.Context()
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "ID\tUSER\tTENANT\tSCOPES\tPOLICY\tCREATED\tEXPIRES\tSTATE\tEMAIL")
 			now := time.Now()
-			for _, k := range st.Keys() {
+			keys, err := st.Keys(ctx)
+			if err != nil {
+				return err
+			}
+			for _, k := range keys {
 				// A sign-in's key is its account's, for a while (accounts.go).
 				if k.Parent != "" {
 					continue
@@ -586,7 +736,7 @@ func newKeys(state *string) *cobra.Command {
 					exp = k.Expires.Format(time.RFC3339)
 				}
 				pol := "-"
-				if p, ok := st.PolicyOf(k.User, k.Tenant); ok {
+				if p, ok, _ := st.PolicyOf(ctx, k.User, k.Tenant); ok {
 					pol = p.Name
 				}
 				email := "-"
@@ -609,7 +759,8 @@ func newKeys(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			if err := st.RevokeKey(args[0]); err != nil {
+			ctx := cmd.Context()
+			if err := st.RevokeKey(ctx, args[0]); err != nil {
 				return fmt.Errorf("%s: %w", args[0], err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "revoked %s\n", args[0])
@@ -641,8 +792,9 @@ func newPolicies(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
+			ctx := cmd.Context()
 			p := api.UserPolicy{Name: args[0], MaxLifetimeSecs: int(maxLife / time.Second)}
-			if err := st.PutPolicy(p); err != nil {
+			if err := st.PutPolicy(ctx, p); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "policy %s: max lifetime %s\n", p.Name, lifetimeText(p.MaxLifetimeSecs))
@@ -660,18 +812,27 @@ func newPolicies(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
+			ctx := cmd.Context()
 			holders := map[string][]string{}
 			seen := map[string]bool{}
-			for _, k := range st.Keys() {
+			keys, err := st.Keys(ctx)
+			if err != nil {
+				return err
+			}
+			for _, k := range keys {
 				id := k.User + "@" + k.Tenant
-				if p, ok := st.PolicyOf(k.User, k.Tenant); ok && !k.Revoked && !seen[id] {
+				if p, ok, _ := st.PolicyOf(ctx, k.User, k.Tenant); ok && !k.Revoked && !seen[id] {
 					seen[id] = true
 					holders[p.Name] = append(holders[p.Name], id)
 				}
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tMAX LIFETIME\tUSERS")
-			for _, p := range st.Policies() {
+			pols, err := st.Policies(ctx)
+			if err != nil {
+				return err
+			}
+			for _, p := range pols {
 				users := strings.Join(holders[p.Name], ",")
 				if users == "" {
 					users = "-"
@@ -702,7 +863,8 @@ func newPolicies(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			if err := st.AssignPolicy(args[0], tenant, name); err != nil {
+			ctx := cmd.Context()
+			if err := st.AssignPolicy(ctx, args[0], tenant, name); err != nil {
 				return err
 			}
 			if name == "" {
@@ -724,7 +886,8 @@ func newPolicies(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			if err := st.DeletePolicy(args[0]); err != nil {
+			ctx := cmd.Context()
+			if err := st.DeletePolicy(ctx, args[0]); err != nil {
 				return fmt.Errorf("%s: %w", args[0], err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", args[0])
@@ -775,7 +938,8 @@ func newNodes(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			if err := st.PutNode(cfg); err != nil {
+			ctx := cmd.Context()
+			if err := st.PutNode(ctx, cfg); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "added node %s (%s)\n", cfg.Name, cfg.Endpoint)
@@ -796,9 +960,14 @@ func newNodes(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
+			ctx := cmd.Context()
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tENDPOINT\tTOKEN FILE\tCA FILE\tCLIENT CERT")
-			for _, n := range st.Nodes() {
+			nodes, err := st.Nodes(ctx)
+			if err != nil {
+				return err
+			}
+			for _, n := range nodes {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", n.Name, n.Endpoint, dash(n.TokenFile), dash(n.CAFile), dash(n.CertFile))
 			}
 			return tw.Flush()
@@ -814,7 +983,8 @@ func newNodes(state *string) *cobra.Command {
 				return err
 			}
 			defer st.Close()
-			if err := st.RemoveNode(args[0]); err != nil {
+			ctx := cmd.Context()
+			if err := st.RemoveNode(ctx, args[0]); err != nil {
 				return fmt.Errorf("node %s: %w", args[0], err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "removed node %s\n", args[0])
@@ -853,4 +1023,110 @@ func mailConfig(o serveOptions) (*gateway.MailConfig, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// --- store ----------------------------------------------------------------------
+
+// newStore is `sandbox-gateway store`: moving a gateway's state into a
+// database, and looking after the database's schema.
+func newStore(state *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "store",
+		Short: "Import a gateway's state file into its database; apply migrations; show what the database holds",
+	}
+	var from string
+	imp := &cobra.Command{
+		Use:   "import",
+		Short: "Copy a state file from before databases into the gateway's database, once",
+		Long: "Copies every key (with its id and hash, so secrets handed out keep working),\n" +
+			"organisation, member, policy, invite, owner, node, sealed secret, job and service\n" +
+			"from a state file into the database, in one transaction. The database must hold\n" +
+			"no gateway state yet, and the gateway must be stopped (the file is locked while\n" +
+			"it runs). The file is left as it was; move it aside once the gateway serves.",
+		Example: "  sandbox-gateway --state-dir /var/lib/sandbox-gateway store import --from /var/lib/sandbox-gateway/state.json\n" +
+			"  sandbox-gateway --state-dir /var/lib/sandbox-gateway --store postgres --store-dsn-file /etc/sandbox-gateway/db.dsn \\\n" +
+			"    store import --from /var/lib/sandbox-gateway/state.json",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if *state == "" {
+				return errors.New("--state-dir is required")
+			}
+			st, err := openStoreAt(*state)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			c, err := gateway.ImportState(cmd.Context(), from, st)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "imported %s: %s\n", from, c)
+			return nil
+		},
+	}
+	imp.Flags().StringVar(&from, "from", "", "the state file to import; required")
+	_ = imp.MarkFlagRequired("from")
+
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Show the database's schema version and how much it holds",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if *state == "" {
+				return errors.New("--state-dir is required")
+			}
+			st, err := openStoreAt(*state)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			ctx := cmd.Context()
+			v, err := gateway.SchemaVersion(ctx, st)
+			if err != nil {
+				return err
+			}
+			keys, err := st.Keys(ctx)
+			if err != nil {
+				return err
+			}
+			orgs, err := st.Orgs(ctx)
+			if err != nil {
+				return err
+			}
+			live, err := st.LiveSandboxes(ctx)
+			if err != nil {
+				return err
+			}
+			nodes, err := st.Nodes(ctx)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "store:     %s\nschema:    %d\nkeys:      %d\norgs:      %d\nsandboxes: %d live\nnodes:     %d\n",
+				storeFlags.kindOrDefault(), v, len(keys), len(orgs), len(live), len(nodes))
+			return nil
+		},
+	}
+	migrate := &cobra.Command{
+		Use:   "migrate",
+		Short: "Bring the database's schema up to this gateway's (serve does this too)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if *state == "" {
+				return errors.New("--state-dir is required")
+			}
+			st, err := openStoreAt(*state)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			v, err := gateway.SchemaVersion(cmd.Context(), st)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "schema at version %d\n", v)
+			return nil
+		},
+	}
+	cmd.AddCommand(imp, status, migrate)
+	return cmd
 }

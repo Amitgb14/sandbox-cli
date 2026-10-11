@@ -20,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useAgents, useEgress, useInfo, useLaunch, useNode, useSandboxes, useSnapshots, useTemplates } from "@/lib/api/queries";
+import { useAgents, useEgress, useInfo, useLaunch, useNode, useSandboxes, useSnapshots, useTemplates, useFleetImages } from "@/lib/api/queries";
 import { useCaller } from "@/lib/caller";
 import { cliAgent, snippets } from "@/lib/codegen";
 import { formatMiB, formatRelative, splitArgs } from "@/lib/format";
@@ -97,9 +97,14 @@ function LaunchForm() {
   const [snapshot, setSnapshot] = useState("");
   const canSnapshot = !!(info?.capabilities?.capabilities?.memory_snapshot || info?.capabilities?.capabilities?.disk_snapshot);
   const { data: snapshots } = useSnapshots(canSnapshot);
-  const { data: node } = useNode(useCaller().kind === "sandboxd");
+  const callerKind = useCaller().kind;
+  const { data: node } = useNode(callerKind === "sandboxd");
+  // Through a gateway the node's own list is not offered; the gateway lists
+  // what its nodes have built, so a new user sees choices before their first
+  // sandbox.
+  const { data: fleetImages } = useFleetImages(callerKind === "gateway");
   const { data: sandboxes } = useSandboxes();
-  const built = node?.images ?? [];
+  const built = node?.images ?? fleetImages ?? [];
   const inUse = (sandboxes ?? []).map((sb) => sb.image);
   const fromSnapshot = from === "snapshot" && canSnapshot;
   // A snapshot schedule, within what the server allows (its limits).
@@ -304,7 +309,13 @@ function LaunchForm() {
             )
           ) : (
             <div className="flex flex-col gap-1.5">
-              <ImagePicker value={image} onChange={setImage} built={built} inUse={inUse} />
+              <ImagePicker
+                value={image}
+                onChange={setImage}
+                built={built}
+                inUse={inUse}
+                builtWhere={callerKind === "gateway" ? "Built on the gateway's nodes" : undefined}
+              />
               <p className="text-xs text-muted-foreground">
                 A desktop image gives the sandbox a screen, in its Desktop tab; it runs best with 2 GiB (the CLI&apos;s{" "}
                 <span className="font-mono">--memory 2048</span>).

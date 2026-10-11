@@ -138,7 +138,12 @@ func (g *Gateway) startJobs(ctx context.Context) {
 	g.jobs.mu.Lock()
 	g.jobs.ctx = ctx
 	g.jobs.mu.Unlock()
-	for _, rec := range g.store.AllJobs() {
+	all, err := g.store.AllJobs(context.WithoutCancel(ctx))
+	if err != nil {
+		// Resumed at the next start; a job left running is not lost.
+		g.logf("jobs: not resumed: %v", err)
+	}
+	for _, rec := range all {
 		if rec.State == api.JobRunning {
 			g.logf("job %s: resuming", rec.ID)
 			g.startJob(rec.ID)
@@ -153,16 +158,21 @@ func (g *Gateway) startJobs(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				g.forgetOldJobs()
+				g.forgetOldJobs(ctx)
 			}
 		}
 	})
 }
 
 // forgetOldJobs drops finished jobs kept for JobRetention, and what they kept.
-func (g *Gateway) forgetOldJobs() {
+func (g *Gateway) forgetOldJobs(ctx context.Context) {
 	now := time.Now()
-	for _, rec := range g.store.AllJobs() {
+	all, err := g.store.AllJobs(context.WithoutCancel(ctx))
+	if err != nil {
+		g.logf("jobs: %v", err)
+		return
+	}
+	for _, rec := range all {
 		if rec.Finished == nil || now.Sub(*rec.Finished) < g.cfg.JobRetention {
 			continue
 		}
@@ -170,7 +180,7 @@ func (g *Gateway) forgetOldJobs() {
 			g.logf("job %s: removing what it kept: %v", rec.ID, err)
 			continue
 		}
-		if err := g.store.ForgetJob(rec.ID); err != nil {
+		if err := g.store.ForgetJob(context.WithoutCancel(ctx), rec.ID); err != nil {
 			g.logf("job %s: %v", rec.ID, err)
 			continue
 		}
@@ -189,7 +199,7 @@ func (g *Gateway) startJob(id string) {
 	ctx, cancel := context.WithCancelCause(jm.ctx)
 	ctl := &jobCtl{cancel: cancel, done: make(chan struct{})}
 	jm.ctls[id] = ctl
-	if rec, ok := g.store.Job(id); ok && rec.Cancelled {
+	if rec, ok, _ := g.store.Job(context.WithoutCancel(ctx), id); ok && rec.Cancelled {
 		// Asked before a restart: the cancel is finished now.
 		cause := errJobCancelled
 		if rec.Error == reasonOwnerRevoked {
@@ -222,23 +232,35 @@ func (g *Gateway) startJob(id string) {
 // terminated and the queued runs never started. Called on every
 // revocation (accessChanged), at Start, and every AccessRecheckInterval.
 func (g *Gateway) revokeOrphanedJobs() {
+	ctx := g.baseCtx()
+	running, err := g.store.RunningJobs(context.WithoutCancel(ctx))
+	if err != nil {
+		g.logf("jobs: checking owners: %v", err)
+		return
+	}
 	active := map[Owner]bool{}
-	for id, o := range g.store.runningJobs() {
+	for id, o := range running {
 		ok, seen := active[o]
 		if !seen {
-			ok = userActive(g.store, o.User, o.Tenant)
+			var err error
+			// A check that failed is not a revocation: nothing is
+			// cancelled until the store says the owner has no access.
+			if ok, err = userActive(ctx, g.store, o.User, o.Tenant); err != nil {
+				g.logf("jobs: checking %s: %v", o.User, err)
+				continue
+			}
 			active[o] = ok
 		}
 		if !ok {
-			g.revokeJob(id, o)
+			g.revokeJob(ctx, id, o)
 		}
 	}
 }
 
 // revokeJob cancels job id because its owner o lost their access.
-func (g *Gateway) revokeJob(id string, o Owner) {
+func (g *Gateway) revokeJob(ctx context.Context, id string, o Owner) {
 	first := false
-	if err := g.store.UpdateJob(id, func(j *jobRecord) {
+	if err := g.store.UpdateJob(context.WithoutCancel(ctx), id, func(j *jobRecord) {
 		if j.State != api.JobRunning || j.Cancelled {
 			return
 		}
@@ -284,7 +306,11 @@ func stopping(ctx context.Context) (cancelled, interrupted bool) {
 }
 
 func (g *Gateway) runJob(ctx context.Context, id string) {
-	rec, ok := g.store.Job(id)
+	rec, ok, err := g.store.Job(context.WithoutCancel(ctx), id)
+	if err != nil {
+		g.logf("job %s: %v", id, err)
+		return
+	}
 	if !ok || rec.State != api.JobRunning {
 		return
 	}
@@ -322,7 +348,7 @@ loop:
 	if _, interrupted := stopping(ctx); interrupted {
 		return
 	}
-	g.finishJob(id)
+	g.finishJob(ctx, id)
 }
 
 // jobEnv opens a job's environment: sealed in the store, or held in memory.
@@ -354,10 +380,10 @@ func (g *Gateway) jobEnv(rec *jobRecord) (map[string]string, error) {
 }
 
 // finishJob decides the job's state once no run is in flight.
-func (g *Gateway) finishJob(id string) {
+func (g *Gateway) finishJob(ctx context.Context, id string) {
 	var final *jobRecord
 	now := time.Now().UTC()
-	err := g.store.UpdateJob(id, func(j *jobRecord) {
+	err := g.store.UpdateJob(context.WithoutCancel(ctx), id, func(j *jobRecord) {
 		failed := false
 		for i := range j.Runs {
 			r := &j.Runs[i]
@@ -401,7 +427,7 @@ func (g *Gateway) finishJob(id string) {
 // the job is cancelled or the gateway stops.
 func (g *Gateway) runOne(ctx context.Context, rec *jobRecord, env map[string]string, envErr error, n int) {
 	for {
-		run, ok := g.currentRun(rec.ID, n)
+		run, ok := g.currentRun(ctx, rec.ID, n)
 		if !ok {
 			return
 		}
@@ -410,7 +436,7 @@ func (g *Gateway) runOne(ctx context.Context, rec *jobRecord, env map[string]str
 			return
 		}
 		now := time.Now().UTC()
-		updated, err := g.store.UpdateRun(rec.ID, n, func(r *api.JobRun) {
+		updated, err := g.store.UpdateRun(context.WithoutCancel(ctx), rec.ID, n, func(r *api.JobRun) {
 			if out.counted {
 				r.Attempts++
 			}
@@ -429,7 +455,7 @@ func (g *Gateway) runOne(ctx context.Context, rec *jobRecord, env map[string]str
 			return
 		}
 		if updated.State != api.RunQueued {
-			if j, ok := g.store.Job(rec.ID); ok {
+			if j, ok, _ := g.store.Job(context.WithoutCancel(ctx), rec.ID); ok {
 				g.notify(j, api.JobNotification{Event: "run.finished", Run: &n, State: updated.State, ExitCode: updated.ExitCode})
 			}
 			return
@@ -438,8 +464,8 @@ func (g *Gateway) runOne(ctx context.Context, rec *jobRecord, env map[string]str
 	}
 }
 
-func (g *Gateway) currentRun(id string, n int) (api.JobRun, bool) {
-	j, ok := g.store.Job(id)
+func (g *Gateway) currentRun(ctx context.Context, id string, n int) (api.JobRun, bool) {
+	j, ok, _ := g.store.Job(context.WithoutCancel(ctx), id)
 	if !ok || n >= len(j.Runs) {
 		return api.JobRun{}, false
 	}
@@ -475,7 +501,7 @@ func (g *Gateway) attempt(ctx context.Context, rec *jobRecord, env map[string]st
 			g.terminateRunSandbox(run.Sandbox)
 			return failed("the gateway stopped between making the run's sandbox and starting its command")
 		}
-		nd, ok := g.nodeOfSandbox(run.Sandbox)
+		nd, ok := g.nodeOfSandbox(ctx, run.Sandbox)
 		if !ok {
 			return failed("the run's sandbox ended while the gateway was not watching it")
 		}
@@ -489,14 +515,17 @@ func (g *Gateway) attempt(ctx context.Context, rec *jobRecord, env map[string]st
 	// Every new sandbox is made in the owner's name, so the owner is checked
 	// before each, not only when a revocation is noticed: a run that reaches
 	// this between the revocation and the recheck makes nothing.
-	if !userActive(g.store, rec.User, rec.Tenant) {
-		g.revokeJob(rec.ID, rec.owner())
+	if ok, err := userActive(ctx, g.store, rec.User, rec.Tenant); err != nil {
+		// Unknown is not revoked: the attempt waits for the store.
+		return outcome{interrupted: true}
+	} else if !ok {
+		g.revokeJob(ctx, rec.ID, rec.owner())
 		return outcome{state: api.RunCancelled, err: reasonOwnerRevoked}
 	}
 	if envErr != nil {
 		return outcome{state: api.RunFailed, err: envErr.Error(), final: true, counted: true}
 	}
-	secrets, err := g.secretValues(rec.Tenant, rec.Spec.Secrets)
+	secrets, err := g.secretValues(ctx, rec.Tenant, rec.Spec.Secrets)
 	if err != nil {
 		return outcome{state: api.RunFailed, err: err.Error(), final: true, counted: true}
 	}
@@ -532,7 +561,7 @@ func (g *Gateway) attempt(ctx context.Context, rec *jobRecord, env map[string]st
 		wait = min(wait*2, 30*time.Second)
 	}
 	// From here the run has a sandbox to take down whatever happens.
-	if _, err := g.store.UpdateRun(rec.ID, n, func(r *api.JobRun) {
+	if _, err := g.store.UpdateRun(context.WithoutCancel(ctx), rec.ID, n, func(r *api.JobRun) {
 		r.Attempts++
 		r.State, r.Sandbox, r.PID = api.RunRunning, sb.ID, 0
 		r.Started, r.Finished, r.ExitCode, r.Error = nil, nil, nil, ""
@@ -540,7 +569,7 @@ func (g *Gateway) attempt(ctx context.Context, rec *jobRecord, env map[string]st
 		g.terminateRunSandbox(sb.ID)
 		return failed("recording the run failed")
 	}
-	nd, ok := g.nodeOfSandbox(sb.ID)
+	nd, ok := g.nodeOfSandbox(ctx, sb.ID)
 	if !ok {
 		return failed("the run's node is not answering")
 	}
@@ -557,7 +586,7 @@ func (g *Gateway) attempt(ctx context.Context, rec *jobRecord, env map[string]st
 		return failed("starting the command: " + err.Error())
 	}
 	started := time.Now().UTC()
-	if _, err := g.store.UpdateRun(rec.ID, n, func(r *api.JobRun) {
+	if _, err := g.store.UpdateRun(context.WithoutCancel(ctx), rec.ID, n, func(r *api.JobRun) {
 		r.PID, r.Started = proc.PID, &started
 	}); err != nil {
 		g.terminateRunSandbox(sb.ID)
@@ -618,8 +647,8 @@ var gitIdentity = map[string]string{
 	"GIT_COMMITTER_NAME": "sandbox", "GIT_COMMITTER_EMAIL": "sandbox@localhost",
 }
 
-func (g *Gateway) nodeOfSandbox(id string) (*node, bool) {
-	o, ok := g.store.OwnerOf(id)
+func (g *Gateway) nodeOfSandbox(ctx context.Context, id string) (*node, bool) {
+	o, ok, _ := g.store.OwnerOf(context.WithoutCancel(ctx), id)
 	if !ok {
 		return nil, false
 	}
@@ -752,7 +781,11 @@ func (g *Gateway) keepFiles(nd *node, sandbox, dir string, paths []string) []api
 // terminateRunSandbox takes a run's sandbox down and forgets it, as a
 // DELETE through the gateway does.
 func (g *Gateway) terminateRunSandbox(id string) {
-	o, ok := g.store.OwnerOf(id)
+	o, ok, err := g.store.OwnerOf(context.Background(), id)
+	if err != nil {
+		g.logf("terminating %s: %v", id, err)
+		return
+	}
 	if !ok {
 		return
 	}
@@ -771,9 +804,9 @@ func (g *Gateway) terminateRunSandbox(id string) {
 	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
 		g.tombs.add(id, o)
 		if resp.StatusCode == http.StatusNoContent {
-			g.roomBack(o.Node, id)
+			g.roomBack(ctx, o.Node, id)
 		}
-		if err := g.store.ForgetSandbox(id); err != nil {
+		if err := g.store.ForgetSandbox(context.WithoutCancel(ctx), id); err != nil {
 			g.logf("forgetting %s: %v", id, err)
 		}
 	}

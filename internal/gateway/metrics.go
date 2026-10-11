@@ -131,8 +131,12 @@ func (g *Gateway) writeMetrics(w *metrics.Writer) {
 		}
 	}
 
-	lost := g.lostSandboxes()
-	w.Gauge("sandbox_gateway_sandboxes_recorded", "Sandboxes the gateway's store records an owner for.", float64(g.store.sandboxCount()))
+	rows, err := g.store.LiveSandboxes(g.baseCtx())
+	if err != nil {
+		g.logf("metrics: %v", err)
+	}
+	lost := g.lostAmong(rows)
+	w.Gauge("sandbox_gateway_sandboxes_recorded", "Sandboxes the gateway's store records an owner for.", float64(len(rows)))
 	w.Gauge("sandbox_gateway_sandboxes_lost", "Recorded sandboxes on nodes past the grace period (GET /v1/admin/lost).", float64(len(lost)))
 
 	w.Gauge("sandbox_gateway_ssh_connections_open", "SSH connections open.", float64(m.sshConns.Load()))

@@ -62,7 +62,7 @@ and which one depends on who runs what:
   # the gateway's copy of that token, readable by the gateway's user only
   install -o sandbox-gateway -g sandbox-gateway -m 0600 /etc/sandboxd/token \
     /etc/sandbox-gateway/local.token
-  sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.json \
+  sudo -u sandbox-gateway sandbox-gateway --state-dir /var/lib/sandbox-gateway \
     nodes add local http://127.0.0.1:7443 --token-file /etc/sandbox-gateway/local.token
   ```
 
@@ -193,7 +193,114 @@ sudo install -o sandbox-gateway -g sandbox-gateway -m 0600 n17.token n18.token /
 ```
 
 Every file the gateway reads must belong to its user: it refuses a token, a
-client key or its state file that other users can read.
+client key, its database file or its database's address file that other
+users can read.
+
+### The gateway's database
+
+Everything the gateway keeps across a restart — keys and accounts,
+organisations and their members, policies and invites, who owns every
+sandbox, volume and snapshot, nodes added at run time, sealed secrets, jobs
+and services — is in a database:
+
+| `--store` | For | Where |
+|---|---|---|
+| `sqlite` (the default) | one gateway on one machine | `gateway.db` in `--state-dir`, mode 0600, made at first start |
+| `postgres` | one or more gateways, a managed database, backups without a pause | the database `--store-dsn-file` names |
+
+The schema is the gateway's own: it is brought up to date as the gateway
+starts (`store migrate` does it alone), and a database whose schema is newer
+than the gateway is refused rather than written to. `store status` shows
+the schema version and what the database holds.
+
+Each sandbox's row holds, besides its owner, node and size, its details as
+its node last answered: name, image, state, labels, network, lifetime, end
+and idle timeout, kept in step on every change made through the gateway and
+by a refresh from each node every minute (the node stays the authority).
+A terminated sandbox's row is kept as history. Processes, events, metrics
+and files stay on the node.
+
+**PostgreSQL, on this machine, in Docker:**
+
+```sh
+scripts/postgres-local.sh up      # postgres:17 on 127.0.0.1:5432; writes ~/.config/sandbox/gateway-db.dsn (0600)
+sandbox-gateway --state-dir /var/lib/sandbox-gateway --store postgres \
+  --store-dsn-file ~/.config/sandbox/gateway-db.dsn serve …
+```
+
+`deploy/postgres/compose.yaml` keeps the data in a volume, publishes on
+loopback only, and makes two roles: an admin, and `sandbox_gateway`, the
+gateway's own login, which owns its database and is neither a superuser nor
+able to bypass row-level security. Their passwords are made on first use in
+`deploy/postgres/secrets/`, readable by you only, and never committed.
+
+**PostgreSQL elsewhere** (a managed database, or your own with a replica):
+create the gateway's login role and its database, and the role its requests
+take, once, as an administrator:
+
+```sql
+CREATE ROLE sandbox_gateway LOGIN PASSWORD '…';
+CREATE ROLE sandbox_gateway_tenant NOLOGIN NOBYPASSRLS;
+GRANT sandbox_gateway_tenant TO sandbox_gateway WITH ADMIN OPTION;
+CREATE DATABASE sandbox_gateway OWNER sandbox_gateway;
+```
+
+Put its address in a file only the gateway's user can read:
+
+```sh
+sudo -u sandbox-gateway sh -c 'umask 077; printf "%s\n" \
+  "postgres://sandbox_gateway:…@db.example.internal:5432/sandbox_gateway?sslmode=verify-full&sslrootcert=/etc/sandbox-gateway/db-ca.pem" \
+  > /etc/sandbox-gateway/db.dsn'
+```
+
+The address is read from the file, never a flag: a password in a command
+line is every local user's. A database not on this machine must be reached
+with `sslmode=verify-full`; the gateway refuses anything less.
+
+**Isolation, twice.** Every tenant's records carry their tenant, and the
+gateway's own checks decide whose a request may touch, on either store. On
+PostgreSQL the database holds the same line: a request's statements run as
+`sandbox_gateway_tenant` with row-level security for the tenant it acts in,
+so a query that forgot its tenant returns nothing of another's. The
+gateway's work across tenants — the scheduler, the job runner, admin calls
+— runs as the owner of the tables, which row-level security does not
+filter.
+
+**One serving gateway, and standbys.** One gateway serves a database at a
+time: it also holds things in its own memory (names being created, quota in
+flight, open streams a revocation must end, the job runner and the service
+controller), which two serving at once would each hold apart.
+
+- **PostgreSQL:** start as many gateways on one database as you like, with
+  the same flags and the same key files (`--secrets-key-file`, the SSH host
+  key, TLS). One serves; the others log *standby: another gateway serves this
+  database* and listen on nothing, so a load balancer's health check
+  (`GET /v1/health`) finds them down and sends nothing their way. When the
+  serving gateway stops, crashes or loses its connection to the database, a
+  standby takes over within seconds with the whole state. A gateway that
+  loses its hold stops serving at once and exits, for its service manager to
+  restart it as a standby. Jobs' kept output (`--jobs-dir`) should be on a
+  filesystem every gateway mounts.
+- **SQLite:** a second gateway on the same database is refused.
+
+The offline commands (`keys`, `policies`, `nodes`, `store`) hold nothing and
+work beside the serving gateway.
+
+**From a state file.** A gateway from before databases kept a JSON state
+file. Every command refuses to start on an empty database beside one, and
+says how to import it:
+
+```sh
+sudo systemctl stop sandbox-gateway
+sudo -u sandbox-gateway sandbox-gateway --state-dir /var/lib/sandbox-gateway [--store postgres --store-dsn-file …] \
+  store import --from /var/lib/sandbox-gateway/state.json
+sudo systemctl start sandbox-gateway
+```
+
+Keys keep their ids and hashes, so every secret handed out keeps working;
+everything else is copied as it was. The import is one transaction, into a
+database that holds nothing yet. Move the file aside once the gateway
+serves.
 
 ### Nodes
 
@@ -216,18 +323,17 @@ Unknown keys are refused, so a misspelt `ca_file` cannot quietly mean "trust
 the system's CAs". Pass it with `serve --node-config`. A node defined here is
 changed by editing the file and restarting, never through the admin API.
 
-**The state file**, through the CLI while the gateway is stopped, or the admin
-API while it serves:
+**The database**, through the CLI or the admin API:
 
 ```sh
-sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.json \
+sudo -u sandbox-gateway sandbox-gateway --state-dir /var/lib/sandbox-gateway \
   nodes add n17 https://10.0.0.17:7443 \
     --token-file /etc/sandbox-gateway/n17.token \
     --ca-file /etc/sandbox-gateway/tls/ca.pem \
     --cert-file /etc/sandbox-gateway/tls/gateway-client.pem \
     --key-file /etc/sandbox-gateway/tls/gateway-client-key.pem
-sudo -u sandbox-gateway sandbox-gateway --state … nodes list
-sudo -u sandbox-gateway sandbox-gateway --state … nodes remove n17
+sudo -u sandbox-gateway sandbox-gateway --state-dir … nodes list
+sudo -u sandbox-gateway sandbox-gateway --state-dir … nodes remove n17
 ```
 
 `nodes add` reads every file it is given and refuses a node it could not reach
@@ -237,23 +343,19 @@ as configured. An endpoint is `https://host:port`, `unix:///path`, or plain
 ### The first admin key
 
 ```sh
-sudo -u sandbox-gateway sandbox-gateway --state /var/lib/sandbox-gateway/state.json \
+sudo -u sandbox-gateway sandbox-gateway --state-dir /var/lib/sandbox-gateway \
   keys create --user ops --scope admin
 ```
 
 The secret (`sgk_…`) is printed once and stored only as a hash. Run `keys` and
-`nodes` as the gateway's user: run as root, they would create a state file the
-gateway cannot open.
-
-While the gateway serves it holds the state file, and `keys` and `nodes` refuse
-with *another process holds …state.json.lock*: a change made beside a running
-gateway would be overwritten by it, and a revoked key would come back. Change
-a serving gateway through the [admin API](operations.md#changing-a-serving-gateway).
+`nodes` as the gateway's user: run as root, they would create a database file
+the gateway cannot open. They work while the gateway serves, and what they
+change holds at once: the gateway reads keys and policies on every request.
 
 ### Serve
 
 ```sh
-sudo -u sandbox-gateway sandbox-gateway serve --state /var/lib/sandbox-gateway/state.json \
+sudo -u sandbox-gateway sandbox-gateway serve --state-dir /var/lib/sandbox-gateway \
   --listen 0.0.0.0:8443 \
   --tls-cert /etc/sandbox-gateway/tls/gateway.pem \
   --tls-key /etc/sandbox-gateway/tls/gateway-key.pem \
@@ -275,13 +377,16 @@ sudo systemctl daemon-reload && sudo systemctl enable --now sandbox-gateway
 
 | Flag | Default | |
 |---|---|---|
-| `--state FILE` | required | keys, owners, nodes added at run time. Created 0600 when missing. |
+| `--state-dir DIR` | required | the gateway's directory: its SQLite database, SSH host key, audit log, jobs and node files. (`--state FILE`, as gateways before databases took, names a file in it.) |
+| `--store sqlite\|postgres` | `sqlite` | where its state is kept ([above](#the-gateways-database)). |
+| `--store-path FILE` | `gateway.db` in `--state-dir` | the SQLite database. |
+| `--store-dsn-file FILE` | | with `--store postgres`: a file, mode 0600, holding the database's address. |
 | `--listen HOST:PORT` | `127.0.0.1:7443` | an address other machines can reach is refused without `--tls-cert` and `--tls-key`. TCP only. |
 | `--tls-cert`, `--tls-key` | | the API's certificate and key (PEM). |
 | `--node-config FILE` | | the node file above. |
-| `--node-files-dir DIR` | `nodes/` beside the state file | the only directory whose files a node added **through the admin API** may name. |
+| `--node-files-dir DIR` | `nodes/` in `--state-dir` | the only directory whose files a node added **through the admin API** may name. |
 | `--ssh-listen HOST:PORT` | off | the SSH server. |
-| `--ssh-host-key FILE` | `ssh_host_ed25519_key` beside the state file | created 0600 when missing; one key for the whole fleet. |
+| `--ssh-host-key FILE` | `ssh_host_ed25519_key` in `--state-dir` | created 0600 when missing; one key for the whole fleet. |
 | `--ssh-public-host`, `--ssh-public-port` | the `--ssh-listen` host and port | what clients are told to connect to. Required when listening on `0.0.0.0` or behind a load balancer. |
 | `--router-listen HOST:PORT` | off | the HTTP router for public [services](services.md#the-router). Off loopback, refused without `--router-tls-cert` and `--router-tls-key`. |
 | `--router-domain DOMAIN` | | what the router serves under: `<service>.DOMAIN`, `<service>--<tenant>.DOMAIN`. Required with `--router-listen`. |
@@ -294,10 +399,11 @@ sudo systemctl daemon-reload && sudo systemctl enable --now sandbox-gateway
 | `--secrets-key-file FILE` | | 32 random bytes, mode 0600, sealing the tenants' secrets and jobs' environments. Without it there are no secrets. |
 | `--notify-allow-private` | off | lets a job's `notify` URL reach loopback, private and link-local addresses (and http to loopback). Off, the gateway posts only to public addresses, checked as it connects. |
 | `--metrics-listen HOST:PORT` | off | Prometheus metrics, on loopback only ([operations.md](operations.md#metrics)). |
-| `--audit-log FILE` | `audit/gateway.jsonl` beside the state file | who did what, as JSONL; `none` keeps no log ([operations.md](operations.md#the-audit-log)). |
+| `--audit-log FILE` | `audit/gateway.jsonl` in `--state-dir` | who did what, as JSONL; `none` keeps no log ([operations.md](operations.md#the-audit-log)). |
 | `--node-lost-after` | `5m` | how long a node may not answer before its sandboxes are reported lost and stop counting against quotas ([operations.md](operations.md#node-loss-and-lost-sandboxes)). |
-| `--jobs-dir DIR` | `jobs/` beside the state file | where jobs' runs keep output and files ([jobs.md](jobs.md)). |
+| `--jobs-dir DIR` | `jobs/` in `--state-dir` | where jobs' runs keep output and files ([jobs.md](jobs.md)). |
 | `--job-retention` | `24h` | how long a finished job, and what it kept, is kept. |
+| `--sandbox-history` | `720h` (30 days) | how long a terminated sandbox's details stay in the database, as history; `0` keeps them. |
 
 To serve SSH on port 22 or the API on 443, give the unit
 `AmbientCapabilities=CAP_NET_BIND_SERVICE` (it is in the unit, commented out),
@@ -308,16 +414,17 @@ for a load balancer's health check.
 
 ### Changing a serving gateway
 
-While it serves, the gateway holds its state file, so keys and nodes change
-through the admin API — plain HTTP with an admin key — or, for nodes, through
-`sandbox-cli gateway`. The calls, and why a node added at run time may name
+Keys, policies and nodes change through the offline commands above, the
+admin API — plain HTTP with an admin key — or `sandbox-cli gateway`. A node
+added with the offline command is picked up by a serving gateway at its next
+restart; through the admin API, at once. The calls, and why a node added at run time may name
 files only under `--node-files-dir`, are in
 [operations.md](operations.md#changing-a-serving-gateway).
 
 ## Giving users keys
 
 ```sh
-sudo -u sandbox-gateway sandbox-gateway --state … keys create --user alice --tenant team-a \
+sudo -u sandbox-gateway sandbox-gateway --state-dir … keys create --user alice --tenant team-a \
   --scope sandbox:read --scope sandbox:create --scope sandbox:delete --scope sandbox:ssh
 ```
 
@@ -464,7 +571,7 @@ SMTP relay, whose user name and API key go in the flags below.
 
 ```sh
 umask 077; printf '%s\n' '<the relay password or API key>' > /var/lib/sandbox-gateway/smtp.key
-sandbox-gateway --state … serve … \
+sandbox-gateway --state-dir … serve … \
   --smtp-host smtp.example.com --smtp-port 465 --smtp-user <user> \
   --smtp-password-file /var/lib/sandbox-gateway/smtp.key \
   --mail-from 'Sandbox Studio <invites@your-domain.example>' \
@@ -642,17 +749,27 @@ is lost, revocation and changing a serving gateway are in
 
 ## Back up
 
-`/var/lib/sandbox-gateway/` holds the state file and the SSH host key.
-Losing the state file loses every key and every ownership record: running
-sandboxes then belong to nobody and can only be reached on their node. Losing
-the host key makes every user's `ssh` warn that the host changed. Copy both
-while the gateway is stopped, or copy the state file whole (it is replaced
-atomically on every change).
+The database holds every key and every ownership record: losing it leaves
+running sandboxes belonging to nobody, reachable only on their node.
+`/var/lib/sandbox-gateway/` also holds the SSH host key, whose loss makes
+every user's `ssh` warn that the host changed, and the secrets key file must
+be kept with the database: without it the sealed secrets do not open.
+
+- **SQLite:** `sqlite3 /var/lib/sandbox-gateway/gateway.db ".backup /backup/gateway.db"`
+  while the gateway serves (a consistent copy), or copy `gateway.db` while it
+  is stopped.
+- **PostgreSQL:** `pg_dump -Fc sandbox_gateway > gateway.dump`, or a managed
+  database's point-in-time recovery. Restore with `pg_restore` into an empty
+  database owned by the gateway's role.
+
+Restore one to a scratch directory now and then, and start a gateway on it
+with no nodes: `store status` and `keys list` show what came back.
 
 ## Not done yet
 
-- **One gateway process per state file.** The state is a JSON file one process
-  holds; there is no second gateway for failover, and no database yet.
+- **One serving gateway per database.** Others on the same PostgreSQL are
+  standbys that take over, not gateways serving beside it: requests are not
+  spread across gateways yet.
 - **No single sign-on.** Users authenticate with gateway-issued API keys.
 - **No API-key commands in `sandbox-cli`.** `sandbox-cli gateway` covers
   nodes, drain, lost sandboxes and the audit log; issue and revoke keys with

@@ -78,8 +78,8 @@ func TestARenameIsUniquePerUserAcrossNodes(t *testing.T) {
 			a = sb
 			continue
 		}
-		oa, _ := tg.g.ownerOf(a.ID)
-		ob, _ := tg.g.ownerOf(sb.ID)
+		oa, _ := tg.owner(a.ID)
+		ob, _ := tg.owner(sb.ID)
 		if oa.Node != ob.Node {
 			b = sb
 		}

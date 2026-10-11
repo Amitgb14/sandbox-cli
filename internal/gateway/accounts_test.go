@@ -170,9 +170,7 @@ func TestASignInNeedsItsAccount(t *testing.T) {
 	}
 	acct, _ := tg.store.Account("bob@example.com")
 	// Revoke the account alone, as an older gateway's store would have.
-	tg.store.mu.Lock()
-	tg.store.st.Keys[tg.store.keyIndex(acct.ID)].Revoked = true
-	tg.store.mu.Unlock()
+	tg.store.exec("UPDATE api_keys SET revoked = ? WHERE id = ?", true, acct.ID)
 	_, err = tg.signedIn(reg).Whoami(ctx)
 	wantCode(t, err, api.CodeUnauthorized)
 }
@@ -301,7 +299,7 @@ func TestInviteRefusals(t *testing.T) {
 	_, err = tg.anon().Register(ctx, api.RegisterRequest{Token: iv.Token, Password: bobPassword})
 	wantCode(t, err, api.CodeNotFound)
 	iv, _ = tg.admin.CreateInvite(ctx, api.CreateInviteRequest{Email: "carol@example.com", User: "carol", Scopes: demoScopes, ValidSecs: 60})
-	tg.store.now = func() time.Time { return time.Now().Add(2 * time.Minute) }
+	tg.store.setNow(func() time.Time { return time.Now().Add(2 * time.Minute) })
 	_, err = tg.anon().Register(ctx, api.RegisterRequest{Token: iv.Token, Password: bobPassword})
 	wantCode(t, err, api.CodeNotFound)
 }
@@ -309,10 +307,7 @@ func TestInviteRefusals(t *testing.T) {
 // Accounts and pending invites are kept across a restart.
 func TestAccountsSurviveAReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	st, err := OpenFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := reopenTestStore(t, path)
 	token, _, err := st.CreateInvite(api.CreateInviteRequest{Email: "bob@example.com", User: "bob", Scopes: demoScopes})
 	if err != nil {
 		t.Fatal(err)
@@ -322,9 +317,7 @@ func TestAccountsSurviveAReopen(t *testing.T) {
 	}
 	pending, _, _ := st.CreateInvite(api.CreateInviteRequest{Email: "carol@example.com", User: "carol", Scopes: demoScopes})
 	st.Close()
-	if st, err = OpenFileStore(path); err != nil {
-		t.Fatal(err)
-	}
+	st = reopenTestStore(t, path)
 	defer st.Close()
 	acct, ok := st.Account("bob@example.com")
 	if !ok || !verifyPassword(acct.Password, bobPassword) {

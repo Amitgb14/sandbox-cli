@@ -67,9 +67,11 @@ gofmt -w cmd internal
 ```
 
 Go 1.25+. Dependencies are the standard library, `cobra` and `yaml.v3` — nothing
-else without a decision recorded in the plan. The one recorded exception:
-`golang.org/x/crypto/ssh`, for `sandbox-gateway`'s SSH server only (plan, open
-question 2).
+else without a decision recorded in the plan. The recorded exceptions, all for
+`sandbox-gateway` only (`internal/gateway`, `cmd/sandbox-gateway`; plan, open
+question 2): `golang.org/x/crypto/ssh` for its SSH server, and
+`github.com/jackc/pgx/v5` and `modernc.org/sqlite` for its database. Neither the
+CLI nor `sandboxd` may import `internal/gateway` (tests may).
 
 ## Layout
 
@@ -96,7 +98,7 @@ internal/
   guestproto/   host <-> guest agent protocol; the host treats the guest as hostile
   vsock/        guest vsock listener, host dial through the VMM's bridge
   image/        OCI pull, safe unpack (paths resolved inside the root), ext4 root disks
-  gateway/      sandbox-gateway: key store, ownership router, scheduler, node pool, SSH server; the only package that may use x/crypto/ssh
+  gateway/      sandbox-gateway: its store (SQLite or PostgreSQL, sql_*.go and migrations/), ownership router, scheduler, node pool, SSH server; the only package that may use x/crypto/ssh, pgx or sqlite
 packaging/systemd/      sandboxd and sandbox-gateway units, an example operator policy (docs/self-hosting.md)
 packaging/fleet/        certificates for a gateway and its nodes, an example node file (docs/fleet.md)
 packaging/launchd/      the macOS launch agent (docs/local-macos.md)

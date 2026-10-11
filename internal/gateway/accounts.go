@@ -605,6 +605,7 @@ func loginOf(secret string, k Key, email string) api.Login {
 }
 
 func (g *Gateway) login(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var req api.LoginRequest
 	if !decode(w, r, &req) {
 		return
@@ -619,7 +620,11 @@ func (g *Gateway) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusTooManyRequests, api.CodeRefused, why)
 		return
 	}
-	acct, found := g.store.Account(email)
+	acct, found, err := g.store.Account(ctx, email)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
 	hash := acct.Password
 	if !found || hash == "" {
 		hash = dummyHash()
@@ -636,7 +641,7 @@ func (g *Gateway) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, api.CodeRefused, "this account has expired; ask your admin to renew it")
 		return
 	}
-	secret, k, err := g.store.SignIn(acct.ID, ttl)
+	secret, k, err := g.store.SignIn(ctx, acct.ID, ttl)
 	if err != nil {
 		writeErr(w, http.StatusForbidden, api.CodeRefused, "this account has expired; ask your admin to renew it")
 		return
@@ -646,11 +651,16 @@ func (g *Gateway) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) inviteFor(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var req api.InviteTokenRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	iv, ok := g.store.InviteByToken(req.Token)
+	iv, ok, err := g.store.InviteByToken(ctx, req.Token)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, ErrNoSuchInvite.Error())
 		return
@@ -659,6 +669,7 @@ func (g *Gateway) inviteFor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) register(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	var req api.RegisterRequest
 	if !decode(w, r, &req) {
 		return
@@ -672,11 +683,14 @@ func (g *Gateway) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Checked before the hash is paid for, and again as it is used.
-	if _, ok := g.store.InviteByToken(req.Token); !ok {
+	if _, ok, err := g.store.InviteByToken(ctx, req.Token); err != nil {
+		g.writeStoreErr(w, err)
+		return
+	} else if !ok {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, ErrNoSuchInvite.Error())
 		return
 	}
-	acct, err := g.store.RedeemInvite(req.Token, hashPassword(req.Password))
+	acct, err := g.store.RedeemInvite(ctx, req.Token, hashPassword(req.Password))
 	switch {
 	case errors.Is(err, ErrNoSuchInvite):
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, err.Error())
@@ -692,7 +706,7 @@ func (g *Gateway) register(w http.ResponseWriter, r *http.Request) {
 	// A reset ended every sign-in; the accessChanged after it ends what
 	// they had open.
 	g.accessChanged()
-	secret, k, err := g.store.SignIn(acct.ID, ttl)
+	secret, k, err := g.store.SignIn(ctx, acct.ID, ttl)
 	if err != nil {
 		writeErr(w, http.StatusForbidden, api.CodeRefused, "this account has expired; ask your admin to renew it")
 		return
@@ -701,7 +715,8 @@ func (g *Gateway) register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) logout(w http.ResponseWriter, r *http.Request, p Principal) {
-	if err := g.store.SignOut(p.KeyID); err != nil {
+	ctx := r.Context()
+	if err := g.store.SignOut(ctx, p.KeyID); err != nil {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "this key is not a sign-in's; an admin revokes it")
 		return
 	}
@@ -710,11 +725,16 @@ func (g *Gateway) logout(w http.ResponseWriter, r *http.Request, p Principal) {
 }
 
 func (g *Gateway) changePassword(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	var req api.PasswordRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	acct, ok := g.store.accountOf(p.KeyID)
+	acct, ok, err := g.store.AccountOf(ctx, p.KeyID)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "this key is not an account's; it has no password")
 		return
@@ -732,7 +752,7 @@ func (g *Gateway) changePassword(w http.ResponseWriter, r *http.Request, p Princ
 		writeErr(w, http.StatusForbidden, api.CodeRefused, "the current password is not right")
 		return
 	}
-	if err := g.store.SetPassword(acct.ID, hashPassword(req.New), p.KeyID); err != nil {
+	if err := g.store.SetPassword(ctx, acct.ID, hashPassword(req.New), p.KeyID); err != nil {
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "changing the password failed")
 		return
 	}
@@ -744,6 +764,7 @@ func (g *Gateway) changePassword(w http.ResponseWriter, r *http.Request, p Princ
 // --- admin --------------------------------------------------------------------
 
 func (g *Gateway) adminCreateInvite(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
@@ -755,7 +776,7 @@ func (g *Gateway) adminCreateInvite(w http.ResponseWriter, r *http.Request, p Pr
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "this gateway sends no email: it was started without --smtp-host")
 		return
 	}
-	token, iv, err := g.store.CreateInvite(req)
+	token, iv, err := g.store.CreateInvite(ctx, req)
 	switch {
 	case errors.Is(err, ErrEmailTaken), errors.Is(err, ErrUserHasAccount), errors.Is(err, ErrMemberName):
 		writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
@@ -776,22 +797,29 @@ func (g *Gateway) adminCreateInvite(w http.ResponseWriter, r *http.Request, p Pr
 }
 
 func (g *Gateway) adminListInvites(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
 	out := api.InviteList{Invites: []api.InviteInfo{}, CanEmail: g.cfg.Mail != nil}
-	for _, iv := range g.store.Invites() {
+	ivs, err := g.store.Invites(ctx)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
+	for _, iv := range ivs {
 		out.Invites = append(out.Invites, iv.info())
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (g *Gateway) adminRevokeInvite(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
 	id := r.PathValue("id")
-	if err := g.store.RevokeInvite(id); err != nil {
+	if err := g.store.RevokeInvite(ctx, id); err != nil {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such invite")
 		return
 	}
@@ -802,6 +830,7 @@ func (g *Gateway) adminRevokeInvite(w http.ResponseWriter, r *http.Request, p Pr
 // adminResendInvite makes a pending invite's link again, and emails it
 // when asked: the token is not kept, so the old link cannot be sent twice.
 func (g *Gateway) adminResendInvite(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
@@ -814,7 +843,7 @@ func (g *Gateway) adminResendInvite(w http.ResponseWriter, r *http.Request, p Pr
 		return
 	}
 	id := r.PathValue("id")
-	token, iv, err := g.store.RenewInvite(id, inviteValid)
+	token, iv, err := g.store.RenewInvite(ctx, id, inviteValid)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such invite: used, withdrawn or expired")
 		return
@@ -828,6 +857,7 @@ func (g *Gateway) adminResendInvite(w http.ResponseWriter, r *http.Request, p Pr
 }
 
 func (g *Gateway) adminResetPassword(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
@@ -840,7 +870,7 @@ func (g *Gateway) adminResetPassword(w http.ResponseWriter, r *http.Request, p P
 		return
 	}
 	id := r.PathValue("id")
-	token, iv, err := g.store.CreateResetInvite(id, inviteValid)
+	token, iv, err := g.store.CreateResetInvite(ctx, id, inviteValid)
 	switch {
 	case errors.Is(err, ErrNoSuchKey):
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such key")

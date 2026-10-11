@@ -69,11 +69,12 @@ export function orgName(tenant: string | undefined | null): string {
 
 /** An organisation name the gateway will accept for a new one (internal/gateway/orgs.go). */
 export function orgNameProblem(name: string): string | null {
-  if (!/^[a-z][a-z0-9-]{0,29}$/.test(name)) return "1 to 30 lowercase letters, digits and dashes, starting with a letter";
+  if (!/^[A-Za-z][A-Za-z0-9-]{0,29}$/.test(name)) return "1 to 30 letters, digits and dashes, starting with a letter";
   if (name.endsWith("-")) return "may not end with a dash";
   if (name.includes("--")) return 'may not contain "--"';
-  if (name === "default" || name === "admin") return `"${name}" is reserved`;
+  // Matched without regard to case, as the gateway matches every name.
+  if (["default", "admin"].includes(name.toLowerCase())) return `"${name}" is reserved`;
   return null;
 }
 
-export const ORG_NAME_HINT = '1–30 lowercase letters, digits and dashes, starting with a letter; no "--"; not "default" or "admin".';
+export const ORG_NAME_HINT = '1–30 letters, digits and dashes, starting with a letter; no "--"; not "default" or "admin". Case is kept as typed, and ignored when matching.';
