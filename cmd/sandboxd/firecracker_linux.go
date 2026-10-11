@@ -25,7 +25,7 @@ func newFirecracker(o backendOptions) (backend.Backend, error) {
 		self, _ := os.Executable()
 		agent = filepath.Join(filepath.Dir(self), "sandbox-guestd")
 	}
-	puller := &image.Puller{Logf: o.logf, PlainHTTP: map[string]bool{}}
+	puller := &image.Puller{Logf: o.logf, PlainHTTP: map[string]bool{}, Logins: o.logins}
 	for _, r := range o.insecureRegistries {
 		puller.PlainHTTP[r] = true
 		o.logf("pulling from %s over plain HTTP", r)

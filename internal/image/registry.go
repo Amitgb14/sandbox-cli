@@ -141,6 +141,9 @@ type Puller struct {
 	OS, Arch  string // platform; default linux/runtime.GOARCH
 	MaxBlob   int64  // per blob; default 8 GiB
 	Logf      func(format string, a ...any)
+	// Logins are the operator's registry logins (logins.go); without one,
+	// a pull is anonymous.
+	Logins []Login
 
 	mu     sync.Mutex
 	tokens map[string]string // repo -> bearer token
@@ -422,10 +425,12 @@ func (p *Puller) get(ctx context.Context, r Ref, u, accept string) (*http.Respon
 
 var challengeRE = regexp.MustCompile(`(\w+)="([^"]*)"`)
 
-// authenticate fetches an anonymous pull token for the repository.
+// authenticate fetches a pull token for the repository: with the operator's
+// login for it where there is one, else anonymously.
 func (p *Puller) authenticate(ctx context.Context, r Ref, challenge string) error {
+	login, hasLogin := p.loginFor(r)
 	if !strings.HasPrefix(strings.ToLower(challenge), "bearer ") {
-		return fmt.Errorf("registry %s wants %q, which anonymous pulls cannot answer", r.Registry, challenge)
+		return fmt.Errorf("registry %s wants %q, which sandboxd's pulls cannot answer (a bearer token is all it asks for)", r.Registry, strings.SplitN(challenge, " ", 2)[0])
 	}
 	params := map[string]string{}
 	for _, m := range challengeRE.FindAllStringSubmatch(challenge, -1) {
@@ -445,6 +450,11 @@ func (p *Puller) authenticate(ctx context.Context, r Ref, challenge string) erro
 	if err != nil {
 		return err
 	}
+	if hasLogin {
+		// Only to a realm the registry named, over https (checked above);
+		// Go's client drops it on a redirect to another host.
+		req.SetBasicAuth(login.Username, login.Password)
+	}
 	resp, err := p.client().Do(req)
 	if err != nil {
 		return err
@@ -453,12 +463,15 @@ func (p *Puller) authenticate(ctx context.Context, r Ref, challenge string) erro
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		// Pulls are anonymous, so a registry that will not hand out a pull
+		if hasLogin {
+			return fmt.Errorf("%s/%s: the registry refused the login for %s/%s (token request: %s): no such image, or the login's token cannot read it (on ghcr.io: read:packages, and access to the package); check the name and the token", r.Registry, r.Repo, login.Registry, strings.TrimSuffix(login.Prefix, "/"), resp.Status)
+		}
+		// Without a login a pull is anonymous, so a registry that will not hand out a pull
 		// token is saying the repository is not public. ghcr.io answers 403
 		// both for a private one and for a name that does not exist, a typo
 		// included, before any tag is looked at; "token request: 403" alone
 		// sent people looking at credentials sandboxd never uses.
-		return fmt.Errorf("%s/%s: the registry refused an anonymous pull (token request: %s): no such image, or it is private; check the name, or make it public (sandboxd pulls without credentials)", r.Registry, r.Repo, resp.Status)
+		return fmt.Errorf("%s/%s: the registry refused an anonymous pull (token request: %s): no such image, or it is private; check the name, or make it public, or give the node a login for it (sandboxd --registry-auth-file)", r.Registry, r.Repo, resp.Status)
 	default:
 		return fmt.Errorf("token request: %s", resp.Status)
 	}

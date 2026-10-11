@@ -29,6 +29,9 @@ type registry struct {
 	types     map[string]string
 	tamper    func(path string, body []byte) []byte
 	tokens    atomic.Int32
+	// login, when set, makes the repository private: a token only for a
+	// token request carrying it, user:password.
+	login string
 }
 
 func newRegistry(t *testing.T, arch string) (*registry, string, string) {
@@ -65,6 +68,13 @@ func (r *registry) handler(host *string) http.Handler {
 			if req.URL.Query().Get("scope") != "repository:team/app:pull" {
 				w.WriteHeader(http.StatusForbidden)
 				return
+			}
+			if r.login != "" {
+				u, pw, ok := req.BasicAuth()
+				if !ok || u+":"+pw != r.login {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
 			}
 			r.tokens.Add(1)
 			json.NewEncoder(w).Encode(map[string]string{"token": "t0k"})

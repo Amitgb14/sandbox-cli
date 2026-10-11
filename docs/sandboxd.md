@@ -41,6 +41,7 @@ sudo sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
 | `--state-dir DIR` | `/var/lib/sandboxd` as root, else `$XDG_DATA_HOME/sandboxd` or `~/.local/share/sandboxd` | images and per-sandbox state. Under the jailer it must share a filesystem with the jail: image disks and volumes are hard-linked in. |
 | `--default-image REF` | | the image for requests that name none; overrides the policy file. |
 | `--insecure-registry HOST:PORT` | | a registry to pull from over plain HTTP — a local one (repeatable). |
+| `--registry-auth-file PATH` | | firecracker: logins for private images, each used only for the repositories it names; mode 0600 ([Private images](#private-images)). |
 | `--kernel FILE` | | firecracker: the guest kernel (`vmlinux`). |
 | `--firecracker FILE` | `firecracker` | firecracker: the VMM binary. |
 | `--jailer FILE` | | firecracker: the jailer binary; enables it (root only). |
@@ -107,6 +108,37 @@ ceiling become the allowlist, with the built-in list as the default. How the net
 default and the profiles interact is in
 [self-hosting.md](self-hosting.md#the-network-default) and
 [security/README.md](security/README.md#security-profiles).
+
+## Private images
+
+sandboxd pulls anonymously. For images in a private repository — a
+workstation image you publish for your users on ghcr.io, say — give it a
+login for those repositories:
+
+```yaml
+# /etc/sandboxd/registry-auth.yaml, mode 0600, owned by the user sandboxd runs as
+logins:
+  - registry: ghcr.io
+    repositories: amitgb14/     # every repository under amitgb14 (never a whole registry)
+    username: amitgb14
+    password: ghp_…             # a token that may read packages (on GitHub: read:packages)
+```
+
+```sh
+sandboxd … --registry-auth-file /etc/sandboxd/registry-auth.yaml
+```
+
+- **A login is the operator's.** What it pulls is cached on the node like
+  any image, so every user of this node — every tenant, behind a gateway —
+  may start sandboxes from it. Give it only for images meant for them.
+- It is used only for the repositories it names (the longest match wins),
+  sent only in the token request the registry's challenge points to, over
+  https, and never logged. A file others can read is refused at startup.
+- A pull the registry refuses says whether it was anonymous or which login
+  was refused; a ghcr.io token needs `read:packages` and access to the
+  package.
+- The macos backend pulls through the container runtime and refuses the
+  flag: log the runtime in with `container registry login` instead.
 
 ## What sandboxd refuses at startup
 
