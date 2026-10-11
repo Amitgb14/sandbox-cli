@@ -138,6 +138,8 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/admin/keys", false, g.adminCreateKey)
 	route("GET /v1/admin/keys", false, g.adminListKeys)
 	route("DELETE /v1/admin/keys/{id}", false, g.adminRevokeKey)
+	route("POST /v1/admin/keys/{id}/suspend", false, g.adminSuspendKey)
+	route("POST /v1/admin/keys/{id}/restore", false, g.adminRestoreKey)
 	route("PATCH /v1/admin/keys/{id}", false, g.adminKeyExpiry)
 	route("POST /v1/admin/keys/{id}/reset", false, g.adminResetPassword)
 	route("POST /v1/admin/invites", false, g.adminCreateInvite)

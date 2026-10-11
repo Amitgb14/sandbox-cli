@@ -41,6 +41,10 @@ function Account() {
       <dl className="grid max-w-xl grid-cols-[10rem_1fr] gap-y-1.5 text-sm">
         <dt className="text-muted-foreground">user</dt>
         <dd className="font-mono">{who.user}</dd>
+        <dt className="text-muted-foreground">role</dt>
+        <dd data-testid="account-role">
+          {who.scopes.includes("admin") ? "super admin: every organization on this gateway" : <>admin of <span className="font-mono">{org}</span></>}
+        </dd>
         {who.email && (
           <>
             <dt className="text-muted-foreground">email</dt>

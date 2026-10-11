@@ -86,6 +86,19 @@ func (c *Client) RevokeKey(ctx context.Context, id string) error {
 	return c.json(ctx, http.MethodDelete, "/v1/admin/keys/"+url.PathEscape(id), nil, nil)
 }
 
+// SuspendKey revokes an API key (admin) so that it may still be restored
+// for an hour: refused at once, revoked for good once the hour is out.
+func (c *Client) SuspendKey(ctx context.Context, id string) (KeyInfo, error) {
+	var out KeyInfo
+	return out, c.json(ctx, http.MethodPost, "/v1/admin/keys/"+url.PathEscape(id)+"/suspend", nil, &out)
+}
+
+// RestoreKey takes back a suspension that has not run out (admin).
+func (c *Client) RestoreKey(ctx context.Context, id string) (KeyInfo, error) {
+	var out KeyInfo
+	return out, c.json(ctx, http.MethodPost, "/v1/admin/keys/"+url.PathEscape(id)+"/restore", nil, &out)
+}
+
 // SetKeyExpiry renews or shortens an API key (admin): it stops working
 // secs from now, or never when secs is 0.
 func (c *Client) SetKeyExpiry(ctx context.Context, id string, secs int) (KeyInfo, error) {

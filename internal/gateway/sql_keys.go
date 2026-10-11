@@ -24,20 +24,23 @@ import (
 // keySelect reads keys as k, with their users (u) and home organisations
 // (h). A where clause names k's columns as k.<column>.
 const keySelect = `SELECT k.id, k.hash, u.name, h.key, k.scopes, k.created, k.revoked, k.expires, k.account,
-	u.email, u.password, u.last_login, k.parent
+	u.email, u.password, u.last_login, k.parent, k.restore_until
 	FROM api_keys k JOIN users u ON u.id = k.user_id JOIN orgs h ON h.id = u.org_id `
 
 func scanKey(sc interface{ Scan(...any) error }) (Key, error) {
 	var k Key
-	var created, expires, lastLogin dbTime
+	var created, expires, lastLogin, restore dbTime
 	var email, password, parent sql.NullString
 	var account bool
 	err := sc.Scan(&k.ID, &k.Hash, &k.User, &k.Tenant, jsonCol{&k.Scopes}, &created, &k.Revoked, &expires, &account,
-		&email, &password, &lastLogin, &parent)
+		&email, &password, &lastLogin, &parent, &restore)
 	if err != nil {
 		return Key{}, err
 	}
 	k.Created, k.Expires, k.Parent = created.T, expires.ptr(), parent.String
+	if k.Revoked {
+		k.RestoreUntil = restore.ptr()
+	}
 	if account {
 		k.Email, k.Password, k.LastLogin = email.String, password.String, lastLogin.ptr()
 	}
@@ -93,7 +96,7 @@ func (q *sqlTx) insertKey(ctx context.Context, k Key) error {
 	account := k.Email != ""
 	if account {
 		if _, err := q.exec(ctx, `UPDATE users SET email = NULL, password = NULL WHERE email = ? AND id <> ?
-			AND NOT EXISTS (SELECT 1 FROM api_keys a WHERE a.user_id = users.id AND a.account AND NOT a.revoked)`, k.Email, uid); err != nil {
+			AND NOT EXISTS (SELECT 1 FROM api_keys a WHERE a.user_id = users.id AND a.account AND (NOT a.revoked OR a.restore_until > ?))`, k.Email, uid, q.s.t(q.s.stamp())); err != nil {
 			return err
 		}
 		_, err := q.exec(ctx, "UPDATE users SET email = ?, password = ?, last_login = ? WHERE id = ?",
@@ -196,7 +199,8 @@ func (s *sqlStore) KeyBySecret(ctx context.Context, secret string) (Key, bool, e
 
 func (s *sqlStore) RevokeKey(ctx context.Context, id string) error {
 	return s.tx(ctx, func(q *sqlTx) error {
-		r, err := q.exec(ctx, "UPDATE api_keys SET revoked = ? WHERE id = ?", true, id)
+		// For good, a suspension's too: nothing is left to restore.
+		r, err := q.exec(ctx, "UPDATE api_keys SET revoked = ?, restore_until = NULL WHERE id = ?", true, id)
 		if err != nil {
 			return err
 		}
@@ -402,15 +406,15 @@ func (q *sqlTx) pruneInvites(ctx context.Context, now time.Time) error {
 // already, or whose name an organisation holds for someone else.
 func (q *sqlTx) accountFree(ctx context.Context, email, user, tenant string) error {
 	var n int
-	if err := q.row(ctx, "SELECT COUNT(*) FROM api_keys k JOIN users u ON u.id = k.user_id WHERE u.email = ? AND k.account AND NOT k.revoked",
-		email).Scan(&n); err != nil {
+	if err := q.row(ctx, "SELECT COUNT(*) FROM api_keys k JOIN users u ON u.id = k.user_id WHERE u.email = ? AND k.account AND (NOT k.revoked OR k.restore_until > ?)",
+		email, q.s.t(q.s.stamp())).Scan(&n); err != nil {
 		return storeErr(err)
 	}
 	if n > 0 {
 		return ErrEmailTaken
 	}
 	if err := q.row(ctx, `SELECT COUNT(*) FROM api_keys k JOIN users u ON u.id = k.user_id JOIN orgs h ON h.id = u.org_id
-		WHERE u.name = ? AND h.key = ? AND k.account AND NOT k.revoked`, user, orgKeyOf(tenant)).Scan(&n); err != nil {
+		WHERE u.name = ? AND h.key = ? AND k.account AND (NOT k.revoked OR k.restore_until > ?)`, user, orgKeyOf(tenant), q.s.t(q.s.stamp())).Scan(&n); err != nil {
 		return storeErr(err)
 	}
 	if n > 0 {

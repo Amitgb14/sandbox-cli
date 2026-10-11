@@ -676,6 +676,22 @@ sandbox-gateway --state-dir … serve … \
 
 ### Revoking
 
+**Studio's Revoke suspends.** It asks first, then calls
+`POST /v1/admin/keys/{id}/suspend` (`sandbox-cli gateway keys suspend ID`):
+the user is refused from that moment — signing in, their keys, SSH — their
+sign-ins end and their running jobs are cancelled, exactly as a revocation
+does. For an hour the super admin can take it back (**Restore**, `gateway keys
+restore ID`); after that it is a revocation for good. Until then the user's
+address and name stay theirs, so an invite cannot take them. `keys revoke`
+and `DELETE` revoke for good at once.
+
+**One kind of account.** Studio's Users screen gives every account the same
+scopes — everything in its own organization (`sandbox:read`, `create`,
+`delete`, `ssh`, `secrets:write`, `org:create`) — so each user is the admin of
+their own organization and of nothing else. The `admin` scope is the super
+admin's, gateway-wide, and is given only from the CLI (`gateway keys create
+--scope admin`); only a super admin sees the Users screen.
+
 Revoking a key (`DELETE /v1/admin/keys/{id}`, or `keys revoke` with the
 gateway stopped) ends what is already running, not only what starts next:
 open API streams, SSH connections and running jobs, before the call returns,

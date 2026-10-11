@@ -48,7 +48,7 @@ test("an invite link signs in, leaves the address bar, and no request carries a 
   await page.reload();
   await expect(page.locator("[data-sidebar=sidebar]").getByText("hosted · hana@hana")).toBeVisible();
   // No admin screens and no token paste box in a hosted build.
-  await expect(page.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Users & keys" })).toHaveCount(0);
+  await expect(page.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Users", exact: true })).toHaveCount(0);
   await expect(page.getByText("Studio needs its token")).toHaveCount(0);
   expect(sent).toEqual([]);
 });
@@ -122,7 +122,7 @@ test("an admin adds a demo user by invite link, and expiring their key ends thei
   const { gatewayURL, adminKey } = e2eState();
   hosted();
   await page.goto(`${base}/#key=${adminKey}`);
-  await expect(page.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Users & keys" })).toBeVisible();
+  await expect(page.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Users", exact: true })).toBeVisible();
   expect(page.url()).not.toContain("key=");
 
   await page.goto(`${base}/admin/keys/`);
@@ -131,10 +131,13 @@ test("an admin adds a demo user by invite link, and expiring their key ends thei
   await page.getByRole("button", { name: "Save policy" }).click();
   await expect(page.getByRole("cell", { name: "trial", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Demo user" }).click();
+  // One kind of account: what differs is the policy and the expiry picked.
   await page.getByLabel("User", { exact: true }).fill("jun");
   await page.getByLabel("Tenant", { exact: true }).fill("jun");
-  await expect(page.getByRole("combobox", { name: "Key expires" })).toHaveText("expires in 7 days");
+  await page.getByRole("combobox", { name: "Policy", exact: true }).click();
+  await page.getByRole("option", { name: "trial" }).click();
+  await page.getByRole("combobox", { name: "Key expires" }).click();
+  await page.getByRole("option", { name: "expires in 7 days" }).click();
   await page.getByRole("button", { name: "Issue key" }).click();
   const key = (await page.getByTestId("new-key-secret").textContent())!;
   const invite = (await page.getByTestId("new-key-invite").textContent())!;
@@ -149,12 +152,11 @@ test("an admin adds a demo user by invite link, and expiring their key ends thei
   await jun.goto(invite);
   await expect(jun.locator("[data-sidebar=sidebar]").getByText("hosted · jun@jun")).toBeVisible();
   await jun.goto(`${base}/launch/`);
-  // The Demo preset picks "demo" where another test made one, else "trial":
-  // 30 minutes either way.
-  await expect(jun.getByTestId("policy-lifetime")).toHaveText(/policy, (demo|trial), a sandbox ends 30 minutes after it starts/);
+  await expect(jun.getByTestId("policy-lifetime")).toHaveText(/policy, trial, a sandbox ends 30 minutes after it starts/);
   await jun.goto(`${base}/account/`);
   await expect(jun.getByTestId("account-policy")).toContainText("ends 30 min after it starts");
-  await expect(jun.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Users & keys" })).toHaveCount(0);
+  await expect(jun.getByTestId("account-role")).toHaveText("admin of jun");
+  await expect(jun.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Users", exact: true })).toHaveCount(0);
   const made = await fetch(`${gatewayURL}/v1/sandboxes`, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
@@ -182,9 +184,8 @@ test("an admin invites a person by email, who chooses a password and signs in wi
   const { adminKey } = e2eState();
   hosted();
   await page.goto(`${base}/#key=${adminKey}`);
-  await expect(page.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Users & keys" })).toBeVisible();
+  await expect(page.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Users", exact: true })).toBeVisible();
   await page.goto(`${base}/admin/keys/`);
-  await page.getByRole("button", { name: "Member" }).click();
   await page.getByLabel("Email", { exact: true }).fill("kim@example.com");
   await expect(page.getByLabel("User", { exact: true })).toHaveValue("kim");
   await page.getByLabel("Tenant", { exact: true }).fill("kim");

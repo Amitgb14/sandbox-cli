@@ -233,6 +233,21 @@ in `_old/` as reference, to be ported where this design still wants it.
   `gateway.service` one only the gateway sets. Studio's service Deploy and
   Edit refuse a one-item command holding a space (`["sleep 40"]`, a program
   no image has) and show the two spellings that run it.
+- **Revoking suspends first, for an hour.** `POST /v1/admin/keys/{id}/suspend`
+  (`sandbox-cli gateway keys suspend ID`) revokes a key at once — sign-in,
+  keys, SSH refused, sign-ins ended, running jobs cancelled — and
+  `…/restore` (`gateway keys restore ID`) takes it back for an hour, after
+  which it is revoked for good. Meanwhile the account's address and user
+  stay its own. An admin cannot suspend the key or account they act with.
+  Studio's Revoke asks in a dialog and suspends; a suspended user shows when
+  it becomes final, with **Restore**.
+- **One kind of account in Studio.** The Users screen (was Users & keys,
+  under Super admin) invites every user with the same scopes, everything in
+  their own organization, so each is the admin of their organization only;
+  the demo and member presets and the scope checkboxes are gone, and the
+  policy and expiry are what differ. It lists each user's organization,
+  scopes, policy and expiry. The gateway-wide `admin` scope is the super
+  admin's, given from the CLI. The Account page says which you are.
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and
   `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)
   list the images on every node with where each is, download one to every

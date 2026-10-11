@@ -12,7 +12,7 @@ import { e2eState, gatewayStudio, HOSTED_PORT, type GatewayStudio } from "./stat
  */
 
 const TENANT = ["Jobs", "Services", "Secrets", "SSH", "Account"];
-const ADMIN = ["Nodes", "Lost sandboxes", "Users & keys", "Allowlist groups", "Audit", "All organizations"];
+const ADMIN = ["Nodes", "Lost sandboxes", "Users", "Allowlist groups", "Audit", "All organizations"];
 const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
 
 /** Opens a gateway Studio with its token, once whoami has answered. */
@@ -402,9 +402,18 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
   expect(await page.content()).not.toContain(value);
   const row = page.getByRole("row").filter({ hasText: "carol" });
   await expect(row).toBeVisible();
-  page.once("dialog", (d) => d.accept());
+  await expect(page.getByTestId("account-access")).toContainText("admin of their own organization");
+  // Revoking asks, then suspends: restorable for an hour.
   await row.getByRole("button", { name: "Revoke" }).click();
-  await expect(row.getByText("revoked")).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "Revoke carol?" });
+  await expect(dialog).toContainText("you can restore it until then");
+  await dialog.getByRole("button", { name: "Revoke" }).click();
+  await expect(page.getByTestId("suspended-carol")).toContainText("suspended · revoked for good");
+  const r = await fetch(`${e2eState().gatewayURL}/v1/whoami`, { headers: { Authorization: `Bearer ${value}` } });
+  expect(r.status).toBe(401);
+  await page.getByRole("row").filter({ hasText: "carol" }).getByRole("button", { name: "Restore" }).click();
+  await expect(page.getByTestId("suspended-carol")).toHaveCount(0);
+  expect((await fetch(`${e2eState().gatewayURL}/v1/whoami`, { headers: { Authorization: `Bearer ${value}` } })).status).toBe(200);
 
   await page.goto(`${base}/admin/audit/`);
   await expect(page.getByRole("cell", { name: "GET /v1/whoami" }).first()).toBeVisible();

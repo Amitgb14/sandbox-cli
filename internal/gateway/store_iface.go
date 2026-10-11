@@ -38,6 +38,10 @@ type Store interface {
 	KeyBySecret(ctx context.Context, secret string) (Key, bool, error)
 	RevokeKey(ctx context.Context, id string) error
 	SetKeyExpiry(ctx context.Context, id string, at *time.Time) (Key, error)
+	// SuspendKey revokes a key restorably until until; RestoreKey takes it
+	// back (keys_suspend.go).
+	SuspendKey(ctx context.Context, id string, until time.Time) (Key, error)
+	RestoreKey(ctx context.Context, id string) (Key, error)
 	Keys(ctx context.Context) ([]Key, error)
 	// KeysOfUser is every key whose user is named user, in any tenant.
 	KeysOfUser(ctx context.Context, user string) ([]Key, error)
