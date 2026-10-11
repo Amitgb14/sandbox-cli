@@ -784,13 +784,30 @@ To give users Studio without installing anything, serve it with
 
 ## Images
 
-A node's images — `GET`, `POST` and `DELETE /v1/images`, `sandbox-cli image`,
-Studio's Images screen — are its operator's, managed on the node itself
-([self-hosting.md](self-hosting.md#images)). The gateway answers them `501
-unsupported` and does not report the `images` capability: an install fills a
-node's disk for every tenant on it. A gateway catalog of images run by admin
-keys, which keeps nodes filled, is not done yet. Sandboxes still prefer a node
-that has their image (below).
+A node's images are its disk, shared by every tenant on it, so through a
+gateway only an admin manages them, once for the fleet:
+
+```sh
+sandbox-cli gateway images pull ghcr.io/amitgb14/sandbox-desktop:edge   # every node taking new sandboxes
+sandbox-cli gateway images ls                                           # each image, and which nodes have it
+sandbox-cli gateway images rm python:3.13-slim                          # from every node that has it
+```
+
+- **A pull** goes to every healthy node that is not cordoned, and each node's
+  own policy decides whether it may install the image. A node that refuses is
+  named in the answer; the others go ahead.
+- **A removal** is refused, removing nothing, while any node still needs the
+  image: a sandbox there starts from it, it is the node's default or pooled
+  image, or it is being installed. Then it goes to every node that has it.
+- **Studio's Images screen** is the same for an admin key, with where each
+  image is. Any other key sees what the nodes have built, read-only
+  (`GET /v1/fleet/images`). The plain `/v1/images` routes and `sandbox-cli
+  image` stay `501 unsupported` through a gateway, which does not report the
+  `images` capability.
+- A node added later has none of them until a sandbox asks or the admin
+  pulls again. Sandboxes still prefer a node that has their image (below).
+
+The routes are in [api/v1.md](api/v1.md).
 
 ## Scheduling and failure
 

@@ -97,6 +97,8 @@ export interface SandboxImage {
   pooled?: boolean;
   progress?: { phase: "pulling" | "building"; done?: number; total?: number };
   error?: string;
+  /** Where it is, in a gateway's admin listing: each node's state, or what it answered. */
+  nodes?: { node: string; state?: string; error?: string }[];
 }
 
 export interface Process {

@@ -108,8 +108,7 @@ export const NAV: NavGroup[] = [
         title: "Images",
         href: "/images",
         icon: Layers3,
-        need: "sandboxd",
-        hint: "Images sandboxes start from: what is installed and what uses it; download one ahead of use, or remove one",
+        hint: "Images sandboxes start from: what is installed and what uses it; download one ahead of use, or remove one (a gateway's admin)",
       },
     ],
   },
@@ -170,7 +169,7 @@ export const NAV: NavGroup[] = [
 /** Whether the caller may see a nav item's screen at all. */
 export function allowed(item: Pick<NavItem, "need" | "scope">, caller: Caller): boolean {
   if (item.need === "gateway" && caller.kind !== "gateway") return false;
-  // A gateway does not route a node's images yet (its admin catalog is to come).
+  // A screen of a plain sandboxd's own, which no gateway offers.
   if (item.need === "sandboxd" && caller.kind !== "sandboxd") return false;
   if (item.need === "admin" && !isAdmin(caller)) return false;
   if (item.scope && !can(caller, item.scope)) return false;

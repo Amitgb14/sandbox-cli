@@ -207,10 +207,15 @@ export function useFleetImages(enabled = true) {
   });
 }
 
-export function useImages(enabled = true) {
+/**
+ * The images at path: a sandboxd's own (/v1/images), a gateway's nodes' for
+ * its admin (/v1/admin/images, the same shape with where each is), or what a
+ * gateway's nodes have built, read-only (/v1/fleet/images).
+ */
+export function useImages(enabled = true, path = "/v1/images") {
   return useQuery({
-    queryKey: keys.images,
-    queryFn: async () => (await apiFetch<{ images: SandboxImage[] }>("/v1/images")).images,
+    queryKey: [...keys.images, path],
+    queryFn: async () => (await apiFetch<{ images: SandboxImage[] }>(path)).images,
     enabled,
     retry: false,
     refetchInterval: (q) => (q.state.data?.some((i) => i.state === "installing") ? 1_000 : 10_000),
@@ -448,17 +453,17 @@ export function useDeleteAgentKey() {
   );
 }
 
-/** Starts installing an image; useImages follows it. */
-export function useInstallImage() {
+/** Starts installing an image, at path as for useImages; useImages follows it. */
+export function useInstallImage(path = "/v1/images") {
   return useInvalidating(
-    (image: string) => apiFetch<SandboxImage>("/v1/images", { method: "POST", json: { image } }),
-    () => [[...keys.images]],
+    (image: string) => apiFetch<SandboxImage>(path, { method: "POST", json: { image } }),
+    () => [[...keys.images], [...keys.fleetImages]],
   );
 }
 
-export function useRemoveImage() {
+export function useRemoveImage(path = "/v1/images") {
   return useInvalidating(
-    (image: string) => apiFetch<{ image: string; freed_bytes: number }>(`/v1/images?image=${encodeURIComponent(image)}`, { method: "DELETE" }),
-    () => [[...keys.images], [...keys.node]],
+    (image: string) => apiFetch<{ image: string; freed_bytes: number }>(`${path}?image=${encodeURIComponent(image)}`, { method: "DELETE" }),
+    () => [[...keys.images], [...keys.fleetImages], [...keys.node]],
   );
 }

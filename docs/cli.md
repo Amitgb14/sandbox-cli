@@ -54,6 +54,10 @@ Global flags:
 | [`sandbox-cli gateway egress-groups list`](#sandbox-cli-gateway-egress-groups-list) | List the groups any user may name |
 | [`sandbox-cli gateway egress-groups remove`](#sandbox-cli-gateway-egress-groups-remove) | Remove a group no running job or service names |
 | [`sandbox-cli gateway egress-groups set`](#sandbox-cli-gateway-egress-groups-set) | Create or replace a group; a change holds for sandboxes created after it |
+| [`sandbox-cli gateway images`](#sandbox-cli-gateway-images) | Images on the gateway's nodes: list, download ahead of use, remove (admin key) |
+| [`sandbox-cli gateway images ls`](#sandbox-cli-gateway-images-ls) | List the nodes' images, and which nodes have each |
+| [`sandbox-cli gateway images pull`](#sandbox-cli-gateway-images-pull) | Have every node that takes new sandboxes download and install an image |
+| [`sandbox-cli gateway images rm`](#sandbox-cli-gateway-images-rm) | Remove images from every node, where no node still needs them |
 | [`sandbox-cli gateway invites`](#sandbox-cli-gateway-invites) | Invite people by email to sign in to hosted Studio with a password (admin key) |
 | [`sandbox-cli gateway invites create`](#sandbox-cli-gateway-invites-create) | Make an invite; its link is printed once |
 | [`sandbox-cli gateway invites list`](#sandbox-cli-gateway-invites-list) | List invites not yet used |
@@ -500,7 +504,7 @@ and restart its sandboxd, uncordon NODE. The gateway keeps a node it cordoned
 cordoned across the node's restart, until it is uncordoned here.
 ```
 
-Subcommands: [`audit`](#sandbox-cli-gateway-audit), [`cordon`](#sandbox-cli-gateway-cordon), [`drain`](#sandbox-cli-gateway-drain), [`egress-groups`](#sandbox-cli-gateway-egress-groups), [`invites`](#sandbox-cli-gateway-invites), [`keys`](#sandbox-cli-gateway-keys), [`lost`](#sandbox-cli-gateway-lost), [`nodes`](#sandbox-cli-gateway-nodes), [`policies`](#sandbox-cli-gateway-policies), [`uncordon`](#sandbox-cli-gateway-uncordon).
+Subcommands: [`audit`](#sandbox-cli-gateway-audit), [`cordon`](#sandbox-cli-gateway-cordon), [`drain`](#sandbox-cli-gateway-drain), [`egress-groups`](#sandbox-cli-gateway-egress-groups), [`images`](#sandbox-cli-gateway-images), [`invites`](#sandbox-cli-gateway-invites), [`keys`](#sandbox-cli-gateway-keys), [`lost`](#sandbox-cli-gateway-lost), [`nodes`](#sandbox-cli-gateway-nodes), [`policies`](#sandbox-cli-gateway-policies), [`uncordon`](#sandbox-cli-gateway-uncordon).
 
 Flags:
 
@@ -608,6 +612,56 @@ Flags:
 |---|---|---|
 | `--description string` |  | what the group is for |
 | `--host stringArray` |  | a host the group allows, such as example.com or *.example.com (repeatable; the whole list) |
+
+### sandbox-cli gateway images
+
+Images on the gateway's nodes: list, download ahead of use, remove (admin key).
+
+```text
+sandbox-cli gateway images [command]
+```
+
+```text
+The images the gateway's nodes start sandboxes from, once for the fleet. A pull
+goes to every node that takes new sandboxes (healthy, not cordoned), each as
+its own policy allows. A removal is refused, removing nothing, while any node
+still needs the image (a sandbox starts from it, or it is the node's default
+or pooled image), and then takes it from every node that has it.
+```
+
+Subcommands: [`ls`](#sandbox-cli-gateway-images-ls), [`pull`](#sandbox-cli-gateway-images-pull), [`rm`](#sandbox-cli-gateway-images-rm).
+
+Examples:
+
+```sh
+sandbox-cli gateway images pull ghcr.io/amitgb14/sandbox-desktop:edge
+sandbox-cli gateway images ls
+sandbox-cli gateway images rm python:3.13-slim
+```
+
+### sandbox-cli gateway images ls
+
+List the nodes' images, and which nodes have each.
+
+```text
+sandbox-cli gateway images ls
+```
+
+### sandbox-cli gateway images pull
+
+Have every node that takes new sandboxes download and install an image.
+
+```text
+sandbox-cli gateway images pull IMAGE
+```
+
+### sandbox-cli gateway images rm
+
+Remove images from every node, where no node still needs them.
+
+```text
+sandbox-cli gateway images rm IMAGE...
+```
 
 ### sandbox-cli gateway invites
 
@@ -918,8 +972,8 @@ A sandboxd pulls an image the first time a sandbox asks for it. These let its
 operator do that ahead of time, see what is installed and what uses it, and
 remove what nothing does. On Linux an install also builds the image's root
 disk, which is most of the first sandbox's wait. The policy's images list, where
-there is one, limits what may be installed. Through a gateway they are not
-offered: a node's images are its operator's.
+there is one, limits what may be installed. Through a gateway these are not
+offered; its admin manages the nodes' images with sandbox-cli gateway images.
 ```
 
 Subcommands: [`ls`](#sandbox-cli-image-ls), [`pull`](#sandbox-cli-image-pull), [`rm`](#sandbox-cli-image-rm).

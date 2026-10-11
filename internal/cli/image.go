@@ -15,7 +15,8 @@ import (
 )
 
 // newImageCmd manages the images a sandboxd starts sandboxes from: its
-// operator's, so a gateway answers these as unsupported.
+// operator's, so a gateway answers these as unsupported (its admin has
+// sandbox-cli gateway images).
 func newImageCmd() *cobra.Command {
 	var ctxFlag string
 	cmd := &cobra.Command{
@@ -25,8 +26,8 @@ func newImageCmd() *cobra.Command {
 			"operator do that ahead of time, see what is installed and what uses it, and\n" +
 			"remove what nothing does. On Linux an install also builds the image's root\n" +
 			"disk, which is most of the first sandbox's wait. The policy's images list, where\n" +
-			"there is one, limits what may be installed. Through a gateway they are not\n" +
-			"offered: a node's images are its operator's.",
+			"there is one, limits what may be installed. Through a gateway these are not\n" +
+			"offered; its admin manages the nodes' images with sandbox-cli gateway images.",
 	}
 	cmd.PersistentFlags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
 

@@ -75,11 +75,15 @@ test("a tenant key sees the tenant screens and not the admin ones, by sidebar or
     await expect(page.getByRole("heading", { name: "Not available" })).toBeVisible();
   }
   expect(seen.filter((p) => p.startsWith("/api/v1/admin"))).toEqual([]);
-  // A node's images are its operator's: no gateway key is offered them yet.
-  await expect(nav(page).getByRole("link", { name: "Images", exact: true })).toHaveCount(0);
-  await page.goto(`${base}/images/`);
-  await expect(page.getByText("a gateway does not offer it")).toBeVisible();
-  expect(seen.filter((p) => p.startsWith("/api/v1/images"))).toEqual([]);
+  // The nodes' images are the gateway's admin's: a tenant reads what the
+  // nodes have built, and is offered no download or removal.
+  await nav(page).getByRole("link", { name: "Images", exact: true }).click();
+  await expect(page.locator("main h1")).toHaveText("Images");
+  await expect(page.getByText("The gateway's admin manages them.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download image" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Remove / })).toHaveCount(0);
+  expect(seen.filter((p) => p.startsWith("/api/v1/fleet/images")).length).toBeGreaterThan(0);
+  expect(seen.filter((p) => p.startsWith("/api/v1/images") || p.startsWith("/api/v1/admin"))).toEqual([]);
 
   await page.goto(`${base}/account/`);
   await expect(page.locator("main").getByText("alice", { exact: true })).toBeVisible();
@@ -399,6 +403,25 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
 
   await page.goto(`${base}/admin/audit/`);
   await expect(page.getByRole("cell", { name: "GET /v1/whoami" }).first()).toBeVisible();
+});
+
+test("an admin downloads an image to the gateway's nodes, and removes it from them", async ({ page }) => {
+  const base = await open(page, "gw-admin", "ops");
+  await page.goto(`${base}/images/`);
+  await expect(page.locator("main h1")).toHaveText("Images");
+  const ref = "registry.example/e2e/gw-tool:1.0";
+  await page.getByRole("button", { name: "Download image" }).click();
+  await expect(page.getByRole("dialog")).toContainText("every node that takes new sandboxes");
+  await page.getByRole("textbox", { name: "Image" }).fill(ref);
+  await page.getByRole("button", { name: "Download", exact: true }).click();
+  const row = page.getByRole("list", { name: "Images" }).getByRole("listitem").filter({ hasText: ref });
+  await expect(row.getByText("installed", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(row.getByTestId("image-nodes")).toHaveText("on n1");
+
+  await row.getByRole("button", { name: `Remove ${ref}` }).click();
+  await expect(page.getByRole("dialog")).toContainText("from every node that has it");
+  await page.getByRole("dialog").getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(row).toHaveCount(0);
 });
 
 test("an admin gives a user a policy, and moves a sandbox's end both ways", async ({ page }) => {

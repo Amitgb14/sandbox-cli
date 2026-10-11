@@ -860,6 +860,16 @@ type Image struct {
 	Pooled   bool           `json:"pooled,omitempty"`
 	Progress *ImageProgress `json:"progress,omitempty"`
 	Error    string         `json:"error,omitempty"`
+	// Nodes is where the image is, in a gateway's admin listing (GET
+	// /v1/admin/images): each node's own state, or the error it answered.
+	Nodes []ImageNode `json:"nodes,omitempty"`
+}
+
+// ImageNode is one node's part of an image a gateway lists.
+type ImageNode struct {
+	Node  string `json:"node"`
+	State string `json:"state,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // Image states.

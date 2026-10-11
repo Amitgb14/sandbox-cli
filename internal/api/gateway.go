@@ -172,6 +172,28 @@ func (c *Client) FleetImages(ctx context.Context) ([]Image, error) {
 	return out.Images, err
 }
 
+// AdminImages lists the images on a gateway's nodes, each with where it is
+// (Image.Nodes) and its state there (admin).
+func (c *Client) AdminImages(ctx context.Context) ([]Image, error) {
+	var out ImageList
+	err := c.json(ctx, http.MethodGet, "/v1/admin/images", nil, &out)
+	return out.Images, err
+}
+
+// AdminInstallImage has every node that takes new sandboxes download and
+// install ref, each as its own policy allows (admin).
+func (c *Client) AdminInstallImage(ctx context.Context, ref string) (Image, error) {
+	var out Image
+	return out, c.json(ctx, http.MethodPost, "/v1/admin/images", InstallImageRequest{Image: ref}, &out)
+}
+
+// AdminRemoveImage removes ref from every node that has it, or from none
+// when one still needs it (admin).
+func (c *Client) AdminRemoveImage(ctx context.Context, ref string) (RemovedImage, error) {
+	var out RemovedImage
+	return out, c.json(ctx, http.MethodDelete, "/v1/admin/images?image="+url.QueryEscape(ref), nil, &out)
+}
+
 // CreateInvite makes a sign-up link for an email address (admin). The token
 // is returned once.
 func (c *Client) CreateInvite(ctx context.Context, req CreateInviteRequest) (CreatedInvite, error) {

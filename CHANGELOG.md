@@ -228,6 +228,13 @@ in `_old/` as reference, to be ported where this design still wants it.
   /v1/services/{name}?keep_env=1` keeps the service's env, for a spec read
   back from a `GET`, which holds env names only. Studio's service page has
   **Redeploy** and **Edit spec**, which uses it.
+- **A gateway's admin manages the nodes' images.** `GET`, `POST` and
+  `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)
+  list the images on every node with where each is, download one to every
+  node that takes new sandboxes, each under its own policy, and remove one
+  from every node, refused while any node still needs it. Studio shows
+  Images through a gateway too: an admin downloads and removes there, any
+  other key sees what the nodes have built, read-only.
 
 **Added:**
 
