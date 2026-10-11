@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -155,7 +156,7 @@ func checkServiceSpec(sp *api.ServiceSpec, tenant string) *specError {
 // secrets it asked for is not the service that was asked for. A secret
 // removed later is the replica's create failing, said in the service's
 // error, never a replica started without it.
-func (g *Gateway) checkServiceSecrets(sp api.ServiceSpec, tenant string) *specError {
+func (g *Gateway) checkServiceSecrets(ctx context.Context, sp api.ServiceSpec, tenant string) *specError {
 	if len(sp.Secrets) == 0 {
 		return nil
 	}
@@ -163,7 +164,9 @@ func (g *Gateway) checkServiceSecrets(sp api.ServiceSpec, tenant string) *specEr
 		return &specError{http.StatusNotImplemented, api.CodeUnsupported, ErrNoSecretsKey.Error()}
 	}
 	for _, name := range sp.Secrets {
-		if _, ok := g.store.SealedSecret(tenant, name); !ok {
+		if _, ok, err := g.store.SealedSecret(ctx, tenant, name); err != nil {
+			return &specError{http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error()}
+		} else if !ok {
 			return badServiceSpec("secret %s does not exist (sandbox-cli secret set %s)", name, name)
 		}
 	}
@@ -216,9 +219,9 @@ type service struct {
 
 func svcKey(tenant, name string) string { return tenant + "\x00" + name }
 
-func newServiceCtl(st *FileStore) *serviceCtl {
+func newServiceCtl(records []serviceRecord) *serviceCtl {
 	c := &serviceCtl{svcs: map[string]*service{}, kick: make(chan struct{}, 1)}
-	for _, r := range st.Services() {
+	for _, r := range records {
 		c.svcs[svcKey(r.Tenant, r.Name)] = &service{rec: r, health: map[string]*replicaHealth{}}
 	}
 	return c
@@ -276,6 +279,7 @@ func (g *Gateway) lookupService(w http.ResponseWriter, r *http.Request, p Princi
 }
 
 func (g *Gateway) createService(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeCreate) {
 		return
 	}
@@ -287,7 +291,7 @@ func (g *Gateway) createService(w http.ResponseWriter, r *http.Request, p Princi
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
-	if e := g.checkServiceSecrets(sp, p.Tenant); e != nil {
+	if e := g.checkServiceSecrets(r.Context(), sp, p.Tenant); e != nil {
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
@@ -304,7 +308,7 @@ func (g *Gateway) createService(w http.ResponseWriter, r *http.Request, p Princi
 		writeErr(w, http.StatusConflict, api.CodeConflict, "a service named "+sp.Name+" already exists in this tenant")
 		return
 	}
-	if err := g.store.PutService(s.rec); err != nil {
+	if err := g.store.PutService(ctx, s.rec); err != nil {
 		ctl.mu.Unlock()
 		g.logf("recording service %s: %v", sp.Name, err)
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the service could not be recorded")
@@ -351,6 +355,7 @@ func (g *Gateway) getService(w http.ResponseWriter, r *http.Request, p Principal
 // rollout to a new revision; a change to the count, to public or to the
 // spread applies at once.
 func (g *Gateway) updateService(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeCreate) {
 		return
 	}
@@ -380,7 +385,7 @@ func (g *Gateway) updateService(w http.ResponseWriter, r *http.Request, p Princi
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
-	if e := g.checkServiceSecrets(sp, s.rec.Tenant); e != nil {
+	if e := g.checkServiceSecrets(r.Context(), sp, s.rec.Tenant); e != nil {
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
@@ -399,7 +404,7 @@ func (g *Gateway) updateService(w http.ResponseWriter, r *http.Request, p Princi
 	}
 	rec.Spec = sp
 	rec.Updated = time.Now().UTC()
-	if err := g.store.PutService(rec); err != nil {
+	if err := g.store.PutService(ctx, rec); err != nil {
 		g.logf("recording service %s: %v", sp.Name, err)
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the service could not be recorded")
 		return
@@ -410,6 +415,7 @@ func (g *Gateway) updateService(w http.ResponseWriter, r *http.Request, p Princi
 }
 
 func (g *Gateway) scaleService(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeCreate) {
 		return
 	}
@@ -434,7 +440,7 @@ func (g *Gateway) scaleService(w http.ResponseWriter, r *http.Request, p Princip
 	rec := s.rec.clone()
 	rec.Spec.Replicas = req.Replicas
 	rec.Updated = time.Now().UTC()
-	if err := g.store.PutService(rec); err != nil {
+	if err := g.store.PutService(ctx, rec); err != nil {
 		g.logf("recording service %s: %v", rec.Name, err)
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the service could not be recorded")
 		return
@@ -448,6 +454,7 @@ func (g *Gateway) scaleService(w http.ResponseWriter, r *http.Request, p Princip
 // queued for termination in the same write that removes the service, so a
 // replica whose node is down now is terminated when it answers again.
 func (g *Gateway) deleteService(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeCreate) || !need(w, p, ScopeDelete) {
 		return
 	}
@@ -465,7 +472,7 @@ func (g *Gateway) deleteService(w http.ResponseWriter, r *http.Request, p Princi
 	for _, m := range s.rec.Members {
 		ids = append(ids, m.Sandbox)
 	}
-	if err := g.store.DeleteService(s.rec.Tenant, s.rec.Name, ids); err != nil {
+	if err := g.store.DeleteService(ctx, s.rec.Tenant, s.rec.Name, ids); err != nil {
 		s.mu.Unlock()
 		g.logf("deleting service %s: %v", s.rec.Name, err)
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the service could not be deleted")

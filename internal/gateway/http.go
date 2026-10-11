@@ -61,8 +61,12 @@ func (g *Gateway) Handler() http.Handler {
 
 	// A node's images are its operator's: an install fills that node's disk
 	// for every tenant on it. The gateway's own catalog, run by admin keys,
-	// is not done yet, so the fleet has no images capability and these are
-	// refused as on any endpoint without it, rather than forwarded.
+	// is not done yet, so the fleet has no images capability and installing
+	// or removing one is refused as on any endpoint without it, rather than
+	// forwarded. What the nodes have built is listed at an endpoint of the
+	// gateway's own (images.go), so GET /v1/images keeps the answer every
+	// endpoint without the capability gives.
+	route("GET /v1/fleet/images", false, g.listImages)
 	for _, p := range []string{"GET /v1/images", "POST /v1/images", "DELETE /v1/images"} {
 		route(p, false, func(w http.ResponseWriter, _ *http.Request, _ Principal) {
 			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "images are managed on each node by its operator; this gateway does not manage them")
@@ -170,7 +174,14 @@ func (g *Gateway) guard(raw bool, next handlerFunc) http.Handler {
 			writeErr(w, http.StatusForbidden, api.CodeForbiddenOrigin, "requests from this origin are not accepted")
 			return
 		}
-		p, ok := g.authenticate(r)
+		p, ok, err := g.authenticate(r)
+		if err != nil {
+			// Not 401: a client that drops its credential on 401 (hosted
+			// Studio ends the session) must not, for a database that did
+			// not answer.
+			g.writeStoreErr(w, err)
+			return
+		}
 		if !ok {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeErr(w, http.StatusUnauthorized, api.CodeUnauthorized, "missing or unknown API key")
@@ -210,16 +221,17 @@ func (g *Gateway) originAllowed(r *http.Request) bool {
 
 // authenticate turns the bearer key into a principal. The key's secret is
 // never logged; its id is what names it.
-func (g *Gateway) authenticate(r *http.Request) (Principal, bool) {
+func (g *Gateway) authenticate(r *http.Request) (Principal, bool, error) {
+	ctx := r.Context()
 	secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || secret == "" {
-		return Principal{}, false
+		return Principal{}, false, nil
 	}
-	k, ok := g.store.KeyBySecret(secret)
-	if !ok {
-		return Principal{}, false
+	k, ok, err := g.store.KeyBySecret(ctx, secret)
+	if err != nil || !ok {
+		return Principal{}, false, err
 	}
-	return Principal{User: k.User, Tenant: k.Tenant, KeyTenant: k.Tenant, KeyID: k.ID, Scopes: k.Scopes}, true
+	return Principal{User: k.User, Tenant: k.Tenant, KeyTenant: k.Tenant, KeyID: k.ID, Scopes: k.Scopes}, true, nil
 }
 
 func checkContentType(r *http.Request, raw bool) error {
@@ -283,6 +295,8 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 func writeRouteErr(w http.ResponseWriter, err error, scope string) {
 	var ae *api.Error
 	switch {
+	case errors.Is(err, ErrStore):
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error())
 	case errors.Is(err, ErrUnauthenticated):
 		writeErr(w, http.StatusUnauthorized, api.CodeUnauthorized, "missing or unknown API key")
 	case errors.Is(err, ErrForbidden):

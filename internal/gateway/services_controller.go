@@ -59,7 +59,12 @@ func (g *Gateway) serviceTick(ctx context.Context) {
 		go func() {
 			defer g.wg.Done()
 			defer g.services.retireBusy.Unlock()
-			g.terminateReplicas(ctx, g.store.Retiring())
+			ids, err := g.store.Retiring(context.WithoutCancel(ctx))
+			if err != nil {
+				g.logf("services: %v", err)
+				return
+			}
+			g.terminateReplicas(ctx, ids)
 		}()
 	}
 	for _, s := range g.services.list() {
@@ -128,7 +133,7 @@ func (g *Gateway) observeService(ctx context.Context, s *service) {
 		h := s.h(m.Sandbox)
 		n := g.nodes.get(m.Node)
 		h.lost = n == nil || !n.isHealthy()
-		if o, ok := g.store.OwnerOf(m.Sandbox); !ok || o.Node != m.Node {
+		if o, ok, err := g.store.OwnerOf(context.WithoutCancel(ctx), m.Sandbox); err == nil && (!ok || o.Node != m.Node) {
 			h.fatal, h.lastErr = true, "the sandbox is gone"
 		}
 		if h.lost || h.fatal || h.checking {
@@ -262,7 +267,9 @@ func (g *Gateway) decide(s *service, now time.Time) action {
 // does (userActive): revoking a user's keys stops what runs in their name
 // from growing. What already runs stays until an admin deletes the service.
 func (g *Gateway) ownerActive(s *service) bool {
-	if userActive(g.store, s.rec.User, s.rec.Tenant) {
+	ok, err := g.userActiveCached(s.rec.User, s.rec.Tenant)
+	if ok || err != nil {
+		// A check that failed holds off nothing: what runs keeps running.
 		return true
 	}
 	s.lastErr = "the service's owner holds no active API key; no replica is created"
@@ -317,7 +324,7 @@ func backoff(crashes int) time.Duration {
 // it holds, and the next write catches the file up.
 func (g *Gateway) persistService(s *service, retire []string) {
 	s.rec.pruneOlder()
-	if err := g.store.PutServiceRetiring(s.rec, retire); err != nil {
+	if err := g.store.PutServiceRetiring(context.WithoutCancel(g.baseCtx()), s.rec, retire); err != nil {
 		g.logf("service %s: recording: %v", s.rec.Name, err)
 	}
 }
@@ -366,7 +373,7 @@ func (g *Gateway) createStep(s *service, rev revision) action {
 		}
 		if s.gone {
 			// Deleted while it was being made.
-			if err := g.store.Retire(m.Sandbox); err != nil {
+			if err := g.store.Retire(context.WithoutCancel(ctx), m.Sandbox); err != nil {
 				g.logf("retire queue: %v", err)
 			}
 			s.mu.Unlock()
@@ -424,7 +431,7 @@ func (e *startError) Error() string { return "starting the command: " + e.err.Er
 // replica made.
 func (g *Gateway) startReplica(ctx context.Context, p Principal, name string, rev revision, spread map[string]int) (replicaRecord, error) {
 	sp := rev.Spec
-	secrets, err := g.secretValues(p.Tenant, sp.Secrets)
+	secrets, err := g.secretValues(ctx, p.Tenant, sp.Secrets)
 	if err != nil {
 		// Not waited out: a secret removed, or a gateway restarted without
 		// its key, is a spec that cannot be honoured until someone acts.
@@ -455,7 +462,7 @@ func (g *Gateway) startReplica(ctx context.Context, p Principal, name string, re
 			proc, err = n.client.StartProcess(ctx, c.sb.ID, api.RunRequest{Argv: sp.Command})
 		}
 		if err != nil {
-			if qerr := g.store.Retire(c.sb.ID); qerr != nil {
+			if qerr := g.store.Retire(context.WithoutCancel(ctx), c.sb.ID); qerr != nil {
 				g.logf("retire queue: %v", qerr)
 			}
 			g.terminateReplicas(context.WithoutCancel(ctx), []string{c.sb.ID})
@@ -472,7 +479,10 @@ func (g *Gateway) startReplica(ctx context.Context, p Principal, name string, re
 func (g *Gateway) terminateReplicas(ctx context.Context, ids []string) {
 	var done []string
 	for _, id := range ids {
-		o, ok := g.store.OwnerOf(id)
+		o, ok, err := g.store.OwnerOf(context.WithoutCancel(ctx), id)
+		if err != nil {
+			continue // asked again at the next pass
+		}
 		if !ok {
 			done = append(done, id)
 			continue
@@ -495,14 +505,14 @@ func (g *Gateway) terminateReplicas(ctx context.Context, ids []string) {
 		}
 		g.tombs.add(id, o)
 		if resp.StatusCode == http.StatusNoContent {
-			g.roomBack(o.Node, id)
+			g.roomBack(ctx, o.Node, id)
 		}
-		if err := g.store.ForgetSandbox(id); err != nil {
+		if err := g.store.ForgetSandbox(context.WithoutCancel(ctx), id); err != nil {
 			g.logf("forgetting %s: %v", id, err)
 		}
 		done = append(done, id)
 	}
-	if err := g.store.Retired(done...); err != nil {
+	if err := g.store.Retired(context.WithoutCancel(ctx), done...); err != nil {
 		g.logf("retire queue: %v", err)
 	}
 }

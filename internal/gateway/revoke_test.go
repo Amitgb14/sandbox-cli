@@ -25,7 +25,7 @@ func TestSSHNeedsAKeyWithTheSSHScope(t *testing.T) {
 	h.store.addKey(t, "sk_1", "alice", "", k.PublicKey())
 	h.store.tokens["sgt_valid"] = SSHToken{User: "alice", Sandbox: h.a, Expires: time.Now().Add(time.Hour)}
 	h.store.set(func(m *memStore) { m.scopes = map[string][]string{"alice": {ScopeRead, ScopeCreate}} })
-	if !userActive(h.store, "alice", "") {
+	if !active(t, h.store, "alice", "") {
 		t.Fatal("precondition: alice holds no active key at all")
 	}
 	if c, err := h.dial(h.a, nil, ssh.PublicKeys(k)); err == nil {
@@ -128,7 +128,7 @@ func sshGateway(t *testing.T, audit string) (*testGateway, *SSHServer, string) {
 		}
 	}, startNode(t, "n1", allCaps...))
 	cfg := SSHConfig{
-		Store: tg.store, Router: tg.g, HostKeyFile: filepath.Join(t.TempDir(), "host_ed25519"),
+		Store: tg.store.Store, Router: tg.g, HostKeyFile: filepath.Join(t.TempDir(), "host_ed25519"),
 		Host: "ssh.example.test", Port: 2222, Logf: t.Logf, HandshakeTimeout: 10 * time.Second,
 		// The fake backend runs builtins, so exec's command line is argv.
 		ExecArgv: func(cmd string) []string { return strings.Fields(cmd) },
@@ -319,11 +319,7 @@ func TestRevokingAKeyCancelsItsOwnersJobs(t *testing.T) {
 // any of its runs makes a sandbox.
 func TestJobOfARevokedOwnerIsCancelledAtStart(t *testing.T) {
 	n1 := startNode(t, "n1", allCaps...)
-	st, err := OpenFileStore(filepath.Join(t.TempDir(), "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := reopenTestStore(t, filepath.Join(t.TempDir(), "state.json"))
 	_, key, err := st.CreateKey("ana", "", []string{ScopeCreate})
 	if err != nil {
 		t.Fatal(err)
@@ -337,7 +333,7 @@ func TestJobOfARevokedOwnerIsCancelledAtStart(t *testing.T) {
 	if err := st.RevokeKey(key.ID); err != nil {
 		t.Fatal(err)
 	}
-	g, err := New(Config{Store: st, PollInterval: 100 * time.Millisecond, Logf: t.Logf, StaticNodes: []NodeConfig{n1.config()}})
+	g, err := New(Config{Store: st.Store, JobsDir: filepath.Join(t.TempDir(), "jobs"), PollInterval: 100 * time.Millisecond, Logf: t.Logf, StaticNodes: []NodeConfig{n1.config()}})
 	if err != nil {
 		t.Fatal(err)
 	}

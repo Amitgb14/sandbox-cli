@@ -106,7 +106,9 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	if _, ok := g.combinedCapabilities(); !ok {
 		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
 	}
-	if err := g.applyPolicyLifetime(p, &req); err != nil {
+	if err := g.applyPolicyLifetime(ctx, p, &req); errors.Is(err, ErrStore) {
+		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error())
+	} else if err != nil {
 		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 	}
 
@@ -163,7 +165,10 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 		}
 	case len(req.Volumes) > 0 && g.anyNodeHas(api.CapVolumes):
 		for _, m := range req.Volumes {
-			o, ok := g.store.VolumeOwner(m.Name)
+			o, ok, err := g.storeFor(p).VolumeOwner(ctx, m.Name)
+			if err != nil {
+				return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error())
+			}
 			if !ok || !mayAct(p, o) {
 				return api.Sandbox{}, failWith(http.StatusNotFound, api.CodeNotFound, "no volume named "+m.Name)
 			}
@@ -197,7 +202,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	}
 
 	res := api.NodeResources{CPUs: want.CPUs, MemoryMB: want.MemoryMB, DiskMB: want.DiskMB}
-	hold, err := g.reserveQuota(p.Tenant, res)
+	hold, err := g.reserveQuota(ctx, p.Tenant, res)
 	if err != nil {
 		g.metrics.refused.Inc(refusedQuota)
 		return api.Sandbox{}, transientFail(http.StatusForbidden, api.CodeRefused, err.Error())
@@ -282,7 +287,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 		if names && named != n.cfg.Name {
 			err = errors.New("the node made an id naming node " + named)
 		} else {
-			err = hold.record(sb.ID, o, sb.CPUs, sb.MemoryMB, sb.DiskMB)
+			err = hold.record(ctx, g.storeFor(p), o, sb)
 		}
 		if err != nil {
 			n.finishIf(pl, false)
@@ -367,8 +372,17 @@ func (g *Gateway) listSandboxes(ctx context.Context, p Principal, filters []stri
 	for _, f := range filters {
 		q.Add("label", f)
 	}
+	// The caller's sandboxes, read once: the store decides, not the label.
+	owned := map[string]Owner{}
 	if !all {
 		q.Add("label", LabelOwner+"="+p.User)
+		rows, err := g.storeFor(p).SandboxHistory(ctx, SandboxFilter{Tenant: p.Tenant, User: p.User, Live: true})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			owned[r.ID] = r.Owner
+		}
 	}
 	var mu sync.Mutex
 	out := []api.Sandbox{}
@@ -388,7 +402,10 @@ func (g *Gateway) listSandboxes(ctx context.Context, p Principal, filters []stri
 		defer mu.Unlock()
 		for _, sb := range list.Sandboxes {
 			if !all {
-				o, ok := g.ownerOf(sb.ID)
+				o, ok := owned[sb.ID]
+				if !ok {
+					o, ok = g.tombs.get(sb.ID)
+				}
 				if !ok || o.Node != n.cfg.Name || o.User != p.User || o.Tenant != p.Tenant {
 					continue
 				}
@@ -493,12 +510,14 @@ func (g *Gateway) afterDelete(resp *http.Response, id string, o Owner) error {
 	if resp.StatusCode != http.StatusNoContent {
 		return nil
 	}
+	// Recorded even if the caller has gone: the node has terminated it.
+	ctx := context.WithoutCancel(resp.Request.Context())
 	g.tombs.add(id, o)
-	if _, held := g.store.OwnerOf(id); held {
+	if _, held, _ := g.store.OwnerOf(ctx, id); held {
 		g.metrics.terminated.Inc("delete")
 	}
-	g.roomBack(o.Node, id)
-	if err := g.store.ForgetSandbox(id); err != nil {
+	g.roomBack(ctx, o.Node, id)
+	if err := g.store.ForgetSandbox(ctx, id); err != nil {
 		g.logf("forgetting %s: %v", id, err)
 	}
 	return nil
@@ -519,7 +538,7 @@ func (g *Gateway) afterSnapshot(resp *http.Response, id string, o Owner) error {
 	if err := json.Unmarshal(data, &snap); err != nil || snap.ID == "" {
 		return errors.New("the node answered with no snapshot")
 	}
-	if err := g.store.SetSnapshot(snap.ID, o); err != nil {
+	if err := g.store.SetSnapshot(context.WithoutCancel(resp.Request.Context()), snap.ID, o); err != nil {
 		return err
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(data))
@@ -561,7 +580,10 @@ func (g *Gateway) createFor(ctx context.Context, p Principal, req api.CreateSand
 	if f.status != http.StatusCreated {
 		return nil, &createError{fail: f}
 	}
-	o, _ := g.store.OwnerOf(sb.ID)
+	o, _, err := g.store.OwnerOf(ctx, sb.ID)
+	if err != nil {
+		return nil, &createError{fail: transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error())}
+	}
 	return &created{sb: sb, node: o.Node}, nil
 }
 
@@ -569,12 +591,12 @@ func (g *Gateway) createFor(ctx context.Context, p Principal, req api.CreateSand
 // node has given back its room (node.released). Called after the node
 // answered the delete with 204, and before the store forgets the sandbox's
 // size; a 404 means it ended earlier, and the node's status already says so.
-func (g *Gateway) roomBack(node, id string) {
+func (g *Gateway) roomBack(ctx context.Context, node, id string) {
 	n := g.nodes.get(node)
 	if n == nil {
 		return
 	}
-	if res, ok := g.store.SizeOf(id); ok {
+	if res, ok, _ := g.store.SizeOf(ctx, id); ok {
 		n.released(id, res)
 	}
 }

@@ -109,6 +109,37 @@ jobs:
       - name: test -race
         run: go test -race ./...
 
+  # The gateway's tests again on PostgreSQL, which the check job runs on
+  # SQLite: every gateway test, plus what only PostgreSQL has — row-level
+  # security between tenants and a standby taking over (make test-postgres).
+  # Each test makes and drops a database of its own on the service.
+  postgres:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s
+          --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: test on PostgreSQL
+        env:
+          SANDBOX_TEST_POSTGRES_DSN: postgres://postgres:ci@127.0.0.1:5432/postgres?sslmode=disable
+        run: go test -count=1 ./internal/gateway/... ./cmd/sandbox-gateway/...
+
   # Compile every target the release actually ships. Kept a separate job so its
   # verdict is legible on its own: "the release would not build" is a different
   # sentence from "a test failed".

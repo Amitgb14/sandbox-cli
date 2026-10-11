@@ -166,40 +166,6 @@ type NodeConfig struct {
 	KeyFile   string `json:"key_file,omitempty"`
 }
 
-// Store is everything the gateway must keep across a restart. Placement can
-// be rebuilt from the nodes' own listings; ownership cannot, which is why it
-// lives here.
-type Store interface {
-	CreateKey(user, tenant string, scopes []string) (secret string, k Key, err error)
-	// KeyBySecret checks a presented secret against the stored hashes, in
-	// constant time, and returns the key it matches if not revoked.
-	KeyBySecret(secret string) (Key, bool)
-	RevokeKey(id string) error
-	Keys() []Key
-
-	AddSSHKey(user, tenant, sandbox, authorizedKey string) (SSHKey, error)
-	RemoveSSHKey(id string) error
-	// SSHKeysByFingerprint returns every stored key with that fingerprint.
-	SSHKeysByFingerprint(fingerprint string) []SSHKey
-	SSHKeysFor(user string) []SSHKey
-
-	// NewSSHToken issues a token for one sandbox; only its hash is stored.
-	NewSSHToken(user, tenant, sandbox string, ttl time.Duration) (token string, expires time.Time, err error)
-	RedeemSSHToken(token string) (SSHToken, bool)
-
-	SetOwner(sandbox string, o Owner) error
-	OwnerOf(sandbox string) (Owner, bool)
-	ForgetSandbox(sandbox string) error
-
-	PutNode(n NodeConfig) error
-	RemoveNode(name string) error
-	Nodes() []NodeConfig
-
-	// MemberRole returns the role user — named with the tenant of their own
-	// keys — holds in organisation org, and false when not a member.
-	MemberRole(org, user, userTenant string) (string, bool)
-}
-
 // Router turns a principal, a sandbox reference and a scope into a client for
 // the node that holds the sandbox, or an error saying why not. It is the one
 // place authorisation happens, so the HTTP front and the SSH front cannot

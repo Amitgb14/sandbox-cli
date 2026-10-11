@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -244,7 +245,7 @@ func badSpec(format string, a ...any) *errSpec {
 // a node would refuse at a run's start where it can tell now — a reserved
 // environment name, a secret that does not exist — so a mistake costs one
 // request, not a job of failed runs.
-func (g *Gateway) checkJobSpec(p Principal, s *api.JobSpec) error {
+func (g *Gateway) checkJobSpec(ctx context.Context, p Principal, s *api.JobSpec) error {
 	if s.Name != "" && !spec.ValidName(s.Name) {
 		return badSpec("name %q: lowercase letters, digits and dashes, starting with a letter or digit, at most 63", s.Name)
 	}
@@ -336,7 +337,9 @@ func (g *Gateway) checkJobSpec(p Principal, s *api.JobSpec) error {
 			return &errSpec{status: http.StatusNotImplemented, code: api.CodeUnsupported, msg: ErrNoSecretsKey.Error()}
 		}
 		for _, name := range s.Secrets {
-			if _, ok := g.store.SealedSecret(p.Tenant, name); !ok {
+			if _, ok, err := g.storeFor(p).SealedSecret(ctx, p.Tenant, name); err != nil {
+				return err
+			} else if !ok {
 				return badSpec("secret %s does not exist (sandbox-cli secret set %s)", name, name)
 			}
 		}
@@ -407,7 +410,7 @@ func (g *Gateway) createJob(w http.ResponseWriter, r *http.Request, p Principal)
 	if !decode(w, r, &s) {
 		return
 	}
-	g.submitJob(w, p, s)
+	g.submitJob(w, r.Context(), p, s)
 }
 
 // createAgentRun is a job of one agent run.
@@ -423,15 +426,18 @@ func (g *Gateway) createAgentRun(w http.ResponseWriter, r *http.Request, p Princ
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "an agent run needs an agent and a prompt")
 		return
 	}
-	g.submitJob(w, p, api.JobSpec{
+	g.submitJob(w, r.Context(), p, api.JobSpec{
 		Name: a.Name, Image: a.Image, Agent: a.Agent, Prompt: a.Prompt, Retries: a.Retries,
 		TimeoutSecs: a.TimeoutSecs, Env: a.Env, Secrets: a.Secrets, Network: a.Network,
 		Resources: a.Resources, FromSnapshot: a.FromSnapshot, Keep: a.Keep, Notify: a.Notify,
 	})
 }
 
-func (g *Gateway) submitJob(w http.ResponseWriter, p Principal, s api.JobSpec) {
-	if err := g.checkJobSpec(p, &s); err != nil {
+func (g *Gateway) submitJob(w http.ResponseWriter, ctx context.Context, p Principal, s api.JobSpec) {
+	if err := g.checkJobSpec(ctx, p, &s); errors.Is(err, ErrStore) {
+		g.writeStoreErr(w, err)
+		return
+	} else if err != nil {
 		var es *errSpec
 		if errors.As(err, &es) {
 			writeErr(w, es.status, es.code, es.msg)
@@ -441,7 +447,7 @@ func (g *Gateway) submitJob(w http.ResponseWriter, p Principal, s api.JobSpec) {
 		return
 	}
 	rec := &jobRecord{ID: newID("job_"), User: p.User, Tenant: p.Tenant, Spec: s,
-		State: api.JobRunning, Created: g.store.now().UTC()}
+		State: api.JobRunning, Created: g.store.Now().UTC()}
 	env := s.Env
 	rec.Spec.Env = nil
 	for k := range env {
@@ -465,7 +471,7 @@ func (g *Gateway) submitJob(w http.ResponseWriter, p Principal, s api.JobSpec) {
 		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "the gateway is not running jobs")
 		return
 	}
-	if err := g.store.PutJob(rec); err != nil {
+	if err := g.storeFor(p).PutJob(ctx, rec); err != nil {
 		g.jobs.drop(rec.ID)
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the job could not be recorded")
 		return
@@ -480,12 +486,21 @@ func jobEnvAD(id string) string { return "sandbox-gateway job env v1\x00" + id }
 // jobFor finds a job the caller may see; another user's is not found, as a
 // sandbox is.
 func (g *Gateway) jobFor(w http.ResponseWriter, r *http.Request, p Principal, scope string) (*jobRecord, bool) {
+	ctx := r.Context()
 	if !need(w, p, scope) {
 		return nil, false
 	}
 	id := r.PathValue("id")
-	rec, ok := g.store.Job(id)
-	if !jobIDRE.MatchString(id) || !ok || !mayAct(p, rec.owner()) {
+	if !jobIDRE.MatchString(id) {
+		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such job")
+		return nil, false
+	}
+	rec, ok, err := g.storeFor(p).Job(ctx, id)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return nil, false
+	}
+	if !ok || !mayAct(p, rec.owner()) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such job")
 		return nil, false
 	}
@@ -493,14 +508,18 @@ func (g *Gateway) jobFor(w http.ResponseWriter, r *http.Request, p Principal, sc
 }
 
 func (g *Gateway) listJobs(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeRead) {
 		return
 	}
 	out := []api.Job{}
-	for _, rec := range g.store.AllJobs() {
-		if rec.User == p.User && rec.Tenant == p.Tenant {
-			out = append(out, g.jobView(rec, false))
-		}
+	mine, err := g.storeFor(p).JobsOf(ctx, p.User, p.Tenant)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
+	for _, rec := range mine {
+		out = append(out, g.jobView(rec, false))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].Created.Equal(out[j].Created) {
@@ -520,18 +539,23 @@ func (g *Gateway) getJob(w http.ResponseWriter, r *http.Request, p Principal) {
 // cancelJob cancels a job and waits (a while) for its runs to stop, so the
 // answer says what became of them.
 func (g *Gateway) cancelJob(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	rec, ok := g.jobFor(w, r, p, ScopeCreate)
 	if !ok {
 		return
 	}
 	if rec.State == api.JobRunning {
-		if err := g.store.UpdateJob(rec.ID, func(j *jobRecord) { j.Cancelled = true }); err != nil {
+		if err := g.storeFor(p).UpdateJob(ctx, rec.ID, func(j *jobRecord) { j.Cancelled = true }); err != nil {
 			writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the cancel could not be recorded")
 			return
 		}
 		g.jobs.cancel(r.Context(), rec.ID, time.Minute)
 		g.logf("job %s cancelled by key %s", rec.ID, p.KeyID)
-		if rec, ok = g.store.Job(rec.ID); !ok {
+		var err error
+		if rec, ok, err = g.storeFor(p).Job(ctx, rec.ID); err != nil {
+			g.writeStoreErr(w, err)
+			return
+		} else if !ok {
 			writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such job")
 			return
 		}

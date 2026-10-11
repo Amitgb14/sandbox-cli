@@ -24,6 +24,7 @@ export function ImagePicker({
   onChange,
   built,
   inUse,
+  builtWhere = "Built on this machine",
 }: {
   value: string;
   onChange: (image: string) => void;
@@ -31,6 +32,8 @@ export function ImagePicker({
   built: string[];
   /** Images the endpoint's sandboxes run. */
   inUse: string[];
+  /** Where built ones were built: this machine, or a gateway's nodes. */
+  builtWhere?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -42,7 +45,7 @@ export function ImagePicker({
   const builtSet = new Set(built);
   const groups: { title: string; icon: React.ComponentType<{ className?: string }>; items: string[] }[] = [
     { title: "Desktop", icon: Monitor, items: desktop.filter((i) => !builtSet.has(i)) },
-    { title: "Built on this machine", icon: HardDrive, items: [...builtSet] },
+    { title: builtWhere, icon: HardDrive, items: [...builtSet] },
     { title: "Used by sandboxes here", icon: Package, items: [...new Set(inUse)].filter((i) => !builtSet.has(i) && !desktop.includes(i)) },
   ].filter((g) => g.items.length);
   const typed = query.trim();

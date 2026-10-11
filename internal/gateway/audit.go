@@ -136,7 +136,7 @@ func (s *SSHServer) audit(login *sshLogin, action, session string) {
 		return
 	}
 	node := ""
-	if o, ok := s.cfg.Store.OwnerOf(login.id); ok {
+	if o, ok, _ := s.cfg.Store.OwnerOf(s.baseCtx, login.id); ok {
 		node = o.Node
 	}
 	p := login.principal

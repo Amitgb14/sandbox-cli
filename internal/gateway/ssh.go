@@ -431,9 +431,16 @@ func (s *SSHServer) RecheckAccess() int {
 func (s *SSHServer) lostAccess(login *sshLogin, cache map[[2]string]bool) string {
 	p := login.principal
 	who := [2]string{p.User, p.Tenant}
+	ctx := s.baseCtx
 	ok, seen := cache[who]
 	if !seen {
-		ok = userMaySSH(s.cfg.Store, p.User, p.Tenant)
+		var err error
+		if ok, err = userMaySSH(ctx, s.cfg.Store, p.User, p.Tenant); err != nil {
+			// An open connection is not cut for a check that could not be
+			// made; the next recheck asks again.
+			s.cfg.Logf("ssh: %s: recheck: %v", login.describe(), err)
+			return ""
+		}
 		if cache != nil {
 			cache[who] = ok
 		}
@@ -442,7 +449,12 @@ func (s *SSHServer) lostAccess(login *sshLogin, cache map[[2]string]bool) string
 		return "the user holds no active API key with " + ScopeSSH
 	}
 	if login.sshKeyID != "" {
-		for _, k := range s.cfg.Store.SSHKeysFor(p.User) {
+		keys, err := s.cfg.Store.SSHKeysFor(ctx, p.User)
+		if err != nil {
+			s.cfg.Logf("ssh: %s: recheck: %v", login.describe(), err)
+			return ""
+		}
+		for _, k := range keys {
 			if k.ID == login.sshKeyID && k.Tenant == p.KeyTenant {
 				return ""
 			}
@@ -467,7 +479,7 @@ func (s *SSHServer) endLogin(c *ssh.ServerConn, login *sshLogin, why string) {
 	s.cfg.Logf("ssh: %s: closed: %s", login.describe(), why)
 	if s.cfg.Audit != nil {
 		node := ""
-		if o, ok := s.cfg.Store.OwnerOf(login.id); ok {
+		if o, ok, _ := s.cfg.Store.OwnerOf(s.baseCtx, login.id); ok {
 			node = o.Node
 		}
 		p := login.principal

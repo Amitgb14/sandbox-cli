@@ -76,10 +76,7 @@ func TestSecretsAreSealedAndNeverReturned(t *testing.T) {
 	if strings.Contains(string(body), value) {
 		t.Fatalf("the listing holds the value: %s", body)
 	}
-	state, err := os.ReadFile(tg.store.path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	state := tg.store.rawBytes()
 	if bytes.Contains(state, []byte(value)) || bytes.Contains(state, []byte(strings.ToUpper(value))) {
 		t.Fatal("the state file holds a secret's plaintext")
 	}
@@ -91,7 +88,7 @@ func TestSecretsAreSealedAndNeverReturned(t *testing.T) {
 	if err := tg.store.PutSecret("", "OTHER", sealed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tg.g.secretValues("", []string{"OTHER"}); err == nil || strings.Contains(err.Error(), value) {
+	if _, err := tg.g.secretValues(context.Background(), "", []string{"OTHER"}); err == nil || strings.Contains(err.Error(), value) {
 		t.Fatalf("a sealed value moved to another name: %v", err)
 	}
 
@@ -507,7 +504,7 @@ func TestJobSecretsReachTheRunOnly(t *testing.T) {
 			t.Errorf("the run's environment lacks %s:\n%s", want, out.Stdout)
 		}
 	}
-	state, _ := os.ReadFile(tg.store.path)
+	state := tg.store.rawBytes()
 	if bytes.Contains(state, []byte(secret)) || bytes.Contains(state, []byte(plain)) {
 		t.Fatal("the state file holds a value")
 	}
@@ -734,12 +731,8 @@ func mapsKeys(m map[string]string) func(func(string) bool) {
 // it runs; the job finishes as if nothing had happened.
 func TestJobResumesAfterARestart(t *testing.T) {
 	n1 := startNode(t, "n1", allCaps...)
-	st, err := OpenFileStore(filepath.Join(t.TempDir(), "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	cfg := Config{Store: st, PollInterval: 100 * time.Millisecond, FailAfter: 2, Logf: t.Logf,
+	st := reopenTestStore(t, filepath.Join(t.TempDir(), "state.json"))
+	cfg := Config{Store: st.Store, JobsDir: filepath.Join(t.TempDir(), "jobs"), PollInterval: 100 * time.Millisecond, FailAfter: 2, Logf: t.Logf,
 		StaticNodes: []NodeConfig{n1.config()}, SecretsKey: testSecretsKey}
 	g1, err := New(cfg)
 	if err != nil {
@@ -788,11 +781,7 @@ func TestJobResumesAfterARestart(t *testing.T) {
 // restarted gateway says so rather than running without it.
 func TestUnsealedEnvIsLostOnRestart(t *testing.T) {
 	n1 := startNode(t, "n1", allCaps...)
-	st, err := OpenFileStore(filepath.Join(t.TempDir(), "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := reopenTestStore(t, filepath.Join(t.TempDir(), "state.json"))
 	// ana still holds a key: a job whose owner holds none is cancelled at
 	// Start instead (TestRevokingAKeyCancelsItsOwnersJobs).
 	if _, _, err := st.CreateKey("ana", "", []string{ScopeCreate}); err != nil {
@@ -804,7 +793,7 @@ func TestUnsealedEnvIsLostOnRestart(t *testing.T) {
 	if err := st.PutJob(rec); err != nil {
 		t.Fatal(err)
 	}
-	g2, err := New(Config{Store: st, PollInterval: 100 * time.Millisecond, Logf: t.Logf, StaticNodes: []NodeConfig{n1.config()}})
+	g2, err := New(Config{Store: st.Store, JobsDir: filepath.Join(t.TempDir(), "jobs"), PollInterval: 100 * time.Millisecond, Logf: t.Logf, StaticNodes: []NodeConfig{n1.config()}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -48,6 +48,11 @@ type LostSandbox struct {
 	Node     string  `json:"node"`
 	CPUs     float64 `json:"cpus,omitempty"`
 	MemoryMB int     `json:"memory_mb,omitempty"`
+	// Name, Image and State are as the gateway last stored them from the
+	// node: what it was, since the node cannot say what it is.
+	Name  string `json:"name,omitempty"`
+	Image string `json:"image,omitempty"`
+	State string `json:"state,omitempty"`
 	// NodeDownSince is when the gateway last saw the node answer, or when it
 	// started if never; zero for a node no longer configured.
 	NodeDownSince time.Time `json:"node_down_since,omitzero"`

@@ -235,6 +235,29 @@ test("an admin invites a person by email, who chooses a password and signs in wi
   await expect(page.getByTestId("account-kim")).toContainText("kim@example.com · signed in");
 });
 
+/**
+ * A user who has made no sandbox yet still sees what they can start from:
+ * the gateway lists what its nodes have built (GET /v1/fleet/images), where
+ * before the list was empty until their first sandbox.
+ */
+test("a new user's create form lists the images the nodes have built", async ({ page }) => {
+  const { gatewayURL, adminKey } = e2eState();
+  hosted();
+  const admin = (method: string, path: string, body?: object) =>
+    fetch(`${gatewayURL}${path}`, { method, headers: { Authorization: `Bearer ${adminKey}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+  // The default image is built on a node once anything has started from it.
+  const sb = (await (await admin("POST", "/v1/sandboxes", {})).json()) as { id: string; image: string };
+  await admin("DELETE", `/v1/sandboxes/${sb.id}`);
+  const key = (await (await admin("POST", "/v1/admin/keys", { user: "newbie", tenant: "newbie", scopes: ["sandbox:read", "sandbox:create"] })).json()) as { secret: string };
+  await page.goto(`${base}/#key=${key.secret}`);
+  await expect(page.locator("[data-sidebar=sidebar]").getByText("hosted · newbie@newbie")).toBeVisible();
+  await page.goto(`${base}/launch/`);
+  await page.getByRole("combobox", { name: "Image" }).click();
+  const group = page.getByRole("group", { name: "Built on the gateway's nodes" });
+  await expect(group).toBeVisible({ timeout: 15_000 });
+  await expect(group.getByRole("option").filter({ hasText: sb.image.replace(/^.*\//, "") })).toBeVisible();
+});
+
 test("a user may bring their sandbox's end nearer, and is offered no way to push it out", async ({ page }) => {
   const { gatewayURL } = e2eState();
   const resp = await fetch(`${gatewayURL}/v1/sandboxes`, {

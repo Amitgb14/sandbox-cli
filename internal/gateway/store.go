@@ -21,7 +21,11 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
 
-// FileStore is the Store kept in one JSON file.
+// FileStore is the state file of a gateway from before databases. The
+// gateway no longer serves from it: `sandbox-gateway store import` reads one
+// (ImportState) into SQLite or PostgreSQL (sql_store.go), and its methods
+// remain for that and for tests that write a file to import. What follows
+// describes the file as it was kept.
 //
 // The file holds no secret. An API key and an SSH token are kept as the hex
 // SHA-256 of the secret, which is a 256-bit random string: a hash of that
@@ -818,5 +822,3 @@ func (s *FileStore) Nodes() []NodeConfig {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
-
-var _ Store = (*FileStore)(nil)

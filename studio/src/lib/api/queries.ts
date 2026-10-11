@@ -47,6 +47,7 @@ export const keys = {
   agentStates: ["agent-states"] as const,
   templates: ["templates"] as const,
   images: ["images"] as const,
+  fleetImages: ["fleet-images"] as const,
   egress: ["egress"] as const,
 };
 
@@ -191,6 +192,21 @@ export function useAgents() {
 }
 
 /** The endpoint's images; read every second while one installs, for its progress. */
+/**
+ * What a gateway's nodes have built (GET /v1/fleet/images), for the create
+ * form: a gateway manages no images, so GET /v1/images is not offered, but
+ * a user still needs to see what they can start from. Gateways only.
+ */
+export function useFleetImages(enabled = true) {
+  return useQuery({
+    queryKey: keys.fleetImages,
+    queryFn: async () => (await apiFetch<{ images: SandboxImage[] }>("/v1/fleet/images")).images.map((i) => i.image),
+    enabled,
+    retry: false,
+    staleTime: 30_000,
+  });
+}
+
 export function useImages(enabled = true) {
   return useQuery({
     queryKey: keys.images,

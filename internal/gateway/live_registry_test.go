@@ -105,7 +105,7 @@ func TestLiveLostAccess(t *testing.T) {
 		if c.mod != nil {
 			c.mod(&k)
 		}
-		why := liveLostAccess(&memStore{}, &liveReq{p: p, scope: c.scope}, map[string]Key{k.ID: k})
+		why := liveLostAccess(context.Background(), &memStore{}, &liveReq{p: p, scope: c.scope}, map[string]Key{k.ID: k})
 		if (why != "") != c.lost {
 			t.Errorf("%s: lost access = %q; want lost %v", c.name, why, c.lost)
 		}

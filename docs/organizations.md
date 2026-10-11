@@ -66,12 +66,24 @@ then on; `--org NAME` (or `SANDBOX_ORG`) does it for one command, and
 `sandbox-cli org ls` lists the key's own tenant first and every organisation
 its user belongs to, with `*` on the current one.
 
-**Names.** An organisation name is a DNS label: 1 to 30 lowercase letters,
-digits and dashes, starting with a letter, with no `--` (the router splits
-`<service>--<org>` on it) and not `default` or `admin`. It may not be a
-tenant already in use — by a key, a sandbox, a volume, a secret, a job or a
-service, compared without case — or creating it would make its creator a
-member of someone else's tenant.
+**Names.** An organisation name is 1 to 30 letters, digits and dashes,
+starting with a letter, with no `--` (the router splits `<service>--<org>`
+on it) and not `default` or `admin` in any case. It is kept as typed —
+`Acme-Labs` is shown as `Acme-Labs` — and matched without regard to case:
+`Acme-Labs` and `acme-labs` are one organisation, and its tenant, which its
+records, labels and router host use, is the name lowercased (`acme-labs`).
+`X-Sandbox-Org: ACME-LABS` selects it. It may not be a tenant already in use
+— by a key, a sandbox, a volume, a secret, a job or a service, compared
+without case — or creating it would make its creator a member of someone
+else's tenant.
+
+**Isolated in the database too.** Every record that belongs to a tenant —
+sandboxes, volumes, snapshots, secrets, jobs and their runs, services —
+carries it, and the gateway decides whose a request may touch. On
+PostgreSQL the database enforces the same line itself: a request's
+statements run under row-level security for the tenant it acts in, so a
+query that forgot its tenant would return nothing of another organisation's
+([fleet.md](fleet.md#the-gateways-database)).
 
 ## What is guaranteed
 

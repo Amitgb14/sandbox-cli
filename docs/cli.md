@@ -1082,9 +1082,10 @@ sandbox-cli org create NAME [flags]
 ```
 
 ```text
-NAME is 1 to 30 lowercase letters, digits and dashes, starting with a letter,
-with no "--"; "default" and "admin" are reserved, and a name already used by
-a tenant is taken.
+NAME is 1 to 30 letters, digits and dashes, starting with a letter, with no
+"--"; "default" and "admin" are reserved, and a name already used by a tenant is
+taken. The case is kept as typed and ignored when matching: Acme-Labs and
+acme-labs are one organization, whose tenant is acme-labs.
 ```
 
 Flags:

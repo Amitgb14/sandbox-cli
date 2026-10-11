@@ -57,7 +57,7 @@ func (tg *testGateway) do(secret, method, path string, in, out any) int {
 }
 
 func nodeOf(tg *testGateway, id string) string {
-	o, ok := tg.g.ownerOf(id)
+	o, ok := tg.owner(id)
 	if !ok {
 		tg.t.Fatalf("no owner recorded for %s", id)
 	}
@@ -880,8 +880,8 @@ func TestScheduledSnapshotsBelongToTheSandboxOwner(t *testing.T) {
 	for _, s := range held {
 		on[s.ID] = true
 	}
-	for id, o := range tg.store.st.Snapshots {
-		if o.Node == "n1" && !on[id] {
+	for _, id := range tg.store.snapshotsOn("n1") {
+		if !on[id] {
 			t.Errorf("a record of %s, which n1 no longer holds, was kept", id)
 		}
 	}

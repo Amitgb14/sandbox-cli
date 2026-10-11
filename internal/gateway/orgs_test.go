@@ -29,7 +29,7 @@ var orgScopes = []string{ScopeRead, ScopeCreate, ScopeDelete, ScopeSSH, ScopeSec
 func attachSSH(t *testing.T, tg *testGateway) (*SSHServer, string) {
 	t.Helper()
 	srv, err := NewSSHServer(SSHConfig{
-		Store: tg.store, Router: tg.g, HostKeyFile: filepath.Join(t.TempDir(), "host_ed25519"),
+		Store: tg.store.Store, Router: tg.g, HostKeyFile: filepath.Join(t.TempDir(), "host_ed25519"),
 		Host: "ssh.example.test", Port: 2222, Logf: t.Logf, HandshakeTimeout: 10 * time.Second,
 		ExecArgv: func(cmd string) []string { return strings.Fields(cmd) },
 		Audit:    tg.g.audit,
@@ -365,7 +365,7 @@ func TestCreateOrg(t *testing.T) {
 	wantCode(t, err, api.CodeRefused)
 
 	_, alice := tg.keyed("alice", "", orgScopes...)
-	for _, bad := range []string{"", "A", "Aa", "1a", "-a", "a-", "a--b", "a_b", "a.b", "default", "admin",
+	for _, bad := range []string{"", "1a", "-a", "a-", "a--b", "a_b", "a.b", "default", "Admin", "DEFAULT",
 		strings.Repeat("a", 31), "a b", "ä"} {
 		_, err := alice.CreateOrg(ctx, bad)
 		wantCode(t, err, api.CodeInvalidRequest)
@@ -586,7 +586,7 @@ func TestQuotaIsPerOrg(t *testing.T) {
 	}
 }
 
-// A state file from before organisations loads, and keeps working.
+// A state file from before organisations imports, and keeps working.
 func TestStateFileFromBeforeOrgsLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	old := `{
@@ -604,9 +604,10 @@ func TestStateFileFromBeforeOrgsLoads(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	st, err := OpenFileStore(path)
-	if err != nil {
-		t.Fatalf("an old state file: %v", err)
+	dbPath := filepath.Join(filepath.Dir(path), "gateway.db")
+	st := reopenTestStore(t, dbPath)
+	if _, err := ImportState(context.Background(), path, st.Store); err != nil {
+		t.Fatal(err)
 	}
 	if k, ok := st.KeyBySecret("sgk_old"); !ok || k.User != "alice" {
 		t.Errorf("the old key: %+v %v", k, ok)
@@ -618,17 +619,16 @@ func TestStateFileFromBeforeOrgsLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Close()
-	st, err = OpenFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st = reopenTestStore(t, dbPath)
 	defer st.Close()
 	if role, ok := st.MemberRole("aa", "alice", ""); !ok || role != api.RoleOwner {
 		t.Errorf("after a reopen: %q %v", role, ok)
 	}
-	fi, err := os.Stat(path)
-	if err != nil || fi.Mode().Perm() != 0o600 {
-		t.Errorf("state file mode: %v %v", fi.Mode(), err)
+	if st.sql().path != "" { // SQLite: the file is the state
+		fi, err := os.Stat(dbPath)
+		if err != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("database file mode: %v %v", fi, err)
+		}
 	}
 }
 

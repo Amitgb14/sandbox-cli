@@ -26,13 +26,13 @@ func TestAKeyStopsWorkingWhenItExpires(t *testing.T) {
 	if _, err := dana.Whoami(ctx); err != nil {
 		t.Fatalf("before it expires: %v", err)
 	}
-	if !userActive(tg.store, "dana", "dana") {
+	if !active(t, tg.store.Store, "dana", "dana") {
 		t.Fatal("before it expires, dana holds no active key")
 	}
 	time.Sleep(1100 * time.Millisecond)
 	_, err = dana.Whoami(ctx)
 	wantCode(t, err, api.CodeUnauthorized)
-	if userActive(tg.store, "dana", "dana") || userMaySSH(tg.store, "dana", "dana") {
+	if active(t, tg.store.Store, "dana", "dana") || maySSH(t, tg.store.Store, "dana", "dana") {
 		t.Error("an expired key still counts as active, for jobs or for SSH")
 	}
 
@@ -110,10 +110,7 @@ func TestKeyExpiryRefusals(t *testing.T) {
 // with its keys never expiring.
 func TestKeyExpirySurvivesAReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	st, err := OpenFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := reopenTestStore(t, path)
 	at := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	secret, k, err := st.CreateKeyExpiring("gus", "", demoScopes, &at)
 	if err != nil {
@@ -123,16 +120,13 @@ func TestKeyExpirySurvivesAReopen(t *testing.T) {
 		t.Error("a key issued already expired")
 	}
 	st.Close()
-	st, err = OpenFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st = reopenTestStore(t, path)
 	defer st.Close()
 	got, ok := st.KeyBySecret(secret)
-	if !ok || got.ID != k.ID || got.Expires == nil || !got.Expires.Equal(at) {
+	if !ok || got.ID != k.ID || got.Expires == nil || !got.Expires.Equal(at.Truncate(time.Microsecond)) {
 		t.Fatalf("after a reopen: %+v %v", got, ok)
 	}
-	st.now = func() time.Time { return at }
+	st.setNow(func() time.Time { return at })
 	if _, ok := st.KeyBySecret(secret); ok {
 		t.Error("the key was accepted at its expiry")
 	}

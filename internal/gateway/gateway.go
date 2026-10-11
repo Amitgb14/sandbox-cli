@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 
 // Config configures a Gateway.
 type Config struct {
-	Store *FileStore
+	Store Store
 	// StaticNodes come from the node config file, beside the store's own.
 	// A name in both is refused at start.
 	StaticNodes []NodeConfig
@@ -64,6 +63,9 @@ type Config struct {
 	// file), and JobRetention is how long a finished job is kept (24h).
 	JobsDir      string
 	JobRetention time.Duration
+	// SandboxHistory is how long a terminated sandbox's row is kept, as
+	// history; 0 keeps them.
+	SandboxHistory time.Duration
 	// NotifyAllowPrivate lets a job's notify URL reach loopback, private and
 	// link-local addresses; without it the gateway posts to public ones only
 	// (jobrun.go, newNotifyClient).
@@ -96,7 +98,7 @@ type SSHInfoer interface{ Info() api.SSHInfo }
 // router, and the HTTP front that speaks Sandbox API v1.
 type Gateway struct {
 	cfg   Config
-	store *FileStore
+	store Store
 	nodes *nodePool
 	tombs *tombstones
 	logf  func(string, ...any)
@@ -124,6 +126,7 @@ type Gateway struct {
 	services     *serviceCtl
 	live         *liveRequests   // open forwarded requests, held to their keys (live.go)
 	signIns      *signInThrottle // accounts.go
+	active       activeCache     // userActiveCached
 
 	stop context.CancelFunc
 	wg   sync.WaitGroup
@@ -161,7 +164,7 @@ func New(cfg Config) (*Gateway, error) {
 		cfg.NodeLostAfter = 5 * time.Minute
 	}
 	if cfg.JobsDir == "" {
-		cfg.JobsDir = filepath.Join(filepath.Dir(cfg.Store.path), "jobs")
+		return nil, errors.New("a gateway needs a jobs directory (Config.JobsDir)")
 	}
 	if cfg.JobRetention <= 0 {
 		cfg.JobRetention = 24 * time.Hour
@@ -176,10 +179,14 @@ func New(cfg Config) (*Gateway, error) {
 			return nil, err
 		}
 	}
+	services, err := cfg.Store.Services(context.Background())
+	if err != nil {
+		return nil, err
+	}
 	g := &Gateway{sealer: seal, jobs: newJobManager(), notifyClient: newNotifyClient(cfg.NotifyAllowPrivate),
 		cfg: cfg, store: cfg.Store, logf: cfg.Logf, tombs: newTombstones(10000, time.Hour),
 		inflight: map[string]Usage{}, claimed: map[string]bool{},
-		metrics: newGatewayMetrics(), audit: cfg.Audit, services: newServiceCtl(cfg.Store),
+		metrics: newGatewayMetrics(), audit: cfg.Audit, services: newServiceCtl(services),
 		live: newLiveRequests(), signIns: newSignInThrottle(time.Now),
 	}
 	g.nodes = newNodePool(poolConfig{interval: cfg.PollInterval, failAfter: cfg.FailAfter,
@@ -194,7 +201,11 @@ func New(cfg Config) (*Gateway, error) {
 			return nil, err
 		}
 	}
-	for _, n := range cfg.Store.Nodes() {
+	stored, err := cfg.Store.Nodes(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range stored {
 		if seen[n.Name] {
 			return nil, fmt.Errorf("node %s is both in the node config file and in the state; remove one", n.Name)
 		}
@@ -214,8 +225,9 @@ func (g *Gateway) Start(ctx context.Context) {
 	g.ctx = ctx
 	g.ctxMu.Unlock()
 	g.nodes.pollAll(ctx)
-	g.wg.Add(4)
+	g.wg.Add(5)
 	go func() { defer g.wg.Done(); g.nodes.run(ctx) }()
+	go func() { defer g.wg.Done(); g.pruneHistory(ctx) }()
 	g.startJobs(ctx)
 	// A key revoked while the gateway was down (the CLI's keys revoke) is
 	// acted on now, before a resumed job makes another sandbox.
@@ -294,6 +306,7 @@ type accessRechecker interface{ RecheckAccess() int }
 // nothing here: it is routed to and given replicas only while its owner is
 // active (pickReplica, ownerActive), which both check every time.
 func (g *Gateway) accessChanged() {
+	g.active.clear()
 	g.recheckLive()
 	g.revokeOrphanedJobs()
 	g.sshMu.RLock()
@@ -326,11 +339,13 @@ func mayAct(p Principal, o Owner) bool {
 
 // ownerOf is the store's record, or a tombstone's for a sandbox deleted
 // through the gateway a short while ago.
-func (g *Gateway) ownerOf(id string) (Owner, bool) {
-	if o, ok := g.store.OwnerOf(id); ok {
-		return o, true
+func (g *Gateway) ownerOf(ctx context.Context, p Principal, id string) (Owner, bool, error) {
+	o, ok, err := g.storeFor(p).OwnerOf(ctx, id)
+	if err != nil || ok {
+		return o, ok, err
 	}
-	return g.tombs.get(id)
+	o, ok = g.tombs.get(id)
+	return o, ok, nil
 }
 
 // Resolve implements Router.
@@ -358,7 +373,10 @@ func (g *Gateway) resolve(ctx context.Context, p Principal, ref, scope string) (
 	switch {
 	case spec.ValidID(ref):
 		var ok bool
-		if o, ok = g.ownerOf(ref); !ok || !mayAct(p, o) {
+		var err error
+		if o, ok, err = g.ownerOf(ctx, p, ref); err != nil {
+			return "", Owner{}, nil, err
+		} else if !ok || !mayAct(p, o) {
 			return "", Owner{}, nil, ErrNotFound
 		}
 		id = ref
@@ -371,7 +389,9 @@ func (g *Gateway) resolve(ctx context.Context, p Principal, ref, scope string) (
 		}
 		id = sb
 		var ok bool
-		if o, ok = g.ownerOf(id); !ok || !mayAct(p, o) {
+		if o, ok, err = g.ownerOf(ctx, p, id); err != nil {
+			return "", Owner{}, nil, err
+		} else if !ok || !mayAct(p, o) {
 			return "", Owner{}, nil, ErrNotFound
 		}
 	default:
@@ -461,13 +481,16 @@ type quotaHold struct {
 // reserveQuota checks a create against its tenant's quota and holds its
 // share. Usage is what the store records plus what is in flight, so a burst
 // of creates cannot each pass the check and together exceed it.
-func (g *Gateway) reserveQuota(tenant string, r api.NodeResources) (*quotaHold, error) {
+func (g *Gateway) reserveQuota(ctx context.Context, tenant string, r api.NodeResources) (*quotaHold, error) {
 	q := g.cfg.Quota
 	g.quotaMu.Lock()
 	defer g.quotaMu.Unlock()
 	in := g.inflight[tenant]
 	if q.Sandboxes > 0 || q.CPUs > 0 || q.MemoryMB > 0 {
-		u := g.usageOf(tenant) // less what is on lost nodes
+		u, err := g.usageOf(ctx, tenant) // less what is on lost nodes
+		if err != nil {
+			return nil, err
+		}
 		who := "tenant " + tenant
 		if tenant == "" {
 			who = "the default tenant"
@@ -512,23 +535,18 @@ func (h *quotaHold) release() {
 	h.drop()
 }
 
-// record makes the sandbox's owner record, and moves its share from in
-// flight to recorded in one step under the quota lock, so no check counts it
-// twice or not at all; the file is written after the lock is let go.
-func (h *quotaHold) record(id string, o Owner, cpus float64, memoryMB, diskMB int) error {
+// record makes the sandbox's record — owner, size and the details its node
+// answered with — and moves its share from in flight to recorded in one
+// step under the quota lock, so no check counts it twice or not at all.
+func (h *quotaHold) record(ctx context.Context, st Store, o Owner, sb api.Sandbox) error {
 	h.g.quotaMu.Lock()
-	err := h.g.store.stageSandbox(id, o, cpus, memoryMB, diskMB)
-	if err == nil {
-		h.drop()
-	}
-	h.g.quotaMu.Unlock()
-	if err != nil {
+	defer h.g.quotaMu.Unlock()
+	size := api.NodeResources{CPUs: sb.CPUs, MemoryMB: sb.MemoryMB, DiskMB: sb.DiskMB}
+	// Recorded even if the caller has gone: the sandbox exists on the node.
+	if err := st.RecordSandbox(context.WithoutCancel(ctx), sb.ID, o, size, &sb); err != nil {
 		return err
 	}
-	if err := h.g.store.persist(); err != nil {
-		_ = h.g.store.ForgetSandbox(id)
-		return err
-	}
+	h.drop()
 	return nil
 }
 
@@ -580,7 +598,8 @@ func (t *tombstones) get(id string) (Owner, bool) {
 // reconcile forgets owner records of sandboxes their node no longer runs:
 // terminated without a DELETE through the gateway (an idle timeout), or gone
 // (a node that restarted). What is forgotten no longer counts against its
-// tenant's quota.
+// tenant's quota, and is kept as history. The details of those still
+// running are brought up to the node's: a lifetime moved, a suspend.
 func (g *Gateway) reconcile(ctx context.Context) {
 	for _, n := range g.nodes.healthy() {
 		g.reconcileNode(ctx, n)
@@ -590,7 +609,11 @@ func (g *Gateway) reconcile(ctx context.Context) {
 // reconcileNode is reconcile for one node: also run when a node answers
 // again after not answering (lost.go).
 func (g *Gateway) reconcileNode(ctx context.Context, n *node) {
-	recorded := g.store.SandboxesOn(n.cfg.Name)
+	recorded, err := g.store.SandboxesOn(ctx, n.cfg.Name)
+	if err != nil {
+		g.logf("reconcile %s: %v", n.cfg.Name, err)
+		return
+	}
 	if len(recorded) == 0 {
 		return
 	}
@@ -600,26 +623,60 @@ func (g *Gateway) reconcileNode(ctx context.Context, n *node) {
 		return
 	}
 	state := map[string]string{}
+	var live []api.Sandbox
 	for _, sb := range list.Sandboxes {
 		state[sb.ID] = sb.State
+		if _, ours := recorded[sb.ID]; ours && sb.State != api.StateTerminated {
+			live = append(live, sb)
+		}
 	}
-	var forget []string
+	var forget, gone []string
 	for id, at := range recorded {
 		st, listed := state[id]
 		if listed && st == api.StateTerminated {
-			if o, ok := g.store.OwnerOf(id); ok {
+			if o, ok, _ := g.store.OwnerOf(ctx, id); ok {
 				g.tombs.add(id, o)
 			}
 			forget = append(forget, id)
 		} else if !listed && at.Before(asked) {
-			forget = append(forget, id)
+			gone = append(gone, id)
 		}
 	}
-	if err := g.store.ForgetSandboxes(forget); err != nil {
+	if err := g.store.UpdateSandboxDetails(ctx, live...); err != nil {
+		g.logf("reconcile %s: %v", n.cfg.Name, err)
+	}
+	if err := g.store.ForgetSandboxes(ctx, gone, "gone"); err != nil {
+		g.logf("reconcile %s: %v", n.cfg.Name, err)
+		return
+	}
+	forget = append(forget, gone...)
+	if err := g.store.ForgetSandboxes(ctx, forget, "terminated"); err != nil {
 		g.logf("reconcile %s: %v", n.cfg.Name, err)
 		return
 	}
 	g.metrics.terminated.Add(float64(len(forget)), "ended")
+}
+
+// pruneHistory deletes terminated sandboxes' rows older than
+// SandboxHistory, at start and every hour.
+func (g *Gateway) pruneHistory(ctx context.Context) {
+	if g.cfg.SandboxHistory <= 0 {
+		return
+	}
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		if n, err := g.store.PruneSandboxHistory(ctx, time.Now().Add(-g.cfg.SandboxHistory)); err != nil {
+			g.logf("sandbox history: %v", err)
+		} else if n > 0 {
+			g.logf("sandbox history: %d terminated sandboxes past %v forgotten", n, g.cfg.SandboxHistory)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // baseCtx is Start's context, ended by Close.
