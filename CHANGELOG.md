@@ -200,6 +200,17 @@ in `_old/` as reference, to be ported where this design still wants it.
   a group a running job or a service names cannot be removed. There is no
   default group: a launch reaches a group's hosts only by naming it. A
   `sandboxd` reached directly refuses `groups`, which are a gateway's.
+- **An invite naming no tenant is a sign-up with an organization of its
+  own.** It used to put the account in the default tenant, beside everyone
+  else invited without one, sharing its secrets and services. Now the
+  account gets a tenant named after its user (`john.smith` gets
+  `john-smith`), and the invite is refused (`409`) when that name is a
+  tenant someone is in already, a team organization, or one another pending
+  invite names. `--tenant` (`"tenant"`) puts an account in an existing
+  tenant as before; `default` names the default tenant. Studio no
+  longer offers creating organizations or the Members screen: an account is
+  one person in one organization for now, and organizations made with
+  `sandbox-cli org` still work.
 
 **Added:**
 

@@ -28,6 +28,12 @@ sandbox-cli org members rm bob           # bob's open streams and SSH sessions i
 members do not see each other's sandboxes, while secrets and services are
 the organisation's, as they are a tenant's.
 
+**For now an account is one person in one organisation.** An invite that
+names no tenant gives its account an organisation of its own
+([fleet.md](fleet.md#accounts-invite-by-email-sign-in-with-a-password)),
+and hosted Studio offers neither creating organisations nor the Members
+screen. Team organisations, below, still work through the CLI and the API.
+
 **Every tenant is an organisation** in the gateway's database: the default
 tenant, each tenant a key was issued into (a *personal* one, which nobody
 else joins), and the ones made with `org create` (*team*, with members). A

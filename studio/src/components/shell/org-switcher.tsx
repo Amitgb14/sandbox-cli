@@ -21,7 +21,7 @@ import { ApiError, apiFetch } from "@/lib/api/client";
 import { useInfo } from "@/lib/api/queries";
 import { useCreateOrg, useOrgs } from "@/lib/api/orgs";
 import { can, useCaller } from "@/lib/caller";
-import { ORG_NAME_HINT, orgName, orgNameProblem, useOrgStore } from "@/lib/org";
+import { ORG_NAME_HINT, TEAMS, orgName, orgNameProblem, useOrgStore } from "@/lib/org";
 import type { Whoami } from "@/lib/types";
 
 /**
@@ -101,7 +101,22 @@ export function OrgSwitcher() {
   const [creating, setCreating] = useState(false);
   if (caller.kind !== "gateway" || !current) return null;
   const own = orgName(caller.who.tenant);
-  const mayCreate = can(caller, "org:create");
+  const mayCreate = TEAMS && can(caller, "org:create");
+
+  // One organisation and nothing to offer: its name, not a menu.
+  if ((orgs?.length ?? 1) <= 1 && !TEAMS) {
+    return (
+      <div
+        role="group"
+        aria-label={`Organization: ${current}`}
+        data-testid="org-switcher"
+        className="flex h-9 items-center gap-2 rounded-md border bg-background px-2.5 text-sm"
+      >
+        <Building2 className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate font-medium">{current}</span>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -127,19 +142,23 @@ export function OrgSwitcher() {
               <span className="text-xs text-muted-foreground">{o.name === own ? "your key's" : o.role}</span>
             </DropdownMenuItem>
           ))}
-          <DropdownMenuSeparator />
-          {mayCreate && (
-            <DropdownMenuItem onSelect={() => setCreating(true)}>
-              <Plus className="size-4" />
-              Create organization
-            </DropdownMenuItem>
+          {TEAMS && (
+            <>
+              <DropdownMenuSeparator />
+              {mayCreate && (
+                <DropdownMenuItem onSelect={() => setCreating(true)}>
+                  <Plus className="size-4" />
+                  Create organization
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem asChild>
+                <Link href="/members">
+                  <Users className="size-4" />
+                  Members
+                </Link>
+              </DropdownMenuItem>
+            </>
           )}
-          <DropdownMenuItem asChild>
-            <Link href="/members">
-              <Users className="size-4" />
-              Members
-            </Link>
-          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       {mayCreate && <CreateOrgDialog open={creating} onOpenChange={setCreating} onCreated={(name) => switchOrg(name)} />}

@@ -18,6 +18,16 @@ import { create } from "zustand";
 
 const ORG_KEY = "sandbox-studio-org";
 
+/**
+ * Whether Studio offers teams: creating organisations and managing their
+ * members. For now an account is one person in one organisation (an invite
+ * naming no tenant makes it one of its own), so both are hidden; the
+ * gateway still has them, an organisation made with `sandbox-cli org` is
+ * still listed and switched to, and the members screen still answers at
+ * /members. Turning teams on is this one value.
+ */
+export const TEAMS = false;
+
 function readStored(): string | null {
   if (typeof window === "undefined") return null;
   try {

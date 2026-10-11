@@ -203,7 +203,11 @@ func newGatewayInvitesCmd(ctxFlag *string) *cobra.Command {
 			"the person chooses a password and becomes an account: a user with the tenant,\n" +
 			"scopes, policy and lifetime the invite names, as a key issued with them would\n" +
 			"have. They sign in with the address and password from then on; the account is\n" +
-			"listed, renewed and revoked with gateway keys.",
+			"listed, renewed and revoked with gateway keys.\n\n" +
+			"With no --tenant the invite is a sign-up: the account gets an organization of\n" +
+			"its own, named after the user (john.smith gets john-smith), and the invite is\n" +
+			"refused if that name is in use. --tenant puts it in an existing one, default\n" +
+			"for the default tenant.",
 	}
 
 	var email, user, tenant, policy, expires, inviteURL string
@@ -213,7 +217,7 @@ func newGatewayInvitesCmd(ctxFlag *string) *cobra.Command {
 		Use:   "create",
 		Short: "Make an invite; its link is printed once",
 		Example: "  # a demo user: 30-minute sandboxes, an account for a week, the link emailed\n" +
-			"  sandbox-cli gateway invites create --email bob@example.com --user bob --tenant bob \\\n" +
+			"  sandbox-cli gateway invites create --email bob@example.com --user bob \\\n" +
 			"    --scope sandbox:read --scope sandbox:create --scope sandbox:delete \\\n" +
 			"    --policy demo --expires 7d --send --invite-url https://studio.example.com",
 		Args: cobra.NoArgs,
@@ -242,7 +246,7 @@ func newGatewayInvitesCmd(ctxFlag *string) *cobra.Command {
 	f := create.Flags()
 	f.StringVar(&email, "email", "", "the address the invite is for; required")
 	f.StringVar(&user, "user", "", "the user the account acts as; required")
-	f.StringVar(&tenant, "tenant", "", "the user's tenant (quotas are per tenant)")
+	f.StringVar(&tenant, "tenant", "", "an existing tenant to put the account in (default: an organization of its own)")
 	f.StringArrayVar(&scopes, "scope", nil, "a scope, as for gateway keys create (repeatable)")
 	f.StringVar(&policy, "policy", "", "the policy the user holds (gateway policies set)")
 	f.StringVar(&expires, "expires", "never", "how long the account lasts once made: 7d, 12h, or never")

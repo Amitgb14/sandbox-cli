@@ -22,6 +22,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { can, isAdmin, useCaller, type Caller } from "@/lib/caller";
+import { TEAMS } from "@/lib/org";
 import type { Scope } from "@/lib/types";
 
 /**
@@ -151,7 +152,9 @@ export const NAV: NavGroup[] = [
   {
     label: "System",
     items: [
-      { title: "Members", href: "/members", icon: UserRoundCog, need: "gateway", hint: "Who belongs to the current organization; owners add and remove members" },
+      ...(TEAMS
+        ? [{ title: "Members", href: "/members", icon: UserRoundCog, need: "gateway", hint: "Who belongs to the current organization; owners add and remove members" } satisfies NavItem]
+        : []),
       { title: "Account", href: "/account", icon: CircleUser, need: "gateway", hint: "Who this API key is: user, tenant, organization and scopes" },
       {
         title: "Settings",

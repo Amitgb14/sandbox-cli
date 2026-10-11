@@ -605,7 +605,7 @@ instead.
 
 ```sh
 # a demo user: 30-minute sandboxes, an account that lasts a week
-sandbox-cli gateway invites create --email bob@example.com --user bob --tenant bob \
+sandbox-cli gateway invites create --email bob@example.com --user bob \
   --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
   --policy demo --expires 7d --invite-url https://studio.example.com
 sandbox-cli gateway invites list                 # sent and not yet used
@@ -617,6 +617,13 @@ Or in Studio, under Users & keys: type the address in **Add a user** and
 press **Create invite**; **Email invite** opens your own mail program with the
 message and link written.
 
+- **Its organization.** An invite naming no tenant is a sign-up: the
+  account gets an organization of its own, named after its user (`bob`;
+  `john.smith` gets `john-smith`), with its own sandboxes, secrets, jobs,
+  services and quota. It is refused when that name is a tenant someone is
+  in already, a team organization, or one another pending invite names,
+  rather than putting a stranger beside them. `--tenant NAME` puts the
+  account in an existing tenant, `--tenant default` in the default one.
 - **The invite** is a link, `https://studio…/#invite=sgi_…`, shown once and
   stored only as its hash. It works once, for two days (`valid_secs` in the
   API, at most seven), so a leaked email is worth nothing once it was used or

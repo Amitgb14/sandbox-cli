@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -325,5 +326,86 @@ func TestAccountsSurviveAReopen(t *testing.T) {
 	}
 	if _, ok := st.InviteByToken(pending); !ok {
 		t.Error("a pending invite was lost")
+	}
+}
+
+// An invite naming no tenant is a sign-up: an organisation of its own, named
+// after its user, never a tenant someone is in already or one another pending
+// invite names.
+func TestAnInviteNamingNoTenantIsAnOrganisationOfItsOwn(t *testing.T) {
+	tg := startGateway(t, nil, startNode(t, "n1"))
+	ctx := ctxT(t)
+	invite := func(email, user, tenant string) (api.CreatedInvite, error) {
+		return tg.admin.CreateInvite(ctx, api.CreateInviteRequest{Email: email, User: user, Tenant: tenant, Scopes: demoScopes})
+	}
+
+	iv, err := invite("carol@example.com", "Carol", "")
+	if err != nil || iv.Tenant != "carol" {
+		t.Fatalf("an invite naming no tenant: %+v, %v; want tenant carol", iv, err)
+	}
+	if _, err := tg.anon().Register(ctx, api.RegisterRequest{Token: iv.Token, Password: bobPassword}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := tg.anon().Login(ctx, api.LoginRequest{Email: "carol@example.com", Password: bobPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if who, err := tg.signedIn(l).Whoami(ctx); err != nil || who.Tenant != "carol" || who.Org != "carol" {
+		t.Errorf("carol's account: %+v, %v", who, err)
+	}
+
+	// A tenant in use: by a key, or as a team organisation.
+	tg.keyed("ops", "acme", ScopeRead)
+	_, founder := tg.keyed("founder", "founders", ScopeRead, ScopeOrgCreate)
+	mustOrg(t, founder, "team-x")
+	for _, user := range []string{"acme", "ACME", "team-x"} {
+		_, err := invite(user+"@example.com", user, "")
+		wantCode(t, err, api.CodeConflict)
+	}
+	// Named, it is the admin's to say.
+	if iv, err := invite("acme@example.com", "acme", "acme"); err != nil || iv.Tenant != "acme" {
+		t.Errorf("an invite naming acme: %+v, %v", iv, err)
+	}
+
+	// A tenant a pending invite for another address names.
+	if _, err := invite("dave@example.com", "dave", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err = invite("dave2@example.com", "dave", "")
+	wantCode(t, err, api.CodeConflict)
+	// The same address again replaces its own invite.
+	if _, err := invite("dave@example.com", "dave", ""); err != nil {
+		t.Errorf("a second invite for dave's address: %v", err)
+	}
+
+	// A user name an organisation name cannot hold becomes one that can.
+	if iv, err := invite("john@example.com", "John.Smith+ops", ""); err != nil || iv.Tenant != "john-smith-ops" {
+		t.Errorf("john.smith+ops: %+v, %v; want tenant john-smith-ops", iv, err)
+	}
+	// One that cannot become one.
+	for _, user := range []string{"1st", "admin", "default", "_"} {
+		_, err := invite(user+"@example.com", user, "")
+		wantCode(t, err, api.CodeInvalidRequest)
+	}
+	// "default" names the default tenant.
+	if iv, err := invite("erin@example.com", "erin", api.DefaultOrg); err != nil || iv.Tenant != "" {
+		t.Errorf("an invite naming default: %+v, %v", iv, err)
+	}
+}
+
+func TestOwnTenant(t *testing.T) {
+	for user, want := range map[string]string{
+		"bob":                          "bob",
+		"Bob":                          "bob",
+		"john.smith":                   "john-smith",
+		"a..b__c":                      "a-b-c",
+		".lead":                        "lead",
+		"trail_":                       "trail",
+		"x@example.com":                "x-example-com",
+		strings.Repeat("a", 29) + ".b": strings.Repeat("a", 29),
+	} {
+		if got := ownTenant(user); got != want {
+			t.Errorf("ownTenant(%q) = %q; want %q", user, got, want)
+		}
 	}
 }

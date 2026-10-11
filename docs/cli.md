@@ -622,6 +622,11 @@ the person chooses a password and becomes an account: a user with the tenant,
 scopes, policy and lifetime the invite names, as a key issued with them would
 have. They sign in with the address and password from then on; the account is
 listed, renewed and revoked with gateway keys.
+
+With no --tenant the invite is a sign-up: the account gets an organization of
+its own, named after the user (john.smith gets john-smith), and the invite is
+refused if that name is in use. --tenant puts it in an existing one, default
+for the default tenant.
 ```
 
 Subcommands: [`create`](#sandbox-cli-gateway-invites-create), [`list`](#sandbox-cli-gateway-invites-list), [`resend`](#sandbox-cli-gateway-invites-resend), [`revoke`](#sandbox-cli-gateway-invites-revoke).
@@ -638,7 +643,7 @@ Examples:
 
 ```sh
 # a demo user: 30-minute sandboxes, an account for a week, the link emailed
-sandbox-cli gateway invites create --email bob@example.com --user bob --tenant bob \
+sandbox-cli gateway invites create --email bob@example.com --user bob \
   --scope sandbox:read --scope sandbox:create --scope sandbox:delete \
   --policy demo --expires 7d --send --invite-url https://studio.example.com
 ```
@@ -653,7 +658,7 @@ Flags:
 | `--policy string` |  | the policy the user holds (gateway policies set) |
 | `--scope stringArray` |  | a scope, as for gateway keys create (repeatable) |
 | `--send` |  | have the gateway email the link to the address (a gateway started with --smtp-host) |
-| `--tenant string` |  | the user's tenant (quotas are per tenant) |
+| `--tenant string` |  | an existing tenant to put the account in (default: an organization of its own) |
 | `--user string` |  | the user the account acts as; required |
 
 ### sandbox-cli gateway invites list

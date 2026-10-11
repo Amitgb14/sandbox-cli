@@ -5,8 +5,10 @@ import { gatewayStudio, type GatewayStudio } from "./state";
  * Organisations in Studio, against the real sandbox-gateway global-setup.ts
  * starts. Whether a selection is allowed is the gateway's to decide — its
  * tests pin that — so these pin what Studio does with one: lists the key's,
- * sends the selection on every call, shows nothing of one organisation under
- * another's name, and offers creating and managing only to whom may.
+ * sends the selection on every call, and shows nothing of one organisation
+ * under another's name. Teams are hidden for now (lib/org.ts TEAMS): Studio
+ * offers neither creating an organisation nor its members, so one is made
+ * through the API here, and the members screen is reached by its address.
  */
 
 const ORG = "e2e-one";
@@ -37,17 +39,23 @@ async function choose(page: Page, org: string) {
   await expect(switcher(page)).toHaveAccessibleName(`Organization: ${org}`);
 }
 
-test("a tenant creates an organization and sees only the selected one's sandboxes", async ({ page, request }) => {
+test("one organization is a name, not a menu, and offers no teams", async ({ page }) => {
   await open(page, "gw-tenant", "alice@team-a");
   await expect(switcher(page)).toHaveAccessibleName("Organization: team-a");
   await switcher(page).click();
+  await expect(page.getByRole("menuitem")).toHaveCount(0);
+  await expect(page.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Members" })).toHaveCount(0);
+});
+
+test("an organization made elsewhere is switched to, and shows only its own sandboxes", async ({ page, request }) => {
+  const { base: gwBase, token } = gatewayStudio("gw-tenant");
+  const made = await request.fetch(`${gwBase}/api/v1/orgs`, { method: "POST", data: { name: ORG }, headers: { Authorization: `Bearer ${token}` } });
+  expect(made.status(), await made.text()).toBe(201);
+  await open(page, "gw-tenant", "alice@team-a");
+  await switcher(page).click();
   await expect(page.getByRole("menuitem", { name: /^team-a/ })).toBeVisible();
-  await page.getByRole("menuitem", { name: "Create organization" }).click();
-  await page.getByLabel("Organization name").fill("Bad--name");
-  await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
-  await page.getByLabel("Organization name").fill(ORG);
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  // Created, and switched to.
+  await expect(page.getByRole("menuitem", { name: "Create organization" })).toHaveCount(0);
+  await page.getByRole("menuitem", { name: new RegExp(`^${ORG}\\b`) }).click();
   await expect(switcher(page)).toHaveAccessibleName(`Organization: ${ORG}`);
 
   await sandbox(request, "gw-tenant", "in-team-a");
