@@ -60,6 +60,8 @@ func TestFakeNoEgress(t *testing.T) {
 func TestFakeNarrowPolicy(t *testing.T) {
 	pol := spec.DefaultPolicyFor(capSet(api.CapEgressAllowlist))
 	pol.Network.MayAllow = nil
+	// Long enough for every other test, so only the lifetime tests see it.
+	pol.Limits.MaxLifetimeSecs = 3600
 	Run(t, serveFake(t, pol, false, api.CapEgressAllowlist))
 }
 

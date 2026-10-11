@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -86,6 +87,17 @@ func (s *Server) resize(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "its environment ("+strings.Join(old.EnvNames, ", ")+") does not carry over: values are never readable back; resize with drop_env to go on without it")
 		return
 	}
+	// The copy is the same sandbox at another size, so it keeps the time it
+	// has left: a resize must not be a way to start a lifetime over.
+	lifetime := 0
+	if old.ExpiresAt != nil {
+		left := int(math.Ceil(time.Until(*old.ExpiresAt).Seconds()))
+		if left <= 0 {
+			writeErr(w, http.StatusConflict, "it has reached the end of its lifetime")
+			return
+		}
+		lifetime = left
+	}
 
 	snap, err := c.CreateSnapshot(ctx, old.ID)
 	if err != nil {
@@ -113,7 +125,7 @@ func (s *Server) resize(w http.ResponseWriter, r *http.Request) {
 	network := old.Network
 	copyReq := api.CreateSandboxRequest{
 		SnapshotID: snap.ID, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,
-		Labels: labels, Network: &network, IdleTimeoutSecs: old.IdleTimeoutSecs,
+		Labels: labels, Network: &network, IdleTimeoutSecs: old.IdleTimeoutSecs, LifetimeSecs: lifetime,
 		SnapshotEverySecs: old.SnapshotEverySecs, SnapshotKeep: old.SnapshotKeep,
 	}
 	nsb, err := c.CreateSandbox(ctx, copyReq)

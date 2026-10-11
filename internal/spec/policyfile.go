@@ -16,7 +16,8 @@ import (
 //	default_image: ghcr.io/you/sandbox-base:1
 //	images: [ghcr.io/you/sandbox-base:1]      # only these may be requested
 //	defaults: {cpus: 2, memory_mb: 2048, disk_mb: 20480, idle_timeout_secs: 3600}
-//	limits:   {max_cpus: 8, max_memory_mb: 16384, max_disk_mb: 102400, max_idle_timeout_secs: 86400}
+//	limits:   {max_cpus: 8, max_memory_mb: 16384, max_disk_mb: 102400, max_idle_timeout_secs: 86400,
+//	           max_lifetime_secs: 1800}             # every sandbox ends 30 minutes after it starts
 //	network:
 //	  default: {mode: allowlist, allow: [github.com, registry.npmjs.org]}
 //	  ceiling: allowlist
@@ -37,6 +38,8 @@ type policyFile struct {
 		MaxMemoryMB        *int     `yaml:"max_memory_mb"`
 		MaxDiskMB          *int     `yaml:"max_disk_mb"`
 		MaxIdleTimeoutSecs *int     `yaml:"max_idle_timeout_secs"`
+		// How long any sandbox may exist, busy or not; unset or 0 is no bound.
+		MaxLifetimeSecs *int `yaml:"max_lifetime_secs"`
 		// Scheduled snapshots: how often at most, and how many of one sandbox.
 		MinSnapshotEverySecs *int `yaml:"min_snapshot_every_secs"`
 		MaxSnapshotKeep      *int `yaml:"max_snapshot_keep"`
@@ -88,6 +91,7 @@ func LoadPolicy(path string) (Policy, error) {
 		set(&p.Limits.MaxMemoryMB, l.MaxMemoryMB)
 		set(&p.Limits.MaxDiskMB, l.MaxDiskMB)
 		set(&p.Limits.MaxIdleTimeoutSecs, l.MaxIdleTimeoutSecs)
+		set(&p.Limits.MaxLifetimeSecs, l.MaxLifetimeSecs)
 		set(&p.Limits.MinSnapshotEverySecs, l.MinSnapshotEverySecs)
 		set(&p.Limits.MaxSnapshotKeep, l.MaxSnapshotKeep)
 	}

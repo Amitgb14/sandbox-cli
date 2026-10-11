@@ -301,6 +301,17 @@ in `_old/` as reference, to be ported where this design still wants it.
   before, closing the browser tab threw a minute of work away. Deleting the
   sandbox part way does not stop it either: the sandbox goes at once, and the
   snapshot is listed when it finishes, or is not there at all if it cannot.
+- **A sandbox lifetime.** `limits.max_lifetime_secs` in sandboxd's policy ends
+  every sandbox that long after it was created, whatever it is doing — a
+  running process holds off the idle timeout, not this — and a suspended one
+  too. A request may ask for a shorter `lifetime_secs` (`sandbox-cli run
+  --lifetime 10m`), never a longer one, and with no limit set it may ask for
+  one of its own. A sandbox reports `lifetime_secs` and `expires_at`;
+  `sandbox-cli ls` has an EXPIRES column, Studio counts down to it, and the
+  termination is recorded with reason `lifetime`. The clock is the wall clock,
+  so a sandbox kept across a sandboxd restart ends on time, and a Studio resize
+  keeps the time left rather than starting it over. For a demo server:
+  `max_lifetime_secs: 1800`.
 - **Hosted Studio: `sandbox-cli studio host`.** One Studio on a public
   address for a gateway's users ([docs/studio.md](docs/studio.md#hosted-studio)).
   Each user opens an invite link, `https://studio.example.com/#key=sgk_…`,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pencil, Scaling, SquareTerminal } from "lucide-react";
 import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -15,7 +15,7 @@ import { useInfo } from "@/lib/api/queries";
 import { useCan } from "@/lib/caller";
 import { cn } from "@/lib/utils";
 import { StateDot } from "@/components/sandbox/state-dot";
-import { formatArgv, formatDateTime, formatRelative } from "@/lib/format";
+import { formatArgv, formatDateTime, formatDuration, formatRelative } from "@/lib/format";
 import type { Process, Sandbox } from "@/lib/types";
 
 function idle(secs: number): string {
@@ -36,6 +36,24 @@ function Section({ title, aside, children }: { title?: string; aside?: React.Rea
       ) : null}
       {children}
     </section>
+  );
+}
+
+/**
+ * Time left before a sandbox's lifetime ends it, busy or not. It ticks: there
+ * is one on screen, and the last minutes are what someone is watching for.
+ */
+function Countdown({ at }: { at: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const left = new Date(at).getTime() - now;
+  return (
+    <span title={formatDateTime(at)} className={cn("tabular-nums", left < 5 * 60_000 && "text-caution")}>
+      {left > 0 ? `in ${formatDuration(left)}` : "now"}
+    </span>
   );
 }
 
@@ -173,6 +191,11 @@ export function SandboxOverview({
             <span title={formatDateTime(sb.created_at)}>{formatRelative(sb.created_at)}</span>
           </Row>
           <Row k="Idle auto-stop">{idle(sb.idle_timeout_secs)}</Row>
+          {sb.expires_at && sb.state !== "terminated" ? (
+            <Row k="Ends">
+              <Countdown at={sb.expires_at} />
+            </Row>
+          ) : null}
         </dl>
       </Section>
 

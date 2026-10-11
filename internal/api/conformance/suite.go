@@ -85,6 +85,8 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"ImagesAreListedInstalledAndPinned", testImages},
 		{"IdleSandboxIsTerminated", testIdleTimeout},
 		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
+		{"ABusySandboxEndsAtItsLifetime", testLifetime},
+		{"LifetimeAboveTheLimitIsInvalid", testLifetimeLimit},
 		{"AttachStreamsInputAndOutput", testAttach},
 		{"SuspendKeepsTheSandbox", testSuspend},
 		{"ASnapshotForksTheSandbox", testSnapshot},
@@ -790,6 +792,46 @@ func testIdleTimeout(t *testing.T, e *env) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	t.Fatal("an idle sandbox was not terminated")
+}
+
+// A lifetime ends a sandbox whatever it is doing: here a process keeps it
+// busy, which an idle timeout would respect and a lifetime does not.
+func testLifetime(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{LifetimeSecs: 3})
+	if sb.LifetimeSecs != 3 || sb.ExpiresAt == nil {
+		t.Fatalf("lifetime_secs %d, expires_at %v; want 3 and a time", sb.LifetimeSecs, sb.ExpiresAt)
+	}
+	if d := sb.ExpiresAt.Sub(sb.CreatedAt); d != 3*time.Second {
+		t.Errorf("expires_at is %v after created_at, want 3s", d)
+	}
+	if _, err := e.c.StartProcess(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"sleep", "600"}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := e.c.Sandbox(ctxT(t), sb.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State == api.StateTerminated {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatal("a sandbox outlived its lifetime")
+}
+
+func testLifetimeLimit(t *testing.T, e *env) {
+	max := e.caps.Limits.MaxLifetimeSecs
+	if max <= 0 {
+		t.Skip("no lifetime limit")
+	}
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{LifetimeSecs: max + 1})
+	wantCode(t, err, api.CodeInvalidRequest)
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	if sb.LifetimeSecs != max || sb.ExpiresAt == nil {
+		t.Errorf("a sandbox asking for none: lifetime_secs %d, expires_at %v; want the limit, %d", sb.LifetimeSecs, sb.ExpiresAt, max)
+	}
 }
 
 func testIdleTimeoutLimit(t *testing.T, e *env) {

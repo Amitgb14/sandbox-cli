@@ -134,10 +134,14 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tNAME\tSTATE\tIMAGE\tNETWORK\tCREATED\tLABELS")
+			fmt.Fprintln(tw, "ID\tNAME\tSTATE\tIMAGE\tNETWORK\tCREATED\tEXPIRES\tLABELS")
 			for _, s := range list {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, termsafe.Clean(s.Name), s.State,
-					termsafe.Clean(s.Image), s.Network.Mode, s.CreatedAt.Local().Format(time.DateTime), formatLabels(s.Labels))
+				expires := "-"
+				if s.ExpiresAt != nil && s.State != api.StateTerminated {
+					expires = s.ExpiresAt.Local().Format(time.DateTime)
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, termsafe.Clean(s.Name), s.State,
+					termsafe.Clean(s.Image), s.Network.Mode, s.CreatedAt.Local().Format(time.DateTime), expires, formatLabels(s.Labels))
 			}
 			return tw.Flush()
 		},

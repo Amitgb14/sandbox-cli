@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
@@ -97,5 +98,26 @@ func TestResizeRefusesWhatItCannotCarry(t *testing.T) {
 	}
 	if snaps, _ := cm.Snapshots(ctx); len(snaps) != 0 {
 		t.Errorf("a refused resize took a snapshot")
+	}
+}
+
+// A resize keeps the time a sandbox has left: the copy expires when the
+// original would have, so resizing cannot start a lifetime over.
+func TestResizeKeepsTheLifetimeLeft(t *testing.T) {
+	st, c := studioWith(t, api.CapEgressAllowlist, api.CapDiskSnapshot)
+	ctx := context.Background()
+	old, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{Name: "web", LifetimeSecs: 1800})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, body := call(t, st.URL, "POST", "/api/sandboxes/"+old.ID+"/resize", testToken, "", ResizeRequest{CPUs: 2, MemoryMB: 2048}); r.StatusCode != http.StatusOK {
+		t.Fatalf("resize: %d %v", r.StatusCode, body)
+	}
+	nsb, err := c.Sandbox(ctx, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nsb.ExpiresAt == nil || nsb.ExpiresAt.Sub(*old.ExpiresAt).Abs() > 2*time.Second {
+		t.Errorf("the copy expires at %v, the original at %v; want the same time", nsb.ExpiresAt, old.ExpiresAt)
 	}
 }
