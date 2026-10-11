@@ -79,6 +79,8 @@ export interface AdminOrg {
   created_by_tenant?: string;
   members: number;
   owners: number;
+  /** Each owner now, user and tenant (empty: the default tenant). */
+  owned_by?: { user: string; tenant?: string; role: string }[];
 }
 
 export interface KeyInfo {

@@ -653,6 +653,9 @@ type AdminOrg struct {
 	CreatedByTenant string    `json:"created_by_tenant,omitempty"`
 	Members         int       `json:"members"`
 	Owners          int       `json:"owners"`
+	// OwnedBy names each owner, user and tenant: who holds the organisation
+	// now, which CreatedBy says only of its start.
+	OwnedBy []OrgMember `json:"owned_by,omitempty"`
 }
 
 // AdminOrgList is GET /v1/admin/orgs.

@@ -411,6 +411,15 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
   await expect(page.getByTestId("suspended-carol")).toContainText("suspended · revoked for good");
   const r = await fetch(`${e2eState().gatewayURL}/v1/whoami`, { headers: { Authorization: `Bearer ${value}` } });
   expect(r.status).toBe(401);
+  // The filter finds a user by name and by status.
+  await page.getByRole("combobox", { name: "Status" }).click();
+  await page.getByRole("option", { name: "suspended" }).click();
+  await expect(page.getByTestId("users-count")).toHaveText(/^1 of \d+ keys$/);
+  await page.getByRole("button", { name: "Reset" }).click();
+  await page.getByLabel("Filter users").fill("no-such-user");
+  await expect(page.getByText("No key matches.")).toBeVisible();
+  await page.getByLabel("Filter users").fill("carol");
+  await expect(page.getByRole("row").filter({ hasText: "alice" })).toHaveCount(0);
   await page.getByRole("row").filter({ hasText: "carol" }).getByRole("button", { name: "Restore" }).click();
   await expect(page.getByTestId("suspended-carol")).toHaveCount(0);
   expect((await fetch(`${e2eState().gatewayURL}/v1/whoami`, { headers: { Authorization: `Bearer ${value}` } })).status).toBe(200);

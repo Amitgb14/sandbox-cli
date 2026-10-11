@@ -750,8 +750,14 @@ func (g *Gateway) adminListOrgs(w http.ResponseWriter, r *http.Request, p Princi
 		return
 	}
 	for _, o := range orgs {
-		out.Orgs = append(out.Orgs, api.AdminOrg{Name: o.Name, Created: o.Created, CreatedBy: o.CreatedBy,
-			CreatedByTenant: o.CreatedByTenant, Members: len(o.Members), Owners: owners(o.Members)})
+		ao := api.AdminOrg{Name: o.Name, Created: o.Created, CreatedBy: o.CreatedBy,
+			CreatedByTenant: o.CreatedByTenant, Members: len(o.Members), Owners: owners(o.Members)}
+		for _, m := range o.Members {
+			if m.Role == api.RoleOwner {
+				ao.OwnedBy = append(ao.OwnedBy, api.OrgMember{User: m.User, Tenant: m.Tenant, Role: m.Role})
+			}
+		}
+		out.Orgs = append(out.Orgs, ao)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

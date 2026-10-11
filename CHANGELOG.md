@@ -248,6 +248,16 @@ in `_old/` as reference, to be ported where this design still wants it.
   policy and expiry are what differ. It lists each user's organization,
   scopes, policy and expiry. The gateway-wide `admin` scope is the super
   admin's, given from the CLI. The Account page says which you are.
+- **Users create their own organizations in Studio.** The organization
+  switcher offers Create organization again to every account (each holds
+  `org:create`): a user owns their first organization, from their invite,
+  and as many more as `--max-orgs-per-user` allows, each with its own
+  sandboxes, secrets, jobs, services and quota, and switches between them.
+  Members stay hidden. The super admin's Users table lists each user's
+  organizations (`GET /v1/admin/orgs` now names each organization's owners,
+  `owned_by`) and filters by name, email, organization, scope or policy, by
+  role (super admin or admin) and by status (active, suspended, expired,
+  revoked).
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and
   `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)
   list the images on every node with where each is, download one to every
