@@ -211,6 +211,8 @@ export interface SSHAccess {
 export interface JobSpec {
   name?: string;
   image?: string;
+  /** Your own metadata, returned with the job; bounded as a sandbox's labels are. */
+  labels?: Record<string, string>;
   /** The argv each run starts; or `agent` and `prompt` (or `prompts`, one run each). */
   command?: string[];
   agent?: string;

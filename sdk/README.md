@@ -29,7 +29,7 @@ request that started it has gone ([docs/jobs.md](../docs/jobs.md)):
 
 | Python | TypeScript | |
 |---|---|---|
-| `create_job(spec)` | `createJob(spec)` | start a job: `command` or `agent` + `prompt`/`prompts`, `parallelism`, `completions`, `retries`, `timeout_secs`, `env`, `secrets`, `keep`, `notify`, … |
+| `create_job(spec)` | `createJob(spec)` | start a job: `command` or `agent` + `prompt`/`prompts`, `parallelism`, `completions`, `retries`, `timeout_secs`, `env`, `secrets`, `keep`, `notify`, `labels`, … |
 | `agent_run(agent, prompt, **opts)` | `agentRun(agent, prompt, opts?)` | a job of one agent run |
 | `jobs()` | `jobs()` | your jobs, newest first, without their runs |
 | `job(id)` | `job(id)` | one job, with each run's state, exit code, attempts and sandbox |

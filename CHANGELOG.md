@@ -185,6 +185,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   `secrets:write` scope. A restarted gateway carries its jobs on, following
   a command that was running where it runs. The Python and TypeScript SDKs
   have the same calls.
+- **A job carries labels.** A job spec's `labels` are your own metadata,
+  bounded as a sandbox's are (up to 32 keys of lowercase letters, digits and
+  `. _ / -`; printable values up to 256 bytes) and refused otherwise. They
+  are returned with the job, so `GET /v1/jobs` can be told apart and
+  filtered; Studio's Jobs form sets them and its list filters by them.
 
 **Added:**
 

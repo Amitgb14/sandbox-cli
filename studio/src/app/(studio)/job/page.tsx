@@ -7,6 +7,7 @@ import { Download } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader, SectionHeader } from "@/components/common/page-header";
 import { StatusBadge } from "@/components/common/status-badge";
+import { Labels } from "@/components/sandbox/labels";
 import { Gate } from "@/components/shell/gate";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -115,6 +116,7 @@ function Spec({ job }: { job: Job }) {
   if (s.secrets?.length) rows.push(["secrets", s.secrets.join(", ")]);
   if (job.env_names?.length) rows.push(["env", job.env_names.join(", ")]);
   if (s.keep?.files?.length) rows.push(["keeps", s.keep.files.join(", ")]);
+  if (Object.keys(s.labels ?? {}).length) rows.push(["labels", <Labels key="labels" labels={s.labels} />]);
   return (
     <dl className="grid max-w-3xl grid-cols-[8rem_1fr] gap-y-1.5 text-sm">
       {rows.map(([k, v]) => (

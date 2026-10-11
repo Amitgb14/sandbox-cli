@@ -1,21 +1,38 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus, Workflow } from "lucide-react";
+import {
+  type ColumnDef,
+  type SortingState,
+  flexRender,
+  getCoreRowModel,
+  getFacetedRowModel,
+  getFacetedUniqueValues,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
+import { Plus, RefreshCw, Search, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/empty-state";
 import { PageHeader } from "@/components/common/page-header";
 import { StatusBadge } from "@/components/common/status-badge";
+import { ColumnHeader } from "@/components/data-table/column-header";
+import { FacetedFilter } from "@/components/data-table/faceted-filter";
+import { DataTablePagination } from "@/components/data-table/pagination";
 import { Gate } from "@/components/shell/gate";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { serviceHref, useDeployService, useServices } from "@/lib/api/gateway";
 import { useCaller, useCan } from "@/lib/caller";
 import { formatRelative } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { Service, ServiceSpec } from "@/lib/types";
 
 /**
@@ -70,16 +87,123 @@ function rolloutOf(s: Service): string {
   return s.rollout.state === "failed" ? `rev ${s.rollout.to} failed` : `rolling ${s.rollout.from} → ${s.rollout.to}`;
 }
 
+/** How a service stands, as its Ready badge and the Health filter say it. */
+type Health = "healthy" | "starting" | "unhealthy";
+
+function healthOf(s: Service): Health {
+  if (s.ready >= s.desired && s.desired > 0) return "healthy";
+  return s.ready === 0 && s.desired > 0 ? "unhealthy" : "starting";
+}
+
+const HEALTH = [
+  { value: "healthy", label: "Healthy", tone: "var(--status-good)" },
+  { value: "starting", label: "Starting", tone: "var(--status-running)" },
+  { value: "unhealthy", label: "Unhealthy", tone: "var(--status-critical)" },
+];
+
+const REACH = [
+  { value: "public", label: "Public" },
+  { value: "private", label: "Private" },
+];
+
+function matches(s: Service, q: string): boolean {
+  return [s.spec.name, s.owner, s.tenant ?? "", s.url ?? "", s.spec.image ?? ""].some((v) => v.toLowerCase().includes(q));
+}
+
 /**
  * Services: a sandbox spec and a count the gateway keeps true, replacing a
  * replica whose command exits or whose health check fails.
+ *
+ * Search, the filters and the pages are the table's, over the gateway's
+ * whole list.
  */
 function Services() {
   const can = useCan();
   const router = useRouter();
-  const { data, isLoading, error } = useServices();
+  const { data, isLoading, isFetching, error, refetch } = useServices();
   const [open, setOpen] = useState(false);
-  const rows = data ?? [];
+  const [query, setQuery] = useState("");
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const rows = useMemo(() => data ?? [], [data]);
+  const anyOf = (value: string[] | undefined, v: string) => !value?.length || value.includes(v);
+
+  const columns = useMemo<ColumnDef<Service>[]>(
+    () => [
+      {
+        id: "service",
+        accessorFn: (s) => s.spec.name,
+        header: ({ column }) => <ColumnHeader column={column} title="Service" />,
+        cell: ({ row: { original: s } }) => (
+          <>
+            <Link href={serviceHref(s)} className="flex flex-col hover:underline">
+              <span className="text-sm font-medium">{s.spec.name}</span>
+              <span className="text-[11px] text-muted-foreground">
+                {s.owner}
+                {s.tenant ? `@${s.tenant}` : ""}
+              </span>
+            </Link>
+            {s.error ? <p className="mt-1 max-w-80 truncate text-xs text-destructive" title={s.error}>{s.error}</p> : null}
+          </>
+        ),
+      },
+      {
+        id: "health",
+        accessorFn: healthOf,
+        header: "Ready",
+        filterFn: (row, id, value: string[]) => anyOf(value, row.getValue(id)),
+        cell: ({ row: { original: s } }) => (
+          <span className="flex items-center gap-2">
+            <StatusBadge outcome={healthOf(s)} size="sm" />
+            <span className="font-mono text-xs tabular-nums">
+              {s.ready}/{s.desired}
+            </span>
+          </span>
+        ),
+      },
+      {
+        id: "revision",
+        header: "Revision",
+        cell: ({ row }) => <span className="font-mono text-xs text-muted-foreground">{rolloutOf(row.original)}</span>,
+      },
+      {
+        id: "reach",
+        accessorFn: (s) => (s.url ? "public" : "private"),
+        header: "URL",
+        filterFn: (row, id, value: string[]) => anyOf(value, row.getValue(id)),
+        cell: ({ row: { original: s } }) => (
+          <span className="block max-w-56 truncate font-mono text-xs">{s.url ?? <span className="text-muted-foreground">private</span>}</span>
+        ),
+      },
+      {
+        id: "updated",
+        accessorFn: (s) => s.updated_at,
+        header: ({ column }) => <ColumnHeader column={column} title="Updated" />,
+        cell: ({ row }) => <span className="text-xs text-muted-foreground">{formatRelative(row.original.updated_at)}</span>,
+      },
+    ],
+    [],
+  );
+
+  const table = useReactTable({
+    data: rows,
+    columns,
+    state: { sorting, globalFilter: query },
+    getRowId: (s) => `${s.tenant ?? ""}/${s.spec.name}`,
+    onSortingChange: setSorting,
+    onGlobalFilterChange: setQuery,
+    globalFilterFn: (row, _id, q: string) => !q.trim() || matches(row.original, q.trim().toLowerCase()),
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getFacetedRowModel: getFacetedRowModel(),
+    getFacetedUniqueValues: getFacetedUniqueValues(),
+    initialState: { pagination: { pageSize: 20 } },
+    // The list refreshes every few seconds; that must not send the reader
+    // back to the first page.
+    autoResetPageIndex: false,
+  });
+  const filtered = query.trim() !== "" || table.getState().columnFilters.length > 0;
 
   return (
     <div className="flex flex-col gap-5">
@@ -101,44 +225,54 @@ function Services() {
       ) : !isLoading && rows.length === 0 ? (
         <EmptyState icon={Workflow} title="No services" description="Deploy one from a spec here, or with sandbox-cli service deploy -f service.yaml." />
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Service</TableHead>
-              <TableHead>Ready</TableHead>
-              <TableHead>Revision</TableHead>
-              <TableHead>URL</TableHead>
-              <TableHead>Updated</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((s) => (
-              <TableRow key={`${s.tenant}/${s.spec.name}`} className="cursor-pointer" onClick={(e) => !(e.target as HTMLElement).closest("a,button") && router.push(serviceHref(s))}>
-                <TableCell>
-                  <Link href={serviceHref(s)} className="flex flex-col hover:underline">
-                    <span className="text-sm font-medium">{s.spec.name}</span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {s.owner}
-                      {s.tenant ? `@${s.tenant}` : ""}
-                    </span>
-                  </Link>
-                  {s.error ? <p className="mt-1 max-w-80 truncate text-xs text-destructive" title={s.error}>{s.error}</p> : null}
-                </TableCell>
-                <TableCell>
-                  <span className="flex items-center gap-2">
-                    <StatusBadge outcome={s.ready >= s.desired && s.desired > 0 ? "healthy" : s.ready === 0 && s.desired > 0 ? "unhealthy" : "starting"} size="sm" />
-                    <span className="font-mono text-xs tabular-nums">
-                      {s.ready}/{s.desired}
-                    </span>
-                  </span>
-                </TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">{rolloutOf(s)}</TableCell>
-                <TableCell className="max-w-56 truncate font-mono text-xs">{s.url ?? <span className="text-muted-foreground">private</span>}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">{formatRelative(s.updated_at)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-full sm:w-72">
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input placeholder="Search by name, owner, image or URL" aria-label="Search services" value={query} onChange={(e) => setQuery(e.target.value)} className="h-8 pl-8" />
+            </div>
+            <FacetedFilter column={table.getColumn("health")} title="Health" options={HEALTH} />
+            <FacetedFilter column={table.getColumn("reach")} title="Reach" options={REACH} />
+            {filtered ? (
+              <Button variant="ghost" size="sm" className="h-8" onClick={() => { setQuery(""); table.resetColumnFilters(); }}>
+                Reset
+              </Button>
+            ) : null}
+            <div className="ml-auto">
+              <Button variant="outline" size="icon" className="size-8" aria-label="Refresh" onClick={() => refetch()}>
+                <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
+              </Button>
+            </div>
+          </div>
+          <Table>
+            <TableHeader className="bg-muted/30">
+              {table.getHeaderGroups().map((g) => (
+                <TableRow key={g.id} className="hover:bg-transparent">
+                  {g.headers.map((h) => (
+                    <TableHead key={h.id}>{h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}</TableHead>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {table.getRowModel().rows.map((row) => (
+                <TableRow key={row.id} className="cursor-pointer" onClick={(e) => !(e.target as HTMLElement).closest("a,button") && router.push(serviceHref(row.original))}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                  ))}
+                </TableRow>
+              ))}
+              {table.getRowModel().rows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={columns.length} className="py-10 text-center text-sm text-muted-foreground">
+                    No service matches.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+          <DataTablePagination table={table} noun="service" />
+        </div>
       )}
     </div>
   );

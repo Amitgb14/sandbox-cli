@@ -372,6 +372,7 @@ export type RunState = "queued" | "running" | "succeeded" | "failed" | "timed_ou
 export interface JobSpec {
   name?: string;
   image?: string;
+  labels?: Record<string, string>;
   command?: string[];
   agent?: string;
   prompt?: string;

@@ -48,7 +48,7 @@ func newJobCmd() *cobra.Command {
 		Use:   "run -f JOB.yaml",
 		Short: "Start a job from a YAML (or JSON) spec; -f - reads it from stdin",
 		Long: "The spec's keys are the API's (docs: README, \"Agents and jobs on a fleet\"):\n" +
-			"name, image, command | agent + prompt, prompts (a batch), parallelism,\n" +
+			"name, labels, image, command | agent + prompt, prompts (a batch), parallelism,\n" +
 			"completions, retries, timeout_secs, env, secrets, network, resources,\n" +
 			"from_snapshot, keep: {output, files}, notify. An unknown key is refused.",
 		Example: "  sandbox-cli job run -f job.yaml\n  sandbox-cli job run -f job.yaml --wait",

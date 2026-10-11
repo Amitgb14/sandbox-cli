@@ -153,7 +153,8 @@ func TestJobRunsCommandAndKeepsOutput(t *testing.T) {
 	tg := startGateway(t, withKey, n1)
 	ctx := ctxT(t)
 	ana := tg.jobUser("ana")
-	j, err := ana.CreateJob(ctx, api.JobSpec{Name: "hello", Command: []string{"echo", "hello", "fleet"}, Completions: 3, Parallelism: 3})
+	j, err := ana.CreateJob(ctx, api.JobSpec{Name: "hello", Command: []string{"echo", "hello", "fleet"}, Completions: 3, Parallelism: 3,
+		Labels: map[string]string{"team": "infra", "nightly": ""}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +183,9 @@ func TestJobRunsCommandAndKeepsOutput(t *testing.T) {
 	}
 	if l, err := ana.Jobs(ctx); err != nil || len(l) != 1 || l[0].Runs != nil || l[0].Succeeded != 3 {
 		t.Fatalf("list = %+v, %v", l, err)
+	} else if lb := l[0].Spec.Labels; len(lb) != 2 || lb["team"] != "infra" {
+		// The listing carries the labels, for a client to filter by.
+		t.Fatalf("labels = %v", lb)
 	}
 	if _, err := ana.JobOutput(ctx, j.ID, 3); !api.IsCode(err, api.CodeNotFound) {
 		t.Fatalf("run 3: %v", err)
@@ -436,6 +440,8 @@ func TestJobSpecIsChecked(t *testing.T) {
 		"http notify":      {Command: []string{"true"}, Notify: "http://example.com/hook"},
 		"ftp notify":       {Command: []string{"true"}, Notify: "ftp://example.com/hook"},
 		"name":             {Name: "Not A Name", Command: []string{"true"}},
+		"label key":        {Command: []string{"true"}, Labels: map[string]string{"Team": "infra"}},
+		"label escape":     {Command: []string{"true"}, Labels: map[string]string{"team": "\x1b[31minfra"}},
 	} {
 		if name == "secret and env" {
 			if err := ana.SetSecret(ctx, "K", "v"); err != nil {

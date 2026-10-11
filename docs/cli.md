@@ -982,7 +982,7 @@ sandbox-cli job run -f JOB.yaml [flags]
 
 ```text
 The spec's keys are the API's (docs: README, "Agents and jobs on a fleet"):
-name, image, command | agent + prompt, prompts (a batch), parallelism,
+name, labels, image, command | agent + prompt, prompts (a batch), parallelism,
 completions, retries, timeout_secs, env, secrets, network, resources,
 from_snapshot, keep: {output, files}, notify. An unknown key is refused.
 ```

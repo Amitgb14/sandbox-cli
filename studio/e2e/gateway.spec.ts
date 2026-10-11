@@ -119,6 +119,40 @@ test("a tenant submits a job and reads its output", async ({ page }) => {
   await expect(page.getByRole("link", { name: /e2e-job/ })).toBeVisible();
 });
 
+test("a job is submitted with labels, and the list filters by them", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/jobs/`);
+  await page.getByRole("button", { name: "Submit job" }).click();
+  await page.getByLabel("Name").fill("e2e-labelled");
+  await page.getByLabel("Command").fill("echo labelled");
+  const labels = page.getByLabel("Labels");
+  await labels.fill("team=e2e");
+  await labels.press("Enter");
+  await labels.fill("nightly");
+  await labels.press("Enter");
+  // One the gateway would refuse is marked, and stops the submit.
+  await labels.fill("Bad Key");
+  await labels.press("Enter");
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page).toHaveURL(/\/jobs\/?$/);
+  await page.getByRole("button", { name: "Remove Key" }).click();
+  await page.getByRole("button", { name: "Remove Bad" }).click();
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page).toHaveURL(/\/job\/?\?id=job_/);
+  await expect(page.locator("main").getByText("team=e2e")).toBeVisible();
+
+  await page.goto(`${base}/jobs/`);
+  await expect(page.getByRole("link", { name: /e2e-labelled/ })).toBeVisible();
+  await page.getByRole("button", { name: "Labels" }).click();
+  await page.getByRole("option", { name: /team=e2e/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("link", { name: /e2e-labelled/ })).toBeVisible();
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await page.getByRole("button", { name: "Reset" }).click();
+  await page.getByLabel("Search jobs").fill("no-such-job-anywhere");
+  await expect(page.getByText("No job matches.")).toBeVisible();
+});
+
 /**
  * A command line using the shell runs in one, and a run that never started
  * says why in plain sight. The fake backend has no sh, so the run fails, as
@@ -199,6 +233,17 @@ test("a tenant deploys, scales and removes a service", async ({ page }) => {
   await page.getByRole("button", { name: "Scale" }).click();
   await expect(page.getByText("2/2 ready")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("main").getByText("Healthy")).toHaveCount(2);
+  // The list finds it by search and by health, and says when nothing matches.
+  await page.goto(`${base}/services/`);
+  await page.getByLabel("Search services").fill("e2e-web");
+  await expect(page.getByRole("link", { name: /e2e-web/ })).toBeVisible();
+  await page.getByRole("button", { name: "Health" }).click();
+  await page.getByRole("option", { name: /Unhealthy/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("No service matches.")).toBeVisible();
+  await page.getByRole("button", { name: "Reset" }).click();
+  await page.getByRole("link", { name: /e2e-web/ }).click();
+  await expect(page).toHaveURL(/\/service\/?\?name=e2e-web/);
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Remove" }).click();
   await expect(page).toHaveURL(/\/services\/?$/);

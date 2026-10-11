@@ -1,14 +1,31 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ListChecks, Plus } from "lucide-react";
+import {
+  type ColumnDef,
+  type SortingState,
+  flexRender,
+  getCoreRowModel,
+  getFacetedRowModel,
+  getFacetedUniqueValues,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
+import { ListChecks, Plus, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/empty-state";
 import { PageHeader } from "@/components/common/page-header";
 import { StatusBadge } from "@/components/common/status-badge";
+import { TagInput } from "@/components/common/tag-input";
+import { ColumnHeader } from "@/components/data-table/column-header";
+import { FacetedFilter } from "@/components/data-table/faceted-filter";
+import { DataTablePagination } from "@/components/data-table/pagination";
 import { Gate } from "@/components/shell/gate";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -21,9 +38,18 @@ import { ImagePicker } from "@/components/launch/image-picker";
 import { useAgents, useFleetImages, useSandboxes } from "@/lib/api/queries";
 import { useCan } from "@/lib/caller";
 import { commandArgv, formatArgv, formatRelative, needsShell } from "@/lib/format";
+import { labelMap, labelProblem, labelTags, MAX_LABELS } from "@/lib/labels";
+import { cn } from "@/lib/utils";
 import type { Job, JobSpec } from "@/lib/types";
 
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
+
+const STATES = [
+  { value: "running", label: "Running", tone: "var(--status-running)" },
+  { value: "succeeded", label: "Succeeded", tone: "var(--status-good)" },
+  { value: "failed", label: "Failed", tone: "var(--status-critical)" },
+  { value: "cancelled", label: "Cancelled", tone: "var(--status-idle)" },
+];
 
 /** What a job runs, in a few words: its command, or its agent. */
 function jobWhat(j: Job): string {
@@ -31,18 +57,140 @@ function jobWhat(j: Job): string {
   return formatArgv(j.spec.command ?? []);
 }
 
+function matches(j: Job, q: string): boolean {
+  return (
+    j.id.includes(q) ||
+    (j.name ?? "").toLowerCase().includes(q) ||
+    jobWhat(j).toLowerCase().includes(q) ||
+    labelTags(j.spec.labels).some((t) => t.toLowerCase().includes(q))
+  );
+}
+
 /**
  * Jobs: work the gateway runs to completion after the request has gone, each
  * run in a sandbox of its own, with what was asked to be kept — output and
  * files — kept after the sandbox is gone.
+ *
+ * The listing is the gateway's whole list, newest first; search, the State
+ * and Labels filters and the pages are the table's, in the browser.
  */
 function Jobs() {
   const can = useCan();
-  const { data, isLoading, error } = useJobs();
+  const { data, isLoading, isFetching, error, refetch } = useJobs();
   const cancel = useCancelJob();
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const rows = data ?? [];
+  const [query, setQuery] = useState("");
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const rows = useMemo(() => data ?? [], [data]);
+
+  // Every label on the listed jobs, for the Labels filter to offer.
+  const labelOptions = useMemo(
+    () => [...new Set(rows.flatMap((j) => labelTags(j.spec.labels)))].sort().map((t) => ({ value: t, label: t })),
+    [rows],
+  );
+
+  const columns = useMemo<ColumnDef<Job>[]>(
+    () => [
+      {
+        id: "job",
+        accessorFn: (j) => j.name || j.id,
+        header: ({ column }) => <ColumnHeader column={column} title="Job" />,
+        cell: ({ row: { original: j } }) => (
+          <Link href={`/job?id=${j.id}`} className="flex flex-col hover:underline">
+            <span className="text-sm font-medium">{j.name || j.id}</span>
+            {j.name ? <span className="font-mono text-[11px] text-muted-foreground">{j.id}</span> : null}
+          </Link>
+        ),
+      },
+      {
+        id: "state",
+        accessorKey: "state",
+        header: "State",
+        cell: ({ row }) => <StatusBadge outcome={row.original.state} size="sm" />,
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue(id)),
+      },
+      {
+        id: "runs",
+        header: "Runs",
+        cell: ({ row: { original: j } }) => (
+          <span className="font-mono text-xs text-muted-foreground tabular-nums">
+            {j.succeeded} ok · {j.failed} failed · {j.running} running · {j.queued} queued
+          </span>
+        ),
+      },
+      {
+        id: "what",
+        header: "What",
+        cell: ({ row }) => <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">{jobWhat(row.original)}</span>,
+      },
+      {
+        id: "labels",
+        accessorFn: (j) => labelTags(j.spec.labels),
+        // The facet counts are per label, not per set of them.
+        getUniqueValues: (j) => labelTags(j.spec.labels),
+        header: "Labels",
+        // A job shown has every label chosen: picking more narrows, as a
+        // second filter would.
+        filterFn: (row, id, value: string[]) => !value?.length || value.every((t) => (row.getValue(id) as string[]).includes(t)),
+        cell: ({ row }) => {
+          const tags = labelTags(row.original.spec.labels);
+          if (!tags.length) return <span className="text-xs text-muted-foreground">—</span>;
+          return (
+            <div className="flex max-w-56 flex-wrap items-center gap-1" title={tags.join("\n")}>
+              {tags.slice(0, 2).map((t) => (
+                <Badge key={t} variant="outline" className="block max-w-28 truncate font-mono text-[10px] font-normal">
+                  {t}
+                </Badge>
+              ))}
+              {tags.length > 2 ? <span className="text-[11px] whitespace-nowrap text-muted-foreground">+{tags.length - 2}</span> : null}
+            </div>
+          );
+        },
+      },
+      {
+        id: "created",
+        accessorFn: (j) => j.created_at,
+        header: ({ column }) => <ColumnHeader column={column} title="Created" />,
+        cell: ({ row }) => <span className="text-xs text-muted-foreground">{formatRelative(row.original.created_at)}</span>,
+      },
+      {
+        id: "actions",
+        header: "",
+        cell: ({ row: { original: j } }) =>
+          j.state === "running" && can("sandbox:create") ? (
+            <div className="text-right">
+              <Button size="sm" variant="ghost" disabled={cancel.isPending}
+                onClick={() => confirm(`Cancel ${j.name || j.id}? Its running sandboxes are terminated.`) && cancel.mutate(j.id, { onError: (e) => toast.error(e.message), onSuccess: () => toast.success("Cancelled") })}>
+                Cancel
+              </Button>
+            </div>
+          ) : null,
+      },
+    ],
+    [can, cancel],
+  );
+
+  const table = useReactTable({
+    data: rows,
+    columns,
+    state: { sorting, globalFilter: query },
+    getRowId: (j) => j.id,
+    onSortingChange: setSorting,
+    onGlobalFilterChange: setQuery,
+    globalFilterFn: (row, _id, q: string) => !q.trim() || matches(row.original, q.trim().toLowerCase()),
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getFacetedRowModel: getFacetedRowModel(),
+    getFacetedUniqueValues: getFacetedUniqueValues(),
+    initialState: { pagination: { pageSize: 20 } },
+    // The list refreshes every few seconds; that must not send the reader
+    // back to the first page.
+    autoResetPageIndex: false,
+  });
+  const filtered = query.trim() !== "" || table.getState().columnFilters.length > 0;
 
   return (
     <div className="flex flex-col gap-5">
@@ -64,46 +212,54 @@ function Jobs() {
       ) : !isLoading && rows.length === 0 ? (
         <EmptyState icon={ListChecks} title="No jobs" description="Submit one here, or with sandbox-cli job run." />
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Job</TableHead>
-              <TableHead>State</TableHead>
-              <TableHead>Runs</TableHead>
-              <TableHead>What</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead className="text-right" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((j) => (
-              <TableRow key={j.id} className="cursor-pointer" onClick={(e) => !(e.target as HTMLElement).closest("a,button") && router.push(`/job?id=${j.id}`)}>
-                <TableCell>
-                  <Link href={`/job?id=${j.id}`} className="flex flex-col hover:underline">
-                    <span className="text-sm font-medium">{j.name || j.id}</span>
-                    {j.name ? <span className="font-mono text-[11px] text-muted-foreground">{j.id}</span> : null}
-                  </Link>
-                </TableCell>
-                <TableCell>
-                  <StatusBadge outcome={j.state} size="sm" />
-                </TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground tabular-nums">
-                  {j.succeeded} ok · {j.failed} failed · {j.running} running · {j.queued} queued
-                </TableCell>
-                <TableCell className="max-w-64 truncate font-mono text-xs text-muted-foreground">{jobWhat(j)}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">{formatRelative(j.created_at)}</TableCell>
-                <TableCell className="text-right">
-                  {j.state === "running" && can("sandbox:create") && (
-                    <Button size="sm" variant="ghost" disabled={cancel.isPending}
-                      onClick={() => confirm(`Cancel ${j.name || j.id}? Its running sandboxes are terminated.`) && cancel.mutate(j.id, { onError: (e) => toast.error(e.message), onSuccess: () => toast.success("Cancelled") })}>
-                      Cancel
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-full sm:w-72">
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input placeholder="Search by name, id, command or label" aria-label="Search jobs" value={query} onChange={(e) => setQuery(e.target.value)} className="h-8 pl-8" />
+            </div>
+            <FacetedFilter column={table.getColumn("state")} title="State" options={STATES} />
+            {labelOptions.length ? <FacetedFilter column={table.getColumn("labels")} title="Labels" options={labelOptions} /> : null}
+            {filtered ? (
+              <Button variant="ghost" size="sm" className="h-8" onClick={() => { setQuery(""); table.resetColumnFilters(); }}>
+                Reset
+              </Button>
+            ) : null}
+            <div className="ml-auto">
+              <Button variant="outline" size="icon" className="size-8" aria-label="Refresh" onClick={() => refetch()}>
+                <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
+              </Button>
+            </div>
+          </div>
+          <Table>
+            <TableHeader className="bg-muted/30">
+              {table.getHeaderGroups().map((g) => (
+                <TableRow key={g.id} className="hover:bg-transparent">
+                  {g.headers.map((h) => (
+                    <TableHead key={h.id}>{h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}</TableHead>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {table.getRowModel().rows.map((row) => (
+                <TableRow key={row.id} className="cursor-pointer" onClick={(e) => !(e.target as HTMLElement).closest("a,button") && router.push(`/job?id=${row.id}`)}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                  ))}
+                </TableRow>
+              ))}
+              {table.getRowModel().rows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={columns.length} className="py-10 text-center text-sm text-muted-foreground">
+                    No job matches.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+          <DataTablePagination table={table} noun="job" />
+        </div>
       )}
     </div>
   );
@@ -123,6 +279,7 @@ function SubmitJob({ onClose }: { onClose: () => void }) {
   const [timeout, setTimeoutSecs] = useState("");
   const [secrets, setSecrets] = useState("");
   const [files, setFiles] = useState("");
+  const [labels, setLabels] = useState<string[]>([]);
   // What the nodes have built, and what the user's sandboxes run: what a
   // job can start from, as the create form offers.
   const { data: built } = useFleetImages();
@@ -141,6 +298,15 @@ function SubmitJob({ onClose }: { onClose: () => void }) {
     if (timeout) spec.timeout_secs = Number(timeout);
     if (list(secrets).length) spec.secrets = list(secrets);
     if (list(files).length) spec.keep = { files: list(files) };
+    if (labels.some((l) => labelProblem(l))) {
+      toast.error("A label will be refused; hover it to see why.");
+      return;
+    }
+    if (labels.length > MAX_LABELS) {
+      toast.error(`At most ${MAX_LABELS} labels.`);
+      return;
+    }
+    if (labels.length) spec.labels = labelMap(labels);
     submit.mutate(spec, {
       onSuccess: (j) => {
         toast.success(`Submitted ${j.id}`);
@@ -224,6 +390,11 @@ function SubmitJob({ onClose }: { onClose: () => void }) {
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="job-files">Keep files</Label>
             <Input id="job-files" placeholder="/sandbox/home/report.md, …" value={files} onChange={(e) => setFiles(e.target.value)} className="font-mono" />
+          </div>
+          <div className="flex flex-col gap-1.5 md:col-span-2">
+            <Label htmlFor="job-labels">Labels</Label>
+            <TagInput id="job-labels" value={labels} onChange={setLabels} invalid={labelProblem} placeholder="team=infra, nightly — Enter or comma adds one" />
+            <p className="text-xs text-muted-foreground">Your own tags for the job, <span className="font-mono">key=value</span> or a bare <span className="font-mono">key</span>; the list filters by them.</p>
           </div>
           <div className="flex gap-2 md:col-span-2">
             <Button type="submit" disabled={submit.isPending}>Submit</Button>
