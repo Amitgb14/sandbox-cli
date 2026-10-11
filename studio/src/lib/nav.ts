@@ -67,11 +67,11 @@ export interface NavGroup {
 const ADMIN_GROUP: NavGroup[] = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off"
   ? [
       {
-        label: "Admin",
+        label: "Super admin",
         items: [
           { title: "Nodes", href: "/admin/nodes", icon: Server, need: "admin", hint: "The nodes behind the gateway: health, capacity, cordon and drain" },
           { title: "Lost sandboxes", href: "/admin/lost", icon: Unplug, need: "admin", hint: "Sandboxes on nodes that stopped answering" },
-          { title: "Users & keys", href: "/admin/keys", icon: Users, need: "admin", hint: "Issue and revoke API keys; any user's SSH keys" },
+          { title: "Users", href: "/admin/keys", icon: Users, need: "admin", hint: "Every user: their organization, scopes, policy and expiry; invite, renew, revoke and restore" },
           { title: "Allowlist groups", href: "/admin/egress-groups", icon: ListPlus, need: "admin", hint: "Named sets of hosts any user may pick for a sandbox on an allowlist" },
           { title: "Audit", href: "/admin/audit", icon: ScrollText, need: "admin", hint: "Every authenticated request and SSH login the gateway recorded" },
           { title: "All organizations", href: "/admin/orgs", icon: Building2, need: "admin", hint: "Every organization on the gateway, who made it and how many members it has" },

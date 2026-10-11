@@ -110,6 +110,15 @@ type Key struct {
 	// to the account key it names, with that key's user and scopes, and
 	// never outliving it.
 	Parent string `json:"parent,omitempty"`
+	// RestoreUntil, on a revoked key, makes it a suspended one
+	// (keys_suspend.go): refused like any revoked key, and restorable until
+	// then. Past it, the revocation is for good.
+	RestoreUntil *time.Time `json:"restore_until,omitempty"`
+}
+
+// Suspended reports whether k is revoked and may still be restored at now.
+func (k Key) Suspended(now time.Time) bool {
+	return k.Revoked && k.RestoreUntil != nil && now.Before(*k.RestoreUntil)
 }
 
 // Active reports whether k still works at now: not revoked, not expired.

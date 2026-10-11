@@ -180,6 +180,9 @@ func (g *Gateway) sshAccess(w http.ResponseWriter, r *http.Request, p Principal)
 func (g *Gateway) keyInfo(ctx context.Context, k Key) (api.KeyInfo, error) {
 	ki := api.KeyInfo{ID: k.ID, User: k.User, Tenant: k.Tenant, Scopes: k.Scopes, Created: k.Created, Revoked: k.Revoked,
 		Expires: k.Expires, Email: k.Email, LastLogin: k.LastLogin}
+	if k.Suspended(time.Now()) {
+		ki.Suspended, ki.RestoreUntil = true, k.RestoreUntil
+	}
 	pol, ok, err := g.store.PolicyOf(ctx, k.User, k.Tenant)
 	if ok {
 		ki.Policy = pol.Name

@@ -68,7 +68,9 @@ Global flags:
 | [`sandbox-cli gateway keys list`](#sandbox-cli-gateway-keys-list) | List API keys (never their secrets) |
 | [`sandbox-cli gateway keys renew`](#sandbox-cli-gateway-keys-renew) | Change when an API key stops working: --expires 30d, never, or now |
 | [`sandbox-cli gateway keys reset`](#sandbox-cli-gateway-keys-reset) | Make a link that sets a new password for an account |
+| [`sandbox-cli gateway keys restore`](#sandbox-cli-gateway-keys-restore) | Take back a suspension that has not run out |
 | [`sandbox-cli gateway keys revoke`](#sandbox-cli-gateway-keys-revoke) | Revoke an API key; what it has open is closed at once |
+| [`sandbox-cli gateway keys suspend`](#sandbox-cli-gateway-keys-suspend) | Revoke a key restorably: refused at once, revoked for good in an hour |
 | [`sandbox-cli gateway lost`](#sandbox-cli-gateway-lost) | List sandboxes on nodes that have not answered for longer than the gateway's grace period |
 | [`sandbox-cli gateway nodes`](#sandbox-cli-gateway-nodes) | List the gateway's nodes: health, cordon, sandboxes running, sandboxd version |
 | [`sandbox-cli gateway policies`](#sandbox-cli-gateway-policies) | Set, list, assign and remove user policies (admin key) |
@@ -762,7 +764,7 @@ Issue, list and revoke the gateway's API keys (admin key).
 sandbox-cli gateway keys [command]
 ```
 
-Subcommands: [`create`](#sandbox-cli-gateway-keys-create), [`list`](#sandbox-cli-gateway-keys-list), [`renew`](#sandbox-cli-gateway-keys-renew), [`reset`](#sandbox-cli-gateway-keys-reset), [`revoke`](#sandbox-cli-gateway-keys-revoke).
+Subcommands: [`create`](#sandbox-cli-gateway-keys-create), [`list`](#sandbox-cli-gateway-keys-list), [`renew`](#sandbox-cli-gateway-keys-renew), [`reset`](#sandbox-cli-gateway-keys-reset), [`restore`](#sandbox-cli-gateway-keys-restore), [`revoke`](#sandbox-cli-gateway-keys-revoke), [`suspend`](#sandbox-cli-gateway-keys-suspend).
 
 ### sandbox-cli gateway keys create
 
@@ -856,12 +858,34 @@ Flags:
 | `--invite-url string` |  | the hosted Studio's address (https://studio.example.com), to print the whole link |
 | `--send` |  | have the gateway email the link to the account's address (a gateway started with --smtp-host) |
 
+### sandbox-cli gateway keys restore
+
+Take back a suspension that has not run out.
+
+```text
+sandbox-cli gateway keys restore ID
+```
+
 ### sandbox-cli gateway keys revoke
 
 Revoke an API key; what it has open is closed at once.
 
 ```text
 sandbox-cli gateway keys revoke ID
+```
+
+### sandbox-cli gateway keys suspend
+
+Revoke a key restorably: refused at once, revoked for good in an hour.
+
+```text
+sandbox-cli gateway keys suspend ID
+```
+
+```text
+The key is refused from now on, as a revoked one is, and what it has open is closed;
+its sign-ins end and its jobs are cancelled. For an hour, gateway keys restore ID takes
+it back; after that it is revoked for good.
 ```
 
 ### sandbox-cli gateway lost

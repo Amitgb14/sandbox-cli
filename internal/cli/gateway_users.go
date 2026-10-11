@@ -160,6 +160,46 @@ func newGatewayKeysCmd(ctxFlag *string) *cobra.Command {
 			return nil
 		},
 	}
+	suspend := &cobra.Command{
+		Use:   "suspend ID",
+		Short: "Revoke a key restorably: refused at once, revoked for good in an hour",
+		Long: "The key is refused from now on, as a revoked one is, and what it has open is closed;\n" +
+			"its sign-ins end and its jobs are cancelled. For an hour, gateway keys restore ID takes\n" +
+			"it back; after that it is revoked for good.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := requireGateway(cmd.Context(), *ctxFlag, "gateway keys")
+			if err != nil {
+				return err
+			}
+			k, err := c.SuspendKey(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			until := ""
+			if k.RestoreUntil != nil {
+				until = k.RestoreUntil.Local().Format("15:04")
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "suspended %s; restorable until %s, revoked for good then\n", termsafe.Clean(args[0]), until)
+			return nil
+		},
+	}
+	restore := &cobra.Command{
+		Use:   "restore ID",
+		Short: "Take back a suspension that has not run out",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := requireGateway(cmd.Context(), *ctxFlag, "gateway keys")
+			if err != nil {
+				return err
+			}
+			if _, err := c.RestoreKey(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "restored %s\n", termsafe.Clean(args[0]))
+			return nil
+		},
+	}
 	var resetURL string
 	var resetSend bool
 	reset := &cobra.Command{
@@ -189,7 +229,7 @@ func newGatewayKeysCmd(ctxFlag *string) *cobra.Command {
 	reset.Flags().StringVar(&resetURL, "invite-url", "", "the hosted Studio's address (https://studio.example.com), to print the whole link")
 	reset.Flags().BoolVar(&resetSend, "send", false, "have the gateway email the link to the account's address (a gateway started with --smtp-host)")
 
-	cmd.AddCommand(create, list, renew, revoke, reset)
+	cmd.AddCommand(create, list, renew, suspend, restore, revoke, reset)
 	return cmd
 }
 

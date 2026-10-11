@@ -19,7 +19,7 @@ import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 // Strings only the admin screens carry, which an admin's session shows.
-const ADMIN = ["Users & keys", "Save policy"];
+const ADMIN = ["revoked for good", "Save policy"];
 // Strings only local Studio carries: its token handling, and the editors of
 // this machine's user's settings (agents' saved keys, templates, egress rules).
 const LOCAL = [

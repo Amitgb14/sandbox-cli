@@ -443,8 +443,13 @@ func (g *Gateway) startReplica(ctx context.Context, p Principal, name string, re
 		maps.Copy(env, sp.Env)
 		maps.Copy(env, secrets)
 	}
+	// type and name are plain labels, for people and for filtering a
+	// sandbox list (type=service). They are the owner's to change like any
+	// label; which service a replica is, for the gateway, is the
+	// gateway.service label only it sets.
 	req := api.CreateSandboxRequest{Image: sp.Image, CPUs: sp.Resources.CPUs, MemoryMB: sp.Resources.MemoryMB,
-		DiskMB: sp.Resources.DiskMB, Env: env, Network: sp.Network}
+		DiskMB: sp.Resources.DiskMB, Env: env, Network: sp.Network,
+		Labels: map[string]string{ReplicaLabelType: "service", ReplicaLabelName: name}}
 	opts := createOpts{spread: spread, labels: map[string]string{
 		api.LabelService: name, api.LabelServiceRevision: strconv.Itoa(rev.Rev)}}
 	c, cerr := g.createFor(ctx, p, req, opts)

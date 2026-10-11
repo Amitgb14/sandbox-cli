@@ -28,28 +28,27 @@ import {
   useResendInvite,
   useResetPassword,
   useRevokeInvite,
-  useRevokeKey,
+  useRestoreKey,
   useSetKeyExpiry,
   useUserSSHKeys,
   type CreatedInvite,
+  useSuspendKey,
   type CreatedKey,
+  type KeyInfo,
 } from "@/lib/admin/api";
+import { orgName } from "@/lib/org";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatRelative } from "@/lib/format";
 
-const SCOPES = ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh", "secrets:write", "org:create", "admin"];
-const USER_SCOPES = ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh"];
+/**
+ * Every account is one kind: everything it may do, inside its own
+ * organization — its sandboxes, SSH, secrets. Gateway-wide admin, this
+ * screen among it, is the super admin's alone, and is given from the CLI
+ * (sandbox-cli gateway keys create --scope admin), never from here.
+ */
+const ACCOUNT_SCOPES = ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh", "secrets:write", "org:create"];
 const DAY = 86_400;
 
-/**
- * What kind of user a key is for, as a starting point the form fills in:
- * a demo user has a policy and a key that lasts a week; a member, someone
- * using the service for good, has neither. Every field stays editable.
- */
-const KINDS = {
-  demo: { label: "Demo user", scopes: ["sandbox:read", "sandbox:create", "sandbox:delete"], expires: 7 * DAY },
-  member: { label: "Member", scopes: USER_SCOPES, expires: 0 },
-} as const;
-type Kind = keyof typeof KINDS;
 
 const EXPIRIES: { label: string; secs: number }[] = [
   { label: "never", secs: 0 },
@@ -100,18 +99,21 @@ function PolicySelect({ value, onChange, label, disabled }: { value: string; onC
  */
 function Keys() {
   const { data, error } = useKeys();
-  const revoke = useRevokeKey();
+  const restore = useRestoreKey();
+  const [revoking, setRevoking] = useState<KeyInfo | null>(null);
   const assign = useAssignPolicy();
   const renew = useSetKeyExpiry();
   const reset = useResetPassword();
   const canEmail = useInvites().data?.canEmail ?? false;
   const [created, setCreated] = useState<CreatedKey | null>(null);
   const [invited, setInvited] = useState<CreatedInvite | null>(null);
-  const rows = [...(data ?? [])].sort((a, b) => Number(!!a.revoked) - Number(!!b.revoked) || b.created.localeCompare(a.created));
+  // Live first, then suspended (still restorable), then revoked for good.
+  const rank = (k: KeyInfo) => (k.suspended ? 1 : k.revoked ? 2 : 0);
+  const rows = [...(data ?? [])].sort((a, b) => rank(a) - rank(b) || b.created.localeCompare(a.created));
 
   return (
     <div className="flex flex-col gap-8">
-      <PageHeader title="Users & keys" description="Invite a person by email to sign in with a password, or issue a key for a program. Either acts as its user, in its tenant, with the scopes it was given; an expired or revoked one stops at once, and a user's last one takes their SSH access with it." />
+      <PageHeader title="Users" description="Invite a person by email to sign in with a password, or issue a key for a program. Each user is the admin of their own organization and of nothing else; you are the super admin, of every one. Revoking suspends a user at once and is final an hour later." />
       {created ? (
         <Secret created={created} onDone={() => setCreated(null)} />
       ) : invited ? (
@@ -122,27 +124,25 @@ function Keys() {
       <Invites onResent={(iv) => { setCreated(null); setInvited(iv); }} />
       <Policies />
       <section className="flex flex-col gap-3">
-        <SectionHeader title="Accounts and API keys" description="An account is a key whose user signs in with an email and password; its own secret is never shown." />
+        <SectionHeader title="Users and their keys" description="An account is a key whose user signs in with an email and password; its own secret is never shown. A suspended one is refused everywhere and can be restored until the time it shows." />
         {error ? <p className="text-sm text-destructive">{error.message}</p> : null}
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Key</TableHead>
               <TableHead>User</TableHead>
+              <TableHead>Organization</TableHead>
               <TableHead>Scopes</TableHead>
               <TableHead>Policy</TableHead>
-              <TableHead>Issued</TableHead>
               <TableHead>Expires</TableHead>
               <TableHead className="text-right" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.map((k) => (
-              <TableRow key={k.id} className={k.revoked || expired(k.expires) ? "opacity-50" : ""}>
-                <TableCell className="font-mono text-xs">{k.id}</TableCell>
+              <TableRow key={k.id} className={(k.revoked && !k.suspended) || expired(k.expires) ? "opacity-50" : ""}>
                 <TableCell className="text-sm">
                   {k.user}
-                  {k.tenant ? <span className="text-muted-foreground">@{k.tenant}</span> : null}
+                  <div className="font-mono text-[11px] text-muted-foreground">{k.id}</div>
                   {k.email ? (
                     <div className="text-xs text-muted-foreground" data-testid={`account-${k.user}`}>
                       {k.email}
@@ -150,16 +150,21 @@ function Keys() {
                     </div>
                   ) : null}
                 </TableCell>
+                <TableCell className="font-mono text-xs" data-testid={`org-${k.user}`}>{orgName(k.tenant)}</TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
-                    {k.scopes.map((s) => (
-                      <Badge key={s} variant="outline" className="font-mono text-[11px]">{s}</Badge>
-                    ))}
+                    {k.scopes.includes("admin") ? (
+                      <Badge className="text-[11px]">super admin</Badge>
+                    ) : (
+                      k.scopes.map((s) => (
+                        <Badge key={s} variant="outline" className="font-mono text-[11px]">{s}</Badge>
+                      ))
+                    )}
                   </div>
                 </TableCell>
                 <TableCell>
                   {k.scopes.includes("admin") ? (
-                    <span className="text-xs text-muted-foreground">admin: none</span>
+                    <span className="text-xs text-muted-foreground">super admin: none</span>
                   ) : (
                     <PolicySelect
                       label={`Policy of ${k.user}`}
@@ -174,12 +179,21 @@ function Keys() {
                     />
                   )}
                 </TableCell>
-                <TableCell className="text-xs text-muted-foreground">{formatRelative(k.created)}</TableCell>
                 <TableCell className="text-xs text-muted-foreground" title={k.expires}>
                   {!k.expires ? "never" : expired(k.expires) ? <span className="text-caution">expired</span> : formatRelative(k.expires)}
                 </TableCell>
                 <TableCell className="text-right">
-                  {k.revoked ? (
+                  {k.suspended ? (
+                    <span className="inline-flex items-center gap-2">
+                      <span className="text-xs text-caution" data-testid={`suspended-${k.user}`}>
+                        suspended · revoked for good {k.restore_until ? new Date(k.restore_until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+                      </span>
+                      <Button size="sm" variant="outline" disabled={restore.isPending}
+                        onClick={() => restore.mutate(k.id, { onError: (e) => toast.error(e.message), onSuccess: () => toast.success(`${k.user} restored`) })}>
+                        Restore
+                      </Button>
+                    </span>
+                  ) : k.revoked ? (
                     <span className="text-xs text-muted-foreground">revoked</span>
                   ) : (
                     <>
@@ -218,8 +232,7 @@ function Keys() {
                           ) : null}
                         </DropdownMenuContent>
                       </DropdownMenu>
-                      <Button size="sm" variant="ghost" disabled={revoke.isPending}
-                        onClick={() => confirm(`Revoke ${k.id} (${k.user})? Every call with it is refused from now on.`) && revoke.mutate(k.id, { onError: (e) => toast.error(e.message), onSuccess: () => toast.success("Revoked") })}>
+                      <Button size="sm" variant="ghost" onClick={() => setRevoking(k)}>
                         Revoke
                       </Button>
                     </>
@@ -231,7 +244,52 @@ function Keys() {
         </Table>
       </section>
       <UserSSHKeys />
+      <RevokeDialog keyInfo={revoking} onClose={() => setRevoking(null)} />
     </div>
+  );
+}
+
+/**
+ * Revoking asks first, and is a suspension: the user is refused everywhere
+ * at once, and for an hour the revoke can be taken back from the list.
+ */
+function RevokeDialog({ keyInfo: k, onClose }: { keyInfo: KeyInfo | null; onClose: () => void }) {
+  const suspend = useSuspendKey();
+  const at = new Date(Date.now() + 3_600_000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return (
+    <Dialog open={!!k} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Revoke {k?.user}?</DialogTitle>
+          <DialogDescription>
+            {k?.email ? `${k.email}, of ${orgName(k.tenant)}. ` : k ? `Key ${k.id}, of ${orgName(k.tenant)}. ` : ""}
+            Their access ends now: signing in, their keys and SSH are refused, their sign-ins end and their running jobs are cancelled. It is
+            suspended until {at}, and you can restore it until then; after that it is revoked for good.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={suspend.isPending}
+            onClick={() =>
+              k &&
+              suspend.mutate(k.id, {
+                onError: (e) => toast.error(e.message),
+                onSuccess: () => {
+                  toast.success(`${k.user} suspended; restorable until ${at}`);
+                  onClose();
+                },
+              })
+            }
+          >
+            Revoke
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -241,20 +299,11 @@ function CreateKey({ onCreated, onInvited }: { onCreated: (k: CreatedKey) => voi
   const canEmail = useInvites().data?.canEmail ?? false;
   const [email, setEmail] = useState("");
   const [send, setSend] = useState(true);
-  const { data: policies } = usePolicies();
   const [user, setUser] = useState("");
   const [tenant, setTenant] = useState("");
-  const [kind, setKind] = useState<Kind>("member");
-  const [scopes, setScopes] = useState<string[]>([...KINDS.member.scopes]);
+  const scopes = ACCOUNT_SCOPES;
   const [policy, setPolicy] = useState("");
   const [expires, setExpires] = useState(0);
-  const choose = (k: Kind) => {
-    setKind(k);
-    setScopes([...KINDS[k].scopes]);
-    setExpires(KINDS[k].expires);
-    // A demo user's policy: "demo" where there is one, else the first.
-    setPolicy(k === "demo" ? (policies?.find((p) => p.name === "demo") ?? policies?.[0])?.name ?? "" : "");
-  };
   return (
     <Card className="surface-sheen gap-0 py-0">
       <CardContent className="p-4">
@@ -297,13 +346,6 @@ function CreateKey({ onCreated, onInvited }: { onCreated: (k: CreatedKey) => voi
         >
           <p className="text-sm font-medium">Add a user</p>
           <div className="flex flex-wrap gap-2">
-            {(Object.keys(KINDS) as Kind[]).map((k) => (
-              <Button key={k} type="button" size="sm" variant={kind === k ? "secondary" : "ghost"} aria-pressed={kind === k} onClick={() => choose(k)}>
-                {KINDS[k].label}
-              </Button>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-2">
             <Input
               aria-label="Email"
               type="email"
@@ -333,19 +375,15 @@ function CreateKey({ onCreated, onInvited }: { onCreated: (k: CreatedKey) => voi
               </SelectContent>
             </Select>
           </div>
-          <div className="flex flex-wrap gap-x-5 gap-y-2">
-            {SCOPES.map((s) => (
-              <Label key={s} className="flex items-center gap-2 font-mono text-xs font-normal">
-                <Checkbox checked={scopes.includes(s)} onCheckedChange={(on) => setScopes(on ? [...scopes, s] : scopes.filter((x) => x !== s))} />
-                {s}
-              </Label>
-            ))}
-          </div>
+          <p className="text-xs text-muted-foreground" data-testid="account-access">
+            Every user is the admin of their own organization: sandboxes, SSH and secrets there, and nothing in anyone else&apos;s. A policy and an
+            expiry, if you pick them, are all that differ.
+          </p>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="submit" value="invite" disabled={invite.isPending || !email.trim() || !user || scopes.length === 0}>
+            <Button type="submit" value="invite" disabled={invite.isPending || !email.trim() || !user}>
               <Mail aria-hidden /> Create invite
             </Button>
-            <Button type="submit" value="key" variant="outline" disabled={create.isPending || !user || scopes.length === 0}>Issue key</Button>
+            <Button type="submit" value="key" variant="outline" disabled={create.isPending || !user}>Issue key</Button>
             {canEmail ? (
               <Label className="flex items-center gap-2 text-xs font-normal">
                 <Checkbox checked={send} onCheckedChange={(on) => setSend(on === true)} aria-label="Email the invite" />

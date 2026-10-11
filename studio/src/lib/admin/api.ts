@@ -95,6 +95,9 @@ export interface KeyInfo {
   /** Set on an account: its user signs in with this address and a password. */
   email?: string;
   last_login?: string;
+  /** Revoked, and restorable until restore_until (POST …/restore). */
+  suspended?: boolean;
+  restore_until?: string;
 }
 
 /** A sign-up link not yet used (docs/fleet.md#accounts); its token is shown once. */
@@ -268,6 +271,15 @@ export function useSetKeyExpiry() {
 
 export function useRevokeKey() {
   return useAdminMutation((id: string) => apiFetch<void>(`/v1/admin/keys/${enc(id)}`, { method: "DELETE" }), akeys.keys);
+}
+
+/** Revokes a key restorably: refused at once, revoked for good an hour later. */
+export function useSuspendKey() {
+  return useAdminMutation((id: string) => apiFetch<KeyInfo>(`/v1/admin/keys/${enc(id)}/suspend`, { method: "POST" }), akeys.keys);
+}
+
+export function useRestoreKey() {
+  return useAdminMutation((id: string) => apiFetch<KeyInfo>(`/v1/admin/keys/${enc(id)}/restore`, { method: "POST" }), akeys.keys);
 }
 
 export function useRemoveUserSSHKey() {

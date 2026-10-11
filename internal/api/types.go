@@ -747,6 +747,11 @@ type KeyInfo struct {
 	// that address and a password, and the key's secret is never shown.
 	Email     string     `json:"email,omitempty"`
 	LastLogin *time.Time `json:"last_login,omitempty"`
+	// Suspended, with Revoked, is a key that is refused now and may be
+	// restored until RestoreUntil (POST /v1/admin/keys/{id}/restore); past
+	// it the revocation is for good.
+	Suspended    bool       `json:"suspended,omitempty"`
+	RestoreUntil *time.Time `json:"restore_until,omitempty"`
 }
 
 // CreatedKey is returned once, when a key is issued: Secret is never shown
