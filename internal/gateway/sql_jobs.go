@@ -20,9 +20,10 @@ func (q *sqlTx) job(ctx context.Context, id string, lock bool) (*jobRecord, bool
 	r := &jobRecord{}
 	var created, finished dbTime
 	var envSealed []byte
-	query := "SELECT id, tenant, user_name, spec, env_names, env_sealed, state, error, cancelled, created, finished FROM jobs WHERE id = ?"
+	query := `SELECT r.id, ro.key, ru.name, r.spec, r.env_names, r.env_sealed, r.state, r.error, r.cancelled, r.created, r.finished
+		FROM jobs r` + ownerJoin + "WHERE r.id = ?"
 	if lock {
-		query += q.s.forUpdate()
+		query += q.s.forUpdateOf("r")
 	}
 	err := q.row(ctx, query, id).Scan(&r.ID, &r.Tenant, &r.User, jsonCol{&r.Spec}, jsonCol{&r.EnvNames}, &envSealed,
 		&r.State, &r.Error, &r.Cancelled, &created, &finished)
@@ -66,9 +67,16 @@ func (q *sqlTx) writeJob(ctx context.Context, r *jobRecord, insert bool) error {
 		names = "[]"
 	}
 	if insert {
-		_, err = q.exec(ctx, `INSERT INTO jobs (id, tenant, user_name, spec, env_names, env_sealed, state, error, cancelled, created, finished)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.ID, r.Tenant, r.User, spec, names, r.EnvSealed, r.State, r.Error,
+		org, user, _, err := q.ownerIDs(ctx, Owner{User: r.User, Tenant: r.Tenant}, true)
+		if err != nil {
+			return err
+		}
+		_, err = q.exec(ctx, `INSERT INTO jobs (id, org_id, user_id, spec, env_names, env_sealed, state, error, cancelled, created, finished)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.ID, org, user, spec, names, r.EnvSealed, r.State, r.Error,
 			r.Cancelled, q.s.t(r.Created), q.s.tp(r.Finished))
+		if err != nil {
+			return err
+		}
 	} else {
 		_, err = q.exec(ctx, `UPDATE jobs SET spec = ?, env_names = ?, env_sealed = ?, state = ?, error = ?, cancelled = ?, finished = ?
 			WHERE id = ?`, spec, names, r.EnvSealed, r.State, r.Error, r.Cancelled, q.s.tp(r.Finished), r.ID)
@@ -80,20 +88,26 @@ func (q *sqlTx) writeJob(ctx context.Context, r *jobRecord, insert bool) error {
 		return err
 	}
 	for n, run := range r.Runs {
-		if err := q.writeRun(ctx, r.ID, r.Tenant, n, run); err != nil {
+		if err := q.writeRun(ctx, r.ID, n, run); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (q *sqlTx) writeRun(ctx context.Context, id, tenant string, n int, run api.JobRun) error {
+// writeRun writes run n of job id, in the job's organisation (job_runs
+// carries it for row-level security).
+func (q *sqlTx) writeRun(ctx context.Context, id string, n int, run api.JobRun) error {
 	b, err := jsonText(run)
 	if err != nil {
 		return err
 	}
-	_, err = q.exec(ctx, `INSERT INTO job_runs (tenant, job, n, run) VALUES (?, ?, ?, ?)
-		ON CONFLICT (job, n) DO UPDATE SET run = excluded.run`, tenant, id, n, b)
+	var org string
+	if err := q.row(ctx, "SELECT org_id FROM jobs WHERE id = ?", id).Scan(&org); err != nil {
+		return storeErr(err)
+	}
+	_, err = q.exec(ctx, `INSERT INTO job_runs (org_id, job, n, run) VALUES (?, ?, ?, ?)
+		ON CONFLICT (job, n) DO UPDATE SET run = excluded.run`, org, id, n, b)
 	return err
 }
 
@@ -115,7 +129,7 @@ func (s *sqlStore) Job(ctx context.Context, id string) (*jobRecord, bool, error)
 func (s *sqlStore) jobIDs(ctx context.Context, where string, args ...any) ([]string, error) {
 	var ids []string
 	err := s.read(ctx, func(q *sqlTx) error {
-		rows, err := q.query(ctx, "SELECT id FROM jobs "+where, args...)
+		rows, err := q.query(ctx, "SELECT r.id FROM jobs r"+ownerJoin+where, args...)
 		if err != nil {
 			return err
 		}
@@ -151,18 +165,18 @@ func (s *sqlStore) jobsWhere(ctx context.Context, where string, args ...any) ([]
 }
 
 func (s *sqlStore) JobsOf(ctx context.Context, user, tenant string) ([]*jobRecord, error) {
-	return s.jobsWhere(ctx, "WHERE user_name = ? AND tenant = ? ORDER BY created, id", user, tenant)
+	return s.jobsWhere(ctx, "WHERE ru.name = ? AND ro.key = ? ORDER BY r.created, r.id", user, orgKeyOf(tenant))
 }
 
 func (s *sqlStore) AllJobs(ctx context.Context) ([]*jobRecord, error) {
-	return s.jobsWhere(ctx, "ORDER BY created, id")
+	return s.jobsWhere(ctx, "ORDER BY r.created, r.id")
 }
 
 // RunningJobs is the owner of every job still running and not cancelled.
 func (s *sqlStore) RunningJobs(ctx context.Context) (map[string]Owner, error) {
 	out := map[string]Owner{}
 	err := s.read(ctx, func(q *sqlTx) error {
-		rows, err := q.query(ctx, "SELECT id, user_name, tenant FROM jobs WHERE state = ? AND NOT cancelled", api.JobRunning)
+		rows, err := q.query(ctx, "SELECT r.id, ru.name, ro.key FROM jobs r"+ownerJoin+"WHERE r.state = ? AND NOT r.cancelled", api.JobRunning)
 		if err != nil {
 			return err
 		}
@@ -206,7 +220,7 @@ func (s *sqlStore) UpdateRun(ctx context.Context, id string, n int, fn func(*api
 		}
 		fn(&r.Runs[n])
 		out = cloneRun(r.Runs[n])
-		return q.writeRun(ctx, id, r.Tenant, n, r.Runs[n])
+		return q.writeRun(ctx, id, n, r.Runs[n])
 	})
 	return out, err
 }
@@ -227,20 +241,24 @@ func (s *sqlStore) PutSecret(ctx context.Context, tenant, name string, sealed []
 	now := s.stamp()
 	return s.tx(ctx, func(q *sqlTx) error {
 		var exists, n int
-		if err := q.row(ctx, "SELECT COUNT(*) FROM secrets WHERE tenant = ? AND name = ?", tenant, name).Scan(&exists); err != nil {
+		org, _, err := q.orgID(ctx, tenant, true)
+		if err != nil {
+			return err
+		}
+		if err := q.row(ctx, "SELECT COUNT(*) FROM secrets WHERE org_id = ? AND name = ?", org, name).Scan(&exists); err != nil {
 			return storeErr(err)
 		}
 		if exists == 0 {
-			if err := q.row(ctx, "SELECT COUNT(*) FROM secrets WHERE tenant = ?", tenant).Scan(&n); err != nil {
+			if err := q.row(ctx, "SELECT COUNT(*) FROM secrets WHERE org_id = ?", org).Scan(&n); err != nil {
 				return storeErr(err)
 			}
 			if n >= maxSecrets {
 				return fmt.Errorf("a tenant holds at most %d secrets", maxSecrets)
 			}
 		}
-		_, err := q.exec(ctx, `INSERT INTO secrets (tenant, name, sealed, updated) VALUES (?, ?, ?, ?)
-			ON CONFLICT (tenant, name) DO UPDATE SET sealed = excluded.sealed, updated = excluded.updated`,
-			tenant, name, slices.Clone(sealed), s.t(now))
+		_, err = q.exec(ctx, `INSERT INTO secrets (org_id, name, sealed, updated) VALUES (?, ?, ?, ?)
+			ON CONFLICT (org_id, name) DO UPDATE SET sealed = excluded.sealed, updated = excluded.updated`,
+			org, name, slices.Clone(sealed), s.t(now))
 		return err
 	})
 }
@@ -248,7 +266,8 @@ func (s *sqlStore) PutSecret(ctx context.Context, tenant, name string, sealed []
 func (s *sqlStore) SealedSecret(ctx context.Context, tenant, name string) ([]byte, bool, error) {
 	var b []byte
 	err := s.read(ctx, func(q *sqlTx) error {
-		return storeErr(q.row(ctx, "SELECT sealed FROM secrets WHERE tenant = ? AND name = ?", tenant, name).Scan(&b))
+		return storeErr(q.row(ctx, "SELECT x.sealed FROM secrets x JOIN orgs o ON o.id = x.org_id WHERE o.key = ? AND x.name = ?",
+			orgKeyOf(tenant), name).Scan(&b))
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
@@ -259,7 +278,8 @@ func (s *sqlStore) SealedSecret(ctx context.Context, tenant, name string) ([]byt
 func (s *sqlStore) SecretsOf(ctx context.Context, tenant string) ([]api.SecretInfo, error) {
 	out := []api.SecretInfo{}
 	err := s.read(ctx, func(q *sqlTx) error {
-		rows, err := q.query(ctx, "SELECT name, updated FROM secrets WHERE tenant = ? ORDER BY name", tenant)
+		rows, err := q.query(ctx, "SELECT x.name, x.updated FROM secrets x JOIN orgs o ON o.id = x.org_id WHERE o.key = ? ORDER BY x.name",
+			orgKeyOf(tenant))
 		if err != nil {
 			return err
 		}
@@ -280,7 +300,7 @@ func (s *sqlStore) SecretsOf(ctx context.Context, tenant string) ([]api.SecretIn
 
 func (s *sqlStore) DeleteSecret(ctx context.Context, tenant, name string) error {
 	return s.tx(ctx, func(q *sqlTx) error {
-		r, err := q.exec(ctx, "DELETE FROM secrets WHERE tenant = ? AND name = ?", tenant, name)
+		r, err := q.exec(ctx, "DELETE FROM secrets WHERE org_id = (SELECT id FROM orgs WHERE key = ?) AND name = ?", orgKeyOf(tenant), name)
 		if err != nil {
 			return err
 		}
@@ -296,7 +316,7 @@ func (s *sqlStore) DeleteSecret(ctx context.Context, tenant, name string) error 
 func (s *sqlStore) Services(ctx context.Context) ([]serviceRecord, error) {
 	var out []serviceRecord
 	err := s.read(ctx, func(q *sqlTx) error {
-		rows, err := q.query(ctx, "SELECT record FROM services ORDER BY tenant, name")
+		rows, err := q.query(ctx, "SELECT x.record FROM services x JOIN orgs o ON o.id = x.org_id ORDER BY o.key, x.name")
 		if err != nil {
 			return err
 		}
@@ -332,9 +352,13 @@ func (s *sqlStore) PutServiceRetiring(ctx context.Context, r serviceRecord, reti
 		return err
 	}
 	return s.tx(ctx, func(q *sqlTx) error {
-		if _, err := q.exec(ctx, `INSERT INTO services (tenant, name, user_name, record) VALUES (?, ?, ?, ?)
-			ON CONFLICT (tenant, name) DO UPDATE SET user_name = excluded.user_name, record = excluded.record`,
-			r.Tenant, r.Name, r.User, b); err != nil {
+		org, user, _, err := q.ownerIDs(ctx, Owner{User: r.User, Tenant: r.Tenant}, true)
+		if err != nil {
+			return err
+		}
+		if _, err := q.exec(ctx, `INSERT INTO services (org_id, name, user_id, record) VALUES (?, ?, ?, ?)
+			ON CONFLICT (org_id, name) DO UPDATE SET user_id = excluded.user_id, record = excluded.record`,
+			org, r.Name, user, b); err != nil {
 			return err
 		}
 		return q.retire(ctx, retire)
@@ -343,7 +367,8 @@ func (s *sqlStore) PutServiceRetiring(ctx context.Context, r serviceRecord, reti
 
 func (s *sqlStore) DeleteService(ctx context.Context, tenant, name string, retire []string) error {
 	return s.tx(ctx, func(q *sqlTx) error {
-		if _, err := q.exec(ctx, "DELETE FROM services WHERE tenant = ? AND name = ?", tenant, name); err != nil {
+		if _, err := q.exec(ctx, "DELETE FROM services WHERE org_id = (SELECT id FROM orgs WHERE key = ?) AND name = ?",
+			orgKeyOf(tenant), name); err != nil {
 			return err
 		}
 		return q.retire(ctx, retire)

@@ -15,25 +15,37 @@ import (
 // API keys, accounts and invites in the database: the same rules as the
 // state file had (accounts.go explains accounts), each change one
 // transaction.
+//
+// A key belongs to a user (api_keys.user_id), and its tenant is the user's
+// home organisation. An account is a user with an address and a password,
+// and the one live key marked account stands for it: Key.Email, Password
+// and LastLogin are the user's, read through that key.
 
-const keyColumns = "id, hash, user_name, tenant, scopes, created, revoked, expires, email, password, last_login, parent"
+// keySelect reads keys as k, with their users (u) and home organisations
+// (h). A where clause names k's columns as k.<column>.
+const keySelect = `SELECT k.id, k.hash, u.name, h.key, k.scopes, k.created, k.revoked, k.expires, k.account,
+	u.email, u.password, u.last_login, k.parent
+	FROM api_keys k JOIN users u ON u.id = k.user_id JOIN orgs h ON h.id = u.org_id `
 
 func scanKey(sc interface{ Scan(...any) error }) (Key, error) {
 	var k Key
 	var created, expires, lastLogin dbTime
 	var email, password, parent sql.NullString
-	err := sc.Scan(&k.ID, &k.Hash, &k.User, &k.Tenant, jsonCol{&k.Scopes}, &created, &k.Revoked, &expires,
+	var account bool
+	err := sc.Scan(&k.ID, &k.Hash, &k.User, &k.Tenant, jsonCol{&k.Scopes}, &created, &k.Revoked, &expires, &account,
 		&email, &password, &lastLogin, &parent)
 	if err != nil {
 		return Key{}, err
 	}
-	k.Created, k.Expires, k.LastLogin = created.T, expires.ptr(), lastLogin.ptr()
-	k.Email, k.Password, k.Parent = email.String, password.String, parent.String
+	k.Created, k.Expires, k.Parent = created.T, expires.ptr(), parent.String
+	if account {
+		k.Email, k.Password, k.LastLogin = email.String, password.String, lastLogin.ptr()
+	}
 	return k, nil
 }
 
 func (q *sqlTx) keys(ctx context.Context, where string, args ...any) ([]Key, error) {
-	rows, err := q.query(ctx, "SELECT "+keyColumns+" FROM api_keys "+where, args...)
+	rows, err := q.query(ctx, keySelect+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +62,7 @@ func (q *sqlTx) keys(ctx context.Context, where string, args ...any) ([]Key, err
 }
 
 func (q *sqlTx) key(ctx context.Context, where string, args ...any) (Key, bool, error) {
-	k, err := scanKey(q.row(ctx, "SELECT "+keyColumns+" FROM api_keys "+where, args...))
+	k, err := scanKey(q.row(ctx, keySelect+where, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Key{}, false, nil
 	}
@@ -60,23 +72,43 @@ func (q *sqlTx) key(ctx context.Context, where string, args ...any) (Key, bool, 
 	return k, true, nil
 }
 
-// insertKey adds k. A unique index refuses a second live account for an
-// address or a user.
+// insertKey adds k, under its user (made one, in an organisation of its
+// tenant, if not yet). A key with an address is the user's account: the
+// address and password go on the user, taken from any user whose account
+// was revoked. A unique index refuses a second live account for an address
+// or a user.
 func (q *sqlTx) insertKey(ctx context.Context, k Key) error {
 	scopes, err := jsonText(k.Scopes)
 	if err != nil {
 		return err
 	}
-	null := func(s string) any {
-		if s == "" {
-			return nil
-		}
-		return s
+	uid, _, err := q.userID(ctx, k.User, k.Tenant, true)
+	if err != nil {
+		return err
 	}
-	_, err = q.exec(ctx, "INSERT INTO api_keys ("+keyColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		k.ID, k.Hash, k.User, k.Tenant, scopes, q.s.t(k.Created), k.Revoked, q.s.tp(k.Expires),
-		null(k.Email), null(k.Password), q.s.tp(k.LastLogin), null(k.Parent))
-	if isUnique(err) && k.Email != "" {
+	var parent any
+	if k.Parent != "" {
+		parent = k.Parent
+	}
+	account := k.Email != ""
+	if account {
+		if _, err := q.exec(ctx, `UPDATE users SET email = NULL, password = NULL WHERE email = ? AND id <> ?
+			AND NOT EXISTS (SELECT 1 FROM api_keys a WHERE a.user_id = users.id AND a.account AND NOT a.revoked)`, k.Email, uid); err != nil {
+			return err
+		}
+		_, err := q.exec(ctx, "UPDATE users SET email = ?, password = ?, last_login = ? WHERE id = ?",
+			k.Email, k.Password, q.s.tp(k.LastLogin), uid)
+		if isUnique(err) {
+			return ErrEmailTaken
+		}
+		if err != nil {
+			return err
+		}
+	}
+	_, err = q.exec(ctx, `INSERT INTO api_keys (id, hash, user_id, scopes, created, revoked, expires, account, parent)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		k.ID, k.Hash, uid, scopes, q.s.t(k.Created), k.Revoked, q.s.tp(k.Expires), account, parent)
+	if isUnique(err) && account {
 		return ErrEmailTaken
 	}
 	return err
@@ -135,7 +167,7 @@ func (s *sqlStore) KeyBySecret(ctx context.Context, secret string) (Key, bool, e
 	var ok bool
 	err := s.read(ctx, func(q *sqlTx) error {
 		var err error
-		k, ok, err = q.key(ctx, "WHERE hash = ?", hashSecret(secret))
+		k, ok, err = q.key(ctx, "WHERE k.hash = ?", hashSecret(secret))
 		if err != nil || !ok {
 			return err
 		}
@@ -146,7 +178,7 @@ func (s *sqlStore) KeyBySecret(ctx context.Context, secret string) (Key, bool, e
 		}
 		// A sign-in's key is cut off with its account.
 		if k.Parent != "" {
-			a, found, err := q.key(ctx, "WHERE id = ?", k.Parent)
+			a, found, err := q.key(ctx, "WHERE k.id = ?", k.Parent)
 			if err != nil {
 				return err
 			}
@@ -179,7 +211,7 @@ func (s *sqlStore) RevokeKey(ctx context.Context, id string) error {
 func (s *sqlStore) SetKeyExpiry(ctx context.Context, id string, at *time.Time) (Key, error) {
 	var out Key
 	err := s.tx(ctx, func(q *sqlTx) error {
-		k, ok, err := q.key(ctx, "WHERE id = ?"+s.forUpdate(), id)
+		k, ok, err := q.key(ctx, "WHERE k.id = ?"+s.forUpdateOf("k"), id)
 		if err != nil {
 			return err
 		}
@@ -215,7 +247,7 @@ func (s *sqlStore) Keys(ctx context.Context) ([]Key, error) {
 	var out []Key
 	err := s.read(ctx, func(q *sqlTx) error {
 		var err error
-		out, err = q.keys(ctx, "ORDER BY created, id")
+		out, err = q.keys(ctx, "ORDER BY k.created, k.id")
 		return err
 	})
 	return out, err
@@ -225,7 +257,7 @@ func (s *sqlStore) KeysOfUser(ctx context.Context, user string) ([]Key, error) {
 	var out []Key
 	err := s.read(ctx, func(q *sqlTx) error {
 		var err error
-		out, err = q.keys(ctx, "WHERE user_name = ? ORDER BY created, id", user)
+		out, err = q.keys(ctx, "WHERE u.name = ? ORDER BY k.created, k.id", user)
 		return err
 	})
 	return out, err
@@ -238,7 +270,7 @@ func (s *sqlStore) Account(ctx context.Context, email string) (Key, bool, error)
 	var ok bool
 	err := s.read(ctx, func(q *sqlTx) error {
 		var err error
-		k, ok, err = q.key(ctx, "WHERE email = ? AND NOT revoked AND parent IS NULL", strings.ToLower(email))
+		k, ok, err = q.key(ctx, "WHERE u.email = ? AND k.account AND NOT k.revoked", strings.ToLower(email))
 		return err
 	})
 	return k, ok, err
@@ -248,12 +280,12 @@ func (s *sqlStore) AccountOf(ctx context.Context, keyID string) (Key, bool, erro
 	var out Key
 	var ok bool
 	err := s.read(ctx, func(q *sqlTx) error {
-		k, found, err := q.key(ctx, "WHERE id = ?", keyID)
+		k, found, err := q.key(ctx, "WHERE k.id = ?", keyID)
 		if err != nil || !found {
 			return err
 		}
 		if k.Parent != "" {
-			if k, found, err = q.key(ctx, "WHERE id = ?", k.Parent); err != nil || !found {
+			if k, found, err = q.key(ctx, "WHERE k.id = ?", k.Parent); err != nil || !found {
 				return err
 			}
 		}
@@ -268,7 +300,7 @@ func (s *sqlStore) SignIn(ctx context.Context, account string, ttl time.Duration
 	secret := newSecret(keySecretPrefix)
 	var out Key
 	err := s.tx(ctx, func(q *sqlTx) error {
-		acct, ok, err := q.key(ctx, "WHERE id = ?"+s.forUpdate(), account)
+		acct, ok, err := q.key(ctx, "WHERE k.id = ?"+s.forUpdateOf("k"), account)
 		if err != nil {
 			return err
 		}
@@ -282,7 +314,7 @@ func (s *sqlStore) SignIn(ctx context.Context, account string, ttl time.Duration
 		if acct.Expires != nil && acct.Expires.Before(end) {
 			end = *acct.Expires
 		}
-		if _, err := q.exec(ctx, "UPDATE api_keys SET last_login = ? WHERE id = ?", s.t(now), acct.ID); err != nil {
+		if _, err := q.exec(ctx, "UPDATE users SET last_login = ? WHERE id = (SELECT user_id FROM api_keys WHERE id = ?)", s.t(now), acct.ID); err != nil {
 			return err
 		}
 		// Sign-ins that ended are forgotten, so they do not pile up.
@@ -311,7 +343,8 @@ func (s *sqlStore) SignOut(ctx context.Context, id string) error {
 
 func (s *sqlStore) SetPassword(ctx context.Context, account, passwordHash, keep string) error {
 	return s.tx(ctx, func(q *sqlTx) error {
-		r, err := q.exec(ctx, "UPDATE api_keys SET password = ? WHERE id = ? AND email IS NOT NULL", passwordHash, account)
+		r, err := q.exec(ctx, "UPDATE users SET password = ? WHERE id = (SELECT user_id FROM api_keys WHERE id = ? AND account)",
+			passwordHash, account)
 		if err != nil {
 			return err
 		}
@@ -325,7 +358,10 @@ func (s *sqlStore) SetPassword(ctx context.Context, account, passwordHash, keep 
 
 // --- invites ---------------------------------------------------------------------
 
-const inviteColumns = "id, hash, email, user_name, tenant, scopes, policy, expires_in_secs, account_key, created, expires"
+// inviteSelect reads invites as i, with the organisation each makes its
+// account in (o).
+const inviteSelect = `SELECT i.id, i.hash, i.email, i.user_name, o.key, i.scopes, i.policy, i.expires_in_secs, i.account_key,
+	i.created, i.expires FROM invites i JOIN orgs o ON o.id = i.org_id `
 
 func scanInvite(sc interface{ Scan(...any) error }) (inviteRecord, error) {
 	var iv inviteRecord
@@ -346,8 +382,13 @@ func (q *sqlTx) insertInvite(ctx context.Context, iv inviteRecord) error {
 	if iv.Key != "" {
 		key = iv.Key
 	}
-	_, err = q.exec(ctx, "INSERT INTO invites ("+inviteColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		iv.ID, iv.Hash, iv.Email, iv.User, iv.Tenant, scopes, iv.Policy, iv.ExpiresInSecs, key,
+	org, _, err := q.orgID(ctx, iv.Tenant, true)
+	if err != nil {
+		return err
+	}
+	_, err = q.exec(ctx, `INSERT INTO invites (id, hash, email, org_id, user_name, scopes, policy, expires_in_secs, account_key,
+		created, expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		iv.ID, iv.Hash, iv.Email, org, iv.User, scopes, iv.Policy, iv.ExpiresInSecs, key,
 		q.s.t(iv.Created), q.s.t(iv.Expires))
 	return err
 }
@@ -361,14 +402,15 @@ func (q *sqlTx) pruneInvites(ctx context.Context, now time.Time) error {
 // already, or whose name an organisation holds for someone else.
 func (q *sqlTx) accountFree(ctx context.Context, email, user, tenant string) error {
 	var n int
-	if err := q.row(ctx, "SELECT COUNT(*) FROM api_keys WHERE email = ? AND NOT revoked AND parent IS NULL", email).Scan(&n); err != nil {
+	if err := q.row(ctx, "SELECT COUNT(*) FROM api_keys k JOIN users u ON u.id = k.user_id WHERE u.email = ? AND k.account AND NOT k.revoked",
+		email).Scan(&n); err != nil {
 		return storeErr(err)
 	}
 	if n > 0 {
 		return ErrEmailTaken
 	}
-	if err := q.row(ctx, "SELECT COUNT(*) FROM api_keys WHERE email IS NOT NULL AND NOT revoked AND parent IS NULL AND user_name = ? AND tenant = ?",
-		user, tenant).Scan(&n); err != nil {
+	if err := q.row(ctx, `SELECT COUNT(*) FROM api_keys k JOIN users u ON u.id = k.user_id JOIN orgs h ON h.id = u.org_id
+		WHERE u.name = ? AND h.key = ? AND k.account AND NOT k.revoked`, user, orgKeyOf(tenant)).Scan(&n); err != nil {
 		return storeErr(err)
 	}
 	if n > 0 {
@@ -453,7 +495,7 @@ func (s *sqlStore) CreateResetInvite(ctx context.Context, id string, valid time.
 	token := newSecret(inviteSecretPrefix)
 	var iv inviteRecord
 	err := s.tx(ctx, func(q *sqlTx) error {
-		k, ok, err := q.key(ctx, "WHERE id = ?", id)
+		k, ok, err := q.key(ctx, "WHERE k.id = ?", id)
 		switch {
 		case err != nil:
 			return err
@@ -489,7 +531,7 @@ func (s *sqlStore) RenewInvite(ctx context.Context, id string, valid time.Durati
 			return err
 		}
 		var err error
-		iv, err = scanInvite(q.row(ctx, "SELECT "+inviteColumns+" FROM invites WHERE id = ?", id))
+		iv, err = scanInvite(q.row(ctx, inviteSelect+"WHERE i.id = ?", id))
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNoSuchInvite
 		}
@@ -509,7 +551,7 @@ func (s *sqlStore) RenewInvite(ctx context.Context, id string, valid time.Durati
 func (s *sqlStore) Invites(ctx context.Context) ([]inviteRecord, error) {
 	var out []inviteRecord
 	err := s.read(ctx, func(q *sqlTx) error {
-		rows, err := q.query(ctx, "SELECT "+inviteColumns+" FROM invites WHERE expires > ? ORDER BY created, id", s.t(s.now()))
+		rows, err := q.query(ctx, inviteSelect+"WHERE i.expires > ? ORDER BY i.created, i.id", s.t(s.now()))
 		if err != nil {
 			return err
 		}
@@ -543,7 +585,7 @@ func (q *sqlTx) inviteByToken(ctx context.Context, token string, now time.Time) 
 	if !strings.HasPrefix(token, inviteSecretPrefix) {
 		return inviteRecord{}, false, nil
 	}
-	iv, err := scanInvite(q.row(ctx, "SELECT "+inviteColumns+" FROM invites WHERE hash = ? AND expires > ?",
+	iv, err := scanInvite(q.row(ctx, inviteSelect+"WHERE i.hash = ? AND i.expires > ?",
 		hashSecret(token), q.s.t(now)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return inviteRecord{}, false, nil
@@ -577,14 +619,15 @@ func (s *sqlStore) RedeemInvite(ctx context.Context, token, passwordHash string)
 			return ErrNoSuchInvite
 		}
 		if iv.Key != "" {
-			a, ok, err := q.key(ctx, "WHERE id = ?", iv.Key)
+			a, ok, err := q.key(ctx, "WHERE k.id = ?", iv.Key)
 			if err != nil {
 				return err
 			}
 			if !ok || a.Revoked || a.Email != iv.Email {
 				return ErrNoSuchInvite
 			}
-			if _, err := q.exec(ctx, "UPDATE api_keys SET password = ? WHERE id = ?", passwordHash, a.ID); err != nil {
+			if _, err := q.exec(ctx, "UPDATE users SET password = ? WHERE id = (SELECT user_id FROM api_keys WHERE id = ?)",
+				passwordHash, a.ID); err != nil {
 				return err
 			}
 			// A new password ends every sign-in.

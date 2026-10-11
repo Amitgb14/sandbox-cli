@@ -22,9 +22,16 @@ import (
 // reconcile) so they can be asked for when the node cannot be, and kept as
 // history once it is gone. Processes, events, metrics and files stay on the
 // node.
+//
+// A sandbox, a volume and a snapshot belong to an organisation and a user
+// (org_id, user_id); reads join them back to the tenant and the user name
+// an Owner holds (ownerJoin).
 
-const sandboxColumns = `id, tenant, user_name, node, cpus, memory_mb, disk_mb, recorded, name, image, state, labels, network,
-	lifetime_secs, expires_at, idle_timeout_secs, created_at, details_updated, terminated_at, terminated_reason`
+// sandboxSelect reads sandboxes as r. A where clause names its columns as
+// r.<column>.
+const sandboxSelect = `SELECT r.id, ro.key, ru.name, r.node, r.cpus, r.memory_mb, r.disk_mb, r.recorded, r.name, r.image, r.state,
+	r.labels, r.network, r.lifetime_secs, r.expires_at, r.idle_timeout_secs, r.created_at, r.details_updated, r.terminated_at,
+	r.terminated_reason FROM sandboxes r` + ownerJoin
 
 func scanSandbox(sc interface{ Scan(...any) error }) (SandboxRow, error) {
 	var r SandboxRow
@@ -77,12 +84,16 @@ func (s *sqlStore) RecordSandbox(ctx context.Context, id string, o Owner, size a
 	if err != nil {
 		return err
 	}
-	args := append([]any{id, o.Tenant, o.User, o.Node, size.CPUs, size.MemoryMB, size.DiskMB, s.t(s.stamp())}, details...)
 	return s.tx(ctx, func(q *sqlTx) error {
-		_, err := q.exec(ctx, `INSERT INTO sandboxes (id, tenant, user_name, node, cpus, memory_mb, disk_mb, recorded,
+		org, user, _, err := q.ownerIDs(ctx, o, true)
+		if err != nil {
+			return err
+		}
+		args := append([]any{id, org, user, o.Node, size.CPUs, size.MemoryMB, size.DiskMB, s.t(s.stamp())}, details...)
+		_, err = q.exec(ctx, `INSERT INTO sandboxes (id, org_id, user_id, node, cpus, memory_mb, disk_mb, recorded,
 			name, image, state, labels, network, lifetime_secs, expires_at, idle_timeout_secs, created_at, details_updated)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET tenant = excluded.tenant, user_name = excluded.user_name, node = excluded.node,
+			ON CONFLICT (id) DO UPDATE SET org_id = excluded.org_id, user_id = excluded.user_id, node = excluded.node,
 				cpus = excluded.cpus, memory_mb = excluded.memory_mb, disk_mb = excluded.disk_mb, recorded = excluded.recorded,
 				name = excluded.name, image = excluded.image, state = excluded.state, labels = excluded.labels,
 				network = excluded.network, lifetime_secs = excluded.lifetime_secs, expires_at = excluded.expires_at,
@@ -137,7 +148,7 @@ func (s *sqlStore) sandbox(ctx context.Context, id string) (SandboxRow, bool, er
 	var ok bool
 	err := s.read(ctx, func(q *sqlTx) error {
 		var err error
-		r, err = scanSandbox(q.row(ctx, "SELECT "+sandboxColumns+" FROM sandboxes WHERE id = ? AND terminated_at IS NULL", id))
+		r, err = scanSandbox(q.row(ctx, sandboxSelect+"WHERE r.id = ? AND r.terminated_at IS NULL", id))
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -174,8 +185,9 @@ func (s *sqlStore) ForgetSandboxes(ctx context.Context, ids []string, reason str
 func (s *sqlStore) UsageOf(ctx context.Context, tenant string) (Usage, error) {
 	var u Usage
 	err := s.read(ctx, func(q *sqlTx) error {
-		return storeErr(q.row(ctx, `SELECT COUNT(*), COALESCE(SUM(cpus), 0), COALESCE(SUM(memory_mb), 0)
-			FROM sandboxes WHERE tenant = ? AND terminated_at IS NULL`, tenant).Scan(&u.Sandboxes, &u.CPUs, &u.MemoryMB))
+		return storeErr(q.row(ctx, `SELECT COUNT(*), COALESCE(SUM(r.cpus), 0), COALESCE(SUM(r.memory_mb), 0)
+			FROM sandboxes r JOIN orgs ro ON ro.id = r.org_id WHERE ro.key = ? AND r.terminated_at IS NULL`,
+			orgKeyOf(tenant)).Scan(&u.Sandboxes, &u.CPUs, &u.MemoryMB))
 	})
 	return u, err
 }
@@ -183,7 +195,7 @@ func (s *sqlStore) UsageOf(ctx context.Context, tenant string) (Usage, error) {
 func (s *sqlStore) sandboxRows(ctx context.Context, where string, args ...any) ([]SandboxRow, error) {
 	var out []SandboxRow
 	err := s.read(ctx, func(q *sqlTx) error {
-		rows, err := q.query(ctx, "SELECT "+sandboxColumns+" FROM sandboxes "+where, args...)
+		rows, err := q.query(ctx, sandboxSelect+where, args...)
 		if err != nil {
 			return err
 		}
@@ -201,11 +213,11 @@ func (s *sqlStore) sandboxRows(ctx context.Context, where string, args ...any) (
 }
 
 func (s *sqlStore) LiveSandboxes(ctx context.Context) ([]SandboxRow, error) {
-	return s.sandboxRows(ctx, "WHERE terminated_at IS NULL ORDER BY id")
+	return s.sandboxRows(ctx, "WHERE r.terminated_at IS NULL ORDER BY r.id")
 }
 
 func (s *sqlStore) SandboxesOn(ctx context.Context, node string) (map[string]time.Time, error) {
-	rows, err := s.sandboxRows(ctx, "WHERE node = ? AND terminated_at IS NULL", node)
+	rows, err := s.sandboxRows(ctx, "WHERE r.node = ? AND r.terminated_at IS NULL", node)
 	if err != nil {
 		return nil, err
 	}
@@ -220,19 +232,19 @@ func (s *sqlStore) SandboxHistory(ctx context.Context, f SandboxFilter) ([]Sandb
 	var where []string
 	var args []any
 	if !f.AllTenant {
-		where, args = append(where, "tenant = ?"), append(args, f.Tenant)
+		where, args = append(where, "ro.key = ?"), append(args, orgKeyOf(f.Tenant))
 	}
 	if f.User != "" {
-		where, args = append(where, "user_name = ?"), append(args, f.User)
+		where, args = append(where, "ru.name = ?"), append(args, f.User)
 	}
 	if f.Live {
-		where = append(where, "terminated_at IS NULL")
+		where = append(where, "r.terminated_at IS NULL")
 	}
 	q := ""
 	if len(where) > 0 {
 		q = "WHERE " + strings.Join(where, " AND ")
 	}
-	q += " ORDER BY recorded DESC, id"
+	q += " ORDER BY r.recorded DESC, r.id"
 	if f.Limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", f.Limit)
 	}
@@ -256,9 +268,13 @@ func (s *sqlStore) PruneSandboxHistory(ctx context.Context, before time.Time) (i
 
 func (s *sqlStore) SetVolume(ctx context.Context, name string, o Owner) error {
 	return s.tx(ctx, func(q *sqlTx) error {
-		_, err := q.exec(ctx, `INSERT INTO volumes (name, tenant, user_name, node) VALUES (?, ?, ?, ?)
-			ON CONFLICT (name) DO UPDATE SET tenant = excluded.tenant, user_name = excluded.user_name, node = excluded.node`,
-			name, o.Tenant, o.User, o.Node)
+		org, user, _, err := q.ownerIDs(ctx, o, true)
+		if err != nil {
+			return err
+		}
+		_, err = q.exec(ctx, `INSERT INTO volumes (name, org_id, user_id, node) VALUES (?, ?, ?, ?)
+			ON CONFLICT (name) DO UPDATE SET org_id = excluded.org_id, user_id = excluded.user_id, node = excluded.node`,
+			name, org, user, o.Node)
 		return err
 	})
 }
@@ -275,7 +291,7 @@ func (s *sqlStore) ownerRow(ctx context.Context, query string, arg string) (Owne
 }
 
 func (s *sqlStore) VolumeOwner(ctx context.Context, name string) (Owner, bool, error) {
-	return s.ownerRow(ctx, "SELECT tenant, user_name, node FROM volumes WHERE name = ?", name)
+	return s.ownerRow(ctx, "SELECT ro.key, ru.name, r.node FROM volumes r"+ownerJoin+"WHERE r.name = ?", name)
 }
 
 func (s *sqlStore) ForgetVolume(ctx context.Context, name string) error {
@@ -288,7 +304,7 @@ func (s *sqlStore) ForgetVolume(ctx context.Context, name string) error {
 func (s *sqlStore) VolumesOf(ctx context.Context, user, tenant string) (map[string]string, error) {
 	out := map[string]string{}
 	err := s.read(ctx, func(q *sqlTx) error {
-		rows, err := q.query(ctx, "SELECT name, node FROM volumes WHERE user_name = ? AND tenant = ?", user, tenant)
+		rows, err := q.query(ctx, "SELECT r.name, r.node FROM volumes r"+ownerJoin+"WHERE ru.name = ? AND ro.key = ?", user, orgKeyOf(tenant))
 		if err != nil {
 			return err
 		}
@@ -307,15 +323,19 @@ func (s *sqlStore) VolumesOf(ctx context.Context, user, tenant string) (map[stri
 
 func (s *sqlStore) SetSnapshot(ctx context.Context, id string, o Owner) error {
 	return s.tx(ctx, func(q *sqlTx) error {
-		_, err := q.exec(ctx, `INSERT INTO snapshots (id, tenant, user_name, node) VALUES (?, ?, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET tenant = excluded.tenant, user_name = excluded.user_name, node = excluded.node`,
-			id, o.Tenant, o.User, o.Node)
+		org, user, _, err := q.ownerIDs(ctx, o, true)
+		if err != nil {
+			return err
+		}
+		_, err = q.exec(ctx, `INSERT INTO snapshots (id, org_id, user_id, node) VALUES (?, ?, ?, ?)
+			ON CONFLICT (id) DO UPDATE SET org_id = excluded.org_id, user_id = excluded.user_id, node = excluded.node`,
+			id, org, user, o.Node)
 		return err
 	})
 }
 
 func (s *sqlStore) SnapshotOwner(ctx context.Context, id string) (Owner, bool, error) {
-	return s.ownerRow(ctx, "SELECT tenant, user_name, node FROM snapshots WHERE id = ?", id)
+	return s.ownerRow(ctx, "SELECT ro.key, ru.name, r.node FROM snapshots r"+ownerJoin+"WHERE r.id = ?", id)
 }
 
 func (s *sqlStore) ForgetSnapshotsGoneFrom(ctx context.Context, node string, holds map[string]bool) error {
@@ -402,6 +422,11 @@ func (s *sqlStore) Nodes(ctx context.Context) ([]NodeConfig, error) {
 
 // --- SSH -------------------------------------------------------------------------
 
+// sshKeySelect reads SSH keys as k, with their users (u) and the users'
+// home organisations (h).
+const sshKeySelect = `SELECT k.id, u.name, h.key, k.fingerprint, k.authorized_key, k.sandbox, k.created
+	FROM ssh_keys k JOIN users u ON u.id = k.user_id JOIN orgs h ON h.id = u.org_id `
+
 func scanSSHKey(sc interface{ Scan(...any) error }) (SSHKey, error) {
 	var k SSHKey
 	var created dbTime
@@ -413,7 +438,7 @@ func scanSSHKey(sc interface{ Scan(...any) error }) (SSHKey, error) {
 func (s *sqlStore) sshKeys(ctx context.Context, where string, args ...any) ([]SSHKey, error) {
 	var out []SSHKey
 	err := s.read(ctx, func(q *sqlTx) error {
-		rows, err := q.query(ctx, "SELECT id, user_name, tenant, fingerprint, authorized_key, sandbox, created FROM ssh_keys "+where, args...)
+		rows, err := q.query(ctx, sshKeySelect+where, args...)
 		if err != nil {
 			return err
 		}
@@ -438,7 +463,8 @@ func (s *sqlStore) AddSSHKey(ctx context.Context, user, tenant, sandbox, authori
 	k := SSHKey{ID: newID("ssh_"), User: user, Tenant: tenant, Fingerprint: pk.Fingerprint,
 		AuthorizedKey: pk.Line(), Sandbox: sandbox, Created: s.stamp()}
 	err = s.tx(ctx, func(q *sqlTx) error {
-		rows, err := q.query(ctx, "SELECT user_name, tenant, sandbox FROM ssh_keys WHERE fingerprint = ?", k.Fingerprint)
+		rows, err := q.query(ctx, `SELECT u.name, h.key, k.sandbox FROM ssh_keys k JOIN users u ON u.id = k.user_id
+			JOIN orgs h ON h.id = u.org_id WHERE k.fingerprint = ?`, k.Fingerprint)
 		if err != nil {
 			return err
 		}
@@ -448,7 +474,7 @@ func (s *sqlStore) AddSSHKey(ctx context.Context, user, tenant, sandbox, authori
 				rows.Close()
 				return storeErr(err)
 			}
-			if u != user || t != tenant {
+			if u != user || t != orgKeyOf(tenant) {
 				rows.Close()
 				return ErrKeyTaken
 			}
@@ -458,8 +484,12 @@ func (s *sqlStore) AddSSHKey(ctx context.Context, user, tenant, sandbox, authori
 			}
 		}
 		rows.Close()
-		_, err = q.exec(ctx, "INSERT INTO ssh_keys (id, user_name, tenant, fingerprint, authorized_key, sandbox, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			k.ID, k.User, k.Tenant, k.Fingerprint, k.AuthorizedKey, k.Sandbox, s.t(k.Created))
+		uid, _, err := q.userID(ctx, user, tenant, true)
+		if err != nil {
+			return err
+		}
+		_, err = q.exec(ctx, "INSERT INTO ssh_keys (id, user_id, fingerprint, authorized_key, sandbox, created) VALUES (?, ?, ?, ?, ?, ?)",
+			k.ID, uid, k.Fingerprint, k.AuthorizedKey, k.Sandbox, s.t(k.Created))
 		return err
 	})
 	if err != nil {
@@ -482,7 +512,7 @@ func (s *sqlStore) RemoveSSHKey(ctx context.Context, id string) error {
 }
 
 func (s *sqlStore) SSHKeysByFingerprint(ctx context.Context, fingerprint string) ([]SSHKey, error) {
-	keys, err := s.sshKeys(ctx, "WHERE fingerprint = ? ORDER BY created, id", fingerprint)
+	keys, err := s.sshKeys(ctx, "WHERE k.fingerprint = ? ORDER BY k.created, k.id", fingerprint)
 	// The index found them; compare again in constant time, as the file
 	// store did, so a near match costs as long as a far one.
 	out := keys[:0]
@@ -495,7 +525,7 @@ func (s *sqlStore) SSHKeysByFingerprint(ctx context.Context, fingerprint string)
 }
 
 func (s *sqlStore) SSHKeysFor(ctx context.Context, user string) ([]SSHKey, error) {
-	return s.sshKeys(ctx, "WHERE user_name = ? ORDER BY created, id", user)
+	return s.sshKeys(ctx, "WHERE u.name = ? ORDER BY k.created, k.id", user)
 }
 
 func (s *sqlStore) NewSSHToken(ctx context.Context, user, tenant, sandbox string, ttl time.Duration) (string, time.Time, error) {
@@ -512,8 +542,12 @@ func (s *sqlStore) NewSSHToken(ctx context.Context, user, tenant, sandbox string
 		if _, err := q.exec(ctx, "DELETE FROM ssh_tokens WHERE expires <= ?", s.t(now)); err != nil {
 			return err
 		}
-		_, err := q.exec(ctx, "INSERT INTO ssh_tokens (hash, user_name, tenant, sandbox, expires) VALUES (?, ?, ?, ?, ?)",
-			hashSecret(tok), user, tenant, sandbox, s.t(exp))
+		org, uid, _, err := q.ownerIDs(ctx, Owner{User: user, Tenant: tenant}, true)
+		if err != nil {
+			return err
+		}
+		_, err = q.exec(ctx, "INSERT INTO ssh_tokens (hash, user_id, org_id, sandbox, expires) VALUES (?, ?, ?, ?, ?)",
+			hashSecret(tok), uid, org, sandbox, s.t(exp))
 		return err
 	})
 	if err != nil {
@@ -529,7 +563,8 @@ func (s *sqlStore) RedeemSSHToken(ctx context.Context, token string) (SSHToken, 
 	var t SSHToken
 	var exp dbTime
 	err := s.read(ctx, func(q *sqlTx) error {
-		return storeErr(q.row(ctx, "SELECT user_name, tenant, sandbox, expires FROM ssh_tokens WHERE hash = ? AND expires > ?",
+		return storeErr(q.row(ctx, `SELECT u.name, o.key, t.sandbox, t.expires FROM ssh_tokens t
+			JOIN users u ON u.id = t.user_id JOIN orgs o ON o.id = t.org_id WHERE t.hash = ? AND t.expires > ?`,
 			hashSecret(token), s.t(s.now())).Scan(&t.User, &t.Tenant, &t.Sandbox, &exp))
 	})
 	if errors.Is(err, sql.ErrNoRows) {
