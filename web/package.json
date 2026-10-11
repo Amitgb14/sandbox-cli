@@ -7,7 +7,8 @@
     "build": "next build && node scripts/check-docs.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:waitlist": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test-waitlist.mts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

@@ -37,6 +37,28 @@ anchors. `SiteHeader` and `SiteFooter` therefore take their nav as a prop, with
 the landing page's sections as the default — a sub-page that inherited `#threat`
 would render links that quietly do nothing.
 
+## The waitlist
+
+"Join the waitlist" in the hero opens a form (first name, last name, email)
+that posts to `/api/waitlist`. That is `api/waitlist.ts`, a Vercel function
+beside the static export, the only part of the site that runs on a server:
+a static export cannot take a POST. It checks the fields and mails them to
+the waitlist inbox through the email service's API, as plain text, with the
+visitor's address as reply-to.
+
+Set in the Vercel project's environment (Settings → Environment Variables),
+then redeploy:
+
+| Variable | |
+|---|---|
+| `RESEND_API_KEY` | required; without it every sign-up answers 503 |
+| `WAITLIST_TO` | default `waitlist@sandbox-cli.com` |
+| `WAITLIST_FROM` | default `sandbox-cli waitlist <waitlist@sandbox-cli.com>`; its domain must be verified with the email service, or every send is refused (502, logged) |
+
+`npm run test:waitlist` tests the function with a stand-in for the email
+service. `npm run dev` does not serve `api/`; `vercel dev` does. On a host
+without functions (GitHub Pages, a bucket) the form says it could not send.
+
 ## Design direction
 
 Light, near-monochrome, in the spirit of a modern security-tooling page: white
